@@ -22,8 +22,11 @@ function Node({ node }: { node: AdfNode }): ReactNode {
     case "paragraph":
       return <p className="min-h-[1lh] whitespace-pre-wrap">{children(node)}</p>;
     case "heading": {
-      const size = ["", "text-xl", "text-lg", "text-base", "text-base", "text-sm", "text-sm"][Number(a.level) || 3];
-      return <p className={`mt-1 font-semibold ${size}`}>{children(node)}</p>;
+      const level = Math.min(6, Math.max(1, Number(a.level) || 3));
+      const size = ["", "text-xl", "text-lg", "text-base", "text-base", "text-sm", "text-sm"][level];
+      // Descriptions and comments sit under an h3 section heading, so the document's own levels nest below it.
+      const Tag = `h${Math.min(6, level + 3)}` as "h4";
+      return <Tag className={`mt-1 font-semibold ${size}`}>{children(node)}</Tag>;
     }
     case "text":
       return <Text text={node.text ?? ""} marks={node.marks ?? []} />;
@@ -117,7 +120,7 @@ function Node({ node }: { node: AdfNode }): ReactNode {
     case "inlineCard":
     case "blockCard":
     case "embedCard":
-      return typeof a.url === "string" ? <Link href={a.url}>{a.url}</Link> : null;
+      return <Card attrs={a} />;
     case "mediaSingle":
     case "mediaGroup":
     case "mediaInline":
@@ -149,6 +152,15 @@ const PANEL: Record<string, string> = {
   error: "bg-blocked-bg",
   tip: "bg-done-bg",
 };
+
+/** Smart links carry either `url` or JSON-LD `data` (with its own `url` and `name`). */
+function Card({ attrs }: { attrs: Record<string, unknown> }) {
+  const data = (attrs.data ?? {}) as Record<string, unknown>;
+  const url = [attrs.url, data.url].find((u): u is string => typeof u === "string");
+  const label = typeof data.name === "string" && data.name ? data.name : url;
+  if (!label) return <span className="text-ink-3">[Link]</span>;
+  return url ? <Link href={url}>{label}</Link> : <>{label}</>;
+}
 
 function Text({ text, marks }: { text: string; marks: AdfMark[] }) {
   let out: ReactNode = text;
