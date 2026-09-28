@@ -99,6 +99,29 @@ describe("store", () => {
     expect(s().snap!.site).not.toBe("stale.example");
   });
 
+  it("rereads a replacement's snapshot when an update arrived while it loaded", async () => {
+    const next = new MockBackend();
+    const load = next.load.bind(next);
+    let calls = 0;
+    next.load = async () => {
+      calls++;
+      const snap = await load();
+      if (calls === 1) await next.syncNow();
+      return calls === 1 ? { ...snap, events: snap.events.slice(0, -1) } : snap;
+    };
+    await s().init(next);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls).toBe(2);
+    expect(s().snap!.events.some((e) => e.text.startsWith("@Alf the design is final"))).toBe(true);
+  });
+
+  it("refuses a comment when the backend changed during the upload", async () => {
+    const uploadedVia = s().backend!;
+    await s().init(new MockBackend());
+    expect(await s().comment("Here", { via: uploadedVia })).toBe(false);
+    expect(s().error).toMatch(/switched Jira accounts/);
+  });
+
   it("keeps the current backend working when a new one fails to load", async () => {
     const current = s().backend!;
     let disposed = false;

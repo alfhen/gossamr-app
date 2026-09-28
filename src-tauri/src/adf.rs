@@ -126,21 +126,29 @@ pub fn with_files(mut doc: Value, files: &[crate::model::Uploaded]) -> Value {
     };
     let mut cards = Vec::new();
     let content = doc["content"].as_array_mut().expect("from_text builds a doc with content");
+    // Consecutive cards share one group; anything else closes it, so files keep the order they were attached in.
+    let flush = |cards: &mut Vec<Value>, content: &mut Vec<Value>| {
+        if !cards.is_empty() {
+            content.push(json!({ "type": "mediaGroup", "content": std::mem::take(cards) }));
+        }
+    };
     for f in files {
         match (&f.media_id, f.width.zip(f.height)) {
             (Some(id), Some((width, height))) if f.mime_type.starts_with("image/") => {
                 let mut node = media(f, id);
                 node["attrs"]["width"] = json!(width);
                 node["attrs"]["height"] = json!(height);
+                flush(&mut cards, content);
                 content.push(json!({ "type": "mediaSingle", "attrs": { "layout": "center" }, "content": [node] }))
             }
             (Some(id), _) => cards.push(media(f, id)),
-            (None, _) => content.push(json!({ "type": "paragraph", "content": [{ "type": "text", "text": format!("📎 {}", f.filename) }] })),
+            (None, _) => {
+                flush(&mut cards, content);
+                content.push(json!({ "type": "paragraph", "content": [{ "type": "text", "text": format!("📎 {}", f.filename) }] }))
+            }
         }
     }
-    if !cards.is_empty() {
-        content.push(json!({ "type": "mediaGroup", "content": cards }));
-    }
+    flush(&mut cards, content);
     doc
 }
 
@@ -250,10 +258,10 @@ mod tests {
             &[file("shot.png", "image/png", Some("m1")), file("log.txt", "text/plain", Some("m2")), file("x.pdf", "application/pdf", None)],
         );
         let types: Vec<&str> = doc["content"].as_array().unwrap().iter().map(|n| n["type"].as_str().unwrap()).collect();
-        assert_eq!(types, ["paragraph", "mediaSingle", "paragraph", "mediaGroup"]);
+        assert_eq!(types, ["paragraph", "mediaSingle", "mediaGroup", "paragraph"], "in the order attached");
         assert_eq!(doc["content"][1]["content"][0]["attrs"]["id"], "m1");
-        assert_eq!(doc["content"][2]["content"][0]["text"], "📎 x.pdf");
-        assert_eq!(doc["content"][3]["content"][0]["attrs"]["id"], "m2");
+        assert_eq!(doc["content"][2]["content"][0]["attrs"]["id"], "m2");
+        assert_eq!(doc["content"][3]["content"][0]["text"], "📎 x.pdf");
         assert_eq!(doc["content"][1]["content"][0]["attrs"]["width"], 640);
 
         let unsized_image = crate::model::Uploaded { width: None, height: None, ..file("shot.png", "image/png", Some("m1")) };
