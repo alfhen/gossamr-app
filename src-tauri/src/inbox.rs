@@ -32,12 +32,31 @@ fn ago(d: Duration) -> String {
     (Utc::now() - d).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+/// The site and account a piece of work belongs to.
+#[derive(Clone, PartialEq, Eq)]
+struct Scope {
+    cloud_id: String,
+    account_id: String,
+}
+
+impl Scope {
+    fn of(site: &Site, me: &Account) -> Self {
+        Self { cloud_id: site.cloud_id.clone(), account_id: me.account_id.clone() }
+    }
+
+    fn file_name(&self) -> String {
+        let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect::<String>();
+        format!("inbox-{}-{}.sqlite", safe(&self.cloud_id), safe(&self.account_id))
+    }
+}
+
 pub struct Core {
     pub auth: Arc<Auth>,
     pub jira: Jira,
     data_dir: PathBuf,
-    /// One database per Jira site, opened for whichever site is signed in.
-    db: Mutex<Option<(String, Db)>>,
+    /// One database per Jira site and account, opened for whichever is signed in. Keyed by account too, so two
+    /// people signing in to the same site on one Mac never see each other's tickets or inbox.
+    db: Mutex<Option<(Scope, Db)>>,
     last_error: Mutex<Option<String>>,
     pub wake: Notify,
 }
@@ -52,21 +71,20 @@ impl Core {
     }
 
     async fn with_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
-        let (site, _) = self.identity().await?;
-        self.with_db_for(&site.cloud_id, f).await
+        let (site, me) = self.identity().await?;
+        self.with_db_for(&Scope::of(&site, &me), f).await
     }
 
-    /// Runs `f` against `cloud_id`'s database, but only if that site is still the signed-in one. Work that fetched
-    /// data before a sign-out and sign-in to another site must not land in the new site's database.
-    async fn with_db_for<T>(&self, cloud_id: &str, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
-        let (site, _) = self.identity().await?;
-        if site.cloud_id != cloud_id {
+    /// Runs `f` against `scope`'s database, but only if that site and account are still the signed-in ones. Work
+    /// that fetched data before someone signed in elsewhere must not land in the new session's database.
+    async fn with_db_for<T>(&self, scope: &Scope, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+        let (site, me) = self.identity().await?;
+        if &Scope::of(&site, &me) != scope {
             return Err(Error::SiteChanged);
         }
         let mut guard = self.db.lock().expect("db lock poisoned");
-        if guard.as_ref().map(|(id, _)| id != cloud_id).unwrap_or(true) {
-            let path = self.data_dir.join(format!("inbox-{cloud_id}.sqlite"));
-            *guard = Some((cloud_id.to_string(), Db::open(&path)?));
+        if guard.as_ref().map(|(open, _)| open != scope).unwrap_or(true) {
+            *guard = Some((scope.clone(), Db::open(&self.data_dir.join(scope.file_name()))?));
         }
         f(&guard.as_ref().expect("opened above").1)
     }
@@ -83,6 +101,7 @@ impl Core {
     /// The first sync for a site returns nothing, so connecting doesn't fire a burst of notifications.
     pub async fn sync(&self) -> Result<Vec<NewEvent>> {
         let (site, me) = self.identity().await?;
+        let scope = Scope::of(&site, &me);
         let started = now_iso();
         let tracked = self.jira.search(TRACKED_JQL, true).await?;
         let epics: Vec<&str> = tracked.iter().filter(|t| t.is_epic).map(|t| t.key.as_str()).collect();
@@ -93,7 +112,7 @@ impl Core {
             self.jira.search(&jql, false).await?
         };
 
-        self.with_db_for(&site.cloud_id, |db| {
+        self.with_db_for(&scope, |db| {
             let previous = db.meta(LAST_SYNC)?;
             let unread_after = match &previous {
                 Some(at) => (chrono::DateTime::parse_from_rfc3339(at).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now())
@@ -116,10 +135,12 @@ impl Core {
     /// Re-reads one issue after a write so the UI shows the result without waiting for the next sync.
     async fn refresh(&self, key: &str) -> Result<()> {
         let (site, me) = self.identity().await?;
+        let scope = Scope::of(&site, &me);
         let t = self.jira.issue(key).await?;
-        self.with_db_for(&site.cloud_id, |db| {
+        self.with_db_for(&scope, |db| {
             db.upsert_ticket(&t, &now_iso())?;
-            let since = db.meta(LAST_SYNC)?.unwrap_or_else(now_iso);
+            // Same 24 hour lookback as the first sync, so recent activity on this ticket still arrives unread.
+            let since = db.meta(LAST_SYNC)?.unwrap_or_else(|| ago(Duration::hours(24)));
             db.insert_events(&derive(&t, &me.account_id), &since)?;
             Ok(())
         })
@@ -240,5 +261,19 @@ impl Core {
             self.set_error(Some(format!("Saved, but couldn't refresh {key}: {e}")));
             self.wake.notify_one();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_site_and_account_gets_its_own_database_file() {
+        let a = Scope { cloud_id: "c1".into(), account_id: "712020:ab-cd".into() };
+        let b = Scope { cloud_id: "c1".into(), account_id: "someone-else".into() };
+        assert_eq!(a.file_name(), "inbox-c1-712020_ab-cd.sqlite");
+        assert_ne!(a.file_name(), b.file_name());
+        assert!(!Scope { cloud_id: "../x".into(), account_id: "y".into() }.file_name().contains('/'));
     }
 }
