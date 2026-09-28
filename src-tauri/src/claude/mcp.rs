@@ -14,6 +14,7 @@ use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::auth::Scope;
 use crate::inbox::Core;
 use crate::model::{CachedTicket, Transition};
 
@@ -39,28 +40,35 @@ pub struct Proposal {
 
 pub type ProposalSink = Arc<dyn Fn(Proposal) + Send + Sync>;
 
+/// The account each running Ask Claude request belongs to. Tools answer only for runs listed here, and only as that
+/// account, so switching accounts mid-run can't hand Claude another account's tickets.
+pub type Runs = Arc<std::sync::Mutex<std::collections::HashMap<String, Scope>>>;
+
 struct McpState {
     core: Arc<Core>,
     token: String,
     sink: ProposalSink,
+    runs: Runs,
     seq: AtomicU64,
 }
 
 pub struct McpServer {
     pub port: u16,
     pub token: String,
+    pub runs: Runs,
 }
 
 impl McpServer {
     pub async fn start(core: Arc<Core>, token: String, sink: ProposalSink) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
-        let state = Arc::new(McpState { core, token: token.clone(), sink, seq: AtomicU64::new(0) });
+        let runs: Runs = Arc::default();
+        let state = Arc::new(McpState { core, token: token.clone(), sink, runs: runs.clone(), seq: AtomicU64::new(0) });
         let router = Router::new().route("/mcp/{request_id}", post(handle)).with_state(state);
         tauri::async_runtime::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
-        Ok(Self { port, token })
+        Ok(Self { port, token, runs })
     }
 
     pub fn config_json(&self, request_id: &str) -> String {
@@ -165,6 +173,10 @@ fn text(t: impl Into<String>, is_error: bool) -> Value {
 const PROPOSED: &str = "Proposed. The user will approve, edit or skip it in Jira Inbox; don't say it has been done.";
 
 async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
+    let Some(scope) = st.runs.lock().expect("runs lock poisoned").get(request_id).cloned() else {
+        return text("This Ask Claude run has ended.", true);
+    };
+    let scope = &scope;
     let args = &params["arguments"];
     let arg = |k: &str| args[k].as_str().map(str::trim).filter(|s| !s.is_empty());
     let propose = |body: ProposalBody| {
@@ -174,11 +186,11 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
     };
 
     match (params["name"].as_str().unwrap_or_default(), arg("key")) {
-        ("get_ticket", Some(key)) => match st.core.ticket(key).await {
+        ("get_ticket", Some(key)) => match st.core.ticket(scope, key).await {
             Ok(t) => text(describe(&t), false),
             Err(e) => text(format!("Couldn't read {key}: {e}"), true),
         },
-        ("list_transitions", Some(key)) => match st.core.transitions(key).await {
+        ("list_transitions", Some(key)) => match st.core.transitions(scope, key).await {
             Ok(ts) => text(
                 ts.iter().map(|t| format!("{}: {} → {}", t.id, t.name, t.to.name)).collect::<Vec<_>>().join("\n"),
                 false,
@@ -187,7 +199,7 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
         },
         ("search_tickets", _) => match arg("jql") {
             None => text("jql is required", true),
-            Some(jql) => match st.core.jira.search(jql, false).await {
+            Some(jql) => match st.core.jira.search(scope, jql, false).await {
                 Ok(found) => text(
                     found
                         .iter()
@@ -209,7 +221,7 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
         },
         ("propose_transition", Some(key)) => {
             let Some(id) = arg("transition_id") else { return text("transition_id is required", true) };
-            match st.core.transitions(key).await {
+            match st.core.transitions(scope, key).await {
                 Ok(ts) => match ts.into_iter().find(|t| t.id == id) {
                     Some(transition) => propose(ProposalBody::Transition { key: key.into(), transition }),
                     None => text(format!("{id} isn't an available transition for {key}; call list_transitions"), true),

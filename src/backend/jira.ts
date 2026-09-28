@@ -5,9 +5,20 @@ import type { Mention } from "../lib/mentions";
 import type { Person, Snapshot, Transition } from "../types";
 import type { Backend } from "./types";
 
-/** Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change. */
+/** The Jira site and account this backend acts for. */
+export interface Scope {
+  cloudId: string;
+  accountId: string;
+}
+
+/**
+ * Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change.
+ * Writes carry `scope`, so a write started for one account is refused if someone else has signed in meanwhile.
+ */
 export class JiraBackend implements Backend {
   readonly kind = "jira" as const;
+
+  constructor(private readonly scope: Scope) {}
 
   load() {
     return invoke<Snapshot>("snapshot");
@@ -23,11 +34,11 @@ export class JiraBackend implements Backend {
   }
 
   transition(key: string, transitionId: string) {
-    return invoke<void>("transition", { key, transitionId });
+    return invoke<void>("transition", { scope: this.scope, key, transitionId });
   }
 
   comment(key: string, body: string, mentions: Mention[] = []) {
-    return invoke<void>("comment", { key, body, mentions });
+    return invoke<void>("comment", { scope: this.scope, key, body, mentions });
   }
 
   mentionable(key: string, query: string) {
@@ -35,7 +46,7 @@ export class JiraBackend implements Backend {
   }
 
   createSubtasks(key: string, summaries: string[]) {
-    return invoke<string[]>("create_subtasks", { key, summaries });
+    return invoke<string[]>("create_subtasks", { scope: this.scope, key, summaries });
   }
 
   markSeen(key: string) {

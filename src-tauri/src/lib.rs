@@ -17,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
-use auth::{Auth, AuthStatus, OAuthApp};
+use auth::{Auth, AuthStatus, OAuthApp, Scope};
 use claude::{AskRequest, Claude};
 use inbox::Core;
 use error::{Error, Result};
@@ -125,12 +125,12 @@ async fn snooze(app: AppHandle, core: State<'_, CoreState>, id: String, until: O
 
 #[tauri::command]
 async fn transitions(core: State<'_, CoreState>, key: String) -> Result<Vec<Transition>> {
-    core.transitions(&key).await
+    core.transitions(&core.scope().await?, &key).await
 }
 
 #[tauri::command]
-async fn transition(app: AppHandle, core: State<'_, CoreState>, key: String, transition_id: String) -> Result<()> {
-    core.transition(&key, &transition_id).await?;
+async fn transition(app: AppHandle, core: State<'_, CoreState>, scope: Scope, key: String, transition_id: String) -> Result<()> {
+    core.transition(&scope, &key, &transition_id).await?;
     publish(&app, &core).await;
     Ok(())
 }
@@ -139,23 +139,30 @@ async fn transition(app: AppHandle, core: State<'_, CoreState>, key: String, tra
 async fn comment(
     app: AppHandle,
     core: State<'_, CoreState>,
+    scope: Scope,
     key: String,
     body: String,
     mentions: Option<Vec<adf::MentionRef>>,
 ) -> Result<()> {
-    core.comment(&key, &body, &mentions.unwrap_or_default()).await?;
+    core.comment(&scope, &key, &body, &mentions.unwrap_or_default()).await?;
     publish(&app, &core).await;
     Ok(())
 }
 
 #[tauri::command]
 async fn mentionable(core: State<'_, CoreState>, key: String, query: String) -> Result<Vec<model::Person>> {
-    core.mentionable(&key, &query).await
+    core.mentionable(&core.scope().await?, &key, &query).await
 }
 
 #[tauri::command]
-async fn create_subtasks(app: AppHandle, core: State<'_, CoreState>, key: String, summaries: Vec<String>) -> Result<Vec<String>> {
-    let created = core.create_subtasks(&key, &summaries).await?;
+async fn create_subtasks(
+    app: AppHandle,
+    core: State<'_, CoreState>,
+    scope: Scope,
+    key: String,
+    summaries: Vec<String>,
+) -> Result<Vec<String>> {
+    let created = core.create_subtasks(&scope, &key, &summaries).await?;
     publish(&app, &core).await;
     Ok(created)
 }
