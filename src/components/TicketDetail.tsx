@@ -323,7 +323,14 @@ function Composer({ ticket }: { ticket: Ticket }) {
     previews.current = files;
     latestBody.current = body;
   }, [files, body]);
-  useEffect(() => () => previews.current.forEach((f) => f.preview && URL.revokeObjectURL(f.preview)), []);
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+      previews.current.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
+    },
+    [],
+  );
 
   const add = async (list: File[]) => {
     if (!backend || !list.length) return;
@@ -333,6 +340,8 @@ function Composer({ ticket }: { ticket: Ticket }) {
     } catch (e) {
       return fail(`Couldn't check Jira's upload limit, so nothing was added: ${e instanceof Error ? e.message : String(e)}`);
     }
+    // Switching tickets during the check unmounts this composer; previews made now would never be released.
+    if (!mounted.current) return;
     if (limit === null) return fail("Attachments are turned off on this Jira site");
     const max = limit;
     const tooBig = list.filter((f) => f.size > max);

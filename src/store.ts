@@ -77,13 +77,27 @@ export const useStore = create<Store>()((set, get) => {
 
     async init(backend) {
       const mine = ++generation;
-      if (get().backend !== backend) get().backend?.dispose?.();
-      unsubscribe?.();
-      unsubscribe = backend.subscribe((snap) => {
-        if (mine === generation) set({ snap, now: new Date() });
+      // The current backend keeps running until this one has loaded, so a failed load leaves the app as it was.
+      let live = false;
+      const stop = backend.subscribe((snap) => {
+        if (live) set({ snap, now: new Date() });
       });
-      const snap = await backend.load();
-      if (mine !== generation) return;
+      let snap: Snapshot;
+      try {
+        snap = await backend.load();
+      } catch (e) {
+        stop();
+        throw e;
+      }
+      if (mine !== generation) return stop();
+      const previous = get().backend;
+      unsubscribe?.();
+      unsubscribe = () => {
+        live = false;
+        stop();
+      };
+      live = true;
+      if (previous && previous !== backend) previous.dispose?.();
       set({ backend, snap, now: new Date() });
       const first = currentItems(get())[0];
       if (first) get().select(first.id);
