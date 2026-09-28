@@ -68,7 +68,8 @@ impl Claude {
         let binary = find_claude().ok_or_else(|| {
             Error::Claude("Claude Code isn't installed, or isn't on your PATH. Install it from code.claude.com.".into())
         })?;
-        let ticket = self.core.ticket(&req.ticket_key).await?;
+        let scope = self.core.scope().await?;
+        let ticket = self.core.ticket(&scope, &req.ticket_key).await?;
         let cwd = req
             .cwd
             .clone()
@@ -102,6 +103,7 @@ impl Claude {
 
         let (cancel_tx, cancel_rx) = oneshot::channel();
         self.running.lock().expect("lock poisoned").insert(req.request_id.clone(), cancel_tx);
+        self.mcp.runs.lock().expect("lock poisoned").insert(req.request_id.clone(), scope);
 
         let this = self.clone();
         tauri::async_runtime::spawn(async move {
@@ -152,6 +154,7 @@ impl Claude {
                 let _ = this.core.remember_claude_session(&req.ticket_key, &id, &cwd.to_string_lossy()).await;
             }
             this.running.lock().expect("lock poisoned").remove(&request_id);
+            this.mcp.runs.lock().expect("lock poisoned").remove(&request_id);
         });
         Ok(())
     }
@@ -208,6 +211,8 @@ mod tests {
         let server = McpServer::start(core, "t0ken".into(), Arc::new(move |p| sink_got.lock().unwrap().push(p)))
             .await
             .unwrap();
+        let scope = crate::auth::Scope { cloud_id: "test".into(), account_id: "test".into() };
+        server.runs.lock().unwrap().insert("req-1".into(), scope);
 
         let mut cmd = Command::new(find_claude().expect("claude on PATH"));
         cmd.args(["-p", "--output-format", "stream-json", "--verbose"])

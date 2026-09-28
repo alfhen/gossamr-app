@@ -77,10 +77,24 @@ pub struct AuthStatus {
     pub me: Option<Account>,
 }
 
+/// The Jira site and account a piece of work belongs to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Scope {
+    pub cloud_id: String,
+    pub account_id: String,
+}
+
+impl Scope {
+    pub fn of(site: &Site, me: &Account) -> Self {
+        Self { cloud_id: site.cloud_id.clone(), account_id: me.account_id.clone() }
+    }
+}
+
 /// What the Jira client needs for one request.
 pub struct Credentials {
     pub access_token: String,
-    pub cloud_id: String,
+    pub scope: Scope,
 }
 
 pub struct Auth {
@@ -178,7 +192,7 @@ impl Auth {
         }
         Ok(Credentials {
             access_token: session.tokens.access_token.clone(),
-            cloud_id: session.site.cloud_id.clone(),
+            scope: Scope::of(&session.site, &session.me),
         })
     }
 
