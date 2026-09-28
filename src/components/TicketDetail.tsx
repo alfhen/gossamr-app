@@ -3,7 +3,7 @@ import { liveMentions, participants, segments, type Mention } from "../lib/menti
 import { snoozeOptions, relativeTime } from "../lib/views";
 import { selectedEvent, selectedTicket, useStore } from "../store";
 import type { AdfNode, Snapshot, Ticket, Transition, Uploaded } from "../types";
-import { filesIn, formatSize, nameFor } from "../lib/attachments";
+import { filesIn, formatSize, imageSize, nameFor } from "../lib/attachments";
 import { useClaude } from "../claudeStore";
 import { Adf, MediaContext, type ResolvedMedia } from "./Adf";
 import { Icon, Sparkle } from "./icons";
@@ -373,7 +373,8 @@ function Composer({ ticket }: { ticket: Ticket }) {
       for (const f of sent) {
         const u = f.uploaded ?? (await backend.attach(ticket.key, f.file));
         if (!f.uploaded) setFiles((prev) => prev.map((x) => (x.id === f.id ? { ...x, uploaded: u } : x)));
-        uploaded.push(u);
+        const size = f.file.type.startsWith("image/") ? await imageSize(f.file) : null;
+        uploaded.push(size ? { ...u, ...size } : u);
       }
       if (await comment(sentBody, liveMentions(sentBody, mentions), uploaded, ticket.key)) {
         sent.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));

@@ -38,6 +38,9 @@ export interface Uploaded {
   filename: string;
   mimeType: string;
   mediaId: string | null;
+  /** Pixel size, which Jira needs to show an image inline. */
+  width?: number;
+  height?: number;
 }
 
 export interface Comment {
