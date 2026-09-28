@@ -88,7 +88,9 @@ export const useStore = create<Store>()((set, get) => {
       // The current backend keeps running until this one has loaded, so a failed load leaves the app as it was.
       let live = false;
       let missed = false;
+      let updates = 0;
       const stop = backend.subscribe((snap) => {
+        updates++;
         if (live) set({ snap, now: new Date() });
         else missed = true;
       });
@@ -110,10 +112,12 @@ export const useStore = create<Store>()((set, get) => {
       if (previous && previous !== backend) previous.dispose?.();
       set({ backend, snap, now: new Date() });
       // An update that arrived during the load may be newer than what it returned, so read the latest once more.
+      // It's skipped if a newer update arrives while it runs, since that one is already showing.
       if (missed) {
+        const seen = updates;
         void backend
           .load()
-          .then((latest) => live && set({ snap: latest, now: new Date() }))
+          .then((latest) => live && updates === seen && set({ snap: latest, now: new Date() }))
           .catch(() => {});
       }
       const first = currentItems(get())[0];
