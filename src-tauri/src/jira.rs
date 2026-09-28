@@ -32,8 +32,15 @@ impl Jira {
 
     async fn call<T: DeserializeOwned>(&self, method: Method, path: &str, body: Option<&Value>) -> Result<T> {
         let mut force_refresh = false;
+        let mut first_site: Option<String> = None;
         loop {
             let creds = self.auth.credentials(force_refresh).await?;
+            // If someone signed in to another site while this request waited, retrying would change that site instead.
+            match &first_site {
+                Some(site) if site != &creds.cloud_id => return Err(Error::SiteChanged),
+                Some(_) => {}
+                None => first_site = Some(creds.cloud_id.clone()),
+            }
             let url = format!("https://api.atlassian.com/ex/jira/{}/rest/api/3/{path}", creds.cloud_id);
             let mut req = self.http.request(method.clone(), url).bearer_auth(&creds.access_token);
             if let Some(b) = body {
