@@ -40,7 +40,7 @@ pub fn recent(root: &Path, own_ids: &[String], limit: usize) -> Vec<SessionInfo>
         .filter(|f| f.path().extension().is_some_and(|e| e == "jsonl"))
         .filter_map(|f| Some((f.metadata().ok()?.modified().ok()?, f.path())))
         .collect();
-    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files.sort_by_key(|f| std::cmp::Reverse(f.0));
 
     files
         .into_iter()
