@@ -108,7 +108,7 @@ export function Setup({
             <button type="button" className={primary} disabled={!configured || busy !== null} onClick={() => void signIn()}>
               {busy === "signin" ? "Waiting for the browser…" : "Sign in with Atlassian"}
             </button>
-            <button type="button" className="text-accent" onClick={onUseSampleData}>
+            <button type="button" className="text-accent disabled:opacity-45" disabled={busy === "signin"} onClick={onUseSampleData}>
               Try it with sample data
             </button>
           </div>

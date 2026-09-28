@@ -13,6 +13,9 @@ use crate::secrets;
 pub const CALLBACK_PORT: u16 = 8723;
 pub const SCOPES: &str = "read:jira-work write:jira-work read:jira-user offline_access";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+/// A connection that doesn't send its request line quickly is dropped, so it can't hold up the real redirect.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_REQUEST_HEAD: usize = 8192;
 
 const APP_KEY: &str = "oauth-app";
 const SESSION_KEY: &str = "session";
@@ -73,11 +76,13 @@ pub struct Auth {
 }
 
 impl Auth {
-    pub fn load(http: reqwest::Client) -> Result<Self> {
-        Ok(Self {
-            http,
-            session: Mutex::new(secrets::load(SESSION_KEY)?),
-        })
+    /// Restores the saved session. If the Keychain can't be read, the app starts signed out rather than failing.
+    pub fn load(http: reqwest::Client) -> Self {
+        let session = secrets::load(SESSION_KEY).unwrap_or_else(|e| {
+            eprintln!("couldn't restore the saved Jira session: {e}");
+            None
+        });
+        Self { http, session: Mutex::new(session) }
     }
 
     pub async fn status(&self) -> Result<AuthStatus> {
@@ -241,7 +246,10 @@ fn authorize_url(app: &OAuthApp, state: &str) -> Url {
 #[derive(Debug, PartialEq)]
 enum Callback {
     Code(String),
+    /// A response to this sign-in that ends it, e.g. the user declined.
     Failed(String),
+    /// A request that isn't the redirect for this sign-in. Answer it and keep waiting.
+    Rejected(String),
     Ignore,
 }
 
@@ -258,12 +266,12 @@ fn parse_callback(request_line: &str, expected_state: &str) -> Callback {
         return Callback::Ignore;
     }
     let param = |name: &str| url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned());
+    // Only a response carrying this sign-in's state may end it; otherwise any local page could cancel the login.
+    if param("state").as_deref() != Some(expected_state) {
+        return Callback::Rejected("the sign-in response did not match this request".into());
+    }
     if let Some(err) = param("error") {
         return Callback::Failed(param("error_description").unwrap_or(err));
-    }
-    // The state check is what stops another local page from completing the login with its own code.
-    if param("state").as_deref() != Some(expected_state) {
-        return Callback::Failed("the sign-in response did not match this request".into());
     }
     match param("code") {
         Some(code) if !code.is_empty() => Callback::Code(code),
@@ -271,15 +279,30 @@ fn parse_callback(request_line: &str, expected_state: &str) -> Callback {
     }
 }
 
+/// Reads up to the end of the request headers, bounded in size and time.
+async fn read_request_head(stream: &mut TcpStream) -> Option<String> {
+    let mut buf = Vec::with_capacity(1024);
+    let read = async {
+        let mut chunk = [0u8; 1024];
+        while buf.len() < MAX_REQUEST_HEAD && !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            }
+        }
+    };
+    tokio::time::timeout(REQUEST_TIMEOUT, read).await.ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
 async fn wait_for_code(v4: &TcpListener, v6: Option<&TcpListener>, state: &str) -> Result<String> {
     loop {
         let mut stream = accept(v4, v6).await?;
-        let mut buf = [0u8; 8192];
-        let n = stream.read(&mut buf).await?;
-        let request = String::from_utf8_lossy(&buf[..n]);
+        let Some(request) = read_request_head(&mut stream).await else { continue };
         let line = request.lines().next().unwrap_or_default();
         match parse_callback(line, state) {
             Callback::Ignore => respond(&mut stream, "404 Not Found", "Not found").await,
+            Callback::Rejected(msg) => respond(&mut stream, "400 Bad Request", &msg).await,
             Callback::Code(code) => {
                 respond(&mut stream, "200 OK", "Signed in to Jira Inbox. You can close this tab.").await;
                 return Ok(code);
@@ -356,9 +379,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_mismatched_state() {
-        assert!(matches!(parse_callback("GET /callback?code=c&state=other HTTP/1.1", "st"), Callback::Failed(_)));
-        assert!(matches!(parse_callback("GET /callback?code=c HTTP/1.1", "st"), Callback::Failed(_)));
+    fn a_mismatched_state_is_rejected_without_ending_the_sign_in() {
+        assert!(matches!(parse_callback("GET /callback?code=c&state=other HTTP/1.1", "st"), Callback::Rejected(_)));
+        assert!(matches!(parse_callback("GET /callback?code=c HTTP/1.1", "st"), Callback::Rejected(_)));
+        assert!(matches!(parse_callback("GET /callback?error=access_denied&state=other HTTP/1.1", "st"), Callback::Rejected(_)));
+    }
+
+    #[test]
+    fn a_matching_response_without_a_code_fails() {
+        assert!(matches!(parse_callback("GET /callback?state=st HTTP/1.1", "st"), Callback::Failed(_)));
     }
 
     #[test]
@@ -374,6 +403,24 @@ mod tests {
         assert_eq!(parse_callback("GET /favicon.ico HTTP/1.1", "st"), Callback::Ignore);
         assert_eq!(parse_callback("POST /callback HTTP/1.1", "st"), Callback::Ignore);
         assert_eq!(parse_callback("", "st"), Callback::Ignore);
+    }
+
+    #[tokio::test]
+    async fn keeps_waiting_past_stray_and_silent_connections() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let waiter = tokio::spawn(async move { wait_for_code(&listener, None, "st").await });
+
+        let _silent = TcpStream::connect(addr).await.unwrap();
+        let mut stray = TcpStream::connect(addr).await.unwrap();
+        stray.write_all(b"GET /callback?code=evil&state=nope HTTP/1.1\r\n\r\n").await.unwrap();
+        let mut real = TcpStream::connect(addr).await.unwrap();
+        // Sent in two pieces to check the head is accumulated before parsing.
+        real.write_all(b"GET /callback?code=go").await.unwrap();
+        real.write_all(b"od&state=st HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+
+        let code = tokio::time::timeout(Duration::from_secs(15), waiter).await.unwrap().unwrap().unwrap();
+        assert_eq!(code, "good");
     }
 
     #[test]

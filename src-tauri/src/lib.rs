@@ -46,7 +46,7 @@ pub fn run() {
             let http = reqwest::Client::builder()
                 .user_agent(concat!("jira-inbox/", env!("CARGO_PKG_VERSION")))
                 .build()?;
-            app.manage::<AuthState>(Arc::new(Auth::load(http)?));
+            app.manage::<AuthState>(Arc::new(Auth::load(http)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![auth_status, save_oauth_app, sign_in, sign_out])
