@@ -25,6 +25,17 @@ export interface AdfMark {
   attrs?: Record<string, unknown>;
 }
 
+/** A file uploaded to a ticket. Without `mediaId` it can't be shown inline, so a comment names it instead. */
+export interface Uploaded {
+  id: string;
+  filename: string;
+  mimeType: string;
+  mediaId: string | null;
+  /** Pixel size, which Jira needs to show an image inline. */
+  width?: number;
+  height?: number;
+}
+
 export interface Comment {
   id: string;
   author: Person;

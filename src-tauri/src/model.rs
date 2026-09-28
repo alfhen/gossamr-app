@@ -210,6 +210,22 @@ pub struct Transition {
     pub to: Status,
 }
 
+/// A file uploaded to a ticket. `media_id` is its id in Atlassian's media service, which a comment needs to show it
+/// inline; it's `None` when Jira didn't reveal it, and the comment then names the file instead.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Uploaded {
+    pub id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub media_id: Option<String>,
+    /// Pixel size, measured by the page. An image is only shown inline when both are known.
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
 /// Keys created, in the order the summaries were given. `error` is set when creation stopped part-way.
 #[derive(Clone, Debug, Serialize)]
 pub struct CreatedSubtasks {

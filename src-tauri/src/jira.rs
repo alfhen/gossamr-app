@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use reqwest::{Method, StatusCode};
+use reqwest::multipart::{Form, Part};
+use reqwest::{Method, RequestBuilder, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -9,7 +10,7 @@ use serde_json::{json, Value};
 use crate::adf;
 use crate::auth::{json_or_error, Auth, Scope};
 use crate::error::{Error, Result};
-use crate::model::{CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, Transition};
+use crate::model::{CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, Transition, Uploaded};
 
 const FIELDS: &[&str] = &[
     "summary", "status", "issuetype", "priority", "assignee", "reporter", "parent", "description", "comment",
@@ -27,17 +28,32 @@ const MENTION_SUGGESTIONS: usize = 10;
 
 pub struct Jira {
     http: reqwest::Client,
+    /// Doesn't follow redirects, so a redirect's target can be read (see `media_id`).
+    no_redirect: reqwest::Client,
     auth: Arc<Auth>,
 }
 
 impl Jira {
     pub fn new(http: reqwest::Client, auth: Arc<Auth>) -> Self {
-        Self { http, auth }
+        let no_redirect = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("static client config");
+        Self { http, no_redirect, auth }
     }
 
     /// Sends one request as `scope`. It is refused before sending if the signed-in site or account is no longer
-    /// `scope`, so work started for one account can never read or write as another.
-    async fn call<T: DeserializeOwned>(&self, scope: &Scope, method: Method, path: &str, body: Option<&Value>) -> Result<T> {
+    /// `scope`, so work started for one account can never read or write as another. `build` may run twice, since a
+    /// 401 is retried once with a refreshed token.
+    async fn send(
+        &self,
+        client: &reqwest::Client,
+        scope: &Scope,
+        method: Method,
+        path: &str,
+        build: impl Fn(RequestBuilder) -> RequestBuilder,
+    ) -> Result<reqwest::Response> {
         let mut force_refresh = false;
         loop {
             let creds = self.auth.credentials(force_refresh).await?;
@@ -45,21 +61,27 @@ impl Jira {
                 return Err(Error::SiteChanged);
             }
             let url = format!("https://api.atlassian.com/ex/jira/{}/rest/api/3/{path}", scope.cloud_id);
-            let mut req = self.http.request(method.clone(), url).bearer_auth(&creds.access_token);
-            if let Some(b) = body {
-                req = req.json(b);
-            }
-            let res = req.send().await?;
+            let res = build(client.request(method.clone(), url).bearer_auth(&creds.access_token)).send().await?;
             // A token can be revoked or rotated elsewhere before it expires; refresh once and retry.
             if res.status() == StatusCode::UNAUTHORIZED && !force_refresh {
                 force_refresh = true;
                 continue;
             }
-            if res.status() == StatusCode::NO_CONTENT {
-                return Ok(serde_json::from_value(Value::Null)?);
-            }
-            return json_or_error(res).await;
+            return Ok(res);
         }
+    }
+
+    async fn call<T: DeserializeOwned>(&self, scope: &Scope, method: Method, path: &str, body: Option<&Value>) -> Result<T> {
+        let res = self
+            .send(&self.http, scope, method, path, |req| match body {
+                Some(b) => req.json(b),
+                None => req,
+            })
+            .await?;
+        if res.status() == StatusCode::NO_CONTENT {
+            return Ok(serde_json::from_value(Value::Null)?);
+        }
+        json_or_error(res).await
     }
 
     /// Runs a JQL search and returns up to `limit` matching issues. With `history_since`, each issue carries its
@@ -195,8 +217,48 @@ impl Jira {
             .collect())
     }
 
-    pub async fn comment(&self, scope: &Scope, key: &str, text: &str, mentions: &[adf::MentionRef]) -> Result<()> {
-        let body = json!({ "body": adf::from_text(text, mentions) });
+    /// Jira's per-file upload limit in bytes, or `None` when attachments are turned off on the site.
+    pub async fn attachment_limit(&self, scope: &Scope) -> Result<Option<u64>> {
+        let meta: Value = self.call(scope, Method::GET, "attachment/meta", None).await?;
+        Ok(if meta["enabled"] == false { None } else { meta["uploadLimit"].as_u64() })
+    }
+
+    /// Uploads a file to `key`, then looks up its media id so a comment can show it inline.
+    pub async fn attach(&self, scope: &Scope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
+        let mime_type = if Part::bytes(Vec::new()).mime_str(mime_type).is_ok() { mime_type } else { "application/octet-stream" };
+        let res = self
+            .send(&self.http, scope, Method::POST, &format!("issue/{key}/attachments"), |req| {
+                let part = Part::bytes(bytes.clone()).file_name(filename.to_string()).mime_str(mime_type).expect("checked above");
+                // Required by Jira for multipart uploads, as protection against cross-site requests.
+                req.header("X-Atlassian-Token", "no-check").multipart(Form::new().part("file", part))
+            })
+            .await?;
+        let created: Vec<Value> = json_or_error(res).await?;
+        let a = created.first().ok_or_else(|| Error::Api { status: 200, message: "Jira didn't return the upload".into() })?;
+        let id = a["id"].as_str().map(String::from).or_else(|| a["id"].as_u64().map(|n| n.to_string())).unwrap_or_default();
+        let media_id = self.media_id(scope, &id).await.unwrap_or(None);
+        Ok(Uploaded {
+            filename: a["filename"].as_str().unwrap_or(filename).to_string(),
+            mime_type: a["mimeType"].as_str().unwrap_or(mime_type).to_string(),
+            id,
+            media_id,
+            width: None,
+            height: None,
+        })
+    }
+
+    /// The media-service id of an attachment. Jira's API only exposes it through the redirect its content download
+    /// answers with (`…/file/{mediaId}/binary`), so this reads that redirect without following it.
+    pub async fn media_id(&self, scope: &Scope, attachment_id: &str) -> Result<Option<String>> {
+        let res = self.send(&self.no_redirect, scope, Method::GET, &format!("attachment/content/{attachment_id}"), |r| r).await?;
+        if !res.status().is_redirection() {
+            return Ok(None);
+        }
+        Ok(res.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()).and_then(media_id_from_location))
+    }
+
+    pub async fn comment(&self, scope: &Scope, key: &str, text: &str, mentions: &[adf::MentionRef], files: &[Uploaded]) -> Result<()> {
+        let body = json!({ "body": adf::with_files(adf::from_text(text, mentions), files) });
         self.call::<Value>(scope, Method::POST, &format!("issue/{key}/comment"), Some(&body)).await?;
         Ok(())
     }
@@ -231,6 +293,11 @@ fn doc(v: &Value) -> Option<Value> {
 
 fn str_of(v: &Value) -> Option<String> {
     v.as_str().map(String::from)
+}
+
+fn media_id_from_location(location: &str) -> Option<String> {
+    let id = location.split("/file/").nth(1)?.split(['/', '?']).next()?;
+    (id.len() >= 32 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')).then(|| id.to_string())
 }
 
 /// The changelog's total length, if the expanded changelog didn't include all of it.
@@ -400,6 +467,15 @@ pub(crate) mod tests {
         }
         assert_eq!(pages, vec![(150, 100), (50, 100), (0, 50)]);
         assert_eq!(previous_page(0), None);
+    }
+
+    #[test]
+    fn reads_the_media_id_from_a_content_redirect() {
+        let id = "3f5b1c2a-9d4e-4b7a-8c1f-2e6d9a0b7c34";
+        let loc = format!("https://api.media.atlassian.com/file/{id}/binary?token=abc&client=xyz&collection=&dl=true");
+        assert_eq!(media_id_from_location(&loc).as_deref(), Some(id));
+        assert_eq!(media_id_from_location("https://example.com/secure/attachment/10001/a.png"), None);
+        assert_eq!(media_id_from_location("https://api.media.atlassian.com/file/not-an-id/binary"), None);
     }
 
     #[test]

@@ -3,7 +3,7 @@ import { auth, type Account, type Site } from "./backend/auth";
 import type { Backend } from "./backend/types";
 import type { Mention } from "./lib/mentions";
 import { itemsForView, type ListItem } from "./lib/views";
-import type { Snapshot, Ticket, ViewId } from "./types";
+import type { Snapshot, Ticket, Uploaded, ViewId } from "./types";
 
 export interface Toast {
   id: number;
@@ -38,10 +38,19 @@ interface Actions {
   snooze(until: Date): Promise<void>;
   toggleUnread(): Promise<void>;
   transition(transitionId: string, name: string): Promise<void>;
-  comment(body: string, mentions?: Mention[]): Promise<boolean>;
+  comment(body: string, options?: CommentOptions): Promise<boolean>;
   showToast(message: string, undo?: () => void): void;
   goToTicket(key: string): void;
   signOut(): Promise<void>;
+}
+
+export interface CommentOptions {
+  mentions?: Mention[];
+  files?: Uploaded[];
+  /** The ticket to comment on; the selected one when omitted. */
+  ticketKey?: string;
+  /** The backend the files were uploaded through. The comment is refused if another has taken over since. */
+  via?: Backend;
 }
 
 export type Store = State & Actions;
@@ -76,13 +85,41 @@ export const useStore = create<Store>()((set, get) => {
 
     async init(backend) {
       const mine = ++generation;
-      unsubscribe?.();
-      unsubscribe = backend.subscribe((snap) => {
-        if (mine === generation) set({ snap, now: new Date() });
+      // The current backend keeps running until this one has loaded, so a failed load leaves the app as it was.
+      let live = false;
+      let missed = false;
+      let updates = 0;
+      const stop = backend.subscribe((snap) => {
+        updates++;
+        if (live) set({ snap, now: new Date() });
+        else missed = true;
       });
-      const snap = await backend.load();
-      if (mine !== generation) return;
+      let snap: Snapshot;
+      try {
+        snap = await backend.load();
+      } catch (e) {
+        stop();
+        throw e;
+      }
+      if (mine !== generation) return stop();
+      const previous = get().backend;
+      unsubscribe?.();
+      unsubscribe = () => {
+        live = false;
+        stop();
+      };
+      live = true;
+      if (previous && previous !== backend) previous.dispose?.();
       set({ backend, snap, now: new Date() });
+      // An update that arrived during the load may be newer than what it returned, so read the latest once more.
+      // It's skipped if a newer update arrives while it runs, since that one is already showing.
+      if (missed) {
+        const seen = updates;
+        void backend
+          .load()
+          .then((latest) => live && updates === seen && set({ snap: latest, now: new Date() }))
+          .catch(() => {});
+      }
       const first = currentItems(get())[0];
       if (first) get().select(first.id);
     },
@@ -167,12 +204,16 @@ export const useStore = create<Store>()((set, get) => {
       }
     },
 
-    async comment(body, mentions = []) {
-      const { backend } = get();
-      const t = selectedTicket(get());
+    async comment(body, { mentions = [], files = [], ticketKey, via } = {}) {
+      const { backend, snap } = get();
+      if (via && backend !== via) {
+        set({ error: "Couldn't comment: you switched Jira accounts while the files were uploading" });
+        return false;
+      }
+      const t = ticketKey ? (snap?.tickets[ticketKey] ?? null) : selectedTicket(get());
       const text = body.trim();
-      if (!backend || !t || !text) return false;
-      const ok = await run(`comment on ${t.key}`, () => backend.comment(t.key, text, mentions));
+      if (!backend || !t || (!text && !files.length)) return false;
+      const ok = await run(`comment on ${t.key}`, () => backend.comment(t.key, text, mentions, files));
       if (ok) get().showToast(`Commented on ${t.key}`);
       return ok;
     },
@@ -186,6 +227,7 @@ export const useStore = create<Store>()((set, get) => {
         generation++;
         unsubscribe?.();
         unsubscribe = null;
+        get().backend?.dispose?.();
         set({ account: null, backend: null, snap: null, selectedId: null, overlay: null });
       }
     },

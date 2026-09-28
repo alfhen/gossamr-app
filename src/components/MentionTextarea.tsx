@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { filesIn } from "../lib/attachments";
 import { activeQuery, insertMention, rankPeople, segments, type ActiveQuery, type Mention } from "../lib/mentions";
 import { useStore } from "../store";
 import type { Person } from "../types";
@@ -19,6 +20,7 @@ export function MentionTextarea({
   people,
   placeholder,
   onSubmit,
+  onPasteFiles,
   disabled,
   className = "",
 }: {
@@ -31,6 +33,8 @@ export function MentionTextarea({
   people: Person[];
   placeholder?: string;
   onSubmit?: () => void;
+  /** Receives files pasted into the field; without it, pasting a file does nothing special. */
+  onPasteFiles?: (files: File[]) => void;
   disabled?: boolean;
   className?: string;
 }) {
@@ -148,6 +152,12 @@ export function MentionTextarea({
         }}
         onSelect={(e) => track(e.currentTarget)}
         onKeyDown={onKeyDown}
+        onPaste={(e) => {
+          const files = onPasteFiles ? filesIn(e.clipboardData) : [];
+          if (!files.length) return;
+          e.preventDefault();
+          onPasteFiles?.(files);
+        }}
         onBlur={() => setTimeout(() => setQuery(null), 120)}
         onScroll={(e) => {
           if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop;
