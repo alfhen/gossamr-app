@@ -16,7 +16,9 @@ export function Root() {
   const start = (status: AuthStatus | null) => {
     const account = status?.site && status.me ? { site: status.site, me: status.me } : null;
     useStore.setState({ account });
-    void useStore.getState().init(account ? new JiraBackend() : new MockBackend());
+    void useStore
+      .getState()
+      .init(account ? new JiraBackend({ cloudId: account.site.cloudId, accountId: account.me.accountId }) : new MockBackend());
     if (account) void askForNotifications();
     setPhase({ name: "app" });
   };

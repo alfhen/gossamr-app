@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{Duration, SecondsFormat, Utc};
 use tokio::sync::Notify;
 
-use crate::auth::{Account, Auth, Site};
+use crate::auth::{Account, Auth, Scope, Site};
 use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, NewEvent};
@@ -32,22 +32,10 @@ fn ago(d: Duration) -> String {
     (Utc::now() - d).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// The site and account a piece of work belongs to.
-#[derive(Clone, PartialEq, Eq)]
-struct Scope {
-    cloud_id: String,
-    account_id: String,
-}
-
-impl Scope {
-    fn of(site: &Site, me: &Account) -> Self {
-        Self { cloud_id: site.cloud_id.clone(), account_id: me.account_id.clone() }
-    }
-
-    fn file_name(&self) -> String {
-        let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect::<String>();
-        format!("inbox-{}-{}.sqlite", safe(&self.cloud_id), safe(&self.account_id))
-    }
+/// Separate files per site and account, so two people signing in on one Mac never see each other's inbox.
+fn db_file(scope: &Scope) -> String {
+    let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect::<String>();
+    format!("inbox-{}-{}.sqlite", safe(&scope.cloud_id), safe(&scope.account_id))
 }
 
 pub struct Core {
@@ -84,7 +72,7 @@ impl Core {
         }
         let mut guard = self.db.lock().expect("db lock poisoned");
         if guard.as_ref().map(|(open, _)| open != scope).unwrap_or(true) {
-            *guard = Some((scope.clone(), Db::open(&self.data_dir.join(scope.file_name()))?));
+            *guard = Some((scope.clone(), Db::open(&self.data_dir.join(db_file(scope)))?));
         }
         f(&guard.as_ref().expect("opened above").1)
     }
@@ -103,13 +91,13 @@ impl Core {
         let (site, me) = self.identity().await?;
         let scope = Scope::of(&site, &me);
         let started = now_iso();
-        let tracked = self.jira.search(TRACKED_JQL, true).await?;
+        let tracked = self.jira.search(&scope, TRACKED_JQL, true).await?;
         let epics: Vec<&str> = tracked.iter().filter(|t| t.is_epic).map(|t| t.key.as_str()).collect();
         let context = if epics.is_empty() {
             Vec::new()
         } else {
             let jql = format!("parent in ({}) ORDER BY updated DESC", epics.join(","));
-            self.jira.search(&jql, false).await?
+            self.jira.search(&scope, &jql, false).await?
         };
 
         self.with_db_for(&scope, |db| {
@@ -133,15 +121,13 @@ impl Core {
     }
 
     /// Re-reads one issue after a write so the UI shows the result without waiting for the next sync.
-    async fn refresh(&self, key: &str) -> Result<()> {
-        let (site, me) = self.identity().await?;
-        let scope = Scope::of(&site, &me);
-        let t = self.jira.issue(key).await?;
-        self.with_db_for(&scope, |db| {
+    async fn refresh(&self, scope: &Scope, key: &str) -> Result<()> {
+        let t = self.jira.issue(scope, key).await?;
+        self.with_db_for(scope, |db| {
             db.upsert_ticket(&t, &now_iso())?;
             // Same 24 hour lookback as the first sync, so recent activity on this ticket still arrives unread.
             let since = db.meta(LAST_SYNC)?.unwrap_or_else(|| ago(Duration::hours(24)));
-            db.insert_events(&derive(&t, &me.account_id), &since)?;
+            db.insert_events(&derive(&t, &scope.account_id), &since)?;
             Ok(())
         })
         .await
@@ -234,30 +220,38 @@ impl Core {
         self.with_db(|db| db.snooze(id, until.as_deref())).await
     }
 
-    pub async fn transitions(&self, key: &str) -> Result<Vec<Transition>> {
-        self.jira.transitions(key).await
+    /// The signed-in scope, for work that starts now.
+    pub async fn scope(&self) -> Result<Scope> {
+        let (site, me) = self.identity().await?;
+        Ok(Scope::of(&site, &me))
     }
 
-    pub async fn transition(&self, key: &str, transition_id: &str) -> Result<()> {
-        self.jira.transition(key, transition_id).await?;
-        self.after_write(key).await;
+    pub async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<Transition>> {
+        self.jira.transitions(scope, key).await
+    }
+
+    /// `scope` is the account the user was looking at when they acted; the write is refused if that has changed.
+    pub async fn transition(&self, scope: &Scope, key: &str, transition_id: &str) -> Result<()> {
+        self.jira.transition(scope, key, transition_id).await?;
+        self.after_write(scope, key).await;
         Ok(())
     }
 
-    pub async fn comment(&self, key: &str, body: &str) -> Result<()> {
+    /// `scope` is the account the user was looking at when they acted; the write is refused if that has changed.
+    pub async fn comment(&self, scope: &Scope, key: &str, body: &str) -> Result<()> {
         let body = body.trim();
         if body.is_empty() {
             return Err(Error::Api { status: 400, message: "a comment can't be empty".into() });
         }
-        self.jira.comment(key, body).await?;
-        self.after_write(key).await;
+        self.jira.comment(scope, key, body).await?;
+        self.after_write(scope, key).await;
         Ok(())
     }
 
     /// Re-reads a ticket after a successful write. A failure here must not be reported as a failed write, or a retry
     /// would post the comment twice; the next sync picks the change up instead.
-    async fn after_write(&self, key: &str) {
-        if let Err(e) = self.refresh(key).await {
+    async fn after_write(&self, scope: &Scope, key: &str) {
+        if let Err(e) = self.refresh(scope, key).await {
             self.set_error(Some(format!("Saved, but couldn't refresh {key}: {e}")));
             self.wake.notify_one();
         }
@@ -272,8 +266,8 @@ mod tests {
     fn each_site_and_account_gets_its_own_database_file() {
         let a = Scope { cloud_id: "c1".into(), account_id: "712020:ab-cd".into() };
         let b = Scope { cloud_id: "c1".into(), account_id: "someone-else".into() };
-        assert_eq!(a.file_name(), "inbox-c1-712020_ab-cd.sqlite");
-        assert_ne!(a.file_name(), b.file_name());
-        assert!(!Scope { cloud_id: "../x".into(), account_id: "y".into() }.file_name().contains('/'));
+        assert_eq!(db_file(&a), "inbox-c1-712020_ab-cd.sqlite");
+        assert_ne!(db_file(&a), db_file(&b));
+        assert!(!db_file(&Scope { cloud_id: "../x".into(), account_id: "y".into() }).contains('/'));
     }
 }
