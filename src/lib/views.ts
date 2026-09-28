@@ -4,6 +4,10 @@ export interface ListItem {
   id: string;
   ticketKey: string;
   event?: InboxEvent;
+  /** Every update to the ticket in this view, newest first, when there is more than one. */
+  stack?: InboxEvent[];
+  /** An update listed inside an expanded stack. */
+  inStack?: boolean;
 }
 
 export const VIEWS: { id: ViewId; label: string }[] = [
@@ -65,8 +69,29 @@ export function itemsForView(
   }
 }
 
+/**
+ * Folds several updates to one ticket into a single `s:<key>` item placed at the newest update. Stacks whose ticket
+ * is in `expanded` are followed by their updates.
+ */
+export function stackByTicket(items: ListItem[], expanded: ReadonlySet<string>): ListItem[] {
+  const byTicket = new Map<string, InboxEvent[]>();
+  for (const it of items) if (it.event) byTicket.set(it.ticketKey, [...(byTicket.get(it.ticketKey) ?? []), it.event]);
+  const placed = new Set<string>();
+  return items.flatMap((it) => {
+    const stack = byTicket.get(it.ticketKey);
+    if (!stack || stack.length < 2) return [it];
+    if (placed.has(it.ticketKey)) return [];
+    placed.add(it.ticketKey);
+    const head: ListItem = { id: `s:${it.ticketKey}`, ticketKey: it.ticketKey, event: stack[0], stack };
+    if (!expanded.has(it.ticketKey)) return [head];
+    return [head, ...stack.map((e) => ({ id: `e:${e.id}`, ticketKey: it.ticketKey, event: e, inStack: true }))];
+  });
+}
+
+/** Event views count tickets rather than updates, matching the list once updates are stacked. */
 export function viewCounts(snap: Snapshot, now: Date): Record<ViewId, number> {
-  const unread = (keep: (e: InboxEvent) => boolean) => snap.events.filter((e) => e.unread && keep(e)).length;
+  const tickets = (keep: (e: InboxEvent) => boolean) => new Set(snap.events.filter(keep).map((e) => e.ticketKey)).size;
+  const unread = (keep: (e: InboxEvent) => boolean) => tickets((e) => e.unread && keep(e));
   return {
     inbox: unread((e) => isActive(e, now)),
     mentions: unread((e) => e.kind === "mention" && e.doneAt === null),
@@ -74,8 +99,8 @@ export function viewCounts(snap: Snapshot, now: Date): Record<ViewId, number> {
       (t) => t.assignee?.accountId === snap.me.accountId && t.status.category !== "done",
     ).length,
     watching: snap.watching.length,
-    snoozed: snap.events.filter((e) => e.doneAt === null && isSnoozed(e, now)).length,
-    done: snap.events.filter((e) => e.doneAt !== null).length,
+    snoozed: tickets((e) => e.doneAt === null && isSnoozed(e, now)),
+    done: tickets((e) => e.doneAt !== null),
   };
 }
 

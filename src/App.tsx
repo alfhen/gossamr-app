@@ -53,6 +53,10 @@ function useKeyboard() {
           return s.move(1);
         case "prev":
           return s.move(-1);
+        case "expand":
+          return s.setStackOpen(true);
+        case "collapse":
+          return s.setStackOpen(false);
         case "transition":
           return s.openOverlay("transition");
         case "snooze":
@@ -91,15 +95,17 @@ function useClock() {
 
 /**
  * Selects the first item when nothing is selected yet (e.g. the first sync just arrived), or when the selected
- * inbox item leaves the list (done, snoozed, filtered out).
+ * inbox item leaves the list (done, snoozed, filtered out). An update that folds into a stack, or a stack that shrinks
+ * to one update, keeps its ticket selected.
  */
 function useSelectionFallback() {
   const state = useStore();
   const items = currentItems(state);
   const { selectedId, select } = state;
-  const missing = (!selectedId || selectedId.startsWith("e:")) && !items.some((i) => i.id === selectedId);
-  const first = items[0]?.id ?? null;
+  const missing = (!selectedId || !selectedId.startsWith("t:")) && !items.some((i) => i.id === selectedId);
+  const key = missing ? selectedTicket(state)?.key : undefined;
+  const next = (key && items.find((i) => i.ticketKey === key && !i.inStack)?.id) || (items[0]?.id ?? null);
   useEffect(() => {
-    if (missing) select(first);
-  }, [missing, first, select]);
+    if (missing) select(next);
+  }, [missing, next, select]);
 }

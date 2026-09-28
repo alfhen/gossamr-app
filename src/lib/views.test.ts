@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InboxEvent, Snapshot, Ticket } from "../types";
-import { itemsForView, relativeTime, snoozeOptions, statusTone, viewCounts } from "./views";
+import { itemsForView, relativeTime, snoozeOptions, stackByTicket, statusTone, viewCounts } from "./views";
 
 const now = new Date("2026-09-28T12:00:00Z");
 const me = { accountId: "me", name: "Me" };
@@ -49,6 +49,25 @@ const snap = (events: InboxEvent[], tickets: Ticket[] = [ticket("A-1"), ticket("
   lastSyncAt: null,
 });
 
+describe("stackByTicket", () => {
+  const s = snap([
+    event("a1", { at: "2026-09-28T11:50:00Z" }),
+    event("b1", { ticketKey: "B-1", at: "2026-09-28T11:40:00Z" }),
+    event("a2", { at: "2026-09-28T11:30:00Z" }),
+  ]);
+  const items = itemsForView(s, "inbox", null, now);
+
+  it("folds a ticket's updates into one item at the newest, leaving single updates alone", () => {
+    const stacked = stackByTicket(items, new Set());
+    expect(stacked.map((i) => i.id)).toEqual(["s:A-1", "e:b1"]);
+    expect(stacked[0].stack?.map((e) => e.id)).toEqual(["a1", "a2"]);
+  });
+
+  it("lists an expanded stack's updates after it", () => {
+    expect(stackByTicket(items, new Set(["A-1"])).map((i) => i.id)).toEqual(["s:A-1", "e:a1", "e:a2", "e:b1"]);
+  });
+});
+
 describe("itemsForView", () => {
   it("keeps done and currently snoozed events out of the inbox, newest first", () => {
     const s = snap([
@@ -83,9 +102,15 @@ describe("itemsForView", () => {
 });
 
 describe("viewCounts", () => {
-  it("counts unread events per view and open tickets assigned to me", () => {
+  it("counts tickets with unread updates per view and open tickets assigned to me", () => {
     const s = snap(
-      [event("1"), event("2", { kind: "mention" }), event("3", { unread: false }), event("4", { doneAt: "2026-09-28T11:00:00Z", unread: false })],
+      [
+        event("1"),
+        event("2", { kind: "mention" }),
+        event("3", { unread: false }),
+        event("4", { doneAt: "2026-09-28T11:00:00Z", unread: false }),
+        event("5", { ticketKey: "B-1" }),
+      ],
       [ticket("A-1", { assignee: me }), ticket("B-1", { assignee: me, status: { name: "Done", category: "done" } })],
     );
     expect(viewCounts(s, now)).toMatchObject({ inbox: 2, mentions: 1, mine: 1, done: 1, snoozed: 0 });

@@ -2,8 +2,8 @@ import { create } from "zustand";
 import { auth, type Account, type Site } from "./backend/auth";
 import type { Backend } from "./backend/types";
 import type { Mention } from "./lib/mentions";
-import { itemsForView, type ListItem } from "./lib/views";
-import type { Snapshot, Ticket, Uploaded, ViewId } from "./types";
+import { itemsForView, stackByTicket, type ListItem } from "./lib/views";
+import type { InboxEvent, Snapshot, Ticket, Uploaded, ViewId } from "./types";
 
 export interface Toast {
   id: number;
@@ -22,6 +22,8 @@ interface State {
   view: ViewId;
   project: string | null;
   selectedId: string | null;
+  /** Tickets whose stack of updates is shown expanded. */
+  expanded: ReadonlySet<string>;
   overlay: Overlay;
   toast: Toast | null;
   error: string | null;
@@ -33,6 +35,8 @@ interface Actions {
   setView(view: ViewId, project?: string | null): void;
   select(id: string | null): void;
   move(delta: 1 | -1): void;
+  /** Expands or collapses the stack the selection is in. */
+  setStackOpen(open: boolean): void;
   openOverlay(o: Overlay): void;
   markDone(): Promise<void>;
   snooze(until: Date): Promise<void>;
@@ -79,6 +83,7 @@ export const useStore = create<Store>()((set, get) => {
     view: "inbox",
     project: null,
     selectedId: null,
+    expanded: new Set(),
     overlay: null,
     toast: null,
     error: null,
@@ -140,8 +145,7 @@ export const useStore = create<Store>()((set, get) => {
       const nextKey = id && ticketKeyOf(id, snap);
       // "Since you last looked" means since you last left the ticket, so the diff stays visible while it's open.
       if (prevKey && prevKey !== nextKey) void backend.markSeen(prevKey);
-      const ev = id?.startsWith("e:") ? snap.events.find((e) => `e:${e.id}` === id) : undefined;
-      if (ev?.unread) void backend.setUnread(ev.id, false);
+      for (const ev of selectedEvents(get())) if (ev.unread) void backend.setUnread(ev.id, false);
     },
 
     move(delta) {
@@ -152,47 +156,60 @@ export const useStore = create<Store>()((set, get) => {
       get().select(items[next].id);
     },
 
+    setStackOpen(open) {
+      const s = get();
+      const item = currentItems(s).find((i) => i.id === s.selectedId);
+      if (!item || !(item.stack || item.inStack)) return;
+      const expanded = new Set(s.expanded);
+      if (open) expanded.add(item.ticketKey);
+      else expanded.delete(item.ticketKey);
+      set({ expanded });
+      if (!open) get().select(`s:${item.ticketKey}`);
+    },
+
     openOverlay(overlay) {
       // Menus render only for a selected ticket or event; opening one without it would swallow all shortcuts.
       if (overlay === "transition" && !selectedTicket(get())) return;
-      if (overlay === "snooze" && !selectedEvent(get())) return;
+      if (overlay === "snooze" && !selectedEvents(get()).length) return;
       set({ overlay });
     },
 
     async markDone() {
       const { backend } = get();
-      const ev = selectedEvent(get());
-      if (!backend || !ev) return;
-      const done = ev.doneAt === null;
-      const snoozedUntil = ev.snoozedUntil;
+      const evs = selectedEvents(get());
+      if (!backend || !evs.length) return;
+      const done = evs[0].doneAt === null;
       const neighbour = neighbourOf(get());
-      if (await run("update the item", () => backend.setDone(ev.id, done))) {
+      if (await run("update the item", () => forEach(evs, (ev) => backend.setDone(ev.id, done)))) {
         if (neighbour) get().select(neighbour);
-        get().showToast(done ? "Cleared" : "Moved back to Inbox", () =>
-          void run("undo", async () => {
-            await backend.setDone(ev.id, !done);
-            if (done && snoozedUntil) await backend.snooze(ev.id, new Date(snoozedUntil));
-          }),
+        get().showToast(`${done ? "Cleared" : "Moved back to Inbox"}${countOf(evs)}`, () =>
+          void run("undo", () =>
+            forEach(evs, async (ev) => {
+              await backend.setDone(ev.id, !done);
+              if (done && ev.snoozedUntil) await backend.snooze(ev.id, new Date(ev.snoozedUntil));
+            }),
+          ),
         );
       }
     },
 
     async snooze(until) {
       const { backend } = get();
-      const ev = selectedEvent(get());
-      if (!backend || !ev) return;
+      const evs = selectedEvents(get());
+      if (!backend || !evs.length) return;
       const neighbour = neighbourOf(get());
-      if (await run("snooze the item", () => backend.snooze(ev.id, until))) {
+      if (await run("snooze the item", () => forEach(evs, (ev) => backend.snooze(ev.id, until)))) {
         if (neighbour) get().select(neighbour);
         const when = until.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
-        get().showToast(`Snoozed until ${when}`, () => void backend.snooze(ev.id, null));
+        get().showToast(`Snoozed${countOf(evs)} until ${when}`, () => void forEach(evs, (ev) => backend.snooze(ev.id, null)));
       }
     },
 
     async toggleUnread() {
       const { backend } = get();
-      const ev = selectedEvent(get());
-      if (backend && ev) await run("update the item", () => backend.setUnread(ev.id, !ev.unread));
+      const evs = selectedEvents(get());
+      const unread = !evs.some((e) => e.unread);
+      if (backend && evs.length) await run("update the item", () => forEach(evs, (ev) => backend.setUnread(ev.id, unread)));
     },
 
     async transition(transitionId, name) {
@@ -247,12 +264,12 @@ export const useStore = create<Store>()((set, get) => {
 });
 
 function ticketKeyOf(id: string, snap: Snapshot): string | null {
-  if (id.startsWith("t:")) return id.slice(2);
+  if (id.startsWith("t:") || id.startsWith("s:")) return id.slice(2);
   return snap.events.find((e) => `e:${e.id}` === id)?.ticketKey ?? null;
 }
 
-export function currentItems(s: Pick<State, "snap" | "view" | "project" | "now">): ListItem[] {
-  return s.snap ? itemsForView(s.snap, s.view, s.project, s.now) : [];
+export function currentItems(s: Pick<State, "snap" | "view" | "project" | "now" | "expanded">): ListItem[] {
+  return s.snap ? stackByTicket(itemsForView(s.snap, s.view, s.project, s.now), s.expanded) : [];
 }
 
 export function selectedTicket(s: State): Ticket | null {
@@ -265,6 +282,16 @@ export function selectedEvent(s: State) {
   if (!s.snap || !s.selectedId?.startsWith("e:")) return null;
   return s.snap.events.find((e) => `e:${e.id}` === s.selectedId) ?? null;
 }
+
+/** The updates the selection acts on: every update in a selected stack, or the one selected update. */
+export function selectedEvents(s: State): InboxEvent[] {
+  if (s.selectedId?.startsWith("s:")) return currentItems(s).find((i) => i.id === s.selectedId)?.stack ?? [];
+  const ev = selectedEvent(s);
+  return ev ? [ev] : [];
+}
+
+const forEach = async (evs: InboxEvent[], fn: (ev: InboxEvent) => Promise<void>) => void (await Promise.all(evs.map(fn)));
+const countOf = (evs: InboxEvent[]) => (evs.length > 1 ? ` (${evs.length} updates)` : "");
 
 /** The item to select after the current one leaves the list. */
 function neighbourOf(s: State): string | null {

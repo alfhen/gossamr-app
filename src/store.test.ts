@@ -36,6 +36,38 @@ describe("store", () => {
     expect(currentItems(s()).some((i) => i.event?.id === id)).toBe(true);
   });
 
+  describe("stacks", () => {
+    const stackEvents = () => s().snap!.events.filter((e) => e.ticketKey === "CA-420" && e.doneAt === null);
+
+    it("folds a ticket's updates into one item and marks them all read when selected", async () => {
+      expect(currentItems(s()).filter((i) => i.ticketKey === "CA-420").map((i) => i.id)).toEqual(["s:CA-420"]);
+      s().select("s:CA-420");
+      await Promise.resolve();
+      expect(stackEvents().some((e) => e.unread)).toBe(false);
+    });
+
+    it("clears every update in a stack and undoes", async () => {
+      s().select("s:CA-420");
+      const count = stackEvents().length;
+      await s().markDone();
+      expect(stackEvents()).toHaveLength(0);
+      expect(s().toast?.message).toBe(`Cleared (${count} updates)`);
+      s().toast?.undo?.();
+      await new Promise((r) => setTimeout(r));
+      expect(stackEvents()).toHaveLength(count);
+    });
+
+    it("expands into a stack's updates and collapses back to the stack", () => {
+      s().select("s:CA-420");
+      s().setStackOpen(true);
+      s().move(1);
+      expect(selectedEvent(s())?.ticketKey).toBe("CA-420");
+      s().setStackOpen(false);
+      expect(s().selectedId).toBe("s:CA-420");
+      expect(currentItems(s()).some((i) => i.inStack)).toBe(false);
+    });
+  });
+
   it("keeps the change summary while a ticket is open and clears it after leaving", async () => {
     expect(selectedTicket(s())?.changes).toHaveLength(1);
     s().move(1);
