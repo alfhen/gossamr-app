@@ -5,7 +5,7 @@ import App from "./App";
 import { auth, type AuthStatus } from "./backend/auth";
 import { JiraBackend } from "./backend/jira";
 import { MockBackend } from "./backend/mock";
-import { listenToClaude } from "./claudeStore";
+import { listenToClaude, useClaude } from "./claudeStore";
 import { Setup } from "./components/Setup";
 import { useStore } from "./store";
 
@@ -15,6 +15,8 @@ export function Root() {
   const [phase, setPhase] = useState<Phase>({ name: "loading" });
 
   const start = (status: AuthStatus | null) => {
+    // Conversations and their proposals belong to the account they were made in.
+    useClaude.setState({ open: false, byTicket: {} });
     const account = status?.site && status.me ? { site: status.site, me: status.me } : null;
     useStore.setState({ account });
     void useStore

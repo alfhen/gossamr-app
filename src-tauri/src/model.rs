@@ -197,6 +197,13 @@ pub struct Transition {
     pub to: Status,
 }
 
+/// Keys created, in the order the summaries were given. `error` is set when creation stopped part-way.
+#[derive(Clone, Debug, Serialize)]
+pub struct CreatedSubtasks {
+    pub created: Vec<String>,
+    pub error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

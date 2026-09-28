@@ -13,7 +13,8 @@ export interface Backend {
   /** People who can see the ticket and match the query, for @mention suggestions. */
   mentionable(ticketKey: string, query: string): Promise<Person[]>;
   /** Creates sub-tasks under a ticket and returns their keys. */
-  createSubtasks(ticketKey: string, summaries: string[]): Promise<string[]>;
+  /** Stops at the first failure; `created` lists the keys made before it, in order. */
+  createSubtasks(ticketKey: string, summaries: string[]): Promise<{ created: string[]; error: string | null }>;
   markSeen(ticketKey: string): Promise<void>;
   setUnread(eventId: string, unread: boolean): Promise<void>;
   setDone(eventId: string, done: boolean): Promise<void>;

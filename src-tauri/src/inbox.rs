@@ -10,7 +10,7 @@ use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, NewEvent};
 use crate::jira::Jira;
-use crate::model::{CachedTicket, Person, Snapshot, Ticket, Transition};
+use crate::model::{CachedTicket, CreatedSubtasks, Person, Snapshot, Ticket, Transition};
 
 /// Tickets the user follows. Anything else only appears as context, e.g. the children of an epic they watch.
 const TRACKED_JQL: &str =
@@ -278,10 +278,16 @@ impl Core {
     }
 
     /// `scope` is the account the user was looking at when they approved; the write is refused if that has changed.
-    pub async fn create_subtasks(&self, scope: &Scope, key: &str, summaries: &[String]) -> Result<Vec<String>> {
-        let created = self.jira.create_subtasks(scope, key, summaries).await?;
+    /// A failure part-way still reports what was created, so a retry can skip those and not duplicate them.
+    pub async fn create_subtasks(&self, scope: &Scope, key: &str, summaries: &[String]) -> Result<CreatedSubtasks> {
+        let (created, error) = self.jira.create_subtasks(scope, key, summaries).await?;
+        if created.is_empty() {
+            if let Some(e) = error {
+                return Err(e);
+            }
+        }
         self.after_write(scope, key).await;
-        Ok(created)
+        Ok(CreatedSubtasks { created, error: error.map(|e| e.to_string()) })
     }
 
     /// Remembers the Claude session last used for a ticket, and that the app started it.

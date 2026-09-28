@@ -21,6 +21,9 @@ use mcp::McpServer;
 use stream::{parse_line, ClaudeEvent};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
+/// Pinned rather than inherited from the user's Claude Code default, which may be a slower, costlier model.
+const MODEL: &str = "sonnet";
+const EFFORT: &str = "medium";
 
 /// Built-in tools Claude may use. With `--permission-mode dontAsk`, anything outside `ALLOWED` is refused, so it can
 /// read the repo and git history but not edit files or run other commands.
@@ -80,6 +83,7 @@ impl Claude {
 
         let mut cmd = Command::new(binary);
         cmd.args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
+            .args(["--model", MODEL, "--effort", EFFORT])
             .args(["--permission-mode", "dontAsk", "--tools", TOOLS, "--allowedTools", ALLOWED])
             .args(["--strict-mcp-config", "--mcp-config", &self.mcp.config_json(&req.request_id)])
             .args(["--append-system-prompt", &system_prompt(&req.ticket_key)]);
@@ -99,11 +103,12 @@ impl Claude {
         let mut stdin = child.stdin.take().expect("piped");
         let prompt = format!("{}\n\n{}", ticket_context(&ticket), req.prompt.trim());
         stdin.write_all(prompt.as_bytes()).await?;
-        drop(stdin);
 
+        // Registered before stdin closes, since Claude starts work (and may call the MCP tools) on EOF.
         let (cancel_tx, cancel_rx) = oneshot::channel();
         self.running.lock().expect("lock poisoned").insert(req.request_id.clone(), cancel_tx);
         self.mcp.runs.lock().expect("lock poisoned").insert(req.request_id.clone(), scope);
+        drop(stdin);
 
         let this = self.clone();
         tauri::async_runtime::spawn(async move {

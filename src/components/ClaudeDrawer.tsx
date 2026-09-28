@@ -254,8 +254,16 @@ function ProposalView({ ticketKey, requestId, card }: { ticketKey: string; reque
         await backend.transition(p.key, p.transition.id);
         showToast(`${p.key}: ${p.transition.name}`);
       } else {
-        const created = await backend.createSubtasks(p.key, p.summaries.filter((_, i) => picked[i]));
-        showToast(`Created ${created.join(", ")}`);
+        const todo = p.summaries.flatMap((_, i) => (picked[i] && !card.created?.[i] ? [i] : []));
+        const out = await backend.createSubtasks(p.key, todo.map((i) => p.summaries[i]));
+        const created = { ...card.created };
+        out.created.forEach((k, j) => (created[todo[j]] = k));
+        if (out.error) {
+          const made = out.created.length ? `Created ${out.created.join(", ")}, then stopped: ` : "";
+          return patch({ state: "pending", error: made + out.error, created });
+        }
+        patch({ created });
+        showToast(`Created ${Object.values(created).join(", ")}`);
       }
       patch({ state: "applied" });
     } catch (e) {
@@ -263,9 +271,10 @@ function ProposalView({ ticketKey, requestId, card }: { ticketKey: string; reque
     }
   };
 
+  const remaining = picked.filter((v, i) => v && !card.created?.[i]).length;
   const title = { comment: `Comment on ${p.key}`, transition: `Transition ${p.key}`, subtasks: `Subtasks under ${p.key}` }[p.kind];
   const action =
-    p.kind === "comment" ? "Post comment" : p.kind === "transition" ? p.transition.name : `Create ${picked.filter(Boolean).length} subtasks`;
+    p.kind === "comment" ? "Post comment" : p.kind === "transition" ? p.transition.name : `Create ${remaining} subtasks`;
   const done = card.state === "applied" || card.state === "skipped";
 
   return (
@@ -302,12 +311,13 @@ function ProposalView({ ticketKey, requestId, card }: { ticketKey: string; reque
             <label key={i} className="flex items-start gap-2">
               <input
                 type="checkbox"
-                checked={picked[i]}
-                disabled={done}
+                checked={picked[i] || !!card.created?.[i]}
+                disabled={done || !!card.created?.[i]}
                 onChange={(e) => setPicked(picked.map((v, j) => (j === i ? e.target.checked : v)))}
                 className="mt-1"
               />
               {s}
+              {card.created?.[i] && <span className="ml-auto font-mono text-ink-3">{card.created[i]}</span>}
             </label>
           ))}
         {card.error && <div className="text-sm text-blocked">{card.error}</div>}
@@ -318,7 +328,7 @@ function ProposalView({ ticketKey, requestId, card }: { ticketKey: string; reque
             </button>
             <button
               type="button"
-              disabled={card.state === "applying" || (p.kind === "comment" && !body.trim()) || (p.kind === "subtasks" && !picked.some(Boolean))}
+              disabled={card.state === "applying" || (p.kind === "comment" && !body.trim()) || (p.kind === "subtasks" && remaining === 0)}
               onClick={() => void approve()}
               className="rounded-md bg-accent px-3 py-1 font-semibold text-white disabled:opacity-45"
             >

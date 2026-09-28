@@ -46,7 +46,7 @@ export class JiraBackend implements Backend {
   }
 
   createSubtasks(key: string, summaries: string[]) {
-    return invoke<string[]>("create_subtasks", { scope: this.scope, key, summaries });
+    return invoke<{ created: string[]; error: string | null }>("create_subtasks", { scope: this.scope, key, summaries });
   }
 
   markSeen(key: string) {
