@@ -265,13 +265,10 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 function useTicketMedia(t: Ticket) {
   const backend = useStore((s) => s.backend);
   const [byMedia, setByMedia] = useState<Record<string, string>>({});
-  const imageIds = (t.attachments ?? [])
-    .filter((a) => a.mimeType.startsWith("image/"))
-    .map((a) => a.id)
-    .join(",");
+  const attachmentIds = (t.attachments ?? []).map((a) => a.id).join(",");
 
   useEffect(() => {
-    if (!backend || (!imageIds && backend.kind !== "mock")) return setByMedia({});
+    if (!backend || (!attachmentIds && backend.kind !== "mock")) return setByMedia({});
     let live = true;
     backend
       .ticketMedia(t.key)
@@ -280,7 +277,7 @@ function useTicketMedia(t: Ticket) {
     return () => {
       live = false;
     };
-  }, [backend, t.key, imageIds, t.comments.length]);
+  }, [backend, t.key, attachmentIds, t.comments.length]);
 
   return useCallback(
     (node: AdfNode): ResolvedMedia | null => {

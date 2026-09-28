@@ -271,13 +271,12 @@ impl Core {
         Ok(())
     }
 
-    /// Where each of a ticket's images lives in the media service, as `media id → attachment id`, so the images a
+    /// Where each of a ticket's attachments lives in the media service, as `media id → attachment id`, so the files a
     /// description or comment embeds can be shown. Lookups are cached: an attachment's media id never changes.
     pub async fn ticket_media(&self, scope: &Scope, key: &str) -> Result<HashMap<String, String>> {
-        let images: Vec<Attachment> =
-            self.ticket(scope, key).await?.attachments.into_iter().filter(|a| a.mime_type.starts_with("image/")).collect();
+        let attachments: Vec<Attachment> = self.ticket(scope, key).await?.attachments;
         let cached = self
-            .with_db_for(scope, |db| images.iter().map(|a| Ok((a.id.clone(), db.meta(&media_key(&a.id))?))).collect::<Result<Vec<_>>>())
+            .with_db_for(scope, |db| attachments.iter().map(|a| Ok((a.id.clone(), db.meta(&media_key(&a.id))?))).collect::<Result<Vec<_>>>())
             .await?;
         let mut out = HashMap::new();
         for (id, media) in cached {
