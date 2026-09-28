@@ -19,20 +19,23 @@ export function Root() {
     setPhase({ name: "app" });
   };
 
-  useEffect(() => {
-    if (!isTauri()) return start(null);
+  const checkAuth = () => {
+    setPhase({ name: "loading" });
     auth
       .status()
       .then((s) => (s.site ? start(s) : setPhase({ name: "setup", status: s })))
       .catch((e) => setPhase({ name: "error", message: String(e) }));
+  };
+
+  useEffect(() => {
+    if (!isTauri()) return start(null);
+    checkAuth();
   }, []);
 
   useEffect(
     () =>
       useStore.subscribe((s, prev) => {
-        if (prev.account && !s.account) {
-          void auth.status().then((status) => setPhase({ name: "setup", status }));
-        }
+        if (prev.account && !s.account) checkAuth();
       }),
     [],
   );
@@ -41,7 +44,21 @@ export function Root() {
     case "loading":
       return <div className="grid h-full place-items-center bg-win text-ink-3">Loading…</div>;
     case "error":
-      return <div className="selectable grid h-full place-items-center bg-win px-6 text-blocked">{phase.message}</div>;
+      return (
+        <div className="grid h-full place-items-center bg-win px-6">
+          <div className="grid max-w-[480px] gap-3 text-center">
+            <p className="selectable text-blocked">Couldn't check your Jira sign-in: {phase.message}</p>
+            <div className="flex justify-center gap-3">
+              <button type="button" className="rounded-md bg-accent px-3.5 py-1.5 font-semibold text-white" onClick={checkAuth}>
+                Try again
+              </button>
+              <button type="button" className="text-accent" onClick={() => start(null)}>
+                Use sample data
+              </button>
+            </div>
+          </div>
+        </div>
+      );
     case "setup":
       return <Setup status={phase.status} onSignedIn={start} onUseSampleData={() => start(null)} />;
     case "app":

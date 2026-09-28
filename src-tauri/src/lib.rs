@@ -146,7 +146,7 @@ pub fn run() {
                 .user_agent(concat!("jira-inbox/", env!("CARGO_PKG_VERSION")))
                 .timeout(Duration::from_secs(30))
                 .build()?;
-            let auth = Arc::new(Auth::load(http.clone())?);
+            let auth = Arc::new(Auth::load(http.clone()));
             let jira = jira::Jira::new(http, auth.clone());
             let core: CoreState = Arc::new(Core::new(auth, jira, app.path().app_data_dir()?));
             app.manage(core.clone());
