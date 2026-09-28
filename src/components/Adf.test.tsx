@@ -46,4 +46,16 @@ describe("Adf", () => {
     expect(dateOf("1582070400000")?.toISOString()).toBe("2020-02-19T00:00:00.000Z");
     expect(dateOf("nope")).toBeNull();
   });
+
+  it("renders headings as headings below the page's own", () => {
+    expect(html(doc({ type: "heading", attrs: { level: 1 }, content: [text("Plan")] }))).toMatch(/<h4[^>]*>Plan<\/h4>/);
+    expect(html(doc({ type: "heading", attrs: { level: 6 }, content: [text("Fine print")] }))).toMatch(/<h6/);
+  });
+
+  it("shows link cards from their url or their data", () => {
+    expect(html(doc(p({ type: "inlineCard", attrs: { url: "https://example.com/a" } })))).toContain('href="https://example.com/a"');
+    const fromData = html(doc(p({ type: "inlineCard", attrs: { data: { url: "https://example.com/b", name: "Spec" } } })));
+    expect(fromData).toMatch(/href="https:\/\/example.com\/b"[^>]*>Spec</);
+    expect(html(doc(p({ type: "inlineCard", attrs: {} })))).toContain("[Link]");
+  });
 });
