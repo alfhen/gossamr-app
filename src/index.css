@@ -115,9 +115,12 @@ kbd {
   background: var(--color-bar);
 }
 
-:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+/* Layered so a field's `outline-none` wins where its container draws the focus ring instead. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
 }
 
 @keyframes flash {
