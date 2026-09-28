@@ -201,7 +201,7 @@ mod tests {
     #[ignore]
     async fn claude_can_propose_through_the_mcp_server() {
         let http = reqwest::Client::new();
-        let auth = Arc::new(Auth::load(http.clone()).unwrap());
+        let auth = Arc::new(Auth::load(http.clone()));
         let core = Arc::new(Core::new(auth.clone(), Jira::new(http, auth), std::env::temp_dir()));
         let got = Arc::new(Mutex::new(Vec::new()));
         let sink_got = got.clone();
