@@ -21,6 +21,9 @@ use mcp::McpServer;
 use stream::{parse_line, ClaudeEvent};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
+/// Pinned rather than inherited from the user's Claude Code default, which may be a slower, costlier model.
+const MODEL: &str = "sonnet";
+const EFFORT: &str = "medium";
 
 /// Built-in tools Claude may use. With `--permission-mode dontAsk`, anything outside `ALLOWED` is refused, so it can
 /// read the repo and git history but not edit files or run other commands.
@@ -80,6 +83,7 @@ impl Claude {
 
         let mut cmd = Command::new(binary);
         cmd.args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
+            .args(["--model", MODEL, "--effort", EFFORT])
             .args(["--permission-mode", "dontAsk", "--tools", TOOLS, "--allowedTools", ALLOWED])
             .args(["--strict-mcp-config", "--mcp-config", &self.mcp.config_json(&req.request_id)])
             .args(["--append-system-prompt", &system_prompt(&req.ticket_key)]);
