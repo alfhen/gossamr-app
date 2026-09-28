@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import App from "./App";
 import { auth, type AuthStatus } from "./backend/auth";
 import { JiraBackend } from "./backend/jira";
@@ -13,20 +13,26 @@ type Phase = { name: "loading" } | { name: "setup"; status: AuthStatus } | { nam
 
 export function Root() {
   const [phase, setPhase] = useState<Phase>({ name: "loading" });
+  const starts = useRef(0);
 
   const start = (status: AuthStatus | null) => {
     // Conversations and their proposals belong to the account they were made in.
     useClaude.setState({ open: false, byTicket: {} });
+    const mine = ++starts.current;
     const account = status?.site && status.me ? { site: status.site, me: status.me } : null;
     useStore.setState({ account });
-    void useStore
+    setPhase({ name: "loading" });
+    useStore
       .getState()
-      .init(account ? new JiraBackend({ cloudId: account.site.cloudId, accountId: account.me.accountId }) : new MockBackend());
+      .init(account ? new JiraBackend({ cloudId: account.site.cloudId, accountId: account.me.accountId }) : new MockBackend())
+      .then(
+        () => mine === starts.current && setPhase({ name: "app" }),
+        (e) => mine === starts.current && setPhase({ name: "error", message: `Couldn't load your inbox: ${e}` }),
+      );
     if (account) {
       void askForNotifications();
       listenToClaude();
     }
-    setPhase({ name: "app" });
   };
 
   const checkAuth = () => {
@@ -34,7 +40,7 @@ export function Root() {
     auth
       .status()
       .then((s) => (s.site ? start(s) : setPhase({ name: "setup", status: s })))
-      .catch((e) => setPhase({ name: "error", message: String(e) }));
+      .catch((e) => setPhase({ name: "error", message: `Couldn't check your Jira sign-in: ${e}` }));
   };
 
   useEffect(() => {
@@ -57,7 +63,7 @@ export function Root() {
       return (
         <div className="grid h-full place-items-center bg-win px-6">
           <div className="grid max-w-[480px] gap-3 text-center">
-            <p className="selectable text-blocked">Couldn't check your Jira sign-in: {phase.message}</p>
+            <p className="selectable text-blocked">{phase.message}</p>
             <div className="flex justify-center gap-3">
               <button type="button" className="rounded-md bg-accent px-3.5 py-1.5 font-semibold text-white" onClick={checkAuth}>
                 Try again
