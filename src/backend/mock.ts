@@ -1,7 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AdfNode, Comment, EventKind, InboxEvent, Person, Snapshot, Status, Ticket, Transition, Uploaded } from "../types";
-import type { Mention } from "../lib/mentions";
+import { fold, type Mention } from "../lib/mentions";
 import type { Backend } from "./types";
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -336,8 +336,8 @@ export class MockBackend implements Backend {
   }
 
   async mentionable(_key: string, query: string) {
-    const q = query.trim().toLowerCase();
-    return [...Object.values(P), ...EXTRA_PEOPLE].filter((p) => p.name.toLowerCase().split(" ").some((part) => part.startsWith(q)));
+    const q = fold(query.trim());
+    return [...Object.values(P), ...EXTRA_PEOPLE].filter((p) => fold(p.name).split(" ").some((part) => part.startsWith(q)));
   }
 
   async markSeen(key: string) {

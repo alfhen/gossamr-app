@@ -24,6 +24,7 @@ const MAX_CHANGELOG_PAGES: usize = 10;
 pub const TRACKED_LIMIT: usize = 2000;
 /// Tickets read for context, such as an epic's children, so a very broad JQL can't stall a sync.
 pub const CONTEXT_LIMIT: usize = 300;
+const MENTION_SUGGESTIONS: usize = 10;
 
 pub struct Jira {
     http: reqwest::Client,
@@ -202,7 +203,9 @@ impl Jira {
     /// People who can see `key` and match `query`, for @mention suggestions. Apps and deactivated users are left out.
     pub async fn mentionable(&self, scope: &Scope, key: &str, query: &str) -> Result<Vec<Person>> {
         let encode = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
-        let path = format!("user/viewissue/search?issueKey={}&query={}&maxResults=10", encode(key), encode(query));
+        // Jira takes `maxResults` users first and filters that range by `query` afterwards, so a small page would
+        // hide most of a site's people. 1,000 is the endpoint's ceiling.
+        let path = format!("user/viewissue/search?issueKey={}&query={}&maxResults=1000", encode(key), encode(query));
         let raw: Value = self.call(scope, Method::GET, &path, None).await?;
         Ok(raw
             .as_array()
@@ -210,6 +213,7 @@ impl Jira {
             .flatten()
             .filter(|u| u["active"] != false && u["accountType"].as_str().is_none_or(|t| t == "atlassian"))
             .filter_map(person)
+            .take(MENTION_SUGGESTIONS)
             .collect())
     }
 
