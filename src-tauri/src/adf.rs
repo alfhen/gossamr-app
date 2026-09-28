@@ -121,10 +121,12 @@ fn push_line(line: &str, mentions: &[&MentionRef], content: &mut Vec<Value>) {
     let mut plain = String::new();
     let mut rest = line;
     while !rest.is_empty() {
-        let hit = rest.strip_prefix('@').and_then(|after| {
+        // Same rules as the composer's highlighting: `@` starts a token (not `team@Sam`), and the name must end there.
+        let starts_token = line[..line.len() - rest.len()].chars().last().is_none_or(|c| c.is_whitespace() || "([{\"'".contains(c));
+        let hit = rest.strip_prefix('@').filter(|_| starts_token).and_then(|after| {
             mentions.iter().find(|m| {
                 after.starts_with(m.name.as_str())
-                    && after[m.name.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric())
+                    && after[m.name.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_')
             })
         });
         match hit {
@@ -204,5 +206,16 @@ mod tests {
     fn tolerates_missing_or_odd_nodes() {
         assert_eq!(to_text(&Value::Null), "");
         assert_eq!(to_text(&json!({"type":"doc","content":[{"type":"unknown"}]})), "");
+    }
+
+    #[test]
+    fn only_mentions_whole_tokens() {
+        let sam = [MentionRef { account_id: "sam".into(), name: "Sam Holt".into() }];
+        let kinds = |text: &str| -> Vec<String> {
+            from_text(text, &sam)["content"][0]["content"].as_array().unwrap().iter().map(|n| n["type"].as_str().unwrap().to_string()).collect()
+        };
+        assert_eq!(kinds("(@Sam Holt)"), ["text", "mention", "text"]);
+        assert_eq!(kinds("team@Sam Holt"), ["text"]);
+        assert_eq!(kinds("@Sam Holt_2"), ["text"]);
     }
 }

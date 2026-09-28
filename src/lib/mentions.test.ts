@@ -49,6 +49,12 @@ describe("segments and liveMentions", () => {
   it("drops mentions whose name was edited away", () => {
     expect(liveMentions("@Sam Holt hi", [sam, mette])).toEqual([sam]);
     expect(liveMentions("@Sam Hol hi", [sam])).toEqual([]);
+    expect(liveMentions("@Sam Holt_2 hi", [sam])).toEqual([]);
+  });
+
+  it("ignores @ inside a word, like an email address", () => {
+    expect(liveMentions("mail team@Sam Holt", [sam])).toEqual([]);
+    expect(liveMentions("(@Sam Holt)", [sam])).toEqual([sam]);
   });
 });
 
@@ -62,5 +68,10 @@ describe("autoLink", () => {
   it("leaves ambiguous first names alone", () => {
     const r = autoLink("@Sam any news?", [sam, sam2]);
     expect(r).toEqual({ text: "@Sam any news?", mentions: [] });
+  });
+
+  it("leaves full names two people share alone", () => {
+    const twin = { accountId: "s3", name: "Sam Holt" };
+    expect(autoLink("@Sam Holt any news?", [sam, twin]).mentions).toEqual([]);
   });
 });
