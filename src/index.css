@@ -1,1 +1,135 @@
 @import "tailwindcss";
+
+@theme {
+  --font-sans: system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-lg: 15px;
+  --text-xl: 21px;
+
+  --color-win: #ffffff;
+  --color-side: #ebeaef;
+  --color-side-sel: rgb(0 0 0 / 0.075);
+  --color-bar: #f6f6f8;
+  --color-ink: #1d1d1f;
+  --color-ink-2: #5f5f66;
+  --color-ink-3: #8e8e95;
+  --color-sep: rgb(0 0 0 / 0.09);
+  --color-sep-strong: rgb(0 0 0 / 0.14);
+  --color-accent: #0a6cff;
+  --color-accent-soft: rgb(10 108 255 / 0.1);
+  --color-hover: rgb(0 0 0 / 0.04);
+  --color-field: #ffffff;
+  --color-field-border: rgb(0 0 0 / 0.14);
+  --color-pop: #ffffff;
+  --color-claude: #c96442;
+  --color-claude-soft: rgb(201 100 66 / 0.1);
+
+  --color-todo-bg: #ececef;
+  --color-todo: #4b4b52;
+  --color-progress-bg: #e3eeff;
+  --color-progress: #0b57c9;
+  --color-review-bg: #efe7fd;
+  --color-review: #6b3fc4;
+  --color-blocked-bg: #fde8e7;
+  --color-blocked: #b8322b;
+  --color-done-bg: #e3f5e8;
+  --color-done: #1f7a3d;
+
+  --shadow-pop: 0 18px 50px rgb(20 24 40 / 0.22), 0 2px 6px rgb(20 24 40 / 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-win: #1e1e20;
+    --color-side: #29292c;
+    --color-side-sel: rgb(255 255 255 / 0.09);
+    --color-bar: #242426;
+    --color-ink: #f2f2f4;
+    --color-ink-2: #b1b1b8;
+    --color-ink-3: #7f7f87;
+    --color-sep: rgb(255 255 255 / 0.08);
+    --color-sep-strong: rgb(255 255 255 / 0.14);
+    --color-accent: #2f86ff;
+    --color-accent-soft: rgb(47 134 255 / 0.16);
+    --color-hover: rgb(255 255 255 / 0.05);
+    --color-field: #2b2b2e;
+    --color-field-border: rgb(255 255 255 / 0.12);
+    --color-pop: #2c2c2f;
+    --color-claude: #e08a68;
+    --color-claude-soft: rgb(224 138 104 / 0.14);
+    --color-todo-bg: #38383c;
+    --color-todo: #c9c9cf;
+    --color-progress-bg: #17305a;
+    --color-progress: #8fbaff;
+    --color-review-bg: #33264f;
+    --color-review: #c5a8ff;
+    --color-blocked-bg: #4a1f1d;
+    --color-blocked: #ff9b93;
+    --color-done-bg: #18392a;
+    --color-done: #7fd99d;
+    --shadow-pop: 0 18px 50px rgb(0 0 0 / 0.55), 0 2px 6px rgb(0 0 0 / 0.3);
+    color-scheme: dark;
+  }
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--color-win);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+/* In the app the window is transparent so the sidebar can show the macOS vibrancy material behind it. */
+html.tauri,
+html.tauri body {
+  background: transparent;
+}
+html.tauri .sidebar {
+  background: transparent;
+}
+
+.selectable {
+  user-select: text;
+}
+
+kbd {
+  font: 11px var(--font-mono);
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid var(--color-sep-strong);
+  color: var(--color-ink-2);
+  background: var(--color-bar);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+@keyframes flash {
+  from {
+    background: var(--color-claude-soft);
+  }
+}
+@keyframes slide-in {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
