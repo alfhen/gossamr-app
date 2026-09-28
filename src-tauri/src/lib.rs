@@ -73,9 +73,12 @@ async fn sign_in(app: AppHandle, core: State<'_, CoreState>) -> Result<AuthStatu
 }
 
 #[tauri::command]
-async fn sign_out(core: State<'_, CoreState>) -> Result<()> {
+async fn sign_out(app: AppHandle, core: State<'_, CoreState>) -> Result<()> {
     core.auth.sign_out().await?;
     core.close_db();
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_badge_count(None);
+    }
     Ok(())
 }
 
