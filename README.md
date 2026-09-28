@@ -27,6 +27,10 @@ Press `⌘J` on a ticket to ask Claude about it. The app runs your installed Cla
 
 Claude can read the ticket through a local MCP server the app runs, and read code and git history in the session's folder. It can't write files or change Jira: comments, transitions and subtasks come back as cards you approve, edit or skip.
 
+## Use it from other Claude Code sessions
+
+Sidebar → **Use from Claude Code…** → **Add to Claude Code** registers a `jira-inbox` MCP server for all your projects (`claude mcp add --scope user`). Any session can then ask what's new in your inbox, read tickets, comment and transition them, with Claude Code asking before each call. The server listens on `127.0.0.1:8724` while the app is open and needs a bearer token that is kept in the Keychain.
+
 ## Development
 
 ```bash

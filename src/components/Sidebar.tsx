@@ -5,7 +5,7 @@ import { Icon, VIEW_ICON } from "./icons";
 const PROJECT_COLOURS = ["#e5883a", "#3aa87a", "#5b7cf0", "#c4508f", "#8a6d3b"];
 
 export function Sidebar() {
-  const { snap, now, view, project, setView, backend, account, signOut } = useStore();
+  const { snap, now, view, project, setView, backend, account, signOut, openOverlay } = useStore();
   if (!snap) return null;
   const counts = viewCounts(snap, now);
   const navItem = "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left hover:bg-hover";
@@ -67,9 +67,14 @@ export function Sidebar() {
           {account ? `${account.me.name} · ${account.site.name}` : "Sample data"}
         </div>
         {account && (
-          <button type="button" className="text-left text-accent" onClick={() => void signOut()}>
-            Sign out
-          </button>
+          <>
+            <button type="button" className="text-left text-accent" onClick={() => openOverlay("connect")}>
+              Use from Claude Code…
+            </button>
+            <button type="button" className="text-left text-accent" onClick={() => void signOut()}>
+              Sign out
+            </button>
+          </>
         )}
         {backend && (
           <button type="button" className="text-left text-accent" onClick={() => void backend.syncNow()}>

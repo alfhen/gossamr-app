@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import { SHORTCUTS } from "../lib/keyboard";
 import { ticketMatches, VIEWS } from "../lib/views";
@@ -118,6 +119,63 @@ export function ShortcutHelp() {
             </div>
           ))}
         </dl>
+      </div>
+    </Scrim>
+  );
+}
+
+export function ConnectClaude() {
+  const openOverlay = useStore((s) => s.openOverlay);
+  const [state, setState] = useState<"idle" | "working" | "done">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [command, setCommand] = useState<string | null>(null);
+
+  const connect = async () => {
+    setState("working");
+    setError(null);
+    try {
+      await invoke("connect_claude_code");
+      setState("done");
+    } catch (e) {
+      setError(String(e));
+      setState("idle");
+    }
+  };
+
+  const showCommand = async () => {
+    const c = await invoke<{ command: string }>("mcp_connection");
+    setCommand(c.command);
+  };
+
+  return (
+    <Scrim onClose={() => openOverlay(null)}>
+      <div role="dialog" aria-label="Use Jira Inbox from Claude Code" className="selectable grid w-[min(520px,100%)] gap-3 rounded-xl border border-sep-strong bg-pop px-5 py-4 shadow-pop">
+        <h3 className="text-lg font-semibold">Use Jira Inbox from Claude Code</h3>
+        <p className="text-ink-2">
+          Adds a <code className="font-mono text-sm">jira-inbox</code> MCP server to Claude Code for all your projects, so any session can ask
+          what's new in your inbox, read tickets, comment and move them. Claude Code asks before each call, and the server only listens on
+          this Mac while Jira Inbox is open.
+        </p>
+        {state === "done" ? (
+          <p className="text-done">Added. Start a new Claude Code session and ask “what's new in my Jira inbox?”</p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="button" disabled={state === "working"} onClick={() => void connect()} className="rounded-md bg-accent px-3.5 py-1.5 font-semibold text-white disabled:opacity-45">
+              {state === "working" ? "Adding…" : "Add to Claude Code"}
+            </button>
+            {!command && (
+              <button type="button" className="text-accent" onClick={() => void showCommand()}>
+                Show the command instead
+              </button>
+            )}
+          </div>
+        )}
+        {command && <pre className="overflow-x-auto rounded-md bg-hover p-2.5 font-mono text-xs whitespace-pre-wrap break-all">{command}</pre>}
+        {error && (
+          <div role="alert" className="rounded-md bg-blocked-bg px-3 py-2 text-blocked">
+            {error}
+          </div>
+        )}
       </div>
     </Scrim>
   );

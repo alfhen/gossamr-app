@@ -10,7 +10,7 @@ export interface Toast {
   undo?: () => void;
 }
 
-export type Overlay = "palette" | "help" | "transition" | "snooze" | null;
+export type Overlay = "palette" | "help" | "transition" | "snooze" | "connect" | null;
 
 interface State {
   backend: Backend | null;

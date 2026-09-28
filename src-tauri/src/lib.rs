@@ -179,10 +179,42 @@ fn cancel_claude(claude: State<'_, ClaudeState>, request_id: String) {
     claude.cancel(&request_id);
 }
 
-fn random_token() -> std::result::Result<String, getrandom::Error> {
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpConnection {
+    url: String,
+    /// The command to run by hand. It contains the local access token, so it's only shown on request.
+    command: String,
+}
+
+#[tauri::command]
+fn mcp_connection(claude: State<'_, ClaudeState>) -> McpConnection {
+    let mcp = claude.mcp();
+    McpConnection {
+        url: mcp.external_url(),
+        command: format!(
+            "claude mcp add --transport http --scope user jira-inbox {} --header \"Authorization: Bearer {}\"",
+            mcp.external_url(),
+            mcp.token
+        ),
+    }
+}
+
+#[tauri::command]
+async fn connect_claude_code(claude: State<'_, ClaudeState>) -> Result<()> {
+    claude::register_with_claude_code(claude.mcp()).await
+}
+
+/// The MCP bearer token is kept in the Keychain so the entry registered with Claude Code keeps working after restarts.
+fn mcp_token() -> Result<String> {
+    if let Some(t) = secrets::load::<String>("mcp-token")? {
+        return Ok(t);
+    }
     let mut bytes = [0u8; 24];
-    getrandom::fill(&mut bytes)?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    getrandom::fill(&mut bytes).map_err(|e| Error::Claude(format!("no randomness available: {e}")))?;
+    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    secrets::save("mcp-token", &token)?;
+    Ok(token)
 }
 
 fn spawn_sync_loop(app: AppHandle, core: CoreState) {
@@ -221,13 +253,17 @@ pub fn run() {
             let core: CoreState = Arc::new(Core::new(auth, jira, app.path().app_data_dir()?));
             app.manage(core.clone());
 
-            let handle = app.handle().clone();
-            let token = random_token().map_err(|e| Error::Claude(format!("no randomness available: {e}")))?;
+            let proposals = app.handle().clone();
+            let changes = (app.handle().clone(), core.clone());
             let mcp = tauri::async_runtime::block_on(claude::mcp::McpServer::start(
                 core.clone(),
-                token,
+                mcp_token()?,
                 Arc::new(move |p| {
-                    let _ = handle.emit("claude-proposal", p);
+                    let _ = proposals.emit("claude-proposal", p);
+                }),
+                Arc::new(move || {
+                    let (app, core) = changes.clone();
+                    tauri::async_runtime::spawn(async move { publish(&app, &core).await });
                 }),
             ))?;
             app.manage::<ClaudeState>(Arc::new(Claude::new(core.clone(), mcp)));
@@ -252,7 +288,9 @@ pub fn run() {
             create_subtasks,
             claude_sessions,
             ask_claude,
-            cancel_claude
+            cancel_claude,
+            mcp_connection,
+            connect_claude_code
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

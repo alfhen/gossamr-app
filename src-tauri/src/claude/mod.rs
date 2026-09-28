@@ -58,6 +58,10 @@ impl Claude {
         Self { core, mcp, running: Mutex::new(HashMap::new()) }
     }
 
+    pub fn mcp(&self) -> &McpServer {
+        &self.mcp
+    }
+
     pub fn cancel(&self, request_id: &str) {
         if let Some(tx) = self.running.lock().expect("lock poisoned").remove(request_id) {
             let _ = tx.send(());
@@ -172,6 +176,23 @@ fn ticket_context(t: &crate::model::CachedTicket) -> String {
     format!("[Jira ticket {}]\n{}\n\n[Request]", t.key, mcp::describe(t))
 }
 
+/// Registers the app's MCP server with Claude Code for all of the user's projects, replacing any earlier entry.
+pub async fn register_with_claude_code(mcp: &McpServer) -> Result<()> {
+    let binary = find_claude().ok_or_else(|| Error::Claude("Claude Code isn't installed, or isn't on your PATH.".into()))?;
+    let _ = Command::new(&binary).args(["mcp", "remove", "--scope", "user", "jira-inbox"]).output().await;
+    let out = Command::new(&binary)
+        .args(["mcp", "add", "--transport", "http", "--scope", "user", "jira-inbox", &mcp.external_url()])
+        .args(["--header", &format!("Authorization: Bearer {}", mcp.token)])
+        .env_remove("CLAUDECODE")
+        .output()
+        .await?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(Error::Claude(format!("claude mcp add failed: {}", String::from_utf8_lossy(&out.stderr).trim())))
+    }
+}
+
 /// GUI apps on macOS don't inherit the shell PATH, so look where installers put `claude` before asking a login shell.
 fn find_claude() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
@@ -205,7 +226,7 @@ mod tests {
         let core = Arc::new(Core::new(auth.clone(), Jira::new(http, auth), std::env::temp_dir()));
         let got = Arc::new(Mutex::new(Vec::new()));
         let sink_got = got.clone();
-        let server = McpServer::start(core, "t0ken".into(), Arc::new(move |p| sink_got.lock().unwrap().push(p)))
+        let server = McpServer::start(core, "t0ken".into(), Arc::new(move |p| sink_got.lock().unwrap().push(p)), Arc::new(|| {}))
             .await
             .unwrap();
 

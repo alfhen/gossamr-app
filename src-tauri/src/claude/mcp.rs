@@ -1,7 +1,11 @@
-//! A minimal MCP server (streamable HTTP, JSON responses only) that Claude Code connects to during an Ask Claude run.
+//! A minimal MCP server (streamable HTTP, JSON responses only) for Claude Code.
 //!
-//! Claude gets read tools plus `propose_*` tools. Proposals are handed to the UI as cards; nothing here writes to
-//! Jira. That keeps "Claude never changes Jira without your approval" true regardless of what the model decides.
+//! Two audiences share it:
+//! - Ask Claude runs (`/mcp/<request id>`) get read tools plus `propose_*` tools. Proposals are handed to the UI as
+//!   cards and nothing on that path writes to Jira, so "Claude never changes Jira without your approval in the app"
+//!   holds whatever the model decides.
+//! - The user's other Claude Code sessions (`/mcp/external`) get the inbox, read tools and direct comment/transition
+//!   tools. Those sessions ask the user before every MCP tool call under Claude Code's own permission rules.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -38,11 +42,18 @@ pub struct Proposal {
 }
 
 pub type ProposalSink = Arc<dyn Fn(Proposal) + Send + Sync>;
+/// Called after an external session changes Jira, so the window can refresh.
+pub type ChangeHook = Arc<dyn Fn() + Send + Sync>;
+
+/// Preferred port, so the URL registered with Claude Code stays valid across restarts.
+pub const PREFERRED_PORT: u16 = 8724;
+const EXTERNAL: &str = "external";
 
 struct McpState {
     core: Arc<Core>,
     token: String,
     sink: ProposalSink,
+    on_change: ChangeHook,
     seq: AtomicU64,
 }
 
@@ -52,15 +63,22 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    pub async fn start(core: Arc<Core>, token: String, sink: ProposalSink) -> std::io::Result<Self> {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    pub async fn start(core: Arc<Core>, token: String, sink: ProposalSink, on_change: ChangeHook) -> std::io::Result<Self> {
+        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", PREFERRED_PORT)).await {
+            Ok(l) => l,
+            Err(_) => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?,
+        };
         let port = listener.local_addr()?.port();
-        let state = Arc::new(McpState { core, token: token.clone(), sink, seq: AtomicU64::new(0) });
+        let state = Arc::new(McpState { core, token: token.clone(), sink, on_change, seq: AtomicU64::new(0) });
         let router = Router::new().route("/mcp/{request_id}", post(handle)).with_state(state);
         tauri::async_runtime::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
         Ok(Self { port, token })
+    }
+
+    pub fn external_url(&self) -> String {
+        format!("http://127.0.0.1:{}/mcp/{EXTERNAL}", self.port)
     }
 
     pub fn config_json(&self, request_id: &str) -> String {
@@ -107,7 +125,8 @@ async fn handle(
             "serverInfo": { "name": "jira-inbox", "version": env!("CARGO_PKG_VERSION") }
         })),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_list() })),
+        "tools/list" => Ok(json!({ "tools": if request_id == EXTERNAL { external_tool_list() } else { tool_list() } })),
+        "tools/call" if request_id == EXTERNAL => Ok(call_external_tool(&st, &msg["params"]).await),
         "tools/call" => Ok(call_tool(&st, &request_id, &msg["params"]).await),
         _ => Err(json!({ "code": -32601, "message": "Method not found" })),
     };
@@ -126,8 +145,12 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
     })
 }
 
-fn tool_list() -> Vec<Value> {
-    let key = json!({ "type": "string", "description": "Issue key, e.g. CA-412" });
+fn key_schema() -> Value {
+    json!({ "type": "string", "description": "Issue key, e.g. CA-412" })
+}
+
+fn read_tools() -> Vec<Value> {
+    let key = key_schema();
     vec![
         tool("get_ticket", "Read a Jira issue: fields, description, subtasks, recent comments and history.", json!({ "key": key }), &["key"]),
         tool(
@@ -137,6 +160,13 @@ fn tool_list() -> Vec<Value> {
             &["jql"],
         ),
         tool("list_transitions", "List the workflow transitions available for an issue right now.", json!({ "key": key }), &["key"]),
+    ]
+}
+
+fn tool_list() -> Vec<Value> {
+    let key = key_schema();
+    let mut tools = read_tools();
+    tools.extend([
         tool(
             "propose_comment",
             "Suggest a comment. The user sees it as a draft they can edit, post or skip. It is not posted by this call.",
@@ -155,7 +185,34 @@ fn tool_list() -> Vec<Value> {
             json!({ "key": key, "summaries": { "type": "array", "items": { "type": "string" }, "minItems": 1 } }),
             &["key", "summaries"],
         ),
-    ]
+    ]);
+    tools
+}
+
+fn external_tool_list() -> Vec<Value> {
+    let key = key_schema();
+    let mut tools = vec![tool(
+        "inbox",
+        "The user's Jira Inbox: recent mentions, assignments, comments and status changes on tickets they follow, newest first.",
+        json!({ "include_read": { "type": "boolean", "description": "Also list items already read (default false)" } }),
+        &[],
+    )];
+    tools.extend(read_tools());
+    tools.extend([
+        tool(
+            "comment_on_ticket",
+            "Post a comment on a Jira issue as the user.",
+            json!({ "key": key, "body": { "type": "string", "description": "Plain text. Blank lines separate paragraphs." } }),
+            &["key", "body"],
+        ),
+        tool(
+            "transition_ticket",
+            "Move a Jira issue through its workflow. Get the id from list_transitions.",
+            json!({ "key": key, "transition_id": { "type": "string" } }),
+            &["key", "transition_id"],
+        ),
+    ]);
+    tools
 }
 
 fn text(t: impl Into<String>, is_error: bool) -> Value {
@@ -173,7 +230,50 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
         text(PROPOSED, false)
     };
 
+    if let Some(result) = call_read_tool(st, params).await {
+        return result;
+    }
     match (params["name"].as_str().unwrap_or_default(), arg("key")) {
+        ("propose_comment", Some(key)) => match arg("body") {
+            Some(body) => propose(ProposalBody::Comment { key: key.into(), body: body.into() }),
+            None => text("body is required", true),
+        },
+        ("propose_transition", Some(key)) => {
+            let Some(id) = arg("transition_id") else { return text("transition_id is required", true) };
+            match st.core.transitions(key).await {
+                Ok(ts) => match ts.into_iter().find(|t| t.id == id) {
+                    Some(transition) => propose(ProposalBody::Transition { key: key.into(), transition }),
+                    None => text(format!("{id} isn't an available transition for {key}; call list_transitions"), true),
+                },
+                Err(e) => text(format!("Couldn't check transitions for {key}: {e}"), true),
+            }
+        }
+        ("propose_subtasks", Some(key)) => {
+            let summaries: Vec<String> = args["summaries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from))
+                .collect();
+            if summaries.is_empty() {
+                return text("summaries must list at least one subtask", true);
+            }
+            propose(ProposalBody::Subtasks { key: key.into(), summaries })
+        }
+        (_, None) => text("key is required", true),
+        (name, _) => text(format!("Unknown tool {name}"), true),
+    }
+}
+
+/// Tools both audiences share. Returns `None` for any other tool name.
+async fn call_read_tool(st: &McpState, params: &Value) -> Option<Value> {
+    let args = &params["arguments"];
+    let arg = |k: &str| args[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let name = params["name"].as_str().unwrap_or_default();
+    if !["get_ticket", "list_transitions", "search_tickets"].contains(&name) {
+        return None;
+    }
+    Some(match (name, arg("key")) {
         ("get_ticket", Some(key)) => match st.core.ticket(key).await {
             Ok(t) => text(describe(&t), false),
             Err(e) => text(format!("Couldn't read {key}: {e}"), true),
@@ -203,35 +303,66 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
                 Err(e) => text(format!("Search failed: {e}"), true),
             },
         },
-        ("propose_comment", Some(key)) => match arg("body") {
-            Some(body) => propose(ProposalBody::Comment { key: key.into(), body: body.into() }),
+        _ => text("key is required", true),
+    })
+}
+
+async fn call_external_tool(st: &McpState, params: &Value) -> Value {
+    if let Some(result) = call_read_tool(st, params).await {
+        return result;
+    }
+    let args = &params["arguments"];
+    let arg = |k: &str| args[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let changed = |r: crate::error::Result<()>, done: String| match r {
+        Ok(()) => {
+            (st.on_change)();
+            text(done, false)
+        }
+        Err(e) => text(e.to_string(), true),
+    };
+    match (params["name"].as_str().unwrap_or_default(), arg("key")) {
+        ("inbox", _) => match st.core.snapshot().await {
+            Ok(snap) => text(inbox_text(&snap, args["include_read"] == true, &crate::inbox::now_iso()), false),
+            Err(e) => text(e.to_string(), true),
+        },
+        ("comment_on_ticket", Some(key)) => match arg("body") {
+            Some(body) => changed(st.core.comment(key, body).await, format!("Commented on {key}.")),
             None => text("body is required", true),
         },
-        ("propose_transition", Some(key)) => {
-            let Some(id) = arg("transition_id") else { return text("transition_id is required", true) };
-            match st.core.transitions(key).await {
-                Ok(ts) => match ts.into_iter().find(|t| t.id == id) {
-                    Some(transition) => propose(ProposalBody::Transition { key: key.into(), transition }),
-                    None => text(format!("{id} isn't an available transition for {key}; call list_transitions"), true),
-                },
-                Err(e) => text(format!("Couldn't check transitions for {key}: {e}"), true),
-            }
-        }
-        ("propose_subtasks", Some(key)) => {
-            let summaries: Vec<String> = args["summaries"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|s| s.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from))
-                .collect();
-            if summaries.is_empty() {
-                return text("summaries must list at least one subtask", true);
-            }
-            propose(ProposalBody::Subtasks { key: key.into(), summaries })
-        }
-        (name, None) if name != "search_tickets" => text("key is required", true),
+        ("transition_ticket", Some(key)) => match arg("transition_id") {
+            Some(id) => changed(st.core.transition(key, id).await, format!("Moved {key}.")),
+            None => text("transition_id is required", true),
+        },
+        (_, None) => text("key is required", true),
         (name, _) => text(format!("Unknown tool {name}"), true),
     }
+}
+
+/// Active inbox items (not done, not snoozed) as one line each.
+fn inbox_text(snap: &crate::model::Snapshot, include_read: bool, now: &str) -> String {
+    let lines: Vec<String> = snap
+        .events
+        .iter()
+        .filter(|e| e.done_at.is_none() && e.snoozed_until.as_deref().is_none_or(|u| u <= now))
+        .filter(|e| include_read || e.unread)
+        .take(50)
+        .map(|e| {
+            let summary = snap.tickets.get(&e.ticket_key).map(|t| t.summary.as_str()).unwrap_or_default();
+            format!(
+                "{}{} {} “{summary}”: {} {} — {}",
+                if e.unread { "[unread] " } else { "" },
+                e.at,
+                e.ticket_key,
+                e.actor.name,
+                e.kind.as_str(),
+                e.text
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        return "Nothing new in the inbox.".into();
+    }
+    lines.join("\n")
 }
 
 /// The ticket as compact JSON for the model.
@@ -288,6 +419,44 @@ mod tests {
     fn only_read_and_propose_tools_are_offered() {
         let names: Vec<String> = tool_list().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         assert!(names.iter().all(|n| n.starts_with("get_") || n.starts_with("search_") || n.starts_with("list_") || n.starts_with("propose_")));
+    }
+
+    #[test]
+    fn external_sessions_get_the_inbox_and_direct_writes_but_no_proposals() {
+        let names: Vec<String> = external_tool_list().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+        assert!(names.contains(&"inbox".to_string()));
+        assert!(names.contains(&"comment_on_ticket".to_string()));
+        assert!(!names.iter().any(|n| n.starts_with("propose_")));
+    }
+
+    #[test]
+    fn inbox_text_lists_active_unread_items() {
+        use crate::model::{EventKind, InboxEvent, Person, Snapshot};
+        let person = Person { account_id: "s".into(), name: "Sam".into(), avatar_url: None };
+        let ev = |id: &str, unread: bool, done: Option<&str>| InboxEvent {
+            id: id.into(),
+            kind: EventKind::Mention,
+            ticket_key: "CA-1".into(),
+            actor: person.clone(),
+            at: "2026-09-28T10:00:00Z".into(),
+            text: format!("text {id}"),
+            unread,
+            done_at: done.map(String::from),
+            snoozed_until: None,
+        };
+        let snap = Snapshot {
+            me: person.clone(),
+            site: String::new(),
+            tickets: Default::default(),
+            events: vec![ev("a", true, None), ev("b", false, None), ev("c", true, Some("2026-09-28T11:00:00Z"))],
+            watching: vec![],
+            last_sync_at: None,
+            sync_error: None,
+        };
+        let out = inbox_text(&snap, false, "2026-09-28T12:00:00Z");
+        assert!(out.contains("[unread]") && out.contains("text a"));
+        assert!(!out.contains("text b") && !out.contains("text c"));
+        assert!(inbox_text(&snap, true, "2026-09-28T12:00:00Z").contains("text b"));
     }
 
     #[test]

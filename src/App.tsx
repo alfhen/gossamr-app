@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useClaude } from "./claudeStore";
 import { ClaudeDrawer } from "./components/ClaudeDrawer";
 import { ItemList } from "./components/ItemList";
-import { CommandPalette, ShortcutHelp, ToastHost } from "./components/Overlays";
+import { CommandPalette, ConnectClaude, ShortcutHelp, ToastHost } from "./components/Overlays";
 import { Sidebar } from "./components/Sidebar";
 import { TicketDetail } from "./components/TicketDetail";
 import { commandFor, isTypingTarget } from "./lib/keyboard";
@@ -27,6 +27,7 @@ export default function App() {
       <ClaudeDrawer />
       {overlay === "palette" && <CommandPalette />}
       {overlay === "help" && <ShortcutHelp />}
+      {overlay === "connect" && <ConnectClaude />}
       <ToastHost />
     </div>
   );
