@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { liveMentions, participants, segments, type Mention } from "../lib/mentions";
 import { snoozeOptions, relativeTime } from "../lib/views";
 import { selectedEvent, selectedTicket, useStore } from "../store";
-import type { Snapshot, Ticket, Transition, Uploaded } from "../types";
+import type { AdfNode, Snapshot, Ticket, Transition, Uploaded } from "../types";
 import { filesIn, formatSize, nameFor } from "../lib/attachments";
 import { useClaude } from "../claudeStore";
-import { Adf } from "./Adf";
+import { Adf, MediaContext, type ResolvedMedia } from "./Adf";
 import { Icon, Sparkle } from "./icons";
 import { Menu } from "./Menu";
 import { MentionTextarea } from "./MentionTextarea";
@@ -123,8 +123,10 @@ function TicketBody({ ticket: t }: { ticket: Ticket }) {
   const since = new Date(now.getTime() - 24 * 3600_000).toISOString();
   const newComments = t.comments.filter((c) => c.created > since && c.author.accountId !== me);
   const knownPeople = useMemo(() => (snap ? everyone(snap) : []), [snap]);
+  const media = useTicketMedia(t);
 
   return (
+    <MediaContext.Provider value={media}>
     <div className="selectable grid max-w-[760px] gap-5 px-7 pt-5 pb-7">
       <div>
         <div className="flex flex-wrap gap-1.5 text-sm text-ink-3">
@@ -243,6 +245,7 @@ function TicketBody({ ticket: t }: { ticket: Ticket }) {
 
       <Composer key={t.key} ticket={t} />
     </div>
+    </MediaContext.Provider>
   );
 }
 
@@ -252,6 +255,41 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
       <span className="text-ink-3">{label}</span>
       {children}
     </span>
+  );
+}
+
+/**
+ * Resolves the media nodes in a ticket's description and comments to its attachments: by media id when Jira reveals
+ * it, else by file name when exactly one attachment has that name.
+ */
+function useTicketMedia(t: Ticket) {
+  const backend = useStore((s) => s.backend);
+  const [byMedia, setByMedia] = useState<Record<string, string>>({});
+  const images = t.attachments?.filter((a) => a.mimeType.startsWith("image/")).length ?? 0;
+
+  useEffect(() => {
+    if (!backend || (!images && backend.kind !== "mock")) return setByMedia({});
+    let live = true;
+    backend
+      .ticketMedia(t.key)
+      .then((m) => live && setByMedia(m))
+      .catch(() => live && setByMedia({}));
+    return () => {
+      live = false;
+    };
+  }, [backend, t.key, images, t.comments.length]);
+
+  return useCallback(
+    (node: AdfNode): ResolvedMedia | null => {
+      if (!backend) return null;
+      const alt = typeof node.attrs?.alt === "string" ? node.attrs.alt : "";
+      const named = t.attachments?.filter((a) => a.filename === alt) ?? [];
+      const id = byMedia[String(node.attrs?.id ?? "")] ?? (named.length === 1 ? named[0].id : undefined);
+      if (!id) return null;
+      const a = t.attachments?.find((x) => x.id === id);
+      return { url: backend.attachmentUrl(id), name: a?.filename ?? alt, image: a ? a.mimeType.startsWith("image/") : true };
+    },
+    [backend, byMedia, t.attachments],
   );
 }
 

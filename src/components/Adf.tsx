@@ -1,8 +1,17 @@
-import type { ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import type { AdfMark, AdfNode } from "../types";
 import { useStore } from "../store";
 
 const SAFE_URL = /^(https?:|mailto:)/i;
+
+export interface ResolvedMedia {
+  url: string;
+  name: string;
+  image: boolean;
+}
+
+/** Finds the file a `media` node points at. Without a provider, media shows as a placeholder. */
+export const MediaContext = createContext<(node: AdfNode) => ResolvedMedia | null>(() => null);
 
 /**
  * Renders a Jira document (ADF). Only known node types produce markup; anything else renders its children, so
@@ -107,11 +116,12 @@ function Node({ node }: { node: AdfNode }): ReactNode {
     case "embedCard":
       return typeof a.url === "string" ? <Link href={a.url}>{a.url}</Link> : null;
     case "mediaSingle":
+      return <div>{children(node)}</div>;
     case "mediaGroup":
-    case "mediaInline":
-      return <span className="text-sm text-ink-3">[Attachment. Open in Jira to view]</span>;
+      return <div className="flex flex-wrap gap-2">{children(node)}</div>;
     case "media":
-      return null;
+    case "mediaInline":
+      return <Media node={node} />;
     default:
       return <>{children(node)}</>;
   }
@@ -125,6 +135,42 @@ const PANEL: Record<string, string> = {
   error: "bg-blocked-bg",
   tip: "bg-done-bg",
 };
+
+function Media({ node }: { node: AdfNode }) {
+  const found = useContext(MediaContext)(node);
+  const [zoomed, setZoomed] = useState(false);
+  const alt = typeof node.attrs?.alt === "string" ? node.attrs.alt : "";
+  if (!found) {
+    return <span className="text-sm text-ink-3">{alt ? `📎 ${alt}` : "[Attachment. Open in Jira to view]"}</span>;
+  }
+  if (!found.image) {
+    return <span className="inline-flex items-center gap-1.5 rounded-md border border-sep bg-hover px-2 py-1 text-sm">📎 {found.name}</span>;
+  }
+  return (
+    <>
+      <button type="button" onClick={() => setZoomed(true)} className="block max-w-full cursor-zoom-in" aria-label={`Enlarge ${found.name}`}>
+        <img src={found.url} alt={found.name} loading="lazy" className="max-h-[420px] max-w-full rounded-md border border-sep object-contain" />
+      </button>
+      {zoomed && (
+        <button
+          type="button"
+          autoFocus
+          aria-label="Close image"
+          onClick={() => setZoomed(false)}
+          onKeyDown={(e) => {
+            if (e.key !== "Escape") return;
+            e.stopPropagation();
+            e.nativeEvent.stopImmediatePropagation();
+            setZoomed(false);
+          }}
+          className="fixed inset-0 z-[80] grid cursor-zoom-out place-items-center bg-black/75 p-8"
+        >
+          <img src={found.url} alt={found.name} className="max-h-full max-w-full rounded-md object-contain shadow-pop" />
+        </button>
+      )}
+    </>
+  );
+}
 
 function Text({ text, marks }: { text: string; marks: AdfMark[] }) {
   let out: ReactNode = text;

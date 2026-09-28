@@ -14,6 +14,10 @@ export interface Backend {
   attach(ticketKey: string, file: File): Promise<Uploaded>;
   /** The site's per-file upload limit in bytes, or null when attachments are turned off. */
   attachmentLimit(): Promise<number | null>;
+  /** Maps the media ids that documents embed to the ticket's attachment ids. */
+  ticketMedia(ticketKey: string): Promise<Record<string, string>>;
+  /** A URL the page can load an attachment from. */
+  attachmentUrl(attachmentId: string): string;
   /** People who can see the ticket and match the query, for @mention suggestions. */
   mentionable(ticketKey: string, query: string): Promise<Person[]>;
   /** Creates sub-tasks under a ticket and returns their keys. */

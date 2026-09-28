@@ -174,6 +174,11 @@ async fn attach(core: State<'_, CoreState>, request: tauri::ipc::Request<'_>) ->
 }
 
 #[tauri::command]
+async fn ticket_media(core: State<'_, CoreState>, scope: Scope, key: String) -> Result<std::collections::HashMap<String, String>> {
+    core.ticket_media(&scope, &key).await
+}
+
+#[tauri::command]
 async fn attachment_limit(core: State<'_, CoreState>, scope: Scope) -> Result<Option<u64>> {
     core.attachment_limit(&scope).await
 }
@@ -256,6 +261,25 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        // `attachment://localhost/{id}` serves a Jira attachment to the page, so images load straight into <img>.
+        .register_asynchronous_uri_scheme_protocol("attachment", |ctx, request, responder| {
+            let core = ctx.app_handle().try_state::<CoreState>().map(|s| s.inner().clone());
+            let id = request.uri().path().trim_start_matches('/').to_string();
+            tauri::async_runtime::spawn(async move {
+                let result = match core {
+                    Some(core) => core.attachment(&id).await,
+                    None => Err(Error::NotSignedIn),
+                };
+                let response = match result {
+                    Ok((mime, bytes)) => tauri::http::Response::builder()
+                        .header(tauri::http::header::CONTENT_TYPE, mime)
+                        .header(tauri::http::header::CACHE_CONTROL, "private, max-age=86400")
+                        .body(bytes),
+                    Err(e) => tauri::http::Response::builder().status(502).body(e.to_string().into_bytes()),
+                };
+                responder.respond(response.expect("static response parts"));
+            });
+        })
         .setup(|app| {
             let http = reqwest::Client::builder()
                 .user_agent(concat!("jira-inbox/", env!("CARGO_PKG_VERSION")))
@@ -296,6 +320,7 @@ pub fn run() {
             comment,
             attach,
             attachment_limit,
+            ticket_media,
             mentionable,
             create_subtasks,
             claude_sessions,
