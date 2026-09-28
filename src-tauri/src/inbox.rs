@@ -26,6 +26,14 @@ const LAST_SYNC: &str = "last_sync_at";
 const OWN_CLAUDE_SESSIONS: &str = "claude_sessions";
 const OWN_SESSIONS_KEPT: usize = 50;
 
+/// Events after this are new since the previous sync (or, before the first sync, from the last 24 hours).
+fn unread_cutoff(last_sync: Option<&str>) -> String {
+    match last_sync.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) {
+        Some(at) => (at.with_timezone(&Utc) - Duration::minutes(CLOCK_SKEW_MINUTES)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        None => ago(Duration::hours(24)),
+    }
+}
+
 pub fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
@@ -93,23 +101,18 @@ impl Core {
         let (site, me) = self.identity().await?;
         let scope = Scope::of(&site, &me);
         let started = now_iso();
-        let tracked = self.jira.search(&scope, TRACKED_JQL, true).await?;
+        let previous = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
+        let unread_after = unread_cutoff(previous.as_deref());
+        let tracked = self.jira.search(&scope, TRACKED_JQL, Some(&unread_after)).await?;
         let epics: Vec<&str> = tracked.iter().filter(|t| t.is_epic).map(|t| t.key.as_str()).collect();
         let context = if epics.is_empty() {
             Vec::new()
         } else {
             let jql = format!("parent in ({}) ORDER BY updated DESC", epics.join(","));
-            self.jira.search(&scope, &jql, false).await?
+            self.jira.search(&scope, &jql, None).await?
         };
 
         self.with_db_for(&scope, |db| {
-            let previous = db.meta(LAST_SYNC)?;
-            let unread_after = match &previous {
-                Some(at) => (chrono::DateTime::parse_from_rfc3339(at).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now())
-                    - Duration::minutes(CLOCK_SKEW_MINUTES))
-                .to_rfc3339_opts(SecondsFormat::Secs, true),
-                None => ago(Duration::hours(24)),
-            };
             let tracked_keys: std::collections::HashSet<&str> = tracked.iter().map(|t| t.key.as_str()).collect();
             for t in tracked.iter().chain(context.iter().filter(|t| !tracked_keys.contains(t.key.as_str()))) {
                 db.upsert_ticket(t, &started)?;
@@ -124,11 +127,11 @@ impl Core {
 
     /// Re-reads one issue after a write so the UI shows the result without waiting for the next sync.
     async fn refresh(&self, scope: &Scope, key: &str) -> Result<()> {
-        let t = self.jira.issue(scope, key).await?;
+        let last_sync = self.with_db_for(scope, |db| db.meta(LAST_SYNC)).await?;
+        let since = unread_cutoff(last_sync.as_deref());
+        let t = self.jira.issue(scope, key, &since).await?;
         self.with_db_for(scope, |db| {
             db.upsert_ticket(&t, &now_iso())?;
-            // Same 24 hour lookback as the first sync, so recent activity on this ticket still arrives unread.
-            let since = db.meta(LAST_SYNC)?.unwrap_or_else(|| ago(Duration::hours(24)));
             db.insert_events(&derive(&t, &scope.account_id), &since)?;
             Ok(())
         })
@@ -303,6 +306,13 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unread_cutoff_allows_for_clock_skew_and_defaults_to_a_day() {
+        assert_eq!(unread_cutoff(Some("2026-09-28T12:00:00Z")), "2026-09-28T11:50:00Z");
+        let fallback = unread_cutoff(None);
+        assert!(fallback < now_iso() && fallback > ago(Duration::hours(25)));
+    }
 
     #[test]
     fn each_site_and_account_gets_its_own_database_file() {
