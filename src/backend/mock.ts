@@ -329,7 +329,10 @@ export class MockBackend implements Backend {
 
   async mentionable(_key: string, query: string) {
     const q = fold(query.trim());
-    return [...Object.values(P), ...EXTRA_PEOPLE].filter((p) => fold(p.name).split(" ").some((part) => part.startsWith(q)));
+    return [...Object.values(P), ...EXTRA_PEOPLE].filter((p) => {
+      const name = fold(p.name);
+      return name.startsWith(q) || name.split(" ").some((part) => part.startsWith(q));
+    });
   }
 
   async markSeen(key: string) {
