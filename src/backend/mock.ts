@@ -1,6 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Comment, EventKind, InboxEvent, Person, Snapshot, Status, Ticket, Transition } from "../types";
+import type { Mention } from "../lib/mentions";
 import type { Backend } from "./types";
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -12,6 +13,13 @@ const P = {
   jonas: { accountId: "jonas", name: "Jonas Berg" },
   priya: { accountId: "priya", name: "Priya Nair" },
 } satisfies Record<string, Person>;
+
+/** People who aren't on any sample ticket, so mention search has something to find. */
+const EXTRA_PEOPLE: Person[] = [
+  { accountId: "lars", name: "Lars Møller" },
+  { accountId: "soren", name: "Søren Ødegård" },
+  { accountId: "ida", name: "Ida Kjær" },
+];
 
 const S = {
   todo: { name: "To Do", category: "new" },
@@ -243,9 +251,9 @@ export class MockBackend implements Backend {
     });
   }
 
-  async comment(key: string, body: string) {
+  async comment(key: string, body: string, mentions: Mention[] = []) {
     this.update((s) => {
-      s.tickets[key].comments.push({ id: id(), author: s.me, created: new Date().toISOString(), body });
+      s.tickets[key].comments.push({ id: id(), author: s.me, created: new Date().toISOString(), body, mentioned: mentions });
     });
   }
 
@@ -257,6 +265,11 @@ export class MockBackend implements Backend {
       s.tickets[key].subtasks.push(...summaries.map((summary, i) => ({ key: keys[i], summary, done: false })));
     });
     return keys;
+  }
+
+  async mentionable(_key: string, query: string) {
+    const q = query.trim().toLowerCase();
+    return [...Object.values(P), ...EXTRA_PEOPLE].filter((p) => p.name.toLowerCase().split(" ").some((part) => part.startsWith(q)));
   }
 
   async markSeen(key: string) {

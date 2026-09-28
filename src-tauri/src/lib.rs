@@ -136,10 +136,21 @@ async fn transition(app: AppHandle, core: State<'_, CoreState>, key: String, tra
 }
 
 #[tauri::command]
-async fn comment(app: AppHandle, core: State<'_, CoreState>, key: String, body: String) -> Result<()> {
-    core.comment(&key, &body).await?;
+async fn comment(
+    app: AppHandle,
+    core: State<'_, CoreState>,
+    key: String,
+    body: String,
+    mentions: Option<Vec<adf::MentionRef>>,
+) -> Result<()> {
+    core.comment(&key, &body, &mentions.unwrap_or_default()).await?;
     publish(&app, &core).await;
     Ok(())
+}
+
+#[tauri::command]
+async fn mentionable(core: State<'_, CoreState>, key: String, query: String) -> Result<Vec<model::Person>> {
+    core.mentionable(&key, &query).await
 }
 
 #[tauri::command]
@@ -252,6 +263,7 @@ pub fn run() {
             transitions,
             transition,
             comment,
+            mentionable,
             create_subtasks,
             claude_sessions,
             ask_claude,

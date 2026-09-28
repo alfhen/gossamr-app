@@ -164,7 +164,8 @@ fn system_prompt(key: &str) -> String {
          You cannot change Jira yourself. When a comment, a transition or subtasks would help, call propose_comment, \
          propose_transition or propose_subtasks; each becomes a card the user approves, edits or skips, so never say it \
          has been done. You can read files in the working folder and run read-only git commands. \
-         Keep replies short and specific, and write comments in the user's voice."
+         Keep replies short and specific, and write comments in the user's voice. To mention someone in a comment, write \
+         @ and their full display name as shown on the ticket, e.g. @Sam Holt."
     )
 }
 

@@ -23,8 +23,19 @@ pub struct Comment {
     pub author: Person,
     pub created: String,
     pub body: String,
+    /// Account ids mentioned in the comment.
     #[serde(default)]
     pub mentions: Vec<String>,
+    /// The same people with the name shown in the text, so the UI can highlight `@Name`.
+    #[serde(default)]
+    pub mentioned: Vec<Mentioned>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mentioned {
+    pub account_id: String,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

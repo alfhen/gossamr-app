@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { claude, type ClaudeSessions } from "../backend/claude";
 import { useClaude, type ProposalCard, type Turn } from "../claudeStore";
+import { autoLink, liveMentions, participants, type Mention } from "../lib/mentions";
 import { relativeTime } from "../lib/views";
 import { selectedTicket, useStore } from "../store";
 import type { Ticket } from "../types";
 import { Sparkle } from "./icons";
+import { MentionTextarea } from "./MentionTextarea";
 import { StatusPill } from "./primitives";
 
 const HOME = "~";
@@ -231,7 +233,13 @@ function ProposalView({ ticketKey, requestId, card }: { ticketKey: string; reque
   const showToast = useStore((s) => s.showToast);
   const setProposal = useClaude((s) => s.setProposal);
   const p = card.proposal;
-  const [body, setBody] = useState(p.kind === "comment" ? p.body : "");
+  const ticket = useStore((s) => s.snap?.tickets[p.key]);
+  const me = useStore((s) => s.snap?.me.accountId ?? "");
+  const people = useMemo(() => (ticket ? participants(ticket, me) : []), [ticket, me]);
+  // Claude writes "@Sam"; link that to the person on the ticket so posting it actually notifies them.
+  const [draft] = useState(() => autoLink(p.kind === "comment" ? p.body : "", people));
+  const [body, setBody] = useState(draft.text);
+  const [mentions, setMentions] = useState<Mention[]>(draft.mentions);
   const [picked, setPicked] = useState<boolean[]>(p.kind === "subtasks" ? p.summaries.map(() => true) : []);
   const patch = (x: Partial<ProposalCard>) => setProposal(ticketKey, requestId, p.id, x);
 
@@ -240,7 +248,7 @@ function ProposalView({ ticketKey, requestId, card }: { ticketKey: string; reque
     patch({ state: "applying", error: null });
     try {
       if (p.kind === "comment") {
-        await backend.comment(p.key, body);
+        await backend.comment(p.key, body, liveMentions(body, mentions));
         showToast(`Commented on ${p.key}`);
       } else if (p.kind === "transition") {
         await backend.transition(p.key, p.transition.id);
@@ -270,12 +278,18 @@ function ProposalView({ ticketKey, requestId, card }: { ticketKey: string; reque
       </div>
       <div className="grid gap-2 px-3 py-2.5">
         {p.kind === "comment" && (
-          <textarea
-            aria-label="Comment draft"
+          <MentionTextarea
+            id={`proposal-${requestId}-${p.id}`}
             value={body}
+            mentions={mentions}
+            onChange={(v, m) => {
+              setBody(v);
+              setMentions(m);
+            }}
+            ticketKey={p.key}
+            people={people}
             disabled={done}
-            onChange={(e) => setBody(e.target.value)}
-            className="min-h-[76px] w-full resize-y rounded-md border border-field-border bg-field px-2.5 py-2"
+            className="rounded-md border border-field-border bg-field"
           />
         )}
         {p.kind === "transition" && (

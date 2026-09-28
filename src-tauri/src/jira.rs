@@ -155,8 +155,21 @@ impl Jira {
         Ok(created)
     }
 
-    pub async fn comment(&self, key: &str, text: &str) -> Result<()> {
-        let body = json!({ "body": adf::from_text(text) });
+    /// People who can see `key` and match `query`, for @mention suggestions. Apps and deactivated users are left out.
+    pub async fn mentionable(&self, key: &str, query: &str) -> Result<Vec<Person>> {
+        let q: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+        let raw: Value = self.call(Method::GET, &format!("user/viewissue/search?issueKey={key}&query={q}&maxResults=10"), None).await?;
+        Ok(raw
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|u| u["active"] != false && u["accountType"].as_str().is_none_or(|t| t == "atlassian"))
+            .filter_map(person)
+            .collect())
+    }
+
+    pub async fn comment(&self, key: &str, text: &str, mentions: &[adf::MentionRef]) -> Result<()> {
+        let body = json!({ "body": adf::from_text(text, mentions) });
         self.call::<Value>(Method::POST, &format!("issue/{key}/comment"), Some(&body)).await?;
         Ok(())
     }
@@ -229,6 +242,7 @@ pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
                 created: normalise_time(c["created"].as_str()?),
                 body: adf::to_text(&c["body"]),
                 mentions: adf::mentions(&c["body"]),
+                mentioned: adf::mentioned(&c["body"]),
             })
         })
         .collect();

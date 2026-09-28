@@ -236,6 +236,10 @@ impl Core {
         self.with_db(|db| db.snooze(id, until.as_deref())).await
     }
 
+    pub async fn mentionable(&self, key: &str, query: &str) -> Result<Vec<Person>> {
+        self.jira.mentionable(key, query).await
+    }
+
     pub async fn transitions(&self, key: &str) -> Result<Vec<Transition>> {
         self.jira.transitions(key).await
     }
@@ -246,12 +250,12 @@ impl Core {
         Ok(())
     }
 
-    pub async fn comment(&self, key: &str, body: &str) -> Result<()> {
+    pub async fn comment(&self, key: &str, body: &str, mentions: &[crate::adf::MentionRef]) -> Result<()> {
         let body = body.trim();
         if body.is_empty() {
             return Err(Error::Api { status: 400, message: "a comment can't be empty".into() });
         }
-        self.jira.comment(key, body).await?;
+        self.jira.comment(key, body, mentions).await?;
         self.after_write(key).await;
         Ok(())
     }
