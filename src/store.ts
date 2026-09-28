@@ -48,6 +48,8 @@ export type Store = State & Actions;
 
 let toastSeq = 0;
 let unsubscribe: (() => void) | null = null;
+/** Bumped by each init and sign-out, so a load that finishes late can't restore a previous account's data. */
+let generation = 0;
 
 export const useStore = create<Store>()((set, get) => {
   const run = async (what: string, fn: () => Promise<void>) => {
@@ -73,9 +75,13 @@ export const useStore = create<Store>()((set, get) => {
     error: null,
 
     async init(backend) {
+      const mine = ++generation;
       unsubscribe?.();
-      unsubscribe = backend.subscribe((snap) => set({ snap, now: new Date() }));
+      unsubscribe = backend.subscribe((snap) => {
+        if (mine === generation) set({ snap, now: new Date() });
+      });
       const snap = await backend.load();
+      if (mine !== generation) return;
       set({ backend, snap, now: new Date() });
       const first = currentItems(get())[0];
       if (first) get().select(first.id);
@@ -177,6 +183,7 @@ export const useStore = create<Store>()((set, get) => {
 
     async signOut() {
       if (await run("sign out", auth.signOut)) {
+        generation++;
         unsubscribe?.();
         unsubscribe = null;
         set({ account: null, backend: null, snap: null, selectedId: null, overlay: null });

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { MockBackend } from "./backend/mock";
 import { currentItems, selectedEvent, selectedTicket, useStore } from "./store";
+import type { Snapshot } from "./types";
 
 const initial = useStore.getState();
 
@@ -82,5 +83,19 @@ describe("store", () => {
     const ev = s().snap!.events.find((e) => e.id === id)!;
     expect(ev.doneAt).toBeNull();
     expect(ev.snoozedUntil).toBe(until.toISOString());
+  });
+
+  it("ignores a load that finishes after a newer init", async () => {
+    let finishSlow: (snap: Snapshot) => void = () => {};
+    const slow = new MockBackend();
+    slow.load = () => new Promise((resolve) => (finishSlow = resolve));
+    const slowInit = s().init(slow);
+    const fresh = new MockBackend();
+    await s().init(fresh);
+    const staleSnap = { ...s().snap!, site: "stale.example" };
+    finishSlow(staleSnap);
+    await slowInit;
+    expect(s().backend).toBe(fresh);
+    expect(s().snap!.site).not.toBe("stale.example");
   });
 });
