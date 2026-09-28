@@ -98,4 +98,17 @@ describe("store", () => {
     expect(s().backend).toBe(fresh);
     expect(s().snap!.site).not.toBe("stale.example");
   });
+
+  it("keeps the current backend working when a new one fails to load", async () => {
+    const current = s().backend!;
+    let disposed = false;
+    current.dispose = () => void (disposed = true);
+    const broken = new MockBackend();
+    broken.load = () => Promise.reject(new Error("offline"));
+    await expect(s().init(broken)).rejects.toThrow("offline");
+    expect(s().backend).toBe(current);
+    expect(disposed).toBe(false);
+    await current.syncNow();
+    expect(s().snap!.events.some((e) => e.text.startsWith("@Alf the design is final"))).toBe(true);
+  });
 });
