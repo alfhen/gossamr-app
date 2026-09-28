@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Mention } from "../lib/mentions";
@@ -45,6 +45,14 @@ export class JiraBackend implements Backend {
     // The bytes travel as the raw request body; JSON would inflate them several times over.
     const meta = new URLSearchParams({ ...this.scope, key, name: file.name, type: file.type || "application/octet-stream" });
     return invoke<Uploaded>("attach", new Uint8Array(await file.arrayBuffer()), { headers: { "x-file": meta.toString() } });
+  }
+
+  ticketMedia(key: string) {
+    return invoke<Record<string, string>>("ticket_media", { scope: this.scope, key });
+  }
+
+  attachmentUrl(id: string) {
+    return convertFileSrc(id, "attachment");
   }
 
   private limit: Promise<number | null> | null = null;

@@ -10,11 +10,11 @@ use serde_json::{json, Value};
 use crate::adf;
 use crate::auth::{json_or_error, Auth, Scope};
 use crate::error::{Error, Result};
-use crate::model::{CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, Transition, Uploaded};
+use crate::model::{Attachment, CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, Transition, Uploaded};
 
 const FIELDS: &[&str] = &[
     "summary", "status", "issuetype", "priority", "assignee", "reporter", "parent", "description", "comment",
-    "subtasks", "duedate", "updated", "watches",
+    "subtasks", "duedate", "updated", "watches", "attachment",
 ];
 const PAGE_SIZE: u32 = 50;
 const CHANGELOG_PAGE: u64 = 100;
@@ -25,6 +25,8 @@ pub const TRACKED_LIMIT: usize = 2000;
 /// Tickets read for context, such as an epic's children, so a very broad JQL can't stall a sync.
 pub const CONTEXT_LIMIT: usize = 300;
 const MENTION_SUGGESTIONS: usize = 10;
+/// Largest attachment shown in the app; bigger ones stay in Jira. Checked while reading, not after.
+const PREVIEW_LIMIT: usize = 25 * 1024 * 1024;
 
 pub struct Jira {
     http: reqwest::Client,
@@ -257,6 +259,34 @@ impl Jira {
         Ok(res.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()).and_then(media_id_from_location))
     }
 
+    /// An attachment's content type and bytes. The download redirects to the media service with a signed URL;
+    /// reqwest drops the bearer token when following it to another host.
+    pub async fn download(&self, scope: &Scope, id: &str) -> Result<(String, Vec<u8>)> {
+        let res = self.send(&self.http, scope, Method::GET, &format!("attachment/content/{id}"), |r| r).await?;
+        if !res.status().is_success() {
+            return Err(Error::Api { status: res.status().as_u16(), message: format!("couldn't download attachment {id}") });
+        }
+        let mime = res
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let too_big = || Error::Api { status: 413, message: format!("attachment {id} is too large to preview") };
+        if res.content_length().is_some_and(|n| n > PREVIEW_LIMIT as u64) {
+            return Err(too_big());
+        }
+        let mut res = res;
+        let mut bytes = Vec::with_capacity(res.content_length().unwrap_or(0) as usize);
+        while let Some(chunk) = res.chunk().await? {
+            if bytes.len() + chunk.len() > PREVIEW_LIMIT {
+                return Err(too_big());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok((mime, bytes))
+    }
+
     pub async fn comment(&self, scope: &Scope, key: &str, text: &str, mentions: &[adf::MentionRef], files: &[Uploaded]) -> Result<()> {
         let body = json!({ "body": adf::with_files(adf::from_text(text, mentions), files) });
         self.call::<Value>(scope, Method::POST, &format!("issue/{key}/comment"), Some(&body)).await?;
@@ -360,6 +390,19 @@ pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
         .flatten()
         .filter_map(parse_history)
         .collect();
+    let attachments = f["attachment"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| {
+            Some(Attachment {
+                id: a["id"].as_str()?.to_string(),
+                filename: a["filename"].as_str().unwrap_or_default().to_string(),
+                mime_type: a["mimeType"].as_str().unwrap_or("application/octet-stream").to_string(),
+                size: a["size"].as_u64().unwrap_or(0),
+            })
+        })
+        .collect();
     let subtasks = f["subtasks"]
         .as_array()
         .into_iter()
@@ -389,6 +432,7 @@ pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
         description: adf::to_text(&f["description"]),
         description_doc: doc(&f["description"]),
         comments,
+        attachments,
         subtasks,
         due_date: str_of(&f["duedate"]),
         updated: f["updated"].as_str().map(normalise_time).unwrap_or_default(),
@@ -421,7 +465,8 @@ pub(crate) mod tests {
                 "subtasks": [{"key": "CA-2", "fields": {"summary": "Sub", "status": {"statusCategory": {"key": "done"}}}}],
                 "duedate": "2026-10-17",
                 "updated": "2026-09-28T10:05:00.000+0200",
-                "watches": {"isWatching": true}
+                "watches": {"isWatching": true},
+                "attachment": [{"id": "10001", "filename": "shot.png", "mimeType": "image/png", "size": 2048}]
             },
             "changelog": {"histories": [{
                 "id": "500", "author": {"accountId": "sam", "displayName": "Sam"},
@@ -444,6 +489,7 @@ pub(crate) mod tests {
         assert_eq!(t.comments[0].created, "2026-09-28T08:00:00Z");
         assert!(t.subtasks[0].done);
         assert!(t.watching);
+        assert_eq!((t.attachments[0].id.as_str(), t.attachments[0].mime_type.as_str()), ("10001", "image/png"));
         assert_eq!(t.history[0].items[0].to.as_deref(), Some("In Review"));
     }
 

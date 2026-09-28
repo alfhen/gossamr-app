@@ -322,6 +322,14 @@ export class MockBackend implements Backend {
     return 10 * 1024 * 1024;
   }
 
+  async ticketMedia() {
+    return Object.fromEntries([...this.files.keys()].map((k) => [k, k]));
+  }
+
+  attachmentUrl(id: string) {
+    return this.files.get(id) ?? "";
+  }
+
   async createSubtasks(key: string, summaries: string[]) {
     const project = key.split("-")[0];
     let next = Math.max(...Object.keys(this.snap.tickets).map((k) => Number(k.split("-")[1]) || 0), 0) + 1;

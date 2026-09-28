@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -10,7 +10,7 @@ use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, NewEvent};
 use crate::jira::{Jira, CONTEXT_LIMIT, TRACKED_LIMIT};
-use crate::model::{CachedTicket, CreatedSubtasks, Person, Snapshot, Ticket, Transition, Uploaded};
+use crate::model::{Attachment, CachedTicket, CreatedSubtasks, Person, Snapshot, Ticket, Transition, Uploaded};
 
 /// Tickets the user follows. Anything else only appears as context, e.g. the children of an epic they watch.
 const TRACKED_JQL: &str =
@@ -43,6 +43,10 @@ fn ago(d: Duration) -> String {
 }
 
 /// Separate files per site and account, so two people signing in on one Mac never see each other's inbox.
+fn media_key(attachment_id: &str) -> String {
+    format!("media:{attachment_id}")
+}
+
 fn db_file(scope: &Scope) -> String {
     let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect::<String>();
     format!("inbox-{}-{}.sqlite", safe(&scope.cloud_id), safe(&scope.account_id))
@@ -180,6 +184,7 @@ impl Core {
                         description: t.description,
                         description_doc: t.description_doc,
                         comments: t.comments,
+                        attachments: t.attachments,
                         subtasks: t.subtasks,
                         due_date: t.due_date,
                         sprint: None,
@@ -266,9 +271,44 @@ impl Core {
         Ok(())
     }
 
+    /// Where each of a ticket's attachments lives in the media service, as `media id → attachment id`, so the files a
+    /// description or comment embeds can be shown. Lookups are cached: an attachment's media id never changes.
+    pub async fn ticket_media(&self, scope: &Scope, key: &str) -> Result<HashMap<String, String>> {
+        let attachments: Vec<Attachment> = self.ticket(scope, key).await?.attachments;
+        let cached = self
+            .with_db_for(scope, |db| attachments.iter().map(|a| Ok((a.id.clone(), db.meta(&media_key(&a.id))?))).collect::<Result<Vec<_>>>())
+            .await?;
+        let mut out = HashMap::new();
+        for (id, media) in cached {
+            let media = match media {
+                Some(m) => m,
+                None => {
+                    let Some(m) = self.jira.media_id(scope, &id).await? else { continue };
+                    self.with_db_for(scope, |db| db.set_meta(&media_key(&id), &m)).await?;
+                    m
+                }
+            };
+            out.insert(media, id);
+        }
+        Ok(out)
+    }
+
+    /// An attachment's bytes and content type, for the signed-in account.
+    pub async fn attachment(&self, id: &str) -> Result<(String, Vec<u8>)> {
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(Error::Api { status: 400, message: "not an attachment id".into() });
+        }
+        let scope = self.scope().await?;
+        self.jira.download(&scope, id).await
+    }
+
     /// Uploads a file to a ticket. The ticket isn't refreshed here: the comment that follows does that.
     pub async fn attach(&self, scope: &Scope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
-        self.jira.attach(scope, key, filename, mime_type, bytes).await
+        let uploaded = self.jira.attach(scope, key, filename, mime_type, bytes).await?;
+        if let Some(m) = &uploaded.media_id {
+            let _ = self.with_db_for(scope, |db| db.set_meta(&media_key(&uploaded.id), m)).await;
+        }
+        Ok(uploaded)
     }
 
     pub async fn attachment_limit(&self, scope: &Scope) -> Result<Option<u64>> {

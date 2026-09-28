@@ -25,6 +25,13 @@ export interface AdfMark {
   attrs?: Record<string, unknown>;
 }
 
+export interface Attachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
 /** A file uploaded to a ticket. Without `mediaId` it can't be shown inline, so a comment names it instead. */
 export interface Uploaded {
   id: string;
@@ -73,6 +80,7 @@ export interface Ticket {
   description: string;
   descriptionDoc?: AdfNode | null;
   comments: Comment[];
+  attachments?: Attachment[];
   /** Changes made by other people since the user last opened the ticket. */
   changes: FieldChange[];
   subtasks: SubtaskRef[];

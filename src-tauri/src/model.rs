@@ -52,6 +52,15 @@ pub struct FieldChange {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    pub id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubtaskRef {
     pub key: String,
     pub summary: String,
@@ -97,6 +106,8 @@ pub struct CachedTicket {
     #[serde(default)]
     pub description_doc: Option<Value>,
     pub comments: Vec<Comment>,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
     pub subtasks: Vec<SubtaskRef>,
     pub due_date: Option<String>,
     pub updated: String,
@@ -119,6 +130,7 @@ pub struct Ticket {
     pub description: String,
     pub description_doc: Option<Value>,
     pub comments: Vec<Comment>,
+    pub attachments: Vec<Attachment>,
     pub changes: Vec<FieldChange>,
     pub subtasks: Vec<SubtaskRef>,
     pub children: Vec<String>,

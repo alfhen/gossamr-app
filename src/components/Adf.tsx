@@ -1,8 +1,17 @@
-import type { ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { AdfMark, AdfNode } from "../types";
 import { useStore } from "../store";
 
 const SAFE_URL = /^(https?:|mailto:)/i;
+
+export interface ResolvedMedia {
+  url: string;
+  name: string;
+  image: boolean;
+}
+
+/** Finds the file a `media` node points at. Without a provider, media shows as a placeholder. */
+export const MediaContext = createContext<(node: AdfNode) => ResolvedMedia | null>(() => null);
 
 /**
  * Renders a Jira document (ADF). Only known node types produce markup; anything else renders its children, so
@@ -124,11 +133,13 @@ function Node({ node }: { node: AdfNode }): ReactNode {
     case "embedCard":
       return <Card attrs={a} />;
     case "mediaSingle":
+      return <div>{children(node)}</div>;
     case "mediaGroup":
-    case "mediaInline":
-      return <span className="text-sm text-ink-3">[Attachment. Open in Jira to view]</span>;
+      return <div className="flex flex-wrap gap-2">{children(node)}</div>;
     case "media":
-      return null;
+      return <Media node={node} />;
+    case "mediaInline":
+      return <Media node={node} inline />;
     default:
       return <>{children(node)}</>;
   }
@@ -163,6 +174,74 @@ const PANEL: Record<string, string> = {
   error: "bg-blocked-bg",
   tip: "bg-done-bg",
 };
+
+function Media({ node, inline = false }: { node: AdfNode; inline?: boolean }) {
+  const found = useContext(MediaContext)(node);
+  const [zoomed, setZoomed] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+  const wasZoomed = useRef(false);
+  useEffect(() => {
+    if (wasZoomed.current && !zoomed) opener.current?.focus();
+    wasZoomed.current = zoomed;
+  }, [zoomed]);
+
+  const alt = typeof node.attrs?.alt === "string" ? node.attrs.alt : "";
+  if (!found) {
+    return <span className="text-sm text-ink-3">{alt ? `📎 ${alt}` : "[Attachment. Open in Jira to view]"}</span>;
+  }
+  // Also covers images the app won't preview (over the size limit) or that Jira refused.
+  if (!found.image || failed) {
+    return <span className="inline-flex items-center gap-1.5 rounded-md border border-sep bg-hover px-2 py-1 text-sm">📎 {found.name}</span>;
+  }
+  return (
+    <>
+      <button
+        ref={opener}
+        type="button"
+        onClick={() => setZoomed(true)}
+        className={`${inline ? "inline-block align-middle" : "block"} max-w-full cursor-zoom-in`}
+        aria-label={`Enlarge ${found.name}`}
+      >
+        <img
+          src={found.url}
+          alt={found.name}
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className={`${inline ? "max-h-[1.6em]" : "max-h-[420px]"} max-w-full rounded-md border border-sep object-contain`}
+        />
+      </button>
+      {zoomed && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={found.name}
+          onClick={() => setZoomed(false)}
+          onKeyDown={(e) => {
+            // The close button is the only thing to focus, so Tab stays on it; Esc must not reach the app's handler.
+            if (e.key === "Tab") e.preventDefault();
+            if (e.key !== "Escape") return;
+            e.stopPropagation();
+            e.nativeEvent.stopImmediatePropagation();
+            setZoomed(false);
+          }}
+          className="fixed inset-0 z-[80] grid cursor-zoom-out place-items-center bg-black/75 p-8"
+        >
+          <img src={found.url} alt={found.name} className="max-h-full max-w-full rounded-md object-contain shadow-pop" />
+          <button
+            type="button"
+            autoFocus
+            aria-label="Close image"
+            onClick={() => setZoomed(false)}
+            className="absolute top-4 right-4 grid size-8 place-items-center rounded-full bg-white/15 text-lg leading-none text-white hover:bg-white/25"
+          >
+            ×
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
 
 /** Smart links carry either `url` or JSON-LD `data` (with its own `url` and `name`). */
 function Card({ attrs }: { attrs: Record<string, unknown> }) {
