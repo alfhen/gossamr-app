@@ -7,6 +7,8 @@ export interface ProposalCard {
   proposal: Proposal;
   state: ProposalState;
   error: string | null;
+  /** For subtasks: the key created for each summary so far, by index, so a retry never creates one twice. */
+  created?: Record<number, string>;
 }
 
 export interface Turn {
@@ -88,7 +90,11 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
 
   cancel(ticketKey) {
     const running = get().byTicket[ticketKey]?.turns.find((t) => t.status === "running");
-    if (running) void claude.cancel(running.requestId);
+    if (!running) return;
+    const id = running.requestId;
+    claude
+      .cancel(id)
+      .catch((err) => updateByRequest(id, (c) => applyEvent(c, id, { type: "done", sessionId: null, ok: false, message: String(err) })));
   },
 
   setProposal(ticketKey, requestId, id, patch) {

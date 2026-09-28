@@ -256,7 +256,7 @@ export class MockBackend implements Backend {
     this.update((s) => {
       s.tickets[key].subtasks.push(...summaries.map((summary, i) => ({ key: keys[i], summary, done: false })));
     });
-    return keys;
+    return { created: keys, error: null };
   }
 
   async markSeen(key: string) {

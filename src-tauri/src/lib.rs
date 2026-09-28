@@ -149,7 +149,7 @@ async fn create_subtasks(
     scope: Scope,
     key: String,
     summaries: Vec<String>,
-) -> Result<Vec<String>> {
+) -> Result<model::CreatedSubtasks> {
     let created = core.create_subtasks(&scope, &key, &summaries).await?;
     publish(&app, &core).await;
     Ok(created)

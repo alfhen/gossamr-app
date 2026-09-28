@@ -99,11 +99,12 @@ impl Claude {
         let mut stdin = child.stdin.take().expect("piped");
         let prompt = format!("{}\n\n{}", ticket_context(&ticket), req.prompt.trim());
         stdin.write_all(prompt.as_bytes()).await?;
-        drop(stdin);
 
+        // Registered before stdin closes, since Claude starts work (and may call the MCP tools) on EOF.
         let (cancel_tx, cancel_rx) = oneshot::channel();
         self.running.lock().expect("lock poisoned").insert(req.request_id.clone(), cancel_tx);
         self.mcp.runs.lock().expect("lock poisoned").insert(req.request_id.clone(), scope);
+        drop(stdin);
 
         let this = self.clone();
         tauri::async_runtime::spawn(async move {

@@ -145,8 +145,9 @@ impl Jira {
         Ok(())
     }
 
-    /// Creates subtasks under `parent` using the project's first sub-task issue type.
-    pub async fn create_subtasks(&self, scope: &Scope, parent: &str, summaries: &[String]) -> Result<Vec<String>> {
+    /// Creates subtasks under `parent` using the project's first sub-task issue type, stopping at the first failure.
+    /// Returns the keys created so far, in the order of `summaries`, with the error that stopped it.
+    pub async fn create_subtasks(&self, scope: &Scope, parent: &str, summaries: &[String]) -> Result<(Vec<String>, Option<Error>)> {
         let project = parent.split('-').next().unwrap_or(parent);
         let types: Value = self.call(scope, Method::GET, &format!("issue/createmeta/{project}/issuetypes"), None).await?;
         let subtask_type = types["issueTypes"]
@@ -166,10 +167,12 @@ impl Jira {
                 "issuetype": { "id": subtask_type },
                 "summary": summary,
             }});
-            let res: Value = self.call(scope, Method::POST, "issue", Some(&body)).await?;
-            created.push(res["key"].as_str().unwrap_or_default().to_string());
+            match self.call::<Value>(scope, Method::POST, "issue", Some(&body)).await {
+                Ok(res) => created.push(res["key"].as_str().unwrap_or_default().to_string()),
+                Err(e) => return Ok((created, Some(e))),
+            }
         }
-        Ok(created)
+        Ok((created, None))
     }
 
     pub async fn comment(&self, scope: &Scope, key: &str, text: &str) -> Result<()> {
