@@ -25,6 +25,8 @@ pub const TRACKED_LIMIT: usize = 2000;
 /// Tickets read for context, such as an epic's children, so a very broad JQL can't stall a sync.
 pub const CONTEXT_LIMIT: usize = 300;
 const MENTION_SUGGESTIONS: usize = 10;
+/// Largest attachment shown in the app; bigger ones stay in Jira. Checked while reading, not after.
+const PREVIEW_LIMIT: usize = 25 * 1024 * 1024;
 
 pub struct Jira {
     http: reqwest::Client,
@@ -268,7 +270,19 @@ impl Jira {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("application/octet-stream")
             .to_string();
-        Ok((mime, res.bytes().await?.to_vec()))
+        let too_big = || Error::Api { status: 413, message: format!("attachment {id} is too large to preview") };
+        if res.content_length().is_some_and(|n| n > PREVIEW_LIMIT as u64) {
+            return Err(too_big());
+        }
+        let mut res = res;
+        let mut bytes = Vec::with_capacity(res.content_length().unwrap_or(0) as usize);
+        while let Some(chunk) = res.chunk().await? {
+            if bytes.len() + chunk.len() > PREVIEW_LIMIT {
+                return Err(too_big());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok((mime, bytes))
     }
 
     pub async fn comment(&self, scope: &Scope, key: &str, text: &str, mentions: &[adf::MentionRef], files: &[Uploaded]) -> Result<()> {

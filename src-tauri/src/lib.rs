@@ -273,7 +273,8 @@ pub fn run() {
                 let response = match result {
                     Ok((mime, bytes)) => tauri::http::Response::builder()
                         .header(tauri::http::header::CONTENT_TYPE, mime)
-                        .header(tauri::http::header::CACHE_CONTROL, "private, max-age=86400")
+                        // Not cached: after a sign-out, another account must not be served this account's files.
+                        .header(tauri::http::header::CACHE_CONTROL, "no-store")
                         .body(bytes),
                     Err(e) => tauri::http::Response::builder().status(502).body(e.to_string().into_bytes()),
                 };
