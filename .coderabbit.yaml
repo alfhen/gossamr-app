@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-GB
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false
+    # Feature PRs are stacked on each other, so review PRs into any branch.
+    base_branches:
+      - ".*"
+  path_instructions:
+    - path: "src-tauri/**/*.rs"
+      instructions: >-
+        Tokens and client secrets must only live in the macOS Keychain, never on disk or in logs.
+        Nothing may write to Jira without an explicit user action in the UI.
+    - path: "src/**/*.{ts,tsx}"
+      instructions: >-
+        Keyboard shortcuts must not fire while the user is typing in an input or textarea.

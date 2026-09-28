@@ -1,0 +1,976 @@
+<title>Jira Inbox</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --desk:#d9dbe1;
+  --win:#ffffff;
+  --side:#ebeaef;
+  --side-sel:rgba(0,0,0,.075);
+  --bar:#f6f6f8;
+  --text:#1d1d1f;
+  --text-2:#5f5f66;
+  --text-3:#8e8e95;
+  --sep:rgba(0,0,0,.09);
+  --sep-strong:rgba(0,0,0,.14);
+  --accent:#0a6cff;
+  --accent-text:#ffffff;
+  --accent-soft:rgba(10,108,255,.10);
+  --hover:rgba(0,0,0,.04);
+  --field:#ffffff;
+  --field-border:rgba(0,0,0,.14);
+  --pop:#ffffff;
+  --shadow:0 18px 50px rgba(20,24,40,.22),0 2px 6px rgba(20,24,40,.08);
+  --s-todo-bg:#ececef; --s-todo:#4b4b52;
+  --s-prog-bg:#e3eeff; --s-prog:#0b57c9;
+  --s-review-bg:#efe7fd; --s-review:#6b3fc4;
+  --s-blocked-bg:#fde8e7; --s-blocked:#b8322b;
+  --s-done-bg:#e3f5e8; --s-done:#1f7a3d;
+  --claude:#c96442;
+  --claude-soft:rgba(201,100,66,.10);
+  --unread:#0a6cff;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --desk:#101114; --win:#1e1e20; --side:#29292c; --side-sel:rgba(255,255,255,.09); --bar:#242426;
+    --text:#f2f2f4; --text-2:#b1b1b8; --text-3:#7f7f87; --sep:rgba(255,255,255,.08); --sep-strong:rgba(255,255,255,.14);
+    --accent:#2f86ff; --accent-soft:rgba(47,134,255,.16); --hover:rgba(255,255,255,.05);
+    --field:#2b2b2e; --field-border:rgba(255,255,255,.12); --pop:#2c2c2f;
+    --shadow:0 18px 50px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.3);
+    --s-todo-bg:#38383c; --s-todo:#c9c9cf; --s-prog-bg:#17305a; --s-prog:#8fbaff;
+    --s-review-bg:#33264f; --s-review:#c5a8ff; --s-blocked-bg:#4a1f1d; --s-blocked:#ff9b93;
+    --s-done-bg:#18392a; --s-done:#7fd99d; --claude:#e08a68; --claude-soft:rgba(224,138,104,.14); --unread:#2f86ff;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --desk:#101114; --win:#1e1e20; --side:#29292c; --side-sel:rgba(255,255,255,.09); --bar:#242426;
+  --text:#f2f2f4; --text-2:#b1b1b8; --text-3:#7f7f87; --sep:rgba(255,255,255,.08); --sep-strong:rgba(255,255,255,.14);
+  --accent:#2f86ff; --accent-soft:rgba(47,134,255,.16); --hover:rgba(255,255,255,.05);
+  --field:#2b2b2e; --field-border:rgba(255,255,255,.12); --pop:#2c2c2f;
+  --shadow:0 18px 50px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.3);
+  --s-todo-bg:#38383c; --s-todo:#c9c9cf; --s-prog-bg:#17305a; --s-prog:#8fbaff;
+  --s-review-bg:#33264f; --s-review:#c5a8ff; --s-blocked-bg:#4a1f1d; --s-blocked:#ff9b93;
+  --s-done-bg:#18392a; --s-done:#7fd99d; --claude:#e08a68; --claude-soft:rgba(224,138,104,.14); --unread:#2f86ff;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--desk);color:var(--text);font:13px/1.45 system-ui,-apple-system,"SF Pro Text","Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased;padding-inline:16px;padding-block:16px}
+button{font:inherit;color:inherit}
+kbd{font:11px var(--mono);padding:1px 5px;border-radius:4px;border:1px solid var(--sep-strong);color:var(--text-2);background:var(--bar)}
+.proto-note{max-width:1320px;margin:0 auto 10px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;color:var(--text-2);font-size:12px}
+.proto-note b{color:var(--text)}
+.chip-sample{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:99px;background:var(--claude-soft);color:var(--claude)}
+
+.win{max-width:1320px;height:calc(100% - 34px);min-height:600px;margin:0 auto;background:var(--win);border-radius:12px;box-shadow:var(--shadow);border:1px solid var(--sep-strong);display:grid;grid-template-columns:210px 370px 1fr;overflow:hidden;position:relative}
+
+/* sidebar */
+.side{background:var(--side);border-right:1px solid var(--sep);display:flex;flex-direction:column;min-height:0}
+.lights{display:flex;gap:8px;padding:14px 14px 10px}
+.lights i{width:12px;height:12px;border-radius:50%;display:block}
+.lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.side-sec{padding:6px 8px}
+.side-h{font-size:11px;font-weight:600;color:var(--text-3);padding:10px 8px 4px}
+.nav{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;padding:5px 8px;border-radius:6px;cursor:pointer;text-align:left}
+.nav:hover{background:var(--hover)}
+.nav[aria-current="true"]{background:var(--side-sel);font-weight:600}
+.nav svg{width:15px;height:15px;color:var(--accent);flex:none}
+.nav .count{margin-left:auto;font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums}
+.nav .count.hot{color:var(--text-2);font-weight:600}
+.proj-dot{width:10px;height:10px;border-radius:3px;flex:none}
+.side-foot{margin-top:auto;padding:10px 14px 12px;border-top:1px solid var(--sep);display:grid;gap:8px;font-size:11.5px;color:var(--text-2)}
+.sync{display:flex;align-items:center;gap:6px}
+.sync i{width:7px;height:7px;border-radius:50%;background:#28c840;display:block}
+.sync.busy i{background:var(--accent);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.3}}
+.linkbtn{border:0;background:none;padding:0;color:var(--accent);cursor:pointer;text-align:left;font-size:11.5px}
+
+/* list */
+.list{border-right:1px solid var(--sep);display:flex;flex-direction:column;min-height:0;background:var(--win)}
+.toolbar{height:52px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--sep);background:var(--bar);flex:none}
+.toolbar h2{font-size:14px;margin:0;font-weight:650}
+.toolbar .sub{color:var(--text-3);font-size:12px}
+.search{margin-left:auto;display:flex;align-items:center;gap:6px;border:1px solid var(--field-border);background:var(--field);border-radius:7px;padding:3px 8px;color:var(--text-3);cursor:pointer;font-size:12px}
+.rows{overflow:auto;flex:1;min-height:0;padding:6px}
+.row{display:grid;grid-template-columns:10px 26px 1fr;gap:8px;padding:9px 10px 9px 6px;border-radius:8px;cursor:pointer;border:0;background:none;width:100%;text-align:left}
+.row:hover{background:var(--hover)}
+.row[aria-selected="true"]{background:var(--accent);color:var(--accent-text)}
+.row[aria-selected="true"] .r-meta,.row[aria-selected="true"] .r-what,.row[aria-selected="true"] .r-key{color:rgba(255,255,255,.82)}
+.row[aria-selected="true"] .dot{background:#fff}
+.dot{width:8px;height:8px;border-radius:50%;margin-top:7px;background:transparent}
+.dot.on{background:var(--unread)}
+.kind{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;margin-top:1px}
+.kind svg{width:14px;height:14px}
+.k-mention{background:var(--s-prog-bg);color:var(--s-prog)}
+.k-comment{background:var(--s-todo-bg);color:var(--s-todo)}
+.k-status{background:var(--s-review-bg);color:var(--s-review)}
+.k-assigned{background:var(--s-done-bg);color:var(--s-done)}
+.k-field{background:var(--s-todo-bg);color:var(--s-todo)}
+.r-top{display:flex;gap:6px;align-items:baseline;min-width:0}
+.r-key{font:600 11.5px var(--mono);color:var(--text-2);flex:none}
+.r-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.r-meta{margin-left:auto;font-size:11.5px;color:var(--text-3);flex:none;font-variant-numeric:tabular-nums}
+.r-what{color:var(--text-2);margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.group-h{font-size:11px;font-weight:600;color:var(--text-3);padding:12px 10px 4px;display:flex;gap:6px;align-items:center}
+.empty{padding:40px 20px;text-align:center;color:var(--text-3)}
+.empty b{display:block;color:var(--text-2);font-size:14px;margin-bottom:4px}
+
+/* detail */
+.detail{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--win)}
+.dbar{height:52px;display:flex;align-items:center;gap:6px;padding:0 12px;border-bottom:1px solid var(--sep);background:var(--bar);flex:none;overflow-x:auto}
+.back{display:none}
+.tb{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;border:1px solid var(--field-border);background:var(--field);cursor:pointer;white-space:nowrap;font-size:12.5px}
+.tb:hover{border-color:var(--sep-strong);background:var(--hover)}
+.tb kbd{font-size:10px;padding:0 4px}
+.tb.claude{border-color:transparent;background:var(--claude-soft);color:var(--claude);font-weight:600}
+.tb svg{width:14px;height:14px}
+.spacer{flex:1}
+.dscroll{overflow:auto;flex:1;min-height:0}
+.dinner{max-width:760px;padding:22px 28px 28px;display:grid;gap:20px}
+.crumb{font-size:12px;color:var(--text-3);display:flex;gap:6px;flex-wrap:wrap}
+.crumb span{font-family:var(--mono)}
+.dtitle{font-size:21px;line-height:1.25;font-weight:680;margin:4px 0 0;text-wrap:balance;letter-spacing:-.01em}
+.facts{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;font-size:12.5px;color:var(--text-2)}
+.fact{display:flex;align-items:center;gap:6px}
+.fact .lbl{color:var(--text-3)}
+.pill{display:inline-flex;align-items:center;gap:5px;border:0;border-radius:6px;padding:3px 9px;font-size:12px;font-weight:600;cursor:pointer}
+.pill svg{width:10px;height:10px;opacity:.7}
+.st-todo{background:var(--s-todo-bg);color:var(--s-todo)}
+.st-prog{background:var(--s-prog-bg);color:var(--s-prog)}
+.st-review{background:var(--s-review-bg);color:var(--s-review)}
+.st-blocked{background:var(--s-blocked-bg);color:var(--s-blocked)}
+.st-done{background:var(--s-done-bg);color:var(--s-done)}
+.pill.small{font-size:11px;padding:1px 7px;cursor:default}
+.av{width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;font-size:10px;font-weight:700;color:#fff;flex:none}
+.sec-h{font-size:11px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--text-3);margin:0 0 8px}
+.changed{border:1px solid var(--sep-strong);border-radius:10px;padding:12px 14px;display:grid;gap:8px;background:linear-gradient(0deg,var(--accent-soft),var(--accent-soft)),var(--win)}
+.changed .sec-h{color:var(--accent);margin:0}
+.chg{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.chg .f{font-weight:600;min-width:74px}
+.chg s{color:var(--text-3)}
+.chg .by{color:var(--text-3);font-size:12px;margin-left:auto}
+.desc{white-space:pre-wrap;max-width:65ch;color:var(--text)}
+.subs{display:grid;gap:2px}
+.sub{display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--sep)}
+.sub .k{font:600 11.5px var(--mono);color:var(--text-2);width:62px}
+.sub .chk{width:14px;height:14px;border-radius:4px;border:1.5px solid var(--sep-strong);display:grid;place-items:center;flex:none}
+.sub .chk.on{background:var(--s-done);border-color:var(--s-done)}
+.sub .chk.on::after{content:"";width:6px;height:3px;border:2px solid #fff;border-top:0;border-right:0;transform:rotate(-45deg) translate(1px,-1px)}
+.sub.new{animation:flash 1.6s}
+@keyframes flash{0%{background:var(--claude-soft)}100%{background:transparent}}
+.comments{display:grid;gap:14px}
+.cm{display:grid;grid-template-columns:28px 1fr;gap:10px}
+.cm .av{width:28px;height:28px;font-size:11px}
+.cm-h{display:flex;gap:8px;align-items:baseline}
+.cm-h b{font-weight:600}
+.cm-h span{color:var(--text-3);font-size:12px}
+.cm-b{max-width:65ch;white-space:pre-wrap}
+.cm-b .men{color:var(--accent);font-weight:600}
+.cm.new{animation:flash 1.6s;border-radius:8px}
+.via{font-size:11px;color:var(--claude);font-weight:600}
+.composer{border:1px solid var(--field-border);border-radius:10px;background:var(--field);overflow:hidden}
+.composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.composer textarea{display:block;width:100%;border:0;background:transparent;color:var(--text);font:inherit;padding:10px 12px;resize:vertical;min-height:62px;outline:none}
+.composer-f{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 12px;border-top:1px solid var(--sep);font-size:11.5px;color:var(--text-3)}
+.btn-p{margin-left:auto;border:0;background:var(--accent);color:#fff;border-radius:6px;padding:5px 12px;font-weight:600;cursor:pointer;font-size:12.5px}
+.btn-p:disabled{opacity:.45;cursor:default}
+.btn-g{border:1px solid var(--field-border);background:var(--field);border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12.5px}
+.children{display:grid;gap:0}
+.child{display:grid;grid-template-columns:62px 1fr auto 22px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--sep);cursor:pointer;border-left:0;border-right:0;border-top:0;background:none;text-align:left;width:100%}
+.child:hover .ct{text-decoration:underline}
+.child .k{font:600 11.5px var(--mono);color:var(--text-2)}
+
+/* menus */
+.menu{position:fixed;z-index:50;min-width:220px;background:var(--pop);border:1px solid var(--sep-strong);border-radius:10px;box-shadow:var(--shadow);padding:5px;display:grid}
+.menu-h{font-size:11px;color:var(--text-3);padding:5px 9px 4px;font-weight:600}
+.mi{display:flex;align-items:center;gap:8px;border:0;background:none;text-align:left;padding:6px 9px;border-radius:6px;cursor:pointer}
+.mi:hover,.mi:focus{background:var(--accent);color:#fff;outline:none}
+.mi:hover .pill,.mi:focus .pill{background:rgba(255,255,255,.22);color:#fff}
+.mi .hint{margin-left:auto;font-size:11.5px;opacity:.7}
+
+/* palette */
+.scrim{position:fixed;inset:0;z-index:60;background:rgba(10,12,20,.18);display:grid;justify-items:center;align-items:start;padding:12vh 16px 16px}
+.palette{width:min(600px,100%);background:var(--pop);border:1px solid var(--sep-strong);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.palette input{width:100%;border:0;border-bottom:1px solid var(--sep);background:transparent;color:var(--text);font:16px system-ui,sans-serif;padding:14px 16px;outline:none}
+.pl{max-height:50vh;overflow:auto;padding:6px}
+.po{display:flex;gap:10px;align-items:center;width:100%;border:0;background:none;text-align:left;padding:8px 10px;border-radius:7px;cursor:pointer}
+.po[aria-selected="true"]{background:var(--accent);color:#fff}
+.po[aria-selected="true"] .k,.po[aria-selected="true"] .hint{color:rgba(255,255,255,.8)}
+.po .k{font:600 11.5px var(--mono);color:var(--text-2);width:64px;flex:none}
+.po .hint{margin-left:auto;color:var(--text-3);font-size:11.5px;flex:none}
+.pl-h{font-size:11px;color:var(--text-3);font-weight:600;padding:8px 10px 4px}
+
+/* claude drawer */
+.drawer{position:absolute;top:0;right:0;bottom:0;width:min(440px,100%);background:var(--win);border-left:1px solid var(--sep-strong);box-shadow:-12px 0 40px rgba(0,0,0,.12);display:flex;flex-direction:column;z-index:40;transform:translateX(0);transition:transform .22s ease}
+.drawer[hidden]{display:flex!important;transform:translateX(105%);pointer-events:none;visibility:hidden}
+.dr-h{padding:12px 14px;border-bottom:1px solid var(--sep);display:grid;gap:8px;background:var(--bar)}
+.dr-t{display:flex;align-items:center;gap:8px;font-weight:650}
+.spark{width:22px;height:22px;border-radius:6px;background:var(--claude);color:#fff;display:grid;place-items:center;flex:none}
+.spark svg{width:13px;height:13px}
+.x{margin-left:auto;border:0;background:none;cursor:pointer;color:var(--text-3);font-size:18px;line-height:1;padding:2px 6px;border-radius:5px}
+.x:hover{background:var(--hover)}
+.sess{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--text-2)}
+.sess select{flex:1;min-width:0;font:inherit;font-size:12px;color:var(--text);background:var(--field);border:1px solid var(--field-border);border-radius:6px;padding:4px 6px}
+.ctx{display:flex;flex-wrap:wrap;gap:5px}
+.ctx span{font-size:11px;padding:2px 7px;border-radius:99px;background:var(--hover);border:1px solid var(--sep);color:var(--text-2)}
+.dr-body{flex:1;overflow:auto;padding:14px;display:grid;align-content:start;gap:14px}
+.sugg{display:flex;flex-wrap:wrap;gap:6px}
+.sugg button{border:1px solid var(--sep-strong);background:var(--win);border-radius:99px;padding:5px 11px;cursor:pointer;font-size:12.5px}
+.sugg button:hover{border-color:var(--claude);color:var(--claude)}
+.msg-u{justify-self:end;max-width:85%;background:var(--accent);color:#fff;border-radius:14px 14px 4px 14px;padding:7px 12px}
+.steps{display:grid;gap:4px;font-size:12px;color:var(--text-2)}
+.step{display:flex;gap:7px;align-items:center}
+.step i{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--text-3);flex:none;display:grid;place-items:center}
+.step.run i{border-color:var(--claude);border-right-color:transparent;animation:spin .8s linear infinite}
+.step.ok i{border-color:var(--s-done);background:var(--s-done)}
+.step.ok i::after{content:"";width:5px;height:2.5px;border:1.5px solid #fff;border-top:0;border-right:0;transform:rotate(-45deg) translate(.5px,-.5px)}
+@keyframes spin{to{transform:rotate(360deg)}}
+.msg-a{max-width:65ch}
+.msg-a p{margin:0 0 8px}
+.msg-a ul{margin:0 0 8px;padding-left:18px}
+.prop{border:1px solid var(--sep-strong);border-radius:10px;overflow:hidden}
+.prop-h{display:flex;gap:8px;align-items:center;padding:8px 12px;background:var(--claude-soft);font-size:12px;font-weight:650;color:var(--claude)}
+.prop-h .tag{margin-left:auto;font-weight:500;color:var(--text-3)}
+.prop-b{padding:10px 12px;display:grid;gap:8px}
+.prop-b textarea{width:100%;font:inherit;color:var(--text);background:var(--field);border:1px solid var(--field-border);border-radius:7px;padding:8px 10px;min-height:70px;resize:vertical}
+.prop-b label{display:flex;gap:8px;align-items:flex-start}
+.prop-a{display:flex;gap:8px;justify-content:flex-end}
+.prop.applied .prop-a{display:none}
+.prop .done-note{display:none;color:var(--s-done);font-weight:600;font-size:12px}
+.prop.applied .done-note{display:block}
+.prop.skipped{opacity:.5}
+.prop.skipped .prop-a{display:none}
+.dr-in{border-top:1px solid var(--sep);padding:10px 12px;display:grid;gap:6px}
+.dr-in form{display:flex;gap:8px}
+.dr-in input{flex:1;min-width:0;font:inherit;color:var(--text);background:var(--field);border:1px solid var(--field-border);border-radius:8px;padding:8px 10px;outline:none}
+.dr-in input:focus{border-color:var(--claude);box-shadow:0 0 0 3px var(--claude-soft)}
+.dr-in .btn-p{background:var(--claude)}
+.fine{font-size:11px;color:var(--text-3)}
+.fine code{font-family:var(--mono);font-size:10.5px}
+
+/* notifications + toast */
+.notif{position:fixed;top:14px;right:14px;z-index:80;width:min(360px,calc(100% - 28px));background:color-mix(in srgb,var(--pop) 92%,transparent);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid var(--sep-strong);border-radius:14px;box-shadow:var(--shadow);padding:11px 12px;display:grid;grid-template-columns:32px 1fr;gap:10px;animation:slidein .3s ease}
+@keyframes slidein{from{transform:translateX(30px);opacity:0}}
+.notif .ic{width:32px;height:32px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center}
+.notif .ic svg{width:17px;height:17px}
+.notif .nt{font-weight:650;display:flex;gap:6px}
+.notif .nt span{margin-left:auto;font-weight:400;color:var(--text-3);font-size:11.5px}
+.notif .nb{color:var(--text-2);margin-top:1px}
+.notif .na{display:flex;gap:6px;margin-top:8px}
+.notif .na button{flex:1;border:1px solid var(--field-border);background:var(--field);border-radius:6px;padding:4px;cursor:pointer;font-size:12px}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:90;background:#2a2a2d;color:#fff;border-radius:9px;padding:8px 10px 8px 14px;display:flex;gap:12px;align-items:center;box-shadow:var(--shadow);font-size:12.5px;max-width:calc(100% - 32px)}
+.toast button{border:0;background:rgba(255,255,255,.14);color:#fff;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:12px}
+
+.help{background:var(--pop);border:1px solid var(--sep-strong);border-radius:12px;box-shadow:var(--shadow);padding:18px 20px;width:min(460px,100%);display:grid;gap:10px}
+.help h3{margin:0;font-size:15px}
+.help dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0}
+.help dt{text-align:right}
+
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+@media (max-width:1040px){ .win{grid-template-columns:320px 1fr} .side{display:none} .mobile-nav{display:flex!important} }
+@media (max-width:700px){
+  body{padding-inline:16px}
+  .win{grid-template-columns:1fr;height:calc(100% - 60px)}
+  .detail{display:none}
+  .win.show-detail .list{display:none}
+  .win.show-detail .detail{display:flex}
+  .back{display:inline-flex}
+  .dinner{padding:18px 16px}
+}
+.mobile-nav{display:none;gap:4px;overflow-x:auto}
+.mobile-nav button{border:1px solid var(--field-border);background:var(--field);border-radius:99px;padding:2px 9px;font-size:12px;cursor:pointer;white-space:nowrap}
+.mobile-nav button[aria-current="true"]{background:var(--accent);color:#fff;border-color:transparent}
+</style>
+
+<div class="proto-note">
+  <span class="chip-sample">Prototype · sample data</span>
+  <span>Try <kbd>j</kbd> <kbd>k</kbd> to move, <kbd>t</kbd> transition, <kbd>s</kbd> snooze, <kbd>e</kbd> done, <kbd>c</kbd> comment, <kbd>⌘K</kbd> search, <kbd>⌘J</kbd> ask Claude, <kbd>?</kbd> all shortcuts.</span>
+  <span class="mobile-nav" id="mnav"></span>
+</div>
+
+<div class="win" id="win">
+  <aside class="side">
+    <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+    <nav class="side-sec" id="nav"></nav>
+    <div class="side-sec">
+      <div class="side-h">Projects</div>
+      <button class="nav" data-filter="CA"><span class="proj-dot" style="background:#e5883a"></span>CRM Automation<span class="count">CA</span></button>
+      <button class="nav" data-filter="CE"><span class="proj-dot" style="background:#3aa87a"></span>Content &amp; Experience<span class="count">CE</span></button>
+    </div>
+    <div class="side-foot">
+      <div class="sync" id="sync"><i></i><span id="syncText">Synced just now</span></div>
+      <div>example.atlassian.net · signed in with Atlassian</div>
+      <button class="linkbtn" id="simNotif">Simulate a new notification</button>
+    </div>
+  </aside>
+
+  <section class="list">
+    <div class="toolbar">
+      <div><h2 id="viewTitle">Inbox</h2><div class="sub" id="viewSub"></div></div>
+      <button class="search" id="openPalette" aria-label="Search tickets and actions">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="7" cy="7" r="5"/><path d="m11 11 3.5 3.5"/></svg>
+        Search <kbd>⌘K</kbd>
+      </button>
+    </div>
+    <div class="rows" id="rows" role="listbox" aria-label="Items"></div>
+  </section>
+
+  <section class="detail" id="detail">
+    <div class="dbar" id="dbar">
+      <button class="tb back" id="back">‹ Back</button>
+      <button class="tb" id="bTransition" title="Transition (t)">Transition <kbd>t</kbd></button>
+      <button class="tb" id="bComment" title="Comment (c)">Comment <kbd>c</kbd></button>
+      <button class="tb" id="bSnooze" title="Snooze (s)">Snooze <kbd>s</kbd></button>
+      <button class="tb" id="bDone" title="Done (e)">Done <kbd>e</kbd></button>
+      <span class="spacer"></span>
+      <button class="tb" id="bOpen" title="Open in Jira (o)">Open in Jira ↗</button>
+      <button class="tb claude" id="bClaude" title="Ask Claude (⌘J)">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0l1.6 5.2L15 6.9 9.9 8.6 8 14l-1.8-5.4L1 6.9l5.3-1.7z"/></svg>
+        Ask Claude <kbd>⌘J</kbd>
+      </button>
+    </div>
+    <div class="dscroll" id="dscroll"><div class="dinner" id="dinner"></div></div>
+  </section>
+
+  <aside class="drawer" id="drawer" hidden aria-label="Ask Claude">
+    <div class="dr-h">
+      <div class="dr-t"><span class="spark"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0l1.6 5.2L15 6.9 9.9 8.6 8 14l-1.8-5.4L1 6.9l5.3-1.7z"/></svg></span><span id="drTitle">Ask Claude</span><button class="x" id="drClose" aria-label="Close">×</button></div>
+      <label class="sess" for="sessSel">Session
+        <select id="sessSel">
+          <option value="resume-a">Continue “translation workers” · campaign-service · 2h ago</option>
+          <option value="resume-b">Continue “rollout status bug” · campaign-service · yesterday</option>
+          <option value="new-gw">New session in ~/Code/campaign-service</option>
+          <option value="new-none">New session, no repo</option>
+        </select>
+      </label>
+      <div class="ctx" id="ctx"></div>
+    </div>
+    <div class="dr-body" id="drBody"></div>
+    <div class="dr-in">
+      <form id="askForm"><input id="askInput" placeholder="Ask about this ticket, or tell Claude what to do…" autocomplete="off"><button class="btn-p" type="submit">Ask</button></form>
+      <div class="fine">Runs <code>claude -p</code> with your Claude login, CLAUDE.md, skills and MCPs. Nothing is written to Jira until you approve it.</div>
+    </div>
+  </aside>
+</div>
+
+<div id="layer"></div>
+
+<script>
+(() => {
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const people = {
+  you:{name:'You', first:'you', init:'A', c:'#0a6cff'},
+  sam:{name:'Sam Holt', first:'Sam', init:'SH', c:'#d0621f'},
+  mette:{name:'Mette Lund', first:'Mette', init:'ML', c:'#8a4fd6'},
+  jonas:{name:'Jonas Berg', first:'Jonas', init:'JB', c:'#1f8a5b'},
+  priya:{name:'Priya Nair', first:'Priya', init:'PN', c:'#c43d6b'},
+  none:{name:'Unassigned', first:'', init:'–', c:'#9a9aa2'}
+};
+const ST = {todo:'To Do', prog:'In Progress', review:'In Review', blocked:'Blocked', done:'Done'};
+const TR = {
+  todo:[['prog','Start progress'],['blocked','Block']],
+  prog:[['review','Send to review'],['blocked','Block'],['todo','Stop progress']],
+  review:[['done','Done'],['prog','Back to In Progress']],
+  blocked:[['prog','Unblock'],['todo','Back to To Do']],
+  done:[['prog','Reopen']]
+};
+
+const T = {
+  'CA-400':{type:'Epic', summary:'Campaign translation pipeline', status:'prog', assignee:'mette', reporter:'mette', priority:'High', due:'17 Oct', sprint:'—',
+    desc:'Translate and roll out campaigns to every store automatically, with a human approval step before anything is sent.',
+    children:['CA-412','CA-418','CA-420','CA-421'], comments:[], changes:[{f:'Due date', from:'10 Oct', to:'17 Oct', by:'mette', t:'3h ago'}]},
+  'CA-412':{type:'Story', summary:'Split translation rollout into parallel workers', status:'prog', assignee:'you', reporter:'mette', epic:'CA-400', priority:'High', sprint:'CRM 41',
+    desc:'Large campaigns take over an hour to roll out because translations run one language at a time. Run languages in parallel workers so a 12-language campaign finishes in under 15 minutes.',
+    subtasks:[{key:'CA-413', summary:'Worker pool config in Horizon', done:true},{key:'CA-414', summary:'Fan-out job per language', done:true}],
+    comments:[{by:'jonas', t:'2 days ago', body:'Horizon has room for 8 more workers on the queue box.'},{by:'mette', t:'22m ago', body:'Can we cap concurrency per store? The DKK account is small and I don’t want it hitting limits.'}],
+    changes:[{f:'Sprint', from:'CRM 40', to:'CRM 41', by:'mette', t:'25m ago'}]},
+  'CA-418':{type:'Story', summary:'Retry translation batches when Klaviyo rate-limits us', status:'blocked', assignee:'sam', reporter:'you', epic:'CA-400', priority:'High', sprint:'CRM 41',
+    desc:'Overnight rollouts fail when Klaviyo returns 429. Batches should back off and retry instead of failing the whole campaign.\n\nDone when a 429 on one batch never fails the rollout, and retries show up in the rollout status.',
+    comments:[{by:'sam', t:'4m ago', body:'@Alf do we know the per-account rate limit on the euro store? Batches keep failing around 02:00.'}],
+    changes:[{f:'Status', from:'In Progress', to:'Blocked', by:'sam', t:'5m ago'}]},
+  'CA-420':{type:'Bug', summary:'Rollout status shows stale state after a retry', status:'review', assignee:'jonas', reporter:'you', epic:'CA-400', priority:'Medium', sprint:'CRM 41',
+    desc:'After a batch is retried, the rollout status endpoint keeps reporting the failed state until the next full refresh.',
+    comments:[{by:'jonas', t:'yesterday', body:'Pushed a fix: retries now re-read state before reporting. PR is up.'}],
+    changes:[{f:'Status', from:'In Progress', to:'In Review', by:'jonas', t:'1h ago'}]},
+  'CA-421':{type:'Story', summary:'Dashboard for translation throughput', status:'todo', assignee:'none', reporter:'mette', epic:'CA-400', priority:'Low', sprint:'Backlog',
+    desc:'Show languages per hour, failures and retries per store.', comments:[], changes:[]},
+  'CE-731':{type:'Story', summary:'Match app block copy with the web version', status:'todo', assignee:'you', reporter:'priya', epicName:'App content parity', priority:'Medium', sprint:'CE 18',
+    desc:'Several app blocks still use old copy. Align the text with the web blocks listed in the content sheet.',
+    comments:[], changes:[{f:'Assignee', from:'Unassigned', to:'You', by:'priya', t:'2h ago'}]},
+  'CE-705':{type:'Bug', summary:'Broken footer links on the DE store', status:'done', assignee:'priya', reporter:'you', priority:'Low', sprint:'CE 17',
+    desc:'Three footer links on the DE store return 404.', comments:[], changes:[{f:'Status', from:'In Review', to:'Done', by:'priya', t:'yesterday'}]}
+};
+const watching = ['CA-418','CA-420','CE-705','CA-400'];
+
+let E = [
+  {id:1, kind:'mention', key:'CA-418', by:'sam', t:'4m', text:'@Alf do we know the per-account rate limit on the euro store? Batches keep failing around 02:00.', unread:true},
+  {id:2, kind:'comment', key:'CA-412', by:'mette', t:'22m', text:'Can we cap concurrency per store? The DKK account is small and I don’t want it hitting limits.', unread:true},
+  {id:3, kind:'status', key:'CA-420', by:'jonas', t:'1h', text:'In Progress → In Review', unread:true},
+  {id:4, kind:'assigned', key:'CE-731', by:'priya', t:'2h', text:'Assigned to you', unread:true},
+  {id:5, kind:'field', key:'CA-400', by:'mette', t:'3h', text:'Due date 10 Oct → 17 Oct', unread:false},
+  {id:6, kind:'status', key:'CE-705', by:'priya', t:'Yday', text:'In Review → Done', unread:false},
+  {id:7, kind:'comment', key:'CA-420', by:'jonas', t:'Yday', text:'Pushed a fix: retries now re-read state before reporting. PR is up.', unread:false}
+];
+let nextId = 8;
+
+const VIEWS = [
+  {id:'inbox', label:'Inbox', icon:'inbox'},
+  {id:'mentions', label:'Mentions', icon:'at'},
+  {id:'mine', label:'My tickets', icon:'user'},
+  {id:'watching', label:'Watching', icon:'eye'},
+  {id:'snoozed', label:'Snoozed', icon:'clock'},
+  {id:'done', label:'Done', icon:'check'}
+];
+const ICON = {
+  inbox:'<path d="M2 9h3.5l1 2h3l1-2H14M3.5 3h9L14 9v4H2V9z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>',
+  at:'<circle cx="8" cy="8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.6 8v1.2a1.8 1.8 0 0 0 3.6 0V8A6.2 6.2 0 1 0 11 13.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  user:'<circle cx="8" cy="5.5" r="2.8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 14c.6-2.8 2.8-4.2 5.5-4.2s4.9 1.4 5.5 4.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  eye:'<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2" fill="currentColor"/>',
+  clock:'<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.5V8l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  check:'<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m5.3 8.2 1.8 1.8 3.6-3.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
+  comment:'<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>',
+  status:'<path d="M2.5 8h9M8.5 4.5 12 8l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  assigned:'<circle cx="6.5" cy="5.5" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M1.8 13.5c.5-2.4 2.4-3.6 4.7-3.6M11.5 9v5M9 11.5h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  field:'<path d="M3 12.5 3.5 10 10.5 3l2.5 2.5-7 7z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>',
+  mention:null
+};
+ICON.mention = ICON.at;
+const svg = (name, extra='') => `<svg viewBox="0 0 16 16" ${extra}>${ICON[name]}</svg>`;
+
+const state = {view:'inbox', filter:null, sel:null, lastSeenSel:{}};
+
+const av = p => `<span class="av" style="background:${people[p].c}" title="${esc(people[p].name)}">${people[p].init}</span>`;
+const pill = (s, btn) => btn
+  ? `<button class="pill st-${s}" data-act="transition">${ST[s]}<svg viewBox="0 0 10 10"><path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></button>`
+  : `<span class="pill small st-${s}">${ST[s]}</span>`;
+const kindLabel = {mention:'mentioned you', comment:'commented', status:'changed status', assigned:'assigned you', field:'updated'};
+const mentionFmt = s => esc(s).replace(/@Alf\b/g, '<span class="men">@you</span>');
+
+function items(){
+  const f = k => !state.filter || k.startsWith(state.filter);
+  const ev = pred => E.filter(e => pred(e) && f(e.key)).map(e => ({id:'e'+e.id, key:e.key, e}));
+  switch(state.view){
+    case 'inbox': return ev(e => !e.done && !e.snoozed);
+    case 'mentions': return ev(e => e.kind === 'mention' && !e.done);
+    case 'snoozed': return ev(e => e.snoozed);
+    case 'done': return ev(e => e.done);
+    case 'mine': {
+      const order = ['prog','review','blocked','todo','done'];
+      return Object.keys(T).filter(k => T[k].assignee === 'you' && f(k))
+        .sort((a,b) => order.indexOf(T[a].status) - order.indexOf(T[b].status))
+        .map(k => ({id:'t'+k, key:k}));
+    }
+    case 'watching': return watching.filter(f).map(k => ({id:'t'+k, key:k}));
+  }
+}
+
+function counts(){
+  return {
+    inbox: E.filter(e => !e.done && !e.snoozed && e.unread).length,
+    mentions: E.filter(e => e.kind==='mention' && !e.done && e.unread).length,
+    mine: Object.values(T).filter(t => t.assignee==='you' && t.status!=='done').length,
+    watching: watching.length,
+    snoozed: E.filter(e => e.snoozed).length,
+    done: E.filter(e => e.done).length
+  };
+}
+
+function renderNav(){
+  const c = counts();
+  $('#nav').innerHTML = VIEWS.map(v => `<button class="nav" data-view="${v.id}" aria-current="${state.view===v.id && !state.filter}">${svg(v.icon)}${v.label}<span class="count ${(v.id==='inbox'||v.id==='mentions') && c[v.id] ? 'hot':''}">${c[v.id] || ''}</span></button>`).join('');
+  document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-current', state.filter === b.dataset.filter));
+  $('#mnav').innerHTML = VIEWS.slice(0,4).map(v => `<button data-view="${v.id}" aria-current="${state.view===v.id}">${v.label}${c[v.id] && v.id!=='watching' && v.id!=='mine' ? ' '+c[v.id] : ''}</button>`).join('');
+}
+
+function renderList(){
+  const list = items();
+  const v = VIEWS.find(v => v.id === state.view);
+  $('#viewTitle').textContent = state.filter ? (state.filter === 'CA' ? 'CRM Automation' : 'Content & Experience') + ' · ' + v.label : v.label;
+  const unread = list.filter(i => i.e && i.e.unread).length;
+  $('#viewSub').textContent = list.length ? (unread ? `${unread} unread · ${list.length} total` : `${list.length} items`) : '';
+  if (!list.find(i => i.id === state.sel)) state.sel = list[0] ? list[0].id : null;
+  if (!list.length){
+    const msg = {inbox:['Inbox zero','New mentions, assignments and changes on your tickets land here.'], snoozed:['Nothing snoozed','Press s on an item to bring it back later.'], done:['Nothing done yet','Press e to clear an item from your inbox.']}[state.view] || ['Nothing here',''];
+    $('#rows').innerHTML = `<div class="empty"><b>${msg[0]}</b>${msg[1]}</div>`;
+    return;
+  }
+  let html = '', lastGroup = null;
+  for (const it of list){
+    const t = T[it.key];
+    if (state.view === 'mine' && t.status !== lastGroup){ lastGroup = t.status; html += `<div class="group-h">${pill(t.status)}</div>`; }
+    if (it.e){
+      const e = it.e;
+      const what = e.kind === 'status' || e.kind === 'field' || e.kind === 'assigned'
+        ? `${esc(people[e.by].first)} ${kindLabel[e.kind]}: ${esc(e.text)}`
+        : `${esc(people[e.by].first)}: ${esc(e.text).replace(/@Alf\b/g,'@you')}`;
+      html += `<button class="row" role="option" data-id="${it.id}" aria-selected="${state.sel===it.id}">
+        <span class="dot ${e.unread?'on':''}"></span>
+        <span class="kind k-${e.kind}">${svg(e.kind)}</span>
+        <span style="min-width:0"><span class="r-top"><span class="r-key">${it.key}</span><span class="r-title">${esc(t.summary)}</span><span class="r-meta">${e.snoozed ? esc(e.snoozed) : e.t}</span></span>
+        <span class="r-what">${what}</span></span></button>`;
+    } else {
+      html += `<button class="row" role="option" data-id="${it.id}" aria-selected="${state.sel===it.id}">
+        <span class="dot"></span><span class="kind k-field">${av(t.assignee).replace('class="av"','class="av" style="width:22px;height:22px"')}</span>
+        <span style="min-width:0"><span class="r-top"><span class="r-key">${it.key}</span><span class="r-title">${esc(t.summary)}</span></span>
+        <span class="r-what">${t.type} · ${t.priority} · ${esc(t.sprint)} ${state.view==='watching' ? '· '+ST[t.status] : ''}</span></span></button>`;
+    }
+  }
+  $('#rows').innerHTML = html;
+  const selEl = $(`.row[aria-selected="true"]`);
+  if (selEl) selEl.scrollIntoView({block:'nearest'});
+}
+
+function current(){ const it = items().find(i => i.id === state.sel); return it ? {key:it.key, t:T[it.key], e:it.e} : null; }
+
+function renderDetail(){
+  const c = current();
+  const bar = $('#dbar');
+  if (!c){ $('#dinner').innerHTML = `<div class="empty"><b>Nothing selected</b>Pick an item on the left.</div>`; bar.style.visibility='hidden'; return; }
+  bar.style.visibility='visible';
+  $('#bSnooze').hidden = $('#bDone').hidden = !c.e;
+  const t = c.t, k = c.key;
+  const epic = t.epic ? `<span>${t.epic}</span> ${esc(T[t.epic].summary)} /` : (t.epicName ? esc(t.epicName) + ' /' : '');
+  let h = `<div><div class="crumb">${epic} <span>${k}</span> · ${t.type}</div><h1 class="dtitle">${esc(t.summary)}</h1></div>
+  <div class="facts">
+    ${pill(t.status, true)}
+    <span class="fact"><span class="lbl">Assignee</span>${av(t.assignee)}${esc(people[t.assignee].name)}</span>
+    <span class="fact"><span class="lbl">Reporter</span>${esc(people[t.reporter].name)}</span>
+    <span class="fact"><span class="lbl">Priority</span>${t.priority}</span>
+    ${t.due ? `<span class="fact"><span class="lbl">Due</span>${t.due}</span>` : `<span class="fact"><span class="lbl">Sprint</span>${esc(t.sprint)}</span>`}
+  </div>`;
+  const newComments = t.comments.filter(cm => /m ago|h ago/.test(cm.t) && cm.by !== 'you');
+  if (t.changes.length || newComments.length){
+    h += `<div class="changed"><h3 class="sec-h">Since you last looked</h3>
+      ${t.changes.map(ch => `<div class="chg"><span class="f">${esc(ch.f)}</span><s>${esc(ch.from)}</s> → <b>${esc(ch.to)}</b><span class="by">${esc(people[ch.by].first)} · ${esc(ch.t)}</span></div>`).join('')}
+      ${newComments.map(cm => `<div class="chg"><span class="f">Comment</span><span>${esc(people[cm.by].first)} asked a question</span><span class="by">${esc(cm.t)}</span></div>`).join('')}
+    </div>`;
+  }
+  h += `<div><h3 class="sec-h">Description</h3><div class="desc">${esc(t.desc)}</div></div>`;
+  if (t.children){
+    h += `<div><h3 class="sec-h">Issues in this epic</h3><div class="children">${t.children.map(ck => `<button class="child" data-goto="${ck}"><span class="k">${ck}</span><span class="ct">${esc(T[ck].summary)}</span>${pill(T[ck].status)}${av(T[ck].assignee)}</button>`).join('')}</div></div>`;
+  }
+  if (t.subtasks && t.subtasks.length){
+    h += `<div><h3 class="sec-h">Subtasks · ${t.subtasks.filter(s=>s.done).length}/${t.subtasks.length}</h3><div class="subs">${t.subtasks.map(s => `<div class="sub ${s.fresh?'new':''}"><span class="chk ${s.done?'on':''}"></span><span class="k">${s.key}</span><span>${esc(s.summary)}</span>${s.fresh?'<span class="via" style="margin-left:auto">via Claude</span>':''}</div>`).join('')}</div></div>`;
+  }
+  h += `<div><h3 class="sec-h">Comments${t.comments.length ? ' · '+t.comments.length : ''}</h3><div class="comments">${t.comments.map(cm => `<div class="cm ${cm.fresh?'new':''}">${av(cm.by)}<div><div class="cm-h"><b>${esc(people[cm.by].name)}</b><span>${esc(cm.t)}</span>${cm.via?'<span class="via">drafted with Claude</span>':''}</div><div class="cm-b">${mentionFmt(cm.body)}</div></div></div>`).join('') || '<div style="color:var(--text-3)">No comments yet.</div>'}</div></div>
+  <div class="composer"><textarea id="composer" placeholder="Comment on ${k}…  (@ to mention)"></textarea>
+    <div class="composer-f"><span><kbd>⌘</kbd><kbd>↵</kbd> to send</span><button class="btn-p" id="send" disabled>Comment</button></div></div>`;
+  $('#dinner').innerHTML = h;
+  t.comments.forEach(cm => delete cm.fresh);
+  (t.subtasks||[]).forEach(s => delete s.fresh);
+  const ta = $('#composer');
+  ta.addEventListener('input', () => $('#send').disabled = !ta.value.trim());
+  $('#send').addEventListener('click', () => postComment(k, ta.value));
+}
+
+function render(){ renderNav(); renderList(); renderDetail(); renderCtx(); }
+
+function select(id){
+  state.sel = id;
+  const c = current();
+  if (c && c.e && c.e.unread){ c.e.unread = false; }
+  $('#win').classList.add('show-detail');
+  render();
+  $('#dscroll').scrollTop = 0;
+}
+function move(d){
+  const list = items(); if (!list.length) return;
+  let i = list.findIndex(x => x.id === state.sel);
+  i = Math.max(0, Math.min(list.length-1, i + d));
+  select(list[i].id);
+}
+
+/* actions */
+let toastTimer;
+function toast(msg, undo){
+  $('.toast')?.remove();
+  const el = document.createElement('div'); el.className = 'toast';
+  el.innerHTML = `<span>${msg}</span>${undo ? '<button>Undo</button>' : ''}`;
+  document.body.appendChild(el);
+  if (undo) el.querySelector('button').onclick = () => { undo(); el.remove(); render(); };
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.remove(), 4000);
+}
+function doTransition(key, to, via){
+  const t = T[key], from = t.status;
+  t.status = to;
+  t.changes = [{f:'Status', from:ST[from], to:ST[to], by:'you', t:'just now'}, ...t.changes.filter(c => c.by !== 'you')];
+  render();
+  toast(`${key} moved to <b>${ST[to]}</b>${via ? ' by Claude' : ''}`, () => { t.status = from; t.changes = t.changes.filter(c => c.t !== 'just now'); });
+}
+function postComment(key, body, via){
+  body = body.trim(); if (!body) return;
+  T[key].comments.push({by:'you', t:'just now', body, fresh:true, via});
+  render();
+  toast(`Commented on ${key}`);
+  requestAnimationFrame(() => { const d = $('#dscroll'); d.scrollTop = d.scrollHeight; });
+}
+function markDone(){
+  const c = current(); if (!c || !c.e) return;
+  const e = c.e, wasDone = e.done, wasSnoozed = e.snoozed;
+  if (state.view === 'done'){ e.done = false; render(); toast('Moved back to Inbox'); return; }
+  e.done = true; e.snoozed = null; e.unread = false;
+  render();
+  toast('Marked done', () => { e.done = wasDone; e.snoozed = wasSnoozed; });
+}
+function snooze(label){
+  const c = current(); if (!c || !c.e) return;
+  const e = c.e; e.snoozed = label; e.unread = false;
+  render();
+  toast(`Snoozed until ${label.toLowerCase()}`, () => { e.snoozed = null; });
+}
+
+/* menus */
+let menuEl = null;
+function closeMenu(){ if (menuEl){ menuEl.remove(); menuEl = null; } }
+function openMenu(anchor, title, opts){
+  closeMenu();
+  const r = anchor.getBoundingClientRect();
+  menuEl = document.createElement('div'); menuEl.className = 'menu'; menuEl.setAttribute('role','menu');
+  menuEl.innerHTML = `<div class="menu-h">${title}</div>` + opts.map((o,i) => `<button class="mi" role="menuitem" data-i="${i}">${o.html}${o.hint ? `<span class="hint">${o.hint}</span>` : ''}</button>`).join('');
+  document.body.appendChild(menuEl);
+  const w = menuEl.offsetWidth;
+  menuEl.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left)) + 'px';
+  menuEl.style.top = Math.min(innerHeight - menuEl.offsetHeight - 8, r.bottom + 6) + 'px';
+  menuEl.querySelectorAll('.mi').forEach(b => b.onclick = () => { const o = opts[+b.dataset.i]; closeMenu(); o.run(); });
+  menuEl.addEventListener('keydown', ev => {
+    const bs = [...menuEl.querySelectorAll('.mi')], i = bs.indexOf(document.activeElement);
+    if (ev.key === 'ArrowDown' || ev.key === 'j'){ ev.preventDefault(); bs[(i+1)%bs.length].focus(); }
+    if (ev.key === 'ArrowUp' || ev.key === 'k'){ ev.preventDefault(); bs[(i-1+bs.length)%bs.length].focus(); }
+    const n = parseInt(ev.key); if (n && bs[n-1]){ ev.preventDefault(); bs[n-1].click(); }
+    ev.stopPropagation();
+    if (ev.key === 'Escape') closeMenu();
+  });
+  menuEl.querySelector('.mi').focus();
+}
+function transitionMenu(anchor){
+  const c = current(); if (!c) return;
+  anchor = anchor || $('.pill[data-act="transition"]') || $('#bTransition');
+  openMenu(anchor, `Move ${c.key} from ${ST[c.t.status]}`, TR[c.t.status].map(([to,label],i) => ({html:`<span>${label}</span><span class="pill small st-${to}" style="margin-left:auto">${ST[to]}</span>`, hint:String(i+1), run:() => doTransition(c.key, to)})));
+}
+function snoozeMenu(anchor){
+  const c = current(); if (!c || !c.e) return;
+  const opts = [['Later today','in 3h'],['Tomorrow','09:00'],['Monday','09:00'],['When it changes','next update']];
+  openMenu(anchor || $('#bSnooze'), 'Snooze until', opts.map(([l,h],i) => ({html:l, hint:h, run:() => snooze(l)})));
+}
+
+/* palette */
+function palette(){
+  closeMenu();
+  const scrim = document.createElement('div'); scrim.className = 'scrim';
+  scrim.innerHTML = `<div class="palette" role="dialog" aria-label="Search"><input id="pq" placeholder="Search tickets, or type a command…" autocomplete="off"><div class="pl" id="pl"></div></div>`;
+  $('#layer').appendChild(scrim);
+  const actions = [
+    {label:'Ask Claude about this ticket', hint:'⌘J', run:openClaude},
+    {label:'Transition current ticket', hint:'t', run:() => transitionMenu()},
+    {label:'Go to Inbox', run:() => setView('inbox')},
+    {label:'Go to My tickets', run:() => setView('mine')},
+    {label:'Go to Mentions', run:() => setView('mentions')},
+    {label:'Simulate a new notification', run:simulate}
+  ];
+  let sel = 0, res = [];
+  const draw = () => {
+    const q = $('#pq').value.trim().toLowerCase();
+    const tk = Object.keys(T).filter(k => !q || k.toLowerCase().includes(q) || T[k].summary.toLowerCase().includes(q)).map(k => ({k, label:T[k].summary, hint:ST[T[k].status], run:() => gotoTicket(k)}));
+    const ac = actions.filter(a => !q || a.label.toLowerCase().includes(q));
+    res = [...tk, ...ac]; sel = Math.min(sel, Math.max(0, res.length-1));
+    let h = '', i = 0;
+    if (tk.length) h += '<div class="pl-h">Tickets</div>' + tk.map(r => `<button class="po" data-i="${i}" aria-selected="${i++===sel}"><span class="k">${r.k}</span>${esc(r.label)}<span class="hint">${r.hint}</span></button>`).join('');
+    if (ac.length) h += '<div class="pl-h">Actions</div>' + ac.map(r => `<button class="po" data-i="${i}" aria-selected="${i++===sel}"><span class="k"></span>${esc(r.label)}<span class="hint">${r.hint||''}</span></button>`).join('');
+    $('#pl').innerHTML = h || '<div class="empty">No matches</div>';
+    $('#pl').querySelectorAll('.po').forEach(b => b.onclick = () => pick(+b.dataset.i));
+  };
+  const close = () => scrim.remove();
+  const pick = i => { const r = res[i]; close(); r && r.run(); };
+  scrim.addEventListener('mousedown', ev => { if (ev.target === scrim) close(); });
+  const inp = $('#pq');
+  inp.addEventListener('input', () => { sel = 0; draw(); });
+  inp.addEventListener('keydown', ev => {
+    ev.stopPropagation();
+    if (ev.key === 'ArrowDown'){ ev.preventDefault(); sel = Math.min(res.length-1, sel+1); draw(); }
+    else if (ev.key === 'ArrowUp'){ ev.preventDefault(); sel = Math.max(0, sel-1); draw(); }
+    else if (ev.key === 'Enter'){ ev.preventDefault(); pick(sel); }
+    else if (ev.key === 'Escape'){ close(); }
+  });
+  draw(); inp.focus();
+}
+function setView(v){ state.view = v; state.filter = null; state.sel = null; $('#win').classList.remove('show-detail'); render(); }
+function gotoTicket(k){
+  let it = items().find(i => i.key === k);
+  if (!it){
+    const mine = T[k].assignee === 'you';
+    state.view = mine ? 'mine' : 'watching'; state.filter = null;
+    if (!mine && !watching.includes(k)) watching.push(k);
+    it = items().find(i => i.key === k);
+  }
+  select(it.id);
+}
+
+/* notifications */
+let simulated = false;
+function simulate(){
+  const pool = [
+    {kind:'mention', key:'CE-731', by:'priya', text:'@Alf the design is final. Copy sheet is linked in the description, can you start this week?'},
+    {kind:'comment', key:'CA-420', by:'jonas', text:'Checks are green. Could you review when you have 10 minutes?'},
+    {kind:'status', key:'CA-421', by:'mette', text:'To Do → In Progress'}
+  ];
+  const p = pool[simulated ? Math.floor(Math.random()*pool.length) : 0];
+  simulated = true;
+  const e = {id:nextId++, ...p, t:'now', unread:true};
+  E.unshift(e);
+  if (p.kind !== 'status') T[p.key].comments.push({by:p.by, t:'1m ago', body:p.text});
+  else { T[p.key].status = 'prog'; T[p.key].changes.unshift({f:'Status', from:'To Do', to:'In Progress', by:p.by, t:'1m ago'}); }
+  const sync = $('#sync'); sync.classList.add('busy'); $('#syncText').textContent = 'Syncing…';
+  setTimeout(() => { sync.classList.remove('busy'); syncAt = Date.now(); tickSync(); render(); showNotif(e); }, 700);
+}
+function showNotif(e){
+  $('.notif')?.remove();
+  const el = document.createElement('div'); el.className = 'notif'; el.setAttribute('role','status');
+  const title = e.kind === 'mention' ? `${people[e.by].name} mentioned you` : e.kind === 'status' ? `${e.key} changed status` : `${people[e.by].name} commented`;
+  el.innerHTML = `<div class="ic">${svg('inbox')}</div><div><div class="nt">${esc(title)}<span>now</span></div>
+    <div class="nb"><b style="font-family:var(--mono);font-size:11.5px">${e.key}</b> ${esc(e.text.replace(/@Alf\b/,'@you'))}</div>
+    <div class="na">${e.kind !== 'status' ? '<button data-a="reply">Reply</button>' : ''}<button data-a="open">Open</button><button data-a="claude">Ask Claude</button></div></div>`;
+  document.body.appendChild(el);
+  const go = () => { state.view = 'inbox'; state.filter = null; select('e'+e.id); el.remove(); };
+  el.querySelector('[data-a="open"]').onclick = go;
+  el.querySelector('[data-a="claude"]').onclick = () => { go(); openClaude(); };
+  const rb = el.querySelector('[data-a="reply"]'); if (rb) rb.onclick = () => { go(); $('#composer').focus(); };
+  setTimeout(() => el.remove(), 9000);
+}
+let syncAt = Date.now();
+function tickSync(){
+  const s = Math.round((Date.now() - syncAt)/1000);
+  if (!$('#sync').classList.contains('busy')) $('#syncText').textContent = s < 5 ? 'Synced just now' : `Synced ${s}s ago`;
+  if (s >= 60){ syncAt = Date.now(); }
+}
+setInterval(tickSync, 1000);
+
+/* claude */
+const SESS = {
+  'resume-a':{label:'translation workers', repo:'campaign-service', resume:true},
+  'resume-b':{label:'rollout status bug', repo:'campaign-service', resume:true},
+  'new-gw':{label:null, repo:'campaign-service', resume:false},
+  'new-none':{label:null, repo:null, resume:false}
+};
+function renderCtx(){
+  const c = current(); if (!c) return;
+  $('#drTitle').textContent = `Ask Claude about ${c.key}`;
+  const s = SESS[$('#sessSel').value];
+  $('#ctx').innerHTML = [`${c.key} + ${c.t.children ? c.t.children.length + ' child issues' : c.t.comments.length + ' comments'}`, s.repo ? '~/Code/'+s.repo : null, 'CLAUDE.md', 'Atlassian MCP', 'jira-inbox MCP'].filter(Boolean).map(x => `<span>${esc(x)}</span>`).join('');
+}
+function openClaude(){
+  const c = current(); if (!c) return;
+  closeMenu();
+  const d = $('#drawer');
+  if (d.dataset.key !== c.key){ d.dataset.key = c.key; resetClaude(); }
+  d.hidden = false;
+  renderCtx();
+  setTimeout(() => $('#askInput').focus(), 50);
+}
+function closeClaude(){ $('#drawer').hidden = true; }
+function resetClaude(){
+  const c = current();
+  const sug = [['summary', c.t.type === 'Epic' ? 'How is this epic doing?' : 'What changed and what do I need to do?'], ['reply','Draft a reply'], ['subtasks','Break into subtasks'], ['code','Is this done in code?'], ['move','Move it forward']];
+  $('#drBody').innerHTML = `<div style="color:var(--text-2)">Claude reads the ticket, its history and your repo. Anything it wants to change in Jira shows up below as a card for you to approve.</div>
+   <div class="sugg">${sug.map(([k,l]) => `<button data-intent="${k}">${l}</button>`).join('')}</div>`;
+  $('#drBody').querySelectorAll('[data-intent]').forEach(b => b.onclick = () => ask(b.textContent, b.dataset.intent));
+}
+function intentOf(q){
+  q = q.toLowerCase();
+  if (/subtask|break|split/.test(q)) return 'subtasks';
+  if (/reply|respond|answer|draft/.test(q)) return 'reply';
+  if (/code|branch|pr\b|commit|repo|implemented/.test(q)) return 'code';
+  if (/move|transition|forward|review|close/.test(q)) return 'move';
+  return 'summary';
+}
+function lastQuestion(t){ return [...t.comments].reverse().find(c => c.by !== 'you'); }
+function script(intent, key){
+  const t = T[key], s = SESS[$('#sessSel').value];
+  const first = s.resume ? `Resumed your session “${s.label}”` : s.repo ? `Started a session in ~/Code/${s.repo}` : 'Started a session';
+  const steps = [first, `Read ${key} from Jira`];
+  let text = '', props = [];
+  if (intent === 'summary'){
+    if (t.children){
+      steps.push(`Read ${t.children.length} child issues and their changelogs`);
+      const by = st => t.children.filter(k => T[k].status === st);
+      const line = (st, note) => by(st).length ? `- **${by(st).length} ${ST[st].toLowerCase()}**: ${by(st).map(k => `${k} (${people[T[k].assignee].first || 'unassigned'})`).join(', ')}${note||''}` : '';
+      text = `**${key}** is due **${t.due}**. Mette moved it from 10 Oct three hours ago.\n\n${[line('done'), line('review'), line('prog'), line('blocked', '. Waiting on the rate-limit question Sam asked you'), line('todo')].filter(Boolean).join('\n')}\n\nThe blocker on CA-418 is the biggest risk to the new date, and you can clear it by answering Sam.`;
+      props.push({kind:'comment', key, body:`Status for 17 Oct: ${by('done').length + by('review').length}/${t.children.length} done or in review. CA-418 is blocked on the Klaviyo rate limit; I'm getting the numbers today. CA-421 is unassigned and can slip without affecting the launch.`});
+    } else {
+      steps.push(`Read changelog and ${t.comments.length} comments`);
+      const q = lastQuestion(t);
+      const ch = t.changes.map(c => `- ${c.f}: ${c.from} → ${c.to} (${people[c.by].first}, ${c.t})`).join('\n');
+      text = `${ch ? `Since you last looked:\n${ch}\n\n` : ''}${q ? `**${people[q.by].first} is waiting on you**: “${q.body.replace('@Alf ','')}”\n\n` : ''}${t.assignee === 'you' ? `It's yours and ${ST[t.status].toLowerCase()}.` : `It's assigned to ${people[t.assignee].name}.`} ${q ? 'Want me to draft a reply?' : 'Nothing needs you right now.'}`;
+      if (q) props.push({kind:'comment', key, body:draftReply(key, t, q)});
+    }
+  } else if (intent === 'reply'){
+    const q = lastQuestion(t);
+    if (!q){ text = `There's no open question on ${key}. I can post an update instead:`; props.push({kind:'comment', key, body:`Quick update: this is ${ST[t.status].toLowerCase()}. I'll post here when it moves.`}); }
+    else { text = `Here's a draft reply to ${people[q.by].first}. Edit it before posting if you like.`; props.push({kind:'comment', key, body:draftReply(key, t, q)}); }
+  } else if (intent === 'subtasks'){
+    steps.push(s.repo ? `Searched ~/Code/${s.repo} for related code` : 'Read linked issues');
+    const items = key === 'CA-412' ? ['Cap concurrent workers per store (DKK default 2)','Report per-language progress in rollout status','Load test a 12-language campaign on staging']
+      : key === 'CA-418' ? ['Back off with jitter on 429 per batch','Record retries in rollout status','Alert when a batch fails after 5 retries']
+      : ['Write up the approach on the ticket', `Implement: ${t.summary.charAt(0).toLowerCase() + t.summary.slice(1)}`, 'Test on staging and update docs'];
+    text = t.subtasks ? `Two subtasks are done already. From the description and the code, this is what's left:` : `From the description, I'd split it like this:`;
+    props.push({kind:'subtasks', key, items});
+  } else if (intent === 'code'){
+    if (!s.repo){ steps.push('No repository in this session'); text = `This session has no repo, so I can't check the code. Pick a session in campaign-service above and ask again.`; }
+    else if (key === 'CA-412'){
+      steps.push('git log on branch ca-412-parallel-workers', 'Read app/Jobs/TranslateLanguage.php and config/horizon.php');
+      text = `Mostly. The branch has 6 commits. The worker pool and the per-language fan-out are in, which matches the two done subtasks.\n\nWhat's missing:\n- The per-store cap Mette asked about\n- A test for one language failing while others succeed\n\nI'd keep it In Progress.`;
+      props.push({kind:'comment', key, body:'Progress: worker pool and per-language fan-out are merged to the branch. Next up are a per-store concurrency cap (DKK defaults to 2) and a partial-failure test.'});
+    } else if (key === 'CA-420'){
+      steps.push('Found PR #88 “Re-read rollout state after retry”', 'Checked CI: 14/14 passing');
+      text = `Yes. PR #88 has the fix and all checks pass. It's waiting on one approving review, and Jonas asked you.`;
+    } else { steps.push(`Searched branches and commits for ${key}`); text = `I couldn't find a branch or commits mentioning ${key}, so work hasn't started in code yet.`; }
+  } else if (intent === 'move'){
+    const [to, label] = TR[t.status][0];
+    const why = t.status === 'blocked' ? 'You can unblock this once Sam has the rate-limit numbers.' : t.status === 'review' ? 'CI is green on the linked PR.' : '';
+    text = `The next step in the workflow is **${label}** (${ST[t.status]} → ${ST[to]}). ${why}`;
+    props.push({kind:'transition', key, to, label});
+  }
+  return {steps, text, props};
+}
+function draftReply(key, t, q){
+  if (key === 'CA-418') return `@${people[q.by].first} Not confirmed yet. I'll check the euro account's limits in Klaviyo today and post the numbers here. Until then, retrying with backoff and jitter on 429 is safe to build.`;
+  if (key === 'CA-412') return `@${people[q.by].first} Yes. I'll add a per-store max-workers setting and default DKK to 2, so euro stays at 8. It goes in as a subtask this sprint.`;
+  return `@${people[q.by].first} Thanks, I'll take a look today and reply here.`;
+}
+function md(s){
+  return s.split(/\n\n/).map(block => {
+    const lines = block.split('\n');
+    const f = x => esc(x).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    if (lines.every(l => l.startsWith('- '))) return `<ul>${lines.map(l => `<li>${f(l.slice(2))}</li>`).join('')}</ul>`;
+    if (lines.length > 1 && lines.slice(1).every(l => l.startsWith('- '))) return `<p>${f(lines[0])}</p><ul>${lines.slice(1).map(l => `<li>${f(l.slice(2))}</li>`).join('')}</ul>`;
+    return `<p>${f(block)}</p>`;
+  }).join('');
+}
+const wait = ms => new Promise(r => setTimeout(r, reduced ? 0 : ms));
+let busy = false;
+async function ask(q, intent){
+  const c = current(); if (!c || busy) return;
+  busy = true;
+  intent = intent || intentOf(q);
+  const body = $('#drBody');
+  body.querySelector('.sugg')?.remove();
+  body.insertAdjacentHTML('beforeend', `<div class="msg-u">${esc(q)}</div>`);
+  const sc = script(intent, c.key);
+  const stepsEl = document.createElement('div'); stepsEl.className = 'steps'; body.appendChild(stepsEl);
+  const scroll = () => body.scrollTop = body.scrollHeight;
+  for (const s of sc.steps){
+    stepsEl.insertAdjacentHTML('beforeend', `<div class="step run"><i></i>${esc(s)}</div>`); scroll();
+    await wait(450 + Math.random()*350);
+    stepsEl.lastElementChild.className = 'step ok';
+  }
+  const msg = document.createElement('div'); msg.className = 'msg-a'; body.appendChild(msg);
+  const words = sc.text.split(/(\s+)/);
+  let acc = '';
+  for (let i = 0; i < words.length; i++){ acc += words[i]; if (i % 4 === 0 || i === words.length-1){ msg.innerHTML = md(acc); scroll(); await wait(28); } }
+  for (const p of sc.props){ body.appendChild(proposal(p)); scroll(); await wait(120); }
+  if (sc.props.length === 0 && intent !== 'code') body.insertAdjacentHTML('beforeend', `<div class="sugg"><button data-intent="reply">Draft a reply</button><button data-intent="move">Move it forward</button></div>`);
+  body.querySelectorAll('.sugg [data-intent]').forEach(b => b.onclick = () => ask(b.textContent, b.dataset.intent));
+  busy = false;
+}
+function proposal(p){
+  const el = document.createElement('div'); el.className = 'prop';
+  let b = '', btn = '';
+  if (p.kind === 'comment'){ b = `<textarea aria-label="Comment draft">${esc(p.body)}</textarea>`; btn = 'Post comment'; }
+  if (p.kind === 'transition'){ b = `<div>Move <b style="font-family:var(--mono)">${p.key}</b> ${pill(T[p.key].status)} → ${pill(p.to)}</div>`; btn = p.label; }
+  if (p.kind === 'subtasks'){ b = p.items.map((it,i) => `<label><input type="checkbox" checked data-i="${i}"> ${esc(it)}</label>`).join(''); btn = `Create ${p.items.length} subtasks`; }
+  const head = {comment:`Comment on ${p.key}`, transition:`Transition ${p.key}`, subtasks:`Create subtasks under ${p.key}`}[p.kind];
+  el.innerHTML = `<div class="prop-h">${head}<span class="tag">needs your approval</span></div><div class="prop-b">${b}<div class="prop-a"><button class="btn-g" data-a="skip">Skip</button><button class="btn-p" data-a="ok">${btn}</button></div><div class="done-note"></div></div>`;
+  if (p.kind === 'subtasks'){
+    const upd = () => { const n = el.querySelectorAll('input:checked').length; const ok = el.querySelector('[data-a="ok"]'); ok.textContent = `Create ${n} subtask${n===1?'':'s'}`; ok.disabled = !n; };
+    el.querySelectorAll('input').forEach(i => i.onchange = upd);
+  }
+  el.querySelector('[data-a="skip"]').onclick = () => el.classList.add('skipped');
+  el.querySelector('[data-a="ok"]').onclick = () => {
+    const note = el.querySelector('.done-note');
+    if (p.kind === 'comment'){ const v = el.querySelector('textarea').value; postComment(p.key, v, true); note.textContent = `✓ Posted to ${p.key}`; }
+    if (p.kind === 'transition'){ doTransition(p.key, p.to, true); note.textContent = `✓ ${p.key} is now ${ST[p.to]}`; }
+    if (p.kind === 'subtasks'){
+      const t = T[p.key]; t.subtasks = t.subtasks || [];
+      const [proj, num] = p.key.split('-');
+      let n = Math.max(+num, ...Object.keys(T).filter(k => k.startsWith(proj)).map(k => +k.split('-')[1]), ...t.subtasks.map(s => +s.key.split('-')[1])) + 1;
+      const chosen = [...el.querySelectorAll('input:checked')].map(i => p.items[+i.dataset.i]);
+      chosen.forEach(s => t.subtasks.push({key:`${proj}-${n++}`, summary:s, done:false, fresh:true}));
+      render(); toast(`Created ${chosen.length} subtasks under ${p.key}`);
+      note.textContent = `✓ Created ${chosen.length} subtasks`;
+    }
+    el.classList.add('applied');
+  };
+  return el;
+}
+
+/* wiring */
+document.addEventListener('click', ev => {
+  const nv = ev.target.closest('[data-view]'); if (nv){ setView(nv.dataset.view); return; }
+  const pf = ev.target.closest('[data-filter]'); if (pf){ state.filter = state.filter === pf.dataset.filter ? null : pf.dataset.filter; state.sel = null; render(); return; }
+  const row = ev.target.closest('.row'); if (row){ select(row.dataset.id); return; }
+  const g = ev.target.closest('[data-goto]'); if (g){ gotoTicket(g.dataset.goto); return; }
+  if (ev.target.closest('[data-act="transition"]')){ transitionMenu(ev.target.closest('[data-act="transition"]')); return; }
+  if (menuEl && !ev.target.closest('.menu')) closeMenu();
+});
+$('#bTransition').onclick = e => { e.stopPropagation(); transitionMenu($('#bTransition')); };
+$('#bSnooze').onclick = e => { e.stopPropagation(); snoozeMenu($('#bSnooze')); };
+$('#bDone').onclick = markDone;
+$('#bComment').onclick = () => $('#composer')?.focus();
+$('#bOpen').onclick = () => { const c = current(); c && toast(`In the app this opens example.atlassian.net/browse/${c.key}`); };
+$('#bClaude').onclick = openClaude;
+$('#drClose').onclick = closeClaude;
+$('#back').onclick = () => $('#win').classList.remove('show-detail');
+$('#openPalette').onclick = palette;
+$('#simNotif').onclick = simulate;
+$('#sessSel').onchange = renderCtx;
+$('#askForm').addEventListener('submit', ev => { ev.preventDefault(); const v = $('#askInput').value.trim(); if (v){ $('#askInput').value = ''; ask(v); } });
+
+function help(){
+  const scrim = document.createElement('div'); scrim.className = 'scrim';
+  scrim.innerHTML = `<div class="help" role="dialog" aria-label="Keyboard shortcuts"><h3>Keyboard shortcuts</h3><dl>
+  ${[['j / k','Next / previous item'],['t','Transition'],['s','Snooze'],['e','Mark done'],['u','Toggle unread'],['c','Comment'],['o','Open in Jira'],['⌘K','Search tickets and actions'],['⌘J','Ask Claude'],['⌘↵','Send comment'],['Esc','Close']].map(([k,d]) => `<dt><kbd>${k}</kbd></dt><dd style="margin:0">${d}</dd>`).join('')}
+  </dl></div>`;
+  scrim.onclick = () => scrim.remove();
+  $('#layer').appendChild(scrim);
+}
+
+document.addEventListener('keydown', ev => {
+  const mod = ev.metaKey || ev.ctrlKey;
+  const typing = ev.target.matches('input, textarea, select');
+  if (mod && ev.key.toLowerCase() === 'k'){ ev.preventDefault(); palette(); return; }
+  if (mod && ev.key.toLowerCase() === 'j'){ ev.preventDefault(); $('#drawer').hidden ? openClaude() : closeClaude(); return; }
+  if (mod && ev.key === 'Enter' && ev.target.id === 'composer'){ ev.preventDefault(); const c = current(); c && postComment(c.key, ev.target.value); return; }
+  if (ev.key === 'Escape'){
+    if ($('#layer').lastElementChild){ $('#layer').lastElementChild.remove(); return; }
+    if (menuEl){ closeMenu(); return; }
+    if (typing){ ev.target.blur(); return; }
+    if (!$('#drawer').hidden){ closeClaude(); return; }
+    $('#win').classList.remove('show-detail'); return;
+  }
+  if (typing || mod || ev.altKey || $('#layer').lastElementChild) return;
+  const k = ev.key;
+  if (k === 'j' || k === 'ArrowDown'){ ev.preventDefault(); move(1); }
+  else if (k === 'k' || k === 'ArrowUp'){ ev.preventDefault(); move(-1); }
+  else if (k === 't'){ ev.preventDefault(); transitionMenu(); }
+  else if (k === 's'){ ev.preventDefault(); snoozeMenu(); }
+  else if (k === 'e'){ ev.preventDefault(); markDone(); }
+  else if (k === 'c'){ ev.preventDefault(); $('#composer')?.focus(); }
+  else if (k === 'o'){ ev.preventDefault(); $('#bOpen').click(); }
+  else if (k === 'u'){ const c = current(); if (c && c.e){ c.e.unread = !c.e.unread; render(); } }
+  else if (k === '?'){ help(); }
+});
+
+state.sel = 'e1';
+E[0].unread = false;
+render();
+resetClaude();
+setTimeout(() => { if (!simulated) simulate(); }, 9000);
+})();
+</script>
