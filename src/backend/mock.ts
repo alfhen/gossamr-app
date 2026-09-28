@@ -313,6 +313,11 @@ export class MockBackend implements Backend {
     return { id: id(), filename: file.name, mimeType: file.type, mediaId };
   }
 
+  dispose() {
+    this.files.forEach((url) => URL.revokeObjectURL(url));
+    this.files.clear();
+  }
+
   async attachmentLimit() {
     return 10 * 1024 * 1024;
   }

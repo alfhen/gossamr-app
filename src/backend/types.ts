@@ -25,4 +25,6 @@ export interface Backend {
   snooze(eventId: string, until: Date | null): Promise<void>;
   syncNow(): Promise<void>;
   openUrl(url: string): Promise<void>;
+  /** Releases anything the backend holds, when the app switches to another one. */
+  dispose?(): void;
 }
