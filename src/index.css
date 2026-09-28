@@ -39,6 +39,7 @@
   --color-done: #1f7a3d;
   --color-code: rgb(0 0 0 / 0.045);
   --color-warn-bg: #fff4d6;
+  --color-warn: #8a5a00;
 
   --shadow-pop: 0 18px 50px rgb(20 24 40 / 0.22), 0 2px 6px rgb(20 24 40 / 0.08);
 }
@@ -74,6 +75,7 @@
     --color-done: #7fd99d;
     --color-code: rgb(255 255 255 / 0.06);
     --color-warn-bg: #3a3222;
+    --color-warn: #f2c25b;
     --shadow-pop: 0 18px 50px rgb(0 0 0 / 0.55), 0 2px 6px rgb(0 0 0 / 0.3);
     color-scheme: dark;
   }

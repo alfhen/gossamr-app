@@ -36,7 +36,7 @@ function Node({ node }: { node: AdfNode }): ReactNode {
       return <ul className="grid list-disc gap-0.5 pl-5">{children(node)}</ul>;
     case "orderedList":
       return (
-        <ol start={Number(a.order) || 1} className="grid list-decimal gap-0.5 pl-5">
+        <ol start={Number.isInteger(a.order) && (a.order as number) >= 0 ? (a.order as number) : 1} className="grid list-decimal gap-0.5 pl-5">
           {children(node)}
         </ol>
       );
@@ -107,7 +107,9 @@ function Node({ node }: { node: AdfNode }): ReactNode {
       return <>{String(a.text ?? a.shortName ?? "")}</>;
     case "status":
       return (
-        <span className="rounded-[4px] bg-todo-bg px-1.5 py-px text-[11px] font-semibold tracking-wide text-todo uppercase">{String(a.text ?? "")}</span>
+        <span className={`rounded-[4px] px-1.5 py-px text-[11px] font-semibold tracking-wide uppercase ${STATUS[String(a.color)] ?? STATUS.neutral}`}>
+          {String(a.text ?? "")}
+        </span>
       );
     case "date": {
       const d = dateOf(a.timestamp);
@@ -143,6 +145,15 @@ export function dateOf(timestamp: unknown): Date | null {
   if (!Number.isFinite(n) || n <= 0) return null;
   return new Date(n < 1e11 ? n * 1000 : n);
 }
+
+const STATUS: Record<string, string> = {
+  neutral: "bg-todo-bg text-todo",
+  purple: "bg-review-bg text-review",
+  blue: "bg-progress-bg text-progress",
+  red: "bg-blocked-bg text-blocked",
+  yellow: "bg-warn-bg text-warn",
+  green: "bg-done-bg text-done",
+};
 
 const PANEL: Record<string, string> = {
   info: "bg-progress-bg",

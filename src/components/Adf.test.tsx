@@ -58,4 +58,15 @@ describe("Adf", () => {
     expect(fromData).toMatch(/href="https:\/\/example.com\/b"[^>]*>Spec</);
     expect(html(doc(p({ type: "inlineCard", attrs: {} })))).toContain("[Link]");
   });
+
+  it("keeps a list that starts at zero", () => {
+    const list = (order: unknown): AdfNode => ({ type: "orderedList", attrs: { order }, content: [{ type: "listItem", content: [p(text("x"))] }] });
+    expect(html(doc(list(0)))).toContain('start="0"');
+    expect(html(doc(list("nope")))).toContain('start="1"');
+  });
+
+  it("colours status lozenges, defaulting to neutral", () => {
+    expect(html(doc(p({ type: "status", attrs: { text: "Live", color: "green" } })))).toContain("bg-done-bg");
+    expect(html(doc(p({ type: "status", attrs: { text: "?", color: "chartreuse" } })))).toContain("bg-todo-bg");
+  });
 });
