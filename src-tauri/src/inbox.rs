@@ -139,7 +139,8 @@ impl Core {
     pub async fn snapshot(&self) -> Result<Snapshot> {
         let (site, me) = self.identity().await?;
         let sync_error = self.last_error.lock().expect("error lock poisoned").clone();
-        self.with_db(|db| {
+        // The identity above labels the snapshot, so the data must come from that same account's database.
+        self.with_db_for(&Scope::of(&site, &me), |db| {
             let last_sync = db.meta(LAST_SYNC)?;
             // Tickets refreshed within a day of the last sync; older ones have dropped out of every query.
             let cutoff = last_sync
