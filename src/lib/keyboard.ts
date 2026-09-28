@@ -1,6 +1,8 @@
 export type Command =
   | "next"
   | "prev"
+  | "expand"
+  | "collapse"
   | "transition"
   | "snooze"
   | "done"
@@ -25,6 +27,8 @@ const PLAIN: Record<string, Command> = {
   ArrowDown: "next",
   k: "prev",
   ArrowUp: "prev",
+  ArrowRight: "expand",
+  ArrowLeft: "collapse",
   t: "transition",
   s: "snooze",
   e: "done",
@@ -50,6 +54,7 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 
 export const SHORTCUTS: [string, string][] = [
   ["j / k", "Next / previous item"],
+  ["→ / ←", "Expand / collapse a ticket's updates"],
   ["t", "Transition"],
   ["s", "Snooze"],
   ["e", "Clear from Inbox"],

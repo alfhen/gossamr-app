@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { liveMentions, participants, segments, type Mention } from "../lib/mentions";
 import { snoozeOptions, relativeTime } from "../lib/views";
-import { selectedEvent, selectedTicket, useStore } from "../store";
+import { selectedEvents, selectedTicket, useStore } from "../store";
 import type { AdfNode, Snapshot, Ticket, Transition, Uploaded } from "../types";
 import { filesIn, formatSize, imageSize, nameFor } from "../lib/attachments";
 import { useClaude } from "../claudeStore";
@@ -15,7 +15,8 @@ export function TicketDetail() {
   const state = useStore();
   const { overlay, openOverlay, backend, markDone, snooze, transition, now } = state;
   const ticket = selectedTicket(state);
-  const event = selectedEvent(state);
+  const events = selectedEvents(state);
+  const event = events[0];
   const transitionBtn = useRef<HTMLDivElement>(null);
   const snoozeBtn = useRef<HTMLDivElement>(null);
   const [transitions, setTransitions] = useState<Transition[] | null>(null);
@@ -64,7 +65,7 @@ export function TicketDetail() {
               </ToolbarButton>
             </div>
             <ToolbarButton title={event.doneAt ? "Move back to Inbox (e)" : "Clear from Inbox (e)"} onClick={() => void markDone()}>
-              {event.doneAt ? "Move to Inbox" : "Clear"} <kbd>e</kbd>
+              {event.doneAt ? "Move to Inbox" : events.length > 1 ? `Clear (${events.length})` : "Clear"} <kbd>e</kbd>
             </ToolbarButton>
           </>
         )}

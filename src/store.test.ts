@@ -36,6 +36,102 @@ describe("store", () => {
     expect(currentItems(s()).some((i) => i.event?.id === id)).toBe(true);
   });
 
+  describe("stacks", () => {
+    const stackEvents = () => s().snap!.events.filter((e) => e.ticketKey === "CA-420" && e.doneAt === null);
+
+    it("folds a ticket's updates into one item and marks them all read when selected", async () => {
+      expect(currentItems(s()).filter((i) => i.ticketKey === "CA-420").map((i) => i.id)).toEqual(["s:CA-420"]);
+      s().select("s:CA-420");
+      await Promise.resolve();
+      expect(stackEvents().some((e) => e.unread)).toBe(false);
+    });
+
+    it("clears every update in a stack and undoes", async () => {
+      s().select("s:CA-420");
+      const count = stackEvents().length;
+      await s().markDone();
+      expect(stackEvents()).toHaveLength(0);
+      expect(s().toast?.message).toBe(`Cleared (${count} updates)`);
+      s().toast?.undo?.();
+      await new Promise((r) => setTimeout(r));
+      expect(stackEvents()).toHaveLength(count);
+    });
+
+    it("selects the next ticket, not one of its own updates, after clearing an expanded stack", async () => {
+      s().select("s:CA-420");
+      s().setStackOpen(true);
+      await s().markDone();
+      expect(s().selectedId).toBe("s:CE-731");
+    });
+
+    it("selects the ticket's remaining update after clearing the last one in an expanded stack", async () => {
+      s().select("s:CA-420");
+      s().setStackOpen(true);
+      const children = currentItems(s()).filter((i) => i.inStack);
+      s().select(children[children.length - 1].id);
+      await s().markDone();
+      expect(s().selectedId).toBe(children[children.length - 2].id);
+    });
+
+    it("keeps unread updates unread when a failed clear is reverted", async () => {
+      const backend = s().backend!;
+      const real = backend.setDone.bind(backend);
+      const failOn = stackEvents()[0].id;
+      backend.setDone = (id, done) => (id === failOn && done ? Promise.reject(new Error("offline")) : real(id, done));
+      const unread = stackEvents().filter((e) => e.unread).map((e) => e.id);
+      expect(unread.length).toBeGreaterThan(1);
+      useStore.setState({ selectedId: "s:CA-420" });
+      await s().markDone();
+      await new Promise((r) => setTimeout(r));
+      expect(stackEvents().filter((e) => e.unread).map((e) => e.id)).toEqual(unread);
+    });
+
+    it("reverts the updates that changed when part of a stack action fails", async () => {
+      const backend = s().backend!;
+      const real = backend.setDone.bind(backend);
+      const failOn = stackEvents()[1].id;
+      backend.setDone = (id, done) => (id === failOn ? Promise.reject(new Error("offline")) : real(id, done));
+      s().select("s:CA-420");
+      await s().markDone();
+      await new Promise((r) => setTimeout(r));
+      expect(stackEvents()).toHaveLength(4);
+      expect(s().error).toContain("offline");
+    });
+
+    it("keeps unread updates unread when a snooze is undone", async () => {
+      const unread = stackEvents().filter((e) => e.unread).map((e) => e.id);
+      expect(unread.length).toBeGreaterThan(1);
+      useStore.setState({ selectedId: "s:CA-420" });
+      await s().snooze(new Date(Date.now() + 3600_000));
+      s().toast?.undo?.();
+      await new Promise((r) => setTimeout(r));
+      expect(stackEvents().filter((e) => e.unread).map((e) => e.id)).toEqual(unread);
+    });
+
+    it("restores each update's previous snooze on undo", async () => {
+      s().select("s:CA-420");
+      const first = new Date(Date.now() + 3600_000);
+      await s().snooze(first);
+      s().setView("snoozed");
+      s().select("s:CA-420");
+      await s().snooze(new Date(Date.now() + 7200_000));
+      s().toast?.undo?.();
+      await new Promise((r) => setTimeout(r));
+      const until = s().snap!.events.filter((e) => e.ticketKey === "CA-420" && e.doneAt === null).map((e) => e.snoozedUntil);
+      expect(until.every((u) => u === first.toISOString())).toBe(true);
+    });
+
+    it("expands into a stack's updates and collapses back to the stack", () => {
+      s().select("s:CA-420");
+      s().setStackOpen(true);
+      s().move(1);
+      expect(selectedEvent(s())?.ticketKey).toBe("CA-420");
+      s().setStackOpen(false);
+      expect(s().selectedId).toBe("s:CA-420");
+      expect(currentItems(s()).some((i) => i.inStack)).toBe(false);
+    });
+  });
+
   it("keeps the change summary while a ticket is open and clears it after leaving", async () => {
     expect(selectedTicket(s())?.changes).toHaveLength(1);
     s().move(1);

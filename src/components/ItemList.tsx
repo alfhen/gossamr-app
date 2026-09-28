@@ -30,7 +30,8 @@ export function ItemList() {
   }, [selectedId]);
 
   if (!snap) return null;
-  const unread = items.filter((i) => i.event?.unread).length;
+  const rows = items.filter((i) => !i.inStack);
+  const unread = rows.filter((i) => (i.stack ?? (i.event ? [i.event] : [])).some((e) => e.unread)).length;
   const label = VIEWS.find((v) => v.id === view)?.label;
 
   return (
@@ -39,7 +40,7 @@ export function ItemList() {
         <div data-tauri-drag-region>
           <h2 className="text-sm font-semibold">{project ? `${project} · ${label}` : label}</h2>
           <div className="text-sm text-ink-3">
-            {items.length ? (unread ? `${unread} unread · ${items.length} total` : `${items.length} items`) : ""}
+            {rows.length ? (unread ? `${unread} unread · ${rows.length} total` : `${rows.length} items`) : ""}
           </div>
         </div>
         <button
@@ -58,16 +59,27 @@ export function ItemList() {
             {(EMPTY[view] ?? ["", ""])[1]}
           </div>
         ) : (
-          items.map((it, i) => (
-            <Row
-              key={it.id}
-              item={it}
-              snap={snap}
-              groupStart={view === "mine" && snap.tickets[it.ticketKey].status.name !== snap.tickets[items[i - 1]?.ticketKey]?.status.name}
-              selected={it.id === selectedId}
-              onSelect={() => select(it.id)}
-            />
-          ))
+          items.map((it, i) => {
+            const selected = it.id === selectedId;
+            const onSelect = () => select(it.id);
+            if (it.stack) {
+              return <StackRow key={it.id} item={it} stack={it.stack} snap={snap} selected={selected} onSelect={onSelect} />;
+            }
+            if (it.inStack && it.event) {
+              const last = !items[i + 1]?.inStack;
+              return <StackedUpdate key={it.id} event={it.event} last={last} selected={selected} onSelect={onSelect} />;
+            }
+            return (
+              <Row
+                key={it.id}
+                item={it}
+                snap={snap}
+                groupStart={view === "mine" && snap.tickets[it.ticketKey].status.name !== snap.tickets[items[i - 1]?.ticketKey]?.status.name}
+                selected={selected}
+                onSelect={onSelect}
+              />
+            );
+          })
         )}
       </div>
     </section>
@@ -132,5 +144,161 @@ function Row({
         </span>
       </button>
     </>
+  );
+}
+
+const KIND_ORDER: InboxEvent["kind"][] = ["mention", "assigned", "comment", "status", "field"];
+const KIND_LABEL: Record<InboxEvent["kind"], [string, string]> = {
+  mention: ["mention", "mentions"],
+  assigned: ["assignment", "assignments"],
+  comment: ["comment", "comments"],
+  status: ["status change", "status changes"],
+  field: ["edit", "edits"],
+};
+
+function describeStack(stack: InboxEvent[]): string {
+  return KIND_ORDER.flatMap((k) => {
+    const n = stack.filter((e) => e.kind === k).length;
+    return n ? [`${n} ${KIND_LABEL[k][n > 1 ? 1 : 0]}`] : [];
+  }).join(", ");
+}
+
+function StackRow({
+  item,
+  stack,
+  snap,
+  selected,
+  onSelect,
+}: {
+  item: ListItem;
+  stack: InboxEvent[];
+  snap: Snapshot;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const now = useStore((s) => s.now);
+  const open = useStore((s) => s.expanded.has(item.ticketKey));
+  const toggle = () => {
+    onSelect();
+    useStore.getState().setStackOpen(!open);
+  };
+  const t = snap.tickets[item.ticketKey];
+  const latest = stack[0];
+  const unread = stack.filter((e) => e.unread).length;
+  const actors = [...new Map(stack.map((e) => [e.actor.accountId, e.actor])).values()];
+  const sub = selected ? "text-white/80" : "text-ink-2";
+  const peek = selected ? ["bg-accent/45", "bg-accent/20"] : ["border border-t-0 border-sep-strong bg-bar", "border border-t-0 border-sep-strong bg-side"];
+
+  return (
+    <div className={`relative mx-0.5 mt-1 ${open ? "mb-0.5" : "mb-2"}`}>
+      {!open && (
+        <>
+          <span aria-hidden className={`absolute inset-x-4 -bottom-[7px] h-3 rounded-b-lg ${peek[1]}`} />
+          <span aria-hidden className={`absolute inset-x-2 -bottom-[4px] h-3 rounded-b-lg ${peek[0]}`} />
+        </>
+      )}
+      <button
+        type="button"
+        role="option"
+        aria-selected={selected}
+        aria-expanded={open}
+        aria-label={`${t.key}, ${stack.length} updates`}
+        onClick={onSelect}
+        onDoubleClick={toggle}
+        className={`relative grid w-full grid-cols-[10px_26px_1fr] gap-2 rounded-lg border py-2 pr-2.5 pl-1.5 text-left ${
+          selected ? "border-accent bg-accent text-white" : "border-sep-strong bg-win hover:bg-bar"
+        }`}
+      >
+        <span className={`mt-[7px] size-2 rounded-full ${unread ? (selected ? "bg-white" : "bg-accent") : ""}`} />
+        <span className={`relative mt-px grid size-[26px] place-items-center rounded-full ${KIND_TONE[latest.kind]}`}>
+          <Icon name={EVENT_ICON[latest.kind]} className="size-3.5" />
+          <span
+            className={`absolute -right-1.5 -bottom-1 grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] font-bold tabular-nums ring-2 ${
+              selected ? "bg-white text-accent ring-accent" : "bg-ink text-win ring-win"
+            }`}
+          >
+            {stack.length}
+          </span>
+        </span>
+        <span className="min-w-0">
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className={`shrink-0 font-mono text-[11.5px] font-semibold ${sub}`}>{t.key}</span>
+            <span className="min-w-0 truncate font-semibold">{t.summary}</span>
+            <span className={`ml-auto shrink-0 text-[11.5px] tabular-nums ${selected ? "text-white/80" : "text-ink-3"}`}>
+              {relativeTime(latest.at, now)}
+            </span>
+          </span>
+          {!open && (
+            <span className={`mt-0.5 line-clamp-1 ${sub}`}>
+              {latest.actor.name.split(" ")[0]}: {latest.text}
+            </span>
+          )}
+          <span className={`mt-1 flex items-center gap-1.5 pr-7 text-[11.5px] ${selected ? "text-white/80" : "text-ink-3"}`}>
+            <span className="flex -space-x-1">
+              {actors.slice(0, 3).map((p) => (
+                <span key={p.accountId} className={`rounded-full ring-2 ${selected ? "ring-accent" : "ring-win"}`}>
+                  <Avatar person={p} size={16} />
+                </span>
+              ))}
+            </span>
+            <span className="min-w-0 truncate">
+              {unread ? <b className={selected ? "text-white" : "text-accent"}>{unread} new · </b> : null}
+              {describeStack(stack)}
+            </span>
+          </span>
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={toggle}
+        title={open ? "Collapse (←)" : "Expand (→)"}
+        aria-label={open ? `Collapse ${t.key}` : `Expand ${t.key}`}
+        className={`absolute right-1.5 bottom-1.5 grid size-6 place-items-center rounded-md ${
+          selected ? "text-white hover:bg-white/15" : "text-ink-3 hover:bg-hover hover:text-ink"
+        }`}
+      >
+        <Icon name="chevron" className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
+      </button>
+    </div>
+  );
+}
+
+function StackedUpdate({
+  event: e,
+  last,
+  selected,
+  onSelect,
+}: {
+  event: InboxEvent;
+  last: boolean;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const now = useStore((s) => s.now);
+  return (
+    <div className={`relative ml-[30px] pl-3 ${last ? "mb-2" : ""}`}>
+      <span aria-hidden className={`absolute top-0 left-0 w-px bg-sep-strong ${last ? "h-1/2" : "h-full"}`} />
+      <span aria-hidden className="absolute top-1/2 left-0 h-px w-2 bg-sep-strong" />
+      <button
+        type="button"
+        role="option"
+        aria-selected={selected}
+        onClick={onSelect}
+        className={`grid w-full grid-cols-[8px_20px_1fr] items-start gap-2 rounded-lg py-1.5 pr-2.5 pl-1 text-left ${selected ? "bg-accent text-white" : "hover:bg-hover"}`}
+      >
+        <span className={`mt-[6px] size-1.5 rounded-full ${e.unread ? (selected ? "bg-white" : "bg-accent") : ""}`} />
+        <span className={`grid size-5 place-items-center rounded-full ${KIND_TONE[e.kind]}`}>
+          <Icon name={EVENT_ICON[e.kind]} className="size-3" />
+        </span>
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className={`min-w-0 line-clamp-2 ${selected ? "text-white/90" : "text-ink-2"}`}>
+            <b className={selected ? "text-white" : "text-ink"}>{e.actor.name.split(" ")[0]}</b> {e.text}
+          </span>
+          <span className={`ml-auto shrink-0 text-[11.5px] tabular-nums ${selected ? "text-white/80" : "text-ink-3"}`}>
+            {relativeTime(e.at, now)}
+          </span>
+        </span>
+      </button>
+    </div>
   );
 }
