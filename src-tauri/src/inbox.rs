@@ -213,7 +213,15 @@ impl Core {
     }
 
     pub async fn snooze(&self, id: &str, until: Option<&str>) -> Result<()> {
-        self.with_db(|db| db.snooze(id, until)).await
+        // Stored in the same format as every other timestamp so string comparisons order correctly.
+        let until = until
+            .map(|u| {
+                chrono::DateTime::parse_from_rfc3339(u)
+                    .map(|d| d.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Secs, true))
+                    .map_err(|_| Error::Api { status: 400, message: format!("not a valid time: {u}") })
+            })
+            .transpose()?;
+        self.with_db(|db| db.snooze(id, until.as_deref())).await
     }
 
     /// The signed-in scope, for work that starts now.

@@ -1,4 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { useEffect, useRef, useState } from "react";
 import App from "./App";
 import { auth, type AuthStatus } from "./backend/auth";
@@ -25,6 +26,7 @@ export function Root() {
         () => mine === starts.current && setPhase({ name: "app" }),
         (e) => mine === starts.current && setPhase({ name: "error", message: `Couldn't load your inbox: ${e}` }),
       );
+    if (account) void askForNotifications();
   };
 
   const checkAuth = () => {
@@ -71,5 +73,13 @@ export function Root() {
       return <Setup status={phase.status} onSignedIn={start} onUseSampleData={() => start(null)} />;
     case "app":
       return <App />;
+  }
+}
+
+async function askForNotifications() {
+  try {
+    if (!(await isPermissionGranted())) await requestPermission();
+  } catch {
+    // The inbox works without notifications; the user can enable them later in System Settings.
   }
 }
