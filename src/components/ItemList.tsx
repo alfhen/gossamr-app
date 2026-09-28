@@ -73,9 +73,10 @@ export function ItemList() {
             type="button"
             title="Copy what you did in this range as standup notes"
             onClick={() =>
-              void navigator.clipboard
-                .writeText(standupNotes(snap, state.now, workDays))
-                .then(() => state.showToast("Copied standup notes"))
+              void navigator.clipboard.writeText(standupNotes(snap, state.now, workDays)).then(
+                () => state.showToast("Copied standup notes"),
+                (e) => useStore.setState({ error: `Couldn't copy standup notes: ${e instanceof Error ? e.message : String(e)}` }),
+              )
             }
             className={`ml-auto ${control}`}
           >
