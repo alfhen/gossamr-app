@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AdfNode } from "../types";
-import { Adf } from "./Adf";
+import { Adf, dateOf } from "./Adf";
 
 const doc = (...content: AdfNode[]): AdfNode => ({ type: "doc", content });
 const p = (...content: AdfNode[]): AdfNode => ({ type: "paragraph", content });
@@ -32,5 +32,18 @@ describe("Adf", () => {
     const out = html(doc(p({ type: "mention", attrs: { id: "1", text: "@Sam Holt" } }), { type: "somethingNew", content: [p(text("still here"))] }));
     expect(out).toContain("@Sam Holt");
     expect(out).toContain("still here");
+  });
+
+  it("keeps merged table cells", () => {
+    const cell = (type: string, attrs = {}): AdfNode => ({ type, attrs, content: [p(text("x"))] });
+    const out = html(doc({ type: "table", content: [{ type: "tableRow", content: [cell("tableHeader", { colspan: 2 }), cell("tableCell", { rowspan: 1 })] }] }));
+    expect(out).toMatch(/<th colspan="2"/i);
+    expect(out).not.toMatch(/rowspan/i);
+  });
+
+  it("reads date timestamps in seconds or milliseconds", () => {
+    expect(dateOf("1582152559")?.toISOString()).toBe("2020-02-19T22:49:19.000Z");
+    expect(dateOf("1582070400000")?.toISOString()).toBe("2020-02-19T00:00:00.000Z");
+    expect(dateOf("nope")).toBeNull();
   });
 });
