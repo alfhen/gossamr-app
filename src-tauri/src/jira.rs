@@ -19,8 +19,10 @@ const PAGE_SIZE: u32 = 50;
 const CHANGELOG_PAGE: u64 = 100;
 /// Bounds the changelog pages fetched per issue in one sync, so a ticket edited by automation can't stall it.
 const MAX_CHANGELOG_PAGES: usize = 10;
-/// Upper bound per search so a very broad JQL can't stall a sync.
-const MAX_ISSUES: usize = 300;
+/// Tickets the inbox tracks. Anything past this drops out of the inbox, so it is a sanity bound, not a page size.
+pub const TRACKED_LIMIT: usize = 2000;
+/// Tickets read for context, such as an epic's children, so a very broad JQL can't stall a sync.
+pub const CONTEXT_LIMIT: usize = 300;
 
 pub struct Jira {
     http: reqwest::Client,
@@ -59,9 +61,9 @@ impl Jira {
         }
     }
 
-    /// Runs a JQL search and returns every matching issue (up to a cap). With `history_since`, each issue carries its
+    /// Runs a JQL search and returns up to `limit` matching issues. With `history_since`, each issue carries its
     /// changelog back to at least that time (RFC 3339).
-    pub async fn search(&self, scope: &Scope, jql: &str, history_since: Option<&str>) -> Result<Vec<CachedTicket>> {
+    pub async fn search(&self, scope: &Scope, jql: &str, history_since: Option<&str>, limit: usize) -> Result<Vec<CachedTicket>> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Page {
@@ -89,7 +91,7 @@ impl Jira {
                 }
             }
             match page.next_page_token {
-                Some(t) if out.len() < MAX_ISSUES => token = Some(t),
+                Some(t) if out.len() < limit => token = Some(t),
                 _ => return Ok(out),
             }
         }

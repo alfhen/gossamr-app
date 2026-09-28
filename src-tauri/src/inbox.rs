@@ -9,7 +9,7 @@ use crate::auth::{Account, Auth, Scope, Site};
 use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, NewEvent};
-use crate::jira::Jira;
+use crate::jira::{Jira, CONTEXT_LIMIT, TRACKED_LIMIT};
 use crate::model::{CachedTicket, CreatedSubtasks, Person, Snapshot, Ticket, Transition};
 
 /// Tickets the user follows. Anything else only appears as context, e.g. the children of an epic they watch.
@@ -103,13 +103,13 @@ impl Core {
         let started = now_iso();
         let previous = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
         let unread_after = unread_cutoff(previous.as_deref());
-        let tracked = self.jira.search(&scope, TRACKED_JQL, Some(&unread_after)).await?;
+        let tracked = self.jira.search(&scope, TRACKED_JQL, Some(&unread_after), TRACKED_LIMIT).await?;
         let epics: Vec<&str> = tracked.iter().filter(|t| t.is_epic).map(|t| t.key.as_str()).collect();
         let context = if epics.is_empty() {
             Vec::new()
         } else {
             let jql = format!("parent in ({}) ORDER BY updated DESC", epics.join(","));
-            self.jira.search(&scope, &jql, None).await?
+            self.jira.search(&scope, &jql, None, CONTEXT_LIMIT).await?
         };
 
         self.with_db_for(&scope, |db| {
