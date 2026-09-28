@@ -52,7 +52,7 @@ export const SHORTCUTS: [string, string][] = [
   ["j / k", "Next / previous item"],
   ["t", "Transition"],
   ["s", "Snooze"],
-  ["e", "Mark done"],
+  ["e", "Clear from Inbox"],
   ["u", "Toggle unread"],
   ["c", "Comment"],
   ["o", "Open in Jira"],

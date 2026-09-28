@@ -12,7 +12,7 @@ export const VIEWS: { id: ViewId; label: string }[] = [
   { id: "mine", label: "My tickets" },
   { id: "watching", label: "Watching" },
   { id: "snoozed", label: "Snoozed" },
-  { id: "done", label: "Done" },
+  { id: "done", label: "Archive" },
 ];
 
 export function isSnoozed(e: InboxEvent, now: Date): boolean {

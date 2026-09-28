@@ -63,8 +63,8 @@ export function TicketDetail() {
                 Snooze <kbd>s</kbd>
               </ToolbarButton>
             </div>
-            <ToolbarButton title="Done (e)" onClick={() => void markDone()}>
-              {event.doneAt ? "Not done" : "Done"} <kbd>e</kbd>
+            <ToolbarButton title={event.doneAt ? "Move back to Inbox (e)" : "Clear from Inbox (e)"} onClick={() => void markDone()}>
+              {event.doneAt ? "Move to Inbox" : "Clear"} <kbd>e</kbd>
             </ToolbarButton>
           </>
         )}
