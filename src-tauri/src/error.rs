@@ -14,6 +14,8 @@ pub enum Error {
     NotConfigured,
     #[error("Not signed in to Jira")]
     NotSignedIn,
+    #[error("The signed-in Jira site changed; the result was discarded")]
+    SiteChanged,
     #[error("Sign-in failed: {0}")]
     Auth(String),
     #[error("Jira returned {status}: {message}")]
