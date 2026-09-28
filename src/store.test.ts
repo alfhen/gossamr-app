@@ -64,4 +64,23 @@ describe("store", () => {
     expect(s().view).toBe("mine");
     expect(selectedTicket(s())?.key).toBe("CA-412");
   });
+
+  it("does not open the transition menu without a selected ticket", () => {
+    s().select(null);
+    s().openOverlay("transition");
+    expect(s().overlay).toBeNull();
+  });
+
+  it("puts a snoozed item back in Snoozed when marking it done is undone", async () => {
+    const until = new Date(Date.now() + 3600_000);
+    await s().snooze(until);
+    s().setView("snoozed");
+    const id = selectedEvent(s())!.id;
+    await s().markDone();
+    s().toast?.undo?.();
+    await new Promise((r) => setTimeout(r, 0));
+    const ev = s().snap!.events.find((e) => e.id === id)!;
+    expect(ev.doneAt).toBeNull();
+    expect(ev.snoozedUntil).toBe(until.toISOString());
+  });
 });
