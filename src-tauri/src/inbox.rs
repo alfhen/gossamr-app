@@ -1,0 +1,215 @@
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use chrono::{Duration, SecondsFormat, Utc};
+use tokio::sync::Notify;
+
+use crate::auth::{Account, Auth, Site};
+use crate::db::Db;
+use crate::error::{Error, Result};
+use crate::events::{changes_since, derive, NewEvent};
+use crate::jira::Jira;
+use crate::model::{Person, Snapshot, Ticket, Transition};
+
+/// Tickets the user follows. Anything else only appears as context, e.g. the children of an epic they watch.
+const TRACKED_JQL: &str =
+    "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND updated >= -30d ORDER BY updated DESC";
+/// Events this old drop out of the inbox unless they are still unread.
+const EVENT_WINDOW_DAYS: i64 = 30;
+/// Before a ticket has been opened in the app, "since you last looked" covers this many days.
+const DEFAULT_SEEN_DAYS: i64 = 3;
+/// Leeway for clock differences between this machine and Jira when deciding what arrived since the last sync.
+const CLOCK_SKEW_MINUTES: i64 = 10;
+
+const LAST_SYNC: &str = "last_sync_at";
+
+pub fn now_iso() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn ago(d: Duration) -> String {
+    (Utc::now() - d).to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+pub struct Core {
+    pub auth: Arc<Auth>,
+    pub jira: Jira,
+    data_dir: PathBuf,
+    /// One database per Jira site, opened for whichever site is signed in.
+    db: Mutex<Option<(String, Db)>>,
+    last_error: Mutex<Option<String>>,
+    pub wake: Notify,
+}
+
+impl Core {
+    pub fn new(auth: Arc<Auth>, jira: Jira, data_dir: PathBuf) -> Self {
+        Self { auth, jira, data_dir, db: Mutex::new(None), last_error: Mutex::new(None), wake: Notify::new() }
+    }
+
+    async fn identity(&self) -> Result<(Site, Account)> {
+        self.auth.identity().await.ok_or(Error::NotSignedIn)
+    }
+
+    async fn with_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+        let (site, _) = self.identity().await?;
+        let mut guard = self.db.lock().expect("db lock poisoned");
+        if guard.as_ref().map(|(id, _)| id != &site.cloud_id).unwrap_or(true) {
+            let path = self.data_dir.join(format!("inbox-{}.sqlite", site.cloud_id));
+            *guard = Some((site.cloud_id.clone(), Db::open(&path)?));
+        }
+        f(&guard.as_ref().expect("opened above").1)
+    }
+
+    pub fn close_db(&self) {
+        *self.db.lock().expect("db lock poisoned") = None;
+    }
+
+    pub fn set_error(&self, e: Option<String>) {
+        *self.last_error.lock().expect("error lock poisoned") = e;
+    }
+
+    /// Fetches tracked tickets and epic children, stores them, and returns events that are new and unread.
+    /// The first sync for a site returns nothing, so connecting doesn't fire a burst of notifications.
+    pub async fn sync(&self) -> Result<Vec<NewEvent>> {
+        let (_, me) = self.identity().await?;
+        let started = now_iso();
+        let tracked = self.jira.search(TRACKED_JQL, true).await?;
+        let epics: Vec<&str> = tracked.iter().filter(|t| t.is_epic).map(|t| t.key.as_str()).collect();
+        let context = if epics.is_empty() {
+            Vec::new()
+        } else {
+            let jql = format!("parent in ({}) ORDER BY updated DESC", epics.join(","));
+            self.jira.search(&jql, false).await?
+        };
+
+        self.with_db(|db| {
+            let previous = db.meta(LAST_SYNC)?;
+            let unread_after = match &previous {
+                Some(at) => (chrono::DateTime::parse_from_rfc3339(at).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now())
+                    - Duration::minutes(CLOCK_SKEW_MINUTES))
+                .to_rfc3339_opts(SecondsFormat::Secs, true),
+                None => ago(Duration::hours(24)),
+            };
+            let tracked_keys: std::collections::HashSet<&str> = tracked.iter().map(|t| t.key.as_str()).collect();
+            for t in tracked.iter().chain(context.iter().filter(|t| !tracked_keys.contains(t.key.as_str()))) {
+                db.upsert_ticket(t, &started)?;
+            }
+            let derived: Vec<NewEvent> = tracked.iter().flat_map(|t| derive(t, &me.account_id)).collect();
+            let fresh = db.insert_events(&derived, &unread_after)?;
+            db.set_meta(LAST_SYNC, &started)?;
+            Ok(if previous.is_some() { fresh } else { Vec::new() })
+        })
+        .await
+    }
+
+    /// Re-reads one issue after a write so the UI shows the result without waiting for the next sync.
+    async fn refresh(&self, key: &str) -> Result<()> {
+        let (_, me) = self.identity().await?;
+        let t = self.jira.issue(key).await?;
+        self.with_db(|db| {
+            db.upsert_ticket(&t, &now_iso())?;
+            let since = db.meta(LAST_SYNC)?.unwrap_or_else(now_iso);
+            db.insert_events(&derive(&t, &me.account_id), &since)?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn snapshot(&self) -> Result<Snapshot> {
+        let (site, me) = self.identity().await?;
+        let sync_error = self.last_error.lock().expect("error lock poisoned").clone();
+        self.with_db(|db| {
+            let last_sync = db.meta(LAST_SYNC)?;
+            // Tickets refreshed within a day of the last sync; older ones have dropped out of every query.
+            let cutoff = last_sync
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|d| (d.with_timezone(&Utc) - Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true))
+                .unwrap_or_default();
+            let cached = db.tickets(&cutoff)?;
+            let seen = db.seen()?;
+            let default_since = ago(Duration::days(DEFAULT_SEEN_DAYS));
+
+            let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for t in &cached {
+                if let Some(p) = &t.parent {
+                    children.entry(p.key.clone()).or_default().push(t.key.clone());
+                }
+            }
+            let watching = cached.iter().filter(|t| t.watching).map(|t| t.key.clone()).collect();
+            let tickets = cached
+                .into_iter()
+                .map(|t| {
+                    let since = seen.get(&t.key).cloned().unwrap_or_else(|| default_since.clone());
+                    let ticket = Ticket {
+                        changes: changes_since(&t, &me.account_id, &since),
+                        children: if t.is_epic { children.remove(&t.key).unwrap_or_default() } else { Vec::new() },
+                        url: format!("{}/browse/{}", site.url.trim_end_matches('/'), t.key),
+                        key: t.key,
+                        summary: t.summary,
+                        issue_type: t.issue_type,
+                        status: t.status,
+                        priority: t.priority,
+                        assignee: t.assignee,
+                        reporter: t.reporter,
+                        parent: t.parent,
+                        description: t.description,
+                        comments: t.comments,
+                        subtasks: t.subtasks,
+                        due_date: t.due_date,
+                        sprint: None,
+                        updated: t.updated,
+                    };
+                    (ticket.key.clone(), ticket)
+                })
+                .collect();
+
+            Ok(Snapshot {
+                me: Person { account_id: me.account_id.clone(), name: me.name.clone(), avatar_url: me.avatar_url.clone() },
+                site: site.name.clone(),
+                tickets,
+                events: db.events(&ago(Duration::days(EVENT_WINDOW_DAYS)))?,
+                watching,
+                last_sync_at: last_sync,
+                sync_error,
+            })
+        })
+        .await
+    }
+
+    pub async fn mark_seen(&self, key: &str) -> Result<()> {
+        self.with_db(|db| db.mark_seen(key, &now_iso())).await
+    }
+
+    pub async fn set_unread(&self, id: &str, unread: bool) -> Result<()> {
+        self.with_db(|db| db.set_unread(id, unread)).await
+    }
+
+    pub async fn set_done(&self, id: &str, done: bool) -> Result<()> {
+        let at = done.then(now_iso);
+        self.with_db(|db| db.set_done(id, at.as_deref())).await
+    }
+
+    pub async fn snooze(&self, id: &str, until: Option<&str>) -> Result<()> {
+        self.with_db(|db| db.snooze(id, until)).await
+    }
+
+    pub async fn transitions(&self, key: &str) -> Result<Vec<Transition>> {
+        self.jira.transitions(key).await
+    }
+
+    pub async fn transition(&self, key: &str, transition_id: &str) -> Result<()> {
+        self.jira.transition(key, transition_id).await?;
+        self.refresh(key).await
+    }
+
+    pub async fn comment(&self, key: &str, body: &str) -> Result<()> {
+        let body = body.trim();
+        if body.is_empty() {
+            return Err(Error::Api { status: 400, message: "a comment can't be empty".into() });
+        }
+        self.jira.comment(key, body).await?;
+        self.refresh(key).await
+    }
+}

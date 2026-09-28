@@ -82,12 +82,15 @@ function useClock() {
   }, [tick]);
 }
 
-/** When the selected inbox item leaves the list (done, snoozed, filtered out), select the first remaining one. */
+/**
+ * Selects the first item when nothing is selected yet (e.g. the first sync just arrived), or when the selected
+ * inbox item leaves the list (done, snoozed, filtered out).
+ */
 function useSelectionFallback() {
   const state = useStore();
   const items = currentItems(state);
   const { selectedId, select } = state;
-  const missing = selectedId?.startsWith("e:") && !items.some((i) => i.id === selectedId);
+  const missing = (!selectedId || selectedId.startsWith("e:")) && !items.some((i) => i.id === selectedId);
   const first = items[0]?.id ?? null;
   useEffect(() => {
     if (missing) select(first);

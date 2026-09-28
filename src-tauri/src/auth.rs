@@ -13,6 +13,7 @@ use crate::secrets;
 pub const CALLBACK_PORT: u16 = 8723;
 pub const SCOPES: &str = "read:jira-work write:jira-work read:jira-user offline_access";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+const REFRESH_MARGIN_SECS: u64 = 60;
 
 const APP_KEY: &str = "oauth-app";
 const SESSION_KEY: &str = "session";
@@ -32,6 +33,12 @@ struct Tokens {
     access_token: String,
     refresh_token: String,
     expires_at: u64,
+}
+
+impl Tokens {
+    fn needs_refresh(&self, now: u64) -> bool {
+        self.expires_at <= now + REFRESH_MARGIN_SECS
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -65,6 +72,12 @@ pub struct AuthStatus {
     pub scopes: &'static str,
     pub site: Option<Site>,
     pub me: Option<Account>,
+}
+
+/// What the Jira client needs for one request.
+pub struct Credentials {
+    pub access_token: String,
+    pub cloud_id: String,
 }
 
 pub struct Auth {
@@ -138,6 +151,30 @@ impl Auth {
         secrets::delete(SESSION_KEY)?;
         *self.session.lock().await = None;
         Ok(())
+    }
+
+    /// The signed-in site and account, if any.
+    pub async fn identity(&self) -> Option<(Site, Account)> {
+        self.session.lock().await.as_ref().map(|s| (s.site.clone(), s.me.clone()))
+    }
+
+    /// Returns a valid access token, refreshing it when it is about to expire or when `force` is set (after a 401).
+    pub async fn credentials(&self, force: bool) -> Result<Credentials> {
+        // Holding the lock across the refresh stops concurrent requests from spending the same rotating refresh token twice.
+        let mut guard = self.session.lock().await;
+        let session = guard.as_mut().ok_or(Error::NotSignedIn)?;
+        if force || session.tokens.needs_refresh(unix_now()) {
+            let app: OAuthApp = secrets::load(APP_KEY)?.ok_or(Error::NotConfigured)?;
+            let refresh = session.tokens.refresh_token.clone();
+            session.tokens = self
+                .exchange(&app, &[("grant_type", "refresh_token"), ("refresh_token", &refresh)], Some(&refresh))
+                .await?;
+            secrets::save(SESSION_KEY, &*session)?;
+        }
+        Ok(Credentials {
+            access_token: session.tokens.access_token.clone(),
+            cloud_id: session.site.cloud_id.clone(),
+        })
     }
 
     async fn exchange(&self, app: &OAuthApp, grant: &[(&str, &str)], previous_refresh: Option<&str>) -> Result<Tokens> {
@@ -374,6 +411,13 @@ mod tests {
         assert_eq!(parse_callback("GET /favicon.ico HTTP/1.1", "st"), Callback::Ignore);
         assert_eq!(parse_callback("POST /callback HTTP/1.1", "st"), Callback::Ignore);
         assert_eq!(parse_callback("", "st"), Callback::Ignore);
+    }
+
+    #[test]
+    fn refreshes_a_minute_before_expiry() {
+        let t = Tokens { access_token: "a".into(), refresh_token: "r".into(), expires_at: 1_000 };
+        assert!(!t.needs_refresh(900));
+        assert!(t.needs_refresh(941));
     }
 
     #[test]

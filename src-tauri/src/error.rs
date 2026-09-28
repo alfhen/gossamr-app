@@ -12,6 +12,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("Add your Atlassian OAuth app's client ID and secret first")]
     NotConfigured,
+    #[error("Not signed in to Jira")]
+    NotSignedIn,
     #[error("Sign-in failed: {0}")]
     Auth(String),
     #[error("Jira returned {status}: {message}")]

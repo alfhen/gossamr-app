@@ -2,6 +2,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import App from "./App";
 import { auth, type AuthStatus } from "./backend/auth";
+import { JiraBackend } from "./backend/jira";
 import { MockBackend } from "./backend/mock";
 import { Setup } from "./components/Setup";
 import { useStore } from "./store";
@@ -12,8 +13,9 @@ export function Root() {
   const [phase, setPhase] = useState<Phase>({ name: "loading" });
 
   const start = (status: AuthStatus | null) => {
-    useStore.setState({ account: status?.site && status.me ? { site: status.site, me: status.me } : null });
-    void useStore.getState().init(new MockBackend());
+    const account = status?.site && status.me ? { site: status.site, me: status.me } : null;
+    useStore.setState({ account });
+    void useStore.getState().init(account ? new JiraBackend() : new MockBackend());
     setPhase({ name: "app" });
   };
 

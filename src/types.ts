@@ -81,6 +81,8 @@ export interface Snapshot {
   events: InboxEvent[];
   watching: string[];
   lastSyncAt: string | null;
+  /** The last sync's error message, cleared by the next successful sync. */
+  syncError?: string | null;
 }
 
 export type ViewId = "inbox" | "mentions" | "mine" | "watching" | "snoozed" | "done";
