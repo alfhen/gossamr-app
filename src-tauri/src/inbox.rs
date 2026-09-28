@@ -8,7 +8,7 @@ use tokio::sync::Notify;
 use crate::auth::{Account, Auth, Scope, Site};
 use crate::db::Db;
 use crate::error::{Error, Result};
-use crate::events::{changes_since, derive, NewEvent};
+use crate::events::{changes_since, derive, my_actions, NewEvent};
 use crate::jira::{Jira, CONTEXT_LIMIT, TRACKED_LIMIT};
 use crate::model::{Attachment, CachedTicket, CreatedSubtasks, Person, Snapshot, Ticket, Transition, Uploaded};
 
@@ -17,6 +17,8 @@ const TRACKED_JQL: &str =
     "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND updated >= -30d ORDER BY updated DESC";
 /// Events this old drop out of the inbox unless they are still unread.
 const EVENT_WINDOW_DAYS: i64 = 30;
+/// How far back My work can reach.
+const ACTIVITY_DAYS: i64 = 30;
 /// Before a ticket has been opened in the app, "since you last looked" covers this many days.
 const DEFAULT_SEEN_DAYS: i64 = 3;
 /// Leeway for clock differences between this machine and Jira when deciding what arrived since the last sync.
@@ -123,6 +125,7 @@ impl Core {
             }
             let derived: Vec<NewEvent> = tracked.iter().flat_map(|t| derive(t, &me.account_id)).collect();
             let fresh = db.insert_events(&derived, &unread_after)?;
+            db.insert_activity(&tracked.iter().flat_map(|t| my_actions(t, &me.account_id)).collect::<Vec<_>>())?;
             db.set_meta(LAST_SYNC, &started)?;
             Ok(if previous.is_some() { fresh } else { Vec::new() })
         })
@@ -137,6 +140,7 @@ impl Core {
         self.with_db_for(scope, |db| {
             db.upsert_ticket(&t, &now_iso())?;
             db.insert_events(&derive(&t, &scope.account_id), &since)?;
+            db.insert_activity(&my_actions(&t, &scope.account_id))?;
             Ok(())
         })
         .await
@@ -189,6 +193,7 @@ impl Core {
                         due_date: t.due_date,
                         sprint: None,
                         updated: t.updated,
+                        resolved: t.resolved,
                     };
                     (ticket.key.clone(), ticket)
                 })
@@ -202,6 +207,7 @@ impl Core {
                 watching,
                 last_sync_at: last_sync,
                 sync_error,
+                activity: db.activity(&ago(Duration::days(ACTIVITY_DAYS)))?,
             })
         })
         .await

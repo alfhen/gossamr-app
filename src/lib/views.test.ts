@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InboxEvent, Snapshot, Ticket } from "../types";
-import { itemsForView, relativeTime, snoozeOptions, stackByTicket, statusTone, viewCounts } from "./views";
+import { age, describeActions, itemsForView, myWork, standupNotes, witherLevel, WITHER_DAYS, relativeTime, snoozeOptions, stackByTicket, statusTone, viewCounts, waitingOnMe } from "./views";
 
 const now = new Date("2026-09-28T12:00:00Z");
 const me = { accountId: "me", name: "Me" };
@@ -47,6 +47,102 @@ const snap = (events: InboxEvent[], tickets: Ticket[] = [ticket("A-1"), ticket("
   events,
   watching: ["B-1"],
   lastSyncAt: null,
+});
+
+describe("waitingOnMe", () => {
+  const reply = (at: string) => ({ id: at, author: me, created: at, body: "" });
+
+  it("lists unanswered mentions, even cleared ones, longest wait first", () => {
+    const s = snap(
+      [
+        event("new", { kind: "mention", at: "2026-09-28T11:00:00Z" }),
+        event("cleared", { kind: "mention", ticketKey: "B-1", at: "2026-09-27T09:00:00Z", doneAt: "2026-09-27T10:00:00Z" }),
+      ],
+      [ticket("A-1"), ticket("B-1")],
+    );
+    expect(waitingOnMe(s).map((i) => [i.ticketKey, i.waiting?.reason])).toEqual([
+      ["B-1", "question"],
+      ["A-1", "question"],
+    ]);
+  });
+
+  it("drops a mention once I've replied after it", () => {
+    const s = snap([event("m", { kind: "mention", at: "2026-09-28T09:00:00Z" })], [ticket("A-1", { comments: [reply("2026-09-28T10:00:00Z")] })]);
+    expect(waitingOnMe(s)).toEqual([]);
+  });
+
+  it("lists my unstarted tickets and tickets I reported that are in review", () => {
+    const s = snap(
+      [],
+      [
+        ticket("A-1", { assignee: me }),
+        ticket("B-1", { reporter: me, assignee: other, status: { name: "In Review", category: "indeterminate" } }),
+        ticket("C-1", { assignee: me, status: { name: "Done", category: "done" } }),
+      ],
+    );
+    expect(waitingOnMe(s).map((i) => i.waiting?.reason).sort()).toEqual(["review", "unstarted"]);
+  });
+});
+
+describe("myWork", () => {
+  const done = { name: "Done", category: "done" } as const;
+  const action = (ticketKey: string, at: string, kind: "comment" | "transition" = "transition", text = "To Do → In Progress") => ({
+    ticketKey,
+    at,
+    kind,
+    text,
+  });
+
+  it("sections my open tickets, those resolved in range and others I worked on", () => {
+    const s = {
+      ...snap(
+        [],
+        [
+          ticket("A-1", { assignee: me, status: { name: "In Progress", category: "indeterminate" } }),
+          ticket("A-2", { assignee: me }),
+          ticket("A-3", { assignee: me, status: done, resolved: "2026-09-27T10:00:00Z" }),
+          ticket("A-4", { assignee: me, status: done, resolved: "2026-08-01T10:00:00Z", updated: "2026-08-01T10:00:00Z" }),
+          ticket("B-1", { assignee: other }),
+          ticket("B-2", { assignee: other }),
+        ],
+      ),
+      activity: [action("B-1", "2026-09-28T09:00:00Z", "comment", "")],
+    };
+    expect(myWork(s, now, 7).map((i) => [i.ticketKey, i.work?.section])).toEqual([
+      ["A-1", "In progress"],
+      ["A-2", "To do"],
+      ["A-3", "Done"],
+      ["B-1", "Also worked on"],
+    ]);
+  });
+
+  it("counts only actions inside the range and groups the standup by day", () => {
+    const s = {
+      ...snap([], [ticket("A-1", { comments: [{ id: "c", author: me, created: "2026-09-28T10:00:00Z", body: "" }] })]),
+      activity: [action("A-1", "2026-09-28T09:00:00Z"), action("A-1", "2026-09-01T09:00:00Z")],
+    };
+    const [item] = myWork(s, now, 7);
+    expect(describeActions(item.work!.actions)).toBe("moved to In Progress, commented");
+    expect(standupNotes(s, now, 7)).toBe("Today\n- A-1 A-1: moved to In Progress, commented");
+    expect(myWork(s, new Date("2026-10-20T12:00:00Z"), 7)).toEqual([]);
+  });
+});
+
+describe("witherLevel", () => {
+  it.each([
+    ["2026-09-27T12:00:00Z", 0],
+    ["2026-09-26T12:00:00Z", 1],
+    ["2026-09-25T12:00:00Z", 2],
+    ["2026-09-23T12:00:00Z", 3],
+    ["2026-09-21T12:00:00Z", 4],
+    ["2026-09-10T12:00:00Z", 5],
+  ] as const)("an open ticket last updated %s has withered to level %i", (updated, level) => {
+    expect(witherLevel(updated, now, WITHER_DAYS.ticket)).toBe(level);
+  });
+
+  it("shows ages in their largest whole unit", () => {
+    expect([age("2026-09-28T11:20:00Z", now), age("2026-09-28T07:00:00Z", now), age("2026-09-16T12:00:00Z", now)]).toEqual(["40m", "5h", "12d"]);
+  });
 });
 
 describe("stackByTicket", () => {
@@ -97,7 +193,7 @@ describe("itemsForView", () => {
       ticket("A-2", { assignee: me, status: { name: "In Progress", category: "indeterminate" } }),
       ticket("A-3", { assignee: other }),
     ]);
-    expect(itemsForView(s, "mine", null, now).map((i) => i.ticketKey)).toEqual(["A-2", "A-1"]);
+    expect(itemsForView(s, "work", null, now).map((i) => i.ticketKey)).toEqual(["A-2", "A-1"]);
   });
 });
 
@@ -113,7 +209,7 @@ describe("viewCounts", () => {
       ],
       [ticket("A-1", { assignee: me }), ticket("B-1", { assignee: me, status: { name: "Done", category: "done" } })],
     );
-    expect(viewCounts(s, now)).toMatchObject({ inbox: 2, mentions: 1, mine: 1, done: 1, snoozed: 0 });
+    expect(viewCounts(s, now)).toMatchObject({ inbox: 2, work: 1, done: 1, snoozed: 0 });
   });
 });
 

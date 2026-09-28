@@ -22,6 +22,8 @@ interface State {
   view: ViewId;
   project: string | null;
   selectedId: string | null;
+  /** How many days back My work reaches, including today. */
+  workDays: number;
   /** Tickets whose stack of updates is shown expanded. */
   expanded: ReadonlySet<string>;
   overlay: Overlay;
@@ -35,6 +37,7 @@ interface Actions {
   setView(view: ViewId, project?: string | null): void;
   select(id: string | null): void;
   move(delta: 1 | -1): void;
+  setWorkDays(days: number): void;
   /** Expands or collapses the stack the selection is in. */
   setStackOpen(open: boolean): void;
   openOverlay(o: Overlay): void;
@@ -83,6 +86,7 @@ export const useStore = create<Store>()((set, get) => {
     view: "inbox",
     project: null,
     selectedId: null,
+    workDays: 7,
     expanded: new Set(),
     overlay: null,
     toast: null,
@@ -165,6 +169,10 @@ export const useStore = create<Store>()((set, get) => {
       else expanded.delete(item.ticketKey);
       set({ expanded });
       if (!open) get().select(`s:${item.ticketKey}`);
+    },
+
+    setWorkDays(workDays) {
+      set({ workDays });
     },
 
     openOverlay(overlay) {
@@ -265,7 +273,7 @@ export const useStore = create<Store>()((set, get) => {
       const here = currentItems(s).find((i) => i.ticketKey === key);
       if (here) return s.select(here.id);
       const mine = s.snap.tickets[key].assignee?.accountId === s.snap.me.accountId;
-      const view: ViewId = mine ? "mine" : "watching";
+      const view: ViewId = mine ? "work" : "watching";
       set({ view, project: null, overlay: null });
       const found = currentItems(get()).find((i) => i.ticketKey === key);
       get().select(found?.id ?? `t:${key}`);
@@ -278,8 +286,8 @@ function ticketKeyOf(id: string, snap: Snapshot): string | null {
   return snap.events.find((e) => `e:${e.id}` === id)?.ticketKey ?? null;
 }
 
-export function currentItems(s: Pick<State, "snap" | "view" | "project" | "now" | "expanded">): ListItem[] {
-  return s.snap ? stackByTicket(itemsForView(s.snap, s.view, s.project, s.now), s.expanded) : [];
+export function currentItems(s: Pick<State, "snap" | "view" | "project" | "now" | "expanded" | "workDays">): ListItem[] {
+  return s.snap ? stackByTicket(itemsForView(s.snap, s.view, s.project, s.now, s.workDays), s.expanded) : [];
 }
 
 export function selectedTicket(s: State): Ticket | null {

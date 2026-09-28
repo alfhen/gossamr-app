@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
-import { relativeTime, VIEWS, type ListItem } from "../lib/views";
+import { useEffect, useRef, type ReactNode } from "react";
+import { age, describeActions, INBOX_TABS, WITHER_DAYS, witherLevel, type WitherLevel, isInboxView, relativeTime, standupNotes, viewCounts, VIEWS, WORK_RANGES, type ListItem, type Waiting } from "../lib/views";
 import { currentItems, useStore } from "../store";
 import type { InboxEvent, Snapshot } from "../types";
 import { EVENT_ICON, Icon } from "./icons";
+import { Cobweb } from "./Cobweb";
 import { Avatar, StatusPill } from "./primitives";
 
 const KIND_TONE: Record<InboxEvent["kind"], string> = {
@@ -17,11 +18,13 @@ const EMPTY: Partial<Record<string, [string, string]>> = {
   inbox: ["Inbox zero", "New mentions, assignments and changes on your tickets land here."],
   snoozed: ["Nothing snoozed", "Press s on an item to bring it back later."],
   done: ["Archive is empty", "Press e to clear an item from your inbox."],
+  waiting: ["Nobody is waiting on you", "Unanswered mentions, tickets you haven't started and reviews on tickets you reported show up here."],
+  work: ["Nothing in this range", "Tickets assigned to you, and anything else you worked on, show up here."],
 };
 
 export function ItemList() {
   const state = useStore();
-  const { snap, view, project, selectedId, select, openOverlay } = state;
+  const { snap, view, project, selectedId, select, openOverlay, setView, workDays, setWorkDays } = state;
   const items = currentItems(state);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -32,25 +35,78 @@ export function ItemList() {
   if (!snap) return null;
   const rows = items.filter((i) => !i.inStack);
   const unread = rows.filter((i) => (i.stack ?? (i.event ? [i.event] : [])).some((e) => e.unread)).length;
-  const label = VIEWS.find((v) => v.id === view)?.label;
+  const inbox = isInboxView(view);
+  const label = inbox ? "Inbox" : VIEWS.find((v) => v.id === view)?.label;
+  const counts = viewCounts(snap, state.now);
+  const control = "rounded-[7px] border border-field-border bg-field px-2 py-0.5 text-sm whitespace-nowrap hover:bg-hover";
 
   return (
     <section className="flex min-h-0 flex-col border-r border-sep bg-win">
       <header data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-2 border-b border-sep bg-bar px-3 max-[1040px]:pl-20">
         <div data-tauri-drag-region>
-          <h2 className="text-sm font-semibold">{project ? `${project} · ${label}` : label}</h2>
+          <h2 className="text-sm font-semibold whitespace-nowrap">{project ? `${project} · ${label}` : label}</h2>
           <div className="text-sm text-ink-3">
             {rows.length ? (unread ? `${unread} unread · ${rows.length} total` : `${rows.length} items`) : ""}
           </div>
         </div>
+        <div className="ml-auto flex items-center gap-1.5">
         <button
           type="button"
           onClick={() => openOverlay("palette")}
-          className="ml-auto flex items-center gap-1.5 rounded-[7px] border border-field-border bg-field px-2 py-0.5 text-sm text-ink-3"
+          className="flex items-center gap-1.5 rounded-[7px] border border-field-border bg-field px-2 py-0.5 text-sm text-ink-3"
         >
           <Icon name="search" className="size-3" /> Search <kbd>⌘K</kbd>
         </button>
+        </div>
       </header>
+
+      {view === "work" && (
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-sep bg-bar px-2 py-1.5">
+          <select aria-label="Date range" value={workDays} onChange={(e) => setWorkDays(Number(e.target.value))} className={control}>
+            {WORK_RANGES.map((r) => (
+              <option key={r.days} value={r.days}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            title="Copy what you did in this range as standup notes"
+            onClick={() =>
+              void navigator.clipboard
+                .writeText(standupNotes(snap, state.now, workDays))
+                .then(() => state.showToast("Copied standup notes"))
+            }
+            className={`ml-auto ${control}`}
+          >
+            Copy standup
+          </button>
+        </div>
+      )}
+
+      {inbox && (
+        <nav role="tablist" aria-label="Inbox" className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-sep bg-bar px-2 py-1.5">
+          {INBOX_TABS.map((t) => {
+            const n = t.id === "done" ? 0 : counts[t.id];
+            const current = view === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={current}
+                onClick={() => setView(t.id, project)}
+                className={`flex shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-sm whitespace-nowrap ${
+                  current ? "bg-win font-semibold shadow-[0_0_0_1px_var(--color-sep-strong)]" : "text-ink-2 hover:bg-hover"
+                }`}
+              >
+                {t.label}
+                {n > 0 && <span className={`tabular-nums ${t.id === "inbox" || t.id === "waiting" ? "text-accent" : "text-ink-3"}`}>{n}</span>}
+              </button>
+            );
+          })}
+        </nav>
+      )}
 
       <div ref={listRef} role="listbox" aria-label={label} className="min-h-0 flex-1 overflow-auto p-1.5">
         {items.length === 0 ? (
@@ -65,19 +121,20 @@ export function ItemList() {
             if (it.stack) {
               return <StackRow key={it.id} item={it} stack={it.stack} snap={snap} selected={selected} onSelect={onSelect} />;
             }
+            if (it.waiting) {
+              return <WaitingRow key={it.id} item={it} waiting={it.waiting} snap={snap} selected={selected} onSelect={onSelect} />;
+            }
+            if (it.work) {
+              const sectionStart = items[i - 1]?.work?.section !== it.work.section;
+              const count = sectionStart ? items.filter((x) => x.work?.section === it.work!.section).length : 0;
+              return <WorkRow key={it.id} item={it} snap={snap} sectionCount={count} selected={selected} onSelect={onSelect} />;
+            }
             if (it.inStack && it.event) {
               const last = !items[i + 1]?.inStack;
               return <StackedUpdate key={it.id} event={it.event} last={last} selected={selected} onSelect={onSelect} />;
             }
             return (
-              <Row
-                key={it.id}
-                item={it}
-                snap={snap}
-                groupStart={view === "mine" && snap.tickets[it.ticketKey].status.name !== snap.tickets[items[i - 1]?.ticketKey]?.status.name}
-                selected={selected}
-                onSelect={onSelect}
-              />
+              <Row key={it.id} item={it} snap={snap} selected={selected} onSelect={onSelect} />
             );
           })
         )}
@@ -90,13 +147,11 @@ function Row({
   item,
   snap,
   selected,
-  groupStart,
   onSelect,
 }: {
   item: ListItem;
   snap: Snapshot;
   selected: boolean;
-  groupStart: boolean;
   onSelect: () => void;
 }) {
   const now = useStore((s) => s.now);
@@ -108,11 +163,6 @@ function Row({
 
   return (
     <>
-      {groupStart && (
-        <div className="px-2.5 pt-3 pb-1">
-          <StatusPill status={t.status} />
-        </div>
-      )}
       <button
         type="button"
         role="option"
@@ -140,7 +190,14 @@ function Row({
               </span>
             )}
           </span>
-          <span className={`mt-0.5 line-clamp-2 ${sub}`}>{what}</span>
+          {e ? (
+            <span className={`mt-0.5 line-clamp-2 ${sub}`}>{what}</span>
+          ) : (
+            <span className={`mt-0.5 flex min-w-0 items-center gap-1.5 ${sub}`}>
+              <StatusPill status={t.status} />
+              <span className="min-w-0 truncate">{what}</span>
+            </span>
+          )}
         </span>
       </button>
     </>
@@ -300,5 +357,135 @@ function StackedUpdate({
         </span>
       </button>
     </div>
+  );
+}
+
+const WAITING_LABEL: Record<Waiting["reason"], (who: string) => string> = {
+  question: (who) => `${who} asked you something`,
+  review: (who) => `${who} sent your ticket to review`,
+  unstarted: (who) => `${who} assigned it to you · not started`,
+};
+
+function WaitingRow({
+  item,
+  waiting: w,
+  snap,
+  selected,
+  onSelect,
+}: {
+  item: ListItem;
+  waiting: Waiting;
+  snap: Snapshot;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const now = useStore((s) => s.now);
+  const t = snap.tickets[item.ticketKey];
+  const level = witherLevel(w.since, now, WITHER_DAYS.waiting);
+  const sub = selected ? "text-white/80" : "text-ink-2";
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={selected}
+      onClick={onSelect}
+      className={`grid w-full grid-cols-[26px_1fr] gap-2 rounded-lg py-2 pr-2.5 pl-2 text-left ${selected ? "bg-accent text-white" : "hover:bg-hover"} ${witherClass(level)}`}
+    >
+      <Cobweb level={level} />
+      <span className="mt-0.5">
+        <Avatar person={w.who} size={24} />
+      </span>
+      <span className="min-w-0">
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className={`shrink-0 font-mono text-[11.5px] font-semibold ${sub}`}>{t.key}</span>
+          <span className="min-w-0 truncate font-semibold">{t.summary}</span>
+        </span>
+        <span className={`mt-0.5 flex items-center gap-1.5 ${sub}`}>
+          <span className="min-w-0 truncate">{WAITING_LABEL[w.reason](w.who?.name.split(" ")[0] ?? "Someone")}</span>
+          <Age level={level} selected={selected} title={`Waiting on you since ${new Date(w.since).toLocaleString()}`}>
+            {age(w.since, now)}
+          </Age>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function WorkRow({
+  item,
+  snap,
+  sectionCount,
+  selected,
+  onSelect,
+}: {
+  item: ListItem;
+  snap: Snapshot;
+  /** Set on the first row of a section, which then shows the section heading. */
+  sectionCount: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const now = useStore((s) => s.now);
+  const t = snap.tickets[item.ticketKey];
+  const { section, actions, latest } = item.work!;
+  const sub = selected ? "text-white/80" : "text-ink-2";
+  const did = describeActions(actions);
+  const open = section === "In progress" || section === "To do";
+  const level = open ? witherLevel(t.updated, now, WITHER_DAYS.ticket) : 0;
+  return (
+    <>
+      {sectionCount > 0 && (
+        <div className="flex items-baseline gap-1.5 px-2.5 pt-3 pb-1 text-xs font-semibold text-ink-3">
+          {section} <span className="font-normal tabular-nums">{sectionCount}</span>
+        </div>
+      )}
+      <button
+        type="button"
+        role="option"
+        aria-selected={selected}
+        onClick={onSelect}
+        className={`grid w-full grid-cols-[26px_1fr] gap-2 rounded-lg py-2 pr-2.5 pl-2 text-left ${selected ? "bg-accent text-white" : "hover:bg-hover"} ${witherClass(level)}`}
+      >
+        <Cobweb level={level} />
+        <span className="mt-0.5">
+          <Avatar person={t.assignee} size={22} />
+        </span>
+        <span className="min-w-0">
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className={`shrink-0 font-mono text-[11.5px] font-semibold ${sub}`}>{t.key}</span>
+            <span className="min-w-0 truncate font-semibold">{t.summary}</span>
+            {level === 0 && (
+              <span className={`ml-auto shrink-0 text-[11.5px] tabular-nums ${selected ? "text-white/80" : "text-ink-3"}`}>
+                {relativeTime(latest, now)}
+              </span>
+            )}
+          </span>
+          <span className={`mt-0.5 flex min-w-0 items-center gap-1.5 ${sub}`}>
+            {section === "Also worked on" && <StatusPill status={t.status} />}
+            <span className="min-w-0 truncate">
+              {did ? did.replace(/^./, (c) => c.toUpperCase()) : [t.type, t.priority, t.sprint].filter(Boolean).join(" · ")}
+            </span>
+            {level > 0 && (
+              <Age level={level} selected={selected} title={`No updates since ${new Date(t.updated).toLocaleString()}`}>
+                {age(t.updated, now)}
+              </Age>
+            )}
+          </span>
+        </span>
+      </button>
+    </>
+  );
+}
+
+const witherClass = (level: WitherLevel) => (level ? `wither wither-${Math.min(level, 3)}` : "");
+
+/** How long something has waited, with a dried leaf once it has started to wither. */
+function Age({ level, selected, title, children }: { level: WitherLevel; selected: boolean; title: string; children: ReactNode }) {
+  const tone = selected ? "bg-white/20 text-white" : level ? "bg-wither-bg text-wither" : "bg-todo-bg text-todo";
+  return (
+    <span title={title} className={`ml-auto inline-flex shrink-0 items-center gap-0.5 rounded-md px-1.5 py-px text-[11px] font-semibold tabular-nums ${tone}`}>
+      {level > 0 && <Icon name="leaf" className={`wither-leaf ${level > 2 ? "size-3.5" : "size-3"}`} />}
+      {children}
+    </span>
   );
 }

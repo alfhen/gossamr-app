@@ -14,7 +14,7 @@ use crate::model::{Attachment, CachedTicket, Comment, History, HistoryItem, Pare
 
 const FIELDS: &[&str] = &[
     "summary", "status", "issuetype", "priority", "assignee", "reporter", "parent", "description", "comment",
-    "subtasks", "duedate", "updated", "watches", "attachment",
+    "subtasks", "duedate", "updated", "watches", "attachment", "resolutiondate", "created", "creator",
 ];
 const PAGE_SIZE: u32 = 50;
 const CHANGELOG_PAGE: u64 = 100;
@@ -436,6 +436,9 @@ pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
         subtasks,
         due_date: str_of(&f["duedate"]),
         updated: f["updated"].as_str().map(normalise_time).unwrap_or_default(),
+        resolved: f["resolutiondate"].as_str().map(normalise_time),
+        created: f["created"].as_str().map(normalise_time),
+        creator: person(&f["creator"]),
         watching: f.pointer("/watches/isWatching").and_then(Value::as_bool).unwrap_or(false),
         history,
     })
@@ -466,7 +469,10 @@ pub(crate) mod tests {
                 "duedate": "2026-10-17",
                 "updated": "2026-09-28T10:05:00.000+0200",
                 "watches": {"isWatching": true},
-                "attachment": [{"id": "10001", "filename": "shot.png", "mimeType": "image/png", "size": 2048}]
+                "attachment": [{"id": "10001", "filename": "shot.png", "mimeType": "image/png", "size": 2048}],
+                "resolutiondate": null,
+                "created": "2026-09-20T09:00:00.000+0200",
+                "creator": {"accountId": "me", "displayName": "Me Myself"}
             },
             "changelog": {"histories": [{
                 "id": "500", "author": {"accountId": "sam", "displayName": "Sam"},
@@ -491,6 +497,8 @@ pub(crate) mod tests {
         assert!(t.watching);
         assert_eq!((t.attachments[0].id.as_str(), t.attachments[0].mime_type.as_str()), ("10001", "image/png"));
         assert_eq!(t.history[0].items[0].to.as_deref(), Some("In Review"));
+        assert_eq!((t.resolved, t.created.as_deref()), (None, Some("2026-09-20T07:00:00Z")));
+        assert_eq!(t.creator.unwrap().account_id, "me");
     }
 
     #[test]

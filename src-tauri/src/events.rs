@@ -1,6 +1,6 @@
 //! Turns cached tickets into inbox events and "since you last looked" changes.
 
-use crate::model::{CachedTicket, EventKind, FieldChange, Person};
+use crate::model::{CachedTicket, EventKind, FieldChange, MyAction, Person};
 
 /// Changelog fields worth surfacing, with the label shown to the user. Everything else (rank, links, description
 /// edits, worklogs…) is noise for an inbox.
@@ -75,6 +75,29 @@ pub fn derive(t: &CachedTicket, me: &str) -> Vec<NewEvent> {
             at: c.created.clone(),
             text: excerpt(&c.body),
         });
+    }
+    out
+}
+
+/// The user's own status changes on a ticket, and its creation if they created it, keyed by an id that's stable
+/// across syncs so storing them twice is a no-op.
+pub fn my_actions(t: &CachedTicket, me: &str) -> Vec<(String, MyAction)> {
+    let action = |kind: &str, at: &str, text: String| MyAction { ticket_key: t.key.clone(), at: at.to_string(), kind: kind.into(), text };
+    let mut out: Vec<(String, MyAction)> = t
+        .history
+        .iter()
+        .filter(|h| h.author.account_id == me)
+        .flat_map(|h| {
+            h.items.iter().filter(|i| i.field == "status").map(move |i| {
+                let text = format!("{} → {}", i.from.as_deref().unwrap_or("None"), i.to.as_deref().unwrap_or("None"));
+                (format!("h:{}:status", h.id), action("transition", &h.at, text))
+            })
+        })
+        .collect();
+    if let (Some(creator), Some(created)) = (&t.creator, &t.created) {
+        if creator.account_id == me {
+            out.push((format!("created:{}", t.key), action("created", created, String::new())));
+        }
     }
     out
 }
@@ -159,6 +182,24 @@ mod tests {
         assert_eq!(e.kind, EventKind::Comment);
         assert!(e.text.ends_with('…'));
         assert!(e.text.chars().count() <= EXCERPT_CHARS + 1);
+    }
+
+    #[test]
+    fn my_actions_are_my_status_changes_and_tickets_i_created() {
+        let mut t = ticket();
+        t.history.push(History {
+            id: "501".into(),
+            author: Person { account_id: "me".into(), name: "Me".into(), avatar_url: None },
+            at: "2026-09-28T09:30:00Z".into(),
+            items: vec![
+                HistoryItem { field: "status".into(), from: Some("In Review".into()), to: Some("Done".into()), to_id: None },
+                HistoryItem { field: "priority".into(), from: None, to: Some("High".into()), to_id: None },
+            ],
+        });
+        let actions = my_actions(&t, "me");
+        let kinds: Vec<(&str, &str, &str)> = actions.iter().map(|(id, a)| (id.as_str(), a.kind.as_str(), a.text.as_str())).collect();
+        assert_eq!(kinds, vec![("h:501:status", "transition", "In Review → Done"), ("created:CA-1", "created", "")]);
+        assert!(my_actions(&t, "sam").iter().all(|(_, a)| a.kind == "transition"), "Sam didn't create it");
     }
 
     #[test]
