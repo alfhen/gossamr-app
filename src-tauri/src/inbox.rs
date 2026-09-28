@@ -264,10 +264,11 @@ impl Core {
 
     /// The cached ticket, or a fresh read from Jira when it isn't cached.
     pub async fn ticket(&self, scope: &Scope, key: &str) -> Result<CachedTicket> {
-        let cached = self.with_db_for(scope, |db| Ok(db.tickets("")?.into_iter().find(|t| t.key == key))).await?;
+        let (cached, last_sync) =
+            self.with_db_for(scope, |db| Ok((db.tickets("")?.into_iter().find(|t| t.key == key), db.meta(LAST_SYNC)?))).await?;
         match cached {
             Some(t) => Ok(t),
-            None => self.jira.issue(scope, key).await,
+            None => self.jira.issue(scope, key, &unread_cutoff(last_sync.as_deref())).await,
         }
     }
 

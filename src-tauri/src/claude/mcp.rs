@@ -199,7 +199,7 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
         },
         ("search_tickets", _) => match arg("jql") {
             None => text("jql is required", true),
-            Some(jql) => match st.core.jira.search(scope, jql, false).await {
+            Some(jql) => match st.core.jira.search(scope, jql, None).await {
                 Ok(found) => text(
                     found
                         .iter()
