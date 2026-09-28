@@ -64,6 +64,28 @@ describe("store", () => {
       expect(s().selectedId).toBe("s:CE-731");
     });
 
+    it("selects the ticket's remaining update after clearing the last one in an expanded stack", async () => {
+      s().select("s:CA-420");
+      s().setStackOpen(true);
+      const children = currentItems(s()).filter((i) => i.inStack);
+      s().select(children[children.length - 1].id);
+      await s().markDone();
+      expect(s().selectedId).toBe(children[children.length - 2].id);
+    });
+
+    it("keeps unread updates unread when a failed clear is reverted", async () => {
+      const backend = s().backend!;
+      const real = backend.setDone.bind(backend);
+      const failOn = stackEvents()[0].id;
+      backend.setDone = (id, done) => (id === failOn && done ? Promise.reject(new Error("offline")) : real(id, done));
+      const unread = stackEvents().filter((e) => e.unread).map((e) => e.id);
+      expect(unread.length).toBeGreaterThan(1);
+      useStore.setState({ selectedId: "s:CA-420" });
+      await s().markDone();
+      await new Promise((r) => setTimeout(r));
+      expect(stackEvents().filter((e) => e.unread).map((e) => e.id)).toEqual(unread);
+    });
+
     it("reverts the updates that changed when part of a stack action fails", async () => {
       const backend = s().backend!;
       const real = backend.setDone.bind(backend);

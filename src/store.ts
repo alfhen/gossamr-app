@@ -184,6 +184,8 @@ export const useStore = create<Store>()((set, get) => {
       const revert = async (ev: InboxEvent) => {
         await backend.setDone(ev.id, !done);
         if (done && ev.snoozedUntil) await backend.snooze(ev.id, new Date(ev.snoozedUntil));
+        // Clearing and snoozing both mark an update read, so its unread state is restored last.
+        if (ev.unread) await backend.setUnread(ev.id, true);
       };
       if (await run("update the item", () => applyAll(evs, apply, revert))) {
         if (neighbour) get().select(neighbour);
@@ -308,7 +310,10 @@ async function applyAll(evs: InboxEvent[], apply: (ev: InboxEvent) => Promise<vo
 }
 const countOf = (evs: InboxEvent[]) => (evs.length > 1 ? ` (${evs.length} updates)` : "");
 
-/** The nearest item that stays in the list once `leaving` has left it, looking below the selection first. */
+/**
+ * The nearest item that stays in the list once `leaving` has left it, looking below the selection first. The ticket's
+ * own remaining updates come before other tickets.
+ */
 function neighbourOf(s: State, leaving: InboxEvent[]): string | null {
   const items = currentItems(s);
   const i = items.findIndex((x) => x.id === s.selectedId);
@@ -318,6 +323,9 @@ function neighbourOf(s: State, leaving: InboxEvent[]): string | null {
     const evs = x.stack ?? (x.event ? [x.event] : null);
     return !evs || !evs.every((e) => gone.has(e.id));
   };
-  const next = items.slice(i + 1).find(stays) ?? items.slice(0, i).reverse().find(stays);
+  const sameTicket = (x: ListItem) => x.ticketKey === items[i].ticketKey && !x.stack && stays(x);
+  const below = items.slice(i + 1);
+  const above = items.slice(0, i).reverse();
+  const next = below.find(sameTicket) ?? above.find(sameTicket) ?? below.find(stays) ?? above.find(stays);
   return next?.id ?? null;
 }
