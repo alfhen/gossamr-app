@@ -115,6 +115,28 @@ describe("store", () => {
     expect(s().snap!.events.some((e) => e.text.startsWith("@Alf the design is final"))).toBe(true);
   });
 
+  it("keeps an update that lands while the reread is still loading", async () => {
+    const next = new MockBackend();
+    const load = next.load.bind(next);
+    let calls = 0;
+    let finishReread: () => void = () => {};
+    next.load = async () => {
+      calls++;
+      const snap = await load();
+      if (calls === 1) {
+        await next.syncNow();
+        return snap;
+      }
+      await new Promise<void>((r) => (finishReread = r));
+      return { ...snap, site: "older.example" };
+    };
+    await s().init(next);
+    await next.syncNow();
+    finishReread();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(s().snap!.site).not.toBe("older.example");
+  });
+
   it("refuses a comment when the backend changed during the upload", async () => {
     const uploadedVia = s().backend!;
     await s().init(new MockBackend());
