@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { auth, type Account, type Site } from "./backend/auth";
 import type { Backend } from "./backend/types";
 import { itemsForView, type ListItem } from "./lib/views";
 import type { Snapshot, Ticket, ViewId } from "./types";
@@ -13,6 +14,8 @@ export type Overlay = "palette" | "help" | "transition" | "snooze" | null;
 
 interface State {
   backend: Backend | null;
+  /** The signed-in Jira account, or null when running on sample data. */
+  account: { site: Site; me: Account } | null;
   snap: Snapshot | null;
   now: Date;
   view: ViewId;
@@ -37,11 +40,13 @@ interface Actions {
   comment(body: string): Promise<boolean>;
   showToast(message: string, undo?: () => void): void;
   goToTicket(key: string): void;
+  signOut(): Promise<void>;
 }
 
 export type Store = State & Actions;
 
 let toastSeq = 0;
+let unsubscribe: (() => void) | null = null;
 
 export const useStore = create<Store>()((set, get) => {
   const run = async (what: string, fn: () => Promise<void>) => {
@@ -56,6 +61,7 @@ export const useStore = create<Store>()((set, get) => {
 
   return {
     backend: null,
+    account: null,
     snap: null,
     now: new Date(),
     view: "inbox",
@@ -66,7 +72,8 @@ export const useStore = create<Store>()((set, get) => {
     error: null,
 
     async init(backend) {
-      backend.subscribe((snap) => set({ snap, now: new Date() }));
+      unsubscribe?.();
+      unsubscribe = backend.subscribe((snap) => set({ snap, now: new Date() }));
       const snap = await backend.load();
       set({ backend, snap, now: new Date() });
       const first = currentItems(get())[0];
@@ -154,6 +161,14 @@ export const useStore = create<Store>()((set, get) => {
 
     showToast(message, undo) {
       set({ toast: { id: ++toastSeq, message, undo } });
+    },
+
+    async signOut() {
+      if (await run("sign out", auth.signOut)) {
+        unsubscribe?.();
+        unsubscribe = null;
+        set({ account: null, backend: null, snap: null, selectedId: null, overlay: null });
+      }
     },
 
     goToTicket(key) {
