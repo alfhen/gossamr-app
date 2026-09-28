@@ -179,8 +179,8 @@ impl Jira {
 
     /// People who can see `key` and match `query`, for @mention suggestions. Apps and deactivated users are left out.
     pub async fn mentionable(&self, scope: &Scope, key: &str, query: &str) -> Result<Vec<Person>> {
-        let q: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
-        let path = format!("user/viewissue/search?issueKey={key}&query={q}&maxResults=10");
+        let encode = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
+        let path = format!("user/viewissue/search?issueKey={}&query={}&maxResults=10", encode(key), encode(query));
         let raw: Value = self.call(scope, Method::GET, &path, None).await?;
         Ok(raw
             .as_array()

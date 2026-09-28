@@ -240,6 +240,14 @@ function ProposalView({ ticketKey, requestId, card }: { ticketKey: string; reque
   const [draft] = useState(() => autoLink(p.kind === "comment" ? p.body : "", people));
   const [body, setBody] = useState(draft.text);
   const [mentions, setMentions] = useState<Mention[]>(draft.mentions);
+  const edited = useRef(false);
+  // The ticket may not be cached yet on first render; link once its people arrive, unless the draft was edited.
+  useEffect(() => {
+    if (edited.current || p.kind !== "comment" || !people.length) return;
+    const linked = autoLink(p.body, people);
+    setBody(linked.text);
+    setMentions(linked.mentions);
+  }, [people]);
   const [picked, setPicked] = useState<boolean[]>(p.kind === "subtasks" ? p.summaries.map(() => true) : []);
   const patch = (x: Partial<ProposalCard>) => setProposal(ticketKey, requestId, p.id, x);
 
@@ -292,6 +300,7 @@ function ProposalView({ ticketKey, requestId, card }: { ticketKey: string; reque
             value={body}
             mentions={mentions}
             onChange={(v, m) => {
+              edited.current = true;
               setBody(v);
               setMentions(m);
             }}
