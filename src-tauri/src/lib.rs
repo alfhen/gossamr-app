@@ -14,7 +14,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
-use auth::{Auth, AuthStatus, OAuthApp};
+use auth::{Auth, AuthStatus, OAuthApp, Scope};
 use inbox::Core;
 use error::{Error, Result};
 use model::{Snapshot, Transition};
@@ -102,19 +102,19 @@ async fn snooze(app: AppHandle, core: State<'_, CoreState>, id: String, until: O
 
 #[tauri::command]
 async fn transitions(core: State<'_, CoreState>, key: String) -> Result<Vec<Transition>> {
-    core.transitions(&key).await
+    core.transitions(&core.scope().await?, &key).await
 }
 
 #[tauri::command]
-async fn transition(app: AppHandle, core: State<'_, CoreState>, key: String, transition_id: String) -> Result<()> {
-    core.transition(&key, &transition_id).await?;
+async fn transition(app: AppHandle, core: State<'_, CoreState>, scope: Scope, key: String, transition_id: String) -> Result<()> {
+    core.transition(&scope, &key, &transition_id).await?;
     publish(&app, &core).await;
     Ok(())
 }
 
 #[tauri::command]
-async fn comment(app: AppHandle, core: State<'_, CoreState>, key: String, body: String) -> Result<()> {
-    core.comment(&key, &body).await?;
+async fn comment(app: AppHandle, core: State<'_, CoreState>, scope: Scope, key: String, body: String) -> Result<()> {
+    core.comment(&scope, &key, &body).await?;
     publish(&app, &core).await;
     Ok(())
 }

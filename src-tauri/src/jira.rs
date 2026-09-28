@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::adf;
-use crate::auth::{json_or_error, Auth};
+use crate::auth::{json_or_error, Auth, Scope};
 use crate::error::{Error, Result};
 use crate::model::{CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, Transition};
 
@@ -30,18 +30,16 @@ impl Jira {
         Self { http, auth }
     }
 
-    async fn call<T: DeserializeOwned>(&self, method: Method, path: &str, body: Option<&Value>) -> Result<T> {
+    /// Sends one request as `scope`. It is refused before sending if the signed-in site or account is no longer
+    /// `scope`, so work started for one account can never read or write as another.
+    async fn call<T: DeserializeOwned>(&self, scope: &Scope, method: Method, path: &str, body: Option<&Value>) -> Result<T> {
         let mut force_refresh = false;
-        let mut first_site: Option<String> = None;
         loop {
             let creds = self.auth.credentials(force_refresh).await?;
-            // If someone signed in to another site while this request waited, retrying would change that site instead.
-            match &first_site {
-                Some(site) if site != &creds.cloud_id => return Err(Error::SiteChanged),
-                Some(_) => {}
-                None => first_site = Some(creds.cloud_id.clone()),
+            if &creds.scope != scope {
+                return Err(Error::SiteChanged);
             }
-            let url = format!("https://api.atlassian.com/ex/jira/{}/rest/api/3/{path}", creds.cloud_id);
+            let url = format!("https://api.atlassian.com/ex/jira/{}/rest/api/3/{path}", scope.cloud_id);
             let mut req = self.http.request(method.clone(), url).bearer_auth(&creds.access_token);
             if let Some(b) = body {
                 req = req.json(b);
@@ -60,7 +58,7 @@ impl Jira {
     }
 
     /// Runs a JQL search and returns every matching issue (up to a cap) with its changelog.
-    pub async fn search(&self, jql: &str, with_changelog: bool) -> Result<Vec<CachedTicket>> {
+    pub async fn search(&self, scope: &Scope, jql: &str, with_changelog: bool) -> Result<Vec<CachedTicket>> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Page {
@@ -78,10 +76,10 @@ impl Jira {
             if let Some(t) = &token {
                 body["nextPageToken"] = json!(t);
             }
-            let page: Page = self.call(Method::POST, "search/jql", Some(&body)).await?;
+            let page: Page = self.call(scope, Method::POST, "search/jql", Some(&body)).await?;
             for raw in &page.issues {
                 if let Some(t) = parse_issue(raw) {
-                    out.push(self.with_recent_history(t, raw).await?);
+                    out.push(self.with_recent_history(scope, t, raw).await?);
                 }
             }
             match page.next_page_token {
@@ -91,27 +89,27 @@ impl Jira {
         }
     }
 
-    pub async fn issue(&self, key: &str) -> Result<CachedTicket> {
+    pub async fn issue(&self, scope: &Scope, key: &str) -> Result<CachedTicket> {
         let raw: Value = self
-            .call(Method::GET, &format!("issue/{key}?fields={}&expand=changelog", FIELDS.join(",")), None)
+            .call(scope, Method::GET, &format!("issue/{key}?fields={}&expand=changelog", FIELDS.join(",")), None)
             .await?;
         let t = parse_issue(&raw).ok_or_else(|| Error::Api { status: 200, message: format!("couldn't read {key}") })?;
-        self.with_recent_history(t, &raw).await
+        self.with_recent_history(scope, t, &raw).await
     }
 
     /// An expanded changelog holds only its first page, which is the oldest history. When there is more, replace it
     /// with the most recent page, since that's where new events come from.
-    async fn with_recent_history(&self, mut t: CachedTicket, raw: &Value) -> Result<CachedTicket> {
+    async fn with_recent_history(&self, scope: &Scope, mut t: CachedTicket, raw: &Value) -> Result<CachedTicket> {
         let Some(start) = recent_changelog_start(raw) else { return Ok(t) };
         let page: Value = self
-            .call(Method::GET, &format!("issue/{}/changelog?startAt={start}&maxResults={CHANGELOG_PAGE}", t.key), None)
+            .call(scope, Method::GET, &format!("issue/{}/changelog?startAt={start}&maxResults={CHANGELOG_PAGE}", t.key), None)
             .await?;
         t.history = page["values"].as_array().into_iter().flatten().filter_map(parse_history).collect();
         Ok(t)
     }
 
-    pub async fn transitions(&self, key: &str) -> Result<Vec<Transition>> {
-        let raw: Value = self.call(Method::GET, &format!("issue/{key}/transitions"), None).await?;
+    pub async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<Transition>> {
+        let raw: Value = self.call(scope, Method::GET, &format!("issue/{key}/transitions"), None).await?;
         Ok(raw["transitions"]
             .as_array()
             .into_iter()
@@ -122,15 +120,15 @@ impl Jira {
             .collect())
     }
 
-    pub async fn transition(&self, key: &str, transition_id: &str) -> Result<()> {
+    pub async fn transition(&self, scope: &Scope, key: &str, transition_id: &str) -> Result<()> {
         let body = json!({ "transition": { "id": transition_id } });
-        self.call::<Value>(Method::POST, &format!("issue/{key}/transitions"), Some(&body)).await?;
+        self.call::<Value>(scope, Method::POST, &format!("issue/{key}/transitions"), Some(&body)).await?;
         Ok(())
     }
 
-    pub async fn comment(&self, key: &str, text: &str) -> Result<()> {
+    pub async fn comment(&self, scope: &Scope, key: &str, text: &str) -> Result<()> {
         let body = json!({ "body": adf::from_text(text) });
-        self.call::<Value>(Method::POST, &format!("issue/{key}/comment"), Some(&body)).await?;
+        self.call::<Value>(scope, Method::POST, &format!("issue/{key}/comment"), Some(&body)).await?;
         Ok(())
     }
 }
