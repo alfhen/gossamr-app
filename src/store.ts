@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { auth, type Account, type Site } from "./backend/auth";
 import type { Backend } from "./backend/types";
+import type { Mention } from "./lib/mentions";
 import { itemsForView, type ListItem } from "./lib/views";
 import type { Snapshot, Ticket, ViewId } from "./types";
 
@@ -37,7 +38,7 @@ interface Actions {
   snooze(until: Date): Promise<void>;
   toggleUnread(): Promise<void>;
   transition(transitionId: string, name: string): Promise<void>;
-  comment(body: string): Promise<boolean>;
+  comment(body: string, mentions?: Mention[]): Promise<boolean>;
   showToast(message: string, undo?: () => void): void;
   goToTicket(key: string): void;
   signOut(): Promise<void>;
@@ -166,12 +167,12 @@ export const useStore = create<Store>()((set, get) => {
       }
     },
 
-    async comment(body) {
+    async comment(body, mentions = []) {
       const { backend } = get();
       const t = selectedTicket(get());
       const text = body.trim();
       if (!backend || !t || !text) return false;
-      const ok = await run(`comment on ${t.key}`, () => backend.comment(t.key, text));
+      const ok = await run(`comment on ${t.key}`, () => backend.comment(t.key, text, mentions));
       if (ok) get().showToast(`Commented on ${t.key}`);
       return ok;
     },

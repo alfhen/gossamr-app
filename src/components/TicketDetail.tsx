@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { liveMentions, participants, segments, type Mention } from "../lib/mentions";
 import { snoozeOptions, relativeTime } from "../lib/views";
 import { selectedEvent, selectedTicket, useStore } from "../store";
-import type { Ticket, Transition } from "../types";
+import type { Snapshot, Ticket, Transition } from "../types";
 import { useClaude } from "../claudeStore";
 import { Icon, Sparkle } from "./icons";
 import { Menu } from "./Menu";
+import { MentionTextarea } from "./MentionTextarea";
 import { Avatar, SectionHeading, StatusPill, ToolbarButton } from "./primitives";
 
 export function TicketDetail() {
@@ -118,6 +120,7 @@ function TicketBody({ ticket: t }: { ticket: Ticket }) {
   const me = snap?.me.accountId;
   const since = new Date(now.getTime() - 24 * 3600_000).toISOString();
   const newComments = t.comments.filter((c) => c.created > since && c.author.accountId !== me);
+  const knownPeople = useMemo(() => (snap ? everyone(snap) : []), [snap]);
 
   return (
     <div className="selectable grid max-w-[760px] gap-5 px-7 pt-5 pb-7">
@@ -225,14 +228,14 @@ function TicketBody({ ticket: t }: { ticket: Ticket }) {
                   <b className="font-semibold">{c.author.name}</b>
                   <span className="text-sm text-ink-3">{relativeTime(c.created, now)}</span>
                 </div>
-                <div className="max-w-[65ch] whitespace-pre-wrap">{c.body}</div>
+                <CommentBody body={c.body} people={[...(c.mentioned ?? []), ...knownPeople]} />
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      <Composer ticketKey={t.key} />
+      <Composer ticket={t} />
     </div>
   );
 }
@@ -246,32 +249,38 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-function Composer({ ticketKey }: { ticketKey: string }) {
+function Composer({ ticket }: { ticket: Ticket }) {
   const comment = useStore((s) => s.comment);
+  const me = useStore((s) => s.snap?.me.accountId ?? "");
   const [body, setBody] = useState("");
+  const [mentions, setMentions] = useState<Mention[]>([]);
   const [sending, setSending] = useState(false);
+  const people = useMemo(() => participants(ticket, me), [ticket, me]);
 
   const send = async () => {
     if (!body.trim() || sending) return;
     setSending(true);
-    if (await comment(body)) setBody("");
+    if (await comment(body, liveMentions(body, mentions))) {
+      setBody("");
+      setMentions([]);
+    }
     setSending(false);
   };
 
   return (
-    <div className="overflow-hidden rounded-[10px] border border-field-border bg-field focus-within:border-accent focus-within:ring-3 focus-within:ring-accent-soft">
-      <textarea
+    <div className="rounded-[10px] border border-field-border bg-field focus-within:border-accent focus-within:ring-3 focus-within:ring-accent-soft">
+      <MentionTextarea
         id="composer"
         value={body}
-        onChange={(e) => setBody(e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-            e.preventDefault();
-            void send();
-          }
+        mentions={mentions}
+        onChange={(v, m) => {
+          setBody(v);
+          setMentions(m);
         }}
-        placeholder={`Comment on ${ticketKey}…`}
-        className="block min-h-[62px] w-full resize-y bg-transparent px-3 py-2.5 outline-none"
+        ticketKey={ticket.key}
+        people={people}
+        onSubmit={() => void send()}
+        placeholder={`Comment on ${ticket.key}… (@ to mention)`}
       />
       <div className="flex items-center gap-2 border-t border-sep py-1.5 pr-2 pl-3 text-[11.5px] text-ink-3">
         <span>
@@ -286,6 +295,31 @@ function Composer({ ticketKey }: { ticketKey: string }) {
           {sending ? "Sending…" : "Comment"}
         </button>
       </div>
+    </div>
+  );
+}
+
+function everyone(snap: Snapshot): Mention[] {
+  const people = new Map<string, Mention>([[snap.me.accountId, snap.me]]);
+  for (const t of Object.values(snap.tickets)) {
+    for (const p of [t.assignee, t.reporter, ...t.comments.map((c) => c.author)]) if (p) people.set(p.accountId, p);
+  }
+  return [...people.values()].map((p) => ({ accountId: p.accountId, name: p.name }));
+}
+
+/** A posted comment, with `@Name` for anyone we know highlighted. */
+function CommentBody({ body, people }: { body: string; people: Mention[] }) {
+  return (
+    <div className="max-w-[65ch] whitespace-pre-wrap">
+      {segments(body, people).map((part, i) =>
+        part.mention ? (
+          <span key={i} className="rounded-[4px] bg-accent-soft px-0.5 font-medium text-accent">
+            {part.text}
+          </span>
+        ) : (
+          part.text
+        ),
+      )}
     </div>
   );
 }

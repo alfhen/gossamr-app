@@ -232,6 +232,10 @@ impl Core {
         Ok(Scope::of(&site, &me))
     }
 
+    pub async fn mentionable(&self, scope: &Scope, key: &str, query: &str) -> Result<Vec<Person>> {
+        self.jira.mentionable(scope, key, query).await
+    }
+
     pub async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<Transition>> {
         self.jira.transitions(scope, key).await
     }
@@ -244,12 +248,12 @@ impl Core {
     }
 
     /// `scope` is the account the user was looking at when they acted; the write is refused if that has changed.
-    pub async fn comment(&self, scope: &Scope, key: &str, body: &str) -> Result<()> {
+    pub async fn comment(&self, scope: &Scope, key: &str, body: &str, mentions: &[crate::adf::MentionRef]) -> Result<()> {
         let body = body.trim();
         if body.is_empty() {
             return Err(Error::Api { status: 400, message: "a comment can't be empty".into() });
         }
-        self.jira.comment(scope, key, body).await?;
+        self.jira.comment(scope, key, body, mentions).await?;
         self.after_write(scope, key).await;
         Ok(())
     }

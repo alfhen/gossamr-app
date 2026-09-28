@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { Snapshot, Transition } from "../types";
+import type { Mention } from "../lib/mentions";
+import type { Person, Snapshot, Transition } from "../types";
 import type { Backend } from "./types";
 
 /** The Jira site and account this backend acts for. */
@@ -36,8 +37,12 @@ export class JiraBackend implements Backend {
     return invoke<void>("transition", { scope: this.scope, key, transitionId });
   }
 
-  comment(key: string, body: string) {
-    return invoke<void>("comment", { scope: this.scope, key, body });
+  comment(key: string, body: string, mentions: Mention[] = []) {
+    return invoke<void>("comment", { scope: this.scope, key, body, mentions });
+  }
+
+  mentionable(key: string, query: string) {
+    return invoke<Person[]>("mentionable", { key, query });
   }
 
   createSubtasks(key: string, summaries: string[]) {

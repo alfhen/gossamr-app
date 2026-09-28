@@ -16,6 +16,8 @@ export interface Comment {
   author: Person;
   created: string;
   body: string;
+  /** People @mentioned in the comment, with the name as it appears in `body`. */
+  mentioned?: { accountId: string; name: string }[];
 }
 
 export interface FieldChange {
