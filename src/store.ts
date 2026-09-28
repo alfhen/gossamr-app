@@ -38,11 +38,19 @@ interface Actions {
   snooze(until: Date): Promise<void>;
   toggleUnread(): Promise<void>;
   transition(transitionId: string, name: string): Promise<void>;
-  /** Comments on `ticketKey`, or on the selected ticket when it's omitted. */
-  comment(body: string, mentions?: Mention[], files?: Uploaded[], ticketKey?: string): Promise<boolean>;
+  comment(body: string, options?: CommentOptions): Promise<boolean>;
   showToast(message: string, undo?: () => void): void;
   goToTicket(key: string): void;
   signOut(): Promise<void>;
+}
+
+export interface CommentOptions {
+  mentions?: Mention[];
+  files?: Uploaded[];
+  /** The ticket to comment on; the selected one when omitted. */
+  ticketKey?: string;
+  /** The backend the files were uploaded through. The comment is refused if another has taken over since. */
+  via?: Backend;
 }
 
 export type Store = State & Actions;
@@ -79,8 +87,10 @@ export const useStore = create<Store>()((set, get) => {
       const mine = ++generation;
       // The current backend keeps running until this one has loaded, so a failed load leaves the app as it was.
       let live = false;
+      let missed = false;
       const stop = backend.subscribe((snap) => {
         if (live) set({ snap, now: new Date() });
+        else missed = true;
       });
       let snap: Snapshot;
       try {
@@ -99,6 +109,13 @@ export const useStore = create<Store>()((set, get) => {
       live = true;
       if (previous && previous !== backend) previous.dispose?.();
       set({ backend, snap, now: new Date() });
+      // An update that arrived during the load may be newer than what it returned, so read the latest once more.
+      if (missed) {
+        void backend
+          .load()
+          .then((latest) => live && set({ snap: latest, now: new Date() }))
+          .catch(() => {});
+      }
       const first = currentItems(get())[0];
       if (first) get().select(first.id);
     },
@@ -183,8 +200,12 @@ export const useStore = create<Store>()((set, get) => {
       }
     },
 
-    async comment(body, mentions = [], files = [], ticketKey) {
+    async comment(body, { mentions = [], files = [], ticketKey, via } = {}) {
       const { backend, snap } = get();
+      if (via && backend !== via) {
+        set({ error: "Couldn't comment: you switched Jira accounts while the files were uploading" });
+        return false;
+      }
       const t = ticketKey ? (snap?.tickets[ticketKey] ?? null) : selectedTicket(get());
       const text = body.trim();
       if (!backend || !t || (!text && !files.length)) return false;

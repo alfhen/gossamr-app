@@ -332,10 +332,10 @@ function Composer({ ticket }: { ticket: Ticket }) {
       for (const f of sent) {
         const u = f.uploaded ?? (await backend.attach(ticket.key, f.file));
         if (!f.uploaded) setFiles((prev) => prev.map((x) => (x.id === f.id ? { ...x, uploaded: u } : x)));
-        const size = f.file.type.startsWith("image/") ? await imageSize(f.file) : null;
+        const size = await imageSize(f.file);
         uploaded.push(size ? { ...u, ...size } : u);
       }
-      if (await comment(sentBody, liveMentions(sentBody, mentions), uploaded, ticket.key)) {
+      if (await comment(sentBody, { mentions: liveMentions(sentBody, mentions), files: uploaded, ticketKey: ticket.key, via: backend })) {
         sent.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
         setFiles((prev) => prev.filter((x) => !sent.some((s) => s.id === x.id)));
         if (latestBody.current === sentBody) {
