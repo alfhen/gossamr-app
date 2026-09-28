@@ -38,7 +38,8 @@ interface Actions {
   snooze(until: Date): Promise<void>;
   toggleUnread(): Promise<void>;
   transition(transitionId: string, name: string): Promise<void>;
-  comment(body: string, mentions?: Mention[], files?: Uploaded[]): Promise<boolean>;
+  /** Comments on `ticketKey`, or on the selected ticket when it's omitted. */
+  comment(body: string, mentions?: Mention[], files?: Uploaded[], ticketKey?: string): Promise<boolean>;
   showToast(message: string, undo?: () => void): void;
   goToTicket(key: string): void;
   signOut(): Promise<void>;
@@ -76,6 +77,7 @@ export const useStore = create<Store>()((set, get) => {
 
     async init(backend) {
       const mine = ++generation;
+      if (get().backend !== backend) get().backend?.dispose?.();
       unsubscribe?.();
       unsubscribe = backend.subscribe((snap) => {
         if (mine === generation) set({ snap, now: new Date() });
@@ -167,9 +169,9 @@ export const useStore = create<Store>()((set, get) => {
       }
     },
 
-    async comment(body, mentions = [], files = []) {
-      const { backend } = get();
-      const t = selectedTicket(get());
+    async comment(body, mentions = [], files = [], ticketKey) {
+      const { backend, snap } = get();
+      const t = ticketKey ? (snap?.tickets[ticketKey] ?? null) : selectedTicket(get());
       const text = body.trim();
       if (!backend || !t || (!text && !files.length)) return false;
       const ok = await run(`comment on ${t.key}`, () => backend.comment(t.key, text, mentions, files));
@@ -186,6 +188,7 @@ export const useStore = create<Store>()((set, get) => {
         generation++;
         unsubscribe?.();
         unsubscribe = null;
+        get().backend?.dispose?.();
         set({ account: null, backend: null, snap: null, selectedId: null, overlay: null });
       }
     },

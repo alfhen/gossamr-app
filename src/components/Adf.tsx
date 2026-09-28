@@ -31,8 +31,11 @@ function Node({ node }: { node: AdfNode }): ReactNode {
     case "paragraph":
       return <p className="min-h-[1lh] whitespace-pre-wrap">{children(node)}</p>;
     case "heading": {
-      const size = ["", "text-xl", "text-lg", "text-base", "text-base", "text-sm", "text-sm"][Number(a.level) || 3];
-      return <p className={`mt-1 font-semibold ${size}`}>{children(node)}</p>;
+      const level = Math.min(6, Math.max(1, Number(a.level) || 3));
+      const size = ["", "text-xl", "text-lg", "text-base", "text-base", "text-sm", "text-sm"][level];
+      // Descriptions and comments sit under an h3 section heading, so the document's own levels nest below it.
+      const Tag = `h${Math.min(6, level + 3)}` as "h4";
+      return <Tag className={`mt-1 font-semibold ${size}`}>{children(node)}</Tag>;
     }
     case "text":
       return <Text text={node.text ?? ""} marks={node.marks ?? []} />;
@@ -126,14 +129,15 @@ function Node({ node }: { node: AdfNode }): ReactNode {
     case "inlineCard":
     case "blockCard":
     case "embedCard":
-      return typeof a.url === "string" ? <Link href={a.url}>{a.url}</Link> : null;
+      return <Card attrs={a} />;
     case "mediaSingle":
       return <div>{children(node)}</div>;
     case "mediaGroup":
       return <div className="flex flex-wrap gap-2">{children(node)}</div>;
     case "media":
-    case "mediaInline":
       return <Media node={node} />;
+    case "mediaInline":
+      return <Media node={node} inline />;
     default:
       return <>{children(node)}</>;
   }
@@ -160,7 +164,7 @@ const PANEL: Record<string, string> = {
   tip: "bg-done-bg",
 };
 
-function Media({ node }: { node: AdfNode }) {
+function Media({ node, inline = false }: { node: AdfNode; inline?: boolean }) {
   const found = useContext(MediaContext)(node);
   const [zoomed, setZoomed] = useState(false);
   const alt = typeof node.attrs?.alt === "string" ? node.attrs.alt : "";
@@ -172,8 +176,18 @@ function Media({ node }: { node: AdfNode }) {
   }
   return (
     <>
-      <button type="button" onClick={() => setZoomed(true)} className="block max-w-full cursor-zoom-in" aria-label={`Enlarge ${found.name}`}>
-        <img src={found.url} alt={found.name} loading="lazy" className="max-h-[420px] max-w-full rounded-md border border-sep object-contain" />
+      <button
+        type="button"
+        onClick={() => setZoomed(true)}
+        className={`${inline ? "inline-block align-middle" : "block"} max-w-full cursor-zoom-in`}
+        aria-label={`Enlarge ${found.name}`}
+      >
+        <img
+          src={found.url}
+          alt={found.name}
+          loading="lazy"
+          className={`${inline ? "max-h-[1.6em]" : "max-h-[420px]"} max-w-full rounded-md border border-sep object-contain`}
+        />
       </button>
       {zoomed && (
         <button
@@ -194,6 +208,15 @@ function Media({ node }: { node: AdfNode }) {
       )}
     </>
   );
+}
+
+/** Smart links carry either `url` or JSON-LD `data` (with its own `url` and `name`). */
+function Card({ attrs }: { attrs: Record<string, unknown> }) {
+  const data = (attrs.data ?? {}) as Record<string, unknown>;
+  const url = [attrs.url, data.url].find((u): u is string => typeof u === "string");
+  const label = typeof data.name === "string" && data.name ? data.name : url;
+  if (!label) return <span className="text-ink-3">[Link]</span>;
+  return url ? <Link href={url}>{label}</Link> : <>{label}</>;
 }
 
 function Text({ text, marks }: { text: string; marks: AdfMark[] }) {

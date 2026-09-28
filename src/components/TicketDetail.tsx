@@ -315,15 +315,25 @@ function Composer({ ticket }: { ticket: Ticket }) {
   const fail = (message: string) => useStore.setState({ error: message });
 
   const previews = useRef(files);
-  previews.current = files;
+  const latestBody = useRef(body);
+  useEffect(() => {
+    previews.current = files;
+    latestBody.current = body;
+  }, [files, body]);
   useEffect(() => () => previews.current.forEach((f) => f.preview && URL.revokeObjectURL(f.preview)), []);
 
   const add = async (list: File[]) => {
     if (!backend || !list.length) return;
-    const limit = await backend.attachmentLimit().catch(() => undefined);
+    let limit: number | null;
+    try {
+      limit = await backend.attachmentLimit();
+    } catch (e) {
+      return fail(`Couldn't check Jira's upload limit, so nothing was added: ${e instanceof Error ? e.message : String(e)}`);
+    }
     if (limit === null) return fail("Attachments are turned off on this Jira site");
-    const tooBig = list.filter((f) => limit !== undefined && f.size > limit);
-    if (tooBig.length && limit) fail(`${tooBig.map((f) => f.name || "The image").join(", ")} is over Jira's ${formatSize(limit)} limit`);
+    const max = limit;
+    const tooBig = list.filter((f) => f.size > max);
+    if (tooBig.length) fail(`${tooBig.map((f) => f.name || "The image").join(", ")} is over Jira's ${formatSize(limit)} limit`);
     const added = list
       .filter((f) => !tooBig.includes(f))
       .map((f) => {
@@ -342,18 +352,23 @@ function Composer({ ticket }: { ticket: Ticket }) {
   const send = async () => {
     if ((!body.trim() && !files.length) || sending || !backend) return;
     setSending(true);
+    // Anything added or typed while this is in flight belongs to the next comment, so only clear what was sent.
+    const sent = files;
+    const sentBody = body;
     try {
       const uploaded: Uploaded[] = [];
-      for (const f of files) {
+      for (const f of sent) {
         const u = f.uploaded ?? (await backend.attach(ticket.key, f.file));
         if (!f.uploaded) setFiles((prev) => prev.map((x) => (x.id === f.id ? { ...x, uploaded: u } : x)));
         uploaded.push(u);
       }
-      if (await comment(body, liveMentions(body, mentions), uploaded)) {
-        files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
-        setBody("");
-        setMentions([]);
-        setFiles([]);
+      if (await comment(sentBody, liveMentions(sentBody, mentions), uploaded, ticket.key)) {
+        sent.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
+        setFiles((prev) => prev.filter((x) => !sent.some((s) => s.id === x.id)));
+        if (latestBody.current === sentBody) {
+          setBody("");
+          setMentions([]);
+        }
       }
     } catch (e) {
       fail(`Couldn't upload to ${ticket.key}: ${e instanceof Error ? e.message : String(e)}`);
