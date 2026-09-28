@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 
 use crate::auth::Scope;
 use crate::inbox::Core;
+use crate::jira::CONTEXT_LIMIT;
 use crate::model::{CachedTicket, Transition};
 
 const SEARCH_LIMIT: usize = 20;
@@ -199,7 +200,7 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
         },
         ("search_tickets", _) => match arg("jql") {
             None => text("jql is required", true),
-            Some(jql) => match st.core.jira.search(scope, jql, None).await {
+            Some(jql) => match st.core.jira.search(scope, jql, None, CONTEXT_LIMIT).await {
                 Ok(found) => text(
                     found
                         .iter()
