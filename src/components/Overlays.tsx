@@ -13,7 +13,7 @@ interface PaletteEntry {
 }
 
 export function CommandPalette() {
-  const { snap, backend, openOverlay, goToTicket, setView } = useStore();
+  const { snap, backend, account, openOverlay, goToTicket, setView, signOut } = useStore();
   const [query, setQuery] = useState("");
   const [sel, setSel] = useState(0);
 
@@ -29,10 +29,12 @@ export function CommandPalette() {
       ...VIEWS.map((v) => ({ id: `view:${v.id}`, label: `Go to ${v.label}`, run: () => setView(v.id) })),
       { id: "sync", label: backend?.kind === "mock" ? "Simulate a new notification" : "Sync now", run: () => void backend?.syncNow() },
       { id: "help", label: "Keyboard shortcuts", hint: "?", run: () => openOverlay("help") },
+      // The sidebar is hidden in narrow windows, so its account actions are also available here.
+      ...(account ? [{ id: "signout", label: `Sign out of ${account.site.name}`, run: () => void signOut() }] : []),
     ];
     const q = query.trim().toLowerCase();
     return { tickets, actions: all.filter((a) => !q || a.label.toLowerCase().includes(q)) };
-  }, [snap, query, backend, goToTicket, openOverlay, setView]);
+  }, [snap, query, backend, account, goToTicket, openOverlay, setView, signOut]);
 
   const entries = [...tickets, ...actions];
   const selected = Math.min(sel, Math.max(0, entries.length - 1));
