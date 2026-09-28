@@ -1,4 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { useEffect, useState } from "react";
 import App from "./App";
 import { auth, type AuthStatus } from "./backend/auth";
@@ -16,6 +17,7 @@ export function Root() {
     const account = status?.site && status.me ? { site: status.site, me: status.me } : null;
     useStore.setState({ account });
     void useStore.getState().init(account ? new JiraBackend() : new MockBackend());
+    if (account) void askForNotifications();
     setPhase({ name: "app" });
   };
 
@@ -46,5 +48,13 @@ export function Root() {
       return <Setup status={phase.status} onSignedIn={start} onUseSampleData={() => start(null)} />;
     case "app":
       return <App />;
+  }
+}
+
+async function askForNotifications() {
+  try {
+    if (!(await isPermissionGranted())) await requestPermission();
+  } catch {
+    // The inbox works without notifications; the user can enable them later in System Settings.
   }
 }

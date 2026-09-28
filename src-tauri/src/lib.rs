@@ -6,12 +6,14 @@ mod events;
 mod inbox;
 mod jira;
 mod model;
+mod notify;
 mod secrets;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use auth::{Auth, AuthStatus, OAuthApp};
@@ -23,10 +25,25 @@ const POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 type CoreState = Arc<Core>;
 
-/// Sends the latest snapshot to the window. Failures only mean there is nothing to show yet (e.g. signed out).
+/// Sends the latest snapshot to the window and updates the Dock badge. Failures only mean there is nothing to
+/// show yet (e.g. signed out).
 async fn publish(app: &AppHandle, core: &Core) {
-    if let Ok(snap) = core.snapshot().await {
-        let _ = app.emit("snapshot", snap);
+    let Ok(snap) = core.snapshot().await else { return };
+    if let Some(win) = app.get_webview_window("main") {
+        let unread = snap.inbox_unread(&inbox::now_iso());
+        let _ = win.set_badge_count((unread > 0).then_some(unread as i64));
+    }
+    let _ = app.emit("snapshot", snap);
+}
+
+/// Shows native notifications for new events, unless the window is focused and the user can already see them.
+fn announce(app: &AppHandle, events: &[events::NewEvent]) {
+    let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+    if focused {
+        return;
+    }
+    for n in notify::notices(events) {
+        let _ = app.notification().builder().title(n.title).body(n.body).show();
     }
 }
 
@@ -124,7 +141,10 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
         loop {
             if core.auth.identity().await.is_some() {
                 match core.sync().await {
-                    Ok(_) => core.set_error(None),
+                    Ok(new) => {
+                        core.set_error(None);
+                        announce(&app, &new);
+                    }
                     Err(e) => core.set_error(Some(e.to_string())),
                 }
                 publish(&app, &core).await;
@@ -141,6 +161,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let http = reqwest::Client::builder()
                 .user_agent(concat!("jira-inbox/", env!("CARGO_PKG_VERSION")))

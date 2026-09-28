@@ -168,9 +168,59 @@ pub struct Snapshot {
     pub sync_error: Option<String>,
 }
 
+impl Snapshot {
+    /// Unread events currently in the Inbox view, i.e. not done and not snoozed past `now` (RFC 3339).
+    pub fn inbox_unread(&self, now: &str) -> usize {
+        self.events
+            .iter()
+            .filter(|e| e.unread && e.done_at.is_none())
+            .filter(|e| e.snoozed_until.as_deref().is_none_or(|until| until <= now))
+            .count()
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Transition {
     pub id: String,
     pub name: String,
     pub to: Status,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(unread: bool, done_at: Option<&str>, snoozed_until: Option<&str>) -> InboxEvent {
+        InboxEvent {
+            id: "1".into(),
+            kind: EventKind::Comment,
+            ticket_key: "A-1".into(),
+            actor: Person { account_id: "s".into(), name: "S".into(), avatar_url: None },
+            at: "2026-09-28T10:00:00Z".into(),
+            text: String::new(),
+            unread,
+            done_at: done_at.map(String::from),
+            snoozed_until: snoozed_until.map(String::from),
+        }
+    }
+
+    #[test]
+    fn inbox_unread_skips_read_done_and_snoozed_items() {
+        let snap = Snapshot {
+            me: Person { account_id: "me".into(), name: "Me".into(), avatar_url: None },
+            site: String::new(),
+            tickets: Default::default(),
+            events: vec![
+                event(true, None, None),
+                event(false, None, None),
+                event(true, Some("2026-09-28T11:00:00Z"), None),
+                event(true, None, Some("2026-09-28T13:00:00Z")),
+                event(true, None, Some("2026-09-28T11:00:00Z")),
+            ],
+            watching: vec![],
+            last_sync_at: None,
+            sync_error: None,
+        };
+        assert_eq!(snap.inbox_unread("2026-09-28T12:00:00Z"), 2);
+    }
 }
