@@ -37,8 +37,8 @@ describe("Adf", () => {
   it("keeps merged table cells", () => {
     const cell = (type: string, attrs = {}): AdfNode => ({ type, attrs, content: [p(text("x"))] });
     const out = html(doc({ type: "table", content: [{ type: "tableRow", content: [cell("tableHeader", { colspan: 2 }), cell("tableCell", { rowspan: 1 })] }] }));
-    expect(out).toContain('colspan="2"');
-    expect(out).not.toContain("rowspan");
+    expect(out).toMatch(/<th colspan="2"/i);
+    expect(out).not.toMatch(/rowspan/i);
   });
 
   it("reads date timestamps in seconds or milliseconds", () => {
