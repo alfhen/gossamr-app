@@ -4,7 +4,7 @@ import { CommandPalette, ShortcutHelp, ToastHost } from "./components/Overlays";
 import { Sidebar } from "./components/Sidebar";
 import { TicketDetail } from "./components/TicketDetail";
 import { commandFor, isTypingTarget } from "./lib/keyboard";
-import { currentItems, selectedEvent, selectedTicket, useStore } from "./store";
+import { currentItems, selectedTicket, useStore } from "./store";
 
 export default function App() {
   const snap = useStore((s) => s.snap);
@@ -49,9 +49,9 @@ function useKeyboard() {
         case "prev":
           return s.move(-1);
         case "transition":
-          return selectedTicket(s) && s.openOverlay("transition");
+          return s.openOverlay("transition");
         case "snooze":
-          return selectedEvent(s) && s.openOverlay("snooze");
+          return s.openOverlay("snooze");
         case "done":
           return void s.markDone();
         case "toggleUnread":

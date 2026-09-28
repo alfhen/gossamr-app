@@ -101,17 +101,28 @@ export const useStore = create<Store>()((set, get) => {
       get().select(items[next].id);
     },
 
-    openOverlay: (overlay) => set({ overlay }),
+    openOverlay(overlay) {
+      // Menus render only for a selected ticket or event; opening one without it would swallow all shortcuts.
+      if (overlay === "transition" && !selectedTicket(get())) return;
+      if (overlay === "snooze" && !selectedEvent(get())) return;
+      set({ overlay });
+    },
 
     async markDone() {
       const { backend } = get();
       const ev = selectedEvent(get());
       if (!backend || !ev) return;
       const done = ev.doneAt === null;
+      const snoozedUntil = ev.snoozedUntil;
       const neighbour = neighbourOf(get());
       if (await run("update the item", () => backend.setDone(ev.id, done))) {
         if (neighbour) get().select(neighbour);
-        get().showToast(done ? "Marked done" : "Moved back to Inbox", () => void backend.setDone(ev.id, !done));
+        get().showToast(done ? "Marked done" : "Moved back to Inbox", () =>
+          void run("undo", async () => {
+            await backend.setDone(ev.id, !done);
+            if (done && snoozedUntil) await backend.snooze(ev.id, new Date(snoozedUntil));
+          }),
+        );
       }
     },
 
