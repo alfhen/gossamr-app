@@ -44,8 +44,12 @@ pub fn notices(events: &[NewEvent]) -> Vec<Notice> {
         return picked.into_iter().map(single).collect();
     }
     let mentions = picked.iter().filter(|e| e.kind == EventKind::Mention).count();
-    let mut keys: Vec<&str> = picked.iter().map(|e| e.ticket_key.as_str()).collect();
-    keys.dedup();
+    let mut keys: Vec<&str> = Vec::new();
+    for e in &picked {
+        if !keys.contains(&e.ticket_key.as_str()) {
+            keys.push(&e.ticket_key);
+        }
+    }
     let title = if mentions > 0 {
         format!("{} updates, {mentions} mentioning you", picked.len())
     } else {
@@ -80,6 +84,17 @@ mod tests {
         assert_eq!(n.len(), 2);
         assert_eq!(n[0].title, "Sam Holt mentioned you · A-2");
         assert_eq!(n[1].title, "Sam moved A-1");
+    }
+
+    #[test]
+    fn a_ticket_appears_once_in_a_summary() {
+        let evs = vec![
+            ev(EventKind::Comment, "A-1"),
+            ev(EventKind::Status, "A-2"),
+            ev(EventKind::Mention, "A-1"),
+            ev(EventKind::Status, "A-1"),
+        ];
+        assert_eq!(notices(&evs)[0].body, "A-1, A-2");
     }
 
     #[test]

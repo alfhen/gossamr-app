@@ -16,6 +16,7 @@ const FIELDS: &[&str] = &[
     "subtasks", "duedate", "updated", "watches",
 ];
 const PAGE_SIZE: u32 = 50;
+const CHANGELOG_PAGE: u64 = 100;
 /// Upper bound per search so a very broad JQL can't stall a sync.
 const MAX_ISSUES: usize = 300;
 
@@ -71,7 +72,11 @@ impl Jira {
                 body["nextPageToken"] = json!(t);
             }
             let page: Page = self.call(Method::POST, "search/jql", Some(&body)).await?;
-            out.extend(page.issues.iter().filter_map(parse_issue));
+            for raw in &page.issues {
+                if let Some(t) = parse_issue(raw) {
+                    out.push(self.with_recent_history(t, raw).await?);
+                }
+            }
             match page.next_page_token {
                 Some(t) if out.len() < MAX_ISSUES => token = Some(t),
                 _ => return Ok(out),
@@ -83,7 +88,19 @@ impl Jira {
         let raw: Value = self
             .call(Method::GET, &format!("issue/{key}?fields={}&expand=changelog", FIELDS.join(",")), None)
             .await?;
-        parse_issue(&raw).ok_or_else(|| Error::Api { status: 200, message: format!("couldn't read {key}") })
+        let t = parse_issue(&raw).ok_or_else(|| Error::Api { status: 200, message: format!("couldn't read {key}") })?;
+        self.with_recent_history(t, &raw).await
+    }
+
+    /// An expanded changelog holds only its first page, which is the oldest history. When there is more, replace it
+    /// with the most recent page, since that's where new events come from.
+    async fn with_recent_history(&self, mut t: CachedTicket, raw: &Value) -> Result<CachedTicket> {
+        let Some(start) = recent_changelog_start(raw) else { return Ok(t) };
+        let page: Value = self
+            .call(Method::GET, &format!("issue/{}/changelog?startAt={start}&maxResults={CHANGELOG_PAGE}", t.key), None)
+            .await?;
+        t.history = page["values"].as_array().into_iter().flatten().filter_map(parse_history).collect();
+        Ok(t)
     }
 
     pub async fn transitions(&self, key: &str) -> Result<Vec<Transition>> {
@@ -165,6 +182,31 @@ fn str_of(v: &Value) -> Option<String> {
     v.as_str().map(String::from)
 }
 
+/// Where the most recent changelog page starts, if the expanded changelog is incomplete.
+fn recent_changelog_start(raw: &Value) -> Option<u64> {
+    let total = raw.pointer("/changelog/total").and_then(Value::as_u64)?;
+    let have = raw.pointer("/changelog/histories").and_then(Value::as_array).map_or(0, |h| h.len() as u64);
+    (total > have).then(|| total.saturating_sub(CHANGELOG_PAGE))
+}
+
+fn parse_history(h: &Value) -> Option<History> {
+    Some(History {
+        id: h["id"].as_str()?.to_string(),
+        author: person(&h["author"])?,
+        at: normalise_time(h["created"].as_str()?),
+        items: h["items"]
+            .as_array()?
+            .iter()
+            .map(|i| HistoryItem {
+                field: i["field"].as_str().unwrap_or_default().to_string(),
+                from: str_of(&i["fromString"]),
+                to: str_of(&i["toString"]),
+                to_id: str_of(&i["to"]),
+            })
+            .collect(),
+    })
+}
+
 pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
     let f = &raw["fields"];
     let key = raw["key"].as_str()?.to_string();
@@ -188,23 +230,7 @@ pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|h| {
-            Some(History {
-                id: h["id"].as_str()?.to_string(),
-                author: person(&h["author"])?,
-                at: normalise_time(h["created"].as_str()?),
-                items: h["items"]
-                    .as_array()?
-                    .iter()
-                    .map(|i| HistoryItem {
-                        field: i["field"].as_str().unwrap_or_default().to_string(),
-                        from: str_of(&i["fromString"]),
-                        to: str_of(&i["toString"]),
-                        to_id: str_of(&i["to"]),
-                    })
-                    .collect(),
-            })
-        })
+        .filter_map(parse_history)
         .collect();
     let subtasks = f["subtasks"]
         .as_array()
@@ -290,6 +316,18 @@ pub(crate) mod tests {
         assert!(t.subtasks[0].done);
         assert!(t.watching);
         assert_eq!(t.history[0].items[0].to.as_deref(), Some("In Review"));
+    }
+
+    #[test]
+    fn asks_for_the_latest_changelog_page_only_when_incomplete() {
+        let mut raw = sample_issue();
+        assert_eq!(recent_changelog_start(&raw), None, "no total means nothing to page");
+        raw["changelog"]["total"] = json!(1);
+        assert_eq!(recent_changelog_start(&raw), None);
+        raw["changelog"]["total"] = json!(250);
+        assert_eq!(recent_changelog_start(&raw), Some(150));
+        raw["changelog"]["total"] = json!(60);
+        assert_eq!(recent_changelog_start(&raw), Some(0));
     }
 
     #[test]
