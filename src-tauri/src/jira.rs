@@ -17,6 +17,8 @@ const FIELDS: &[&str] = &[
 ];
 const PAGE_SIZE: u32 = 50;
 const CHANGELOG_PAGE: u64 = 100;
+/// Bounds the changelog pages fetched per issue in one sync, so a ticket edited by automation can't stall it.
+const MAX_CHANGELOG_PAGES: usize = 10;
 /// Upper bound per search so a very broad JQL can't stall a sync.
 const MAX_ISSUES: usize = 300;
 
@@ -57,8 +59,9 @@ impl Jira {
         }
     }
 
-    /// Runs a JQL search and returns every matching issue (up to a cap) with its changelog.
-    pub async fn search(&self, scope: &Scope, jql: &str, with_changelog: bool) -> Result<Vec<CachedTicket>> {
+    /// Runs a JQL search and returns every matching issue (up to a cap). With `history_since`, each issue carries its
+    /// changelog back to at least that time (RFC 3339).
+    pub async fn search(&self, scope: &Scope, jql: &str, history_since: Option<&str>) -> Result<Vec<CachedTicket>> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Page {
@@ -70,7 +73,7 @@ impl Jira {
         let mut token: Option<String> = None;
         loop {
             let mut body = json!({ "jql": jql, "fields": FIELDS, "maxResults": PAGE_SIZE });
-            if with_changelog {
+            if history_since.is_some() {
                 body["expand"] = json!("changelog");
             }
             if let Some(t) = &token {
@@ -79,7 +82,10 @@ impl Jira {
             let page: Page = self.call(scope, Method::POST, "search/jql", Some(&body)).await?;
             for raw in &page.issues {
                 if let Some(t) = parse_issue(raw) {
-                    out.push(self.with_recent_history(scope, t, raw).await?);
+                    out.push(match history_since {
+                        Some(since) => self.with_history_since(scope, t, raw, since).await?,
+                        None => t,
+                    });
                 }
             }
             match page.next_page_token {
@@ -89,22 +95,35 @@ impl Jira {
         }
     }
 
-    pub async fn issue(&self, scope: &Scope, key: &str) -> Result<CachedTicket> {
+    /// One issue, with its changelog back to at least `history_since` (RFC 3339).
+    pub async fn issue(&self, scope: &Scope, key: &str, history_since: &str) -> Result<CachedTicket> {
         let raw: Value = self
             .call(scope, Method::GET, &format!("issue/{key}?fields={}&expand=changelog", FIELDS.join(",")), None)
             .await?;
         let t = parse_issue(&raw).ok_or_else(|| Error::Api { status: 200, message: format!("couldn't read {key}") })?;
-        self.with_recent_history(scope, t, &raw).await
+        self.with_history_since(scope, t, &raw, history_since).await
     }
 
     /// An expanded changelog holds only its first page, which is the oldest history. When there is more, replace it
-    /// with the most recent page, since that's where new events come from.
-    async fn with_recent_history(&self, scope: &Scope, mut t: CachedTicket, raw: &Value) -> Result<CachedTicket> {
-        let Some(start) = recent_changelog_start(raw) else { return Ok(t) };
-        let page: Value = self
-            .call(scope, Method::GET, &format!("issue/{}/changelog?startAt={start}&maxResults={CHANGELOG_PAGE}", t.key), None)
-            .await?;
-        t.history = page["values"].as_array().into_iter().flatten().filter_map(parse_history).collect();
+    /// with the newest pages, walking back until the history reaches `since`, since that's where new events come from.
+    async fn with_history_since(&self, scope: &Scope, mut t: CachedTicket, raw: &Value, since: &str) -> Result<CachedTicket> {
+        let Some(total) = incomplete_changelog_total(raw) else { return Ok(t) };
+        let mut history = Vec::new();
+        let mut end = total;
+        for _ in 0..MAX_CHANGELOG_PAGES {
+            let Some((start, count)) = previous_page(end) else { break };
+            let path = format!("issue/{}/changelog?startAt={start}&maxResults={count}", t.key);
+            let page: Value = self.call(scope, Method::GET, &path, None).await?;
+            let mut older: Vec<History> = page["values"].as_array().into_iter().flatten().filter_map(parse_history).collect();
+            let reached = older.first().is_none_or(|h| h.at.as_str() <= since);
+            older.append(&mut history);
+            history = older;
+            end = start;
+            if reached {
+                break;
+            }
+        }
+        t.history = history;
         Ok(t)
     }
 
@@ -201,11 +220,19 @@ fn str_of(v: &Value) -> Option<String> {
     v.as_str().map(String::from)
 }
 
-/// Where the most recent changelog page starts, if the expanded changelog is incomplete.
-fn recent_changelog_start(raw: &Value) -> Option<u64> {
+/// The changelog's total length, if the expanded changelog didn't include all of it.
+fn incomplete_changelog_total(raw: &Value) -> Option<u64> {
     let total = raw.pointer("/changelog/total").and_then(Value::as_u64)?;
     let have = raw.pointer("/changelog/histories").and_then(Value::as_array).map_or(0, |h| h.len() as u64);
-    (total > have).then(|| total.saturating_sub(CHANGELOG_PAGE))
+    (total > have).then_some(total)
+}
+
+/// The page just before `end` as `(startAt, maxResults)`, or `None` at the beginning. Pages never overlap.
+fn previous_page(end: u64) -> Option<(u64, u64)> {
+    (end > 0).then(|| {
+        let start = end.saturating_sub(CHANGELOG_PAGE);
+        (start, end - start)
+    })
 }
 
 fn parse_history(h: &Value) -> Option<History> {
@@ -339,15 +366,25 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn asks_for_the_latest_changelog_page_only_when_incomplete() {
+    fn pages_the_changelog_only_when_the_expanded_one_is_incomplete() {
         let mut raw = sample_issue();
-        assert_eq!(recent_changelog_start(&raw), None, "no total means nothing to page");
+        assert_eq!(incomplete_changelog_total(&raw), None, "no total means nothing to page");
         raw["changelog"]["total"] = json!(1);
-        assert_eq!(recent_changelog_start(&raw), None);
+        assert_eq!(incomplete_changelog_total(&raw), None);
         raw["changelog"]["total"] = json!(250);
-        assert_eq!(recent_changelog_start(&raw), Some(150));
-        raw["changelog"]["total"] = json!(60);
-        assert_eq!(recent_changelog_start(&raw), Some(0));
+        assert_eq!(incomplete_changelog_total(&raw), Some(250));
+    }
+
+    #[test]
+    fn walks_back_through_changelog_pages_without_overlap() {
+        let mut pages = Vec::new();
+        let mut end = 250;
+        while let Some((start, count)) = previous_page(end) {
+            pages.push((start, count));
+            end = start;
+        }
+        assert_eq!(pages, vec![(150, 100), (50, 100), (0, 50)]);
+        assert_eq!(previous_page(0), None);
     }
 
     #[test]
