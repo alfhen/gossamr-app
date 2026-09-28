@@ -1,0 +1,239 @@
+use std::path::Path;
+
+use rusqlite::{params, Connection, OptionalExtension};
+
+use crate::error::{Error, Result};
+use crate::events::NewEvent;
+use crate::model::{CachedTicket, EventKind, InboxEvent, Person};
+
+impl From<rusqlite::Error> for Error {
+    fn from(e: rusqlite::Error) -> Self {
+        Error::Io(std::io::Error::other(e))
+    }
+}
+
+pub struct Db {
+    conn: Connection,
+}
+
+impl Db {
+    pub fn open(path: &Path) -> Result<Self> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        Self::init(Connection::open(path)?)
+    }
+
+    #[cfg(test)]
+    pub fn in_memory() -> Result<Self> {
+        Self::init(Connection::open_in_memory()?)
+    }
+
+    fn init(conn: Connection) -> Result<Self> {
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             CREATE TABLE IF NOT EXISTS tickets (
+               key TEXT PRIMARY KEY,
+               data TEXT NOT NULL,
+               synced_at TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS events (
+               id TEXT PRIMARY KEY,
+               ticket_key TEXT NOT NULL,
+               kind TEXT NOT NULL,
+               actor TEXT NOT NULL,
+               at TEXT NOT NULL,
+               text TEXT NOT NULL,
+               unread INTEGER NOT NULL,
+               done_at TEXT,
+               snoozed_until TEXT
+             );
+             CREATE INDEX IF NOT EXISTS events_at ON events(at);
+             CREATE TABLE IF NOT EXISTS seen (ticket_key TEXT PRIMARY KEY, at TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);",
+        )?;
+        Ok(Self { conn })
+    }
+
+    pub fn upsert_ticket(&self, t: &CachedTicket, now: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO tickets (key, data, synced_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET data = ?2, synced_at = ?3",
+            params![t.key, serde_json::to_string(t)?, now],
+        )?;
+        Ok(())
+    }
+
+    /// Tickets refreshed at or after `since`. Older rows are ones that dropped out of every query.
+    pub fn tickets(&self, since: &str) -> Result<Vec<CachedTicket>> {
+        let mut stmt = self.conn.prepare("SELECT data FROM tickets WHERE synced_at >= ?1")?;
+        let rows = stmt.query_map(params![since], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(serde_json::from_str(&row?)?);
+        }
+        Ok(out)
+    }
+
+    /// Inserts events that aren't stored yet and returns the ones that were new.
+    pub fn insert_events(&self, events: &[NewEvent], unread_after: &str) -> Result<Vec<NewEvent>> {
+        let mut stmt = self.conn.prepare(
+            "INSERT OR IGNORE INTO events (id, ticket_key, kind, actor, at, text, unread) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?;
+        let mut inserted = Vec::new();
+        for e in events {
+            let unread = e.at.as_str() > unread_after;
+            let n = stmt.execute(params![
+                e.id,
+                e.ticket_key,
+                e.kind.as_str(),
+                serde_json::to_string(&e.actor)?,
+                e.at,
+                e.text,
+                unread
+            ])?;
+            if n > 0 && unread {
+                inserted.push(e.clone());
+            }
+        }
+        Ok(inserted)
+    }
+
+    pub fn events(&self, since: &str) -> Result<Vec<InboxEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ticket_key, kind, actor, at, text, unread, done_at, snoozed_until
+             FROM events WHERE at >= ?1 OR (done_at IS NULL AND unread = 1) ORDER BY at DESC",
+        )?;
+        let rows = stmt.query_map(params![since], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, bool>(6)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, ticket_key, kind, actor, at, text, unread, done_at, snoozed_until) = row?;
+            out.push(InboxEvent {
+                id,
+                kind: EventKind::parse(&kind),
+                ticket_key,
+                actor: serde_json::from_str::<Person>(&actor)?,
+                at,
+                text,
+                unread,
+                done_at,
+                snoozed_until,
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn set_unread(&self, id: &str, unread: bool) -> Result<()> {
+        self.update_event("UPDATE events SET unread = ?2 WHERE id = ?1", params![id, unread])
+    }
+
+    pub fn set_done(&self, id: &str, done_at: Option<&str>) -> Result<()> {
+        if done_at.is_some() {
+            self.update_event(
+                "UPDATE events SET done_at = ?2, unread = 0, snoozed_until = NULL WHERE id = ?1",
+                params![id, done_at],
+            )
+        } else {
+            self.update_event("UPDATE events SET done_at = NULL WHERE id = ?1", params![id])
+        }
+    }
+
+    pub fn snooze(&self, id: &str, until: Option<&str>) -> Result<()> {
+        if until.is_some() {
+            self.update_event("UPDATE events SET snoozed_until = ?2, unread = 0 WHERE id = ?1", params![id, until])
+        } else {
+            self.update_event("UPDATE events SET snoozed_until = NULL WHERE id = ?1", params![id])
+        }
+    }
+
+    fn update_event(&self, sql: &str, p: impl rusqlite::Params) -> Result<()> {
+        match self.conn.execute(sql, p)? {
+            0 => Err(Error::Api { status: 404, message: "that inbox item no longer exists".into() }),
+            _ => Ok(()),
+        }
+    }
+
+    pub fn mark_seen(&self, key: &str, at: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO seen (ticket_key, at) VALUES (?1, ?2) ON CONFLICT(ticket_key) DO UPDATE SET at = ?2",
+            params![key, at],
+        )?;
+        Ok(())
+    }
+
+    pub fn seen(&self) -> Result<std::collections::HashMap<String, String>> {
+        let mut stmt = self.conn.prepare("SELECT ticket_key, at FROM seen")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn meta(&self, k: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT v FROM meta WHERE k = ?1", params![k], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_meta(&self, k: &str, v: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta (k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = ?2",
+            params![k, v],
+        )?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::derive;
+    use crate::jira::{parse_issue, tests::sample_issue};
+
+    #[test]
+    fn inserting_events_twice_reports_them_once() {
+        let db = Db::in_memory().unwrap();
+        let events = derive(&parse_issue(&sample_issue()).unwrap(), "me");
+        assert_eq!(db.insert_events(&events, "2000-01-01T00:00:00Z").unwrap().len(), 2);
+        assert!(db.insert_events(&events, "2000-01-01T00:00:00Z").unwrap().is_empty());
+        assert_eq!(db.events("2000-01-01T00:00:00Z").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn events_before_the_cutoff_arrive_read() {
+        let db = Db::in_memory().unwrap();
+        let events = derive(&parse_issue(&sample_issue()).unwrap(), "me");
+        assert!(db.insert_events(&events, "2030-01-01T00:00:00Z").unwrap().is_empty());
+        assert!(db.events("2000-01-01T00:00:00Z").unwrap().iter().all(|e| !e.unread));
+    }
+
+    #[test]
+    fn done_clears_unread_and_snooze_and_undo_keeps_them_cleared() {
+        let db = Db::in_memory().unwrap();
+        let events = derive(&parse_issue(&sample_issue()).unwrap(), "me");
+        db.insert_events(&events, "2000-01-01T00:00:00Z").unwrap();
+        db.snooze("c:10", Some("2030-01-01T00:00:00Z")).unwrap();
+        db.set_done("c:10", Some("2026-09-28T12:00:00Z")).unwrap();
+        let e = db.events("2000-01-01T00:00:00Z").unwrap().into_iter().find(|e| e.id == "c:10").unwrap();
+        assert_eq!(e.done_at.as_deref(), Some("2026-09-28T12:00:00Z"));
+        assert!(e.snoozed_until.is_none() && !e.unread);
+        assert!(db.set_done("missing", None).is_err());
+    }
+
+    #[test]
+    fn tickets_that_stop_syncing_drop_out() {
+        let db = Db::in_memory().unwrap();
+        let t = parse_issue(&sample_issue()).unwrap();
+        db.upsert_ticket(&t, "2026-09-28T10:00:00Z").unwrap();
+        assert_eq!(db.tickets("2026-09-28T09:00:00Z").unwrap().len(), 1);
+        assert!(db.tickets("2026-09-28T11:00:00Z").unwrap().is_empty());
+    }
+}

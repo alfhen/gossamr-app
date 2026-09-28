@@ -52,10 +52,17 @@ export function Sidebar() {
       </div>
 
       <div className="mt-auto grid gap-1.5 border-t border-sep px-3.5 py-3 text-[11.5px] text-ink-2">
-        <div className="flex items-center gap-1.5">
-          <span className="size-[7px] rounded-full bg-[#28c840]" />
-          {snap.lastSyncAt ? `Synced ${relativeTime(snap.lastSyncAt, now) === "now" ? "just now" : relativeTime(snap.lastSyncAt, now) + " ago"}` : "Not synced yet"}
-        </div>
+        {snap.syncError ? (
+          <div className="flex items-start gap-1.5 text-blocked" title={snap.syncError}>
+            <span className="mt-1 size-[7px] shrink-0 rounded-full bg-blocked" />
+            <span className="line-clamp-2">Sync failed: {snap.syncError}</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <span className="size-[7px] rounded-full bg-[#28c840]" />
+            {syncLabel(snap.lastSyncAt, now)}
+          </div>
+        )}
         <div className="truncate" title={account?.site.url}>
           {account ? `${account.me.name} · ${account.site.name}` : "Sample data"}
         </div>
@@ -64,12 +71,19 @@ export function Sidebar() {
             Sign out
           </button>
         )}
-        {backend?.kind === "mock" && (
+        {backend && (
           <button type="button" className="text-left text-accent" onClick={() => void backend.syncNow()}>
-            Simulate a new notification
+            {backend.kind === "mock" ? "Simulate a new notification" : "Sync now"}
           </button>
         )}
       </div>
     </aside>
   );
+}
+
+function syncLabel(lastSyncAt: string | null, now: Date) {
+  if (!lastSyncAt) return "Syncing…";
+  const rel = relativeTime(lastSyncAt, now);
+  if (rel === "now") return "Synced just now";
+  return rel === "Yday" ? "Synced yesterday" : `Synced ${rel} ago`;
 }
