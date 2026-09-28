@@ -122,7 +122,7 @@ fn push_line(line: &str, mentions: &[&MentionRef], content: &mut Vec<Value>) {
     let mut rest = line;
     while !rest.is_empty() {
         // Same rules as the composer's highlighting: `@` starts a token (not `team@Sam`), and the name must end there.
-        let starts_token = line[..line.len() - rest.len()].chars().last().is_none_or(|c| c.is_whitespace() || "([{\"'".contains(c));
+        let starts_token = line[..line.len() - rest.len()].chars().next_back().is_none_or(|c| c.is_whitespace() || "([{\"'".contains(c));
         let hit = rest.strip_prefix('@').filter(|_| starts_token).and_then(|after| {
             mentions.iter().find(|m| {
                 after.starts_with(m.name.as_str())
