@@ -70,9 +70,17 @@ function Node({ node }: { node: AdfNode }): ReactNode {
     case "tableRow":
       return <tr>{children(node)}</tr>;
     case "tableHeader":
-      return <th className="border border-sep-strong bg-hover px-2 py-1 text-left align-top font-semibold [&>p]:min-h-0">{children(node)}</th>;
+      return (
+        <th {...spans(a)} className="border border-sep-strong bg-hover px-2 py-1 text-left align-top font-semibold [&>p]:min-h-0">
+          {children(node)}
+        </th>
+      );
     case "tableCell":
-      return <td className="border border-sep-strong px-2 py-1 align-top [&>p]:min-h-0">{children(node)}</td>;
+      return (
+        <td {...spans(a)} className="border border-sep-strong px-2 py-1 align-top [&>p]:min-h-0">
+          {children(node)}
+        </td>
+      );
     case "taskList":
     case "decisionList":
       return <ul className="grid gap-1">{children(node)}</ul>;
@@ -99,8 +107,12 @@ function Node({ node }: { node: AdfNode }): ReactNode {
         <span className="rounded-[4px] bg-todo-bg px-1.5 py-px text-[11px] font-semibold tracking-wide text-todo uppercase">{String(a.text ?? "")}</span>
       );
     case "date": {
-      const d = new Date(Number(a.timestamp));
-      return <span className="rounded-[4px] bg-hover px-1">{isNaN(+d) ? "" : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</span>;
+      const d = dateOf(a.timestamp);
+      return (
+        <span className="rounded-[4px] bg-hover px-1">
+          {d ? d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : ""}
+        </span>
+      );
     }
     case "inlineCard":
     case "blockCard":
@@ -115,6 +127,18 @@ function Node({ node }: { node: AdfNode }): ReactNode {
     default:
       return <>{children(node)}</>;
   }
+}
+
+function spans(a: Record<string, unknown>) {
+  const span = (v: unknown) => (Number.isInteger(v) && (v as number) > 1 ? (v as number) : undefined);
+  return { colSpan: span(a.colspan), rowSpan: span(a.rowspan) };
+}
+
+/** A date node's day, which is midnight UTC. The spec's example is in seconds; Jira's editor writes milliseconds. */
+export function dateOf(timestamp: unknown): Date | null {
+  const n = Number(timestamp);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return new Date(n < 1e11 ? n * 1000 : n);
 }
 
 const PANEL: Record<string, string> = {
