@@ -55,10 +55,20 @@ impl Core {
 
     async fn with_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
         let (site, _) = self.identity().await?;
+        self.with_db_for(&site.cloud_id, f).await
+    }
+
+    /// Runs `f` against `cloud_id`'s database, but only if that site is still the signed-in one. Work that fetched
+    /// data before a sign-out and sign-in to another site must not land in the new site's database.
+    async fn with_db_for<T>(&self, cloud_id: &str, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+        let (site, _) = self.identity().await?;
+        if site.cloud_id != cloud_id {
+            return Err(Error::SiteChanged);
+        }
         let mut guard = self.db.lock().expect("db lock poisoned");
-        if guard.as_ref().map(|(id, _)| id != &site.cloud_id).unwrap_or(true) {
-            let path = self.data_dir.join(format!("inbox-{}.sqlite", site.cloud_id));
-            *guard = Some((site.cloud_id.clone(), Db::open(&path)?));
+        if guard.as_ref().map(|(id, _)| id != cloud_id).unwrap_or(true) {
+            let path = self.data_dir.join(format!("inbox-{cloud_id}.sqlite"));
+            *guard = Some((cloud_id.to_string(), Db::open(&path)?));
         }
         f(&guard.as_ref().expect("opened above").1)
     }
@@ -74,7 +84,7 @@ impl Core {
     /// Fetches tracked tickets and epic children, stores them, and returns events that are new and unread.
     /// The first sync for a site returns nothing, so connecting doesn't fire a burst of notifications.
     pub async fn sync(&self) -> Result<Vec<NewEvent>> {
-        let (_, me) = self.identity().await?;
+        let (site, me) = self.identity().await?;
         let started = now_iso();
         let tracked = self.jira.search(TRACKED_JQL, true).await?;
         let epics: Vec<&str> = tracked.iter().filter(|t| t.is_epic).map(|t| t.key.as_str()).collect();
@@ -85,7 +95,7 @@ impl Core {
             self.jira.search(&jql, false).await?
         };
 
-        self.with_db(|db| {
+        self.with_db_for(&site.cloud_id, |db| {
             let previous = db.meta(LAST_SYNC)?;
             let unread_after = match &previous {
                 Some(at) => (chrono::DateTime::parse_from_rfc3339(at).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now())
@@ -107,9 +117,9 @@ impl Core {
 
     /// Re-reads one issue after a write so the UI shows the result without waiting for the next sync.
     async fn refresh(&self, key: &str) -> Result<()> {
-        let (_, me) = self.identity().await?;
+        let (site, me) = self.identity().await?;
         let t = self.jira.issue(key).await?;
-        self.with_db(|db| {
+        self.with_db_for(&site.cloud_id, |db| {
             db.upsert_ticket(&t, &now_iso())?;
             let since = db.meta(LAST_SYNC)?.unwrap_or_else(now_iso);
             db.insert_events(&derive(&t, &me.account_id), &since)?;
@@ -211,7 +221,8 @@ impl Core {
 
     pub async fn transition(&self, key: &str, transition_id: &str) -> Result<()> {
         self.jira.transition(key, transition_id).await?;
-        self.refresh(key).await
+        self.after_write(key).await;
+        Ok(())
     }
 
     pub async fn comment(&self, key: &str, body: &str) -> Result<()> {
@@ -220,7 +231,17 @@ impl Core {
             return Err(Error::Api { status: 400, message: "a comment can't be empty".into() });
         }
         self.jira.comment(key, body).await?;
-        self.refresh(key).await
+        self.after_write(key).await;
+        Ok(())
+    }
+
+    /// Re-reads a ticket after a successful write. A failure here must not be reported as a failed write, or a retry
+    /// would post the comment twice; the next sync picks the change up instead.
+    async fn after_write(&self, key: &str) {
+        if let Err(e) = self.refresh(key).await {
+            self.set_error(Some(format!("Saved, but couldn't refresh {key}: {e}")));
+            self.wake.notify_one();
+        }
     }
 
     /// The cached ticket, or a fresh read from Jira when it isn't cached.
