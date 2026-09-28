@@ -126,7 +126,7 @@ export function autoLink(text: string, people: Person[]): { text: string; mentio
   for (const [first, owners] of firsts) {
     if (owners.length !== 1 || owners[0].name === first) continue;
     const p = owners[0];
-    const re = new RegExp(`@${escapeRe(first)}(?![\\p{L}\\p{N}]| ${escapeRe(p.name.slice(first.length + 1))})`, "gu");
+    const re = new RegExp(`@${escapeRe(first)}(?![\\p{L}\\p{N}_]| ${escapeRe(p.name.slice(first.length + 1))})`, "gu");
     if (re.test(out)) {
       out = out.replace(re, `@${p.name}`);
       mentions.set(p.accountId, { accountId: p.accountId, name: p.name });

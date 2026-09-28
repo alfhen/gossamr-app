@@ -65,6 +65,10 @@ describe("autoLink", () => {
     expect(r.mentions.map((m) => m.accountId).sort()).toEqual(["m", "s"]);
   });
 
+  it("doesn't expand a first name that continues with _", () => {
+    expect(autoLink("@Sam_2 is the test account", [sam])).toEqual({ text: "@Sam_2 is the test account", mentions: [] });
+  });
+
   it("leaves ambiguous first names alone", () => {
     const r = autoLink("@Sam any news?", [sam, sam2]);
     expect(r).toEqual({ text: "@Sam any news?", mentions: [] });

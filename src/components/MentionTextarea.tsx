@@ -39,21 +39,26 @@ export function MentionTextarea({
   const mirror = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLSpanElement>(null);
   const [query, setQuery] = useState<ActiveQuery | null>(null);
-  const [remote, setRemote] = useState<Person[]>([]);
+  // Tagged with its ticket, so people found for one ticket are never offered on another.
+  const [remote, setRemote] = useState<{ ticketKey: string; people: Person[] }>({ ticketKey, people: [] });
   const [index, setIndex] = useState(0);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
-  const suggestions = useMemo(() => (query ? rankPeople([...people, ...remote], query.query) : []), [query, people, remote]);
+  const suggestions = useMemo(() => {
+    if (!query) return [];
+    const found = remote.ticketKey === ticketKey ? remote.people : [];
+    return rankPeople([...people, ...found], query.query);
+  }, [query, people, remote, ticketKey]);
   const open = !!query && suggestions.length > 0;
 
   useEffect(() => {
-    if (!query || !backend || query.query.length === 0) return setRemote([]);
+    if (!query || !backend || query.query.length === 0) return setRemote({ ticketKey, people: [] });
     let live = true;
     const t = setTimeout(() => {
       backend
         .mentionable(ticketKey, query.query)
-        .then((found) => live && setRemote(found))
-        .catch(() => live && setRemote([]));
+        .then((found) => live && setRemote({ ticketKey, people: found }))
+        .catch(() => live && setRemote({ ticketKey, people: [] }));
     }, SEARCH_DELAY_MS);
     return () => {
       live = false;
