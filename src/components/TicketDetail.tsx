@@ -1,0 +1,282 @@
+import { useEffect, useRef, useState } from "react";
+import { snoozeOptions, relativeTime } from "../lib/views";
+import { selectedEvent, selectedTicket, useStore } from "../store";
+import type { Ticket, Transition } from "../types";
+import { Icon } from "./icons";
+import { Menu } from "./Menu";
+import { Avatar, SectionHeading, StatusPill, ToolbarButton } from "./primitives";
+
+export function TicketDetail() {
+  const state = useStore();
+  const { overlay, openOverlay, backend, markDone, snooze, transition, now } = state;
+  const ticket = selectedTicket(state);
+  const event = selectedEvent(state);
+  const transitionBtn = useRef<HTMLDivElement>(null);
+  const snoozeBtn = useRef<HTMLDivElement>(null);
+  const [transitions, setTransitions] = useState<Transition[] | null>(null);
+
+  useEffect(() => {
+    if (overlay !== "transition" || !ticket || !backend) return;
+    let live = true;
+    setTransitions(null);
+    backend
+      .transitions(ticket.key)
+      .then((t) => live && setTransitions(t))
+      .catch(() => live && setTransitions([]));
+    return () => {
+      live = false;
+    };
+  }, [overlay, ticket?.key, ticket?.status.name, backend]);
+
+  if (!ticket) {
+    return (
+      <section className="grid place-items-center bg-win text-ink-3">
+        <div className="text-center">
+          <b className="mb-1 block text-[14px] text-ink-2">Nothing selected</b>Pick an item on the left.
+        </div>
+      </section>
+    );
+  }
+
+  const close = () => openOverlay(null);
+
+  return (
+    <section className="flex min-h-0 min-w-0 flex-col bg-win">
+      <header data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-1.5 overflow-x-auto border-b border-sep bg-bar px-3">
+        <div ref={transitionBtn}>
+          <ToolbarButton title="Transition (t)" onClick={() => openOverlay("transition")}>
+            Transition <kbd>t</kbd>
+          </ToolbarButton>
+        </div>
+        <ToolbarButton title="Comment (c)" onClick={() => document.getElementById("composer")?.focus()}>
+          Comment <kbd>c</kbd>
+        </ToolbarButton>
+        {event && (
+          <>
+            <div ref={snoozeBtn}>
+              <ToolbarButton title="Snooze (s)" onClick={() => openOverlay("snooze")}>
+                Snooze <kbd>s</kbd>
+              </ToolbarButton>
+            </div>
+            <ToolbarButton title="Done (e)" onClick={() => void markDone()}>
+              {event.doneAt ? "Not done" : "Done"} <kbd>e</kbd>
+            </ToolbarButton>
+          </>
+        )}
+        <span data-tauri-drag-region className="flex-1 self-stretch" />
+        <ToolbarButton title="Open in Jira (o)" onClick={() => void backend?.openUrl(ticket.url)}>
+          Open in Jira <Icon name="external" className="size-3" />
+        </ToolbarButton>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-auto">
+        <TicketBody key={ticket.key} ticket={ticket} />
+      </div>
+
+      {overlay === "transition" && (
+        <Menu
+          title={`Move ${ticket.key} from ${ticket.status.name}`}
+          anchor={transitionBtn.current}
+          loading={transitions === null}
+          onClose={close}
+          items={(transitions ?? []).map((tr) => ({
+            key: tr.id,
+            label: tr.name,
+            hint: <StatusPill status={tr.to} />,
+            onPick: () => void transition(tr.id, tr.name),
+          }))}
+        />
+      )}
+      {overlay === "snooze" && event && (
+        <Menu
+          title="Snooze until"
+          anchor={snoozeBtn.current}
+          onClose={close}
+          items={snoozeOptions(now).map((o) => ({
+            key: o.label,
+            label: o.label,
+            hint: o.hint,
+            onPick: () => void snooze(o.until),
+          }))}
+        />
+      )}
+    </section>
+  );
+}
+
+function TicketBody({ ticket: t }: { ticket: Ticket }) {
+  const { now, snap, openOverlay, goToTicket } = useStore();
+  const me = snap?.me.accountId;
+  const since = new Date(now.getTime() - 24 * 3600_000).toISOString();
+  const newComments = t.comments.filter((c) => c.created > since && c.author.accountId !== me);
+
+  return (
+    <div className="selectable grid max-w-[760px] gap-5 px-7 pt-5 pb-7">
+      <div>
+        <div className="flex flex-wrap gap-1.5 text-sm text-ink-3">
+          {t.parent && (
+            <button type="button" className="hover:underline" onClick={() => goToTicket(t.parent!.key)}>
+              <span className="font-mono">{t.parent.key}</span> {t.parent.summary} /
+            </button>
+          )}
+          <span className="font-mono">{t.key}</span> · {t.type}
+        </div>
+        <h1 className="mt-1 text-xl leading-tight font-bold tracking-tight text-balance">{t.summary}</h1>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-[18px] gap-y-2 text-[12.5px] text-ink-2">
+        <StatusPill status={t.status} onClick={() => openOverlay("transition")} />
+        <Fact label="Assignee">
+          <Avatar person={t.assignee} /> {t.assignee?.name ?? "Unassigned"}
+        </Fact>
+        {t.reporter && <Fact label="Reporter">{t.reporter.name}</Fact>}
+        {t.priority && <Fact label="Priority">{t.priority}</Fact>}
+        {t.dueDate ? (
+          <Fact label="Due">{new Date(t.dueDate).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</Fact>
+        ) : (
+          t.sprint && <Fact label="Sprint">{t.sprint}</Fact>
+        )}
+      </div>
+
+      {(t.changes.length > 0 || newComments.length > 0) && (
+        <div className="grid gap-2 rounded-[10px] border border-sep-strong bg-accent-soft px-3.5 py-3">
+          <h3 className="text-xs font-semibold tracking-wide text-accent uppercase">Since you last looked</h3>
+          {t.changes.map((c, i) => (
+            <div key={i} className="flex flex-wrap items-baseline gap-2">
+              <span className="min-w-[74px] font-semibold">{c.field}</span>
+              <s className="text-ink-3">{c.from ?? "None"}</s> → <b>{c.to ?? "None"}</b>
+              <span className="ml-auto text-sm text-ink-3">
+                {c.author.name.split(" ")[0]} · {relativeTime(c.at, now)}
+              </span>
+            </div>
+          ))}
+          {newComments.map((c) => (
+            <div key={c.id} className="flex flex-wrap items-baseline gap-2">
+              <span className="min-w-[74px] font-semibold">Comment</span>
+              <span>from {c.author.name.split(" ")[0]}</span>
+              <span className="ml-auto text-sm text-ink-3">{relativeTime(c.created, now)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div>
+        <SectionHeading>Description</SectionHeading>
+        <div className="max-w-[65ch] whitespace-pre-wrap">{t.description || <span className="text-ink-3">No description.</span>}</div>
+      </div>
+
+      {t.children.length > 0 && snap && (
+        <div>
+          <SectionHeading>Issues in this epic</SectionHeading>
+          {t.children
+            .map((k) => snap.tickets[k])
+            .filter(Boolean)
+            .map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => goToTicket(c.key)}
+                className="grid w-full grid-cols-[62px_1fr_auto_22px] items-center gap-2.5 border-b border-sep py-[7px] text-left hover:[&>.t]:underline"
+              >
+                <span className="font-mono text-[11.5px] font-semibold text-ink-2">{c.key}</span>
+                <span className="t truncate">{c.summary}</span>
+                <StatusPill status={c.status} />
+                <Avatar person={c.assignee} />
+              </button>
+            ))}
+        </div>
+      )}
+
+      {t.subtasks.length > 0 && (
+        <div>
+          <SectionHeading>
+            Subtasks · {t.subtasks.filter((s) => s.done).length}/{t.subtasks.length}
+          </SectionHeading>
+          {t.subtasks.map((s) => (
+            <div key={s.key} className="flex items-center gap-2 border-b border-sep py-[5px]">
+              <span className={`grid size-3.5 place-items-center rounded border-[1.5px] ${s.done ? "border-done bg-done text-white" : "border-sep-strong"}`}>
+                {s.done && <Icon name="check" className="size-3 [&_circle]:hidden" />}
+              </span>
+              <span className="w-[62px] font-mono text-[11.5px] font-semibold text-ink-2">{s.key}</span>
+              {s.summary}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div>
+        <SectionHeading>Comments{t.comments.length ? ` · ${t.comments.length}` : ""}</SectionHeading>
+        <div className="grid gap-3.5">
+          {t.comments.length === 0 && <div className="text-ink-3">No comments yet.</div>}
+          {t.comments.map((c) => (
+            <div key={c.id} className="grid grid-cols-[28px_1fr] gap-2.5">
+              <Avatar person={c.author} size={28} />
+              <div>
+                <div className="flex items-baseline gap-2">
+                  <b className="font-semibold">{c.author.name}</b>
+                  <span className="text-sm text-ink-3">{relativeTime(c.created, now)}</span>
+                </div>
+                <div className="max-w-[65ch] whitespace-pre-wrap">{c.body}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <Composer ticketKey={t.key} />
+    </div>
+  );
+}
+
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="text-ink-3">{label}</span>
+      {children}
+    </span>
+  );
+}
+
+function Composer({ ticketKey }: { ticketKey: string }) {
+  const comment = useStore((s) => s.comment);
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
+    if (!body.trim() || sending) return;
+    setSending(true);
+    if (await comment(body)) setBody("");
+    setSending(false);
+  };
+
+  return (
+    <div className="overflow-hidden rounded-[10px] border border-field-border bg-field focus-within:border-accent focus-within:ring-3 focus-within:ring-accent-soft">
+      <textarea
+        id="composer"
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            e.preventDefault();
+            void send();
+          }
+        }}
+        placeholder={`Comment on ${ticketKey}…`}
+        className="block min-h-[62px] w-full resize-y bg-transparent px-3 py-2.5 outline-none"
+      />
+      <div className="flex items-center gap-2 border-t border-sep py-1.5 pr-2 pl-3 text-[11.5px] text-ink-3">
+        <span>
+          <kbd>⌘</kbd> <kbd>↵</kbd> to send
+        </span>
+        <button
+          type="button"
+          disabled={!body.trim() || sending}
+          onClick={() => void send()}
+          className="ml-auto rounded-md bg-accent px-3 py-1 text-[12.5px] font-semibold text-white disabled:opacity-45"
+        >
+          {sending ? "Sending…" : "Comment"}
+        </button>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,304 @@
+import { isTauri } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import type { Comment, EventKind, InboxEvent, Person, Snapshot, Status, Ticket, Transition } from "../types";
+import type { Backend } from "./types";
+
+const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+const P = {
+  me: { accountId: "me", name: "Alf Henderson" },
+  sam: { accountId: "sam", name: "Sam Holt" },
+  mette: { accountId: "mette", name: "Mette Lund" },
+  jonas: { accountId: "jonas", name: "Jonas Berg" },
+  priya: { accountId: "priya", name: "Priya Nair" },
+} satisfies Record<string, Person>;
+
+const S = {
+  todo: { name: "To Do", category: "new" },
+  prog: { name: "In Progress", category: "indeterminate" },
+  review: { name: "In Review", category: "indeterminate" },
+  blocked: { name: "Blocked", category: "indeterminate" },
+  done: { name: "Done", category: "done" },
+} satisfies Record<string, Status>;
+
+const WORKFLOW: Record<string, [keyof typeof S, string][]> = {
+  "To Do": [["prog", "Start progress"], ["blocked", "Block"]],
+  "In Progress": [["review", "Send to review"], ["blocked", "Block"], ["todo", "Stop progress"]],
+  "In Review": [["done", "Done"], ["prog", "Back to In Progress"]],
+  Blocked: [["prog", "Unblock"], ["todo", "Back to To Do"]],
+  Done: [["prog", "Reopen"]],
+};
+
+let seq = 1000;
+const id = () => String(++seq);
+const comment = (author: Person, minutesAgo: number, body: string): Comment => ({
+  id: id(),
+  author,
+  created: ago(minutesAgo),
+  body,
+});
+
+function ticket(t: Partial<Ticket> & Pick<Ticket, "key" | "summary" | "type" | "status">): Ticket {
+  return {
+    priority: "Medium",
+    assignee: null,
+    reporter: null,
+    parent: null,
+    description: "",
+    comments: [],
+    changes: [],
+    subtasks: [],
+    children: [],
+    dueDate: null,
+    sprint: null,
+    url: `https://example.atlassian.net/browse/${t.key}`,
+    updated: ago(60 * 24),
+    ...t,
+  };
+}
+
+function sampleSnapshot(): Snapshot {
+  const epic = { key: "CA-400", summary: "Campaign translation pipeline" };
+  const tickets: Ticket[] = [
+    ticket({
+      ...epic,
+      type: "Epic",
+      status: S.prog,
+      priority: "High",
+      assignee: P.mette,
+      reporter: P.mette,
+      dueDate: "2026-10-17",
+      description:
+        "Translate and roll out campaigns to every store automatically, with a human approval step before anything is sent.",
+      children: ["CA-412", "CA-418", "CA-420", "CA-421"],
+      changes: [{ field: "Due date", from: "10 Oct", to: "17 Oct", author: P.mette, at: ago(180) }],
+      updated: ago(180),
+    }),
+    ticket({
+      key: "CA-412",
+      summary: "Split translation rollout into parallel workers",
+      type: "Story",
+      status: S.prog,
+      priority: "High",
+      assignee: P.me,
+      reporter: P.mette,
+      parent: epic,
+      sprint: "CRM 41",
+      description:
+        "Large campaigns take over an hour to roll out because translations run one language at a time. Run languages in parallel workers so a 12-language campaign finishes in under 15 minutes.",
+      subtasks: [
+        { key: "CA-413", summary: "Worker pool config in Horizon", done: true },
+        { key: "CA-414", summary: "Fan-out job per language", done: true },
+      ],
+      comments: [
+        comment(P.jonas, 60 * 48, "Horizon has room for 8 more workers on the queue box."),
+        comment(P.mette, 22, "Can we cap concurrency per store? The DKK account is small and I don't want it hitting limits."),
+      ],
+      changes: [{ field: "Sprint", from: "CRM 40", to: "CRM 41", author: P.mette, at: ago(25) }],
+      updated: ago(22),
+    }),
+    ticket({
+      key: "CA-418",
+      summary: "Retry translation batches when Klaviyo rate-limits us",
+      type: "Story",
+      status: S.blocked,
+      priority: "High",
+      assignee: P.sam,
+      reporter: P.me,
+      parent: epic,
+      sprint: "CRM 41",
+      description:
+        "Overnight rollouts fail when Klaviyo returns 429. Batches should back off and retry instead of failing the whole campaign.\n\nDone when a 429 on one batch never fails the rollout, and retries show up in the rollout status.",
+      comments: [comment(P.sam, 4, "@Alf do we know the per-account rate limit on the euro store? Batches keep failing around 02:00.")],
+      changes: [{ field: "Status", from: "In Progress", to: "Blocked", author: P.sam, at: ago(5) }],
+      updated: ago(4),
+    }),
+    ticket({
+      key: "CA-420",
+      summary: "Rollout status shows stale state after a retry",
+      type: "Bug",
+      status: S.review,
+      assignee: P.jonas,
+      reporter: P.me,
+      parent: epic,
+      sprint: "CRM 41",
+      description: "After a batch is retried, the rollout status endpoint keeps reporting the failed state until the next full refresh.",
+      comments: [comment(P.jonas, 60 * 20, "Pushed a fix: retries now re-read state before reporting. PR is up.")],
+      changes: [{ field: "Status", from: "In Progress", to: "In Review", author: P.jonas, at: ago(60) }],
+      updated: ago(60),
+    }),
+    ticket({
+      key: "CA-421",
+      summary: "Dashboard for translation throughput",
+      type: "Story",
+      status: S.todo,
+      priority: "Low",
+      reporter: P.mette,
+      parent: epic,
+      sprint: "Backlog",
+      description: "Show languages per hour, failures and retries per store.",
+    }),
+    ticket({
+      key: "CE-731",
+      summary: "Match app block copy with the web version",
+      type: "Story",
+      status: S.todo,
+      assignee: P.me,
+      reporter: P.priya,
+      sprint: "CE 18",
+      description: "Several app blocks still use old copy. Align the text with the web blocks listed in the content sheet.",
+      changes: [{ field: "Assignee", from: "Unassigned", to: "Alf Henderson", author: P.priya, at: ago(120) }],
+      updated: ago(120),
+    }),
+    ticket({
+      key: "CE-705",
+      summary: "Broken footer links on the DE store",
+      type: "Bug",
+      status: S.done,
+      priority: "Low",
+      assignee: P.priya,
+      reporter: P.me,
+      sprint: "CE 17",
+      description: "Three footer links on the DE store return 404.",
+      changes: [{ field: "Status", from: "In Review", to: "Done", author: P.priya, at: ago(60 * 26) }],
+      updated: ago(60 * 26),
+    }),
+  ];
+
+  const ev = (kind: EventKind, ticketKey: string, actor: Person, minutesAgo: number, text: string, unread: boolean): InboxEvent => ({
+    id: id(),
+    kind,
+    ticketKey,
+    actor,
+    at: ago(minutesAgo),
+    text,
+    unread,
+    doneAt: null,
+    snoozedUntil: null,
+  });
+
+  return {
+    me: P.me,
+    site: "example.atlassian.net",
+    tickets: Object.fromEntries(tickets.map((t) => [t.key, t])),
+    events: [
+      ev("mention", "CA-418", P.sam, 4, "@Alf do we know the per-account rate limit on the euro store? Batches keep failing around 02:00.", true),
+      ev("comment", "CA-412", P.mette, 22, "Can we cap concurrency per store? The DKK account is small and I don't want it hitting limits.", true),
+      ev("status", "CA-420", P.jonas, 60, "In Progress → In Review", true),
+      ev("assigned", "CE-731", P.priya, 120, "Assigned to you", true),
+      ev("field", "CA-400", P.mette, 180, "Due date 10 Oct → 17 Oct", false),
+      ev("status", "CE-705", P.priya, 60 * 26, "In Review → Done", false),
+      ev("comment", "CA-420", P.jonas, 60 * 20, "Pushed a fix: retries now re-read state before reporting. PR is up.", false),
+    ],
+    watching: ["CA-418", "CA-420", "CE-705", "CA-400"],
+    lastSyncAt: new Date().toISOString(),
+  };
+}
+
+const SIMULATED: [EventKind, string, keyof typeof P, string][] = [
+  ["mention", "CE-731", "priya", "@Alf the design is final. The copy sheet is linked in the description, can you start this week?"],
+  ["comment", "CA-420", "jonas", "Checks are green. Could you review when you have 10 minutes?"],
+];
+
+/** In-memory backend with sample data, used for `pnpm dev` in a browser and until a Jira site is connected. */
+export class MockBackend implements Backend {
+  readonly kind = "mock" as const;
+  private snap = sampleSnapshot();
+  private listeners = new Set<(s: Snapshot) => void>();
+  private simulated = 0;
+
+  async load() {
+    return this.snap;
+  }
+
+  subscribe(listener: (s: Snapshot) => void) {
+    this.listeners.add(listener);
+    return () => void this.listeners.delete(listener);
+  }
+
+  private update(fn: (s: Snapshot) => void) {
+    const next = structuredClone(this.snap);
+    fn(next);
+    this.snap = next;
+    this.listeners.forEach((l) => l(next));
+  }
+
+  private event(s: Snapshot, eventId: string) {
+    const e = s.events.find((x) => x.id === eventId);
+    if (!e) throw new Error(`Unknown event ${eventId}`);
+    return e;
+  }
+
+  async transitions(key: string): Promise<Transition[]> {
+    const t = this.snap.tickets[key];
+    return (WORKFLOW[t.status.name] ?? []).map(([to, name]) => ({ id: `${key}:${to}`, name, to: S[to] }));
+  }
+
+  async transition(key: string, transitionId: string) {
+    const to = S[transitionId.split(":")[1] as keyof typeof S];
+    if (!to) throw new Error(`Unknown transition ${transitionId}`);
+    this.update((s) => {
+      s.tickets[key].status = to;
+      s.tickets[key].updated = new Date().toISOString();
+    });
+  }
+
+  async comment(key: string, body: string) {
+    this.update((s) => {
+      s.tickets[key].comments.push({ id: id(), author: s.me, created: new Date().toISOString(), body });
+    });
+  }
+
+  async markSeen(key: string) {
+    if (!this.snap.tickets[key]?.changes.length) return;
+    this.update((s) => void (s.tickets[key].changes = []));
+  }
+
+  async setUnread(eventId: string, unread: boolean) {
+    this.update((s) => void (this.event(s, eventId).unread = unread));
+  }
+
+  async setDone(eventId: string, done: boolean) {
+    this.update((s) => {
+      const e = this.event(s, eventId);
+      e.doneAt = done ? new Date().toISOString() : null;
+      if (done) {
+        e.unread = false;
+        e.snoozedUntil = null;
+      }
+    });
+  }
+
+  async snooze(eventId: string, until: Date | null) {
+    this.update((s) => {
+      const e = this.event(s, eventId);
+      e.snoozedUntil = until?.toISOString() ?? null;
+      if (until) e.unread = false;
+    });
+  }
+
+  async syncNow() {
+    const [kind, key, who, text] = SIMULATED[this.simulated++ % SIMULATED.length];
+    this.update((s) => {
+      const actor = P[who];
+      s.events.push({
+        id: id(),
+        kind,
+        ticketKey: key,
+        actor,
+        at: new Date().toISOString(),
+        text,
+        unread: true,
+        doneAt: null,
+        snoozedUntil: null,
+      });
+      s.tickets[key].comments.push({ id: id(), author: actor, created: new Date().toISOString(), body: text });
+      s.lastSyncAt = new Date().toISOString();
+    });
+  }
+
+  async openUrl(url: string) {
+    if (isTauri()) await openUrl(url);
+    else window.open(url, "_blank", "noopener");
+  }
+}
