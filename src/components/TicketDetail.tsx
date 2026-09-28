@@ -4,6 +4,7 @@ import { snoozeOptions, relativeTime } from "../lib/views";
 import { selectedEvent, selectedTicket, useStore } from "../store";
 import type { Snapshot, Ticket, Transition } from "../types";
 import { useClaude } from "../claudeStore";
+import { Adf } from "./Adf";
 import { Icon, Sparkle } from "./icons";
 import { Menu } from "./Menu";
 import { MentionTextarea } from "./MentionTextarea";
@@ -174,7 +175,11 @@ function TicketBody({ ticket: t }: { ticket: Ticket }) {
 
       <div>
         <SectionHeading>Description</SectionHeading>
-        <div className="max-w-[65ch] whitespace-pre-wrap">{t.description || <span className="text-ink-3">No description.</span>}</div>
+        {t.descriptionDoc ? (
+          <Adf doc={t.descriptionDoc} />
+        ) : (
+          <div className="max-w-[65ch] whitespace-pre-wrap">{t.description || <span className="text-ink-3">No description.</span>}</div>
+        )}
       </div>
 
       {t.children.length > 0 && snap && (
@@ -228,7 +233,7 @@ function TicketBody({ ticket: t }: { ticket: Ticket }) {
                   <b className="font-semibold">{c.author.name}</b>
                   <span className="text-sm text-ink-3">{relativeTime(c.created, now)}</span>
                 </div>
-                <CommentBody body={c.body} people={[...(c.mentioned ?? []), ...knownPeople]} />
+                {c.doc ? <Adf doc={c.doc} /> : <CommentBody body={c.body} people={[...(c.mentioned ?? []), ...knownPeople]} />}
               </div>
             </div>
           ))}

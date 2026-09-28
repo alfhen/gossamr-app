@@ -131,6 +131,38 @@ function sampleSnapshot(): Snapshot {
       parent: epic,
       sprint: "CRM 41",
       description: "After a batch is retried, the rollout status endpoint keeps reporting the failed state until the next full refresh.",
+      descriptionDoc: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "After a batch is retried, " },
+              { type: "text", text: "GET /rollouts/:id/status", marks: [{ type: "code" }] },
+              { type: "text", text: " keeps reporting the " },
+              { type: "text", text: "failed", marks: [{ type: "strong" }] },
+              { type: "text", text: " state until the next full refresh. The status is read from a cached row:" },
+            ],
+          },
+          {
+            type: "codeBlock",
+            attrs: { language: "php" },
+            content: [{ type: "text", text: "$status = Rollout::query()\n    ->where('id', $id)\n    ->remember(300)\n    ->value('status');" }],
+          },
+          {
+            type: "bulletList",
+            content: [
+              { type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "Retry the batch from the dashboard" }] }] },
+              { type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "Status stays failed for up to 5 minutes" }] }] },
+            ],
+          },
+          {
+            type: "panel",
+            attrs: { panelType: "warning" },
+            content: [{ type: "paragraph", content: [{ type: "text", text: "Customers see this as a failed send and retry again." }] }],
+          },
+        ],
+      },
       comments: [comment(P.jonas, 60 * 20, "Pushed a fix: retries now re-read state before reporting. PR is up.")],
       changes: [{ field: "Status", from: "In Progress", to: "In Review", author: P.jonas, at: ago(60) }],
       updated: ago(60),

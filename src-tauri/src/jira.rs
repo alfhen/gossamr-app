@@ -221,6 +221,10 @@ fn status(v: &Value) -> Option<Status> {
     })
 }
 
+fn doc(v: &Value) -> Option<Value> {
+    v.is_object().then(|| v.clone())
+}
+
 fn str_of(v: &Value) -> Option<String> {
     v.as_str().map(String::from)
 }
@@ -274,6 +278,7 @@ pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
                 body: adf::to_text(&c["body"]),
                 mentions: adf::mentions(&c["body"]),
                 mentioned: adf::mentioned(&c["body"]),
+                doc: doc(&c["body"]),
             })
         })
         .collect();
@@ -311,6 +316,7 @@ pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
             summary: f.pointer("/parent/fields/summary").and_then(Value::as_str).unwrap_or_default().to_string(),
         }),
         description: adf::to_text(&f["description"]),
+        description_doc: doc(&f["description"]),
         comments,
         subtasks,
         due_date: str_of(&f["duedate"]),

@@ -178,6 +178,7 @@ impl Core {
                         reporter: t.reporter,
                         parent: t.parent,
                         description: t.description,
+                        description_doc: t.description_doc,
                         comments: t.comments,
                         subtasks: t.subtasks,
                         due_date: t.due_date,

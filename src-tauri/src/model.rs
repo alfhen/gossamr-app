@@ -1,6 +1,7 @@
 //! Types sent to the frontend. They mirror `src/types.ts`.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +30,9 @@ pub struct Comment {
     /// The same people with the name shown in the text, so the UI can highlight `@Name`.
     #[serde(default)]
     pub mentioned: Vec<Mentioned>,
+    /// The body as Jira's document (ADF), for rich rendering. `body` is its plain-text form.
+    #[serde(default)]
+    pub doc: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -90,6 +94,8 @@ pub struct CachedTicket {
     pub reporter: Option<Person>,
     pub parent: Option<ParentRef>,
     pub description: String,
+    #[serde(default)]
+    pub description_doc: Option<Value>,
     pub comments: Vec<Comment>,
     pub subtasks: Vec<SubtaskRef>,
     pub due_date: Option<String>,
@@ -111,6 +117,7 @@ pub struct Ticket {
     pub reporter: Option<Person>,
     pub parent: Option<ParentRef>,
     pub description: String,
+    pub description_doc: Option<Value>,
     pub comments: Vec<Comment>,
     pub changes: Vec<FieldChange>,
     pub subtasks: Vec<SubtaskRef>,
