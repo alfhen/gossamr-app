@@ -98,6 +98,16 @@ describe("store", () => {
       expect(s().error).toContain("offline");
     });
 
+    it("keeps unread updates unread when a snooze is undone", async () => {
+      const unread = stackEvents().filter((e) => e.unread).map((e) => e.id);
+      expect(unread.length).toBeGreaterThan(1);
+      useStore.setState({ selectedId: "s:CA-420" });
+      await s().snooze(new Date(Date.now() + 3600_000));
+      s().toast?.undo?.();
+      await new Promise((r) => setTimeout(r));
+      expect(stackEvents().filter((e) => e.unread).map((e) => e.id)).toEqual(unread);
+    });
+
     it("restores each update's previous snooze on undo", async () => {
       s().select("s:CA-420");
       const first = new Date(Date.now() + 3600_000);

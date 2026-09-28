@@ -184,7 +184,7 @@ export const useStore = create<Store>()((set, get) => {
       const revert = async (ev: InboxEvent) => {
         await backend.setDone(ev.id, !done);
         if (done && ev.snoozedUntil) await backend.snooze(ev.id, new Date(ev.snoozedUntil));
-        // Clearing and snoozing both mark an update read, so its unread state is restored last.
+        // Clearing and snoozing both mark an update read, so its unread state is restored last, here and in snooze.
         if (ev.unread) await backend.setUnread(ev.id, true);
       };
       if (await run("update the item", () => applyAll(evs, apply, revert))) {
@@ -201,7 +201,10 @@ export const useStore = create<Store>()((set, get) => {
       if (!backend || !evs.length) return;
       const neighbour = neighbourOf(get(), evs);
       const apply = (ev: InboxEvent) => backend.snooze(ev.id, until);
-      const revert = (ev: InboxEvent) => backend.snooze(ev.id, ev.snoozedUntil ? new Date(ev.snoozedUntil) : null);
+      const revert = async (ev: InboxEvent) => {
+        await backend.snooze(ev.id, ev.snoozedUntil ? new Date(ev.snoozedUntil) : null);
+        if (ev.unread) await backend.setUnread(ev.id, true);
+      };
       if (await run("snooze the item", () => applyAll(evs, apply, revert))) {
         if (neighbour) get().select(neighbour);
         const when = until.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
