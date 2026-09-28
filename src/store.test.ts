@@ -57,6 +57,38 @@ describe("store", () => {
       expect(stackEvents()).toHaveLength(count);
     });
 
+    it("selects the next ticket, not one of its own updates, after clearing an expanded stack", async () => {
+      s().select("s:CA-420");
+      s().setStackOpen(true);
+      await s().markDone();
+      expect(s().selectedId).toBe("s:CE-731");
+    });
+
+    it("reverts the updates that changed when part of a stack action fails", async () => {
+      const backend = s().backend!;
+      const real = backend.setDone.bind(backend);
+      const failOn = stackEvents()[1].id;
+      backend.setDone = (id, done) => (id === failOn ? Promise.reject(new Error("offline")) : real(id, done));
+      s().select("s:CA-420");
+      await s().markDone();
+      await new Promise((r) => setTimeout(r));
+      expect(stackEvents()).toHaveLength(4);
+      expect(s().error).toContain("offline");
+    });
+
+    it("restores each update's previous snooze on undo", async () => {
+      s().select("s:CA-420");
+      const first = new Date(Date.now() + 3600_000);
+      await s().snooze(first);
+      s().setView("snoozed");
+      s().select("s:CA-420");
+      await s().snooze(new Date(Date.now() + 7200_000));
+      s().toast?.undo?.();
+      await new Promise((r) => setTimeout(r));
+      const until = s().snap!.events.filter((e) => e.ticketKey === "CA-420" && e.doneAt === null).map((e) => e.snoozedUntil);
+      expect(until.every((u) => u === first.toISOString())).toBe(true);
+    });
+
     it("expands into a stack's updates and collapses back to the stack", () => {
       s().select("s:CA-420");
       s().setStackOpen(true);

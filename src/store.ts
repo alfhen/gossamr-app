@@ -179,16 +179,16 @@ export const useStore = create<Store>()((set, get) => {
       const evs = selectedEvents(get());
       if (!backend || !evs.length) return;
       const done = evs[0].doneAt === null;
-      const neighbour = neighbourOf(get());
-      if (await run("update the item", () => forEach(evs, (ev) => backend.setDone(ev.id, done)))) {
+      const neighbour = neighbourOf(get(), evs);
+      const apply = (ev: InboxEvent) => backend.setDone(ev.id, done);
+      const revert = async (ev: InboxEvent) => {
+        await backend.setDone(ev.id, !done);
+        if (done && ev.snoozedUntil) await backend.snooze(ev.id, new Date(ev.snoozedUntil));
+      };
+      if (await run("update the item", () => applyAll(evs, apply, revert))) {
         if (neighbour) get().select(neighbour);
         get().showToast(`${done ? "Cleared" : "Moved back to Inbox"}${countOf(evs)}`, () =>
-          void run("undo", () =>
-            forEach(evs, async (ev) => {
-              await backend.setDone(ev.id, !done);
-              if (done && ev.snoozedUntil) await backend.snooze(ev.id, new Date(ev.snoozedUntil));
-            }),
-          ),
+          void run("undo", () => applyAll(evs, revert, apply)),
         );
       }
     },
@@ -197,11 +197,13 @@ export const useStore = create<Store>()((set, get) => {
       const { backend } = get();
       const evs = selectedEvents(get());
       if (!backend || !evs.length) return;
-      const neighbour = neighbourOf(get());
-      if (await run("snooze the item", () => forEach(evs, (ev) => backend.snooze(ev.id, until)))) {
+      const neighbour = neighbourOf(get(), evs);
+      const apply = (ev: InboxEvent) => backend.snooze(ev.id, until);
+      const revert = (ev: InboxEvent) => backend.snooze(ev.id, ev.snoozedUntil ? new Date(ev.snoozedUntil) : null);
+      if (await run("snooze the item", () => applyAll(evs, apply, revert))) {
         if (neighbour) get().select(neighbour);
         const when = until.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
-        get().showToast(`Snoozed${countOf(evs)} until ${when}`, () => void forEach(evs, (ev) => backend.snooze(ev.id, null)));
+        get().showToast(`Snoozed${countOf(evs)} until ${when}`, () => void run("undo", () => applyAll(evs, revert, apply)));
       }
     },
 
@@ -209,7 +211,10 @@ export const useStore = create<Store>()((set, get) => {
       const { backend } = get();
       const evs = selectedEvents(get());
       const unread = !evs.some((e) => e.unread);
-      if (backend && evs.length) await run("update the item", () => forEach(evs, (ev) => backend.setUnread(ev.id, unread)));
+      if (!backend || !evs.length) return;
+      const apply = (ev: InboxEvent) => backend.setUnread(ev.id, unread);
+      const revert = (ev: InboxEvent) => backend.setUnread(ev.id, ev.unread);
+      await run("update the item", () => applyAll(evs, apply, revert));
     },
 
     async transition(transitionId, name) {
@@ -290,13 +295,29 @@ export function selectedEvents(s: State): InboxEvent[] {
   return ev ? [ev] : [];
 }
 
-const forEach = async (evs: InboxEvent[], fn: (ev: InboxEvent) => Promise<void>) => void (await Promise.all(evs.map(fn)));
+/**
+ * Applies a change to every update, all or nothing: if any call fails, the updates that did change are reverted
+ * before the first error is rethrown. `revert` gets the update as it was before the change.
+ */
+async function applyAll(evs: InboxEvent[], apply: (ev: InboxEvent) => Promise<void>, revert: (ev: InboxEvent) => Promise<void>) {
+  const results = await Promise.allSettled(evs.map(apply));
+  const failed = results.find((r) => r.status === "rejected");
+  if (!failed) return;
+  await Promise.allSettled(evs.filter((_, i) => results[i].status === "fulfilled").map(revert));
+  throw failed.reason;
+}
 const countOf = (evs: InboxEvent[]) => (evs.length > 1 ? ` (${evs.length} updates)` : "");
 
-/** The item to select after the current one leaves the list. */
-function neighbourOf(s: State): string | null {
+/** The nearest item that stays in the list once `leaving` has left it, looking below the selection first. */
+function neighbourOf(s: State, leaving: InboxEvent[]): string | null {
   const items = currentItems(s);
   const i = items.findIndex((x) => x.id === s.selectedId);
   if (i < 0) return null;
-  return (items[i + 1] ?? items[i - 1])?.id ?? null;
+  const gone = new Set(leaving.map((e) => e.id));
+  const stays = (x: ListItem) => {
+    const evs = x.stack ?? (x.event ? [x.event] : null);
+    return !evs || !evs.every((e) => gone.has(e.id));
+  };
+  const next = items.slice(i + 1).find(stays) ?? items.slice(0, i).reverse().find(stays);
+  return next?.id ?? null;
 }
