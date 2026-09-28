@@ -16,7 +16,7 @@ const KIND_TONE: Record<InboxEvent["kind"], string> = {
 const EMPTY: Partial<Record<string, [string, string]>> = {
   inbox: ["Inbox zero", "New mentions, assignments and changes on your tickets land here."],
   snoozed: ["Nothing snoozed", "Press s on an item to bring it back later."],
-  done: ["Nothing done yet", "Press e to clear an item from your inbox."],
+  done: ["Archive is empty", "Press e to clear an item from your inbox."],
 };
 
 export function ItemList() {

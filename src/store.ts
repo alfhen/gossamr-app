@@ -168,7 +168,7 @@ export const useStore = create<Store>()((set, get) => {
       const neighbour = neighbourOf(get());
       if (await run("update the item", () => backend.setDone(ev.id, done))) {
         if (neighbour) get().select(neighbour);
-        get().showToast(done ? "Marked done" : "Moved back to Inbox", () =>
+        get().showToast(done ? "Cleared" : "Moved back to Inbox", () =>
           void run("undo", async () => {
             await backend.setDone(ev.id, !done);
             if (done && snoozedUntil) await backend.snooze(ev.id, new Date(snoozedUntil));
