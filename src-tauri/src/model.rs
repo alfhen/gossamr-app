@@ -219,6 +219,11 @@ pub struct Uploaded {
     pub filename: String,
     pub mime_type: String,
     pub media_id: Option<String>,
+    /// Pixel size, measured by the page. An image is only shown inline when both are known.
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
 }
 
 /// Keys created, in the order the summaries were given. `error` is set when creation stopped part-way.

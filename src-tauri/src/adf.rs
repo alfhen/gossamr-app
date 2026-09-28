@@ -118,6 +118,8 @@ pub fn from_text(text: &str, mentions: &[MentionRef]) -> Value {
 }
 
 /// Appends uploaded files to a comment: images inline, other files as cards, and files without a media id by name.
+/// Jira only displays media inside `mediaSingle` when it has a width and height, so an image without a known size
+/// becomes a card instead.
 pub fn with_files(mut doc: Value, files: &[crate::model::Uploaded]) -> Value {
     let media = |f: &crate::model::Uploaded, id: &str| {
         json!({ "type": "media", "attrs": { "type": "file", "id": id, "collection": "", "alt": f.filename } })
@@ -125,12 +127,15 @@ pub fn with_files(mut doc: Value, files: &[crate::model::Uploaded]) -> Value {
     let mut cards = Vec::new();
     let content = doc["content"].as_array_mut().expect("from_text builds a doc with content");
     for f in files {
-        match &f.media_id {
-            Some(id) if f.mime_type.starts_with("image/") => {
-                content.push(json!({ "type": "mediaSingle", "attrs": { "layout": "center" }, "content": [media(f, id)] }))
+        match (&f.media_id, f.width.zip(f.height)) {
+            (Some(id), Some((width, height))) if f.mime_type.starts_with("image/") => {
+                let mut node = media(f, id);
+                node["attrs"]["width"] = json!(width);
+                node["attrs"]["height"] = json!(height);
+                content.push(json!({ "type": "mediaSingle", "attrs": { "layout": "center" }, "content": [node] }))
             }
-            Some(id) => cards.push(media(f, id)),
-            None => content.push(json!({ "type": "paragraph", "content": [{ "type": "text", "text": format!("📎 {}", f.filename) }] })),
+            (Some(id), _) => cards.push(media(f, id)),
+            (None, _) => content.push(json!({ "type": "paragraph", "content": [{ "type": "text", "text": format!("📎 {}", f.filename) }] })),
         }
     }
     if !cards.is_empty() {
@@ -237,6 +242,8 @@ mod tests {
             filename: name.into(),
             mime_type: mime.into(),
             media_id: media.map(String::from),
+            width: Some(640),
+            height: Some(480),
         };
         let doc = with_files(
             from_text("See attached", &[]),
@@ -247,6 +254,11 @@ mod tests {
         assert_eq!(doc["content"][1]["content"][0]["attrs"]["id"], "m1");
         assert_eq!(doc["content"][2]["content"][0]["text"], "📎 x.pdf");
         assert_eq!(doc["content"][3]["content"][0]["attrs"]["id"], "m2");
+        assert_eq!(doc["content"][1]["content"][0]["attrs"]["width"], 640);
+
+        let unsized_image = crate::model::Uploaded { width: None, height: None, ..file("shot.png", "image/png", Some("m1")) };
+        let doc = with_files(from_text("", &[]), &[unsized_image]);
+        assert_eq!(doc["content"][0]["type"], "mediaGroup", "an image Jira can't size inline goes in as a card");
     }
 
     #[test]

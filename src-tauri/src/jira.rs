@@ -242,6 +242,8 @@ impl Jira {
             mime_type: a["mimeType"].as_str().unwrap_or(mime_type).to_string(),
             id,
             media_id,
+            width: None,
+            height: None,
         })
     }
 
