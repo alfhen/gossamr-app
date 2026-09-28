@@ -25,7 +25,7 @@ export function activeQuery(text: string, caret: number): ActiveQuery | null {
 
 // Letters like ø, æ and ß don't decompose under NFD, so "soren" wouldn't find "Søren" without these.
 const LETTERS: Record<string, string> = { ø: "o", æ: "ae", œ: "oe", ß: "ss", đ: "d", ł: "l", þ: "th" };
-const fold = (s: string) =>
+export const fold = (s: string) =>
   s
     .toLowerCase()
     .normalize("NFD")
