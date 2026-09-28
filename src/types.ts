@@ -11,6 +11,20 @@ export interface Person {
   avatarUrl?: string | null;
 }
 
+/** A node of a Jira document (Atlassian Document Format). */
+export interface AdfNode {
+  type: string;
+  text?: string;
+  attrs?: Record<string, unknown>;
+  marks?: AdfMark[];
+  content?: AdfNode[];
+}
+
+export interface AdfMark {
+  type: string;
+  attrs?: Record<string, unknown>;
+}
+
 export interface Comment {
   id: string;
   author: Person;
@@ -18,6 +32,8 @@ export interface Comment {
   body: string;
   /** People @mentioned in the comment, with the name as it appears in `body`. */
   mentioned?: { accountId: string; name: string }[];
+  /** The body as Jira's document, when known; `body` is its plain text. */
+  doc?: AdfNode | null;
 }
 
 export interface FieldChange {
@@ -44,6 +60,7 @@ export interface Ticket {
   reporter: Person | null;
   parent: { key: string; summary: string } | null;
   description: string;
+  descriptionDoc?: AdfNode | null;
   comments: Comment[];
   /** Changes made by other people since the user last opened the ticket. */
   changes: FieldChange[];
