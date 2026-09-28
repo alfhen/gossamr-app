@@ -1,5 +1,6 @@
 mod adf;
 mod auth;
+mod claude;
 mod db;
 mod error;
 mod events;
@@ -17,6 +18,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use auth::{Auth, AuthStatus, OAuthApp, Scope};
+use claude::{AskRequest, Claude};
 use inbox::Core;
 use error::{Error, Result};
 use model::{Snapshot, Transition};
@@ -24,6 +26,7 @@ use model::{Snapshot, Transition};
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 type CoreState = Arc<Core>;
+type ClaudeState = Arc<Claude>;
 
 /// Sends the latest snapshot to the window and updates the Dock badge. Failures only mean there is nothing to
 /// show yet (e.g. signed out).
@@ -139,6 +142,58 @@ async fn comment(app: AppHandle, core: State<'_, CoreState>, scope: Scope, key: 
     Ok(())
 }
 
+#[tauri::command]
+async fn create_subtasks(
+    app: AppHandle,
+    core: State<'_, CoreState>,
+    scope: Scope,
+    key: String,
+    summaries: Vec<String>,
+) -> Result<model::CreatedSubtasks> {
+    let created = core.create_subtasks(&scope, &key, &summaries).await?;
+    publish(&app, &core).await;
+    Ok(created)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeSessions {
+    /// The session last used for this ticket from the app, as `{id, cwd}`.
+    last: Option<serde_json::Value>,
+    recent: Vec<claude::sessions::SessionInfo>,
+}
+
+#[tauri::command]
+async fn claude_sessions(core: State<'_, CoreState>, key: String) -> Result<ClaudeSessions> {
+    let (last, own) = core.claude_sessions(&key).await?;
+    let recent = tauri::async_runtime::spawn_blocking(move || {
+        claude::sessions::projects_dir().map(|root| claude::sessions::recent(&root, &own, 15)).unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Ok(ClaudeSessions { last, recent })
+}
+
+#[tauri::command]
+async fn ask_claude(app: AppHandle, claude: State<'_, ClaudeState>, request: AskRequest) -> Result<()> {
+    claude
+        .ask(request, Arc::new(move |u| {
+            let _ = app.emit("claude", u);
+        }))
+        .await
+}
+
+#[tauri::command]
+fn cancel_claude(claude: State<'_, ClaudeState>, request_id: String) {
+    claude.cancel(&request_id);
+}
+
+fn random_token() -> std::result::Result<String, getrandom::Error> {
+    let mut bytes = [0u8; 24];
+    getrandom::fill(&mut bytes)?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 fn spawn_sync_loop(app: AppHandle, core: CoreState) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -174,6 +229,18 @@ pub fn run() {
             let jira = jira::Jira::new(http, auth.clone());
             let core: CoreState = Arc::new(Core::new(auth, jira, app.path().app_data_dir()?));
             app.manage(core.clone());
+
+            let handle = app.handle().clone();
+            let token = random_token().map_err(|e| Error::Claude(format!("no randomness available: {e}")))?;
+            let mcp = tauri::async_runtime::block_on(claude::mcp::McpServer::start(
+                core.clone(),
+                token,
+                Arc::new(move |p| {
+                    let _ = handle.emit("claude-proposal", p);
+                }),
+            ))?;
+            app.manage::<ClaudeState>(Arc::new(Claude::new(core.clone(), mcp)));
+
             spawn_sync_loop(app.handle().clone(), core);
             Ok(())
         })
@@ -190,7 +257,11 @@ pub fn run() {
             snooze,
             transitions,
             transition,
-            comment
+            comment,
+            create_subtasks,
+            claude_sessions,
+            ask_claude,
+            cancel_claude
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

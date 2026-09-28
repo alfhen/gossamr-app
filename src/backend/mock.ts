@@ -249,6 +249,16 @@ export class MockBackend implements Backend {
     });
   }
 
+  async createSubtasks(key: string, summaries: string[]) {
+    const project = key.split("-")[0];
+    let next = Math.max(...Object.keys(this.snap.tickets).map((k) => Number(k.split("-")[1]) || 0), 0) + 1;
+    const keys = summaries.map(() => `${project}-${next++}`);
+    this.update((s) => {
+      s.tickets[key].subtasks.push(...summaries.map((summary, i) => ({ key: keys[i], summary, done: false })));
+    });
+    return { created: keys, error: null };
+  }
+
   async markSeen(key: string) {
     if (!this.snap.tickets[key]?.changes.length) return;
     this.update((s) => void (s.tickets[key].changes = []));

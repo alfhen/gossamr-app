@@ -22,8 +22,9 @@ describe("commandFor", () => {
     expect(commandFor(key("j", { typing: true }))).toBeNull();
   });
 
-  it("keeps ⌘K and Escape working while typing", () => {
+  it("keeps ⌘K, ⌘J and Escape working while typing", () => {
     expect(commandFor(key("k", { metaKey: true, typing: true }))).toBe("palette");
+    expect(commandFor(key("j", { metaKey: true, typing: true }))).toBe("claude");
     expect(commandFor(key("Escape", { typing: true }))).toBe("escape");
   });
 

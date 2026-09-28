@@ -8,6 +8,9 @@ export interface Backend {
   transitions(ticketKey: string): Promise<Transition[]>;
   transition(ticketKey: string, transitionId: string): Promise<void>;
   comment(ticketKey: string, body: string): Promise<void>;
+  /** Creates sub-tasks under a ticket and returns their keys. */
+  /** Stops at the first failure; `created` lists the keys made before it, in order. */
+  createSubtasks(ticketKey: string, summaries: string[]): Promise<{ created: string[]; error: string | null }>;
   markSeen(ticketKey: string): Promise<void>;
   setUnread(eventId: string, unread: boolean): Promise<void>;
   setDone(eventId: string, done: boolean): Promise<void>;

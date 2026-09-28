@@ -18,6 +18,8 @@ pub enum Error {
     SiteChanged,
     #[error("Sign-in failed: {0}")]
     Auth(String),
+    #[error("{0}")]
+    Claude(String),
     #[error("Jira returned {status}: {message}")]
     Api { status: u16, message: String },
 }

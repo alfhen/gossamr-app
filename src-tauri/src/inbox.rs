@@ -10,7 +10,7 @@ use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, NewEvent};
 use crate::jira::{Jira, CONTEXT_LIMIT, TRACKED_LIMIT};
-use crate::model::{Person, Snapshot, Ticket, Transition};
+use crate::model::{CachedTicket, CreatedSubtasks, Person, Snapshot, Ticket, Transition};
 
 /// Tickets the user follows. Anything else only appears as context, e.g. the children of an epic they watch.
 const TRACKED_JQL: &str =
@@ -23,6 +23,8 @@ const DEFAULT_SEEN_DAYS: i64 = 3;
 const CLOCK_SKEW_MINUTES: i64 = 10;
 
 const LAST_SYNC: &str = "last_sync_at";
+const OWN_CLAUDE_SESSIONS: &str = "claude_sessions";
+const OWN_SESSIONS_KEPT: usize = 50;
 
 /// Events after this are new since the previous sync (or, before the first sync, from the last 24 hours).
 fn unread_cutoff(last_sync: Option<&str>) -> String {
@@ -259,6 +261,53 @@ impl Core {
             self.set_error(Some(format!("Saved, but couldn't refresh {key}: {e}")));
             self.wake.notify_one();
         }
+    }
+
+    /// The cached ticket, or a fresh read from Jira when it isn't cached.
+    pub async fn ticket(&self, scope: &Scope, key: &str) -> Result<CachedTicket> {
+        let (cached, last_sync) =
+            self.with_db_for(scope, |db| Ok((db.tickets("")?.into_iter().find(|t| t.key == key), db.meta(LAST_SYNC)?))).await?;
+        match cached {
+            Some(t) => Ok(t),
+            None => self.jira.issue(scope, key, &unread_cutoff(last_sync.as_deref())).await,
+        }
+    }
+
+    /// `scope` is the account the user was looking at when they approved; the write is refused if that has changed.
+    /// A failure part-way still reports what was created, so a retry can skip those and not duplicate them.
+    pub async fn create_subtasks(&self, scope: &Scope, key: &str, summaries: &[String]) -> Result<CreatedSubtasks> {
+        let (created, error) = self.jira.create_subtasks(scope, key, summaries).await?;
+        if created.is_empty() {
+            if let Some(e) = error {
+                return Err(e);
+            }
+        }
+        self.after_write(scope, key).await;
+        Ok(CreatedSubtasks { created, error: error.map(|e| e.to_string()) })
+    }
+
+    /// Remembers the Claude session last used for a ticket, and that the app started it.
+    pub async fn remember_claude_session(&self, key: &str, session_id: &str, cwd: &str) -> Result<()> {
+        self.with_db(|db| {
+            db.set_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id, "cwd": cwd }).to_string())?;
+            let mut own: Vec<String> =
+                db.meta(OWN_CLAUDE_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            own.retain(|s| s != session_id);
+            own.insert(0, session_id.to_string());
+            own.truncate(OWN_SESSIONS_KEPT);
+            db.set_meta(OWN_CLAUDE_SESSIONS, &serde_json::to_string(&own)?)
+        })
+        .await
+    }
+
+    /// The last session used for `key` (as `{id, cwd}`), and every session the app started.
+    pub async fn claude_sessions(&self, key: &str) -> Result<(Option<serde_json::Value>, Vec<String>)> {
+        self.with_db(|db| {
+            let last = db.meta(&format!("claude:{key}"))?.and_then(|s| serde_json::from_str(&s).ok());
+            let own = db.meta(OWN_CLAUDE_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            Ok((last, own))
+        })
+        .await
     }
 }
 

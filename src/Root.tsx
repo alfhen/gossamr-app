@@ -5,6 +5,7 @@ import App from "./App";
 import { auth, type AuthStatus } from "./backend/auth";
 import { JiraBackend } from "./backend/jira";
 import { MockBackend } from "./backend/mock";
+import { listenToClaude, useClaude } from "./claudeStore";
 import { Setup } from "./components/Setup";
 import { useStore } from "./store";
 
@@ -15,6 +16,8 @@ export function Root() {
   const starts = useRef(0);
 
   const start = (status: AuthStatus | null) => {
+    // Conversations and their proposals belong to the account they were made in.
+    useClaude.setState({ open: false, byTicket: {} });
     const mine = ++starts.current;
     const account = status?.site && status.me ? { site: status.site, me: status.me } : null;
     useStore.setState({ account });
@@ -26,7 +29,10 @@ export function Root() {
         () => mine === starts.current && setPhase({ name: "app" }),
         (e) => mine === starts.current && setPhase({ name: "error", message: `Couldn't load your inbox: ${e}` }),
       );
-    if (account) void askForNotifications();
+    if (account) {
+      void askForNotifications();
+      listenToClaude();
+    }
   };
 
   const checkAuth = () => {

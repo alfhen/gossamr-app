@@ -21,6 +21,12 @@ Jira Inbox signs in through your own Atlassian OAuth 2.0 (3LO) app:
 
 The client secret and tokens are stored in the macOS Keychain under `dk.alfhen.jirainbox`. "Try it with sample data" skips all of this.
 
+## Ask Claude
+
+Press `⌘J` on a ticket to ask Claude about it. The app runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription and loads your CLAUDE.md, memory and skills. You can continue this ticket's last session, continue any recent CLI or desktop session, or start a new one in a recent folder. It runs Sonnet at medium effort, whatever your Claude Code default is.
+
+Claude can read the ticket through a local MCP server the app runs, and read code and git history in the session's folder. It can't write files or change Jira: comments, transitions and subtasks come back as cards you approve, edit or skip.
+
 ## Development
 
 ```bash
@@ -35,4 +41,10 @@ Checks that CI runs:
 ```bash
 pnpm typecheck && pnpm test
 cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test
+```
+
+Two tests run the real `claude` CLI and are skipped by default. With Claude Code installed and logged in:
+
+```bash
+cd src-tauri && cargo test -- --ignored
 ```

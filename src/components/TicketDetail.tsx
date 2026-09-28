@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { snoozeOptions, relativeTime } from "../lib/views";
 import { selectedEvent, selectedTicket, useStore } from "../store";
 import type { Ticket, Transition } from "../types";
-import { Icon } from "./icons";
+import { useClaude } from "../claudeStore";
+import { Icon, Sparkle } from "./icons";
 import { Menu } from "./Menu";
 import { Avatar, SectionHeading, StatusPill, ToolbarButton } from "./primitives";
 
@@ -66,6 +67,14 @@ export function TicketDetail() {
         <span data-tauri-drag-region className="flex-1 self-stretch" />
         <ToolbarButton title="Open in Jira (o)" onClick={() => void backend?.openUrl(ticket.url)}>
           Open in Jira <Icon name="external" className="size-3" />
+        </ToolbarButton>
+        <ToolbarButton
+          variant="claude"
+          disabled={backend?.kind !== "jira"}
+          title={backend?.kind === "jira" ? "Ask Claude (⌘J)" : "Sign in to Jira to ask Claude"}
+          onClick={() => useClaude.getState().setOpen(!useClaude.getState().open)}
+        >
+          <Sparkle /> Ask Claude <kbd>⌘J</kbd>
         </ToolbarButton>
       </header>
 
