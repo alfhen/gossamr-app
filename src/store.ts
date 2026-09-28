@@ -3,7 +3,7 @@ import { auth, type Account, type Site } from "./backend/auth";
 import type { Backend } from "./backend/types";
 import type { Mention } from "./lib/mentions";
 import { itemsForView, type ListItem } from "./lib/views";
-import type { Snapshot, Ticket, ViewId } from "./types";
+import type { Snapshot, Ticket, Uploaded, ViewId } from "./types";
 
 export interface Toast {
   id: number;
@@ -38,7 +38,7 @@ interface Actions {
   snooze(until: Date): Promise<void>;
   toggleUnread(): Promise<void>;
   transition(transitionId: string, name: string): Promise<void>;
-  comment(body: string, mentions?: Mention[]): Promise<boolean>;
+  comment(body: string, mentions?: Mention[], files?: Uploaded[]): Promise<boolean>;
   showToast(message: string, undo?: () => void): void;
   goToTicket(key: string): void;
   signOut(): Promise<void>;
@@ -167,12 +167,12 @@ export const useStore = create<Store>()((set, get) => {
       }
     },
 
-    async comment(body, mentions = []) {
+    async comment(body, mentions = [], files = []) {
       const { backend } = get();
       const t = selectedTicket(get());
       const text = body.trim();
-      if (!backend || !t || !text) return false;
-      const ok = await run(`comment on ${t.key}`, () => backend.comment(t.key, text, mentions));
+      if (!backend || !t || (!text && !files.length)) return false;
+      const ok = await run(`comment on ${t.key}`, () => backend.comment(t.key, text, mentions, files));
       if (ok) get().showToast(`Commented on ${t.key}`);
       return ok;
     },

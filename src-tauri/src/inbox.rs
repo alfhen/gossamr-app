@@ -10,7 +10,7 @@ use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, NewEvent};
 use crate::jira::{Jira, CONTEXT_LIMIT, TRACKED_LIMIT};
-use crate::model::{CachedTicket, CreatedSubtasks, Person, Snapshot, Ticket, Transition};
+use crate::model::{CachedTicket, CreatedSubtasks, Person, Snapshot, Ticket, Transition, Uploaded};
 
 /// Tickets the user follows. Anything else only appears as context, e.g. the children of an epic they watch.
 const TRACKED_JQL: &str =
@@ -249,14 +249,30 @@ impl Core {
     }
 
     /// `scope` is the account the user was looking at when they acted; the write is refused if that has changed.
-    pub async fn comment(&self, scope: &Scope, key: &str, body: &str, mentions: &[crate::adf::MentionRef]) -> Result<()> {
+    pub async fn comment(
+        &self,
+        scope: &Scope,
+        key: &str,
+        body: &str,
+        mentions: &[crate::adf::MentionRef],
+        files: &[Uploaded],
+    ) -> Result<()> {
         let body = body.trim();
-        if body.is_empty() {
+        if body.is_empty() && files.is_empty() {
             return Err(Error::Api { status: 400, message: "a comment can't be empty".into() });
         }
-        self.jira.comment(scope, key, body, mentions).await?;
+        self.jira.comment(scope, key, body, mentions, files).await?;
         self.after_write(scope, key).await;
         Ok(())
+    }
+
+    /// Uploads a file to a ticket. The ticket isn't refreshed here: the comment that follows does that.
+    pub async fn attach(&self, scope: &Scope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
+        self.jira.attach(scope, key, filename, mime_type, bytes).await
+    }
+
+    pub async fn attachment_limit(&self, scope: &Scope) -> Result<Option<u64>> {
+        self.jira.attachment_limit(scope).await
     }
 
     /// Re-reads a ticket after a successful write. A failure here must not be reported as a failed write, or a retry

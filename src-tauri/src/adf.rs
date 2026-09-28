@@ -117,6 +117,28 @@ pub fn from_text(text: &str, mentions: &[MentionRef]) -> Value {
     json!({ "type": "doc", "version": 1, "content": paragraphs })
 }
 
+/// Appends uploaded files to a comment: images inline, other files as cards, and files without a media id by name.
+pub fn with_files(mut doc: Value, files: &[crate::model::Uploaded]) -> Value {
+    let media = |f: &crate::model::Uploaded, id: &str| {
+        json!({ "type": "media", "attrs": { "type": "file", "id": id, "collection": "", "alt": f.filename } })
+    };
+    let mut cards = Vec::new();
+    let content = doc["content"].as_array_mut().expect("from_text builds a doc with content");
+    for f in files {
+        match &f.media_id {
+            Some(id) if f.mime_type.starts_with("image/") => {
+                content.push(json!({ "type": "mediaSingle", "attrs": { "layout": "center" }, "content": [media(f, id)] }))
+            }
+            Some(id) => cards.push(media(f, id)),
+            None => content.push(json!({ "type": "paragraph", "content": [{ "type": "text", "text": format!("📎 {}", f.filename) }] })),
+        }
+    }
+    if !cards.is_empty() {
+        content.push(json!({ "type": "mediaGroup", "content": cards }));
+    }
+    doc
+}
+
 fn push_line(line: &str, mentions: &[&MentionRef], content: &mut Vec<Value>) {
     let mut plain = String::new();
     let mut rest = line;
@@ -204,5 +226,24 @@ mod tests {
     fn tolerates_missing_or_odd_nodes() {
         assert_eq!(to_text(&Value::Null), "");
         assert_eq!(to_text(&json!({"type":"doc","content":[{"type":"unknown"}]})), "");
+    }
+
+    #[test]
+    fn places_images_inline_and_names_files_it_cannot_embed() {
+        let file = |name: &str, mime: &str, media: Option<&str>| crate::model::Uploaded {
+            id: "1".into(),
+            filename: name.into(),
+            mime_type: mime.into(),
+            media_id: media.map(String::from),
+        };
+        let doc = with_files(
+            from_text("See attached", &[]),
+            &[file("shot.png", "image/png", Some("m1")), file("log.txt", "text/plain", Some("m2")), file("x.pdf", "application/pdf", None)],
+        );
+        let types: Vec<&str> = doc["content"].as_array().unwrap().iter().map(|n| n["type"].as_str().unwrap()).collect();
+        assert_eq!(types, ["paragraph", "mediaSingle", "paragraph", "mediaGroup"]);
+        assert_eq!(doc["content"][1]["content"][0]["attrs"]["id"], "m1");
+        assert_eq!(doc["content"][2]["content"][0]["text"], "📎 x.pdf");
+        assert_eq!(doc["content"][3]["content"][0]["attrs"]["id"], "m2");
     }
 }

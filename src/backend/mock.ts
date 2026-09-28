@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { Comment, EventKind, InboxEvent, Person, Snapshot, Status, Ticket, Transition } from "../types";
+import type { AdfNode, Comment, EventKind, InboxEvent, Person, Snapshot, Status, Ticket, Transition, Uploaded } from "../types";
 import type { Mention } from "../lib/mentions";
 import type { Backend } from "./types";
 
@@ -241,6 +241,20 @@ const SIMULATED: [EventKind, string, keyof typeof P, string][] = [
 ];
 
 /** In-memory backend with sample data, used for `pnpm dev` in a browser and until a Jira site is connected. */
+/** A rough stand-in for the document Jira builds for a comment with files, so sample mode renders them the same way. */
+function withFiles(body: string, files: Uploaded[]): AdfNode {
+  const paragraphs: AdfNode[] = body
+    .split(/\n{2,}/)
+    .filter((p) => p.trim())
+    .map((p) => ({ type: "paragraph", content: [{ type: "text", text: p }] }));
+  const media = files.map<AdfNode>((f) =>
+    f.mimeType.startsWith("image/")
+      ? { type: "mediaSingle", content: [{ type: "media", attrs: { type: "file", id: f.mediaId, alt: f.filename } }] }
+      : { type: "paragraph", content: [{ type: "text", text: `📎 ${f.filename}` }] },
+  );
+  return { type: "doc", content: [...paragraphs, ...media] };
+}
+
 export class MockBackend implements Backend {
   readonly kind = "mock" as const;
   private snap = sampleSnapshot();
@@ -283,10 +297,24 @@ export class MockBackend implements Backend {
     });
   }
 
-  async comment(key: string, body: string, mentions: Mention[] = []) {
+  async comment(key: string, body: string, mentions: Mention[] = [], files: Uploaded[] = []) {
+    const doc = files.length ? withFiles(body, files) : undefined;
     this.update((s) => {
-      s.tickets[key].comments.push({ id: id(), author: s.me, created: new Date().toISOString(), body, mentioned: mentions });
+      s.tickets[key].comments.push({ id: id(), author: s.me, created: new Date().toISOString(), body, mentioned: mentions, doc });
     });
+  }
+
+  /** Files "uploaded" in sample mode, as object URLs by media id. */
+  readonly files = new Map<string, string>();
+
+  async attach(_key: string, file: File): Promise<Uploaded> {
+    const mediaId = `sample-${id()}`;
+    this.files.set(mediaId, URL.createObjectURL(file));
+    return { id: id(), filename: file.name, mimeType: file.type, mediaId };
+  }
+
+  async attachmentLimit() {
+    return 10 * 1024 * 1024;
   }
 
   async createSubtasks(key: string, summaries: string[]) {

@@ -1,5 +1,5 @@
 import type { Mention } from "../lib/mentions";
-import type { Person, Snapshot, Transition } from "../types";
+import type { Person, Snapshot, Transition, Uploaded } from "../types";
 
 export interface Backend {
   readonly kind: "mock" | "jira";
@@ -9,7 +9,11 @@ export interface Backend {
   transitions(ticketKey: string): Promise<Transition[]>;
   transition(ticketKey: string, transitionId: string): Promise<void>;
   /** Posts a comment. Each mention's `@Name` in the body becomes a real Jira mention, which notifies that person. */
-  comment(ticketKey: string, body: string, mentions?: Mention[]): Promise<void>;
+  comment(ticketKey: string, body: string, mentions?: Mention[], files?: Uploaded[]): Promise<void>;
+  /** Uploads a file to the ticket, to be included in a comment. */
+  attach(ticketKey: string, file: File): Promise<Uploaded>;
+  /** The site's per-file upload limit in bytes, or null when attachments are turned off. */
+  attachmentLimit(): Promise<number | null>;
   /** People who can see the ticket and match the query, for @mention suggestions. */
   mentionable(ticketKey: string, query: string): Promise<Person[]>;
   /** Creates sub-tasks under a ticket and returns their keys. */

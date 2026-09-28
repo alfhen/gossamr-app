@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Mention } from "../lib/mentions";
-import type { Person, Snapshot, Transition } from "../types";
+import type { Person, Snapshot, Transition, Uploaded } from "../types";
 import type { Backend } from "./types";
 
 /** The Jira site and account this backend acts for. */
@@ -37,8 +37,24 @@ export class JiraBackend implements Backend {
     return invoke<void>("transition", { scope: this.scope, key, transitionId });
   }
 
-  comment(key: string, body: string, mentions: Mention[] = []) {
-    return invoke<void>("comment", { scope: this.scope, key, body, mentions });
+  comment(key: string, body: string, mentions: Mention[] = [], files: Uploaded[] = []) {
+    return invoke<void>("comment", { scope: this.scope, key, body, mentions, files });
+  }
+
+  async attach(key: string, file: File) {
+    // The bytes travel as the raw request body; JSON would inflate them several times over.
+    const meta = new URLSearchParams({ ...this.scope, key, name: file.name, type: file.type || "application/octet-stream" });
+    return invoke<Uploaded>("attach", new Uint8Array(await file.arrayBuffer()), { headers: { "x-file": meta.toString() } });
+  }
+
+  private limit: Promise<number | null> | null = null;
+
+  attachmentLimit() {
+    this.limit ??= invoke<number | null>("attachment_limit", { scope: this.scope }).catch((e) => {
+      this.limit = null;
+      throw e;
+    });
+    return this.limit;
   }
 
   mentionable(key: string, query: string) {

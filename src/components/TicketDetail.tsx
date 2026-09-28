@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { liveMentions, participants, segments, type Mention } from "../lib/mentions";
 import { snoozeOptions, relativeTime } from "../lib/views";
 import { selectedEvent, selectedTicket, useStore } from "../store";
-import type { Snapshot, Ticket, Transition } from "../types";
+import type { Snapshot, Ticket, Transition, Uploaded } from "../types";
+import { filesIn, formatSize, nameFor } from "../lib/attachments";
 import { useClaude } from "../claudeStore";
 import { Adf } from "./Adf";
 import { Icon, Sparkle } from "./icons";
@@ -240,7 +241,7 @@ function TicketBody({ ticket: t }: { ticket: Ticket }) {
         </div>
       </div>
 
-      <Composer ticket={t} />
+      <Composer key={t.key} ticket={t} />
     </div>
   );
 }
@@ -254,26 +255,92 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
+interface PendingFile {
+  id: string;
+  file: File;
+  preview: string | null;
+  /** Set once uploaded, so a retry after a failed comment doesn't upload it again. */
+  uploaded: Uploaded | null;
+}
+
 function Composer({ ticket }: { ticket: Ticket }) {
   const comment = useStore((s) => s.comment);
+  const backend = useStore((s) => s.backend);
   const me = useStore((s) => s.snap?.me.accountId ?? "");
   const [body, setBody] = useState("");
   const [mentions, setMentions] = useState<Mention[]>([]);
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const [dragging, setDragging] = useState(false);
   const [sending, setSending] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
   const people = useMemo(() => participants(ticket, me), [ticket, me]);
+  const fail = (message: string) => useStore.setState({ error: message });
+
+  const previews = useRef(files);
+  previews.current = files;
+  useEffect(() => () => previews.current.forEach((f) => f.preview && URL.revokeObjectURL(f.preview)), []);
+
+  const add = async (list: File[]) => {
+    if (!backend || !list.length) return;
+    const limit = await backend.attachmentLimit().catch(() => undefined);
+    if (limit === null) return fail("Attachments are turned off on this Jira site");
+    const tooBig = list.filter((f) => limit !== undefined && f.size > limit);
+    if (tooBig.length && limit) fail(`${tooBig.map((f) => f.name || "The image").join(", ")} is over Jira's ${formatSize(limit)} limit`);
+    const added = list
+      .filter((f) => !tooBig.includes(f))
+      .map((f) => {
+        const file = nameFor(f);
+        return { id: crypto.randomUUID(), file, preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null, uploaded: null };
+      });
+    setFiles((prev) => [...prev, ...added]);
+  };
+
+  const remove = (id: string) => {
+    const f = files.find((x) => x.id === id);
+    if (f?.preview) URL.revokeObjectURL(f.preview);
+    setFiles((prev) => prev.filter((x) => x.id !== id));
+  };
 
   const send = async () => {
-    if (!body.trim() || sending) return;
+    if ((!body.trim() && !files.length) || sending || !backend) return;
     setSending(true);
-    if (await comment(body, liveMentions(body, mentions))) {
-      setBody("");
-      setMentions([]);
+    try {
+      const uploaded: Uploaded[] = [];
+      for (const f of files) {
+        const u = f.uploaded ?? (await backend.attach(ticket.key, f.file));
+        if (!f.uploaded) setFiles((prev) => prev.map((x) => (x.id === f.id ? { ...x, uploaded: u } : x)));
+        uploaded.push(u);
+      }
+      if (await comment(body, liveMentions(body, mentions), uploaded)) {
+        files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
+        setBody("");
+        setMentions([]);
+        setFiles([]);
+      }
+    } catch (e) {
+      fail(`Couldn't upload to ${ticket.key}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSending(false);
     }
-    setSending(false);
   };
 
   return (
-    <div className="rounded-[10px] border border-field-border bg-field focus-within:border-accent focus-within:ring-3 focus-within:ring-accent-soft">
+    <div
+      onDragOver={(e) => {
+        if (![...e.dataTransfer.types].includes("Files")) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setDragging(false)}
+      onDrop={(e) => {
+        const dropped = filesIn(e.dataTransfer);
+        setDragging(false);
+        if (!dropped.length) return;
+        e.preventDefault();
+        void add(dropped);
+      }}
+      className={`rounded-[10px] border bg-field focus-within:border-accent focus-within:ring-3 focus-within:ring-accent-soft ${dragging ? "border-accent ring-3 ring-accent-soft" : "border-field-border"}`}
+    >
       <MentionTextarea
         id="composer"
         value={body}
@@ -285,19 +352,65 @@ function Composer({ ticket }: { ticket: Ticket }) {
         ticketKey={ticket.key}
         people={people}
         onSubmit={() => void send()}
-        placeholder={`Comment on ${ticket.key}… (@ to mention)`}
+        onPasteFiles={(f) => void add(f)}
+        placeholder={`Comment on ${ticket.key}… (@ to mention, paste or drop files)`}
       />
+      {files.length > 0 && (
+        <ul aria-label="Attachments" className="flex flex-wrap gap-2 px-3 pb-2.5">
+          {files.map((f) => (
+            <li key={f.id} title={`${f.file.name} · ${formatSize(f.file.size)}`} className="group relative">
+              {f.preview ? (
+                <img src={f.preview} alt={f.file.name} className="size-16 rounded-md border border-sep object-cover" />
+              ) : (
+                <span className="flex h-16 max-w-[180px] items-center gap-1.5 rounded-md border border-sep bg-hover px-2.5 text-sm">
+                  <span aria-hidden>📎</span>
+                  <span className="truncate">{f.file.name}</span>
+                </span>
+              )}
+              {f.uploaded && <span className="absolute bottom-1 left-1 rounded bg-done px-1 text-[10px] font-semibold text-white">Uploaded</span>}
+              <button
+                type="button"
+                aria-label={`Remove ${f.file.name}`}
+                disabled={sending}
+                onClick={() => remove(f.id)}
+                className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full bg-ink text-[11px] leading-none text-win opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:hidden"
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="flex items-center gap-2 border-t border-sep py-1.5 pr-2 pl-3 text-[11.5px] text-ink-3">
         <span>
           <kbd>⌘</kbd> <kbd>↵</kbd> to send
         </span>
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            void add([...(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
+        />
         <button
           type="button"
-          disabled={!body.trim() || sending}
-          onClick={() => void send()}
-          className="ml-auto rounded-md bg-accent px-3 py-1 text-[12.5px] font-semibold text-white disabled:opacity-45"
+          aria-label="Attach files"
+          title="Attach files"
+          onClick={() => picker.current?.click()}
+          className="ml-auto rounded px-1.5 py-0.5 text-[14px] hover:bg-hover hover:text-ink"
         >
-          {sending ? "Sending…" : "Comment"}
+          📎
+        </button>
+        <button
+          type="button"
+          disabled={(!body.trim() && !files.length) || sending}
+          onClick={() => void send()}
+          className="rounded-md bg-accent px-3 py-1 text-[12.5px] font-semibold text-white disabled:opacity-45"
+        >
+          {sending ? (files.some((f) => !f.uploaded) ? "Uploading…" : "Sending…") : "Comment"}
         </button>
       </div>
     </div>

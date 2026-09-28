@@ -143,8 +143,9 @@ async fn comment(
     key: String,
     body: String,
     mentions: Option<Vec<adf::MentionRef>>,
+    files: Option<Vec<model::Uploaded>>,
 ) -> Result<()> {
-    core.comment(&scope, &key, &body, &mentions.unwrap_or_default()).await?;
+    core.comment(&scope, &key, &body, &mentions.unwrap_or_default(), &files.unwrap_or_default()).await?;
     publish(&app, &core).await;
     Ok(())
 }
@@ -152,6 +153,29 @@ async fn comment(
 #[tauri::command]
 async fn mentionable(core: State<'_, CoreState>, key: String, query: String) -> Result<Vec<model::Person>> {
     core.mentionable(&core.scope().await?, &key, &query).await
+}
+
+/// Uploads a file sent as the raw request body; its metadata comes URL-encoded in the `x-file` header, since header
+/// values must be ASCII and file names often aren't.
+#[tauri::command]
+async fn attach(core: State<'_, CoreState>, request: tauri::ipc::Request<'_>) -> Result<model::Uploaded> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(Error::Api { status: 400, message: "expected the file as raw bytes".into() });
+    };
+    let meta: std::collections::HashMap<String, String> = request
+        .headers()
+        .get("x-file")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| url::form_urlencoded::parse(v.as_bytes()).into_owned().collect())
+        .unwrap_or_default();
+    let field = |k: &str| meta.get(k).cloned().ok_or_else(|| Error::Api { status: 400, message: format!("missing {k}") });
+    let scope = Scope { cloud_id: field("cloudId")?, account_id: field("accountId")? };
+    core.attach(&scope, &field("key")?, &field("name")?, &field("type")?, bytes.clone()).await
+}
+
+#[tauri::command]
+async fn attachment_limit(core: State<'_, CoreState>, scope: Scope) -> Result<Option<u64>> {
+    core.attachment_limit(&scope).await
 }
 
 #[tauri::command]
@@ -270,6 +294,8 @@ pub fn run() {
             transitions,
             transition,
             comment,
+            attach,
+            attachment_limit,
             mentionable,
             create_subtasks,
             claude_sessions,
