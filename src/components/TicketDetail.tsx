@@ -282,14 +282,15 @@ function Composer({ ticket }: { ticket: Ticket }) {
     previews.current = files;
     latestBody.current = body;
   }, [files, body]);
-  const mounted = useRef(true);
-  useEffect(
-    () => () => {
+  const mounted = useRef(false);
+  useEffect(() => {
+    // Set here rather than initialised: StrictMode runs cleanup and then this again on the same component.
+    mounted.current = true;
+    return () => {
       mounted.current = false;
       previews.current.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
-    },
-    [],
-  );
+    };
+  }, []);
 
   const add = async (list: File[]) => {
     if (!backend || !list.length) return;
