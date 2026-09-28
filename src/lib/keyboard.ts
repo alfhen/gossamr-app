@@ -8,6 +8,7 @@ export type Command =
   | "comment"
   | "open"
   | "palette"
+  | "claude"
   | "help"
   | "escape";
 
@@ -36,6 +37,7 @@ const PLAIN: Record<string, Command> = {
 export function commandFor(ev: KeyInput): Command | null {
   const mod = ev.metaKey || ev.ctrlKey;
   if (mod && ev.key.toLowerCase() === "k") return "palette";
+  if (mod && ev.key.toLowerCase() === "j") return "claude";
   if (ev.key === "Escape") return "escape";
   if (ev.typing || mod || ev.altKey) return null;
   return PLAIN[ev.key] ?? null;
@@ -55,6 +57,7 @@ export const SHORTCUTS: [string, string][] = [
   ["c", "Comment"],
   ["o", "Open in Jira"],
   ["⌘K", "Search tickets and actions"],
+  ["⌘J", "Ask Claude about this ticket"],
   ["⌘↵", "Send comment"],
   ["Esc", "Close"],
 ];

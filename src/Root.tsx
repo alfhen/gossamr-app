@@ -5,6 +5,7 @@ import App from "./App";
 import { auth, type AuthStatus } from "./backend/auth";
 import { JiraBackend } from "./backend/jira";
 import { MockBackend } from "./backend/mock";
+import { listenToClaude } from "./claudeStore";
 import { Setup } from "./components/Setup";
 import { useStore } from "./store";
 
@@ -17,7 +18,10 @@ export function Root() {
     const account = status?.site && status.me ? { site: status.site, me: status.me } : null;
     useStore.setState({ account });
     void useStore.getState().init(account ? new JiraBackend() : new MockBackend());
-    if (account) void askForNotifications();
+    if (account) {
+      void askForNotifications();
+      listenToClaude();
+    }
     setPhase({ name: "app" });
   };
 

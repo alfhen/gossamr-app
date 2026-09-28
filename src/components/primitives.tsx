@@ -47,11 +47,13 @@ export function ToolbarButton({
   onClick,
   title,
   variant = "plain",
+  disabled,
 }: {
   children: ReactNode;
   onClick: () => void;
   title?: string;
   variant?: "plain" | "claude";
+  disabled?: boolean;
 }) {
   const look =
     variant === "claude"
@@ -62,7 +64,8 @@ export function ToolbarButton({
       type="button"
       title={title}
       onClick={onClick}
-      className={`inline-flex h-7 items-center gap-1.5 rounded-[7px] border px-2.5 text-[12.5px] whitespace-nowrap ${look}`}
+      disabled={disabled}
+      className={`inline-flex h-7 items-center gap-1.5 rounded-[7px] border px-2.5 text-[12.5px] whitespace-nowrap disabled:opacity-50 ${look}`}
     >
       {children}
     </button>

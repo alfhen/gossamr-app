@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { useClaude } from "./claudeStore";
+import { ClaudeDrawer } from "./components/ClaudeDrawer";
 import { ItemList } from "./components/ItemList";
 import { CommandPalette, ShortcutHelp, ToastHost } from "./components/Overlays";
 import { Sidebar } from "./components/Sidebar";
@@ -18,10 +20,11 @@ export default function App() {
   }
 
   return (
-    <div className="grid h-full grid-cols-[210px_370px_1fr] overflow-hidden max-[1040px]:grid-cols-[320px_1fr]">
+    <div className="relative grid h-full grid-cols-[210px_370px_1fr] overflow-hidden max-[1040px]:grid-cols-[320px_1fr]">
       <Sidebar />
       <ItemList />
       <TicketDetail />
+      <ClaudeDrawer />
       {overlay === "palette" && <CommandPalette />}
       {overlay === "help" && <ShortcutHelp />}
       <ToastHost />
@@ -36,9 +39,11 @@ function useKeyboard() {
       const typing = isTypingTarget(ev.target);
       const cmd = commandFor({ key: ev.key, metaKey: ev.metaKey, ctrlKey: ev.ctrlKey, altKey: ev.altKey, typing });
       if (!cmd) return;
+      const claude = useClaude.getState();
       if (cmd === "escape") {
         if (s.overlay) s.openOverlay(null);
         else if (typing) (ev.target as HTMLElement).blur();
+        else if (claude.open) claude.setOpen(false);
         return;
       }
       if (s.overlay && cmd !== "palette") return;
@@ -64,6 +69,8 @@ function useKeyboard() {
         }
         case "palette":
           return s.openOverlay(s.overlay === "palette" ? null : "palette");
+        case "claude":
+          return s.backend?.kind === "jira" && selectedTicket(s) && claude.setOpen(!claude.open);
         case "help":
           return s.openOverlay("help");
       }

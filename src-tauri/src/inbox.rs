@@ -10,7 +10,7 @@ use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, NewEvent};
 use crate::jira::Jira;
-use crate::model::{Person, Snapshot, Ticket, Transition};
+use crate::model::{CachedTicket, Person, Snapshot, Ticket, Transition};
 
 /// Tickets the user follows. Anything else only appears as context, e.g. the children of an epic they watch.
 const TRACKED_JQL: &str =
@@ -23,6 +23,8 @@ const DEFAULT_SEEN_DAYS: i64 = 3;
 const CLOCK_SKEW_MINUTES: i64 = 10;
 
 const LAST_SYNC: &str = "last_sync_at";
+const OWN_CLAUDE_SESSIONS: &str = "claude_sessions";
+const OWN_SESSIONS_KEPT: usize = 50;
 
 pub fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
@@ -219,5 +221,44 @@ impl Core {
         }
         self.jira.comment(key, body).await?;
         self.refresh(key).await
+    }
+
+    /// The cached ticket, or a fresh read from Jira when it isn't cached.
+    pub async fn ticket(&self, key: &str) -> Result<CachedTicket> {
+        let cached = self.with_db(|db| Ok(db.tickets("")?.into_iter().find(|t| t.key == key))).await?;
+        match cached {
+            Some(t) => Ok(t),
+            None => self.jira.issue(key).await,
+        }
+    }
+
+    pub async fn create_subtasks(&self, key: &str, summaries: &[String]) -> Result<Vec<String>> {
+        let created = self.jira.create_subtasks(key, summaries).await?;
+        self.refresh(key).await?;
+        Ok(created)
+    }
+
+    /// Remembers the Claude session last used for a ticket, and that the app started it.
+    pub async fn remember_claude_session(&self, key: &str, session_id: &str, cwd: &str) -> Result<()> {
+        self.with_db(|db| {
+            db.set_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id, "cwd": cwd }).to_string())?;
+            let mut own: Vec<String> =
+                db.meta(OWN_CLAUDE_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            own.retain(|s| s != session_id);
+            own.insert(0, session_id.to_string());
+            own.truncate(OWN_SESSIONS_KEPT);
+            db.set_meta(OWN_CLAUDE_SESSIONS, &serde_json::to_string(&own)?)
+        })
+        .await
+    }
+
+    /// The last session used for `key` (as `{id, cwd}`), and every session the app started.
+    pub async fn claude_sessions(&self, key: &str) -> Result<(Option<serde_json::Value>, Vec<String>)> {
+        self.with_db(|db| {
+            let last = db.meta(&format!("claude:{key}"))?.and_then(|s| serde_json::from_str(&s).ok());
+            let own = db.meta(OWN_CLAUDE_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            Ok((last, own))
+        })
+        .await
     }
 }

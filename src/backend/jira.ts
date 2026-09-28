@@ -29,6 +29,10 @@ export class JiraBackend implements Backend {
     return invoke<void>("comment", { key, body });
   }
 
+  createSubtasks(key: string, summaries: string[]) {
+    return invoke<string[]>("create_subtasks", { key, summaries });
+  }
+
   markSeen(key: string) {
     return invoke<void>("mark_seen", { key });
   }

@@ -104,6 +104,33 @@ impl Jira {
         Ok(())
     }
 
+    /// Creates subtasks under `parent` using the project's first sub-task issue type.
+    pub async fn create_subtasks(&self, parent: &str, summaries: &[String]) -> Result<Vec<String>> {
+        let project = parent.split('-').next().unwrap_or(parent);
+        let types: Value = self.call(Method::GET, &format!("issue/createmeta/{project}/issuetypes"), None).await?;
+        let subtask_type = types["issueTypes"]
+            .as_array()
+            .or_else(|| types["values"].as_array())
+            .into_iter()
+            .flatten()
+            .find(|t| t["subtask"] == true)
+            .and_then(|t| t["id"].as_str())
+            .ok_or_else(|| Error::Api { status: 400, message: format!("project {project} has no sub-task issue type") })?
+            .to_string();
+        let mut created = Vec::new();
+        for summary in summaries {
+            let body = json!({ "fields": {
+                "project": { "key": project },
+                "parent": { "key": parent },
+                "issuetype": { "id": subtask_type },
+                "summary": summary,
+            }});
+            let res: Value = self.call(Method::POST, "issue", Some(&body)).await?;
+            created.push(res["key"].as_str().unwrap_or_default().to_string());
+        }
+        Ok(created)
+    }
+
     pub async fn comment(&self, key: &str, text: &str) -> Result<()> {
         let body = json!({ "body": adf::from_text(text) });
         self.call::<Value>(Method::POST, &format!("issue/{key}/comment"), Some(&body)).await?;
