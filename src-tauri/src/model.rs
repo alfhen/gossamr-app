@@ -171,10 +171,16 @@ pub struct Snapshot {
 impl Snapshot {
     /// Unread events currently in the Inbox view, i.e. not done and not snoozed past `now` (RFC 3339).
     pub fn inbox_unread(&self, now: &str) -> usize {
+        // Compared as instants: snooze times come from the webview with milliseconds, so string order isn't time order.
+        let instant = |s: &str| chrono::DateTime::parse_from_rfc3339(s).ok();
+        let now = instant(now);
         self.events
             .iter()
             .filter(|e| e.unread && e.done_at.is_none())
-            .filter(|e| e.snoozed_until.as_deref().is_none_or(|until| until <= now))
+            .filter(|e| match (e.snoozed_until.as_deref().and_then(instant), now) {
+                (Some(until), Some(now)) => until <= now,
+                _ => true,
+            })
             .count()
     }
 }
@@ -229,5 +235,20 @@ mod tests {
             sync_error: None,
         };
         assert_eq!(snap.inbox_unread("2026-09-28T12:00:00Z"), 2);
+    }
+
+    #[test]
+    fn inbox_unread_compares_snoozes_as_instants() {
+        let snap = |until: &str| Snapshot {
+            me: Person { account_id: "me".into(), name: "Me".into(), avatar_url: None },
+            site: String::new(),
+            tickets: Default::default(),
+            events: vec![event(true, None, Some(until))],
+            watching: vec![],
+            last_sync_at: None,
+            sync_error: None,
+        };
+        assert_eq!(snap("2026-09-28T12:00:00.000Z").inbox_unread("2026-09-28T12:00:00Z"), 1, "a snooze ending now is over");
+        assert_eq!(snap("2026-09-28T14:30:00+02:00").inbox_unread("2026-09-28T12:00:00Z"), 0, "12:30 UTC is still ahead");
     }
 }
