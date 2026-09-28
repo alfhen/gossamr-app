@@ -78,7 +78,9 @@ export function segments(text: string, mentions: Mention[]): Segment[] {
   const out: Segment[] = [];
   let plain = "";
   for (let i = 0; i < text.length; ) {
-    const hit = text[i] === "@" && byLength.find((m) => text.startsWith(`@${m.name}`, i) && isBoundary(text[i + m.name.length + 1]));
+    const startsToken = i === 0 || /[\s([{"']/u.test(text[i - 1]);
+    const hit =
+      text[i] === "@" && startsToken && byLength.find((m) => text.startsWith(`@${m.name}`, i) && isBoundary(text[i + m.name.length + 1]));
     if (hit) {
       if (plain) out.push({ text: plain });
       plain = "";
@@ -93,7 +95,7 @@ export function segments(text: string, mentions: Mention[]): Segment[] {
 }
 
 function isBoundary(ch: string | undefined) {
-  return ch === undefined || !/[\p{L}\p{N}]/u.test(ch);
+  return ch === undefined || !/[\p{L}\p{N}_]/u.test(ch);
 }
 
 /** The mentions still present in the text, each once. */
@@ -105,12 +107,14 @@ export function liveMentions(text: string, mentions: Mention[]): Mention[] {
 
 /**
  * Turns `@First` or `@Full Name` in drafted text (e.g. from Claude) into real mentions of people on the ticket,
- * rewriting first names to full names. Ambiguous first names are left as plain text.
+ * rewriting first names to full names. Ambiguous names, first or full, are left as plain text.
  */
 export function autoLink(text: string, people: Person[]): { text: string; mentions: Mention[] } {
   const mentions = new Map<string, Mention>();
   let out = text;
+  const owners = (name: string) => new Set(people.filter((p) => p.name === name).map((p) => p.accountId)).size;
   for (const p of people) {
+    if (owners(p.name) > 1) continue;
     const full = `@${p.name}`;
     if (containsToken(out, full)) mentions.set(p.accountId, { accountId: p.accountId, name: p.name });
   }
