@@ -24,6 +24,10 @@ describe("parseBlocks", () => {
     ]);
   });
 
+  it("ends a table at a line that starts another block, even one with a pipe", () => {
+    expect(parseBlocks("| a | b |\n|---|---|\n| 1 | 2 |\n> note | detail").map((b) => b.type)).toEqual(["table", "quote"]);
+  });
+
   it("needs one delimiter cell per header cell before reading a table", () => {
     expect(parseBlocks("A | B\n|---|").map((b) => b.type)).toEqual(["paragraph"]);
   });
@@ -118,6 +122,12 @@ describe("parseInline", () => {
     ]);
   });
 
+  it("doesn't nest a link inside a link's label", () => {
+    expect(parseInline("[https://a.io](https://b.io)")).toEqual([
+      { type: "link", href: "https://b.io", children: [{ type: "text", text: "https://a.io" }] },
+    ]);
+  });
+
   it("doesn't treat a key inside a code span as a ticket", () => {
     expect(parseInline("`CA-12`")).toEqual([{ type: "code", text: "CA-12" }]);
   });
@@ -126,5 +136,6 @@ describe("parseInline", () => {
 describe("cells", () => {
   it("splits on pipes outside code and drops the outer ones", () => {
     expect(cells("| a | `b|c` | d \\| e |")).toEqual(["a", "`b|c`", "d | e"]);
+    expect(cells("| ``a|b`` | `x` |")).toEqual(["``a|b``", "`x`"]);
   });
 });

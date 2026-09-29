@@ -61,7 +61,8 @@ function tableAt(lines: string[], i: number): boolean {
 export function cells(row: string): string[] {
   const out: string[] = [];
   let cell = "";
-  let inCode = false;
+  // A code span closes only on a backtick run as long as the one that opened it, as in ``a|b``.
+  let codeTicks = 0;
   const s = row.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
@@ -69,9 +70,13 @@ export function cells(row: string): string[] {
       cell += "|";
       i++;
     } else if (c === "`") {
-      inCode = !inCode;
-      cell += c;
-    } else if (c === "|" && !inCode) {
+      let run = 1;
+      while (s[i + run] === "`") run++;
+      if (!codeTicks) codeTicks = run;
+      else if (run === codeTicks) codeTicks = 0;
+      cell += s.slice(i, i + run);
+      i += run - 1;
+    } else if (c === "|" && !codeTicks) {
       out.push(cell.trim());
       cell = "";
     } else {
@@ -143,7 +148,7 @@ export function parseBlocks(text: string): Block[] {
       const align = cells(lines[i + 1]).map(alignOf);
       const rows: string[][] = [];
       i += 2;
-      while (i < lines.length && !blank(lines[i]) && lines[i].includes("|")) {
+      while (i < lines.length && !blank(lines[i]) && lines[i].includes("|") && !startsBlock(lines, i)) {
         const row = cells(lines[i++]);
         rows.push(head.map((_, c) => row[c] ?? ""));
       }
@@ -214,8 +219,11 @@ function parseList(lines: string[], start: number): [Block, number] {
 const INLINE =
   /`([^`\n]+)`|\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*(?=\S)(.+?)(?<=\S)\*|\[([^\]\n]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"*_])|\b([A-Z][A-Z0-9]{1,9}-\d+)\b/g;
 
-/** Inline Markdown. Ticket keys inside a link's label stay text, since the link already decides where a click goes. */
-export function parseInline(text: string, tickets = true): Inline[] {
+/**
+ * Inline Markdown. Inside a link's label, ticket keys and URLs stay text, since the link already decides where a
+ * click goes and a link inside a link would compete with it.
+ */
+export function parseInline(text: string, inLink = false): Inline[] {
   const out: Inline[] = [];
   let last = 0;
   for (const m of text.matchAll(INLINE)) {
@@ -223,13 +231,13 @@ export function parseInline(text: string, tickets = true): Inline[] {
     if (at > last) out.push({ type: "text", text: text.slice(last, at) });
     const [, code, strong, strong2, del, em, label, href, url, key] = m;
     if (code !== undefined) out.push({ type: "code", text: code });
-    else if (strong !== undefined || strong2 !== undefined) out.push({ type: "strong", children: parseInline(strong ?? strong2, tickets) });
-    else if (del !== undefined) out.push({ type: "del", children: parseInline(del, tickets) });
-    else if (em !== undefined) out.push({ type: "em", children: parseInline(em, tickets) });
-    else if (label !== undefined) out.push({ type: "link", href, children: parseInline(label, false) });
+    else if (strong !== undefined || strong2 !== undefined) out.push({ type: "strong", children: parseInline(strong ?? strong2, inLink) });
+    else if (del !== undefined) out.push({ type: "del", children: parseInline(del, inLink) });
+    else if (em !== undefined) out.push({ type: "em", children: parseInline(em, inLink) });
+    else if (inLink) out.push({ type: "text", text: m[0] });
+    else if (label !== undefined) out.push({ type: "link", href, children: parseInline(label, true) });
     else if (url !== undefined) out.push({ type: "link", href: url, children: [{ type: "text", text: url }] });
-    else if (tickets) out.push({ type: "ticket", key });
-    else out.push({ type: "text", text: key });
+    else out.push({ type: "ticket", key });
     last = at + m[0].length;
   }
   if (last < text.length) out.push({ type: "text", text: text.slice(last) });
