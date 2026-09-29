@@ -383,6 +383,11 @@ export class MockBackend implements Backend {
     return this.proposals.create(intent, label);
   }
 
+  /** Stores a draft the way the assistant would, for the scripted Pip. */
+  async pipDraft(intent: Intent, label: string | null, requestId: string) {
+    return this.proposals.draft(intent, label, requestId);
+  }
+
   proposalsEdit(id: string, edit: ProposalEdit) {
     return this.proposals.edit(id, edit);
   }

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { listenToClaude } from "../claudeStore";
 import { useStore } from "../store";
 import { useItemsByFilter, useWorkspace } from "../workspaceStore";
 import { CANVASES } from "./canvases";
@@ -6,6 +7,7 @@ import { FilterBar } from "./FilterBar";
 import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
+import { FilterNote, PipLauncher, usePipView } from "./PipExtras";
 import { PipPane } from "./PipPane";
 import { applyTheme, usePrefs } from "./prefs";
 import { Rail } from "./Rail";
@@ -56,6 +58,9 @@ export function Workspace() {
   const paletteOpen = usePrefs((s) => s.paletteOpen);
   const setPipOpen = usePrefs((s) => s.setPipOpen);
   useGlobalKeys();
+  usePipView();
+
+  useEffect(() => listenToClaude(), []);
 
   useEffect(() => {
     applyTheme(theme);
@@ -77,12 +82,14 @@ export function Workspace() {
       <main id={MAIN_ID} tabIndex={-1} className="relative flex min-h-0 min-w-0 flex-col outline-none">
         <TabBar />
         {route === "workspace" && <FilterBar />}
+        {route === "workspace" && <FilterNote />}
         <div className="min-h-0 flex-1">
           {route === "workspace" && <Canvas />}
           {route === "activity" && <Activity />}
           {route === "settings" && <Settings />}
         </div>
         <PeekSheet />
+        {!pipOpen && <PipLauncher />}
       </main>
       {pipOpen && <PipPane onClose={() => setPipOpen(false)} />}
       {paletteOpen && <Palette />}

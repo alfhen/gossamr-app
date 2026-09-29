@@ -43,7 +43,7 @@ pub struct Harness {
 impl Harness {
     pub async fn start() -> Self {
         let fx = fixture().await;
-        let server = McpServer::start(fx.core.clone(), "t0ken".into(), Arc::new(|_| {})).await.unwrap();
+        let server = McpServer::start(fx.core.clone(), "t0ken".into(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let canary_port = listener.local_addr().unwrap().port();
         let canary_hit = Arc::new(AtomicBool::new(false));

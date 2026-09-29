@@ -94,3 +94,41 @@
   opacity: 0;
   transform: scale(0.4) rotate(-10deg);
 }
+
+.ws-pulse {
+  animation: ws-pulse 0.7s ease-out 2;
+}
+@keyframes ws-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--color-ws-pip);
+  }
+  100% {
+    box-shadow: 0 0 0 14px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws-pulse {
+    animation: none;
+    outline: 3px solid var(--color-ws-pip);
+  }
+}
+
+/* Components written for the classic screens read the plain colour names; here they follow the workspace theme. */
+.ws-legacy {
+  --color-ink: var(--color-ws-ink);
+  --color-ink-2: var(--color-ws-ink2);
+  --color-ink-3: var(--color-ws-ink3);
+  --color-win: var(--color-ws-win);
+  --color-bar: var(--color-ws-bar);
+  --color-sep: var(--color-ws-sep);
+  --color-sep-strong: var(--color-ws-sep2);
+  --color-hover: var(--color-ws-hover);
+  --color-accent: var(--color-ws-accent);
+  --color-accent-soft: var(--color-ws-accent-soft);
+  --color-field: var(--color-ws-win);
+  --color-field-border: var(--color-ws-sep2);
+  --color-pop: var(--color-ws-win);
+  --color-code: var(--color-ws-hover);
+  --color-blocked: var(--color-ws-blocked);
+  --color-done: var(--color-ws-done);
+}

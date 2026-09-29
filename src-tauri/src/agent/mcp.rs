@@ -31,6 +31,9 @@ const COMMENTS_SHOWN: usize = 10;
 /// Told the connection id whenever a draft was stored, so the page can re-read its drafts.
 pub type ChangeSink = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Told the request id, the filter and a one-line note when Pip wants the page to narrow its current view.
+pub type ViewSink = Arc<dyn Fn(&str, &Filter, &str) + Send + Sync>;
+
 /// The account each running request belongs to. Tools answer only for runs listed here, and only as that account, so
 /// switching accounts mid-run can't hand the agent another account's tickets.
 pub type Runs = Arc<std::sync::Mutex<std::collections::HashMap<String, Scope>>>;
@@ -39,6 +42,7 @@ pub(super) struct McpState {
     pub core: Arc<Core>,
     pub token: String,
     pub sink: ChangeSink,
+    pub view: ViewSink,
     pub runs: Runs,
 }
 
@@ -49,11 +53,11 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    pub async fn start(core: Arc<Core>, token: String, sink: ChangeSink) -> std::io::Result<Self> {
+    pub async fn start(core: Arc<Core>, token: String, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
         let runs: Runs = Arc::default();
-        let state = Arc::new(McpState { core, token: token.clone(), sink, runs: runs.clone() });
+        let state = Arc::new(McpState { core, token: token.clone(), sink, view, runs: runs.clone() });
         let router = Router::new().route("/mcp/{request_id}", post(handle)).with_state(state);
         tauri::async_runtime::spawn(async move {
             let _ = axum::serve(listener, router).await;
@@ -140,6 +144,12 @@ fn tool_list() -> Vec<Value> {
             "List drafts from Pip, the user and autopilot. Open ones by default. Check this before proposing so you don't repeat one.",
             json!({ "state": { "type": "string", "enum": ["open", "applied", "skipped", "retired", "all"] }, "key": key }),
             &[],
+        ),
+        tool(
+            "set_view_filter",
+            "Narrow the view the user is looking at to a filter, and tell them what you did in one short note. This changes only what is shown, never any item, and the user can undo it. Use it when they ask to see, show or filter items.",
+            json!({ "filter": { "type": "object", "description": FILTER_HELP }, "note": text("What the view now shows, e.g. 'Stale tickets in DEVOPS'") }),
+            &["filter", "note"],
         ),
         tool(
             "propose_comment",
@@ -328,6 +338,11 @@ async fn run_tool(st: &McpState, scope: &Scope, run_id: &str, name: &str, args: 
             }
             Ok(found.iter().take(PROPOSALS_SHOWN).map(draft_line).collect::<Vec<_>>().join("\n"))
         }
+        "set_view_filter" => {
+            let filter: Filter = serde_json::from_value(structured(args, "filter")).map_err(|e| format!("filter isn't valid: {e}. {FILTER_HELP}"))?;
+            (st.view)(run_id, &filter, required(args, "note")?);
+            Ok("The user's view now shows that filter, and they can undo it.".into())
+        }
         "propose_comment" => {
             let key = required(args, "key")?;
             let intent = Intent::Comment { item: item_ref(scope, key), body: Doc::from_text(required(args, "body")?, &[]) };
@@ -442,6 +457,7 @@ pub fn tool_label(name: &str, input: &Value) -> Option<String> {
         "get_workflow" => "Checked a workflow".into(),
         "list_next_statuses" => format!("Checked the statuses for {}", s("key")),
         "list_proposals" => "Checked the open drafts".into(),
+        "set_view_filter" => "Filtered the view".into(),
         "propose_comment" => format!("Drafted a comment on {}", s("key")),
         "propose_transition" => format!("Suggested a transition for {}", s("key")),
         "propose_subtasks" => format!("Suggested subtasks for {}", s("key")),
@@ -501,7 +517,10 @@ mod tests {
         fx: Fixture,
         st: McpState,
         changes: Arc<AtomicUsize>,
+        views: Views,
     }
+
+    type Views = Arc<std::sync::Mutex<Vec<(String, Filter, String)>>>;
 
     async fn rig() -> Rig {
         let fx = fixture().await;
@@ -509,10 +528,12 @@ mod tests {
         fx.tracker.moves.lock().unwrap().push(Move { name: "Finish".into(), to: StatusDef { id: "10001".into(), name: "Done".into(), category: Category::Done } });
         let changes = Arc::new(AtomicUsize::new(0));
         let counter = changes.clone();
+        let views: Views = Arc::default();
+        let seen = views.clone();
         let runs: Runs = Arc::default();
         runs.lock().unwrap().insert("run-1".into(), fx.scope.clone());
-        let st = McpState { core: fx.core.clone(), token: "t".into(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), runs };
-        Rig { fx, st, changes }
+        let st = McpState { core: fx.core.clone(), token: "t".into(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), view: Arc::new(move |run, f, note| seen.lock().unwrap().push((run.into(), f.clone(), note.into()))), runs };
+        Rig { fx, st, changes, views }
     }
 
     impl Rig {
@@ -574,11 +595,27 @@ mod tests {
         let mut want = [
             "search_items", "get_item", "list_containers", "get_workflow", "list_next_statuses", "list_proposals",
             "propose_comment", "propose_transition", "propose_subtasks", "propose_create", "revise_proposal", "retire_proposal",
+            "set_view_filter",
         ];
         want.sort();
         assert_eq!(names, want);
         let described: Vec<Value> = tool_list().into_iter().filter(|t| t["name"] != "search_items").collect();
         assert!(described.iter().all(|t| t["inputSchema"]["required"].is_array()));
+    }
+
+    #[tokio::test]
+    async fn set_view_filter_hands_the_filter_to_the_page_and_writes_nothing() {
+        let r = rig().await;
+        r.ok("set_view_filter", json!({ "filter": { "type": "and", "filters": [{ "type": "stale", "days": 5 }, { "type": "blocked" }] }, "note": "Stale and blocked" })).await;
+        let seen = r.views.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "run-1");
+        assert_eq!(seen[0].1, Filter::And { filters: vec![Filter::Stale { days: 5 }, Filter::Blocked] });
+        assert_eq!(seen[0].2, "Stale and blocked");
+        assert!(r.drafts().await.is_empty());
+        assert!(r.err("set_view_filter", json!({ "filter": { "type": "nope" }, "note": "x" })).await.contains("isn't valid"));
+        assert!(r.err("set_view_filter", json!({ "filter": { "type": "blocked" } })).await.contains("note is required"));
+        assert_eq!(r.views.lock().unwrap().len(), 1);
     }
 
     #[test]

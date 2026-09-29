@@ -1,0 +1,28 @@
+import { itemKey } from "../lib/filter";
+import type { ItemRef } from "../types";
+import { useWorkspace } from "../workspaceStore";
+import { cardId } from "./ItemCard";
+import { jumpToItem } from "./Palette";
+
+const PULSE_MS = 1400;
+
+/** The element that stands for an item on whichever canvas is showing: a board or age card, or a list row. */
+export const canvasElement = (ref: ItemRef) => document.getElementById(cardId(ref.key)) ?? document.getElementById(`row-${itemKey(ref)}`);
+
+/** Selects the item, switching the tab's filter if it isn't shown, then brings its card into view and pulses it. */
+export function showMe(ref: ItemRef) {
+  const item = useWorkspace.getState().items[itemKey(ref)];
+  if (!item) return false;
+  jumpToItem(item);
+  // The canvas re-renders after the selection changes.
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const el = canvasElement(ref);
+      if (!el) return;
+      el.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      el.classList.add("ws-pulse");
+      setTimeout(() => el.classList.remove("ws-pulse"), PULSE_MS);
+    }),
+  );
+  return true;
+}
