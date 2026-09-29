@@ -6,6 +6,7 @@ mod error;
 mod events;
 mod inbox;
 mod jira;
+mod legacy;
 mod model;
 mod notify;
 mod secrets;
@@ -288,7 +289,11 @@ pub fn run() {
                 .build()?;
             let auth = Arc::new(Auth::load(http.clone()));
             let jira = jira::Jira::new(http, auth.clone());
-            let core: CoreState = Arc::new(Core::new(auth, jira, app.path().app_data_dir()?));
+            let data_dir = app.path().app_data_dir()?;
+            if let Err(e) = legacy::adopt_legacy_data(&data_dir) {
+                eprintln!("couldn't move data from the previous app name, starting fresh: {e}");
+            }
+            let core: CoreState = Arc::new(Core::new(auth, jira, data_dir));
             app.manage(core.clone());
 
             let handle = app.handle().clone();
