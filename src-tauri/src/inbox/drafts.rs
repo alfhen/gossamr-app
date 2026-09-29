@@ -70,6 +70,33 @@ impl Core {
         self.with_proposals(|db| db.proposals(query)).await
     }
 
+    /// Drafts in `scope`'s connection, for the assistant's tools.
+    pub async fn proposals_in(&self, scope: &Scope, query: &ProposalQuery) -> Result<Vec<Proposal>> {
+        self.with_db_for(scope, |db| db.proposals(query)).await
+    }
+
+    pub async fn proposal_in(&self, scope: &Scope, id: &str) -> Result<Option<Proposal>> {
+        self.with_db_for(scope, |db| db.proposal(id)).await
+    }
+
+    /// Pip's own change to one of its pending drafts. Anyone else's, and anything already decided, is refused here
+    /// whatever the caller checked.
+    pub async fn revise_as_pip(&self, scope: &Scope, id: &str, intent: Intent) -> Result<Proposal> {
+        self.with_db_for(scope, |db| {
+            proposals::require_pip_pending(&db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?)?;
+            proposals::edit_noted(db, id, intent, "Revised by Pip", Utc::now())
+        })
+        .await
+    }
+
+    pub async fn retire_as_pip(&self, scope: &Scope, id: &str, reason: &str) -> Result<Proposal> {
+        self.with_db_for(scope, |db| {
+            proposals::require_pip_pending(&db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?)?;
+            proposals::retire(db, id, reason, Utc::now())
+        })
+        .await
+    }
+
     pub async fn proposal(&self, id: &str) -> Result<Option<Proposal>> {
         self.with_proposals(|db| db.proposal(id)).await
     }

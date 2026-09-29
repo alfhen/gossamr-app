@@ -81,3 +81,25 @@ describe("watchProposals", () => {
     expect(useClaude.getState().proposals[0].state.type).toBe("applied");
   });
 });
+
+describe("ask", () => {
+  it("sends the screen context with the question and never relies on the session for it", async () => {
+    const sent: unknown[] = [];
+    const { claude } = await import("./backend/claude");
+    const original = claude.ask;
+    claude.ask = async (req) => void sent.push(req);
+    try {
+      await useClaude.getState().ask("CA-9", "what next?", null, null);
+      const custom = { view: "board", item: null, filter: { type: "mine" as const }, selection: [ref] };
+      await useClaude.getState().ask("CA-9", "and now?", null, null, custom);
+    } finally {
+      claude.ask = original;
+    }
+    expect(sent[0]).toMatchObject({
+      prompt: "what next?",
+      context: { view: null, item: { connectionId: "", externalId: "CA-9", key: "CA-9" }, filter: null, selection: [] },
+    });
+    expect(sent[1]).toMatchObject({ context: { view: "board", filter: { type: "mine" }, selection: [ref] } });
+    expect(sent[0]).not.toHaveProperty("ticketKey");
+  });
+});

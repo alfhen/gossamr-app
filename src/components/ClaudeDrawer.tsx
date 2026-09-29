@@ -110,7 +110,7 @@ export function ClaudeDrawer() {
 
   return (
     <aside
-      aria-label={`Ask Claude about ${ticket.key}`}
+      aria-label={`Ask Pip about ${ticket.key}`}
       className="absolute inset-y-0 right-0 z-40 flex w-[min(440px,100%)] flex-col border-l border-sep-strong bg-win shadow-[-12px_0_40px_rgb(0_0_0/0.12)]"
     >
       <header className="grid gap-2 border-b border-sep bg-bar px-3.5 pt-3 pb-3">
@@ -118,7 +118,8 @@ export function ClaudeDrawer() {
           <span className="grid size-[22px] place-items-center rounded-md bg-claude text-white">
             <Sparkle className="size-3" />
           </span>
-          Ask Claude about {ticket.key}
+          Ask Pip about {ticket.key}
+          <span className="text-xs font-normal text-ink-3">powered by Claude</span>
           <button type="button" aria-label="Close" onClick={() => setOpen(false)} className="ml-auto rounded px-1.5 text-lg leading-none text-ink-3 hover:bg-hover">
             ×
           </button>
@@ -151,7 +152,7 @@ export function ClaudeDrawer() {
         {!conv?.turns.length && (
           <>
             <p className="text-ink-2">
-              Claude reads the ticket, its history and the repo in the chosen session's folder. Anything it wants to change in Jira shows up
+              Pip reads the ticket, its history and the repo in the chosen session's folder. Anything it wants to change in Jira shows up
               here as a card for you to approve.
             </p>
             <div className="flex flex-wrap gap-1.5">
@@ -192,7 +193,7 @@ export function ClaudeDrawer() {
             id="claude-input"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about this ticket, or tell Claude what to do…"
+            placeholder="Ask about this ticket, or tell Pip what to do…"
             autoComplete="off"
             className="min-w-0 flex-1 rounded-lg border border-field-border bg-field px-2.5 py-2 outline-none focus:border-claude focus:ring-3 focus:ring-claude-soft"
           />
@@ -238,7 +239,7 @@ function TurnView({ turn, proposals }: { turn: Turn; proposals: Proposal[] }) {
       ))}
       {turn.status === "failed" && (
         <div role="alert" className="rounded-md bg-blocked-bg px-3 py-2 text-blocked">
-          {turn.error ?? "Claude stopped"}
+          {turn.error ?? "Pip stopped"}
         </div>
       )}
     </>
@@ -281,7 +282,7 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
   const people = useMemo(() => (ticket ? participants(ticket, me) : []), [ticket, me]);
   const status = useTargetStatus(p);
   const stored = intent.type === "comment" ? docText(intent.body) : "";
-  // Claude writes "@Sam"; link that to the person on the ticket so posting it actually notifies them.
+  // Pip writes "@Sam"; link that to the person on the ticket so posting it actually notifies them.
   const [draft] = useState(() => autoLink(stored, people));
   const [body, setBody] = useState(draft.text);
   const [mentions, setMentions] = useState<Mention[]>(draft.mentions);
@@ -357,13 +358,17 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
         ? `Transition ${key}`
         : intent.type === "subtasks"
           ? `Subtasks under ${key}`
-          : "Draft";
+          : intent.type === "create"
+            ? `New ${intent.fields.kind}`
+            : "Draft";
   const action =
     intent.type === "comment"
       ? "Post comment"
       : intent.type === "transition"
         ? (p.label ?? `Move to ${status.name}`)
-        : `Create ${remaining} subtasks`;
+        : intent.type === "create"
+          ? `Create ${intent.fields.kind}`
+          : `Create ${remaining} subtasks`;
   const revision = p.revisions[p.revisions.length - 1];
   const error = problem ?? p.error;
   const badge = { applied: "Done", skipped: "Skipped", retired: "Out of date", pending: "Needs your approval", applying: "Working…" }[state];
@@ -395,6 +400,12 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
         {intent.type === "transition" && (
           <div className="flex items-center gap-2">
             Move <b className="font-mono">{key}</b> to <StatusPill status={status} />
+          </div>
+        )}
+        {intent.type === "create" && (
+          <div className="grid gap-1">
+            <b>{intent.fields.title}</b>
+            {docText(intent.fields.body) && <div className="whitespace-pre-wrap text-ink-2">{docText(intent.fields.body)}</div>}
           </div>
         )}
         {intent.type === "subtasks" &&

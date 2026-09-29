@@ -1,7 +1,7 @@
 //! Proposals: writes drafted by a person, Pip or autopilot that only an approval turns into a change in a tracker.
 //! `approve` is the single route from here to `WorkTracker::apply`.
 
-// Retiring and the autopilot origin wait for the assistant's list tool and the rules engine (1c, 4a).
+// The autopilot origin waits for the rules engine (4a).
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -93,6 +93,10 @@ fn not_pending(p: &Proposal) -> Error {
 /// Replaces a pending proposal's payload with the person's edit. What it is about and what kind of change it is stay
 /// fixed, and subtasks already created stay in front so a retry still lines up.
 pub fn edit(db: &Db, id: &str, intent: Intent, at: DateTime<Utc>) -> Result<Proposal> {
+    edit_noted(db, id, intent, "Edited", at)
+}
+
+pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Utc>) -> Result<Proposal> {
     let mut p = load(db, id)?;
     if p.state != ProposalState::Pending {
         return Err(not_pending(&p));
@@ -107,12 +111,27 @@ pub fn edit(db: &Db, id: &str, intent: Intent, at: DateTime<Utc>) -> Result<Prop
             return Err(refuse("subtasks that were already created can't be changed"));
         }
     }
-    p.revisions.push(Revision { at, note: "Edited".into(), intent: intent.clone() });
+    // A transition's label named the old target, so the approve button falls back to the new status's name.
+    if matches!((&p.intent, &intent), (Intent::Transition { to: a, .. }, Intent::Transition { to: b, .. }) if a != b) {
+        p.label = None;
+    }
+    p.revisions.push(Revision { at, note: note.into(), intent: intent.clone() });
     p.intent = intent;
     p.updated_at = at;
     p.error = None;
     db.save_proposal(&p)?;
     Ok(p)
+}
+
+/// Pip may change only what it drafted itself, and only while nobody has decided it.
+pub fn require_pip_pending(p: &Proposal) -> Result<()> {
+    if p.created_by != CreatedBy::Pip {
+        return Err(refuse("that draft wasn't made by Pip, so Pip can't change it"));
+    }
+    if p.state != ProposalState::Pending {
+        return Err(not_pending(p));
+    }
+    Ok(())
 }
 
 pub fn skip(db: &Db, id: &str, at: DateTime<Utc>) -> Result<Proposal> {

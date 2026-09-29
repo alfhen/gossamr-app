@@ -179,6 +179,12 @@ impl Auth {
         Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(None) }
     }
 
+    #[cfg(test)]
+    pub fn signed_in(http: reqwest::Client, credentials: Credentials) -> Self {
+        let client = ClientConfig;
+        Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(Some(credentials)) }
+    }
+
     pub async fn status(&self) -> Result<AuthStatus> {
         let session = self.session.lock().await;
         Ok(AuthStatus {
