@@ -138,6 +138,27 @@ describe("workspace store refresh", () => {
     expect(eventsFor(s(), itemRef("DEVOPS-471"))).toEqual([]);
   });
 
+  it("derives me from the current containers on every refresh", async () => {
+    const wider = new MockBackend();
+    const listContainers = wider.connector.listContainers.bind(wider.connector);
+    await s().init(wider);
+    expect(s().me).toHaveLength(1);
+    wider.connector.listContainers = () => [
+      ...listContainers(),
+      { ...listContainers()[0], ref: { connectionId: "other", externalId: "X" } },
+    ];
+    await s().refresh();
+    expect(s().me.map((m) => m.connectionId).sort()).toEqual(["mock", "other"]);
+  });
+
+  it("drops a decision that lands after the workspace moved to another backend", async () => {
+    const draft = draftsForItem(s(), itemRef("SUP-12"))[0];
+    const pending = s().approve(draft.id);
+    await s().init(new MockBackend());
+    await pending;
+    expect(s().proposals[draft.id]).toBeUndefined();
+  });
+
   it("ignores a refresh that lands after the backend was replaced", async () => {
     const other = new MockBackend();
     other.connector.comment(itemRef("WEB-108"), "x");
