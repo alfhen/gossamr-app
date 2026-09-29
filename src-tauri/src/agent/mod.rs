@@ -134,7 +134,7 @@ impl AgentService {
             None => None,
         };
         let open = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
-        let drafts = self.core.proposals(&open).await?;
+        let drafts = self.core.proposals_in(&scope, &open).await?;
         let cwd = req
             .cwd
             .as_ref()
