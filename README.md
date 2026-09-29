@@ -19,7 +19,7 @@ Gossamr signs in through your own Atlassian OAuth 2.0 (3LO) app:
 3. Under Authorization, set the callback URL to `http://localhost:8723/callback`.
 4. Start the app, paste the client ID and secret, and click **Sign in with Atlassian**.
 
-The client secret and tokens are stored in the macOS Keychain under `dk.hobbii.gossamr`. "Try it with sample data" skips all of this.
+The client secret and tokens are stored in the macOS Keychain under `dk.alfhen.gossamr`. "Try it with sample data" skips all of this.
 
 ## Ask Claude
 
