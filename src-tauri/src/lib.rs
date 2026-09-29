@@ -9,6 +9,7 @@ mod legacy;
 mod model;
 mod notify;
 mod secrets;
+mod sync;
 mod tracker;
 
 use std::sync::Arc;
@@ -20,11 +21,16 @@ use tauri_plugin_opener::OpenerExt;
 
 use auth::{Auth, AuthStatus, OAuthApp, Scope};
 use claude::{AskRequest, Claude};
+use tracker::Connection;
 use inbox::Core;
 use error::{Error, Result};
+use domain::{Container, ContainerRef, Event, Filter, ItemRef, WorkItem, Workflow};
 use model::{Snapshot, Transition};
+use sync::Trigger;
 
-const POLL_INTERVAL: Duration = Duration::from_secs(60);
+/// How often the scheduler checks whether a sync is due. Waking from sleep is noticed within one tick.
+const TICK: Duration = Duration::from_secs(15);
+const EVENT_LIMIT: usize = 100;
 
 type CoreState = Arc<Core>;
 type ClaudeState = Arc<Claude>;
@@ -38,6 +44,11 @@ async fn publish(app: &AppHandle, core: &Core) {
         let _ = win.set_badge_count((unread > 0).then_some(unread as i64));
     }
     let _ = app.emit("snapshot", snap);
+}
+
+/// Tells the page the cache changed, so views over it can re-read.
+fn cache_changed(app: &AppHandle, connection_id: &str) {
+    let _ = app.emit("cache-changed", serde_json::json!({ "connectionId": connection_id }));
 }
 
 /// Shows native notifications for new events, unless the window is focused and the user can already see them.
@@ -90,6 +101,31 @@ async fn snapshot(core: State<'_, CoreState>) -> Result<Snapshot> {
 }
 
 #[tauri::command]
+async fn cache_search(core: State<'_, CoreState>, filter: Filter) -> Result<Vec<WorkItem>> {
+    core.cache_search(&filter).await
+}
+
+#[tauri::command]
+async fn cache_item(core: State<'_, CoreState>, item: ItemRef) -> Result<Option<WorkItem>> {
+    core.cache_item(&item).await
+}
+
+#[tauri::command]
+async fn cache_containers(core: State<'_, CoreState>) -> Result<Vec<Container>> {
+    core.cache_containers().await
+}
+
+#[tauri::command]
+async fn cache_workflow(core: State<'_, CoreState>, container: ContainerRef) -> Result<Option<Workflow>> {
+    core.cache_workflow(&container).await
+}
+
+#[tauri::command]
+async fn cache_events(core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<Event>> {
+    core.cache_events(&item, EVENT_LIMIT).await
+}
+
+#[tauri::command]
 fn sync_now(core: State<'_, CoreState>) {
     core.wake.notify_one();
 }
@@ -130,6 +166,7 @@ async fn transitions(core: State<'_, CoreState>, key: String) -> Result<Vec<Tran
 #[tauri::command]
 async fn transition(app: AppHandle, core: State<'_, CoreState>, scope: Scope, key: String, transition_id: String) -> Result<()> {
     core.transition(&scope, &key, &transition_id).await?;
+    cache_changed(&app, &Connection::jira_id(&scope));
     publish(&app, &core).await;
     Ok(())
 }
@@ -145,6 +182,7 @@ async fn comment(
     files: Option<Vec<model::Uploaded>>,
 ) -> Result<()> {
     core.comment(&scope, &key, &body, &mentions.unwrap_or_default(), &files.unwrap_or_default()).await?;
+    cache_changed(&app, &Connection::jira_id(&scope));
     publish(&app, &core).await;
     Ok(())
 }
@@ -191,6 +229,7 @@ async fn create_subtasks(
     summaries: Vec<String>,
 ) -> Result<model::CreatedSubtasks> {
     let created = core.create_subtasks(&scope, &key, &summaries).await?;
+    cache_changed(&app, &Connection::jira_id(&scope));
     publish(&app, &core).await;
     Ok(created)
 }
@@ -236,21 +275,27 @@ fn random_token() -> std::result::Result<String, getrandom::Error> {
 
 fn spawn_sync_loop(app: AppHandle, core: CoreState) {
     tauri::async_runtime::spawn(async move {
+        // Launch catches up straight away, from the cursor the last run left in the cache.
+        let mut trigger = Trigger::Now;
         loop {
-            if core.auth.identity().await.is_some() {
-                match core.sync().await {
-                    Ok(new) => {
+            if let Some(result) = core.sync_if_due(trigger).await {
+                match result {
+                    Ok(synced) => {
                         core.set_error(None);
-                        announce(&app, &new);
+                        announce(&app, &synced.new_events);
+                        if synced.changed {
+                            cache_changed(&app, &synced.connection_id);
+                        }
                     }
                     Err(e) => core.set_error(Some(e.to_string())),
                 }
                 publish(&app, &core).await;
             }
-            tokio::select! {
-                _ = tokio::time::sleep(POLL_INTERVAL) => {}
-                _ = core.wake.notified() => {}
-            }
+            trigger = tokio::select! {
+                _ = tokio::time::sleep(TICK) => Trigger::Timer,
+                _ = core.wake.notified() => Trigger::Now,
+                _ = core.focus.notified() => Trigger::Focus,
+            };
         }
     });
 }
@@ -279,6 +324,13 @@ pub fn run() {
                 };
                 responder.respond(response.expect("static response parts"));
             });
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(true) = event {
+                if let Some(core) = window.app_handle().try_state::<CoreState>() {
+                    core.focus.notify_one();
+                }
+            }
         })
         .setup(|app| {
             let http = reqwest::Client::builder()
@@ -315,6 +367,11 @@ pub fn run() {
             sign_in,
             sign_out,
             snapshot,
+            cache_search,
+            cache_item,
+            cache_containers,
+            cache_workflow,
+            cache_events,
             sync_now,
             mark_seen,
             set_unread,

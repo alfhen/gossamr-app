@@ -2,7 +2,20 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Mention } from "../lib/mentions";
-import type { Person, Snapshot, Transition, Uploaded } from "../types";
+import type {
+  CacheChanged,
+  ContainerRef,
+  ItemRef,
+  Person,
+  Snapshot,
+  Transition,
+  Uploaded,
+  WorkContainer,
+  WorkEvent,
+  WorkFilter,
+  WorkItem,
+  Workflow,
+} from "../types";
 import type { Backend } from "./types";
 
 /** The Jira site and account this backend acts for. */
@@ -87,6 +100,31 @@ export class JiraBackend implements Backend {
 
   snooze(id: string, until: Date | null) {
     return invoke<void>("snooze", { id, until: until?.toISOString() ?? null });
+  }
+
+  cacheSearch(filter: WorkFilter) {
+    return invoke<WorkItem[]>("cache_search", { filter });
+  }
+
+  cacheItem(item: ItemRef) {
+    return invoke<WorkItem | null>("cache_item", { item });
+  }
+
+  cacheContainers() {
+    return invoke<WorkContainer[]>("cache_containers");
+  }
+
+  cacheWorkflow(container: ContainerRef) {
+    return invoke<Workflow | null>("cache_workflow", { container });
+  }
+
+  cacheEvents(item: ItemRef) {
+    return invoke<WorkEvent[]>("cache_events", { item });
+  }
+
+  onCacheChanged(listener: (change: CacheChanged) => void) {
+    const pending = listen<CacheChanged>("cache-changed", (e) => listener(e.payload));
+    return () => void pending.then((unlisten) => unlisten());
   }
 
   syncNow() {

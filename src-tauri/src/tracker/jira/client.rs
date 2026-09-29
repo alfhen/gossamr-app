@@ -11,11 +11,12 @@ use super::adf;
 use crate::auth::{json_or_error, Auth, Scope};
 use crate::error::{Error, Result};
 use crate::domain::StatusDef;
-use crate::model::{Attachment, CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, Uploaded};
+use crate::model::{Attachment, CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, TicketLink, Uploaded};
 
 const FIELDS: &[&str] = &[
     "summary", "status", "issuetype", "priority", "assignee", "reporter", "parent", "description", "comment",
-    "subtasks", "duedate", "updated", "watches", "attachment", "resolutiondate", "created", "creator",
+    "subtasks", "duedate", "updated", "watches", "attachment", "resolutiondate", "created", "creator", "labels",
+    "issuelinks",
 ];
 const PAGE_SIZE: u32 = 50;
 const CHANGELOG_PAGE: u64 = 100;
@@ -469,6 +470,16 @@ pub(super) fn status_def(v: &Value) -> Option<StatusDef> {
     Some(StatusDef { id: v["id"].as_str()?.into(), name: v["name"].as_str()?.into(), category })
 }
 
+fn parse_link(raw: &Value) -> Option<TicketLink> {
+    let kind = raw.pointer("/type/name").and_then(Value::as_str)?.to_string();
+    let (other, outward) = match (raw.pointer("/outwardIssue/key"), raw.pointer("/inwardIssue/key")) {
+        (Some(k), _) => (k.as_str()?, true),
+        (None, Some(k)) => (k.as_str()?, false),
+        _ => return None,
+    };
+    Some(TicketLink { kind, other: other.to_string(), outward })
+}
+
 pub(in crate::tracker) fn parse_issue(raw: &Value) -> Option<CachedTicket> {
     let f = &raw["fields"];
     let key = raw["key"].as_str()?.to_string();
@@ -537,6 +548,8 @@ pub(in crate::tracker) fn parse_issue(raw: &Value) -> Option<CachedTicket> {
         creator: person(&f["creator"]),
         watching: f.pointer("/watches/isWatching").and_then(Value::as_bool).unwrap_or(false),
         history,
+        labels: f["labels"].as_array().into_iter().flatten().filter_map(|l| l.as_str().map(String::from)).collect(),
+        links: f["issuelinks"].as_array().into_iter().flatten().filter_map(parse_link).collect(),
     })
 }
 
@@ -568,7 +581,13 @@ pub(in crate::tracker) mod tests {
                 "attachment": [{"id": "10001", "filename": "shot.png", "mimeType": "image/png", "size": 2048}],
                 "resolutiondate": null,
                 "created": "2026-09-20T09:00:00.000+0200",
-                "creator": {"accountId": "me", "displayName": "Me Myself"}
+                "creator": {"accountId": "me", "displayName": "Me Myself"},
+                "labels": ["backend", "urgent"],
+                "issuelinks": [
+                    {"type": {"name": "Blocks"}, "outwardIssue": {"key": "CA-7"}},
+                    {"type": {"name": "Blocks"}, "inwardIssue": {"key": "CA-8"}},
+                    {"type": {"name": "Relates"}}
+                ]
             },
             "changelog": {"histories": [{
                 "id": "500", "author": {"accountId": "sam", "displayName": "Sam"},
@@ -595,6 +614,14 @@ pub(in crate::tracker) mod tests {
         assert_eq!(t.history[0].items[0].to.as_deref(), Some("In Review"));
         assert_eq!((t.resolved, t.created.as_deref()), (None, Some("2026-09-20T07:00:00Z")));
         assert_eq!(t.creator.unwrap().account_id, "me");
+        assert_eq!(t.labels, ["backend", "urgent"]);
+        assert_eq!(
+            t.links,
+            vec![
+                TicketLink { kind: "Blocks".into(), other: "CA-7".into(), outward: true },
+                TicketLink { kind: "Blocks".into(), other: "CA-8".into(), outward: false },
+            ]
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::adf;
-use crate::domain::{Category, Comment, ContainerRef, ItemKind, ItemRef, Person, PersonRef, Priority, StatusDef, WorkItem};
+use crate::domain::{Category, Comment, ContainerRef, ItemKind, ItemRef, Link, LinkKind, Person, PersonRef, Priority, StatusDef, WorkItem};
 use crate::model::{self, CachedTicket};
 
 pub(super) fn person_ref(conn: &str, p: &model::Person) -> PersonRef {
@@ -57,6 +57,23 @@ fn project_key(issue_key: &str) -> &str {
     issue_key.rsplit_once('-').map_or(issue_key, |(project, _)| project)
 }
 
+fn links(conn: &str, t: &CachedTicket) -> Vec<Link> {
+    let this = ItemRef { connection_id: conn.into(), external_id: t.key.clone(), key: t.key.clone() };
+    t.links
+        .iter()
+        .map(|l| {
+            let other = ItemRef { connection_id: conn.into(), external_id: l.other.clone(), key: l.other.clone() };
+            let kind = match l.kind.to_lowercase().as_str() {
+                "blocks" => LinkKind::Blocks,
+                "duplicate" => LinkKind::Duplicates,
+                _ => LinkKind::Relates,
+            };
+            let (from, to) = if l.outward { (this.clone(), other) } else { (other, this.clone()) };
+            Link { from, to, kind }
+        })
+        .collect()
+}
+
 pub(super) fn comment(conn: &str, c: &model::Comment) -> Comment {
     Comment {
         id: c.id.clone(),
@@ -81,10 +98,10 @@ pub(super) fn work_item(conn: &str, t: &CachedTicket) -> WorkItem {
         reporter: t.reporter.as_ref().map(|p| person_ref(conn, p)),
         priority: t.priority.as_deref().and_then(priority),
         parent: t.parent.as_ref().map(|p| ItemRef { connection_id: conn.into(), external_id: p.key.clone(), key: p.key.clone() }),
-        labels: vec![],
+        labels: t.labels.clone(),
         created: t.created.as_deref().map(time).unwrap_or_else(|| time(&t.updated)),
         updated: time(&t.updated),
-        links: vec![],
+        links: links(conn, t),
         comment_count: t.comments.len() as u32,
         last_commenter: last.map(|c| person_ref(conn, &c.author)),
         extra: serde_json::to_value(t).unwrap_or(Value::Null),
@@ -113,6 +130,18 @@ mod tests {
         assert_eq!(w.last_commenter.unwrap().account_id, "sam");
         assert_eq!(w.updated.to_rfc3339(), "2026-09-28T08:05:00+00:00");
         assert_eq!(w.created.to_rfc3339(), "2026-09-20T07:00:00+00:00");
+        assert_eq!(w.labels, ["backend", "urgent"]);
+    }
+
+    #[test]
+    fn links_point_from_the_blocker_to_the_blocked() {
+        let w = work_item("c", &sample_ticket());
+        let key = |r: &ItemRef| r.key.clone();
+        let got: Vec<(String, String, LinkKind)> = w.links.iter().map(|l| (key(&l.from), key(&l.to), l.kind)).collect();
+        assert_eq!(
+            got,
+            vec![("CA-1".into(), "CA-7".into(), LinkKind::Blocks), ("CA-8".into(), "CA-1".into(), LinkKind::Blocks)]
+        );
     }
 
     #[test]

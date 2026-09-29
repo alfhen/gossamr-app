@@ -1,7 +1,7 @@
 //! Connector-neutral model. Everything above the connector line speaks these types.
 //!
-//! Items, workflows, docs, people, comments, intents and filters are used by the trackers. Events, proposals with
-//! `reconcile`, local filter evaluation and workflow paths wait for their consumers (1a, 1b, 3b, 4a); drop the allow
+//! Items, workflows, containers, events, filters, docs, people and comments are used by the trackers and the cache.
+//! Proposals with `reconcile`, code changes and workflow paths wait for their consumers (1b, 3b, 4a); drop the allow
 //! below once they have one.
 #![allow(dead_code, unused_imports)]
 

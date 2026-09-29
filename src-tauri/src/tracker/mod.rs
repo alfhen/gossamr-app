@@ -1,10 +1,9 @@
 //! Work trackers behind one trait. Core holds an `Arc<dyn WorkTracker>` per connection and speaks domain types.
 //!
-//! Until the cache is rebuilt on domain types, a tracker also leaves the ticket the current inbox reads in
-//! `WorkItem::extra`, so Core never needs a tracker's own client.
+//! Until the inbox is rebuilt on domain types, a tracker also leaves the ticket it reads in `WorkItem::extra`, so
+//! Core never needs a tracker's own client.
 
-// Search by filter, containers, workflows, comments and capabilities have no caller until the cache and sync are
-// built on domain types.
+// Search by filter, comments and capabilities wait for the views and the assistant that will call them.
 #![allow(dead_code)]
 
 mod jira;
@@ -94,6 +93,9 @@ pub struct SearchOptions {
     pub limit: usize,
     /// Include each item's history back to at least this time (RFC 3339), for deriving events.
     pub history_since: Option<String>,
+    /// Only items changed within this many minutes, for `followed` and `children`. A tracker may ignore it and
+    /// return more.
+    pub updated_since_minutes: Option<u32>,
 }
 
 /// A way to move an item, as offered to the person.
@@ -197,6 +199,13 @@ impl Registry {
     pub fn tracker(&self, connection: &Connection) -> Arc<dyn WorkTracker> {
         let mut trackers = self.trackers.lock().expect("registry lock poisoned");
         trackers.entry(connection.id.clone()).or_insert_with(|| (self.factory)(connection)).clone()
+    }
+}
+
+/// A ticket stored before the cache existed, as the work item a sync of `connection` would have produced.
+pub fn item_from_ticket(connection: &Connection, t: &crate::model::CachedTicket) -> WorkItem {
+    match connection.kind {
+        ConnectionKind::Jira => jira::item_from_ticket(&connection.id, t),
     }
 }
 

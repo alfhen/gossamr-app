@@ -1,5 +1,18 @@
 import type { Mention } from "../lib/mentions";
-import type { Person, Snapshot, Transition, Uploaded } from "../types";
+import type {
+  CacheChanged,
+  ContainerRef,
+  ItemRef,
+  Person,
+  Snapshot,
+  Transition,
+  Uploaded,
+  WorkContainer,
+  WorkEvent,
+  WorkFilter,
+  WorkItem,
+  Workflow,
+} from "../types";
 
 export interface Backend {
   readonly kind: "mock" | "jira";
@@ -27,6 +40,15 @@ export interface Backend {
   setUnread(eventId: string, unread: boolean): Promise<void>;
   setDone(eventId: string, done: boolean): Promise<void>;
   snooze(eventId: string, until: Date | null): Promise<void>;
+  /** Items in the local cache that match the filter, newest first. Works offline. */
+  cacheSearch(filter: WorkFilter): Promise<WorkItem[]>;
+  cacheItem(ref: ItemRef): Promise<WorkItem | null>;
+  cacheContainers(): Promise<WorkContainer[]>;
+  cacheWorkflow(container: ContainerRef): Promise<Workflow | null>;
+  /** Events recorded for an item, newest first. */
+  cacheEvents(ref: ItemRef): Promise<WorkEvent[]>;
+  /** Called when a sync or a write changed the cache, so views over it can re-read. Returns an unsubscribe function. */
+  onCacheChanged(listener: (change: CacheChanged) => void): () => void;
   syncNow(): Promise<void>;
   openUrl(url: string): Promise<void>;
   /** Releases anything the backend holds, when the app switches to another one. */
