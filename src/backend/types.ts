@@ -4,6 +4,10 @@ import type {
   ContainerRef,
   ItemRef,
   Person,
+  Proposal,
+  ProposalEdit,
+  ProposalQuery,
+  ProposalsChanged,
   Snapshot,
   Transition,
   Uploaded,
@@ -49,6 +53,19 @@ export interface Backend {
   cacheEvents(ref: ItemRef): Promise<WorkEvent[]>;
   /** Called when a sync or a write changed the cache, so views over it can re-read. Returns an unsubscribe function. */
   onCacheChanged(listener: (change: CacheChanged) => void): () => void;
+  /** Drafted writes, newest first. They survive a restart. */
+  proposalsList(query?: ProposalQuery): Promise<Proposal[]>;
+  proposalsGet(id: string): Promise<Proposal | null>;
+  /** Replaces a pending draft's payload. */
+  proposalsEdit(id: string, edit: ProposalEdit): Promise<Proposal>;
+  proposalsSkip(id: string): Promise<Proposal>;
+  /**
+   * Applies a pending draft; nothing else writes on the assistant's behalf. A failed attempt resolves with the draft
+   * back to pending and `error` set, and subtasks it did create remembered so a retry doesn't repeat them.
+   */
+  proposalsApprove(id: string): Promise<Proposal>;
+  /** Called when drafts changed, including by a sync revising or retiring them. Returns an unsubscribe function. */
+  onProposalsChanged(listener: (change: ProposalsChanged) => void): () => void;
   syncNow(): Promise<void>;
   openUrl(url: string): Promise<void>;
   /** Releases anything the backend holds, when the app switches to another one. */

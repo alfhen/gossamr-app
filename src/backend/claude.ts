@@ -1,7 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Transition } from "../types";
-
 export interface SessionInfo {
   id: string;
   title: string;
@@ -21,12 +19,6 @@ export type ClaudeEvent =
   | { type: "tool"; label: string }
   | { type: "done"; sessionId: string | null; ok: boolean; message: string | null };
 
-export type Proposal = { requestId: string; id: string } & (
-  | { kind: "comment"; key: string; body: string }
-  | { kind: "transition"; key: string; transition: Transition }
-  | { kind: "subtasks"; key: string; summaries: string[] }
-);
-
 export interface AskRequest {
   requestId: string;
   ticketKey: string;
@@ -44,10 +36,6 @@ export const claude = {
       const { requestId, ...event } = payload;
       cb(requestId, event as ClaudeEvent);
     });
-    return () => void p.then((un) => un());
-  },
-  onProposal(cb: (p: Proposal) => void) {
-    const p = listen<Proposal>("claude-proposal", (e) => cb(e.payload));
     return () => void p.then((un) => un());
   },
 };

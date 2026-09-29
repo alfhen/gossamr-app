@@ -5,7 +5,7 @@ import App from "./App";
 import { auth, type AuthStatus } from "./backend/auth";
 import { JiraBackend } from "./backend/jira";
 import { MockBackend } from "./backend/mock";
-import { listenToClaude, useClaude } from "./claudeStore";
+import { listenToClaude, useClaude, watchProposals } from "./claudeStore";
 import { Setup } from "./components/Setup";
 import { useStore } from "./store";
 
@@ -17,7 +17,7 @@ export function Root() {
 
   const start = (status: AuthStatus | null) => {
     // Conversations and their proposals belong to the account they were made in.
-    useClaude.setState({ open: false, byTicket: {} });
+    useClaude.setState({ open: false, byTicket: {}, proposals: [] });
     const mine = ++starts.current;
     const account = status?.site && status.me ? { site: status.site, me: status.me } : null;
     useStore.setState({ account });
@@ -26,7 +26,12 @@ export function Root() {
       .getState()
       .init(account ? new JiraBackend({ cloudId: account.site.cloudId, accountId: account.me.accountId }) : new MockBackend())
       .then(
-        () => mine === starts.current && setPhase({ name: "app" }),
+        () => {
+          if (mine !== starts.current) return;
+          const backend = useStore.getState().backend;
+          if (backend) watchProposals(backend);
+          setPhase({ name: "app" });
+        },
         (e) => mine === starts.current && setPhase({ name: "error", message: `Couldn't load your inbox: ${e}` }),
       );
     if (account) {

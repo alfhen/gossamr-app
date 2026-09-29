@@ -9,6 +9,10 @@ import type {
   InboxEvent,
   ItemRef,
   Person,
+  Proposal,
+  ProposalEdit,
+  ProposalQuery,
+  ProposalsChanged,
   Snapshot,
   Status,
   Ticket,
@@ -17,7 +21,9 @@ import type {
   WorkFilter,
 } from "../types";
 import { fold, type Mention } from "../lib/mentions";
+import { docText } from "../lib/docs";
 import { search, workContainers, workItems } from "./mockCache";
+import { MockProposals } from "./mockProposals";
 import type { Backend } from "./types";
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -336,6 +342,51 @@ export class MockBackend implements Backend {
   private listeners = new Set<(s: Snapshot) => void>();
   private cacheListeners = new Set<(c: CacheChanged) => void>();
   private simulated = 0;
+
+  /** Drafts live in memory; `proposals.draft` stands in for the assistant. */
+  readonly proposals = new MockProposals(async (intent, already) => {
+    switch (intent.type) {
+      case "comment":
+        await this.comment(intent.item.key, docText(intent.body));
+        return [];
+      case "transition": {
+        const to = Object.keys(S).find((k) => S[k as keyof typeof S].name === intent.to);
+        await this.transition(intent.item.key, `${intent.item.key}:${to}`);
+        return [];
+      }
+      case "subtasks": {
+        const rest = intent.summaries.slice(already.length);
+        const { created } = await this.createSubtasks(intent.parent.key, rest);
+        return created.map((key) => ({ connectionId: "mock", externalId: key, key }));
+      }
+      default:
+        throw new Error("the sample data can't apply that");
+    }
+  });
+
+  proposalsList(query?: ProposalQuery): Promise<Proposal[]> {
+    return Promise.resolve(this.proposals.list(query));
+  }
+
+  async proposalsGet(id: string) {
+    return this.proposals.get(id);
+  }
+
+  proposalsEdit(id: string, edit: ProposalEdit) {
+    return this.proposals.edit(id, edit);
+  }
+
+  proposalsSkip(id: string) {
+    return this.proposals.skip(id);
+  }
+
+  proposalsApprove(id: string) {
+    return this.proposals.approve(id);
+  }
+
+  onProposalsChanged(listener: (c: ProposalsChanged) => void) {
+    return this.proposals.onChanged(listener);
+  }
 
   async load() {
     return this.snap;

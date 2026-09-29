@@ -62,9 +62,9 @@ impl Intent {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Origin {
-    Chat,
+    Chat { request_id: String },
     Board,
     Autopilot { event_id: String },
 }
@@ -94,13 +94,68 @@ impl Basis {
     }
 }
 
+/// Who drafted a proposal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CreatedBy {
+    User,
+    Pip,
+    Autopilot,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "reason", rename_all = "camelCase")]
 pub enum ProposalState {
     Pending,
+    /// A connector is executing it; nothing else may start it again.
+    Applying,
     Applied,
-    Discarded,
-    Superseded(String),
+    Skipped,
+    Retired(String),
+}
+
+impl ProposalState {
+    pub fn kind(&self) -> StateKind {
+        match self {
+            ProposalState::Pending => StateKind::Pending,
+            ProposalState::Applying => StateKind::Applying,
+            ProposalState::Applied => StateKind::Applied,
+            ProposalState::Skipped => StateKind::Skipped,
+            ProposalState::Retired(_) => StateKind::Retired,
+        }
+    }
+}
+
+/// A state without its payload, as stored in a column and used to select proposals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StateKind {
+    Pending,
+    Applying,
+    Applied,
+    Skipped,
+    Retired,
+}
+
+impl StateKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StateKind::Pending => "pending",
+            StateKind::Applying => "applying",
+            StateKind::Applied => "applied",
+            StateKind::Skipped => "skipped",
+            StateKind::Retired => "retired",
+        }
+    }
+}
+
+/// Which proposals to list. Every field that is set must match.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalQuery {
+    pub states: Option<Vec<StateKind>>,
+    pub item: Option<ItemRef>,
+    pub connection_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -116,12 +171,22 @@ pub struct Revision {
 pub struct Proposal {
     pub id: String,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     pub origin: Origin,
+    pub created_by: CreatedBy,
     pub intent: Intent,
+    /// What the approve button says, for intents that don't say it themselves (a transition's name).
+    pub label: Option<String>,
     pub basis: Option<Basis>,
     pub state: ProposalState,
     #[serde(default)]
     pub revisions: Vec<Revision>,
+    /// Items an attempt created before it stopped. For subtasks, entry `i` belongs to summary `i`, so a retry skips
+    /// the ones already made.
+    #[serde(default)]
+    pub created: Vec<ItemRef>,
+    /// Why the last attempt to apply it failed.
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -140,6 +205,11 @@ pub struct Revised {
 }
 
 impl Proposal {
+    /// The existing item the proposal is about, if any.
+    pub fn target(&self) -> Option<&ItemRef> {
+        self.intent.target()
+    }
+
     /// Applies a reconcile verdict. Only a pending proposal changes, and never to `Applied`.
     pub fn absorb(&mut self, verdict: Verdict, at: DateTime<Utc>) {
         if self.state != ProposalState::Pending {
@@ -147,7 +217,10 @@ impl Proposal {
         }
         match verdict {
             Verdict::Keep => {}
-            Verdict::Retire { reason } => self.state = ProposalState::Superseded(reason),
+            Verdict::Retire { reason } => {
+                self.state = ProposalState::Retired(reason);
+                self.updated_at = at;
+            }
             Verdict::Revise(revised) => {
                 let Revised { note, intent, basis } = *revised;
                 if let Some(intent) = intent {
@@ -155,6 +228,7 @@ impl Proposal {
                 }
                 self.revisions.push(Revision { at, note, intent: self.intent.clone() });
                 self.basis = Some(basis);
+                self.updated_at = at;
             }
         }
     }
@@ -269,11 +343,16 @@ mod tests {
         Proposal {
             id: "p1".into(),
             created_at: now(),
-            origin: Origin::Chat,
+            updated_at: now(),
+            origin: Origin::Chat { request_id: "r".into() },
+            created_by: CreatedBy::Pip,
             intent,
+            label: None,
             basis: Some(Basis::of(basis)),
             state: ProposalState::Pending,
             revisions: vec![],
+            created: vec![],
+            error: None,
         }
     }
 
@@ -402,7 +481,7 @@ mod tests {
         let item = work_item("1", "todo");
         let mut p = transition_to("doing", &item);
         p.absorb(Verdict::Retire { reason: "gone".into() }, now());
-        assert_eq!(p.state, ProposalState::Superseded("gone".into()));
+        assert_eq!(p.state, ProposalState::Retired("gone".into()));
 
         let mut applied = transition_to("doing", &item);
         applied.state = ProposalState::Applied;
@@ -419,6 +498,15 @@ mod tests {
         p.absorb(verdict, now());
         assert_eq!(p.revisions.len(), 1);
         assert_eq!(run(&p, &[moved]), Verdict::Keep);
+    }
+
+    #[test]
+    fn serialises_origin_and_state_the_way_the_page_reads_them() {
+        let chat = serde_json::to_value(Origin::Chat { request_id: "r1".into() }).unwrap();
+        assert_eq!(chat, serde_json::json!({ "type": "chat", "requestId": "r1" }));
+        let retired = serde_json::to_value(ProposalState::Retired("gone".into())).unwrap();
+        assert_eq!(retired, serde_json::json!({ "type": "retired", "reason": "gone" }));
+        assert_eq!(serde_json::to_value(ProposalState::Applying).unwrap(), serde_json::json!({ "type": "applying" }));
     }
 
     #[test]

@@ -20,8 +20,8 @@ pub use item::{
     PersonRef, Priority, WorkItem,
 };
 pub use proposal::{
-    reconcile, Basis, Intent, NewItem, Origin, Patch, Proposal, ProposalState, ReconcileContext,
-    Revised, Revision, Verdict,
+    reconcile, Basis, CreatedBy, Intent, NewItem, Origin, Patch, Proposal, ProposalQuery, ProposalState, ReconcileContext,
+    Revised, Revision, StateKind, Verdict,
 };
 pub use workflow::{Category, StatusDef, StatusRef, Transition, Transitions, Workflow};
 
