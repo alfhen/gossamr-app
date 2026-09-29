@@ -30,6 +30,15 @@ describe("mock proposals", () => {
     expect(await backend.proposalsGet("nope")).toBeNull();
   });
 
+  it("refuses to skip an applied draft but skipping twice is harmless", async () => {
+    const backend = new MockBackend();
+    const done = await backend.proposalsApprove(backend.proposals.draft(comment).id);
+    await expect(backend.proposalsSkip(done.id)).rejects.toThrow(/applied/);
+    const p = backend.proposals.draft(comment);
+    await backend.proposalsSkip(p.id);
+    expect((await backend.proposalsSkip(p.id)).state.type).toBe("skipped");
+  });
+
   it("creates only the subtasks not yet made when retried", async () => {
     const backend = new MockBackend();
     const p = backend.proposals.draft({ type: "subtasks", parent: ref, summaries: ["a", "b"] });

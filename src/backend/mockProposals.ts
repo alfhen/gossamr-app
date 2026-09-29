@@ -84,6 +84,9 @@ export class MockProposals {
   }
 
   async skip(id: string) {
+    const p = this.get(id);
+    if (p?.state.type === "skipped") return p;
+    this.pending(id);
     return this.set(id, { state: { type: "skipped" } });
   }
 
