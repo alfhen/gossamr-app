@@ -51,7 +51,8 @@ impl Doc {
     pub fn from_text(text: &str, mentions: &[(PersonRef, String)]) -> Self {
         let mut by_length: Vec<&(PersonRef, String)> = mentions.iter().collect();
         by_length.sort_by_key(|(_, name)| std::cmp::Reverse(name.chars().count()));
-        let blocks = text
+        let normalised = text.replace("\r\n", "\n");
+        let blocks = normalised
             .trim()
             .split("\n\n")
             .filter(|p| !p.trim().is_empty())
@@ -167,6 +168,7 @@ mod tests {
         assert_eq!(kinds(&doc), ["text", "break", "text"]);
         assert_eq!(doc.plain_text(), "Hello\nthere\nSecond");
         assert!(Doc::from_text("  \n\n ", &[]).blocks.is_empty());
+        assert_eq!(Doc::from_text("One\r\n\r\nTwo", &[]).blocks.len(), 2, "CRLF blank lines split paragraphs too");
     }
 
     #[test]
