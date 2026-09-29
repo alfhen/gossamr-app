@@ -22,7 +22,7 @@ export type Inline =
   | { type: "link"; href: string; children: Inline[] }
   | { type: "ticket"; key: string };
 
-const FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)/;
+const FENCE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const ITEM = /^(\s*)([-*+]|(\d{1,9})[.)])\s+(.*)$/;
@@ -31,6 +31,31 @@ const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
 const indentOf = (line: string) => line.match(/^\s*/)![0].replace(/\t/g, "    ").length;
 const blank = (line: string) => !line.trim();
+
+/** A fence opener as its marker and language, or null. A backtick fence's info string can't contain backticks. */
+function opener(line: string): { marker: string; lang: string } | null {
+  const m = line.match(FENCE);
+  if (!m || (m[1][0] === "`" && m[2].includes("`"))) return null;
+  return { marker: m[1], lang: m[2].trim().split(/\s+/)[0] };
+}
+
+/** Whether `line` closes a fence opened with `marker`: the same character at least as many times, and nothing after. */
+function closes(line: string, marker: string): boolean {
+  const m = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+  return !!m && m[1][0] === marker[0] && m[1].length >= marker.length;
+}
+
+/** Whether a table starts at `i`: a header row followed by a delimiter row with one cell per header cell. */
+function tableAt(lines: string[], i: number): boolean {
+  const next = lines[i + 1];
+  return (
+    lines[i].includes("|") &&
+    next !== undefined &&
+    next.includes("-") &&
+    TABLE_RULE.test(next) &&
+    cells(next).length === cells(lines[i]).length
+  );
+}
 
 /** Splits a table row on unescaped pipes outside code spans, dropping the outer pipes. */
 export function cells(row: string): string[] {
@@ -69,12 +94,12 @@ function alignOf(spec: string): Align {
 function startsBlock(lines: string[], i: number): boolean {
   const l = lines[i];
   return (
-    FENCE.test(l) ||
+    opener(l) !== null ||
     HEADING.test(l) ||
     RULE.test(l) ||
     ITEM.test(l) ||
     QUOTE.test(l) ||
-    (l.includes("|") && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]) && lines[i + 1].includes("-"))
+    tableAt(lines, i)
   );
 }
 
@@ -89,14 +114,14 @@ export function parseBlocks(text: string): Block[] {
       continue;
     }
 
-    const fence = line.match(FENCE);
+    const fence = opener(line);
     if (fence) {
       const body: string[] = [];
       i++;
       // An unclosed fence runs to the end, which is also how a reply that's still streaming looks.
-      while (i < lines.length && !lines[i].trim().startsWith(fence[1])) body.push(lines[i++]);
+      while (i < lines.length && !closes(lines[i], fence.marker)) body.push(lines[i++]);
       i++;
-      out.push({ type: "code", lang: fence[2], text: body.join("\n") });
+      out.push({ type: "code", lang: fence.lang, text: body.join("\n") });
       continue;
     }
 
@@ -113,7 +138,7 @@ export function parseBlocks(text: string): Block[] {
       continue;
     }
 
-    if (line.includes("|") && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]) && lines[i + 1].includes("-")) {
+    if (tableAt(lines, i)) {
       const head = cells(line);
       const align = cells(lines[i + 1]).map(alignOf);
       const rows: string[][] = [];
@@ -189,7 +214,8 @@ function parseList(lines: string[], start: number): [Block, number] {
 const INLINE =
   /`([^`\n]+)`|\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*(?=\S)(.+?)(?<=\S)\*|\[([^\]\n]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"*_])|\b([A-Z][A-Z0-9]{1,9}-\d+)\b/g;
 
-export function parseInline(text: string): Inline[] {
+/** Inline Markdown. Ticket keys inside a link's label stay text, since the link already decides where a click goes. */
+export function parseInline(text: string, tickets = true): Inline[] {
   const out: Inline[] = [];
   let last = 0;
   for (const m of text.matchAll(INLINE)) {
@@ -197,12 +223,13 @@ export function parseInline(text: string): Inline[] {
     if (at > last) out.push({ type: "text", text: text.slice(last, at) });
     const [, code, strong, strong2, del, em, label, href, url, key] = m;
     if (code !== undefined) out.push({ type: "code", text: code });
-    else if (strong !== undefined || strong2 !== undefined) out.push({ type: "strong", children: parseInline(strong ?? strong2) });
-    else if (del !== undefined) out.push({ type: "del", children: parseInline(del) });
-    else if (em !== undefined) out.push({ type: "em", children: parseInline(em) });
-    else if (label !== undefined) out.push({ type: "link", href, children: parseInline(label) });
+    else if (strong !== undefined || strong2 !== undefined) out.push({ type: "strong", children: parseInline(strong ?? strong2, tickets) });
+    else if (del !== undefined) out.push({ type: "del", children: parseInline(del, tickets) });
+    else if (em !== undefined) out.push({ type: "em", children: parseInline(em, tickets) });
+    else if (label !== undefined) out.push({ type: "link", href, children: parseInline(label, false) });
     else if (url !== undefined) out.push({ type: "link", href: url, children: [{ type: "text", text: url }] });
-    else out.push({ type: "ticket", key });
+    else if (tickets) out.push({ type: "ticket", key });
+    else out.push({ type: "text", text: key });
     last = at + m[0].length;
   }
   if (last < text.length) out.push({ type: "text", text: text.slice(last) });

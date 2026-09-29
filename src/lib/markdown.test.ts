@@ -24,6 +24,21 @@ describe("parseBlocks", () => {
     ]);
   });
 
+  it("needs one delimiter cell per header cell before reading a table", () => {
+    expect(parseBlocks("A | B\n|---|").map((b) => b.type)).toEqual(["paragraph"]);
+  });
+
+  it("closes a fence only on a bare fence of the same character, at least as long", () => {
+    const [code] = parseBlocks("````\n```ts more code\n~~~~\n```\n````\nafter");
+    expect(code).toEqual({ type: "code", lang: "", text: "```ts more code\n~~~~\n```" });    expect(parseBlocks("```\ncode\n```ts more\nstill code\n```")).toEqual([
+      { type: "code", lang: "", text: "code\n```ts more\nstill code" },
+    ]);
+  });
+
+  it("doesn't open a backtick fence whose info string has a backtick", () => {
+    expect(parseBlocks("```ts`extra\nplain")).toEqual([{ type: "paragraph", text: "```ts`extra\nplain" }]);
+  });
+
   it("pads short rows so every row has a cell per column", () => {
     const [table] = parseBlocks("| a | b |\n|---|---|\n| only |");
     expect(table).toMatchObject({ rows: [["only", ""]] });
@@ -94,6 +109,12 @@ describe("parseInline", () => {
       { type: "text", text: "Go to " },
       { type: "link", href: "https://x.io/a_b", children: [{ type: "text", text: "https://x.io/a_b" }] },
       { type: "text", text: ", then run fire_flow_trigger" },
+    ]);
+  });
+
+  it("keeps ticket keys in a link's label as text, so a click only follows the link", () => {
+    expect(parseInline("[**CA-1** notes](https://a.io)")).toEqual([
+      { type: "link", href: "https://a.io", children: [{ type: "strong", children: [{ type: "text", text: "CA-1" }] }, { type: "text", text: " notes" }] },
     ]);
   });
 
