@@ -60,6 +60,11 @@ fn proposals_changed(app: &AppHandle, connection_id: &str) {
     let _ = app.emit("proposals-changed", serde_json::json!({ "connectionId": connection_id }));
 }
 
+/// Asks the page to narrow the view the person is looking at.
+fn pip_view(app: &AppHandle, request_id: &str, filter: &domain::Filter, note: &str) {
+    let _ = app.emit("pip-view", serde_json::json!({ "requestId": request_id, "filter": filter, "note": note }));
+}
+
 /// Shows native notifications for new events, unless the window is focused and the user can already see them.
 fn announce(app: &AppHandle, events: &[events::NewEvent]) {
     let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
@@ -404,11 +409,13 @@ pub fn run() {
             app.manage(core.clone());
 
             let handle = app.handle().clone();
+            let view_handle = handle.clone();
             let token = random_token().map_err(|e| Error::Claude(format!("no randomness available: {e}")))?;
             let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(
                 core.clone(),
                 token,
                 Arc::new(move |connection_id| proposals_changed(&handle, connection_id)),
+                Arc::new(move |request_id, filter, note| pip_view(&view_handle, request_id, filter, note)),
             ))?;
             let config = config::AppConfig::load(&core.data_dir());
             app.manage::<AgentState>(Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config)));
