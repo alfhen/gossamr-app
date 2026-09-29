@@ -21,6 +21,21 @@ Gossamr signs in through your own Atlassian OAuth 2.0 (3LO) app:
 
 The client secret and tokens are stored in the macOS Keychain under `dk.alfhen.gossamr`. "Try it with sample data" skips all of this.
 
+### A company-owned Atlassian app
+
+An admin can register one app for a team instead of everyone making their own:
+
+1. Create an OAuth 2.0 (3LO) integration at [developer.atlassian.com/console/myapps](https://developer.atlassian.com/console/myapps/).
+2. Add the Jira API permissions `read:jira-work`, `write:jira-work` and `read:jira-user`. The app also requests `offline_access` so sign-ins last.
+3. Set the callback URL to `http://localhost:8723/callback`.
+4. Distribute the client ID and secret. Atlassian needs the secret to exchange and refresh tokens, so it ships with the app or the team's setup and can be extracted from either; use this for internal builds only.
+
+Gossamr looks for the client in this order, and the setup screen is skipped when one is found:
+
+- entered on the setup screen (kept in the Keychain)
+- the `GOSSAMR_ATLASSIAN_CLIENT_ID` and `GOSSAMR_ATLASSIAN_CLIENT_SECRET` environment variables when the app starts
+- the same two variables set when the app is built, which compile the client into the binary
+
 ## Ask Claude
 
 Press `⌘J` on a ticket to ask Claude about it. The app runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription and loads your CLAUDE.md, memory and skills. You can continue this ticket's last session, continue any recent CLI or desktop session, or start a new one in a recent folder. It runs Sonnet at medium effort, whatever your Claude Code default is.

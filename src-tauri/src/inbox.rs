@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{Duration, SecondsFormat, Utc};
 use tokio::sync::Notify;
 
-use crate::auth::{Account, Auth, Scope, Site};
+use crate::auth::{Account, Auth, AuthStatus, Scope, Site};
 use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, my_actions, NewEvent};
@@ -84,16 +84,42 @@ impl Core {
         Self { auth, registry, data_dir, db: Mutex::new(None), last_error: Mutex::new(None), wake: Notify::new() }
     }
 
-    fn connection(scope: &Scope) -> Connection {
-        Connection::jira(scope, &scope.cloud_id)
+    /// The registered connection for `scope`. Callers still hold a `Scope`, so this is the adapter between the two;
+    /// a scope that isn't registered is one the person has since signed out of or replaced.
+    fn connection(&self, scope: &Scope) -> Result<Connection> {
+        self.registry.connection(&Connection::jira_id(scope)).ok_or(Error::SiteChanged)
     }
 
-    fn tracker(&self, scope: &Scope) -> Arc<dyn WorkTracker> {
-        self.registry.tracker(&Self::connection(scope))
+    fn tracker(&self, scope: &Scope) -> Result<Arc<dyn WorkTracker>> {
+        Ok(self.registry.tracker(&self.connection(scope)?))
     }
 
     fn item(scope: &Scope, key: &str) -> ItemRef {
-        Self::connection(scope).item(key)
+        ItemRef { connection_id: Connection::jira_id(scope), external_id: key.into(), key: key.into() }
+    }
+
+    /// Signs in and registers the resulting connection.
+    pub async fn sign_in(&self, open_browser: impl FnOnce(&str) -> Result<()>) -> Result<AuthStatus> {
+        let connection = self.auth.sign_in(open_browser).await?;
+        self.registry.register(connection);
+        self.auth.status().await
+    }
+
+    /// Registers the connection restored from the Keychain, if any.
+    pub async fn restore(&self) {
+        if let Some(connection) = self.auth.connection().await {
+            self.registry.register(connection);
+        }
+    }
+
+    pub async fn sign_out(&self) -> Result<()> {
+        let connection = self.auth.connection().await;
+        self.auth.sign_out().await?;
+        if let Some(c) = connection {
+            self.registry.remove(&c.id);
+        }
+        self.close_db();
+        Ok(())
     }
 
     async fn identity(&self) -> Result<(Site, Account)> {
@@ -113,7 +139,7 @@ impl Core {
             return Err(Error::SiteChanged);
         }
         let mut guard = self.db.lock().expect("db lock poisoned");
-        let connection = Self::connection(scope);
+        let connection = self.connection(scope)?;
         if guard.as_ref().map(|(open, _)| *open != connection.id).unwrap_or(true) {
             *guard = Some((connection.id.clone(), Db::open(&self.data_dir.join(db_file(&connection)))?));
         }
@@ -136,7 +162,7 @@ impl Core {
         let started = now_iso();
         let previous = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
         let unread_after = unread_cutoff(previous.as_deref());
-        let tracker = self.tracker(&scope);
+        let tracker = self.tracker(&scope)?;
         let opts = SearchOptions { limit: TRACKED_LIMIT, history_since: Some(unread_after.clone()) };
         let tracked = tickets_of(&tracker.followed(TRACKED_WINDOW_DAYS, &opts).await?)?;
         let epics: Vec<ItemRef> = tracked.iter().filter(|t| t.is_epic).map(|t| Self::item(&scope, &t.key)).collect();
@@ -165,7 +191,7 @@ impl Core {
     async fn refresh(&self, scope: &Scope, key: &str) -> Result<()> {
         let last_sync = self.with_db_for(scope, |db| db.meta(LAST_SYNC)).await?;
         let since = unread_cutoff(last_sync.as_deref());
-        let t = ticket_of(&self.tracker(scope).item(&Self::item(scope, key), &since).await?)?;
+        let t = ticket_of(&self.tracker(scope)?.item(&Self::item(scope, key), &since).await?)?;
         self.with_db_for(scope, |db| {
             db.upsert_ticket(&t, &now_iso())?;
             db.insert_events(&derive(&t, &scope.account_id), &since)?;
@@ -274,7 +300,7 @@ impl Core {
     }
 
     pub async fn mentionable(&self, scope: &Scope, key: &str, query: &str) -> Result<Vec<Person>> {
-        let people = self.tracker(scope).people(&Self::item(scope, key), query).await?;
+        let people = self.tracker(scope)?.people(&Self::item(scope, key), query).await?;
         Ok(people
             .into_iter()
             .map(|p| Person { account_id: p.person_ref.account_id, name: p.display_name, avatar_url: p.avatar_url })
@@ -283,14 +309,14 @@ impl Core {
 
     /// The moves open to a ticket. A move's id is its target status, which `transition` takes back.
     pub async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<Transition>> {
-        let moves = self.tracker(scope).transitions(&Self::item(scope, key)).await?;
+        let moves = self.tracker(scope)?.transitions(&Self::item(scope, key)).await?;
         Ok(moves.into_iter().map(|m| Transition { id: m.to.id.clone(), name: m.name, to: Status::from(&m.to) }).collect())
     }
 
     /// `scope` is the account the user was looking at when they acted; the write is refused if that has changed.
     pub async fn transition(&self, scope: &Scope, key: &str, status_id: &str) -> Result<()> {
         let intent = Intent::Transition { item: Self::item(scope, key), to: status_id.into() };
-        self.tracker(scope).apply(&intent).await?;
+        self.tracker(scope)?.apply(&intent).await?;
         self.after_write(scope, key).await;
         Ok(())
     }
@@ -308,13 +334,13 @@ impl Core {
         if body.is_empty() && files.is_empty() {
             return Err(Error::Api { status: 400, message: "a comment can't be empty".into() });
         }
-        let connection = Self::connection(scope).id;
+        let connection = Connection::jira_id(scope);
         let people: Vec<(PersonRef, String)> = mentions
             .iter()
             .map(|m| (PersonRef { connection_id: connection.clone(), account_id: m.account_id.clone() }, m.name.clone()))
             .collect();
         let intent = Intent::Comment { item: Self::item(scope, key), body: tracker::comment_doc(body, &people) };
-        self.tracker(scope).apply_with_files(&intent, files).await?;
+        self.tracker(scope)?.apply_with_files(&intent, files).await?;
         self.after_write(scope, key).await;
         Ok(())
     }
@@ -331,7 +357,7 @@ impl Core {
             let media = match media {
                 Some(m) => m,
                 None => {
-                    let Some(m) = self.tracker(scope).media_id(&id).await? else { continue };
+                    let Some(m) = self.tracker(scope)?.media_id(&id).await? else { continue };
                     self.with_db_for(scope, |db| db.set_meta(&media_key(&id), &m)).await?;
                     m
                 }
@@ -347,12 +373,12 @@ impl Core {
             return Err(Error::Api { status: 400, message: "not an attachment id".into() });
         }
         let scope = self.scope().await?;
-        self.tracker(&scope).download(id).await
+        self.tracker(&scope)?.download(id).await
     }
 
     /// Uploads a file to a ticket. The ticket isn't refreshed here: the comment that follows does that.
     pub async fn attach(&self, scope: &Scope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
-        let uploaded = self.tracker(scope).attach(&Self::item(scope, key), filename, mime_type, bytes).await?;
+        let uploaded = self.tracker(scope)?.attach(&Self::item(scope, key), filename, mime_type, bytes).await?;
         if let Some(m) = &uploaded.media_id {
             let _ = self.with_db_for(scope, |db| db.set_meta(&media_key(&uploaded.id), m)).await;
         }
@@ -360,7 +386,7 @@ impl Core {
     }
 
     pub async fn attachment_limit(&self, scope: &Scope) -> Result<Option<u64>> {
-        self.tracker(scope).attachment_limit().await
+        self.tracker(scope)?.attachment_limit().await
     }
 
     /// Re-reads a ticket after a successful write. A failure here must not be reported as a failed write, or a retry
@@ -378,21 +404,21 @@ impl Core {
             self.with_db_for(scope, |db| Ok((db.tickets("")?.into_iter().find(|t| t.key == key), db.meta(LAST_SYNC)?))).await?;
         match cached {
             Some(t) => Ok(t),
-            None => ticket_of(&self.tracker(scope).item(&Self::item(scope, key), &unread_cutoff(last_sync.as_deref())).await?),
+            None => ticket_of(&self.tracker(scope)?.item(&Self::item(scope, key), &unread_cutoff(last_sync.as_deref())).await?),
         }
     }
 
     /// Tickets matching a query in the tracker's own language, for the assistant's search tool.
     pub async fn search_native(&self, scope: &Scope, query: &str, limit: usize) -> Result<Vec<CachedTicket>> {
         let opts = SearchOptions { limit, history_since: None };
-        tickets_of(&self.tracker(scope).search_native(query, &opts).await?)
+        tickets_of(&self.tracker(scope)?.search_native(query, &opts).await?)
     }
 
     /// `scope` is the account the user was looking at when they approved; the write is refused if that has changed.
     /// A failure part-way still reports what was created, so a retry can skip those and not duplicate them.
     pub async fn create_subtasks(&self, scope: &Scope, key: &str, summaries: &[String]) -> Result<CreatedSubtasks> {
         let intent = Intent::Subtasks { parent: Self::item(scope, key), summaries: summaries.to_vec() };
-        let tracker::Applied { created, error } = self.tracker(scope).apply(&intent).await?;
+        let tracker::Applied { created, error } = self.tracker(scope)?.apply(&intent).await?;
         let created: Vec<String> = created.into_iter().map(|r| r.key).collect();
         if created.is_empty() {
             if let Some(e) = error {
@@ -441,7 +467,7 @@ mod tests {
 
     #[test]
     fn each_site_and_account_gets_its_own_database_file() {
-        let of = |cloud: &str, account: &str| Core::connection(&Scope { cloud_id: cloud.into(), account_id: account.into() });
+        let of = |cloud: &str, account: &str| Connection::jira(&Scope { cloud_id: cloud.into(), account_id: account.into() }, "Site");
         let a = of("c1", "712020:ab-cd");
         let b = of("c1", "someone-else");
         assert_eq!(db_file(&a), "inbox-c1-712020_ab-cd.sqlite");
