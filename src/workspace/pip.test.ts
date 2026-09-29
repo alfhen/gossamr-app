@@ -5,6 +5,8 @@ import type { AskRequest, ClaudeEvent } from "../backend/claude";
 import { ALL } from "../lib/filter";
 import type { ScreenContext, WorkEvent } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { useClaude } from "../claudeStore";
+import { handlePipView } from "./PipExtras";
 import { commentNotes, historyNotes, linkRows } from "./peekLogic";
 import { LARGE_LIST, isStillFiltered, nudgeFor, usePip } from "./pipStore";
 import { buildScreenContext, screenLine } from "./screenContext";
@@ -79,6 +81,16 @@ describe("Claude-driven filters", () => {
     usePip.getState().applyFilter({ type: "blocked" }, "Blocked");
     useTabs.getState().addFilter({ type: "mine" });
     expect(isStillFiltered(usePip.getState().filtered, activeTab(useTabs.getState()))).toBe(false);
+  });
+
+  it("ignores a filter from a run this pane didn't ask for", () => {
+    const turn = { requestId: "mine", prompt: "", steps: [], text: "", status: "running" as const, error: null };
+    useClaude.setState({ byTicket: { workspace: { turns: [turn], sessionId: null, cwd: null } } });
+    handlePipView({ requestId: "drawer", filter: { type: "blocked" }, note: "x" });
+    expect(activeTab(useTabs.getState()).filter).toEqual(ALL);
+    handlePipView({ requestId: "mine", filter: { type: "blocked" }, note: "x" });
+    expect(activeTab(useTabs.getState()).filter).toEqual({ type: "blocked" });
+    useClaude.setState({ byTicket: {} });
   });
 
   it("undoes on the tab it filtered even after another tab became active", () => {

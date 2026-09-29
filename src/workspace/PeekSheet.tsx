@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Adf } from "../components/Adf";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docFromText } from "../lib/docs";
@@ -183,8 +183,11 @@ function Composer({ item, disabled }: { item: WorkItem; disabled: boolean }) {
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  // A draft created before its mentions could be saved; a retry finishes that one instead of making another.
+  const created = useRef<string | null>(null);
 
   useEffect(() => {
+    created.current = null;
     setText("");
     setMentions([]);
     setProblem(null);
@@ -195,9 +198,10 @@ function Composer({ item, disabled }: { item: WorkItem; disabled: boolean }) {
     if (!backend || !text.trim() || disabled) return;
     setProblem(null);
     try {
-      const made = await backend.proposalsCreate({ type: "comment", item: item.item, body: docFromText(text) });
       const linked = liveMentions(text, mentions);
-      if (linked.length) await backend.proposalsEdit(made.id, { type: "comment", body: text, mentions: linked });
+      created.current ??= (await backend.proposalsCreate({ type: "comment", item: item.item, body: docFromText(text) })).id;
+      if (linked.length) await backend.proposalsEdit(created.current, { type: "comment", body: text, mentions: linked });
+      created.current = null;
       await useWorkspace.getState().refreshProposals();
       setText("");
       setMentions([]);
@@ -268,6 +272,8 @@ function OpenPeek({ item }: { item: WorkItem }) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape" || ev.defaultPrevented || usePrefs.getState().paletteOpen) return;
+      const field = document.activeElement;
+      if (field instanceof HTMLElement && (field.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(field.tagName))) return;
       if (menuOpen) return setMenuOpen(false);
       const inside = !!document.activeElement?.closest("#peek-sheet");
       useTabs.getState().select(null);
