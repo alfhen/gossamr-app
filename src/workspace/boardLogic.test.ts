@@ -136,6 +136,14 @@ describe("draft moves", () => {
     expect(item("DEVOPS-471").status.name).toBe("Done");
   });
 
+  it("keeps the earlier draft when the new one is refused", async () => {
+    const card = item("DEVOPS-471");
+    const wf = section("DEVOPS").workflow;
+    const first = await s().draftTransition(card.item, wf.statuses.find((x) => x.name === "In Progress")!);
+    await expect(s().draftTransition(card.item, { ...wf.statuses[0], id: " " })).rejects.toThrow(/target status/);
+    expect(s().proposals[first.id].state.type).toBe("pending");
+  });
+
   it("finds where a draft points by id, then by name", () => {
     const wf = section("DEVOPS").workflow;
     const draft = (to: string) => ({ intent: { type: "transition", item: itemRef("DEVOPS-471"), to } }) as Proposal;
