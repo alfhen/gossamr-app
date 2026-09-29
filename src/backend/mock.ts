@@ -379,6 +379,10 @@ export class MockBackend implements Backend {
     return this.proposals.get(id);
   }
 
+  proposalsCreate(intent: Intent, label: string | null = null) {
+    return this.proposals.create(intent, label);
+  }
+
   proposalsEdit(id: string, edit: ProposalEdit) {
     return this.proposals.edit(id, edit);
   }

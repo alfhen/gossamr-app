@@ -1,0 +1,96 @@
+.ws-card {
+  --color-ink-2: var(--color-ws-ink2);
+  --color-ink-3: var(--color-ws-ink3);
+  transition:
+    border-radius 0.6s ease,
+    transform 0.12s,
+    box-shadow 0.12s;
+}
+.ws-card:hover {
+  border-color: var(--color-ws-sep2);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.12);
+}
+.ws-card-draft {
+  border: 1.5px dashed var(--color-ws-pip);
+  background: var(--color-ws-pip-soft);
+}
+
+/* Stale cards dry out under an overlay that filters what is behind it, so the age chip can sit above and keep its colour. */
+.ws-wither {
+  position: relative;
+  isolation: isolate;
+}
+.ws-wither::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  -webkit-backdrop-filter: saturate(var(--wsat)) sepia(var(--wsep)) contrast(var(--wcon));
+  backdrop-filter: saturate(var(--wsat)) sepia(var(--wsep)) contrast(var(--wcon));
+  transition: opacity 0.6s ease;
+}
+.ws-wither::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .45 0 0 0 0 .3 0 0 0 0 .15 0 0 0 .9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  mix-blend-mode: multiply;
+  opacity: var(--grain);
+  transition: opacity 0.6s ease;
+}
+.ws-wither-1 {
+  --grain: 0.16;
+  --wsat: 0.7;
+  --wsep: 0.2;
+  --wcon: 1;
+}
+.ws-wither-2 {
+  --grain: 0.28;
+  --wsat: 0.45;
+  --wsep: 0.35;
+  --wcon: 1;
+  border-radius: 11px 8px 12px 7px;
+}
+.ws-wither-3 {
+  --grain: 0.4;
+  --wsat: 0.2;
+  --wsep: 0.5;
+  --wcon: 0.94;
+  border-radius: 13px 6px 14px 5px;
+}
+.ws-wither .ws-age {
+  position: relative;
+  z-index: 3;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ws-wither::after {
+    mix-blend-mode: screen;
+    opacity: calc(var(--grain) * 0.6);
+  }
+}
+:root[data-theme="dark"] .ws-wither::after {
+  mix-blend-mode: screen;
+  opacity: calc(var(--grain) * 0.6);
+}
+/* Hovering or selecting a card lifts the effect and sweeps its web away. */
+.ws-wither:hover,
+.ws-wither.ws-card-pick {
+  border-radius: 10px;
+}
+:root .ws-wither:hover::before,
+:root .ws-wither.ws-card-pick::before,
+:root .ws-wither:hover::after,
+:root .ws-wither.ws-card-pick::after {
+  opacity: 0;
+}
+.ws-wither:hover .cobweb,
+.ws-wither.ws-card-pick .cobweb {
+  opacity: 0;
+  transform: scale(0.4) rotate(-10deg);
+}

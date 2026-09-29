@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { containerRef } from "../backend/mockConnector";
 import { filterChips } from "../lib/filter";
-import { activeTab, loadTabs, useTabs } from "./tabsStore";
+import { activeTab, loadTabs, nextMarked, useTabs } from "./tabsStore";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -78,3 +78,40 @@ describe("workspace tabs", () => {
     expect(s().tabs).toHaveLength(2);
   });
 });
+
+describe("ticking cards", () => {
+  const order = ["a", "b", "c", "d"];
+
+  it("starts from the selected card and toggles from there", () => {
+    expect(nextMarked([], "a", "c", "toggle", order)).toEqual(["a", "c"]);
+    expect(nextMarked(["a", "c"], "c", "b", "toggle", order)).toEqual(["a", "c", "b"]);
+    expect(nextMarked(["a", "c"], "c", "c", "toggle", order)).toEqual(["a"]);
+  });
+
+  it("ticks nothing when the only card left is the selected one", () => {
+    expect(nextMarked(["a", "c"], "c", "c", "toggle", order)).toEqual(["a"]);
+    expect(nextMarked(["a"], "a", "a", "toggle", order)).toEqual([]);
+  });
+
+  it("ticks the span between the selected card and the clicked one, in either direction", () => {
+    expect(nextMarked([], "b", "d", "range", order)).toEqual(["b", "c", "d"]);
+    expect(nextMarked([], "d", "b", "range", order)).toEqual(["d", "b", "c"]);
+    expect(nextMarked([], null, "c", "range", order)).toEqual(["c"]);
+  });
+
+  it("keeps the selection among the ticks, and a plain select clears them", () => {
+    s().select("a");
+    s().mark("c", "toggle", order);
+    expect(s().marked).toEqual(["a", "c"]);
+    expect(s().selected).toBe("c");
+    s().mark("c", "toggle", order);
+    expect(s().selected).toBe("a");
+    s().mark("b", "toggle", order);
+    s().select("d");
+    expect(s().marked).toEqual([]);
+    s().mark("b", "range", order);
+    s().clearMarks();
+    expect(s().marked).toEqual([]);
+  });
+});
+

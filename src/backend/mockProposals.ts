@@ -1,6 +1,6 @@
 import { docFromText } from "../lib/docs";
 import { targetOf } from "../lib/proposals";
-import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalQuery, ProposalsChanged } from "../types";
+import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged } from "../types";
 
 const CONNECTION = "mock";
 
@@ -14,13 +14,24 @@ export class MockProposals {
 
   /** Stores a draft the way the assistant would. */
   draft(intent: Intent, label: string | null = null, requestId = "sample"): Proposal {
+    return this.store(intent, label, { type: "chat", requestId }, "pip");
+  }
+
+  /** Stores a draft the person made by hand. */
+  create(intent: Intent, label: string | null = null): Promise<Proposal> {
+    if (!targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
+    if (intent.type === "transition" && !intent.to.trim()) return Promise.reject(new Error("a transition needs a target status"));
+    return Promise.resolve(this.store(intent, label, { type: "board" }, "user"));
+  }
+
+  private store(intent: Intent, label: string | null, origin: ProposalOrigin, createdBy: Proposal["createdBy"]): Proposal {
     const now = new Date().toISOString();
     const p: Proposal = {
       id: `mock-${++this.seq}`,
       createdAt: now,
       updatedAt: now,
-      origin: { type: "chat", requestId },
-      createdBy: "pip",
+      origin,
+      createdBy,
       intent,
       label,
       basis: null,

@@ -7,7 +7,7 @@ use serde::Deserialize;
 use super::{identity_of, Core};
 use crate::auth::Scope;
 use crate::db::Db;
-use crate::domain::{Basis, Intent, Proposal, ProposalQuery, ProposalState};
+use crate::domain::{Basis, CreatedBy, Intent, Origin, Proposal, ProposalQuery, ProposalState};
 use crate::error::{Error, Result};
 use crate::model::MentionRef;
 use crate::proposals::{self, Draft};
@@ -59,6 +59,19 @@ impl Core {
             proposals::create(db, draft, at)
         })
         .await
+    }
+
+    /// A draft the person made themselves, such as dropping a card on a board column. Nothing is written until it is
+    /// approved. Only an existing item of the signed-in connection can be the target.
+    pub async fn draft_as_user(&self, intent: Intent, label: Option<String>) -> Result<Proposal> {
+        let scope = self.scope().await?;
+        let connection_id = tracker::Connection::jira_id(&scope);
+        let target = intent.target().ok_or_else(|| Error::Proposal("a draft made by hand has to be about an existing item".into()))?;
+        if target.connection_id != connection_id {
+            return Err(Error::Proposal("that item belongs to another connection".into()));
+        }
+        let draft = Draft { origin: Origin::Board, created_by: CreatedBy::User, intent, label, basis: None };
+        self.propose(&scope, draft).await
     }
 
     async fn with_proposals<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
@@ -149,6 +162,30 @@ mod tests {
     use super::*;
     use crate::domain::fixtures::item_ref;
     use crate::domain::Doc;
+
+    #[tokio::test]
+    async fn a_hand_made_draft_is_pending_by_the_user_and_writes_nothing() {
+        let fx = crate::inbox::testing::fixture().await;
+        let intent = Intent::Transition { item: fx.item("CA-1"), to: "10001".into() };
+        let p = fx.core.draft_as_user(intent.clone(), Some("Done".into())).await.unwrap();
+        assert_eq!((p.created_by, p.origin.clone(), p.state.clone()), (CreatedBy::User, Origin::Board, ProposalState::Pending));
+        assert_eq!(p.label.as_deref(), Some("Done"));
+        assert_eq!(p.basis.as_ref().map(|b| b.item.clone()), Some(fx.item("CA-1")), "the basis is noted so a sync can revise it");
+        assert!(fx.tracker.intents().is_empty());
+        assert_eq!(fx.core.proposals(&ProposalQuery::default()).await.unwrap(), vec![p]);
+    }
+
+    #[tokio::test]
+    async fn a_hand_made_draft_is_refused_when_blank_foreign_or_not_about_an_item() {
+        let fx = crate::inbox::testing::fixture().await;
+        let blank = Intent::Transition { item: fx.item("CA-1"), to: " ".into() };
+        assert!(fx.core.draft_as_user(blank, None).await.is_err());
+        let mut foreign = fx.item("CA-1");
+        foreign.connection_id = "elsewhere".into();
+        let err = fx.core.draft_as_user(Intent::Transition { item: foreign, to: "1".into() }, None).await.unwrap_err();
+        assert!(err.to_string().contains("another connection"), "{err}");
+        assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().is_empty());
+    }
 
     #[test]
     fn a_comment_edit_links_the_mentions_it_names() {

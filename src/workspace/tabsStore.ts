@@ -24,6 +24,8 @@ interface TabsState {
   route: Route;
   /** Key (see `itemKey`) of the selected item, shared by every canvas and the peek sheet. */
   selected: string | null;
+  /** Keys of the cards ticked for a bulk action; when it is not empty it includes `selected`. */
+  marked: string[];
   savedViews: SavedView[];
   openTab(init?: Partial<Omit<Tab, "id">>): string;
   closeTab(id: string): void;
@@ -37,6 +39,9 @@ interface TabsState {
   removeSavedView(id: string): void;
   setRoute(route: Route): void;
   select(key: string | null): void;
+  /** Ticks a card without losing the others: `toggle` adds or removes it, `range` ticks everything from the selected card to it in `order`. */
+  mark(key: string, how: "toggle" | "range", order: readonly string[]): void;
+  clearMarks(): void;
 }
 
 const KEY = "gossamr-tabs";
@@ -71,12 +76,26 @@ export function loadTabs(): Pick<TabsState, "tabs" | "activeId" | "savedViews"> 
   return { tabs, activeId: tabs.find((t) => t.id === raw?.activeId)?.id ?? tabs[0].id, savedViews };
 }
 
+/** The ticks after a shift or cmd click on `key`. The selected card counts as ticked once a second one is. */
+export function nextMarked(marked: readonly string[], selected: string | null, key: string, how: "toggle" | "range", order: readonly string[]): string[] {
+  const base = marked.length ? [...marked] : selected ? [selected] : [];
+  if (how === "range") {
+    const [from, to] = [order.indexOf(selected ?? key), order.indexOf(key)];
+    if (from < 0 || to < 0) return base.includes(key) ? base : [...base, key];
+    const span = order.slice(Math.min(from, to), Math.max(from, to) + 1);
+    return [...base, ...span.filter((k) => !base.includes(k))];
+  }
+  const next = base.includes(key) ? base.filter((k) => k !== key) : [...base, key];
+  return next.length === 1 && next[0] === selected ? [] : next;
+}
+
 const patchActive = (s: TabsState, patch: Partial<Tab>) => ({ tabs: s.tabs.map((t) => (t.id === s.activeId ? { ...t, ...patch } : t)) });
 
 export const useTabs = create<TabsState>((set, get) => ({
   ...loadTabs(),
   route: "workspace",
   selected: null,
+  marked: [],
 
   openTab(init = {}) {
     const tab = { ...blankTab(), ...init };
@@ -127,7 +146,13 @@ export const useTabs = create<TabsState>((set, get) => ({
 
   removeSavedView: (id) => set((s) => ({ savedViews: s.savedViews.filter((v) => v.id !== id) })),
   setRoute: (route) => set({ route }),
-  select: (selected) => set({ selected }),
+  select: (selected) => set({ selected, marked: [] }),
+  mark: (key, how, order) =>
+    set((s) => {
+      const marked = nextMarked(s.marked, s.selected, key, how, order);
+      return { marked, selected: marked.includes(key) ? key : (marked[marked.length - 1] ?? s.selected) };
+    }),
+  clearMarks: () => set({ marked: [] }),
 }));
 
 useTabs.subscribe(({ tabs, activeId, savedViews }) => writeStored(KEY, { tabs, activeId, savedViews }));

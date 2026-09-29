@@ -1,5 +1,7 @@
 import type { ComponentType } from "react";
 import type { WorkItem } from "../types";
+import { AgeView } from "./AgeView";
+import { BoardView } from "./BoardView";
 import { ListView } from "./ListView";
 import type { Tab, ViewMode } from "./tabsStore";
 import { VIEW_LABEL } from "./tabsStore";
@@ -21,7 +23,7 @@ function Soon({ view }: { view: ViewMode }) {
 /** One canvas per view mode; a later step replaces its entry to fill in the view. */
 export const CANVASES: Record<ViewMode, ComponentType<CanvasProps>> = {
   list: ListView,
-  board: () => <Soon view="board" />,
+  board: BoardView,
   map: () => <Soon view="map" />,
-  age: () => <Soon view="age" />,
+  age: AgeView,
 };

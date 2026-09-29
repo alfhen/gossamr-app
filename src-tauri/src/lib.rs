@@ -28,7 +28,7 @@ use claude::ClaudeCodeProvider;
 use tracker::Connection;
 use inbox::{Core, Edit};
 use error::{Error, Result};
-use domain::{Container, ContainerRef, Event, Filter, ItemRef, Proposal, ProposalQuery, WorkItem, Workflow};
+use domain::{Container, ContainerRef, Event, Filter, Intent, ItemRef, Proposal, ProposalQuery, WorkItem, Workflow};
 use model::{Snapshot, Transition};
 use sync::Trigger;
 
@@ -142,6 +142,14 @@ async fn proposals_list(core: State<'_, CoreState>, query: Option<ProposalQuery>
 #[tauri::command]
 async fn proposals_get(core: State<'_, CoreState>, id: String) -> Result<Option<Proposal>> {
     core.proposal(&id).await
+}
+
+/// Drafts a write the person made by hand. It stays a draft until `proposals_approve`.
+#[tauri::command]
+async fn proposals_create(app: AppHandle, core: State<'_, CoreState>, intent: Intent, label: Option<String>) -> Result<Proposal> {
+    let made = core.draft_as_user(intent, label).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(made)
 }
 
 #[tauri::command]
@@ -421,6 +429,7 @@ pub fn run() {
             cache_events,
             proposals_list,
             proposals_get,
+            proposals_create,
             proposals_edit,
             proposals_skip,
             proposals_approve,

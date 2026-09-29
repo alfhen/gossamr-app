@@ -9,6 +9,7 @@ import type {
   PersonRef,
   Proposal,
   ProposalStateKind,
+  StatusDef,
   WorkContainer,
   WorkEvent,
   WorkFilter,
@@ -41,6 +42,8 @@ interface WorkspaceState {
   loadEvents(ref: ItemRef): Promise<void>;
   approve(id: string): Promise<Proposal>;
   skip(id: string): Promise<Proposal>;
+  /** Drafts moving an item to a status, replacing any transition draft still pending for it. Nothing is written until approval. */
+  draftTransition(item: ItemRef, to: StatusDef): Promise<Proposal>;
   dispose(): void;
 }
 
@@ -151,6 +154,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const p = await backend.proposalsSkip(id);
     if (backend !== get().backend || mine !== generation) return p;
     set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));
+    return p;
+  },
+
+  async draftTransition(item, to) {
+    const backend = get().backend!;
+    const mine = generation;
+    for (const old of draftsForItem(get(), item)) {
+      if (old.intent.type === "transition") await backend.proposalsSkip(old.id);
+    }
+    const p = await backend.proposalsCreate({ type: "transition", item, to: to.id }, to.name);
+    if (backend === get().backend && mine === generation) await get().refreshProposals();
     return p;
   },
 
