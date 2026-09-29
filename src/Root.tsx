@@ -2,6 +2,8 @@ import { isTauri } from "@tauri-apps/api/core";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { useEffect, useRef, useState } from "react";
 import App from "./App";
+import { useWorkspaceUi } from "./workspace/prefs";
+import { Workspace } from "./workspace/Workspace";
 import { auth, type AuthStatus } from "./backend/auth";
 import { JiraBackend } from "./backend/jira";
 import { MockBackend } from "./backend/mock";
@@ -12,6 +14,7 @@ import { useStore } from "./store";
 type Phase = { name: "loading" } | { name: "setup"; status: AuthStatus } | { name: "app" } | { name: "error"; message: string };
 
 export function Root() {
+  const workspaceUi = useWorkspaceUi();
   const [phase, setPhase] = useState<Phase>({ name: "loading" });
   const starts = useRef(0);
 
@@ -83,7 +86,7 @@ export function Root() {
     case "setup":
       return <Setup status={phase.status} onSignedIn={start} onUseSampleData={() => start(null)} />;
     case "app":
-      return <App />;
+      return workspaceUi ? <Workspace /> : <App />;
   }
 }
 
