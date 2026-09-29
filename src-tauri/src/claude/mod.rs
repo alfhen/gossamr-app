@@ -7,7 +7,7 @@ pub mod stream;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -32,7 +32,7 @@ const ALLOWED: &str = "mcp__gossamr,Read,Grep,Glob,Bash(git log:*),Bash(git show
 
 #[derive(Default)]
 pub struct ClaudeCodeProvider {
-    running: Mutex<HashMap<String, oneshot::Sender<()>>>,
+    running: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
 }
 
 fn mcp_config(mcp: &McpEndpoint) -> String {
@@ -100,6 +100,8 @@ impl AgentProvider for ClaudeCodeProvider {
         drop(stdin);
 
         let (tx, rx) = mpsc::unbounded_channel();
+        let running = self.running.clone();
+        let run_id = req.run_id.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(child.stdout.take().expect("piped")).lines();
             let stderr = child.stderr.take().expect("piped");
@@ -137,6 +139,7 @@ impl AgentProvider for ClaudeCodeProvider {
                 let _ = child.kill().await;
             }
             let _ = child.wait().await;
+            running.lock().expect("lock poisoned").remove(&run_id);
             if !finished {
                 let tail = stderr_tail.await.unwrap_or_default();
                 let message = outcome.map(String::from).unwrap_or(if tail.is_empty() { "Claude exited unexpectedly".into() } else { tail });

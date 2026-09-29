@@ -200,8 +200,16 @@ fn required<'a>(args: &'a Value, k: &str) -> std::result::Result<&'a str, String
     opt(args, k).ok_or_else(|| format!("{k} is required"))
 }
 
+/// `args[k]`, with a JSON-encoded string decoded into the value it holds; some clients send arrays and objects that way.
+fn structured(args: &Value, k: &str) -> Value {
+    match &args[k] {
+        Value::String(s) => serde_json::from_str(s).unwrap_or(Value::Null),
+        v => v.clone(),
+    }
+}
+
 fn summaries_of(args: &Value) -> std::result::Result<Vec<String>, String> {
-    let all: Vec<String> = args["summaries"]
+    let all: Vec<String> = structured(args, "summaries")
         .as_array()
         .into_iter()
         .flatten()
@@ -246,7 +254,8 @@ async fn run_tool(st: &McpState, scope: &Scope, run_id: &str, name: &str, args: 
     let core = &st.core;
     match name {
         "search_items" => {
-            let filter = match (args.get("filter").filter(|f| !f.is_null()), opt(args, "text")) {
+            let raw = structured(args, "filter");
+            let filter = match (Some(&raw).filter(|f| !f.is_null()), opt(args, "text")) {
                 (None, None) => Filter::Open,
                 (f, t) => {
                     let mut all: Vec<Filter> = Vec::new();
@@ -608,6 +617,9 @@ mod tests {
         let capped = r.ok("search_items", json!({ "limit": 1 })).await;
         assert!(capped.contains("showing 1") && capped.lines().count() == 2, "{capped}");
 
+        let encoded = r.ok("search_items", json!({ "filter": "{\"type\":\"status\",\"name\":\"In Review\"}", "text": "Ticket 2" })).await;
+        assert!(encoded.starts_with("1 items match"), "{encoded}");
+
         let bad = r.err("search_items", json!({ "filter": { "type": "nope" } })).await;
         assert!(bad.contains("filter isn't valid") && bad.contains("needsMe"), "{bad}");
     }
@@ -636,7 +648,7 @@ mod tests {
         let comment = r.ok("propose_comment", json!({ "key": "CA-1", "body": " Looks good " })).await;
         assert!(comment.contains("on CA-1") && comment.contains("has not been applied"), "{comment}");
         r.ok("propose_transition", json!({ "key": "CA-1", "status_id": "10001" })).await;
-        r.ok("propose_subtasks", json!({ "key": "CA-1", "summaries": ["a", " ", "b"] })).await;
+        r.ok("propose_subtasks", json!({ "key": "CA-1", "summaries": "[\"a\", \" \", \"b\"]" })).await;
         let container = r.ok("list_containers", json!({})).await.split(" · ").next().unwrap().to_string();
         let created = r.ok("propose_create", json!({ "container": container, "title": "New thing", "description": "Why", "kind": "bug", "parent": "CA-2" })).await;
         assert!(created.contains("to create a new bug"), "{created}");
