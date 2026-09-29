@@ -6,6 +6,7 @@ import { relativeTime } from "../lib/views";
 import { selectedTicket, useStore } from "../store";
 import type { Ticket } from "../types";
 import { Sparkle } from "./icons";
+import { Markdown } from "./Markdown";
 import { MentionTextarea } from "./MentionTextarea";
 import { StatusPill } from "./primitives";
 
@@ -140,7 +141,7 @@ export function ClaudeDrawer() {
         )}
       </header>
 
-      <div ref={bodyRef} className="selectable grid min-h-0 flex-1 content-start gap-3.5 overflow-auto p-3.5">
+      <div ref={bodyRef} className="selectable grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-3.5 overflow-y-auto p-3.5">
         {!conv?.turns.length && (
           <>
             <p className="text-ink-2">
@@ -203,7 +204,9 @@ export function ClaudeDrawer() {
 function TurnView({ ticketKey, turn }: { ticketKey: string; turn: Turn }) {
   return (
     <>
-      <div className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-accent px-3 py-1.5 text-white">{turn.prompt}</div>
+      <div className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
+        {turn.prompt}
+      </div>
       {(turn.steps.length > 0 || (turn.status === "running" && !turn.text)) && (
         <ul className="grid gap-1 text-sm text-ink-2">
           {turn.steps.map((s, i) => (
@@ -346,43 +349,6 @@ function ProposalView({ ticketKey, requestId, card }: { ticketKey: string; reque
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-/** Just enough Markdown for Claude's replies: paragraphs, bullet lists, **bold** and `code`. */
-function Markdown({ text }: { text: string }) {
-  const inline = (s: string) =>
-    s.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) =>
-      part.startsWith("**") && part.endsWith("**") ? (
-        <b key={i}>{part.slice(2, -2)}</b>
-      ) : part.startsWith("`") && part.endsWith("`") ? (
-        <code key={i} className="rounded bg-hover px-1 font-mono text-[12px]">
-          {part.slice(1, -1)}
-        </code>
-      ) : (
-        part
-      ),
-    );
-  return (
-    <div className="grid max-w-[65ch] gap-2">
-      {text.split(/\n{2,}/).map((block, i) => {
-        const lines = block.split("\n");
-        if (lines.every((l) => /^\s*[-*] /.test(l))) {
-          return (
-            <ul key={i} className="list-disc pl-5">
-              {lines.map((l, j) => (
-                <li key={j}>{inline(l.replace(/^\s*[-*] /, ""))}</li>
-              ))}
-            </ul>
-          );
-        }
-        return (
-          <p key={i} className="whitespace-pre-wrap">
-            {inline(block)}
-          </p>
-        );
-      })}
     </div>
   );
 }

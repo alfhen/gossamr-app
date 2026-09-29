@@ -282,7 +282,7 @@ function Text({ text, marks }: { text: string; marks: AdfMark[] }) {
   return <>{out}</>;
 }
 
-function Link({ href, children }: { href: string; children: ReactNode }) {
+export function Link({ href, children }: { href: string; children: ReactNode }) {
   const backend = useStore((s) => s.backend);
   if (!SAFE_URL.test(href)) return <>{children}</>;
   return (
