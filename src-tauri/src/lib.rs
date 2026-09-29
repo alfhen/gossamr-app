@@ -8,6 +8,7 @@ mod inbox;
 mod legacy;
 mod model;
 mod notify;
+mod proposals;
 mod secrets;
 mod sync;
 mod tracker;
@@ -22,9 +23,9 @@ use tauri_plugin_opener::OpenerExt;
 use auth::{Auth, AuthStatus, OAuthApp, Scope};
 use claude::{AskRequest, Claude};
 use tracker::Connection;
-use inbox::Core;
+use inbox::{Core, Edit};
 use error::{Error, Result};
-use domain::{Container, ContainerRef, Event, Filter, ItemRef, WorkItem, Workflow};
+use domain::{Container, ContainerRef, Event, Filter, ItemRef, Proposal, ProposalQuery, WorkItem, Workflow};
 use model::{Snapshot, Transition};
 use sync::Trigger;
 
@@ -49,6 +50,11 @@ async fn publish(app: &AppHandle, core: &Core) {
 /// Tells the page the cache changed, so views over it can re-read.
 fn cache_changed(app: &AppHandle, connection_id: &str) {
     let _ = app.emit("cache-changed", serde_json::json!({ "connectionId": connection_id }));
+}
+
+/// Tells the page the stored drafts changed, so it can re-read them.
+fn proposals_changed(app: &AppHandle, connection_id: &str) {
+    let _ = app.emit("proposals-changed", serde_json::json!({ "connectionId": connection_id }));
 }
 
 /// Shows native notifications for new events, unless the window is focused and the user can already see them.
@@ -123,6 +129,42 @@ async fn cache_workflow(core: State<'_, CoreState>, container: ContainerRef) -> 
 #[tauri::command]
 async fn cache_events(core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<Event>> {
     core.cache_events(&item, EVENT_LIMIT).await
+}
+
+#[tauri::command]
+async fn proposals_list(core: State<'_, CoreState>, query: Option<ProposalQuery>) -> Result<Vec<Proposal>> {
+    core.proposals(&query.unwrap_or_default()).await
+}
+
+#[tauri::command]
+async fn proposals_get(core: State<'_, CoreState>, id: String) -> Result<Option<Proposal>> {
+    core.proposal(&id).await
+}
+
+#[tauri::command]
+async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, edit: Edit) -> Result<Proposal> {
+    let edited = core.edit_proposal(&id, &edit).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(edited)
+}
+
+#[tauri::command]
+async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+    let skipped = core.skip_proposal(&id).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(skipped)
+}
+
+/// Applies the draft. A failed attempt still returns it, back to pending with `error` set.
+#[tauri::command]
+async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+    let result = core.approve_proposal(&id).await;
+    if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
+        proposals_changed(&app, &connection);
+        cache_changed(&app, &connection);
+    }
+    publish(&app, &core).await;
+    result
 }
 
 #[tauri::command]
@@ -286,6 +328,9 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         if synced.changed {
                             cache_changed(&app, &synced.connection_id);
                         }
+                        if synced.proposals_changed {
+                            proposals_changed(&app, &synced.connection_id);
+                        }
                     }
                     Err(e) => core.set_error(Some(e.to_string())),
                 }
@@ -352,9 +397,7 @@ pub fn run() {
             let mcp = tauri::async_runtime::block_on(claude::mcp::McpServer::start(
                 core.clone(),
                 token,
-                Arc::new(move |p| {
-                    let _ = handle.emit("claude-proposal", p);
-                }),
+                Arc::new(move |connection_id| proposals_changed(&handle, connection_id)),
             ))?;
             app.manage::<ClaudeState>(Arc::new(Claude::new(core.clone(), mcp)));
 
@@ -372,6 +415,11 @@ pub fn run() {
             cache_containers,
             cache_workflow,
             cache_events,
+            proposals_list,
+            proposals_get,
+            proposals_edit,
+            proposals_skip,
+            proposals_approve,
             sync_now,
             mark_seen,
             set_unread,

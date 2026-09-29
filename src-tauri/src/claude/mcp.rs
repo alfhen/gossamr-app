@@ -1,9 +1,9 @@
 //! A minimal MCP server (streamable HTTP, JSON responses only) that Claude Code connects to during an Ask Claude run.
 //!
-//! Claude gets read tools plus `propose_*` tools. Proposals are handed to the UI as cards; nothing here writes to
-//! Jira. That keeps "Claude never changes Jira without your approval" true regardless of what the model decides.
+//! Claude gets read tools plus `propose_*` tools. A proposal is stored as a draft for the user to approve; nothing
+//! here writes to Jira. That keeps "Claude never changes Jira without your approval" true regardless of what the
+//! model decides.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -11,34 +11,20 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::auth::Scope;
+use crate::domain::{Doc, Intent, ItemRef};
 use crate::inbox::{Core, CONTEXT_LIMIT};
-use crate::model::{CachedTicket, Transition};
+use crate::model::CachedTicket;
+use crate::proposals::Draft;
+use crate::tracker::Connection;
 
 const SEARCH_LIMIT: usize = 20;
 const COMMENTS_SHOWN: usize = 10;
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum ProposalBody {
-    Comment { key: String, body: String },
-    Transition { key: String, transition: Transition },
-    Subtasks { key: String, summaries: Vec<String> },
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Proposal {
-    pub request_id: String,
-    pub id: String,
-    #[serde(flatten)]
-    pub body: ProposalBody,
-}
-
-pub type ProposalSink = Arc<dyn Fn(Proposal) + Send + Sync>;
+/// Told the connection id whenever a draft was stored, so the page can re-read its drafts.
+pub type ChangeSink = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// The account each running Ask Claude request belongs to. Tools answer only for runs listed here, and only as that
 /// account, so switching accounts mid-run can't hand Claude another account's tickets.
@@ -47,9 +33,8 @@ pub type Runs = Arc<std::sync::Mutex<std::collections::HashMap<String, Scope>>>;
 struct McpState {
     core: Arc<Core>,
     token: String,
-    sink: ProposalSink,
+    sink: ChangeSink,
     runs: Runs,
-    seq: AtomicU64,
 }
 
 pub struct McpServer {
@@ -59,11 +44,11 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    pub async fn start(core: Arc<Core>, token: String, sink: ProposalSink) -> std::io::Result<Self> {
+    pub async fn start(core: Arc<Core>, token: String, sink: ChangeSink) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
         let runs: Runs = Arc::default();
-        let state = Arc::new(McpState { core, token: token.clone(), sink, runs: runs.clone(), seq: AtomicU64::new(0) });
+        let state = Arc::new(McpState { core, token: token.clone(), sink, runs: runs.clone() });
         let router = Router::new().route("/mcp/{request_id}", post(handle)).with_state(state);
         tauri::async_runtime::spawn(async move {
             let _ = axum::serve(listener, router).await;
@@ -170,7 +155,39 @@ fn text(t: impl Into<String>, is_error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": t.into() }], "isError": is_error })
 }
 
-const PROPOSED: &str = "Proposed. The user will approve, edit or skip it in Gossamr; don't say it has been done.";
+fn saved(key: &str, id: &str) -> String {
+    format!(
+        "Saved as a draft on {key} (proposal {id}). It shows in the Ask Claude panel on that ticket, where the user will approve, edit or skip it. It has not been applied; don't say it has."
+    )
+}
+
+fn item_ref(scope: &Scope, key: &str) -> ItemRef {
+    ItemRef { connection_id: Connection::jira_id(scope), external_id: key.into(), key: key.into() }
+}
+
+/// The intent for a `propose_comment` or `propose_subtasks` call, or what to tell the model is missing.
+fn pip_intent(tool: &str, item: ItemRef, args: &Value) -> std::result::Result<Intent, &'static str> {
+    let text = |k: &str| args[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+    match tool {
+        "propose_comment" => {
+            let body = text("body").ok_or("body is required")?;
+            Ok(Intent::Comment { item, body: Doc::from_text(body, &[]) })
+        }
+        "propose_subtasks" => {
+            let summaries: Vec<String> = args["summaries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from))
+                .collect();
+            if summaries.is_empty() {
+                return Err("summaries must list at least one subtask");
+            }
+            Ok(Intent::Subtasks { parent: item, summaries })
+        }
+        _ => Err("not a proposal tool"),
+    }
+}
 
 async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
     let Some(scope) = st.runs.lock().expect("runs lock poisoned").get(request_id).cloned() else {
@@ -179,10 +196,15 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
     let scope = &scope;
     let args = &params["arguments"];
     let arg = |k: &str| args[k].as_str().map(str::trim).filter(|s| !s.is_empty());
-    let propose = |body: ProposalBody| {
-        let id = st.seq.fetch_add(1, Ordering::Relaxed).to_string();
-        (st.sink)(Proposal { request_id: request_id.to_string(), id, body });
-        text(PROPOSED, false)
+    let propose = |intent: Intent, label: Option<String>| async move {
+        let key = intent.target().map(|t| t.key.clone()).unwrap_or_default();
+        match st.core.propose(scope, Draft::from_pip(request_id, intent, label)).await {
+            Ok(p) => {
+                (st.sink)(&Connection::jira_id(scope));
+                text(saved(&key, &p.id), false)
+            }
+            Err(e) => text(format!("Couldn't save the draft: {e}"), true),
+        }
     };
 
     match (params["name"].as_str().unwrap_or_default(), arg("key")) {
@@ -215,31 +237,19 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
                 Err(e) => text(format!("Search failed: {e}"), true),
             },
         },
-        ("propose_comment", Some(key)) => match arg("body") {
-            Some(body) => propose(ProposalBody::Comment { key: key.into(), body: body.into() }),
-            None => text("body is required", true),
+        (tool @ ("propose_comment" | "propose_subtasks"), Some(key)) => match pip_intent(tool, item_ref(scope, key), args) {
+            Ok(intent) => propose(intent, None).await,
+            Err(message) => text(message, true),
         },
         ("propose_transition", Some(key)) => {
             let Some(id) = arg("transition_id") else { return text("transition_id is required", true) };
             match st.core.transitions(scope, key).await {
                 Ok(ts) => match ts.into_iter().find(|t| t.id == id) {
-                    Some(transition) => propose(ProposalBody::Transition { key: key.into(), transition }),
+                    Some(t) => propose(Intent::Transition { item: item_ref(scope, key), to: t.id }, Some(t.name)).await,
                     None => text(format!("{id} isn't an available transition for {key}; call list_transitions"), true),
                 },
                 Err(e) => text(format!("Couldn't check transitions for {key}: {e}"), true),
             }
-        }
-        ("propose_subtasks", Some(key)) => {
-            let summaries: Vec<String> = args["summaries"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|s| s.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from))
-                .collect();
-            if summaries.is_empty() {
-                return text("summaries must list at least one subtask", true);
-            }
-            propose(ProposalBody::Subtasks { key: key.into(), summaries })
         }
         (name, None) if name != "search_tickets" => text("key is required", true),
         (name, _) => text(format!("Unknown tool {name}"), true),
@@ -312,15 +322,31 @@ mod tests {
     }
 
     #[test]
-    fn proposals_serialise_flat_for_the_ui() {
-        let p = Proposal {
-            request_id: "r".into(),
-            id: "0".into(),
-            body: ProposalBody::Subtasks { key: "CA-1".into(), summaries: vec!["a".into()] },
-        };
-        let v = serde_json::to_value(p).unwrap();
-        assert_eq!(v["kind"], "subtasks");
-        assert_eq!(v["requestId"], "r");
-        assert_eq!(v["summaries"][0], "a");
+    fn comment_and_subtask_calls_become_intents_and_bad_calls_say_what_is_missing() {
+        let item = || ItemRef { connection_id: "c".into(), external_id: "1".into(), key: "CA-1".into() };
+        let comment = pip_intent("propose_comment", item(), &json!({ "body": "  Looks good\n\nShip it " })).unwrap();
+        assert_eq!(comment, Intent::Comment { item: item(), body: Doc::from_text("Looks good\n\nShip it", &[]) });
+        assert_eq!(pip_intent("propose_comment", item(), &json!({ "body": " " })), Err("body is required"));
+
+        let subtasks = pip_intent("propose_subtasks", item(), &json!({ "summaries": ["a", " ", "b"] })).unwrap();
+        assert_eq!(subtasks, Intent::Subtasks { parent: item(), summaries: vec!["a".into(), "b".into()] });
+        assert!(pip_intent("propose_subtasks", item(), &json!({ "summaries": [] })).is_err());
+    }
+
+    #[test]
+    fn a_pip_draft_is_stored_pending_and_tied_to_the_run_that_made_it() {
+        use crate::db::Db;
+        use crate::domain::{CreatedBy, Origin, ProposalState};
+
+        let db = Db::in_memory().unwrap();
+        let item = ItemRef { connection_id: "c".into(), external_id: "1".into(), key: "CA-1".into() };
+        let intent = pip_intent("propose_subtasks", item.clone(), &json!({ "summaries": ["a"] })).unwrap();
+        let made = crate::proposals::create(&db, Draft::from_pip("run-7", intent, None), chrono::Utc::now()).unwrap();
+
+        let stored = db.proposal(&made.id).unwrap().unwrap();
+        assert_eq!(stored.state, ProposalState::Pending);
+        assert_eq!(stored.created_by, CreatedBy::Pip);
+        assert_eq!(stored.origin, Origin::Chat { request_id: "run-7".into() });
+        assert!(saved("CA-1", &made.id).contains("has not been applied"));
     }
 }

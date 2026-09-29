@@ -96,7 +96,21 @@ CREATE TABLE sync_state (
   containers_at TEXT
 ) WITHOUT ROWID;";
 
-const STEPS: &[&str] = &[INBOX, CACHE];
+/// Drafted writes. `data` holds the whole proposal; `state` and the target columns exist so lists can narrow first.
+const PROPOSALS: &str = "
+CREATE TABLE proposals (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  item_id TEXT,
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  data TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX proposals_state ON proposals(state, created_at);
+CREATE INDEX proposals_item ON proposals(connection_id, item_id);";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -123,7 +137,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
-        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state"] {
+        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
@@ -142,6 +156,20 @@ mod tests {
         assert_eq!(conn.query_row("SELECT count(*) FROM tickets", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT count(*) FROM seen", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert!(tables(&conn).contains(&"items".to_string()));
+    }
+
+    #[test]
+    fn a_cache_from_before_proposals_gains_the_table_and_keeps_its_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(INBOX).unwrap();
+        conn.execute_batch(CACHE).unwrap();
+        conn.pragma_update(None, "user_version", 2).unwrap();
+        conn.execute("INSERT INTO sync_state (connection_id, cursor) VALUES ('c', 'x')", []).unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        assert!(tables(&conn).contains(&"proposals".to_string()));
+        assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
 
     #[test]

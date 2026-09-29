@@ -271,3 +271,90 @@ export interface WorkEvent {
 export interface CacheChanged {
   connectionId: string;
 }
+
+/** A write drafted for approval, mirroring src-tauri/src/domain/proposal.rs. Only an approval applies it. */
+export type Intent =
+  | { type: "comment"; item: ItemRef; body: WorkDoc }
+  | { type: "transition"; item: ItemRef; to: string }
+  | { type: "create"; container: ContainerRef; fields: NewWorkItem; link: WorkLink | null }
+  | { type: "update"; item: ItemRef; patch: WorkPatch }
+  | { type: "link"; from: ItemRef; to: ItemRef; kind: WorkLink["kind"] }
+  | { type: "subtasks"; parent: ItemRef; summaries: string[] };
+
+export interface NewWorkItem {
+  title: string;
+  body: WorkDoc;
+  kind: WorkItemKind;
+  assignee: PersonRef | null;
+  parent: ItemRef | null;
+  priority: WorkPriority | null;
+  labels: string[];
+}
+
+/** Triage fields; null leaves a field alone. */
+export interface WorkPatch {
+  assignee: PersonRef | null;
+  parent: ItemRef | null;
+  priority: WorkPriority | null;
+}
+
+export type ProposalOrigin = { type: "chat"; requestId: string } | { type: "board" } | { type: "autopilot"; eventId: string };
+
+export type ProposalState =
+  | { type: "pending" }
+  | { type: "applying" }
+  | { type: "applied" }
+  | { type: "skipped" }
+  | { type: "retired"; reason: string };
+
+export type ProposalStateKind = ProposalState["type"];
+
+export interface ProposalBasis {
+  item: ItemRef;
+  statusId: string;
+  commentCount: number;
+  assignee: PersonRef | null;
+  parent: ItemRef | null;
+  priority: WorkPriority | null;
+}
+
+export interface ProposalRevision {
+  at: string;
+  note: string;
+  intent: Intent;
+}
+
+export interface Proposal {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  origin: ProposalOrigin;
+  createdBy: "user" | "pip" | "autopilot";
+  intent: Intent;
+  /** What the approve button says when the intent doesn't (a transition's name). */
+  label: string | null;
+  basis: ProposalBasis | null;
+  state: ProposalState;
+  revisions: ProposalRevision[];
+  /** Items an attempt created before it stopped; for subtasks, entry `i` belongs to summary `i`. */
+  created: ItemRef[];
+  /** Why the last attempt to apply it failed. */
+  error: string | null;
+}
+
+/** Which proposals to list. Every field that is set must match. */
+export interface ProposalQuery {
+  states?: ProposalStateKind[];
+  item?: ItemRef;
+  connectionId?: string;
+}
+
+/** A person's edit to a draft, in the terms the editor works in. */
+export type ProposalEdit =
+  | { type: "comment"; body: string; mentions: { accountId: string; name: string }[] }
+  | { type: "subtasks"; summaries: string[] };
+
+/** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
+export interface ProposalsChanged {
+  connectionId: string;
+}

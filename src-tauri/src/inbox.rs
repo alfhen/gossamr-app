@@ -11,10 +11,14 @@ use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, my_actions, NewEvent};
 use crate::domain::{Container, ContainerRef, Event, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, WorkItem, Workflow};
 use crate::model::{Attachment, CachedTicket, CreatedSubtasks, MentionRef, Person, Snapshot, Status, Ticket, Transition, Uploaded};
+use crate::proposals;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
 use crate::tracker::{self, Connection, Registry, SearchOptions, WorkTracker};
 
+mod drafts;
+
 pub use crate::sync::CONTEXT_LIMIT;
+pub use drafts::Edit;
 
 /// Events this old drop out of the inbox unless they are still unread.
 const EVENT_WINDOW_DAYS: i64 = 30;
@@ -63,6 +67,13 @@ pub(crate) fn tickets_of(items: &[WorkItem]) -> Result<Vec<CachedTicket>> {
     items.iter().map(ticket_of).collect()
 }
 
+fn identity_of(connection_id: &str, me: &Account) -> Identity {
+    Identity {
+        display_name: me.name.clone(),
+        accounts: vec![PersonRef { connection_id: connection_id.into(), account_id: me.account_id.clone() }],
+    }
+}
+
 fn without_extra(mut item: WorkItem) -> WorkItem {
     item.extra = serde_json::Value::Null;
     item
@@ -101,6 +112,8 @@ pub struct Synced {
     pub new_events: Vec<NewEvent>,
     /// Whether any cached item was added or changed.
     pub changed: bool,
+    /// Whether reconciling the drafts against the fresh cache revised or retired any.
+    pub proposals_changed: bool,
 }
 
 impl Core {
@@ -176,6 +189,7 @@ impl Core {
         if guard.as_ref().map(|(open, _)| *open != connection.id).unwrap_or(true) {
             let db = Db::open(&self.data_dir.join(db_file(&connection)))?;
             backfill_cache(&db, &connection)?;
+            db.release_interrupted(Utc::now())?;
             *guard = Some((connection.id.clone(), db));
         }
         f(&guard.as_ref().expect("opened above").1)
@@ -225,7 +239,14 @@ impl Core {
             let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after, previous.is_some())?;
             db.set_meta(LAST_SYNC, &stamp(started))?;
             let containers_changed = pulled.containers.is_some();
-            Ok(Synced { connection_id: connection_id.clone(), new_events: stored.new_events, changed: stored.upserted.any() || containers_changed })
+            // A draft that can't be re-judged must not stop the items from syncing.
+            let revised = proposals::reconcile_pending(db, &identity_of(&connection_id, &me), Utc::now()).unwrap_or_default();
+            Ok(Synced {
+                connection_id: connection_id.clone(),
+                new_events: stored.new_events,
+                changed: stored.upserted.any() || containers_changed,
+                proposals_changed: revised > 0,
+            })
         })
         .await
     }
@@ -466,10 +487,7 @@ impl Core {
                     .into_iter()
                     .map(|key| ItemRef { connection_id: connection_id.clone(), external_id: key.clone(), key })
                     .collect();
-                let me = Identity {
-                    display_name: me.name.clone(),
-                    accounts: vec![PersonRef { connection_id: connection_id.clone(), account_id: me.account_id.clone() }],
-                };
+                let me = identity_of(&connection_id, &me);
                 db.search(&connection_id, filter, &FilterContext { me, now, needs_me })
             })
             .await?;

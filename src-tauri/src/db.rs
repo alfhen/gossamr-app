@@ -13,6 +13,7 @@ impl From<rusqlite::Error> for Error {
 }
 
 mod cache;
+mod proposals;
 mod schema;
 
 pub use cache::{stamp, SyncState, Upserted};

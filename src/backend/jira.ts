@@ -7,6 +7,10 @@ import type {
   ContainerRef,
   ItemRef,
   Person,
+  Proposal,
+  ProposalEdit,
+  ProposalQuery,
+  ProposalsChanged,
   Snapshot,
   Transition,
   Uploaded,
@@ -124,6 +128,31 @@ export class JiraBackend implements Backend {
 
   onCacheChanged(listener: (change: CacheChanged) => void) {
     const pending = listen<CacheChanged>("cache-changed", (e) => listener(e.payload));
+    return () => void pending.then((unlisten) => unlisten());
+  }
+
+  proposalsList(query: ProposalQuery = {}) {
+    return invoke<Proposal[]>("proposals_list", { query });
+  }
+
+  proposalsGet(id: string) {
+    return invoke<Proposal | null>("proposals_get", { id });
+  }
+
+  proposalsEdit(id: string, edit: ProposalEdit) {
+    return invoke<Proposal>("proposals_edit", { id, edit });
+  }
+
+  proposalsSkip(id: string) {
+    return invoke<Proposal>("proposals_skip", { id });
+  }
+
+  proposalsApprove(id: string) {
+    return invoke<Proposal>("proposals_approve", { id });
+  }
+
+  onProposalsChanged(listener: (change: ProposalsChanged) => void) {
+    const pending = listen<ProposalsChanged>("proposals-changed", (e) => listener(e.payload));
     return () => void pending.then((unlisten) => unlisten());
   }
 

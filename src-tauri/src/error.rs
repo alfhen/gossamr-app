@@ -20,6 +20,8 @@ pub enum Error {
     Auth(String),
     #[error("{0}")]
     Claude(String),
+    #[error("{0}")]
+    Proposal(String),
     #[error("Jira returned {status}: {message}")]
     Api { status: u16, message: String },
 }

@@ -217,7 +217,83 @@ pub fn comment_doc(text: &str, mentions: &[(crate::domain::PersonRef, String)]) 
 
 #[cfg(test)]
 pub(crate) mod testing {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+
+    use super::*;
     use crate::model::CachedTicket;
+
+    /// A tracker that only records what it is asked to apply and answers from a script (success when it runs out).
+    #[derive(Default)]
+    pub struct Recorder {
+        pub applied: Mutex<Vec<Intent>>,
+        pub script: Mutex<VecDeque<Result<Applied>>>,
+    }
+
+    impl Recorder {
+        pub fn will(&self, outcome: Result<Applied>) {
+            self.script.lock().unwrap().push_back(outcome);
+        }
+
+        pub fn intents(&self) -> Vec<Intent> {
+            self.applied.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl WorkTracker for Recorder {
+        fn capabilities(&self) -> TrackerCaps {
+            unimplemented!()
+        }
+        async fn search(&self, _: &Filter, _: &SearchOptions) -> Result<Vec<WorkItem>> {
+            unimplemented!()
+        }
+        async fn search_native(&self, _: &str, _: &SearchOptions) -> Result<Vec<WorkItem>> {
+            unimplemented!()
+        }
+        async fn followed(&self, _: u32, _: &SearchOptions) -> Result<Vec<WorkItem>> {
+            unimplemented!()
+        }
+        async fn children(&self, _: &[ItemRef], _: &SearchOptions) -> Result<Vec<WorkItem>> {
+            unimplemented!()
+        }
+        async fn item(&self, _: &ItemRef, _: &str) -> Result<WorkItem> {
+            unimplemented!()
+        }
+        async fn containers(&self) -> Result<Vec<Container>> {
+            unimplemented!()
+        }
+        async fn workflow(&self, _: &ContainerRef) -> Result<Workflow> {
+            unimplemented!()
+        }
+        async fn comments(&self, _: &ItemRef) -> Result<Vec<Comment>> {
+            unimplemented!()
+        }
+        async fn transitions(&self, _: &ItemRef) -> Result<Vec<Move>> {
+            unimplemented!()
+        }
+        async fn people(&self, _: &ItemRef, _: &str) -> Result<Vec<Person>> {
+            unimplemented!()
+        }
+        async fn apply_with_files(&self, intent: &Intent, _: &[Uploaded]) -> Result<Applied> {
+            self.applied.lock().unwrap().push(intent.clone());
+            self.script.lock().unwrap().pop_front().unwrap_or_else(|| Ok(Applied::default()))
+        }
+        async fn attach(&self, _: &ItemRef, _: &str, _: &str, _: Vec<u8>) -> Result<Uploaded> {
+            unimplemented!()
+        }
+        async fn attachment_limit(&self) -> Result<Option<u64>> {
+            unimplemented!()
+        }
+        async fn media_id(&self, _: &str) -> Result<Option<String>> {
+            unimplemented!()
+        }
+        async fn download(&self, _: &str) -> Result<(String, Vec<u8>)> {
+            unimplemented!()
+        }
+    }
 
     pub fn sample_ticket() -> CachedTicket {
         super::jira::parse_issue(&super::jira::sample_issue()).expect("sample issue parses")

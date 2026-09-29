@@ -1,0 +1,100 @@
+import { docFromText } from "../lib/docs";
+import { targetOf } from "../lib/proposals";
+import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalQuery, ProposalsChanged } from "../types";
+
+const CONNECTION = "mock";
+
+/** Drafts held in memory for the sample-data backend. `apply` performs an approved intent and returns what it created. */
+export class MockProposals {
+  private drafts: Proposal[] = [];
+  private listeners = new Set<(c: ProposalsChanged) => void>();
+  private seq = 0;
+
+  constructor(private readonly apply: (intent: Intent, already: ItemRef[]) => Promise<ItemRef[]>) {}
+
+  /** Stores a draft the way the assistant would. */
+  draft(intent: Intent, label: string | null = null, requestId = "sample"): Proposal {
+    const now = new Date().toISOString();
+    const p: Proposal = {
+      id: `mock-${++this.seq}`,
+      createdAt: now,
+      updatedAt: now,
+      origin: { type: "chat", requestId },
+      createdBy: "pip",
+      intent,
+      label,
+      basis: null,
+      state: { type: "pending" },
+      revisions: [],
+      created: [],
+      error: null,
+    };
+    this.drafts = [p, ...this.drafts];
+    this.changed();
+    return p;
+  }
+
+  list(query: ProposalQuery = {}): Proposal[] {
+    return this.drafts.filter(
+      (p) =>
+        (!query.states || query.states.includes(p.state.type)) &&
+        (!query.item || targetOf(p.intent)?.externalId === query.item.externalId) &&
+        (!query.connectionId || query.connectionId === CONNECTION),
+    );
+  }
+
+  get(id: string) {
+    return this.drafts.find((p) => p.id === id) ?? null;
+  }
+
+  onChanged(listener: (c: ProposalsChanged) => void) {
+    this.listeners.add(listener);
+    return () => void this.listeners.delete(listener);
+  }
+
+  private pending(id: string): Proposal {
+    const p = this.get(id);
+    if (!p) throw new Error("that draft no longer exists");
+    if (p.state.type !== "pending") throw new Error(`that draft is ${p.state.type}`);
+    return p;
+  }
+
+  private set(id: string, patch: Partial<Proposal>): Proposal {
+    const next = { ...this.get(id)!, ...patch, updatedAt: new Date().toISOString() };
+    this.drafts = this.drafts.map((p) => (p.id === id ? next : p));
+    this.changed();
+    return next;
+  }
+
+  private changed() {
+    this.listeners.forEach((l) => l({ connectionId: CONNECTION }));
+  }
+
+  async edit(id: string, edit: ProposalEdit) {
+    const { intent } = this.pending(id);
+    if (edit.type === "comment" && intent.type === "comment") {
+      if (!edit.body.trim()) throw new Error("a comment can't be empty");
+      return this.set(id, { intent: { ...intent, body: docFromText(edit.body) }, error: null });
+    }
+    if (edit.type === "subtasks" && intent.type === "subtasks") {
+      if (!edit.summaries.length || edit.summaries.some((s) => !s.trim())) throw new Error("list at least one subtask");
+      return this.set(id, { intent: { ...intent, summaries: edit.summaries }, error: null });
+    }
+    throw new Error("that edit doesn't fit this draft");
+  }
+
+  async skip(id: string) {
+    return this.set(id, { state: { type: "skipped" } });
+  }
+
+  async approve(id: string) {
+    const p = this.pending(id);
+    this.set(id, { state: { type: "applying" } });
+    try {
+      const created = await this.apply(p.intent, p.created);
+      return this.set(id, { state: { type: "applied" }, created: [...p.created, ...created], error: null });
+    } catch (e) {
+      return this.set(id, { state: { type: "pending" }, error: String(e) });
+    }
+  }
+}

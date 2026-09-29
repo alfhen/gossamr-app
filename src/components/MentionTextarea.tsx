@@ -21,6 +21,7 @@ export function MentionTextarea({
   placeholder,
   onSubmit,
   onPasteFiles,
+  onBlur,
   disabled,
   className = "",
 }: {
@@ -35,6 +36,7 @@ export function MentionTextarea({
   onSubmit?: () => void;
   /** Receives files pasted into the field; without it, pasting a file does nothing special. */
   onPasteFiles?: (files: File[]) => void;
+  onBlur?: () => void;
   disabled?: boolean;
   className?: string;
 }) {
@@ -158,7 +160,10 @@ export function MentionTextarea({
           e.preventDefault();
           onPasteFiles?.(files);
         }}
-        onBlur={() => setTimeout(() => setQuery(null), 120)}
+        onBlur={() => {
+          setTimeout(() => setQuery(null), 120);
+          onBlur?.();
+        }}
         onScroll={(e) => {
           if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop;
         }}
