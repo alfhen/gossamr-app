@@ -38,9 +38,13 @@ pub struct Connection {
 }
 
 impl Connection {
+    pub fn jira_id(scope: &Scope) -> String {
+        format!("jira:{}:{}", scope.cloud_id, scope.account_id)
+    }
+
     pub fn jira(scope: &Scope, display_name: &str) -> Self {
         Self {
-            id: format!("jira:{}:{}", scope.cloud_id, scope.account_id),
+            id: Self::jira_id(scope),
             kind: ConnectionKind::Jira,
             workspace: scope.cloud_id.clone(),
             account: scope.account_id.clone(),
@@ -162,16 +166,32 @@ type Factory = Box<dyn Fn(&Connection) -> Arc<dyn WorkTracker> + Send + Sync>;
 /// The trackers Core can reach, one per connection, created on first use.
 pub struct Registry {
     factory: Factory,
+    connections: Mutex<HashMap<String, Connection>>,
     trackers: Mutex<HashMap<String, Arc<dyn WorkTracker>>>,
 }
 
 impl Registry {
     pub fn new(factory: impl Fn(&Connection) -> Arc<dyn WorkTracker> + Send + Sync + 'static) -> Self {
-        Self { factory: Box::new(factory), trackers: Mutex::new(HashMap::new()) }
+        Self { factory: Box::new(factory), connections: Mutex::new(HashMap::new()), trackers: Mutex::new(HashMap::new()) }
     }
 
     pub fn jira(http: reqwest::Client, auth: Arc<Auth>) -> Self {
         Self::new(move |c| Arc::new(jira::JiraTracker::new(http.clone(), auth.clone(), c)))
+    }
+
+    /// Adds a signed-in connection, or replaces it after a new sign-in so its tracker is built from the new details.
+    pub fn register(&self, connection: Connection) {
+        self.trackers.lock().expect("registry lock poisoned").remove(&connection.id);
+        self.connections.lock().expect("registry lock poisoned").insert(connection.id.clone(), connection);
+    }
+
+    pub fn connection(&self, id: &str) -> Option<Connection> {
+        self.connections.lock().expect("registry lock poisoned").get(id).cloned()
+    }
+
+    pub fn remove(&self, id: &str) {
+        self.trackers.lock().expect("registry lock poisoned").remove(id);
+        self.connections.lock().expect("registry lock poisoned").remove(id);
     }
 
     pub fn tracker(&self, connection: &Connection) -> Arc<dyn WorkTracker> {
@@ -226,5 +246,36 @@ mod tests {
         let c = Connection::jira(&Scope { cloud_id: "site".into(), account_id: "me".into() }, "Site");
         let r = c.item("CA-1");
         assert_eq!((r.connection_id.as_str(), r.external_id.as_str(), r.key.as_str()), ("jira:site:me", "CA-1", "CA-1"));
+    }
+
+    #[test]
+    fn a_registered_connection_can_be_found_and_removed() {
+        let registry = Registry::new(|_| unreachable!("no tracker is built here"));
+        let c = Connection::jira(&Scope { cloud_id: "site".into(), account_id: "me".into() }, "Acme");
+        assert!(registry.connection(&c.id).is_none());
+        registry.register(c.clone());
+        assert_eq!(registry.connection(&c.id), Some(c.clone()));
+        registry.remove(&c.id);
+        assert!(registry.connection(&c.id).is_none());
+    }
+
+    #[test]
+    fn registering_again_rebuilds_the_tracker_with_the_new_details() {
+        let made = Arc::new(AtomicUsize::new(0));
+        let counter = made.clone();
+        let http = reqwest::Client::new();
+        let auth = Arc::new(Auth::signed_out(http.clone()));
+        let registry = Registry::new(move |c| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Arc::new(jira::JiraTracker::new(http.clone(), auth.clone(), c))
+        });
+        let scope = Scope { cloud_id: "site".into(), account_id: "me".into() };
+        registry.register(Connection::jira(&scope, "Old name"));
+        let c = registry.connection("jira:site:me").unwrap();
+        registry.tracker(&c);
+        registry.register(Connection::jira(&scope, "New name"));
+        registry.tracker(&registry.connection("jira:site:me").unwrap());
+        assert_eq!(made.load(Ordering::SeqCst), 2);
+        assert_eq!(registry.connection("jira:site:me").unwrap().display_name, "New name");
     }
 }

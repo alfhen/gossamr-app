@@ -65,7 +65,6 @@ async fn save_oauth_app(core: State<'_, CoreState>, client_id: String, client_se
 #[tauri::command]
 async fn sign_in(app: AppHandle, core: State<'_, CoreState>) -> Result<AuthStatus> {
     let status = core
-        .auth
         .sign_in(|url| {
             app.opener()
                 .open_url(url, None::<&str>)
@@ -78,8 +77,7 @@ async fn sign_in(app: AppHandle, core: State<'_, CoreState>) -> Result<AuthStatu
 
 #[tauri::command]
 async fn sign_out(app: AppHandle, core: State<'_, CoreState>) -> Result<()> {
-    core.auth.sign_out().await?;
-    core.close_db();
+    core.sign_out().await?;
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.set_badge_count(None);
     }
@@ -294,6 +292,7 @@ pub fn run() {
                 eprintln!("couldn't move data from the previous app name, starting fresh: {e}");
             }
             let core: CoreState = Arc::new(Core::new(auth, registry, data_dir));
+            tauri::async_runtime::block_on(core.restore());
             app.manage(core.clone());
 
             let handle = app.handle().clone();
