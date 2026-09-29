@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::{Error, Result};
 use crate::events::NewEvent;
-use crate::model::{CachedTicket, EventKind, InboxEvent, Person};
+use crate::model::{CachedTicket, EventKind, InboxEvent, MyAction, Person};
 
 impl From<rusqlite::Error> for Error {
     fn from(e: rusqlite::Error) -> Self {
@@ -49,6 +49,14 @@ impl Db {
                snoozed_until TEXT
              );
              CREATE INDEX IF NOT EXISTS events_at ON events(at);
+             CREATE TABLE IF NOT EXISTS activity (
+               id TEXT PRIMARY KEY,
+               ticket_key TEXT NOT NULL,
+               kind TEXT NOT NULL,
+               at TEXT NOT NULL,
+               text TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS activity_at ON activity(at);
              CREATE TABLE IF NOT EXISTS seen (ticket_key TEXT PRIMARY KEY, at TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);",
         )?;
@@ -97,6 +105,27 @@ impl Db {
             }
         }
         Ok(inserted)
+    }
+
+    /// Stores the user's actions that aren't stored yet. They're kept even after a ticket's history is trimmed to
+    /// its newest pages, which is why they're stored rather than derived from the cached history each time.
+    pub fn insert_activity(&self, actions: &[(String, MyAction)]) -> Result<()> {
+        let mut stmt =
+            self.conn.prepare("INSERT OR IGNORE INTO activity (id, ticket_key, kind, at, text) VALUES (?1, ?2, ?3, ?4, ?5)")?;
+        for (id, a) in actions {
+            stmt.execute(params![id, a.ticket_key, a.kind, a.at, a.text])?;
+        }
+        Ok(())
+    }
+
+    /// The user's actions at or after `since`, newest first.
+    pub fn activity(&self, since: &str) -> Result<Vec<MyAction>> {
+        let mut stmt =
+            self.conn.prepare("SELECT ticket_key, kind, at, text FROM activity WHERE at >= ?1 ORDER BY at DESC")?;
+        let rows = stmt.query_map(params![since], |r| {
+            Ok(MyAction { ticket_key: r.get(0)?, kind: r.get(1)?, at: r.get(2)?, text: r.get(3)? })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn events(&self, since: &str) -> Result<Vec<InboxEvent>> {
@@ -197,6 +226,17 @@ mod tests {
     use super::*;
     use crate::events::derive;
     use crate::jira::{parse_issue, tests::sample_issue};
+
+    #[test]
+    fn stores_each_action_once_and_reads_back_recent_ones() {
+        let db = Db::in_memory().unwrap();
+        let action = |at: &str| MyAction { ticket_key: "CA-1".into(), at: at.into(), kind: "transition".into(), text: "A → B".into() };
+        let actions = vec![("h:1:status".to_string(), action("2026-09-28T09:00:00Z")), ("h:2:status".to_string(), action("2026-08-01T09:00:00Z"))];
+        db.insert_activity(&actions).unwrap();
+        db.insert_activity(&actions).unwrap();
+        assert_eq!(db.activity("2026-09-01T00:00:00Z").unwrap(), vec![action("2026-09-28T09:00:00Z")]);
+        assert_eq!(db.activity("2026-01-01T00:00:00Z").unwrap().len(), 2);
+    }
 
     #[test]
     fn inserting_events_twice_reports_them_once() {

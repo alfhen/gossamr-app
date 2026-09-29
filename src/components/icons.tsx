@@ -41,6 +41,12 @@ const P = {
     </>
   ),
   field: <path d="M3 12.5 3.5 10 10.5 3l2.5 2.5-7 7z" strokeLinejoin="round" />,
+  hourglass: <path d="M4.5 2.5h7M4.5 13.5h7M5.5 2.5V4L8 8l2.5-4V2.5M5.5 13.5V12L8 8l2.5 4v1.5" strokeLinecap="round" strokeLinejoin="round" />,
+  leaf: (
+    <>
+      <path d="M13.5 2.5C7.5 2.5 3 5.5 3 10.5c0 1.2.3 2.1.8 2.8 1-3 3.3-5.3 6.2-6.6-2.4 1.8-4.2 4.1-5 6.7C10.9 13.4 13.5 9.2 13.5 2.5z" strokeLinejoin="round" />
+    </>
+  ),
   search: (
     <>
       <circle cx="7" cy="7" r="4.5" />
@@ -71,9 +77,9 @@ export function Sparkle({ className = "size-3.5" }: { className?: string }) {
 
 export const VIEW_ICON: Record<ViewId, IconName> = {
   inbox: "inbox",
-  mentions: "at",
-  mine: "user",
+  waiting: "hourglass",
   watching: "eye",
+  work: "user",
   snoozed: "clock",
   done: "check",
 };

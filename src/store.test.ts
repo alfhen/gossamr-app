@@ -156,9 +156,9 @@ describe("store", () => {
   it("opens a ticket that is not in the current view", () => {
     s().goToTicket("CE-731");
     expect(s().view).toBe("inbox");
-    s().setView("mentions");
+    s().setView("snoozed");
     s().goToTicket("CA-412");
-    expect(s().view).toBe("mine");
+    expect(s().view).toBe("work");
     expect(selectedTicket(s())?.key).toBe("CA-412");
   });
 

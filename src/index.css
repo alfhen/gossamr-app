@@ -40,6 +40,8 @@
   --color-code: rgb(0 0 0 / 0.045);
   --color-warn-bg: #fff4d6;
   --color-warn: #8a5a00;
+  --color-wither: #8a5a2b;
+  --color-wither-bg: #f3e6d3;
 
   --shadow-pop: 0 18px 50px rgb(20 24 40 / 0.22), 0 2px 6px rgb(20 24 40 / 0.08);
 }
@@ -76,6 +78,8 @@
     --color-code: rgb(255 255 255 / 0.06);
     --color-warn-bg: #3a3222;
     --color-warn: #f2c25b;
+    --color-wither: #d7ab78;
+    --color-wither-bg: #3a2c1e;
     --shadow-pop: 0 18px 50px rgb(0 0 0 / 0.55), 0 2px 6px rgb(0 0 0 / 0.3);
     color-scheme: dark;
   }
@@ -122,6 +126,192 @@ kbd {
   :focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 1px;
+  }
+}
+
+/* Rows that have gone stale dry out a little more at each level and revive on hover. */
+.wither {
+  position: relative;
+  isolation: isolate;
+  transition:
+    filter 0.6s ease,
+    border-radius 0.6s ease;
+}
+.wither::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .45 0 0 0 0 .3 0 0 0 0 .15 0 0 0 .9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  mix-blend-mode: multiply;
+  opacity: var(--grain);
+  transition: opacity 0.6s ease;
+}
+.wither-1 {
+  --grain: 0.16;
+  filter: saturate(0.7) sepia(0.2);
+}
+.wither-2 {
+  --grain: 0.28;
+  filter: saturate(0.45) sepia(0.35);
+  border-radius: 9px 6px 11px 5px;
+}
+.wither-3 {
+  --grain: 0.4;
+  filter: saturate(0.2) sepia(0.5) contrast(0.94);
+  border-radius: 11px 4px 13px 3px;
+}
+.wither:hover,
+.wither[aria-selected="true"] {
+  filter: none;
+  border-radius: 8px;
+}
+.wither:hover::after,
+.wither[aria-selected="true"]::after {
+  opacity: 0;
+}
+.wither-leaf {
+  transform-origin: 50% 10%;
+}
+.wither:hover .wither-leaf {
+  animation: sway 1.4s ease-in-out;
+}
+@keyframes sway {
+  30% {
+    transform: rotate(-16deg);
+  }
+  65% {
+    transform: rotate(9deg);
+  }
+}
+.cobweb {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2;
+  pointer-events: none;
+  color: var(--color-ink-3);
+  opacity: 0.8;
+  transform-origin: top right;
+  transition:
+    opacity 0.5s ease,
+    transform 0.5s ease;
+}
+/* Reviving a row sweeps its web away. */
+.wither:hover .cobweb,
+.wither[aria-selected="true"] .cobweb {
+  opacity: 0;
+  transform: scale(0.4) rotate(-10deg);
+}
+/* Spiders sit still between moves; Cobweb picks one of these now and then, at random. */
+.spider-rig {
+  transform-box: fill-box;
+  transform-origin: 50% 0;
+}
+.spider,
+.spider-legs {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.spider-thread {
+  transform-box: fill-box;
+  transform-origin: top;
+  transition: transform 0.5s ease-in-out;
+}
+/* A spider walking to another perch climbs its thread up to the web first, walking with its legs. */
+.spider-lift {
+  transition: transform 0.5s ease-in-out;
+}
+.lifted .spider-lift {
+  transform: translateY(-11.5px);
+}
+.lifted .spider-thread {
+  transform: scaleY(0);
+}
+.lifted .spider-legs {
+  animation: legs-twitch 0.4s ease-in-out infinite;
+}
+.spider-face {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.3s ease;
+}
+.move-drop .spider {
+  animation: spider-drop 2.4s ease-in-out;
+}
+.move-drop .spider-thread {
+  animation: thread-drop 2.4s ease-in-out;
+}
+.move-climb .spider {
+  animation: spider-climb 2s ease-in-out;
+}
+.move-climb .spider-thread {
+  animation: thread-climb 2s ease-in-out;
+}
+.move-swing {
+  animation: rig-swing 2.2s ease-in-out;
+}
+.move-turn .spider {
+  animation: spider-turn 1.6s ease-in-out;
+}
+.move-twitch .spider-legs {
+  animation: legs-twitch 0.7s ease-in-out;
+}
+@keyframes spider-drop {
+  35%,
+  70% {
+    transform: translateY(7px);
+  }
+}
+@keyframes thread-drop {
+  35%,
+  70% {
+    transform: scaleY(1.78);
+  }
+}
+@keyframes spider-climb {
+  40%,
+  65% {
+    transform: translateY(-4px);
+  }
+}
+@keyframes thread-climb {
+  40%,
+  65% {
+    transform: scaleY(0.56);
+  }
+}
+@keyframes rig-swing {
+  25% {
+    transform: rotate(10deg);
+  }
+  55% {
+    transform: rotate(-7deg);
+  }
+  80% {
+    transform: rotate(3deg);
+  }
+}
+@keyframes spider-turn {
+  40%,
+  70% {
+    transform: rotate(40deg);
+  }
+}
+@keyframes legs-twitch {
+  20%,
+  60% {
+    transform: scaleX(0.75);
+  }
+  40% {
+    transform: scaleX(1.05);
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .wither::after {
+    mix-blend-mode: screen;
+    opacity: calc(var(--grain) * 0.6);
   }
 }
 

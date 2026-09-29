@@ -111,6 +111,12 @@ pub struct CachedTicket {
     pub subtasks: Vec<SubtaskRef>,
     pub due_date: Option<String>,
     pub updated: String,
+    #[serde(default)]
+    pub resolved: Option<String>,
+    #[serde(default)]
+    pub created: Option<String>,
+    #[serde(default)]
+    pub creator: Option<Person>,
     pub watching: bool,
     pub history: Vec<History>,
 }
@@ -138,6 +144,20 @@ pub struct Ticket {
     pub sprint: Option<String>,
     pub url: String,
     pub updated: String,
+    pub resolved: Option<String>,
+}
+
+/// Something the user did on a ticket that the ticket itself doesn't show, for My work. Their comments are read
+/// from the tickets instead.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyAction {
+    pub ticket_key: String,
+    pub at: String,
+    /// "transition" or "created".
+    pub kind: String,
+    /// The transition as "From → To"; empty for "created".
+    pub text: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,6 +216,7 @@ pub struct Snapshot {
     pub watching: Vec<String>,
     pub last_sync_at: Option<String>,
     pub sync_error: Option<String>,
+    pub activity: Vec<MyAction>,
 }
 
 impl Snapshot {
@@ -279,6 +300,7 @@ mod tests {
             watching: vec![],
             last_sync_at: None,
             sync_error: None,
+            activity: vec![],
         };
         assert_eq!(snap.inbox_unread("2026-09-28T12:00:00Z"), 2);
     }
@@ -293,6 +315,7 @@ mod tests {
             watching: vec![],
             last_sync_at: None,
             sync_error: None,
+            activity: vec![],
         };
         assert_eq!(snap("2026-09-28T12:00:00.000Z").inbox_unread("2026-09-28T12:00:00Z"), 1, "a snooze ending now is over");
         assert_eq!(snap("2026-09-28T14:30:00+02:00").inbox_unread("2026-09-28T12:00:00Z"), 0, "12:30 UTC is still ahead");

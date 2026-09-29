@@ -1,6 +1,11 @@
-import { projectsOf, relativeTime, viewCounts, VIEWS } from "../lib/views";
+import { isInboxView, projectsOf, relativeTime, viewCounts } from "../lib/views";
 import { useStore } from "../store";
 import { Icon, VIEW_ICON } from "./icons";
+
+const SECTIONS = [
+  { id: "inbox", label: "Inbox" },
+  { id: "work", label: "My work" },
+] as const;
 
 const PROJECT_COLOURS = ["#e5883a", "#3aa87a", "#5b7cf0", "#c4508f", "#8a6d3b"];
 
@@ -14,9 +19,9 @@ export function Sidebar() {
     <aside className="sidebar flex min-h-0 flex-col border-r border-sep bg-side max-[1040px]:hidden">
       <div data-tauri-drag-region className="h-[52px] shrink-0" />
       <nav className="px-2">
-        {VIEWS.map((v) => {
-          const current = view === v.id && !project;
-          const hot = (v.id === "inbox" || v.id === "mentions") && counts[v.id] > 0;
+        {SECTIONS.map((v) => {
+          const current = (v.id === "inbox" ? isInboxView(view) : view === v.id) && !project;
+          const hot = v.id === "inbox" && counts.inbox > 0;
           return (
             <button
               key={v.id}

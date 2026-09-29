@@ -87,6 +87,8 @@ export interface Ticket {
   /** Keys of issues in this epic; empty for non-epics. */
   children: string[];
   dueDate: string | null;
+  /** When the ticket was resolved, if it is and that's known. */
+  resolved?: string | null;
   sprint: string | null;
   url: string;
   updated: string;
@@ -119,8 +121,18 @@ export interface Snapshot {
   events: InboxEvent[];
   watching: string[];
   lastSyncAt: string | null;
+  /** Things the user did that the ticket data doesn't show, such as transitions. Their comments are read from the tickets. */
+  activity?: MyAction[];
   /** The last sync's error message, cleared by the next successful sync. */
   syncError?: string | null;
 }
 
-export type ViewId = "inbox" | "mentions" | "mine" | "watching" | "snoozed" | "done";
+export type ViewId = "inbox" | "waiting" | "watching" | "snoozed" | "done" | "work";
+
+export interface MyAction {
+  ticketKey: string;
+  at: string;
+  kind: "comment" | "transition" | "created";
+  /** The comment, or the transition as "From → To". */
+  text: string;
+}
