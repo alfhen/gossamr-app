@@ -19,7 +19,7 @@ export function showMe(ref: ItemRef) {
     requestAnimationFrame(() => {
       const el = canvasElement(ref);
       if (!el) return;
-      el.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      el.scrollIntoView({ block: "center", inline: "center", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
       el.classList.add("ws-pulse");
       setTimeout(() => el.classList.remove("ws-pulse"), PULSE_MS);
     }),

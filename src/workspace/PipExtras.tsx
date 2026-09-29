@@ -1,9 +1,10 @@
 import { useEffect, type ReactNode } from "react";
 import { filterChips } from "../lib/filter";
-import { claude } from "../backend/claude";
+import { claude, type PipView } from "../backend/claude";
+import { useClaude } from "../claudeStore";
 import { pendingDrafts, useItemsByFilter, useWorkspace } from "../workspaceStore";
 import { useActiveTab } from "./hooks";
-import { PIP_INPUT_ID } from "./PipPane";
+import { PIP_INPUT_ID, WORKSPACE_CONVERSATION } from "./PipPane";
 import { PipAvatar } from "./PipAvatar";
 import { isStillFiltered, nudgeFor, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
@@ -34,15 +35,14 @@ export function FilterNote() {
   return <PipFilterNote filtered={filtered} onUndo={() => usePip.getState().undoFilter()} onDismiss={() => usePip.getState().clearFiltered()} />;
 }
 
-/** Applies the filters Pip asks for to the tab that was active when it asked. */
+/** Applies a filter Pip asked for, but only for a question asked in this pane; other conversations don't get to change the view. */
+export function handlePipView({ requestId, filter, note }: PipView) {
+  const asked = useClaude.getState().byTicket[WORKSPACE_CONVERSATION]?.turns.some((t) => t.requestId === requestId);
+  if (asked) usePip.getState().applyFilter(filter, note);
+}
+
 export function usePipView() {
-  useEffect(
-    () =>
-      claude.onPipView(({ filter, note }) => {
-        usePip.getState().applyFilter(filter, note);
-      }),
-    [],
-  );
+  useEffect(() => claude.onPipView(handlePipView), []);
 }
 
 export function Nudge({ text, onOpen, onDismiss }: { text: string; onOpen(): void; onDismiss(): void }) {

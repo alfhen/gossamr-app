@@ -14,7 +14,7 @@ import { useTabs } from "./tabsStore";
 import { itemsByFilter, pendingDrafts, useItemsByFilter, useWorkspace, workflowOfItem } from "../workspaceStore";
 
 export const PIP_INPUT_ID = "pip-input";
-const CONVERSATION = "workspace";
+export const WORKSPACE_CONVERSATION = "workspace";
 
 /** The screen as Pip is told about it, read fresh so a question is asked about what is on screen now. */
 function liveScreen() {
@@ -126,7 +126,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const items = useWorkspace((s) => s.items);
   const containers = useWorkspace((s) => s.containers);
   const selected = useTabs((s) => s.selected);
-  const conv = useClaude((s) => s.byTicket[CONVERSATION]);
+  const conv = useClaude((s) => s.byTicket[WORKSPACE_CONVERSATION]);
   const proposals = useWorkspace((s) => s.proposals);
   const turns = conv?.turns ?? [];
   const running = turns.some((t) => t.status === "running");
@@ -148,7 +148,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
     const text = prompt.trim();
     if (!text || running) return;
     setInput("");
-    void useClaude.getState().ask(CONVERSATION, text, conv?.sessionId ?? null, conv?.cwd ?? null, buildScreenContext(liveScreen()));
+    void useClaude.getState().ask(WORKSPACE_CONVERSATION, text, conv?.sessionId ?? null, conv?.cwd ?? null, buildScreenContext(liveScreen()));
   };
 
   const submit = (ev: FormEvent) => {
@@ -198,7 +198,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
           className="min-w-0 flex-1 rounded-md border border-ws-sep2 bg-ws-win px-2.5 py-1.5"
         />
         {running ? (
-          <button type="button" onClick={() => useClaude.getState().cancel(CONVERSATION)} className="rounded-md border border-ws-sep2 px-3 font-semibold">
+          <button type="button" onClick={() => useClaude.getState().cancel(WORKSPACE_CONVERSATION)} className="rounded-md border border-ws-sep2 px-3 font-semibold">
             Stop
           </button>
         ) : (
