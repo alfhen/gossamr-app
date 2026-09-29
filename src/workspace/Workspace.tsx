@@ -4,7 +4,7 @@ import { useItemsByFilter, useWorkspace } from "../workspaceStore";
 import { CANVASES } from "./canvases";
 import { FilterBar } from "./FilterBar";
 import { useActiveTab } from "./hooks";
-import { Palette } from "./Palette";
+import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
 import { PipPane } from "./PipPane";
 import { applyTheme, usePrefs } from "./prefs";
@@ -74,7 +74,7 @@ export function Workspace() {
   return (
     <div className="grid h-full overflow-hidden bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `232px minmax(0,1fr)${pipOpen ? " 380px" : ""}` }}>
       <Rail />
-      <main className="relative flex min-h-0 min-w-0 flex-col">
+      <main id={MAIN_ID} tabIndex={-1} className="relative flex min-h-0 min-w-0 flex-col outline-none">
         <TabBar />
         {route === "workspace" && <FilterBar />}
         <div className="min-h-0 flex-1">
