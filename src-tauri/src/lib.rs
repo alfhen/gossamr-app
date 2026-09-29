@@ -1,5 +1,7 @@
+mod agent;
 mod auth;
 mod claude;
+mod config;
 mod db;
 mod domain;
 mod error;
@@ -21,7 +23,8 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use auth::{Auth, AuthStatus, OAuthApp, Scope};
-use claude::{AskRequest, Claude};
+use agent::{AgentService, AskRequest};
+use claude::ClaudeCodeProvider;
 use tracker::Connection;
 use inbox::{Core, Edit};
 use error::{Error, Result};
@@ -34,7 +37,7 @@ const TICK: Duration = Duration::from_secs(15);
 const EVENT_LIMIT: usize = 100;
 
 type CoreState = Arc<Core>;
-type ClaudeState = Arc<Claude>;
+type AgentState = Arc<AgentService>;
 
 /// Sends the latest snapshot to the window and updates the Dock badge. Failures only mean there is nothing to
 /// show yet (e.g. signed out).
@@ -296,8 +299,8 @@ async fn claude_sessions(core: State<'_, CoreState>, key: String) -> Result<Clau
 }
 
 #[tauri::command]
-async fn ask_claude(app: AppHandle, claude: State<'_, ClaudeState>, request: AskRequest) -> Result<()> {
-    claude
+async fn ask_claude(app: AppHandle, agent: State<'_, AgentState>, request: AskRequest) -> Result<()> {
+    agent
         .ask(request, Arc::new(move |u| {
             let _ = app.emit("claude", u);
         }))
@@ -305,8 +308,8 @@ async fn ask_claude(app: AppHandle, claude: State<'_, ClaudeState>, request: Ask
 }
 
 #[tauri::command]
-fn cancel_claude(claude: State<'_, ClaudeState>, request_id: String) {
-    claude.cancel(&request_id);
+fn cancel_claude(agent: State<'_, AgentState>, request_id: String) {
+    agent.cancel(&request_id);
 }
 
 fn random_token() -> std::result::Result<String, getrandom::Error> {
@@ -394,12 +397,13 @@ pub fn run() {
 
             let handle = app.handle().clone();
             let token = random_token().map_err(|e| Error::Claude(format!("no randomness available: {e}")))?;
-            let mcp = tauri::async_runtime::block_on(claude::mcp::McpServer::start(
+            let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(
                 core.clone(),
                 token,
                 Arc::new(move |connection_id| proposals_changed(&handle, connection_id)),
             ))?;
-            app.manage::<ClaudeState>(Arc::new(Claude::new(core.clone(), mcp)));
+            let config = config::AppConfig::load(&core.data_dir());
+            app.manage::<AgentState>(Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config)));
 
             spawn_sync_loop(app.handle().clone(), core);
             Ok(())

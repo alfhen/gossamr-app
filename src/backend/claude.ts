@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { ScreenContext } from "../types";
+
 export interface SessionInfo {
   id: string;
   title: string;
@@ -21,8 +23,8 @@ export type ClaudeEvent =
 
 export interface AskRequest {
   requestId: string;
-  ticketKey: string;
   prompt: string;
+  context: ScreenContext;
   sessionId: string | null;
   cwd: string | null;
 }

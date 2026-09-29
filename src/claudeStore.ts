@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { claude, type ClaudeEvent } from "./backend/claude";
 import type { Backend } from "./backend/types";
-import type { Proposal } from "./types";
+import type { Proposal, ScreenContext } from "./types";
 
 export interface Turn {
   requestId: string;
@@ -14,7 +14,7 @@ export interface Turn {
 
 export interface Conversation {
   turns: Turn[];
-  /** Set once Claude reports a session, so follow-up questions continue it. */
+  /** Set once the assistant reports a session, so follow-up questions continue it. */
   sessionId: string | null;
   cwd: string | null;
 }
@@ -25,11 +25,19 @@ interface ClaudeState {
   /** Every draft the backend holds. The chat cards read from here, so drafts outlive the conversation that made them. */
   proposals: Proposal[];
   setOpen(open: boolean): void;
-  ask(ticketKey: string, prompt: string, sessionId: string | null, cwd: string | null): Promise<void>;
+  ask(ticketKey: string, prompt: string, sessionId: string | null, cwd: string | null, context?: ScreenContext): Promise<void>;
   cancel(ticketKey: string): void;
   /** Puts a draft the backend just returned in place, ahead of the `proposals-changed` refresh. */
   putProposal(p: Proposal): void;
 }
+
+/** The screen as far as the page knows it today: the open ticket. */
+export const ticketContext = (key: string): ScreenContext => ({
+  view: null,
+  item: { connectionId: "", externalId: key, key },
+  filter: null,
+  selection: [],
+});
 
 const empty: Conversation = { turns: [], sessionId: null, cwd: null };
 
@@ -62,13 +70,13 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
 
   setOpen: (open) => set({ open }),
 
-  async ask(ticketKey, prompt, sessionId, cwd) {
+  async ask(ticketKey, prompt, sessionId, cwd, context = ticketContext(ticketKey)) {
     const requestId = newRequestId();
     const conv = get().byTicket[ticketKey] ?? empty;
     const turn: Turn = { requestId, prompt, steps: [], text: "", status: "running", error: null };
     set({ byTicket: { ...get().byTicket, [ticketKey]: { ...conv, cwd, turns: [...conv.turns, turn] } } });
     try {
-      await claude.ask({ requestId, ticketKey, prompt, sessionId, cwd });
+      await claude.ask({ requestId, prompt, sessionId, cwd, context });
     } catch (err) {
       updateByRequest(requestId, (c) => applyEvent(c, requestId, { type: "done", sessionId: null, ok: false, message: String(err) }));
     }

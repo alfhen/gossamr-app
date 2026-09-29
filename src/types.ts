@@ -232,6 +232,14 @@ export interface WorkItem {
 }
 
 /** The query language for views and search. The backend narrows in SQL and then applies it exactly. */
+/** What the person can see when they ask Pip. A page that doesn't know an item's connection sends an empty `connectionId`. */
+export interface ScreenContext {
+  view: string | null;
+  item: ItemRef | null;
+  filter: WorkFilter | null;
+  selection: ItemRef[];
+}
+
 export type WorkFilter =
   | { type: "needsMe" }
   | { type: "mine" }

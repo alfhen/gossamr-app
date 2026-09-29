@@ -13,11 +13,10 @@ use crate::domain::{Container, ContainerRef, Event, Filter, FilterContext, Ident
 use crate::model::{Attachment, CachedTicket, CreatedSubtasks, MentionRef, Person, Snapshot, Status, Ticket, Transition, Uploaded};
 use crate::proposals;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
-use crate::tracker::{self, Connection, Registry, SearchOptions, WorkTracker};
+use crate::tracker::{self, Connection, Registry, WorkTracker};
 
 mod drafts;
 
-pub use crate::sync::CONTEXT_LIMIT;
 pub use drafts::Edit;
 
 /// Events this old drop out of the inbox unless they are still unread.
@@ -142,6 +141,10 @@ impl Core {
 
     fn item(scope: &Scope, key: &str) -> ItemRef {
         ItemRef { connection_id: Connection::jira_id(scope), external_id: key.into(), key: key.into() }
+    }
+
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_dir.clone()
     }
 
     /// Signs in and registers the resulting connection.
@@ -476,22 +479,28 @@ impl Core {
 
     /// The cached items that match `filter`. The raw tracker payload is left out; it is for Core, not for the page.
     pub async fn cache_search(&self, filter: &Filter) -> Result<Vec<WorkItem>> {
+        let scope = self.scope().await?;
+        Ok(self.search_cached(&scope, filter).await?.into_iter().map(without_extra).collect())
+    }
+
+    /// Like `cache_search`, for `scope` only, and with each item's tracker payload kept.
+    pub async fn search_cached(&self, scope: &Scope, filter: &Filter) -> Result<Vec<WorkItem>> {
         let (site, me) = self.identity().await?;
-        let scope = Scope::of(&site, &me);
-        let connection_id = Connection::jira_id(&scope);
+        if &Scope::of(&site, &me) != scope {
+            return Err(Error::SiteChanged);
+        }
+        let connection_id = Connection::jira_id(scope);
         let now = Utc::now();
-        let items = self
-            .with_db_for(&scope, |db| {
-                let needs_me = db
-                    .needs_me_keys(&stamp(now))?
-                    .into_iter()
-                    .map(|key| ItemRef { connection_id: connection_id.clone(), external_id: key.clone(), key })
-                    .collect();
-                let me = identity_of(&connection_id, &me);
-                db.search(&connection_id, filter, &FilterContext { me, now, needs_me })
-            })
-            .await?;
-        Ok(items.into_iter().map(without_extra).collect())
+        self.with_db_for(scope, |db| {
+            let needs_me = db
+                .needs_me_keys(&stamp(now))?
+                .into_iter()
+                .map(|key| ItemRef { connection_id: connection_id.clone(), external_id: key.clone(), key })
+                .collect();
+            let me = identity_of(&connection_id, &me);
+            db.search(&connection_id, filter, &FilterContext { me, now, needs_me })
+        })
+        .await
     }
 
     pub async fn cache_item(&self, item: &ItemRef) -> Result<Option<WorkItem>> {
@@ -500,24 +509,24 @@ impl Core {
     }
 
     pub async fn cache_containers(&self) -> Result<Vec<Container>> {
-        let scope = self.scope().await?;
-        self.with_db_for(&scope, |db| db.containers(&Connection::jira_id(&scope))).await
+        self.containers_in(&self.scope().await?).await
+    }
+
+    pub async fn containers_in(&self, scope: &Scope) -> Result<Vec<Container>> {
+        self.with_db_for(scope, |db| db.containers(&Connection::jira_id(scope))).await
     }
 
     pub async fn cache_workflow(&self, container: &ContainerRef) -> Result<Option<Workflow>> {
-        let scope = self.scope().await?;
-        self.with_db_for(&scope, |db| db.workflow(container)).await
+        self.workflow_in(&self.scope().await?, container).await
+    }
+
+    pub async fn workflow_in(&self, scope: &Scope, container: &ContainerRef) -> Result<Option<Workflow>> {
+        self.with_db_for(scope, |db| db.workflow(container)).await
     }
 
     pub async fn cache_events(&self, item: &ItemRef, limit: usize) -> Result<Vec<Event>> {
         let scope = self.scope().await?;
         self.with_db_for(&scope, |db| db.events_for_item(item, limit)).await
-    }
-
-    /// Tickets matching a query in the tracker's own language, for the assistant's search tool.
-    pub async fn search_native(&self, scope: &Scope, query: &str, limit: usize) -> Result<Vec<CachedTicket>> {
-        let opts = SearchOptions { limit, ..Default::default() };
-        tickets_of(&self.tracker(scope)?.search_native(query, &opts).await?)
     }
 
     /// `scope` is the account the user was looking at when they approved; the write is refused if that has changed.
@@ -631,5 +640,70 @@ mod tests {
         assert_eq!(db.meta(LAST_SYNC).unwrap().as_deref(), Some("2026-09-28T10:00:00Z"));
         assert_eq!(db.sync_state(&connection.id).unwrap().full_at, None, "the first sync is a full one, which fills in labels and links");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A signed-in Core over a temporary database and a recording tracker, for tests that need the whole path.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::auth::{Credentials, Tokens};
+    use crate::domain::{Category, StatusDef, Transitions};
+    use crate::tracker::testing::{sample_ticket, Recorder};
+
+    pub struct Fixture {
+        pub core: Arc<Core>,
+        pub scope: Scope,
+        pub tracker: Arc<Recorder>,
+        pub dir: PathBuf,
+    }
+
+    impl Fixture {
+        pub fn item(&self, key: &str) -> ItemRef {
+            Core::item(&self.scope, key)
+        }
+
+        /// Adds `CA-<n>` (a copy of the sample ticket) to the cache.
+        pub async fn add_item(&self, n: u32) {
+            let connection = self.core.connection(&self.scope).unwrap();
+            let mut item = tracker::item_from_ticket(&connection, &sample_ticket());
+            let key = format!("CA-{n}");
+            item.item = connection.item(&key);
+            item.title = format!("Ticket {n}");
+            self.core.with_db_for(&self.scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    pub async fn fixture() -> Fixture {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
+        let me = Account { account_id: "me".into(), name: "Me".into(), avatar_url: None };
+        let scope = Scope::of(&site, &me);
+        let creds = Credentials { tokens: Tokens { access_token: "t".into(), refresh_token: "r".into(), expires_at: u64::MAX / 2 }, site, me };
+        let http = reqwest::Client::new();
+        let tracker = Arc::new(Recorder::default());
+        let shared = tracker.clone();
+        let registry = Registry::new(move |_| shared.clone());
+        let core = Arc::new(Core::new(Arc::new(Auth::signed_in(http, creds.clone())), registry, dir.clone()));
+        core.registry.register(creds.connection());
+
+        let fx = Fixture { core, scope, tracker, dir };
+        fx.add_item(1).await;
+        let connection = fx.core.connection(&fx.scope).unwrap();
+        let item = fx.core.cache_item(&connection.item("CA-1")).await.unwrap().unwrap();
+        let done = StatusDef { id: "10001".into(), name: "Done".into(), category: Category::Done };
+        let workflow = Workflow { statuses: vec![item.status.clone(), done], transitions: Transitions::Any };
+        let container = Container { container_ref: item.container, key: "CA".into(), name: "Cats".into(), workflow };
+        fx.core.with_db_for(&fx.scope, |db| db.replace_containers(&connection.id, &[container], "2026-09-29T12:00:00Z")).await.unwrap();
+        fx
     }
 }

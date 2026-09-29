@@ -230,6 +230,7 @@ pub(crate) mod testing {
     pub struct Recorder {
         pub applied: Mutex<Vec<Intent>>,
         pub script: Mutex<VecDeque<Result<Applied>>>,
+        pub moves: Mutex<Vec<Move>>,
     }
 
     impl Recorder {
@@ -272,7 +273,7 @@ pub(crate) mod testing {
             unimplemented!()
         }
         async fn transitions(&self, _: &ItemRef) -> Result<Vec<Move>> {
-            unimplemented!()
+            Ok(self.moves.lock().unwrap().clone())
         }
         async fn people(&self, _: &ItemRef, _: &str) -> Result<Vec<Person>> {
             unimplemented!()
