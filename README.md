@@ -36,6 +36,18 @@ pnpm tauri dev
 
 `pnpm dev` runs only the web UI in a browser, which is handy for layout work.
 
+### Stop the Keychain prompt after every rebuild
+
+macOS ties Keychain access to the app's code signature. An unsigned dev build gets a new signature on every rebuild, so the "allow access?" prompt comes back each time. Run this once to sign local builds with a stable identity:
+
+```bash
+./scripts/dev-signing/setup.sh
+```
+
+It creates a throwaway signing certificate in its own keychain (`~/Library/Keychains/gossamr-dev.keychain-db`, empty password, nothing else in it). `cargo run` and `pnpm tauri dev` then sign the binary with it before launching, through the runner in `src-tauri/.cargo/config.toml`. Click **Always Allow** on the first prompt after setting it up and it stays quiet from then on. Without the identity (a fresh clone, CI) the runner just launches the binary unsigned.
+
+To undo it, delete the keychain file.
+
 Checks that CI runs:
 
 ```bash

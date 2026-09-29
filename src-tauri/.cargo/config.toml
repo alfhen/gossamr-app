@@ -1,0 +1,4 @@
+# Signs local dev builds with a stable identity so the Keychain doesn't ask again after every rebuild.
+# Set it up once with scripts/dev-signing/setup.sh. Builds without it run unsigned as before.
+[target.'cfg(target_os = "macos")']
+runner = "../scripts/dev-signing/run.sh"
