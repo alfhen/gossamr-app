@@ -61,8 +61,11 @@ function tableAt(lines: string[], i: number): boolean {
 export function cells(row: string): string[] {
   const out: string[] = [];
   let cell = "";
-  // A code span closes only on a backtick run as long as the one that opened it, as in ``a|b``.
+  // A code span closes only on a backtick run as long as the one that opened it, as in ``a|b``. A run with no
+  // matching close later in the row is plain text and doesn't hide the pipes after it.
   let codeTicks = 0;
+  const closedLater = (from: number, run: number) =>
+    [...s.slice(from).matchAll(/`+/g)].some((m) => m[0].length === run);
   const s = row.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
@@ -72,7 +75,7 @@ export function cells(row: string): string[] {
     } else if (c === "`") {
       let run = 1;
       while (s[i + run] === "`") run++;
-      if (!codeTicks) codeTicks = run;
+      if (!codeTicks && closedLater(i + run, run)) codeTicks = run;
       else if (run === codeTicks) codeTicks = 0;
       cell += s.slice(i, i + run);
       i += run - 1;
