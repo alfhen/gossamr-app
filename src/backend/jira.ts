@@ -122,6 +122,15 @@ export class JiraBackend implements Backend {
     return invoke<Workflow | null>("cache_workflow", { container });
   }
 
+  async cachePeople() {
+    const snap = await this.load();
+    const seen = new Map<string, Person>();
+    for (const t of Object.values(snap.tickets)) {
+      for (const p of [t.assignee, t.reporter, ...t.comments.map((c) => c.author)]) if (p) seen.set(p.accountId, p);
+    }
+    return [...seen.values()];
+  }
+
   cacheEvents(item: ItemRef) {
     return invoke<WorkEvent[]>("cache_events", { item });
   }

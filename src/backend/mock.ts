@@ -5,6 +5,7 @@ import type {
   CacheChanged,
   Comment,
   ContainerRef,
+  Intent,
   EventKind,
   InboxEvent,
   ItemRef,
@@ -22,8 +23,10 @@ import type {
 } from "../types";
 import { fold, type Mention } from "../lib/mentions";
 import { docText } from "../lib/docs";
-import { search, workContainers, workItems } from "./mockCache";
+import { MockConnector } from "./mockConnector";
+import { targetOf } from "../lib/proposals";
 import { MockProposals } from "./mockProposals";
+import { seedDrafts } from "./mockDrafts";
 import type { Backend } from "./types";
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -343,8 +346,12 @@ export class MockBackend implements Backend {
   private cacheListeners = new Set<(c: CacheChanged) => void>();
   private simulated = 0;
 
+  /** The multi-project tracker behind the cache reads; the snapshot above keeps serving the current screens. */
+  readonly connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)));
+
   /** Drafts live in memory; `proposals.draft` stands in for the assistant. */
   readonly proposals = new MockProposals(async (intent, already) => {
+    if (this.applyToConnector(intent, already)) return this.appliedToConnector;
     switch (intent.type) {
       case "comment":
         await this.comment(intent.item.key, docText(intent.body));
@@ -405,24 +412,54 @@ export class MockBackend implements Backend {
     this.cacheListeners.forEach((l) => l({ connectionId: "mock" }));
   }
 
+  /** Puts sample drafts from the assistant on the connector's items. */
+  seedSampleDrafts() {
+    seedDrafts(this.proposals);
+  }
+
+  private appliedToConnector: ItemRef[] = [];
+
+  private applyToConnector(intent: Intent, already: ItemRef[]): boolean {
+    const target = targetOf(intent);
+    if (!target || !this.connector.has(target)) return false;
+    this.appliedToConnector = [];
+    switch (intent.type) {
+      case "comment":
+        this.connector.comment(intent.item, docText(intent.body));
+        return true;
+      case "transition":
+        this.connector.transition(intent.item, intent.to);
+        return true;
+      case "subtasks":
+        this.appliedToConnector = this.connector.createSubtasks(intent.parent, intent.summaries.slice(already.length));
+        return true;
+      default:
+        throw new Error("the sample data can't apply that");
+    }
+  }
+
   async cacheSearch(filter: WorkFilter) {
-    return search(this.snap, filter);
+    return this.connector.search(filter);
   }
 
   async cacheItem(ref: ItemRef) {
-    return workItems(this.snap).find((i) => i.item.externalId === ref.externalId) ?? null;
+    return this.connector.item(ref);
   }
 
   async cacheContainers() {
-    return workContainers(this.snap);
+    return this.connector.listContainers();
   }
 
   async cacheWorkflow(container: ContainerRef) {
-    return workContainers(this.snap).find((c) => c.ref.externalId === container.externalId)?.workflow ?? null;
+    return this.connector.workflow(container);
   }
 
-  async cacheEvents() {
-    return [];
+  async cacheEvents(ref: ItemRef) {
+    return this.connector.eventsFor(ref);
+  }
+
+  async cachePeople() {
+    return this.connector.people;
   }
 
   onCacheChanged(listener: (c: CacheChanged) => void) {

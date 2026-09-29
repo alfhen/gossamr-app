@@ -49,6 +49,8 @@ export interface Backend {
   cacheItem(ref: ItemRef): Promise<WorkItem | null>;
   cacheContainers(): Promise<WorkContainer[]>;
   cacheWorkflow(container: ContainerRef): Promise<Workflow | null>;
+  /** People the cache has seen, so views can name an assignee. */
+  cachePeople(): Promise<Person[]>;
   /** Events recorded for an item, newest first. */
   cacheEvents(ref: ItemRef): Promise<WorkEvent[]>;
   /** Called when a sync or a write changed the cache, so views over it can re-read. Returns an unsubscribe function. */
