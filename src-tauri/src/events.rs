@@ -127,11 +127,11 @@ pub fn changes_since(t: &CachedTicket, me: &str, since: &str) -> Vec<FieldChange
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jira::{parse_issue, tests::sample_issue};
+    use crate::tracker::testing::sample_ticket;
     use crate::model::{History, HistoryItem};
 
     fn ticket() -> CachedTicket {
-        parse_issue(&sample_issue()).unwrap()
+        sample_ticket()
     }
 
     fn sam() -> Person {

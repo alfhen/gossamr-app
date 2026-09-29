@@ -15,8 +15,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::auth::Scope;
-use crate::inbox::Core;
-use crate::jira::CONTEXT_LIMIT;
+use crate::inbox::{Core, CONTEXT_LIMIT};
 use crate::model::{CachedTicket, Transition};
 
 const SEARCH_LIMIT: usize = 20;
@@ -200,7 +199,7 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
         },
         ("search_tickets", _) => match arg("jql") {
             None => text("jql is required", true),
-            Some(jql) => match st.core.jira.search(scope, jql, None, CONTEXT_LIMIT).await {
+            Some(jql) => match st.core.search_native(scope, jql, CONTEXT_LIMIT).await {
                 Ok(found) => text(
                     found
                         .iter()
@@ -285,7 +284,7 @@ pub fn describe(t: &CachedTicket) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jira::{parse_issue, tests::sample_issue};
+    use crate::tracker::testing::sample_ticket;
 
     #[test]
     fn checks_the_bearer_token() {
@@ -305,7 +304,7 @@ mod tests {
 
     #[test]
     fn describes_a_ticket_for_the_model() {
-        let d: Value = serde_json::from_str(&describe(&parse_issue(&sample_issue()).unwrap())).unwrap();
+        let d: Value = serde_json::from_str(&describe(&sample_ticket())).unwrap();
         assert_eq!(d["key"], "CA-1");
         assert_eq!(d["status"], "In Review");
         assert_eq!(d["recentComments"][0]["author"], "Sam");

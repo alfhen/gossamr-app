@@ -202,7 +202,7 @@ fn find_claude() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use crate::auth::Auth;
-    use crate::jira::Jira;
+    use crate::tracker::Registry;
 
     /// Runs the real `claude` CLI against the MCP server and checks a proposal comes back.
     /// Needs Claude Code installed and logged in: `cargo test -- --ignored claude_can_propose`.
@@ -211,7 +211,7 @@ mod tests {
     async fn claude_can_propose_through_the_mcp_server() {
         let http = reqwest::Client::new();
         let auth = Arc::new(Auth::load(http.clone()));
-        let core = Arc::new(Core::new(auth.clone(), Jira::new(http, auth), std::env::temp_dir()));
+        let core = Arc::new(Core::new(auth.clone(), Registry::jira(http, auth), std::env::temp_dir()));
         let got = Arc::new(Mutex::new(Vec::new()));
         let sink_got = got.clone();
         let server = McpServer::start(core, "t0ken".into(), Arc::new(move |p| sink_got.lock().unwrap().push(p)))

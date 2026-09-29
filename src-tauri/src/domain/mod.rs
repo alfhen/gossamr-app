@@ -1,4 +1,8 @@
 //! Connector-neutral model. Everything above the connector line speaks these types.
+//!
+//! Items, workflows, docs, people, comments, intents and filters are used by the trackers. Events, proposals with
+//! `reconcile`, local filter evaluation and workflow paths wait for their consumers (1a, 1b, 3b, 4a); drop the allow
+//! below once they have one.
 #![allow(dead_code, unused_imports)]
 
 mod doc;
