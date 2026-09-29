@@ -138,5 +138,6 @@ describe("cells", () => {
     expect(cells("| a | `b|c` | d \\| e |")).toEqual(["a", "`b|c`", "d | e"]);
     expect(cells("| ``a|b`` | `x` |")).toEqual(["``a|b``", "`x`"]);
     expect(cells("| ``oops | value |")).toEqual(["``oops", "value"]);
+    expect(cells("| \\`a | \\`b |")).toEqual(["\\`a", "\\`b"]);
   });
 });

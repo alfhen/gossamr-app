@@ -62,15 +62,18 @@ export function cells(row: string): string[] {
   const out: string[] = [];
   let cell = "";
   // A code span closes only on a backtick run as long as the one that opened it, as in ``a|b``. A run with no
-  // matching close later in the row is plain text and doesn't hide the pipes after it.
+  // matching close later in the row is plain text and doesn't hide the pipes after it. Escaped backticks are text.
   let codeTicks = 0;
   const closedLater = (from: number, run: number) =>
-    [...s.slice(from).matchAll(/`+/g)].some((m) => m[0].length === run);
+    [...s.slice(from).matchAll(/(?<!\\)`+/g)].some((m) => m[0].length === run);
   const s = row.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (c === "\\" && s[i + 1] === "|") {
       cell += "|";
+      i++;
+    } else if (c === "\\" && s[i + 1] === "`" && !codeTicks) {
+      cell += "\\`";
       i++;
     } else if (c === "`") {
       let run = 1;
