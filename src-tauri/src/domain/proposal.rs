@@ -205,18 +205,18 @@ fn reconcile_transition(to: &str, current: &WorkItem, basis: &Basis, fresh: Basi
         if w.status(to).is_none() {
             return retire("the target status no longer exists");
         }
+        if w.path(&current.status.id, to).is_none() {
+            return retire("the target is not reachable from the current status");
+        }
     }
     if basis.status_id == current.status.id {
         return Verdict::Keep;
     }
-    match workflow {
-        Some(w) if !w.can_move(&current.status.id, to) => retire("the item moved and the target is no longer reachable"),
-        _ => Verdict::Revise(Box::new(Revised {
-            note: format!("The item moved to {} since this was drafted.", current.status.name),
-            intent: None,
-            basis: fresh,
-        })),
-    }
+    Verdict::Revise(Box::new(Revised {
+        note: format!("The item moved to {} since this was drafted.", current.status.name),
+        intent: None,
+        basis: fresh,
+    }))
 }
 
 fn reconcile_comment(current: &WorkItem, basis: &Basis, fresh: Basis, ctx: &ReconcileContext) -> Verdict {
@@ -313,6 +313,13 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn transition_revised_when_target_is_several_steps_away() {
+        let drafted = work_item("1", "todo");
+        let p = transition_to("done", &drafted);
+        assert!(matches!(run(&p, &[work_item("1", "doing")]), Verdict::Revise(_)));
     }
 
     #[test]
