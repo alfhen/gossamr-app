@@ -1,0 +1,72 @@
+@theme {
+  --color-ws-win: #fcfbfe;
+  --color-ws-side: #ecebf4;
+  --color-ws-bar: #f4f3f9;
+  --color-ws-hover: rgb(50 40 110 / 0.05);
+  --color-ws-sel: rgb(50 40 110 / 0.075);
+  --color-ws-sep: rgb(50 40 110 / 0.1);
+  --color-ws-sep2: rgb(50 40 110 / 0.18);
+  --color-ws-ink: #1b1a2b;
+  --color-ws-ink2: #575672;
+  --color-ws-ink3: #8c8ba6;
+  --color-ws-accent: #4a5be0;
+  --color-ws-accent-soft: rgb(74 91 224 / 0.1);
+  --color-ws-pip: #0b8a86;
+  --color-ws-pip-soft: rgb(11 138 134 / 0.1);
+  --color-ws-on-pip: #ffffff;
+  --color-ws-done: #1f9d6a;
+  --color-ws-done-soft: rgb(31 157 106 / 0.12);
+  --color-ws-blocked: #e0475b;
+  --color-ws-blocked-soft: rgb(224 71 91 / 0.1);
+  --color-ws-warn: #c98a1b;
+  --shadow-ws-pop: 0 12px 40px rgb(30 20 80 / 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-ws-win: #14131d;
+    --color-ws-side: #1c1b2a;
+    --color-ws-bar: #191826;
+    --color-ws-hover: rgb(190 180 255 / 0.07);
+    --color-ws-sel: rgb(190 180 255 / 0.1);
+    --color-ws-sep: rgb(190 180 255 / 0.1);
+    --color-ws-sep2: rgb(190 180 255 / 0.18);
+    --color-ws-ink: #eeedf8;
+    --color-ws-ink2: #b1b0c8;
+    --color-ws-ink3: #7b7a96;
+    --color-ws-accent: #6a82ff;
+    --color-ws-accent-soft: rgb(106 130 255 / 0.16);
+    --color-ws-pip: #37d0c0;
+    --color-ws-pip-soft: rgb(55 208 192 / 0.13);
+    --color-ws-on-pip: #04302c;
+    --color-ws-done-soft: rgb(31 157 106 / 0.2);
+    --color-ws-blocked-soft: rgb(224 71 91 / 0.2);
+    --shadow-ws-pop: 0 12px 40px rgb(0 0 0 / 0.6);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-ws-win: #14131d;
+  --color-ws-side: #1c1b2a;
+  --color-ws-bar: #191826;
+  --color-ws-hover: rgb(190 180 255 / 0.07);
+  --color-ws-sel: rgb(190 180 255 / 0.1);
+  --color-ws-sep: rgb(190 180 255 / 0.1);
+  --color-ws-sep2: rgb(190 180 255 / 0.18);
+  --color-ws-ink: #eeedf8;
+  --color-ws-ink2: #b1b0c8;
+  --color-ws-ink3: #7b7a96;
+  --color-ws-accent: #6a82ff;
+  --color-ws-accent-soft: rgb(106 130 255 / 0.16);
+  --color-ws-pip: #37d0c0;
+  --color-ws-pip-soft: rgb(55 208 192 / 0.13);
+  --color-ws-on-pip: #04302c;
+  --color-ws-done-soft: rgb(31 157 106 / 0.2);
+  --color-ws-blocked-soft: rgb(224 71 91 / 0.2);
+  --shadow-ws-pop: 0 12px 40px rgb(0 0 0 / 0.6);
+}

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./workspace/theme.css";
 
 @theme {
   --font-sans: system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
