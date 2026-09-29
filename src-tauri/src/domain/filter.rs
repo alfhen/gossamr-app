@@ -107,7 +107,11 @@ mod tests {
     }
 
     fn run(filter: Filter, items: &[WorkItem]) -> Vec<String> {
-        ids(filter.select(items, &ctx())).into_iter().map(String::from).collect()
+        run_with(filter, items, &ctx())
+    }
+
+    fn run_with(filter: Filter, items: &[WorkItem], ctx: &FilterContext) -> Vec<String> {
+        ids(filter.select(items, ctx)).into_iter().map(String::from).collect()
     }
 
     #[test]
@@ -210,6 +214,22 @@ mod tests {
         let both = Filter::And { filters: vec![Filter::Mine, Filter::Open] };
         assert_eq!(run(both, &items), ["1"]);
         assert_eq!(run(Filter::And { filters: vec![] }, &items), ["1", "2"]);
+    }
+
+    #[test]
+    fn matches_the_fixtures_the_frontend_engine_also_runs() {
+        let raw: serde_json::Value = serde_json::from_str(include_str!("../../../src/lib/filter.fixtures.json")).unwrap();
+        let items: Vec<WorkItem> = serde_json::from_value(raw["items"].clone()).unwrap();
+        let ctx = FilterContext {
+            me: Identity { display_name: "Me".into(), accounts: serde_json::from_value(raw["me"].clone()).unwrap() },
+            now: serde_json::from_value(raw["now"].clone()).unwrap(),
+            needs_me: serde_json::from_value::<Vec<ItemRef>>(raw["needsMe"].clone()).unwrap().into_iter().collect(),
+        };
+        for case in raw["cases"].as_array().unwrap() {
+            let filter: Filter = serde_json::from_value(case["filter"].clone()).unwrap();
+            let expected: Vec<String> = serde_json::from_value(case["expect"].clone()).unwrap();
+            assert_eq!(run_with(filter, &items, &ctx), expected, "{}", case["name"]);
+        }
     }
 
     #[test]

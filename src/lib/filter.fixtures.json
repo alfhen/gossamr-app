@@ -1,0 +1,735 @@
+{
+ "now": "2026-06-30T12:00:00Z",
+ "me": [
+  {
+   "connectionId": "c",
+   "accountId": "me"
+  },
+  {
+   "connectionId": "gh",
+   "accountId": "me-gh"
+  }
+ ],
+ "needsMe": [
+  {
+   "connectionId": "c",
+   "externalId": "2",
+   "key": "ENG-2"
+  },
+  {
+   "connectionId": "c",
+   "externalId": "8",
+   "key": "ENG-8"
+  }
+ ],
+ "items": [
+  {
+   "item": {
+    "connectionId": "c",
+    "externalId": "1",
+    "key": "ENG-1"
+   },
+   "container": {
+    "connectionId": "c",
+    "externalId": "A"
+   },
+   "kind": "task",
+   "title": "Fix Checkout",
+   "body": {
+    "blocks": []
+   },
+   "status": {
+    "id": "to do",
+    "name": "To Do",
+    "category": "todo"
+   },
+   "assignee": {
+    "connectionId": "c",
+    "accountId": "me"
+   },
+   "reporter": null,
+   "priority": null,
+   "parent": null,
+   "labels": [
+    "Backend"
+   ],
+   "created": "2026-05-21T12:00:00Z",
+   "updated": "2026-06-20T12:00:00Z",
+   "links": [],
+   "commentCount": 0,
+   "lastCommenter": null,
+   "extra": null
+  },
+  {
+   "item": {
+    "connectionId": "c",
+    "externalId": "2",
+    "key": "ENG-2"
+   },
+   "container": {
+    "connectionId": "c",
+    "externalId": "A"
+   },
+   "kind": "task",
+   "title": "Item 2",
+   "body": {
+    "blocks": [
+     {
+      "type": "paragraph",
+      "content": [
+       {
+        "type": "text",
+        "text": "the checkout is slow",
+        "marks": []
+       }
+      ]
+     }
+    ]
+   },
+   "status": {
+    "id": "review",
+    "name": "Review",
+    "category": "active"
+   },
+   "assignee": {
+    "connectionId": "c",
+    "accountId": "other"
+   },
+   "reporter": null,
+   "priority": null,
+   "parent": null,
+   "labels": [],
+   "created": "2026-05-30T12:00:00Z",
+   "updated": "2026-06-29T12:00:00Z",
+   "links": [
+    {
+     "from": {
+      "connectionId": "c",
+      "externalId": "2",
+      "key": "ENG-2"
+     },
+     "to": {
+      "connectionId": "c",
+      "externalId": "4",
+      "key": "ENG-4"
+     },
+     "kind": "blocks"
+    }
+   ],
+   "commentCount": 0,
+   "lastCommenter": null,
+   "extra": null
+  },
+  {
+   "item": {
+    "connectionId": "c",
+    "externalId": "3",
+    "key": "ENG-3"
+   },
+   "container": {
+    "connectionId": "c",
+    "externalId": "B"
+   },
+   "kind": "task",
+   "title": "Item 3",
+   "body": {
+    "blocks": []
+   },
+   "status": {
+    "id": "done",
+    "name": "Done",
+    "category": "done"
+   },
+   "assignee": {
+    "connectionId": "c",
+    "accountId": "me"
+   },
+   "reporter": null,
+   "priority": null,
+   "parent": {
+    "connectionId": "c",
+    "externalId": "1",
+    "key": "ENG-1"
+   },
+   "labels": [
+    "backend"
+   ],
+   "created": "2026-05-11T12:00:00Z",
+   "updated": "2026-06-10T12:00:00Z",
+   "links": [],
+   "commentCount": 0,
+   "lastCommenter": null,
+   "extra": null
+  },
+  {
+   "item": {
+    "connectionId": "c",
+    "externalId": "4",
+    "key": "ENG-4"
+   },
+   "container": {
+    "connectionId": "c",
+    "externalId": "B"
+   },
+   "kind": "task",
+   "title": "Item 4",
+   "body": {
+    "blocks": []
+   },
+   "status": {
+    "id": "to do",
+    "name": "To Do",
+    "category": "todo"
+   },
+   "assignee": null,
+   "reporter": null,
+   "priority": null,
+   "parent": {
+    "connectionId": "c",
+    "externalId": "1",
+    "key": "ENG-1"
+   },
+   "labels": [],
+   "created": "2026-05-24T12:00:00Z",
+   "updated": "2026-06-23T12:00:00Z",
+   "links": [],
+   "commentCount": 0,
+   "lastCommenter": null,
+   "extra": null
+  },
+  {
+   "item": {
+    "connectionId": "c",
+    "externalId": "5",
+    "key": "ENG-5"
+   },
+   "container": {
+    "connectionId": "c",
+    "externalId": "A"
+   },
+   "kind": "task",
+   "title": "Item 5",
+   "body": {
+    "blocks": []
+   },
+   "status": {
+    "id": "doing",
+    "name": "Doing",
+    "category": "active"
+   },
+   "assignee": {
+    "connectionId": "gh",
+    "accountId": "me-gh"
+   },
+   "reporter": null,
+   "priority": null,
+   "parent": null,
+   "labels": [],
+   "created": "2026-05-31T12:00:00Z",
+   "updated": "2026-06-30T12:00:00Z",
+   "links": [
+    {
+     "from": {
+      "connectionId": "c",
+      "externalId": "99",
+      "key": "ENG-99"
+     },
+     "to": {
+      "connectionId": "c",
+      "externalId": "5",
+      "key": "ENG-5"
+     },
+     "kind": "blocks"
+    }
+   ],
+   "commentCount": 0,
+   "lastCommenter": null,
+   "extra": null
+  },
+  {
+   "item": {
+    "connectionId": "c",
+    "externalId": "6",
+    "key": "ENG-6"
+   },
+   "container": {
+    "connectionId": "c",
+    "externalId": "A"
+   },
+   "kind": "task",
+   "title": "Item 6",
+   "body": {
+    "blocks": []
+   },
+   "status": {
+    "id": "done",
+    "name": "Done",
+    "category": "done"
+   },
+   "assignee": null,
+   "reporter": null,
+   "priority": null,
+   "parent": null,
+   "labels": [],
+   "created": "2026-05-28T12:00:00Z",
+   "updated": "2026-06-27T12:00:00Z",
+   "links": [
+    {
+     "from": {
+      "connectionId": "c",
+      "externalId": "6",
+      "key": "ENG-6"
+     },
+     "to": {
+      "connectionId": "c",
+      "externalId": "7",
+      "key": "ENG-7"
+     },
+     "kind": "blocks"
+    }
+   ],
+   "commentCount": 0,
+   "lastCommenter": null,
+   "extra": null
+  },
+  {
+   "item": {
+    "connectionId": "c",
+    "externalId": "7",
+    "key": "ENG-7"
+   },
+   "container": {
+    "connectionId": "c",
+    "externalId": "A"
+   },
+   "kind": "task",
+   "title": "Item 7",
+   "body": {
+    "blocks": []
+   },
+   "status": {
+    "id": "to do",
+    "name": "To Do",
+    "category": "todo"
+   },
+   "assignee": null,
+   "reporter": null,
+   "priority": null,
+   "parent": null,
+   "labels": [],
+   "created": "2026-05-28T12:00:00Z",
+   "updated": "2026-06-27T12:00:00Z",
+   "links": [],
+   "commentCount": 0,
+   "lastCommenter": null,
+   "extra": null
+  },
+  {
+   "item": {
+    "connectionId": "c",
+    "externalId": "8",
+    "key": "ENG-8"
+   },
+   "container": {
+    "connectionId": "c",
+    "externalId": "A"
+   },
+   "kind": "task",
+   "title": "Ärger im Lager",
+   "body": {
+    "blocks": [
+     {
+      "type": "heading",
+      "level": 2,
+      "content": [
+       {
+        "type": "text",
+        "text": "Notes",
+        "marks": [
+         "bold"
+        ]
+       }
+      ]
+     },
+     {
+      "type": "list",
+      "ordered": false,
+      "items": [
+       [
+        {
+         "type": "paragraph",
+         "content": [
+          {
+           "type": "text",
+           "text": "ping ",
+           "marks": []
+          },
+          {
+           "type": "mention",
+           "person": {
+            "connectionId": "c",
+            "accountId": "ada"
+           },
+           "name": "Ada"
+          }
+         ]
+        }
+       ]
+      ]
+     },
+     {
+      "type": "code",
+      "language": null,
+      "text": "make deploy"
+     }
+    ]
+   },
+   "status": {
+    "id": "ünder",
+    "name": "Ünder",
+    "category": "active"
+   },
+   "assignee": null,
+   "reporter": null,
+   "priority": null,
+   "parent": null,
+   "labels": [],
+   "created": "2026-05-29T12:00:00Z",
+   "updated": "2026-06-28T12:00:00Z",
+   "links": [],
+   "commentCount": 0,
+   "lastCommenter": null,
+   "extra": null
+  }
+ ],
+ "cases": [
+  {
+   "name": "needsMe",
+   "filter": {
+    "type": "needsMe"
+   },
+   "expect": [
+    "2",
+    "8"
+   ]
+  },
+  {
+   "name": "mine matches any of my accounts",
+   "filter": {
+    "type": "mine"
+   },
+   "expect": [
+    "1",
+    "3",
+    "5"
+   ]
+  },
+  {
+   "name": "unassigned",
+   "filter": {
+    "type": "unassigned"
+   },
+   "expect": [
+    "4",
+    "6",
+    "7",
+    "8"
+   ]
+  },
+  {
+   "name": "assignee",
+   "filter": {
+    "type": "assignee",
+    "person": {
+     "connectionId": "c",
+     "accountId": "other"
+    }
+   },
+   "expect": [
+    "2"
+   ]
+  },
+  {
+   "name": "assignee needs the same connection",
+   "filter": {
+    "type": "assignee",
+    "person": {
+     "connectionId": "gh",
+     "accountId": "me"
+    }
+   },
+   "expect": []
+  },
+  {
+   "name": "open",
+   "filter": {
+    "type": "open"
+   },
+   "expect": [
+    "1",
+    "2",
+    "4",
+    "5",
+    "7",
+    "8"
+   ]
+  },
+  {
+   "name": "status ignores ascii case",
+   "filter": {
+    "type": "status",
+    "name": "to do"
+   },
+   "expect": [
+    "1",
+    "4",
+    "7"
+   ]
+  },
+  {
+   "name": "status folds ascii only",
+   "filter": {
+    "type": "status",
+    "name": "ünder"
+   },
+   "expect": []
+  },
+  {
+   "name": "status exact non-ascii",
+   "filter": {
+    "type": "status",
+    "name": "Ünder"
+   },
+   "expect": [
+    "8"
+   ]
+  },
+  {
+   "name": "category",
+   "filter": {
+    "type": "category",
+    "category": "done"
+   },
+   "expect": [
+    "3",
+    "6"
+   ]
+  },
+  {
+   "name": "stale counts only open items at the threshold",
+   "filter": {
+    "type": "stale",
+    "days": 7
+   },
+   "expect": [
+    "1",
+    "4"
+   ]
+  },
+  {
+   "name": "stale zero is every open item",
+   "filter": {
+    "type": "stale",
+    "days": 0
+   },
+   "expect": [
+    "1",
+    "2",
+    "4",
+    "5",
+    "7",
+    "8"
+   ]
+  },
+  {
+   "name": "container",
+   "filter": {
+    "type": "container",
+    "container": {
+     "connectionId": "c",
+     "externalId": "B"
+    }
+   },
+   "expect": [
+    "3",
+    "4"
+   ]
+  },
+  {
+   "name": "container needs the same connection",
+   "filter": {
+    "type": "container",
+    "container": {
+     "connectionId": "x",
+     "externalId": "B"
+    }
+   },
+   "expect": []
+  },
+  {
+   "name": "parent",
+   "filter": {
+    "type": "parent",
+    "item": {
+     "connectionId": "c",
+     "externalId": "1",
+     "key": "ENG-1"
+    }
+   },
+   "expect": [
+    "3",
+    "4"
+   ]
+  },
+  {
+   "name": "label ignores case",
+   "filter": {
+    "type": "label",
+    "label": "BACKEND"
+   },
+   "expect": [
+    "1",
+    "3"
+   ]
+  },
+  {
+   "name": "text in title and body",
+   "filter": {
+    "type": "text",
+    "text": "CHECKOUT"
+   },
+   "expect": [
+    "1",
+    "2"
+   ]
+  },
+  {
+   "name": "text in key",
+   "filter": {
+    "type": "text",
+    "text": "eng-7"
+   },
+   "expect": [
+    "7"
+   ]
+  },
+  {
+   "name": "text lowercases beyond ascii",
+   "filter": {
+    "type": "text",
+    "text": "ärger"
+   },
+   "expect": [
+    "8"
+   ]
+  },
+  {
+   "name": "text reads mentions, headings, lists and code",
+   "filter": {
+    "type": "text",
+    "text": "ping @ada"
+   },
+   "expect": [
+    "8"
+   ]
+  },
+  {
+   "name": "text reads code blocks",
+   "filter": {
+    "type": "text",
+    "text": "make deploy"
+   },
+   "expect": [
+    "8"
+   ]
+  },
+  {
+   "name": "blocked: open blocker, dangling blocker, done blocker",
+   "filter": {
+    "type": "blocked"
+   },
+   "expect": [
+    "4",
+    "5"
+   ]
+  },
+  {
+   "name": "items keeps input order",
+   "filter": {
+    "type": "items",
+    "items": [
+     {
+      "connectionId": "c",
+      "externalId": "7",
+      "key": "ENG-7"
+     },
+     {
+      "connectionId": "c",
+      "externalId": "1",
+      "key": "ENG-1"
+     }
+    ]
+   },
+   "expect": [
+    "1",
+    "7"
+   ]
+  },
+  {
+   "name": "and requires all",
+   "filter": {
+    "type": "and",
+    "filters": [
+     {
+      "type": "mine"
+     },
+     {
+      "type": "open"
+     }
+    ]
+   },
+   "expect": [
+    "1",
+    "5"
+   ]
+  },
+  {
+   "name": "and of nothing is everything",
+   "filter": {
+    "type": "and",
+    "filters": []
+   },
+   "expect": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+   ]
+  },
+  {
+   "name": "blocked inside and",
+   "filter": {
+    "type": "and",
+    "filters": [
+     {
+      "type": "blocked"
+     },
+     {
+      "type": "container",
+      "container": {
+       "connectionId": "c",
+       "externalId": "B"
+      }
+     }
+    ]
+   },
+   "expect": [
+    "4"
+   ]
+  }
+ ]
+}
