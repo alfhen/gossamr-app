@@ -53,7 +53,7 @@ export function Setup({
         <div>
           <h1 className="text-xl font-bold tracking-tight">Connect Jira</h1>
           <p className="mt-1 text-ink-2">
-            Jira Inbox signs in with your own Atlassian OAuth app, so it acts as you with your permissions. Tokens are kept in the macOS Keychain.
+            Gossamr signs in with your own Atlassian OAuth app, so it acts as you with your permissions. Tokens are kept in the macOS Keychain.
           </p>
         </div>
 

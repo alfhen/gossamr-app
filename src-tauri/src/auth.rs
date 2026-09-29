@@ -355,7 +355,7 @@ async fn wait_for_code(v4: &TcpListener, v6: Option<&TcpListener>, state: &str) 
             Callback::Ignore => respond(&mut stream, "404 Not Found", "Not found").await,
             Callback::Rejected(msg) => respond(&mut stream, "400 Bad Request", &msg).await,
             Callback::Code(code) => {
-                respond(&mut stream, "200 OK", "Signed in to Jira Inbox. You can close this tab.").await;
+                respond(&mut stream, "200 OK", "Signed in to Gossamr. You can close this tab.").await;
                 return Ok(code);
             }
             Callback::Failed(msg) => {
@@ -378,7 +378,7 @@ async fn accept(v4: &TcpListener, v6: Option<&TcpListener>) -> std::io::Result<T
 
 async fn respond(stream: &mut TcpStream, status: &str, message: &str) {
     let body = format!(
-        "<!doctype html><meta charset=utf-8><title>Jira Inbox</title>\
+        "<!doctype html><meta charset=utf-8><title>Gossamr</title>\
          <body style=\"font:15px system-ui;display:grid;place-items:center;height:90vh\">{}</body>",
         html_escape(message)
     );

@@ -3,7 +3,7 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::error::Result;
 
-const SERVICE: &str = "dk.alfhen.jirainbox";
+const SERVICE: &str = "dk.hobbii.gossamr";
 
 pub fn load<T: DeserializeOwned>(account: &str) -> Result<Option<T>> {
     match Entry::new(SERVICE, account)?.get_password() {

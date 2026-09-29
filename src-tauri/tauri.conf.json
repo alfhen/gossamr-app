@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Jira Inbox",
+  "productName": "Gossamr",
   "version": "0.1.0",
-  "identifier": "dk.alfhen.jirainbox",
+  "identifier": "dk.hobbii.gossamr",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Jira Inbox",
+        "title": "Gossamr",
         "width": 1280,
         "height": 820,
         "minWidth": 900,

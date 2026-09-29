@@ -283,7 +283,7 @@ pub fn run() {
         })
         .setup(|app| {
             let http = reqwest::Client::builder()
-                .user_agent(concat!("jira-inbox/", env!("CARGO_PKG_VERSION")))
+                .user_agent(concat!("gossamr/", env!("CARGO_PKG_VERSION")))
                 .timeout(Duration::from_secs(30))
                 .build()?;
             let auth = Arc::new(Auth::load(http.clone()));

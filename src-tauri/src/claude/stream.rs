@@ -77,7 +77,7 @@ mod tests {
             Some(ClaudeEvent::Tool { label: "Read src/main.rs".into() })
         );
         assert_eq!(
-            parse_line(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__jira-inbox__get_ticket","input":{"key":"CA-1"}}]}}"#),
+            parse_line(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__gossamr__get_ticket","input":{"key":"CA-1"}}]}}"#),
             Some(ClaudeEvent::Tool { label: "Looked up CA-1".into() })
         );
         assert_eq!(
