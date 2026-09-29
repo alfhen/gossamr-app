@@ -36,6 +36,7 @@ pub(super) fn compile(filter: &Filter) -> Clause {
         Filter::Stale { days } => format!("statusCategory != {} AND updated <= -{days}d", quote(category_name(Category::Done))),
         Filter::Container { container } => format!("project = {}", quote(&container.external_id)),
         Filter::Parent { item } => format!("parent = {}", quote(&item.external_id)),
+        Filter::Label { label } => format!("labels = {}", quote(label)),
         Filter::Text { text } => format!("text ~ {}", quote(text)),
         Filter::Items { items } if items.is_empty() => return Clause::Nothing,
         Filter::Items { items } => {
@@ -65,15 +66,32 @@ pub(super) fn ordered(jql: &str) -> String {
     format!("{jql} {ORDER}")
 }
 
-/// Issues the signed-in person is involved in that changed within `window_days`.
-pub(super) fn followed(window_days: u32) -> String {
-    ordered(&format!(
-        "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND updated >= -{window_days}d"
-    ))
+/// How far back a query reaches. Relative units, since a literal date would be read in the user's time zone.
+fn since_clause(window_days: Option<u32>, updated_since_minutes: Option<u32>) -> Option<String> {
+    let days = window_days.map(|d| u64::from(d) * 24 * 60);
+    let minutes = match (days, updated_since_minutes.map(u64::from)) {
+        (Some(d), Some(m)) => Some(d.min(m)),
+        (d, m) => d.or(m),
+    }?;
+    Some(format!("updated >= -{minutes}m"))
 }
 
-pub(super) fn children(parent_keys: &[&str]) -> String {
-    ordered(&format!("parent in ({})", parent_keys.join(",")))
+/// Issues the signed-in person is involved in that changed within `window_days`, and within the last
+/// `updated_since_minutes` when given.
+pub(super) fn followed(window_days: u32, updated_since_minutes: Option<u32>) -> String {
+    let involved = "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser())";
+    match updated_since_minutes {
+        None => ordered(&format!("{involved} AND updated >= -{window_days}d")),
+        Some(_) => ordered(&format!("{involved} AND {}", since_clause(Some(window_days), updated_since_minutes).expect("bounded"))),
+    }
+}
+
+pub(super) fn children(parent_keys: &[&str], updated_since_minutes: Option<u32>) -> String {
+    let parents = format!("parent in ({})", parent_keys.join(","));
+    match since_clause(None, updated_since_minutes) {
+        Some(since) => ordered(&format!("{parents} AND {since}")),
+        None => ordered(&parents),
+    }
 }
 
 #[cfg(test)]
@@ -134,9 +152,21 @@ mod tests {
     #[test]
     fn the_inbox_queries_are_unchanged() {
         assert_eq!(
-            followed(30),
+            followed(30, None),
             "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND updated >= -30d ORDER BY updated DESC"
         );
-        assert_eq!(children(&["CA-1", "CA-2"]), "parent in (CA-1,CA-2) ORDER BY updated DESC");
+        assert_eq!(children(&["CA-1", "CA-2"], None), "parent in (CA-1,CA-2) ORDER BY updated DESC");
+    }
+
+    #[test]
+    fn an_updated_since_cursor_narrows_to_minutes_but_never_past_the_window() {
+        assert!(followed(30, Some(15)).ends_with("AND updated >= -15m ORDER BY updated DESC"));
+        assert!(followed(1, Some(5000)).ends_with("AND updated >= -1440m ORDER BY updated DESC"));
+        assert_eq!(children(&["CA-1"], Some(20)), "parent in (CA-1) AND updated >= -20m ORDER BY updated DESC");
+    }
+
+    #[test]
+    fn labels_are_quoted() {
+        assert_eq!(jql(Filter::Label { label: "a b".into() }), "labels = \"a b\"");
     }
 }

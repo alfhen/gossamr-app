@@ -136,3 +136,138 @@ export interface MyAction {
   /** The comment, or the transition as "From → To". */
   text: string;
 }
+
+/* Connector-neutral model, mirroring src-tauri/src/domain. Names carry a `Work` prefix where they would clash with
+   the Jira-shaped types above or with DOM globals. */
+
+export interface ItemRef {
+  connectionId: string;
+  externalId: string;
+  /** For display only; identity is `connectionId` plus `externalId`. */
+  key: string;
+}
+
+export interface ContainerRef {
+  connectionId: string;
+  externalId: string;
+}
+
+export interface PersonRef {
+  connectionId: string;
+  accountId: string;
+}
+
+export type WorkCategory = "todo" | "active" | "done";
+
+export interface StatusDef {
+  id: string;
+  name: string;
+  category: WorkCategory;
+}
+
+export type Transitions = { kind: "any" } | { kind: "graph"; moves: { from: string; to: string }[] };
+
+export interface Workflow {
+  statuses: StatusDef[];
+  /** Jira only reveals moves per issue, so its graph is empty; ask `transitions` for a real ticket. */
+  transitions: Transitions;
+}
+
+export interface WorkContainer {
+  ref: ContainerRef;
+  key: string;
+  name: string;
+  workflow: Workflow;
+}
+
+export type WorkMark = "bold" | "italic" | "strike" | "code";
+
+export type WorkInline =
+  | { type: "text"; text: string; marks: WorkMark[] }
+  | { type: "link"; href: string; text: string }
+  | { type: "mention"; person: PersonRef; name: string }
+  | { type: "lineBreak" };
+
+export type WorkBlock =
+  | { type: "paragraph"; content: WorkInline[] }
+  | { type: "heading"; level: number; content: WorkInline[] }
+  | { type: "list"; ordered: boolean; items: WorkBlock[][] }
+  | { type: "quote"; content: WorkBlock[] }
+  | { type: "code"; language: string | null; text: string }
+  | { type: "rule" };
+
+export interface WorkDoc {
+  blocks: WorkBlock[];
+}
+
+export type WorkItemKind = "task" | "bug" | "story" | "epic";
+export type WorkPriority = "lowest" | "low" | "medium" | "high" | "highest";
+
+export interface WorkLink {
+  /** `from` blocks, relates to or duplicates `to`. */
+  from: ItemRef;
+  to: ItemRef;
+  kind: "blocks" | "relates" | "duplicates";
+}
+
+/** A cached item. The tracker's raw payload stays in the backend, so it is always null here. */
+export interface WorkItem {
+  item: ItemRef;
+  container: ContainerRef;
+  kind: WorkItemKind;
+  title: string;
+  body: WorkDoc;
+  status: StatusDef;
+  assignee: PersonRef | null;
+  reporter: PersonRef | null;
+  priority: WorkPriority | null;
+  parent: ItemRef | null;
+  labels: string[];
+  created: string;
+  updated: string;
+  links: WorkLink[];
+  commentCount: number;
+  lastCommenter: PersonRef | null;
+  extra: null;
+}
+
+/** The query language for views and search. The backend narrows in SQL and then applies it exactly. */
+export type WorkFilter =
+  | { type: "needsMe" }
+  | { type: "mine" }
+  | { type: "unassigned" }
+  | { type: "blocked" }
+  | { type: "open" }
+  | { type: "assignee"; person: PersonRef }
+  | { type: "status"; name: string }
+  | { type: "category"; category: WorkCategory }
+  | { type: "stale"; days: number }
+  | { type: "container"; container: ContainerRef }
+  | { type: "parent"; item: ItemRef }
+  | { type: "label"; label: string }
+  | { type: "text"; text: string }
+  | { type: "items"; items: ItemRef[] }
+  | { type: "and"; filters: WorkFilter[] };
+
+export interface WorkEvent {
+  id: string;
+  connectionId: string;
+  at: string;
+  kind:
+    | "commentAdded"
+    | "statusChanged"
+    | "assigned"
+    | "itemCreated"
+    | "prOpened"
+    | "prMerged"
+    | "checkFailed"
+    | "reviewRequested";
+  subject: { type: "item"; item: ItemRef } | { type: "codeChange"; repo: string; number: number };
+  actor: PersonRef | null;
+  payload: unknown;
+}
+
+/** Emitted as the `cache-changed` event when a sync or a write changed what the cache holds. */
+export interface CacheChanged {
+  connectionId: string;
+}

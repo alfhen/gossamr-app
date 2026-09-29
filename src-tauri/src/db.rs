@@ -12,6 +12,11 @@ impl From<rusqlite::Error> for Error {
     }
 }
 
+mod cache;
+mod schema;
+
+pub use cache::{stamp, SyncState, Upserted};
+
 pub struct Db {
     conn: Connection,
 }
@@ -29,58 +34,36 @@ impl Db {
         Self::init(Connection::open_in_memory()?)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             CREATE TABLE IF NOT EXISTS tickets (
-               key TEXT PRIMARY KEY,
-               data TEXT NOT NULL,
-               synced_at TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS events (
-               id TEXT PRIMARY KEY,
-               ticket_key TEXT NOT NULL,
-               kind TEXT NOT NULL,
-               actor TEXT NOT NULL,
-               at TEXT NOT NULL,
-               text TEXT NOT NULL,
-               unread INTEGER NOT NULL,
-               done_at TEXT,
-               snoozed_until TEXT
-             );
-             CREATE INDEX IF NOT EXISTS events_at ON events(at);
-             CREATE TABLE IF NOT EXISTS activity (
-               id TEXT PRIMARY KEY,
-               ticket_key TEXT NOT NULL,
-               kind TEXT NOT NULL,
-               at TEXT NOT NULL,
-               text TEXT NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS activity_at ON activity(at);
-             CREATE TABLE IF NOT EXISTS seen (ticket_key TEXT PRIMARY KEY, at TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);",
-        )?;
+    fn init(mut conn: Connection) -> Result<Self> {
+        conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+        schema::migrate(&mut conn)?;
         Ok(Self { conn })
     }
 
-    pub fn upsert_ticket(&self, t: &CachedTicket, now: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO tickets (key, data, synced_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(key) DO UPDATE SET data = ?2, synced_at = ?3",
-            params![t.key, serde_json::to_string(t)?, now],
-        )?;
-        Ok(())
-    }
-
-    /// Tickets refreshed at or after `since`. Older rows are ones that dropped out of every query.
-    pub fn tickets(&self, since: &str) -> Result<Vec<CachedTicket>> {
-        let mut stmt = self.conn.prepare("SELECT data FROM tickets WHERE synced_at >= ?1")?;
-        let rows = stmt.query_map(params![since], |r| r.get::<_, String>(0))?;
+    /// Tickets stored by releases before the cache, with when each was last refreshed. Only read to backfill the
+    /// cache once; the table is otherwise left as it was.
+    pub fn legacy_tickets(&self) -> Result<Vec<(CachedTicket, String)>> {
+        let mut stmt = self.conn.prepare("SELECT data, synced_at FROM tickets")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(serde_json::from_str(&row?)?);
+            let (data, at) = row?;
+            // A row that no longer parses is skipped: the next sync stores it again.
+            if let Ok(t) = serde_json::from_str(&data) {
+                out.push((t, at));
+            }
         }
         Ok(out)
+    }
+
+    /// Keys of tickets with an unread, undone event that isn't snoozed past `now`.
+    pub fn needs_me_keys(&self, now: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT ticket_key FROM events
+             WHERE unread = 1 AND done_at IS NULL AND (snoozed_until IS NULL OR snoozed_until <= ?1)",
+        )?;
+        let rows = stmt.query_map(params![now], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Inserts events that aren't stored yet and returns the ones that were new.
@@ -266,14 +249,5 @@ mod tests {
         assert_eq!(e.done_at.as_deref(), Some("2026-09-28T12:00:00Z"));
         assert!(e.snoozed_until.is_none() && !e.unread);
         assert!(db.set_done("missing", None).is_err());
-    }
-
-    #[test]
-    fn tickets_that_stop_syncing_drop_out() {
-        let db = Db::in_memory().unwrap();
-        let t = sample_ticket();
-        db.upsert_ticket(&t, "2026-09-28T10:00:00Z").unwrap();
-        assert_eq!(db.tickets("2026-09-28T09:00:00Z").unwrap().len(), 1);
-        assert!(db.tickets("2026-09-28T11:00:00Z").unwrap().is_empty());
     }
 }

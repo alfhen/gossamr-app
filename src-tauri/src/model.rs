@@ -142,6 +142,21 @@ pub struct CachedTicket {
     pub creator: Option<Person>,
     pub watching: bool,
     pub history: Vec<History>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub links: Vec<TicketLink>,
+}
+
+/// One of a ticket's issue links, from this ticket's side.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TicketLink {
+    /// Jira's link type name, e.g. `Blocks`.
+    pub kind: String,
+    /// The key of the issue at the other end.
+    pub other: String,
+    /// Whether this ticket is the outward end, which for `Blocks` means it blocks `other`.
+    pub outward: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

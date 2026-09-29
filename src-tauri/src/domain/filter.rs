@@ -20,6 +20,7 @@ pub enum Filter {
     Stale { days: u32 },
     Container { container: ContainerRef },
     Parent { item: ItemRef },
+    Label { label: String },
     Text { text: String },
     /// A lens: exactly these items.
     Items { items: Vec<ItemRef> },
@@ -38,6 +39,15 @@ impl Filter {
         items.iter().filter(|i| self.matches(i, items, ctx)).collect()
     }
 
+    /// Whether matching depends on items other than the one being tested, which is so for links.
+    pub fn needs_all_items(&self) -> bool {
+        match self {
+            Filter::Blocked => true,
+            Filter::And { filters } => filters.iter().any(Filter::needs_all_items),
+            _ => false,
+        }
+    }
+
     /// `all` is the wider slice used to resolve links; a blocker missing from it counts as still blocking.
     pub fn matches(&self, item: &WorkItem, all: &[WorkItem], ctx: &FilterContext) -> bool {
         let open = item.status.category != Category::Done;
@@ -53,6 +63,7 @@ impl Filter {
             Filter::Stale { days } => open && ctx.now - item.updated >= Duration::days(i64::from(*days)),
             Filter::Container { container } => item.container == *container,
             Filter::Parent { item: parent } => item.parent.as_ref() == Some(parent),
+            Filter::Label { label } => item.labels.iter().any(|l| l.eq_ignore_ascii_case(label)),
             Filter::Text { text } => {
                 let needle = text.to_lowercase();
                 item.title.to_lowercase().contains(&needle)
@@ -179,6 +190,14 @@ mod tests {
         let items = [a, b, c];
         assert_eq!(run(Filter::Text { text: "CHECKOUT".into() }, &items), ["1", "2"]);
         assert_eq!(run(Filter::Text { text: "eng-3".into() }, &items), ["3"]);
+    }
+
+    #[test]
+    fn label_matches_case_insensitively() {
+        let mut a = work_item("1", "todo");
+        a.labels = vec!["Backend".into()];
+        let items = [a, work_item("2", "todo")];
+        assert_eq!(run(Filter::Label { label: "backend".into() }, &items), ["1"]);
     }
 
     #[test]

@@ -1,7 +1,23 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { AdfNode, Comment, EventKind, InboxEvent, Person, Snapshot, Status, Ticket, Transition, Uploaded } from "../types";
+import type {
+  AdfNode,
+  CacheChanged,
+  Comment,
+  ContainerRef,
+  EventKind,
+  InboxEvent,
+  ItemRef,
+  Person,
+  Snapshot,
+  Status,
+  Ticket,
+  Transition,
+  Uploaded,
+  WorkFilter,
+} from "../types";
 import { fold, type Mention } from "../lib/mentions";
+import { search, workContainers, workItems } from "./mockCache";
 import type { Backend } from "./types";
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -318,6 +334,7 @@ export class MockBackend implements Backend {
   readonly kind = "mock" as const;
   private snap = sampleSnapshot();
   private listeners = new Set<(s: Snapshot) => void>();
+  private cacheListeners = new Set<(c: CacheChanged) => void>();
   private simulated = 0;
 
   async load() {
@@ -334,6 +351,32 @@ export class MockBackend implements Backend {
     fn(next);
     this.snap = next;
     this.listeners.forEach((l) => l(next));
+    this.cacheListeners.forEach((l) => l({ connectionId: "mock" }));
+  }
+
+  async cacheSearch(filter: WorkFilter) {
+    return search(this.snap, filter);
+  }
+
+  async cacheItem(ref: ItemRef) {
+    return workItems(this.snap).find((i) => i.item.externalId === ref.externalId) ?? null;
+  }
+
+  async cacheContainers() {
+    return workContainers(this.snap);
+  }
+
+  async cacheWorkflow(container: ContainerRef) {
+    return workContainers(this.snap).find((c) => c.ref.externalId === container.externalId)?.workflow ?? null;
+  }
+
+  async cacheEvents() {
+    return [];
+  }
+
+  onCacheChanged(listener: (c: CacheChanged) => void) {
+    this.cacheListeners.add(listener);
+    return () => void this.cacheListeners.delete(listener);
   }
 
   private event(s: Snapshot, eventId: string) {

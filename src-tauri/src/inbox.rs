@@ -6,37 +6,32 @@ use chrono::{Duration, SecondsFormat, Utc};
 use tokio::sync::Notify;
 
 use crate::auth::{Account, Auth, AuthStatus, Scope, Site};
-use crate::db::Db;
+use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, my_actions, NewEvent};
-use crate::domain::{Intent, ItemRef, PersonRef, WorkItem};
+use crate::domain::{Container, ContainerRef, Event, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, WorkItem, Workflow};
 use crate::model::{Attachment, CachedTicket, CreatedSubtasks, MentionRef, Person, Snapshot, Status, Ticket, Transition, Uploaded};
+use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
 use crate::tracker::{self, Connection, Registry, SearchOptions, WorkTracker};
 
-/// Tickets the user follows are those they are involved in that changed this recently. Anything else only appears
-/// as context, e.g. the children of an epic they watch.
-const TRACKED_WINDOW_DAYS: u32 = 30;
-/// Tickets the inbox tracks. Anything past this drops out of the inbox, so it is a sanity bound, not a page size.
-const TRACKED_LIMIT: usize = 2000;
-/// Tickets read for context, such as an epic's children, so a very broad query can't stall a sync.
-pub const CONTEXT_LIMIT: usize = 300;
+pub use crate::sync::CONTEXT_LIMIT;
+
 /// Events this old drop out of the inbox unless they are still unread.
 const EVENT_WINDOW_DAYS: i64 = 30;
 /// How far back My work can reach.
 const ACTIVITY_DAYS: i64 = 30;
 /// Before a ticket has been opened in the app, "since you last looked" covers this many days.
 const DEFAULT_SEEN_DAYS: i64 = 3;
-/// Leeway for clock differences between this machine and Jira when deciding what arrived since the last sync.
-const CLOCK_SKEW_MINUTES: i64 = 10;
 
 const LAST_SYNC: &str = "last_sync_at";
+const CACHE_BACKFILLED: &str = "cache_backfilled";
 const OWN_CLAUDE_SESSIONS: &str = "claude_sessions";
 const OWN_SESSIONS_KEPT: usize = 50;
 
 /// Events after this are new since the previous sync (or, before the first sync, from the last 24 hours).
 fn unread_cutoff(last_sync: Option<&str>) -> String {
     match last_sync.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) {
-        Some(at) => (at.with_timezone(&Utc) - Duration::minutes(CLOCK_SKEW_MINUTES)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        Some(at) => (at.with_timezone(&Utc) - Duration::minutes(i64::from(CLOCK_SKEW_MINUTES))).to_rfc3339_opts(SecondsFormat::Secs, true),
         None => ago(Duration::hours(24)),
     }
 }
@@ -64,8 +59,25 @@ fn ticket_of(item: &WorkItem) -> Result<CachedTicket> {
     Ok(serde_json::from_value(item.extra.clone())?)
 }
 
-fn tickets_of(items: &[WorkItem]) -> Result<Vec<CachedTicket>> {
+pub(crate) fn tickets_of(items: &[WorkItem]) -> Result<Vec<CachedTicket>> {
     items.iter().map(ticket_of).collect()
+}
+
+fn without_extra(mut item: WorkItem) -> WorkItem {
+    item.extra = serde_json::Value::Null;
+    item
+}
+
+/// Fills the cache from tickets stored before it existed, once, keeping when each was last refreshed. The old table
+/// is left as it was.
+fn backfill_cache(db: &Db, connection: &Connection) -> Result<()> {
+    if db.meta(CACHE_BACKFILLED)?.is_some() {
+        return Ok(());
+    }
+    for (ticket, synced_at) in db.legacy_tickets()? {
+        db.upsert_items(&[tracker::item_from_ticket(connection, &ticket)], &synced_at)?;
+    }
+    db.set_meta(CACHE_BACKFILLED, &now_iso())
 }
 
 pub struct Core {
@@ -76,12 +88,33 @@ pub struct Core {
     /// people signing in to the same site on one Mac never see each other's tickets or inbox.
     db: Mutex<Option<(String, Db)>>,
     last_error: Mutex<Option<String>>,
+    schedules: Mutex<HashMap<String, Schedule>>,
+    /// Ask for a sync now, whatever the schedule says.
     pub wake: Notify,
+    /// The window gained focus: sync if it has been a while and no failure is being waited out.
+    pub focus: Notify,
+}
+
+/// What a sync left behind.
+pub struct Synced {
+    pub connection_id: String,
+    pub new_events: Vec<NewEvent>,
+    /// Whether any cached item was added or changed.
+    pub changed: bool,
 }
 
 impl Core {
     pub fn new(auth: Arc<Auth>, registry: Registry, data_dir: PathBuf) -> Self {
-        Self { auth, registry, data_dir, db: Mutex::new(None), last_error: Mutex::new(None), wake: Notify::new() }
+        Self {
+            auth,
+            registry,
+            data_dir,
+            db: Mutex::new(None),
+            last_error: Mutex::new(None),
+            schedules: Mutex::new(HashMap::new()),
+            wake: Notify::new(),
+            focus: Notify::new(),
+        }
     }
 
     /// The registered connection for `scope`. Callers still hold a `Scope`, so this is the adapter between the two;
@@ -141,7 +174,9 @@ impl Core {
         let mut guard = self.db.lock().expect("db lock poisoned");
         let connection = self.connection(scope)?;
         if guard.as_ref().map(|(open, _)| *open != connection.id).unwrap_or(true) {
-            *guard = Some((connection.id.clone(), Db::open(&self.data_dir.join(db_file(&connection)))?));
+            let db = Db::open(&self.data_dir.join(db_file(&connection)))?;
+            backfill_cache(&db, &connection)?;
+            *guard = Some((connection.id.clone(), db));
         }
         f(&guard.as_ref().expect("opened above").1)
     }
@@ -154,35 +189,43 @@ impl Core {
         *self.last_error.lock().expect("error lock poisoned") = e;
     }
 
-    /// Fetches tracked tickets and epic children, stores them, and returns events that are new and unread.
-    /// The first sync for a site returns nothing, so connecting doesn't fire a burst of notifications.
-    pub async fn sync(&self) -> Result<Vec<NewEvent>> {
+    /// Runs a sync if `trigger` says this connection is due one, and records how it went for the backoff.
+    pub async fn sync_if_due(&self, trigger: Trigger) -> Option<Result<Synced>> {
+        let (site, me) = self.auth.identity().await?;
+        let id = Connection::jira_id(&Scope::of(&site, &me));
+        let due = self.schedules.lock().expect("schedule lock poisoned").entry(id.clone()).or_default().due(Utc::now(), trigger);
+        if !due {
+            return None;
+        }
+        let result = self.sync().await;
+        self.schedules.lock().expect("schedule lock poisoned").entry(id).or_default().finished(Utc::now(), result.is_ok());
+        Some(result)
+    }
+
+    /// Fetches what changed since the last sync (or everything, when due), stores it in the cache, and returns the
+    /// events that are new and unread.
+    pub async fn sync(&self) -> Result<Synced> {
         let (site, me) = self.identity().await?;
         let scope = Scope::of(&site, &me);
-        let started = now_iso();
-        let previous = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
+        let connection_id = Connection::jira_id(&scope);
+        let started = Utc::now();
+        let (previous, state, known_epics) = self
+            .with_db_for(&scope, |db| {
+                let last = db.meta(LAST_SYNC)?;
+                let epics = db.epic_ids_synced_since(&connection_id, &stamp(started - Duration::days(1)))?;
+                Ok((last, db.sync_state(&connection_id)?, epics))
+            })
+            .await?;
         let unread_after = unread_cutoff(previous.as_deref());
+        let plan = sync::plan(&state, started);
         let tracker = self.tracker(&scope)?;
-        let opts = SearchOptions { limit: TRACKED_LIMIT, history_since: Some(unread_after.clone()) };
-        let tracked = tickets_of(&tracker.followed(TRACKED_WINDOW_DAYS, &opts).await?)?;
-        let epics: Vec<ItemRef> = tracked.iter().filter(|t| t.is_epic).map(|t| Self::item(&scope, &t.key)).collect();
-        let context = if epics.is_empty() {
-            Vec::new()
-        } else {
-            let opts = SearchOptions { limit: CONTEXT_LIMIT, history_since: None };
-            tickets_of(&tracker.children(&epics, &opts).await?)?
-        };
+        let pulled = sync::pull(tracker.as_ref(), &connection_id, plan, &state, &known_epics, &unread_after, started).await?;
 
         self.with_db_for(&scope, |db| {
-            let tracked_keys: std::collections::HashSet<&str> = tracked.iter().map(|t| t.key.as_str()).collect();
-            for t in tracked.iter().chain(context.iter().filter(|t| !tracked_keys.contains(t.key.as_str()))) {
-                db.upsert_ticket(t, &started)?;
-            }
-            let derived: Vec<NewEvent> = tracked.iter().flat_map(|t| derive(t, &me.account_id)).collect();
-            let fresh = db.insert_events(&derived, &unread_after)?;
-            db.insert_activity(&tracked.iter().flat_map(|t| my_actions(t, &me.account_id)).collect::<Vec<_>>())?;
-            db.set_meta(LAST_SYNC, &started)?;
-            Ok(if previous.is_some() { fresh } else { Vec::new() })
+            let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after, previous.is_some())?;
+            db.set_meta(LAST_SYNC, &stamp(started))?;
+            let containers_changed = pulled.containers.is_some();
+            Ok(Synced { connection_id: connection_id.clone(), new_events: stored.new_events, changed: stored.upserted.any() || containers_changed })
         })
         .await
     }
@@ -191,9 +234,10 @@ impl Core {
     async fn refresh(&self, scope: &Scope, key: &str) -> Result<()> {
         let last_sync = self.with_db_for(scope, |db| db.meta(LAST_SYNC)).await?;
         let since = unread_cutoff(last_sync.as_deref());
-        let t = ticket_of(&self.tracker(scope)?.item(&Self::item(scope, key), &since).await?)?;
+        let item = self.tracker(scope)?.item(&Self::item(scope, key), &since).await?;
+        let t = ticket_of(&item)?;
         self.with_db_for(scope, |db| {
-            db.upsert_ticket(&t, &now_iso())?;
+            db.upsert_items(&[item], &now_iso())?;
             db.insert_events(&derive(&t, &scope.account_id), &since)?;
             db.insert_activity(&my_actions(&t, &scope.account_id))?;
             Ok(())
@@ -205,7 +249,8 @@ impl Core {
         let (site, me) = self.identity().await?;
         let sync_error = self.last_error.lock().expect("error lock poisoned").clone();
         // The identity above labels the snapshot, so the data must come from that same account's database.
-        self.with_db_for(&Scope::of(&site, &me), |db| {
+        let scope = Scope::of(&site, &me);
+        self.with_db_for(&scope.clone(), |db| {
             let last_sync = db.meta(LAST_SYNC)?;
             // Tickets refreshed within a day of the last sync; older ones have dropped out of every query.
             let cutoff = last_sync
@@ -213,7 +258,7 @@ impl Core {
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| (d.with_timezone(&Utc) - Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true))
                 .unwrap_or_default();
-            let cached = db.tickets(&cutoff)?;
+            let cached = tickets_of(&db.items_synced_since(&Connection::jira_id(&scope), &cutoff)?)?;
             let seen = db.seen()?;
             let default_since = ago(Duration::days(DEFAULT_SEEN_DAYS));
 
@@ -400,17 +445,60 @@ impl Core {
 
     /// The cached ticket, or a fresh read from Jira when it isn't cached.
     pub async fn ticket(&self, scope: &Scope, key: &str) -> Result<CachedTicket> {
-        let (cached, last_sync) =
-            self.with_db_for(scope, |db| Ok((db.tickets("")?.into_iter().find(|t| t.key == key), db.meta(LAST_SYNC)?))).await?;
+        let item = Self::item(scope, key);
+        let (cached, last_sync) = self.with_db_for(scope, |db| Ok((db.item(&item)?, db.meta(LAST_SYNC)?))).await?;
         match cached {
-            Some(t) => Ok(t),
-            None => ticket_of(&self.tracker(scope)?.item(&Self::item(scope, key), &unread_cutoff(last_sync.as_deref())).await?),
+            Some(item) => ticket_of(&item),
+            None => ticket_of(&self.tracker(scope)?.item(&item, &unread_cutoff(last_sync.as_deref())).await?),
         }
+    }
+
+    /// The cached items that match `filter`. The raw tracker payload is left out; it is for Core, not for the page.
+    pub async fn cache_search(&self, filter: &Filter) -> Result<Vec<WorkItem>> {
+        let (site, me) = self.identity().await?;
+        let scope = Scope::of(&site, &me);
+        let connection_id = Connection::jira_id(&scope);
+        let now = Utc::now();
+        let items = self
+            .with_db_for(&scope, |db| {
+                let needs_me = db
+                    .needs_me_keys(&stamp(now))?
+                    .into_iter()
+                    .map(|key| ItemRef { connection_id: connection_id.clone(), external_id: key.clone(), key })
+                    .collect();
+                let me = Identity {
+                    display_name: me.name.clone(),
+                    accounts: vec![PersonRef { connection_id: connection_id.clone(), account_id: me.account_id.clone() }],
+                };
+                db.search(&connection_id, filter, &FilterContext { me, now, needs_me })
+            })
+            .await?;
+        Ok(items.into_iter().map(without_extra).collect())
+    }
+
+    pub async fn cache_item(&self, item: &ItemRef) -> Result<Option<WorkItem>> {
+        let scope = self.scope().await?;
+        Ok(self.with_db_for(&scope, |db| db.item(item)).await?.map(without_extra))
+    }
+
+    pub async fn cache_containers(&self) -> Result<Vec<Container>> {
+        let scope = self.scope().await?;
+        self.with_db_for(&scope, |db| db.containers(&Connection::jira_id(&scope))).await
+    }
+
+    pub async fn cache_workflow(&self, container: &ContainerRef) -> Result<Option<Workflow>> {
+        let scope = self.scope().await?;
+        self.with_db_for(&scope, |db| db.workflow(container)).await
+    }
+
+    pub async fn cache_events(&self, item: &ItemRef, limit: usize) -> Result<Vec<Event>> {
+        let scope = self.scope().await?;
+        self.with_db_for(&scope, |db| db.events_for_item(item, limit)).await
     }
 
     /// Tickets matching a query in the tracker's own language, for the assistant's search tool.
     pub async fn search_native(&self, scope: &Scope, query: &str, limit: usize) -> Result<Vec<CachedTicket>> {
-        let opts = SearchOptions { limit, history_since: None };
+        let opts = SearchOptions { limit, ..Default::default() };
         tickets_of(&self.tracker(scope)?.search_native(query, &opts).await?)
     }
 
@@ -481,5 +569,49 @@ mod tests {
         let item = WorkItem { extra: serde_json::to_value(&ticket).unwrap(), ..crate::domain::fixtures::work_item("1", "todo") };
         assert_eq!(ticket_of(&item).unwrap().key, ticket.key);
         assert!(ticket_of(&crate::domain::fixtures::work_item("1", "todo")).is_err(), "no payload, no ticket");
+    }
+
+    #[test]
+    fn a_database_from_before_the_cache_is_migrated_in_place_and_backfilled_once() {
+        let dir = std::env::temp_dir().join(format!("gossamr-backfill-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("inbox-site-me.sqlite");
+        let ticket = crate::tracker::testing::sample_ticket();
+        let mut stored = serde_json::to_value(&ticket).unwrap();
+        stored.as_object_mut().unwrap().retain(|k, _| k != "labels" && k != "links");
+        {
+            let old = rusqlite::Connection::open(&path).unwrap();
+            old.execute_batch(
+                "CREATE TABLE tickets (key TEXT PRIMARY KEY, data TEXT NOT NULL, synced_at TEXT NOT NULL);
+                 CREATE TABLE events (id TEXT PRIMARY KEY, ticket_key TEXT NOT NULL, kind TEXT NOT NULL, actor TEXT NOT NULL,
+                   at TEXT NOT NULL, text TEXT NOT NULL, unread INTEGER NOT NULL, done_at TEXT, snoozed_until TEXT);
+                 CREATE TABLE activity (id TEXT PRIMARY KEY, ticket_key TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL, text TEXT NOT NULL);
+                 CREATE TABLE seen (ticket_key TEXT PRIMARY KEY, at TEXT NOT NULL);
+                 CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+                 INSERT INTO seen VALUES ('CA-1', '2026-09-01T00:00:00Z');
+                 INSERT INTO meta VALUES ('last_sync_at', '2026-09-28T10:00:00Z');",
+            )
+            .unwrap();
+            old.execute(
+                "INSERT INTO tickets VALUES (?1, ?2, '2026-09-28T10:00:00Z')",
+                rusqlite::params![ticket.key, stored.to_string()],
+            )
+            .unwrap();
+        }
+        let connection = Connection::jira(&Scope { cloud_id: "site".into(), account_id: "me".into() }, "Site");
+
+        let db = Db::open(&path).unwrap();
+        backfill_cache(&db, &connection).unwrap();
+        backfill_cache(&db, &connection).unwrap();
+
+        let item = db.item(&connection.item("CA-1")).unwrap().expect("backfilled");
+        assert_eq!(item.title, "Do the thing");
+        assert_eq!(ticket_of(&item).unwrap().key, "CA-1");
+        assert_eq!(db.items_synced_since(&connection.id, "2026-09-28T10:00:00Z").unwrap().len(), 1);
+        assert_eq!(db.seen().unwrap().len(), 1, "inbox state survives");
+        assert_eq!(db.meta(LAST_SYNC).unwrap().as_deref(), Some("2026-09-28T10:00:00Z"));
+        assert_eq!(db.sync_state(&connection.id).unwrap().full_at, None, "the first sync is a full one, which fills in labels and links");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

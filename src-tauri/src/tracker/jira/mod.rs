@@ -22,6 +22,11 @@ use client::Jira;
 #[cfg(test)]
 pub(super) use client::{parse_issue, tests::sample_issue};
 
+/// A ticket stored before the cache existed, as the work item a sync would have produced.
+pub(super) fn item_from_ticket(connection_id: &str, t: &CachedTicket) -> WorkItem {
+    convert::work_item(connection_id, t)
+}
+
 const CONTAINER_LIMIT: usize = 100;
 
 pub(super) struct JiraTracker {
@@ -78,7 +83,7 @@ impl WorkTracker for JiraTracker {
     }
 
     async fn followed(&self, window_days: u32, opts: &SearchOptions) -> Result<Vec<WorkItem>> {
-        self.query(&jql::followed(window_days), opts).await
+        self.query(&jql::followed(window_days, opts.updated_since_minutes), opts).await
     }
 
     async fn children(&self, parents: &[ItemRef], opts: &SearchOptions) -> Result<Vec<WorkItem>> {
@@ -86,7 +91,7 @@ impl WorkTracker for JiraTracker {
             return Ok(vec![]);
         }
         let keys: Vec<&str> = parents.iter().map(|p| p.external_id.as_str()).collect();
-        self.query(&jql::children(&keys), opts).await
+        self.query(&jql::children(&keys, opts.updated_since_minutes), opts).await
     }
 
     async fn item(&self, item: &ItemRef, history_since: &str) -> Result<WorkItem> {
@@ -227,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn reads_and_writes_need_a_signed_in_account() {
         let t = tracker();
-        let opts = SearchOptions { limit: 10, history_since: None };
+        let opts = SearchOptions { limit: 10, ..Default::default() };
         assert!(matches!(t.followed(30, &opts).await, Err(Error::NotSignedIn)));
         assert!(matches!(t.transitions(&item()).await, Err(Error::NotSignedIn)));
         let comment = Intent::Comment { item: item(), body: Doc::paragraph("hi") };
