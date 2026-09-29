@@ -7,6 +7,9 @@ import { withProject } from "./filters";
 import { usePrefs } from "./prefs";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
 
+/** Where focus lands when the palette closes and the element that opened it is gone. */
+export const MAIN_ID = "workspace-main";
+
 export function PaletteView({
   query,
   results,
@@ -125,7 +128,7 @@ export function Palette() {
 
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
-    return () => opener?.focus?.();
+    return () => (opener?.isConnected ? opener : document.getElementById(MAIN_ID))?.focus();
   }, []);
 
   const results = useMemo(() => {
