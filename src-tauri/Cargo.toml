@@ -1,13 +1,13 @@
 [package]
-name = "jira-inbox"
+name = "gossamr"
 version = "0.1.0"
-description = "A keyboard-first Jira inbox for macOS"
+description = "A keyboard-first work aide for macOS, starting with Jira"
 authors = ["Alf Henderson"]
 edition = "2021"
 
 
 [lib]
-name = "jira_inbox_lib"
+name = "gossamr_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

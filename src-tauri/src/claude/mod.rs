@@ -28,7 +28,7 @@ const EFFORT: &str = "medium";
 /// Built-in tools Claude may use. With `--permission-mode dontAsk`, anything outside `ALLOWED` is refused, so it can
 /// read the repo and git history but not edit files or run other commands.
 const TOOLS: &str = "Read,Grep,Glob,Bash";
-const ALLOWED: &str = "mcp__jira-inbox,Read,Grep,Glob,Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git status:*),Bash(git branch:*)";
+const ALLOWED: &str = "mcp__gossamr,Read,Grep,Glob,Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git status:*),Bash(git branch:*)";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,8 +167,8 @@ impl Claude {
 
 fn system_prompt(key: &str) -> String {
     format!(
-        "You are running inside Jira Inbox, a desktop Jira client, helping the user with {key}. \
-         Read Jira with the jira-inbox tools (get_ticket, search_tickets, list_transitions). \
+        "You are running inside Gossamr, a desktop work aide connected to Jira, helping the user with {key}. \
+         Read Jira with the gossamr tools (get_ticket, search_tickets, list_transitions). \
          You cannot change Jira yourself. When a comment, a transition or subtasks would help, call propose_comment, \
          propose_transition or propose_subtasks; each becomes a card the user approves, edits or skips, so never say it \
          has been done. You can read files in the working folder and run read-only git commands. \
@@ -251,7 +251,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn claude_cannot_write_files() {
-        let target = std::env::temp_dir().join(format!("jira-inbox-write-probe-{}", std::process::id()));
+        let target = std::env::temp_dir().join(format!("gossamr-write-probe-{}", std::process::id()));
         let _ = std::fs::remove_file(&target);
         let mut child = Command::new(find_claude().expect("claude on PATH"))
             .args(["-p", "--output-format", "stream-json", "--verbose"])

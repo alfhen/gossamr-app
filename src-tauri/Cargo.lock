@@ -1500,6 +1500,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "gossamr"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "dirs",
+ "getrandom 0.4.3",
+ "keyring",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "gtk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2005,28 +2027,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "875a5a69ac2bab1a891711cf5eccbec1ce0341ea805560dcd90b7a2e925132e8"
 dependencies = [
  "jiff-tzdb",
-]
-
-[[package]]
-name = "jira-inbox"
-version = "0.1.0"
-dependencies = [
- "axum",
- "chrono",
- "dirs",
- "getrandom 0.4.3",
- "keyring",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "thiserror 2.0.21",
- "tokio",
- "url",
 ]
 
 [[package]]

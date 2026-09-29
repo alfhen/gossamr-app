@@ -75,7 +75,7 @@ impl McpServer {
     pub fn config_json(&self, request_id: &str) -> String {
         json!({
             "mcpServers": {
-                "jira-inbox": {
+                "gossamr": {
                     "type": "http",
                     "url": format!("http://127.0.0.1:{}/mcp/{request_id}", self.port),
                     "headers": { "Authorization": format!("Bearer {}", self.token) }
@@ -113,7 +113,7 @@ async fn handle(
         "initialize" => Ok(json!({
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": "jira-inbox", "version": env!("CARGO_PKG_VERSION") }
+            "serverInfo": { "name": "gossamr", "version": env!("CARGO_PKG_VERSION") }
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_list() })),
@@ -171,7 +171,7 @@ fn text(t: impl Into<String>, is_error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": t.into() }], "isError": is_error })
 }
 
-const PROPOSED: &str = "Proposed. The user will approve, edit or skip it in Jira Inbox; don't say it has been done.";
+const PROPOSED: &str = "Proposed. The user will approve, edit or skip it in Gossamr; don't say it has been done.";
 
 async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
     let Some(scope) = st.runs.lock().expect("runs lock poisoned").get(request_id).cloned() else {

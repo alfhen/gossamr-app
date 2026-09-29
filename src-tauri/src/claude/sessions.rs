@@ -20,7 +20,7 @@ pub struct SessionInfo {
     pub title: String,
     pub cwd: String,
     pub updated: String,
-    /// `cli`, `desktop` or `app` (started from Jira Inbox).
+    /// `cli`, `desktop` or `app` (started from Gossamr).
     pub source: String,
 }
 
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn lists_interactive_sessions_and_own_headless_ones() {
-        let dir = std::env::temp_dir().join(format!("jira-inbox-sessions-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gossamr-sessions-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         write(&dir, "p1", "cli-1", &[
             r#"{"type":"ai-title","aiTitle":"Generated"}"#,

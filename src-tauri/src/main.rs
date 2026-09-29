@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    jira_inbox_lib::run()
+    gossamr_lib::run()
 }
