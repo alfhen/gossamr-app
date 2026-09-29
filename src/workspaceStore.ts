@@ -59,6 +59,12 @@ const empty = {
 
 const byKey = <T,>(list: T[], key: (t: T) => string): Record<string, T> => Object.fromEntries(list.map((t) => [key(t), t]));
 
+let myAccountId: string | null = null;
+const meFor = (containers: Record<string, WorkContainer>): PersonRef[] =>
+  myAccountId
+    ? [...new Set(Object.values(containers).map((c) => c.ref.connectionId))].map((connectionId) => ({ connectionId, accountId: myAccountId! }))
+    : [];
+
 let stop: (() => void) | null = null;
 let generation = 0;
 let refreshSeq = 0;
@@ -69,6 +75,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   async init(backend) {
     get().dispose();
+    myAccountId = null;
     const mine = ++generation;
     set({ ...empty, backend, status: "loading" });
     const offCache = backend.onCacheChanged(() => void get().refresh());
@@ -80,9 +87,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try {
       const [snap] = await Promise.all([backend.load(), get().refresh(), get().refreshProposals()]);
       if (mine !== generation) return;
-      const accounts = Object.values(get().containers).map((c) => c.ref.connectionId);
-      const me = [...new Set(accounts)].map((connectionId) => ({ connectionId, accountId: snap.me.accountId }));
-      set({ me, names: { ...get().names, [snap.me.accountId]: snap.me.name }, status: "ready" });
+      myAccountId = snap.me.accountId;
+      set({ me: meFor(get().containers), names: { ...get().names, [snap.me.accountId]: snap.me.name }, status: "ready" });
     } catch (e) {
       if (mine === generation) set({ status: "error", error: String(e) });
       throw e;
@@ -104,9 +110,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       loaded.map(async (k) => [k, await backend.cacheEvents(get().items[k]?.item ?? keyToRef(k))] as const),
     );
     if (backend !== get().backend || mine !== refreshSeq) return;
+    const containerMap = byKey(containers, (c) => containerKey(c.ref));
     set((s) => ({
       items: byKey(items, (i) => itemKey(i.item)),
-      containers: byKey(containers, (c) => containerKey(c.ref)),
+      containers: containerMap,
+      me: meFor(containerMap),
       needsMe: new Set(needsMe.map((i) => itemKey(i.item))),
       names: { ...s.names, ...Object.fromEntries(people.map((p) => [p.accountId, p.name])) },
       events: { ...s.events, ...Object.fromEntries(events) },
@@ -129,13 +137,19 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   async approve(id) {
-    const p = await get().backend!.proposalsApprove(id);
+    const backend = get().backend!;
+    const mine = generation;
+    const p = await backend.proposalsApprove(id);
+    if (backend !== get().backend || mine !== generation) return p;
     set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));
     return p;
   },
 
   async skip(id) {
-    const p = await get().backend!.proposalsSkip(id);
+    const backend = get().backend!;
+    const mine = generation;
+    const p = await backend.proposalsSkip(id);
+    if (backend !== get().backend || mine !== generation) return p;
     set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));
     return p;
   },
