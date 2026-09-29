@@ -2,6 +2,7 @@ import type { Mention } from "../lib/mentions";
 import type {
   CacheChanged,
   ContainerRef,
+  Intent,
   ItemRef,
   Person,
   Proposal,
@@ -58,6 +59,8 @@ export interface Backend {
   /** Drafted writes, newest first. They survive a restart. */
   proposalsList(query?: ProposalQuery): Promise<Proposal[]>;
   proposalsGet(id: string): Promise<Proposal | null>;
+  /** Drafts a write the person made by hand, such as dropping a card on a column. Nothing is written until it is approved. */
+  proposalsCreate(intent: Intent, label?: string | null): Promise<Proposal>;
   /** Replaces a pending draft's payload. */
   proposalsEdit(id: string, edit: ProposalEdit): Promise<Proposal>;
   proposalsSkip(id: string): Promise<Proposal>;

@@ -46,4 +46,15 @@ describe("mock proposals", () => {
     expect(done.created).toHaveLength(2);
     expect((await backend.load()).tickets["CA-412"].subtasks.filter((s) => ["a", "b"].includes(s.summary))).toHaveLength(2);
   });
+
+  it("stores a hand-made draft as pending by the user without applying it", async () => {
+    const backend = new MockBackend();
+    const to = { type: "transition", item: ref, to: "ca-copy" } as const;
+    const before = (await backend.cacheItem(ref))?.status.name;
+    const p = await backend.proposalsCreate(to, "Copy");
+    expect(p).toMatchObject({ createdBy: "user", origin: { type: "board" }, state: { type: "pending" }, label: "Copy", intent: to });
+    expect((await backend.proposalsList({ item: ref })).map((d) => d.id)).toEqual([p.id]);
+    expect((await backend.cacheItem(ref))?.status.name).toBe(before);
+    await expect(backend.proposalsCreate({ ...to, to: "" })).rejects.toThrow(/target status/);
+  });
 });

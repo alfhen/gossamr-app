@@ -5,6 +5,7 @@ import type { Mention } from "../lib/mentions";
 import type {
   CacheChanged,
   ContainerRef,
+  Intent,
   ItemRef,
   Person,
   Proposal,
@@ -146,6 +147,10 @@ export class JiraBackend implements Backend {
 
   proposalsGet(id: string) {
     return invoke<Proposal | null>("proposals_get", { id });
+  }
+
+  proposalsCreate(intent: Intent, label: string | null = null) {
+    return invoke<Proposal>("proposals_create", { intent, label });
   }
 
   proposalsEdit(id: string, edit: ProposalEdit) {
