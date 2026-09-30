@@ -59,6 +59,17 @@ fn args(req: &AgentRequest) -> Vec<String> {
     a
 }
 
+fn command(binary: PathBuf, req: &AgentRequest) -> Command {
+    let mut cmd = Command::new(binary);
+    cmd.args(args(req))
+        .current_dir(req.sandbox.path())
+        // Launched from inside a Claude Code session, the child would otherwise think it's nested.
+        .env_remove("CLAUDECODE")
+        // `--setting-sources` doesn't cover auto memory, which Claude would otherwise put in its prompt.
+        .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+    cmd
+}
+
 impl ClaudeCodeProvider {
     pub fn new() -> Self {
         Self::default()
@@ -79,11 +90,7 @@ impl AgentProvider for ClaudeCodeProvider {
         let binary = find_claude().ok_or_else(|| {
             Error::Claude("Claude Code isn't installed, or isn't on your PATH. Install it from code.claude.com.".into())
         })?;
-        let mut child = Command::new(binary)
-            .args(args(&req))
-            .current_dir(req.sandbox.path())
-            // Launched from inside a Claude Code session, the child would otherwise think it's nested.
-            .env_remove("CLAUDECODE")
+        let mut child = command(binary, &req)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -212,6 +219,15 @@ mod tests {
         let servers: serde_json::Value = serde_json::from_str(&after("--mcp-config")).unwrap();
         assert_eq!(servers["mcpServers"].as_object().unwrap().keys().collect::<Vec<_>>(), ["gossamr"]);
         assert_eq!(servers["mcpServers"]["gossamr"]["headers"]["Authorization"], "Bearer tok");
+    }
+
+    #[test]
+    fn it_runs_in_the_sandbox_with_auto_memory_off() {
+        let req = request(None);
+        let cmd = command(PathBuf::from("claude"), &req);
+        let cmd = cmd.as_std();
+        assert_eq!(cmd.get_current_dir(), Some(req.sandbox.path()));
+        assert!(cmd.get_envs().any(|(k, v)| k == "CLAUDE_CODE_DISABLE_AUTO_MEMORY" && v == Some("1".as_ref())));
     }
 
     #[test]

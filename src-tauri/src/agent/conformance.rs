@@ -140,12 +140,18 @@ pub async fn declares_what_the_rest_relies_on(p: &dyn AgentProvider) -> std::res
 
 pub async fn cannot_write_files(p: &dyn AgentProvider, h: &Harness, probes: &Probes) -> std::result::Result<(), String> {
     let _ = std::fs::remove_file(h.write_target());
-    h.run(p, "write", &probes.write).await?;
+    let events = h.run(p, "write", &probes.write).await?;
+    if !done_ok(&events) {
+        return Err(format!("the probe never ran to the end: {events:?}"));
+    }
     (!h.write_target().exists()).then_some(()).ok_or_else(|| "the agent was able to create a file".into())
 }
 
 pub async fn cannot_read_files_outside_its_sandbox(p: &dyn AgentProvider, h: &Harness, probes: &Probes) -> std::result::Result<(), String> {
     let events = h.run(p, "read", &probes.read_file).await?;
+    if !done_ok(&events) {
+        return Err(format!("the probe never ran to the end: {events:?}"));
+    }
     let seen: String = events
         .iter()
         .map(|e| match e {
@@ -160,7 +166,10 @@ pub async fn cannot_read_files_outside_its_sandbox(p: &dyn AgentProvider, h: &Ha
 pub async fn cannot_run_commands(p: &dyn AgentProvider, h: &Harness, probes: &Probes) -> std::result::Result<(), String> {
     let _ = std::fs::remove_file(h.shell_target());
     let _ = std::fs::remove_dir_all(h.git_target());
-    h.run(p, "command", &probes.run_command).await?;
+    let events = h.run(p, "command", &probes.run_command).await?;
+    if !done_ok(&events) {
+        return Err(format!("the probe never ran to the end: {events:?}"));
+    }
     let ran = h.shell_target().exists() || h.git_target().exists();
     (!ran).then_some(()).ok_or_else(|| "the agent was able to run a shell command or git".into())
 }
@@ -234,6 +243,8 @@ enum Step {
 struct Scripted {
     leaky: bool,
     deaf: bool,
+    /// Every run ends failed before doing anything.
+    crashes: bool,
     cancels: Mutex<HashMap<String, oneshot::Sender<()>>>,
     live: Arc<AtomicUsize>,
 }
@@ -253,12 +264,12 @@ impl AgentProvider for Scripted {
         let (tx, rx) = mpsc::unbounded_channel();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         self.cancels.lock().unwrap().insert(req.run_id.clone(), cancel_tx);
-        let (leaky, deaf, live) = (self.leaky, self.deaf, self.live.clone());
+        let (leaky, deaf, crashes, live) = (self.leaky, self.deaf, self.crashes, self.live.clone());
         live.fetch_add(1, Ordering::SeqCst);
         tokio::spawn(async move {
             let _ = tx.send(AgentEvent::Started { session_id: "scripted".into() });
             let work = async {
-                for step in steps {
+                for step in steps.into_iter().filter(|_| !crashes) {
                     match step {
                         Step::Call { tool, args } => {
                             let rpc = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": args } });
@@ -306,7 +317,7 @@ impl AgentProvider for Scripted {
                 tokio::select! { _ = work => false, _ = cancel_rx => true }
             };
             let message = stopped.then(|| "Stopped".to_string());
-            let _ = tx.send(AgentEvent::Done { session_id: None, ok: !stopped, message });
+            let _ = tx.send(AgentEvent::Done { session_id: None, ok: !stopped && !crashes, message });
             live.fetch_sub(1, Ordering::SeqCst);
         });
         Ok(rx)
@@ -375,6 +386,16 @@ mod tests {
         let tight = Scripted::default();
         cannot_read_files_outside_its_sandbox(&tight, &h, &probes).await.unwrap();
         cannot_run_commands(&tight, &h, &probes).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_fails_to_run_is_not_a_pass() {
+        let p = Scripted { crashes: true, ..Default::default() };
+        let h = Harness::start().await;
+        let probes = probes_for(&h);
+        assert!(cannot_read_files_outside_its_sandbox(&p, &h, &probes).await.unwrap_err().contains("never ran"));
+        assert!(cannot_run_commands(&p, &h, &probes).await.unwrap_err().contains("never ran"));
+        assert!(cannot_write_files(&p, &h, &probes).await.unwrap_err().contains("never ran"));
     }
 
     #[test]

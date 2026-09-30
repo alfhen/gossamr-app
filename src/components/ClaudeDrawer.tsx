@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { claude, type ClaudeSessions } from "../backend/claude";
+import { claude } from "../backend/claude";
 import { useClaude, type Turn } from "../claudeStore";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, participants, type Mention } from "../lib/mentions";
@@ -25,7 +25,7 @@ export function ClaudeDrawer() {
   const ticket = selectedTicket(store);
   const { open, setOpen, byTicket, proposals, ask, cancel } = useClaude();
   const conv = ticket ? byTicket[ticket.key] : undefined;
-  const [sessions, setSessions] = useState<ClaudeSessions | null>(null);
+  const [sessions, setSessions] = useState<{ key: string; last: string | null } | null>(null);
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -42,9 +42,9 @@ export function ClaudeDrawer() {
       .sessions(ticket.key)
       .then((s) => {
         if (!live) return;
-        setSessions(s);
+        setSessions({ key: ticket.key, last: s.last });
       })
-      .catch(() => live && setSessions({ last: null }));
+      .catch(() => live && setSessions({ key: ticket.key, last: null }));
     inputRef.current?.focus();
     return () => {
       live = false;
@@ -56,13 +56,14 @@ export function ClaudeDrawer() {
   }, [conv, proposals]);
 
   if (!open || !ticket) return null;
+  const session = conv?.sessionId ?? (sessions?.key === ticket.key ? sessions.last : null);
 
   const submit = (prompt: string) => {
     const text = prompt.trim();
     if (!text || running) return;
     // Follow-ups continue the session this conversation already started.
     setInput("");
-    void ask(ticket.key, text, conv?.sessionId ?? sessions?.last ?? null);
+    void ask(ticket.key, text, session);
   };
 
   return (
@@ -81,9 +82,9 @@ export function ClaudeDrawer() {
             ×
           </button>
         </div>
-        {(conv?.sessionId ?? sessions?.last) && (
+        {session && (
           <div className="text-sm text-ink-2">
-            Continuing session <span className="font-mono">{(conv?.sessionId ?? sessions?.last ?? "").slice(0, 8)}</span>
+            Continuing session <span className="font-mono">{session.slice(0, 8)}</span>
           </div>
         )}
       </header>
