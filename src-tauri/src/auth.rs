@@ -112,6 +112,11 @@ impl Auth {
         Self { http, session: Mutex::new(session) }
     }
 
+    #[cfg(test)]
+    pub fn signed_out(http: reqwest::Client) -> Self {
+        Self { http, session: Mutex::new(None) }
+    }
+
     pub async fn status(&self) -> Result<AuthStatus> {
         let session = self.session.lock().await;
         Ok(AuthStatus {

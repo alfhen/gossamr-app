@@ -1,4 +1,3 @@
-mod adf;
 mod auth;
 mod claude;
 mod db;
@@ -6,11 +5,11 @@ mod domain;
 mod error;
 mod events;
 mod inbox;
-mod jira;
 mod legacy;
 mod model;
 mod notify;
 mod secrets;
+mod tracker;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -144,7 +143,7 @@ async fn comment(
     scope: Scope,
     key: String,
     body: String,
-    mentions: Option<Vec<adf::MentionRef>>,
+    mentions: Option<Vec<model::MentionRef>>,
     files: Option<Vec<model::Uploaded>>,
 ) -> Result<()> {
     core.comment(&scope, &key, &body, &mentions.unwrap_or_default(), &files.unwrap_or_default()).await?;
@@ -289,12 +288,12 @@ pub fn run() {
                 .timeout(Duration::from_secs(30))
                 .build()?;
             let auth = Arc::new(Auth::load(http.clone()));
-            let jira = jira::Jira::new(http, auth.clone());
+            let registry = tracker::Registry::jira(http, auth.clone());
             let data_dir = app.path().app_data_dir()?;
             if let Err(e) = legacy::adopt_legacy_data(&data_dir) {
                 eprintln!("couldn't move data from the previous app name, starting fresh: {e}");
             }
-            let core: CoreState = Arc::new(Core::new(auth, jira, data_dir));
+            let core: CoreState = Arc::new(Core::new(auth, registry, data_dir));
             app.manage(core.clone());
 
             let handle = app.handle().clone();

@@ -225,7 +225,7 @@ impl Db {
 mod tests {
     use super::*;
     use crate::events::derive;
-    use crate::jira::{parse_issue, tests::sample_issue};
+    use crate::tracker::testing::sample_ticket;
 
     #[test]
     fn stores_each_action_once_and_reads_back_recent_ones() {
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn inserting_events_twice_reports_them_once() {
         let db = Db::in_memory().unwrap();
-        let events = derive(&parse_issue(&sample_issue()).unwrap(), "me");
+        let events = derive(&sample_ticket(), "me");
         assert_eq!(db.insert_events(&events, "2000-01-01T00:00:00Z").unwrap().len(), 2);
         assert!(db.insert_events(&events, "2000-01-01T00:00:00Z").unwrap().is_empty());
         assert_eq!(db.events("2000-01-01T00:00:00Z").unwrap().len(), 2);
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn events_before_the_cutoff_arrive_read() {
         let db = Db::in_memory().unwrap();
-        let events = derive(&parse_issue(&sample_issue()).unwrap(), "me");
+        let events = derive(&sample_ticket(), "me");
         assert!(db.insert_events(&events, "2030-01-01T00:00:00Z").unwrap().is_empty());
         assert!(db.events("2000-01-01T00:00:00Z").unwrap().iter().all(|e| !e.unread));
     }
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn done_clears_unread_and_snooze_and_undo_keeps_them_cleared() {
         let db = Db::in_memory().unwrap();
-        let events = derive(&parse_issue(&sample_issue()).unwrap(), "me");
+        let events = derive(&sample_ticket(), "me");
         db.insert_events(&events, "2000-01-01T00:00:00Z").unwrap();
         db.snooze("c:10", Some("2030-01-01T00:00:00Z")).unwrap();
         db.set_done("c:10", Some("2026-09-28T12:00:00Z")).unwrap();
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn tickets_that_stop_syncing_drop_out() {
         let db = Db::in_memory().unwrap();
-        let t = parse_issue(&sample_issue()).unwrap();
+        let t = sample_ticket();
         db.upsert_ticket(&t, "2026-09-28T10:00:00Z").unwrap();
         assert_eq!(db.tickets("2026-09-28T09:00:00Z").unwrap().len(), 1);
         assert!(db.tickets("2026-09-28T11:00:00Z").unwrap().is_empty());

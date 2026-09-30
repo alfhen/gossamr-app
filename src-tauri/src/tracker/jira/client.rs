@@ -7,10 +7,11 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::adf;
+use super::adf;
 use crate::auth::{json_or_error, Auth, Scope};
 use crate::error::{Error, Result};
-use crate::model::{Attachment, CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, Transition, Uploaded};
+use crate::domain::StatusDef;
+use crate::model::{Attachment, CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, Uploaded};
 
 const FIELDS: &[&str] = &[
     "summary", "status", "issuetype", "priority", "assignee", "reporter", "parent", "description", "comment",
@@ -20,15 +21,26 @@ const PAGE_SIZE: u32 = 50;
 const CHANGELOG_PAGE: u64 = 100;
 /// Bounds the changelog pages fetched per issue in one sync, so a ticket edited by automation can't stall it.
 const MAX_CHANGELOG_PAGES: usize = 10;
-/// Tickets the inbox tracks. Anything past this drops out of the inbox, so it is a sanity bound, not a page size.
-pub const TRACKED_LIMIT: usize = 2000;
-/// Tickets read for context, such as an epic's children, so a very broad JQL can't stall a sync.
-pub const CONTEXT_LIMIT: usize = 300;
+const PROJECT_PAGE: usize = 50;
+const COMMENT_PAGE: u64 = 100;
 const MENTION_SUGGESTIONS: usize = 10;
 /// Largest attachment shown in the app; bigger ones stay in Jira. Checked while reading, not after.
 const PREVIEW_LIMIT: usize = 25 * 1024 * 1024;
 
-pub struct Jira {
+/// A transition as Jira lists it: its own id, and the status it leads to.
+pub(super) struct RawTransition {
+    pub id: String,
+    pub name: String,
+    pub to: StatusDef,
+}
+
+pub(super) struct IssueType {
+    pub id: String,
+    pub name: String,
+    pub subtask: bool,
+}
+
+pub(super) struct Jira {
     http: reqwest::Client,
     /// Doesn't follow redirects, so a redirect's target can be read (see `media_id`).
     no_redirect: reqwest::Client,
@@ -36,7 +48,7 @@ pub struct Jira {
 }
 
 impl Jira {
-    pub fn new(http: reqwest::Client, auth: Arc<Auth>) -> Self {
+    pub(super) fn new(http: reqwest::Client, auth: Arc<Auth>) -> Self {
         let no_redirect = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(30))
@@ -88,7 +100,7 @@ impl Jira {
 
     /// Runs a JQL search and returns up to `limit` matching issues. With `history_since`, each issue carries its
     /// changelog back to at least that time (RFC 3339).
-    pub async fn search(&self, scope: &Scope, jql: &str, history_since: Option<&str>, limit: usize) -> Result<Vec<CachedTicket>> {
+    pub(super) async fn search(&self, scope: &Scope, jql: &str, history_since: Option<&str>, limit: usize) -> Result<Vec<CachedTicket>> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Page {
@@ -123,7 +135,7 @@ impl Jira {
     }
 
     /// One issue, with its changelog back to at least `history_since` (RFC 3339).
-    pub async fn issue(&self, scope: &Scope, key: &str, history_since: &str) -> Result<CachedTicket> {
+    pub(super) async fn issue(&self, scope: &Scope, key: &str, history_since: &str) -> Result<CachedTicket> {
         let raw: Value = self
             .call(scope, Method::GET, &format!("issue/{key}?fields={}&expand=changelog", FIELDS.join(",")), None)
             .await?;
@@ -154,19 +166,13 @@ impl Jira {
         Ok(t)
     }
 
-    pub async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<Transition>> {
+    /// Each transition open to `key` with the status it leads to.
+    pub(super) async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<RawTransition>> {
         let raw: Value = self.call(scope, Method::GET, &format!("issue/{key}/transitions"), None).await?;
-        Ok(raw["transitions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|t| {
-                Some(Transition { id: t["id"].as_str()?.into(), name: t["name"].as_str()?.into(), to: status(&t["to"])? })
-            })
-            .collect())
+        Ok(parse_transitions(&raw))
     }
 
-    pub async fn transition(&self, scope: &Scope, key: &str, transition_id: &str) -> Result<()> {
+    pub(super) async fn transition(&self, scope: &Scope, key: &str, transition_id: &str) -> Result<()> {
         let body = json!({ "transition": { "id": transition_id } });
         self.call::<Value>(scope, Method::POST, &format!("issue/{key}/transitions"), Some(&body)).await?;
         Ok(())
@@ -174,18 +180,15 @@ impl Jira {
 
     /// Creates subtasks under `parent` using the project's first sub-task issue type, stopping at the first failure.
     /// Returns the keys created so far, in the order of `summaries`, with the error that stopped it.
-    pub async fn create_subtasks(&self, scope: &Scope, parent: &str, summaries: &[String]) -> Result<(Vec<String>, Option<Error>)> {
+    pub(super) async fn create_subtasks(&self, scope: &Scope, parent: &str, summaries: &[String]) -> Result<(Vec<String>, Option<Error>)> {
         let project = parent.split('-').next().unwrap_or(parent);
-        let types: Value = self.call(scope, Method::GET, &format!("issue/createmeta/{project}/issuetypes"), None).await?;
-        let subtask_type = types["issueTypes"]
-            .as_array()
-            .or_else(|| types["values"].as_array())
+        let subtask_type = self
+            .issue_types(scope, project)
+            .await?
             .into_iter()
-            .flatten()
-            .find(|t| t["subtask"] == true)
-            .and_then(|t| t["id"].as_str())
-            .ok_or_else(|| Error::Api { status: 400, message: format!("project {project} has no sub-task issue type") })?
-            .to_string();
+            .find(|t| t.subtask)
+            .map(|t| t.id)
+            .ok_or_else(|| Error::Api { status: 400, message: format!("project {project} has no sub-task issue type") })?;
         let mut created = Vec::new();
         for summary in summaries {
             let body = json!({ "fields": {
@@ -203,7 +206,7 @@ impl Jira {
     }
 
     /// People who can see `key` and match `query`, for @mention suggestions. Apps and deactivated users are left out.
-    pub async fn mentionable(&self, scope: &Scope, key: &str, query: &str) -> Result<Vec<Person>> {
+    pub(super) async fn mentionable(&self, scope: &Scope, key: &str, query: &str) -> Result<Vec<Person>> {
         let encode = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
         // Jira takes `maxResults` users first and filters that range by `query` afterwards, so a small page would
         // hide most of a site's people. 1,000 is the endpoint's ceiling.
@@ -220,13 +223,13 @@ impl Jira {
     }
 
     /// Jira's per-file upload limit in bytes, or `None` when attachments are turned off on the site.
-    pub async fn attachment_limit(&self, scope: &Scope) -> Result<Option<u64>> {
+    pub(super) async fn attachment_limit(&self, scope: &Scope) -> Result<Option<u64>> {
         let meta: Value = self.call(scope, Method::GET, "attachment/meta", None).await?;
         Ok(if meta["enabled"] == false { None } else { meta["uploadLimit"].as_u64() })
     }
 
     /// Uploads a file to `key`, then looks up its media id so a comment can show it inline.
-    pub async fn attach(&self, scope: &Scope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
+    pub(super) async fn attach(&self, scope: &Scope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
         let mime_type = if Part::bytes(Vec::new()).mime_str(mime_type).is_ok() { mime_type } else { "application/octet-stream" };
         let res = self
             .send(&self.http, scope, Method::POST, &format!("issue/{key}/attachments"), |req| {
@@ -251,7 +254,7 @@ impl Jira {
 
     /// The media-service id of an attachment. Jira's API only exposes it through the redirect its content download
     /// answers with (`…/file/{mediaId}/binary`), so this reads that redirect without following it.
-    pub async fn media_id(&self, scope: &Scope, attachment_id: &str) -> Result<Option<String>> {
+    pub(super) async fn media_id(&self, scope: &Scope, attachment_id: &str) -> Result<Option<String>> {
         let res = self.send(&self.no_redirect, scope, Method::GET, &format!("attachment/content/{attachment_id}"), |r| r).await?;
         if !res.status().is_redirection() {
             return Ok(None);
@@ -261,7 +264,7 @@ impl Jira {
 
     /// An attachment's content type and bytes. The download redirects to the media service with a signed URL;
     /// reqwest drops the bearer token when following it to another host.
-    pub async fn download(&self, scope: &Scope, id: &str) -> Result<(String, Vec<u8>)> {
+    pub(super) async fn download(&self, scope: &Scope, id: &str) -> Result<(String, Vec<u8>)> {
         let res = self.send(&self.http, scope, Method::GET, &format!("attachment/content/{id}"), |r| r).await?;
         if !res.status().is_success() {
             return Err(Error::Api { status: res.status().as_u16(), message: format!("couldn't download attachment {id}") });
@@ -287,15 +290,75 @@ impl Jira {
         Ok((mime, bytes))
     }
 
-    pub async fn comment(&self, scope: &Scope, key: &str, text: &str, mentions: &[adf::MentionRef], files: &[Uploaded]) -> Result<()> {
-        let body = json!({ "body": adf::with_files(adf::from_text(text, mentions), files) });
-        self.call::<Value>(scope, Method::POST, &format!("issue/{key}/comment"), Some(&body)).await?;
+    pub(super) async fn comment(&self, scope: &Scope, key: &str, body: &Value) -> Result<()> {
+        self.call::<Value>(scope, Method::POST, &format!("issue/{key}/comment"), Some(&json!({ "body": body }))).await?;
+        Ok(())
+    }
+
+    pub(super) async fn comments(&self, scope: &Scope, key: &str) -> Result<Vec<Comment>> {
+        let mut out = Vec::new();
+        let mut start = 0u64;
+        loop {
+            let page: Value = self.call(scope, Method::GET, &format!("issue/{key}/comment?startAt={start}&maxResults={COMMENT_PAGE}"), None).await?;
+            let raw = page["comments"].as_array().map(Vec::as_slice).unwrap_or_default();
+            out.extend(raw.iter().filter_map(parse_comment));
+            start += raw.len() as u64;
+            if raw.is_empty() || start >= page["total"].as_u64().unwrap_or(0) {
+                return Ok(out);
+            }
+        }
+    }
+
+    /// Projects the person can see, as `(key, name)`, up to `limit`.
+    pub(super) async fn projects(&self, scope: &Scope, limit: usize) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
+        while out.len() < limit {
+            let page: Value = self.call(scope, Method::GET, &format!("project/search?startAt={}&maxResults={PROJECT_PAGE}", out.len()), None).await?;
+            let values = page["values"].as_array().map(Vec::as_slice).unwrap_or_default();
+            out.extend(values.iter().filter_map(|p| Some((p["key"].as_str()?.to_string(), p["name"].as_str()?.to_string()))));
+            if values.is_empty() || page["isLast"] == true {
+                break;
+            }
+        }
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    pub(super) async fn project_statuses(&self, scope: &Scope, project: &str) -> Result<Vec<StatusDef>> {
+        let raw: Value = self.call(scope, Method::GET, &format!("project/{project}/statuses"), None).await?;
+        Ok(parse_project_statuses(&raw))
+    }
+
+    pub(super) async fn issue_types(&self, scope: &Scope, project: &str) -> Result<Vec<IssueType>> {
+        let raw: Value = self.call(scope, Method::GET, &format!("issue/createmeta/{project}/issuetypes"), None).await?;
+        Ok(raw["issueTypes"]
+            .as_array()
+            .or_else(|| raw["values"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|t| Some(IssueType { id: t["id"].as_str()?.into(), name: t["name"].as_str()?.into(), subtask: t["subtask"] == true }))
+            .collect())
+    }
+
+    /// Creates an issue from a `fields` object and returns its key.
+    pub(super) async fn create_issue(&self, scope: &Scope, fields: Value) -> Result<String> {
+        let res: Value = self.call(scope, Method::POST, "issue", Some(&json!({ "fields": fields }))).await?;
+        res["key"].as_str().map(String::from).ok_or_else(|| Error::Api { status: 200, message: "Jira didn't return the new issue's key".into() })
+    }
+
+    pub(super) async fn update_issue(&self, scope: &Scope, key: &str, fields: Value) -> Result<()> {
+        self.call::<Value>(scope, Method::PUT, &format!("issue/{key}"), Some(&json!({ "fields": fields }))).await?;
+        Ok(())
+    }
+
+    pub(super) async fn link_issues(&self, scope: &Scope, body: &Value) -> Result<()> {
+        self.call::<Value>(scope, Method::POST, "issueLink", Some(body)).await?;
         Ok(())
     }
 }
 
 /// Jira timestamps look like `2026-09-28T10:00:00.000+0200`; normalise to UTC RFC 3339 so they sort as strings.
-pub fn normalise_time(s: &str) -> String {
+pub(super) fn normalise_time(s: &str) -> String {
     DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f%z")
         .or_else(|_| DateTime::parse_from_rfc3339(s))
         .map(|d| d.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
@@ -312,6 +375,7 @@ fn person(v: &Value) -> Option<Person> {
 
 fn status(v: &Value) -> Option<Status> {
     Some(Status {
+        id: v["id"].as_str().unwrap_or_default().to_string(),
         name: v["name"].as_str()?.to_string(),
         category: v.pointer("/statusCategory/key").and_then(Value::as_str).unwrap_or("indeterminate").to_string(),
     })
@@ -363,7 +427,49 @@ fn parse_history(h: &Value) -> Option<History> {
     })
 }
 
-pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
+fn parse_comment(c: &Value) -> Option<Comment> {
+    Some(Comment {
+        id: c["id"].as_str()?.to_string(),
+        author: person(&c["author"])?,
+        created: normalise_time(c["created"].as_str()?),
+        body: adf::to_text(&c["body"]),
+        mentions: adf::mentions(&c["body"]),
+        mentioned: adf::mentioned(&c["body"]),
+        doc: doc(&c["body"]),
+    })
+}
+
+pub(super) fn parse_transitions(raw: &Value) -> Vec<RawTransition> {
+    raw["transitions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| Some(RawTransition { id: t["id"].as_str()?.into(), name: t["name"].as_str()?.into(), to: status_def(&t["to"])? }))
+        .collect()
+}
+
+/// A status from a project's statuses, once per id across issue types.
+fn parse_project_statuses(raw: &Value) -> Vec<StatusDef> {
+    let mut out: Vec<StatusDef> = Vec::new();
+    for def in raw.as_array().into_iter().flatten().flat_map(|t| t["statuses"].as_array().into_iter().flatten()).filter_map(status_def) {
+        if !out.iter().any(|s| s.id == def.id) {
+            out.push(def);
+        }
+    }
+    out
+}
+
+pub(super) fn status_def(v: &Value) -> Option<StatusDef> {
+    use crate::domain::Category;
+    let category = match v.pointer("/statusCategory/key").and_then(Value::as_str) {
+        Some("new") => Category::Todo,
+        Some("done") => Category::Done,
+        _ => Category::Active,
+    };
+    Some(StatusDef { id: v["id"].as_str()?.into(), name: v["name"].as_str()?.into(), category })
+}
+
+pub(in crate::tracker) fn parse_issue(raw: &Value) -> Option<CachedTicket> {
     let f = &raw["fields"];
     let key = raw["key"].as_str()?.to_string();
     let comments = f
@@ -371,17 +477,7 @@ pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|c| {
-            Some(Comment {
-                id: c["id"].as_str()?.to_string(),
-                author: person(&c["author"])?,
-                created: normalise_time(c["created"].as_str()?),
-                body: adf::to_text(&c["body"]),
-                mentions: adf::mentions(&c["body"]),
-                mentioned: adf::mentioned(&c["body"]),
-                doc: doc(&c["body"]),
-            })
-        })
+        .filter_map(parse_comment)
         .collect();
     let history = raw
         .pointer("/changelog/histories")
@@ -445,15 +541,15 @@ pub fn parse_issue(raw: &Value) -> Option<CachedTicket> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub(in crate::tracker) mod tests {
     use super::*;
 
-    pub(crate) fn sample_issue() -> Value {
+    pub(in crate::tracker) fn sample_issue() -> Value {
         json!({
             "key": "CA-1",
             "fields": {
                 "summary": "Do the thing",
-                "status": {"name": "In Review", "statusCategory": {"key": "indeterminate"}},
+                "status": {"id": "3", "name": "In Review", "statusCategory": {"key": "indeterminate"}},
                 "issuetype": {"name": "Story", "hierarchyLevel": 0},
                 "priority": {"name": "High"},
                 "assignee": {"accountId": "me", "displayName": "Me Myself"},
@@ -537,5 +633,34 @@ pub(crate) mod tests {
         assert_eq!(normalise_time("2026-09-28T10:00:00.123+0200"), "2026-09-28T08:00:00Z");
         assert_eq!(normalise_time("2026-09-28T08:00:00Z"), "2026-09-28T08:00:00Z");
         assert_eq!(normalise_time("garbage"), "garbage");
+    }
+
+    #[test]
+    fn reads_transitions_with_the_status_each_leads_to() {
+        let raw = json!({"transitions": [
+            {"id": "11", "name": "Start", "to": {"id": "3", "name": "In Progress", "statusCategory": {"key": "indeterminate"}}},
+            {"id": "31", "name": "Finish", "to": {"id": "5", "name": "Done", "statusCategory": {"key": "done"}}},
+            {"id": "99", "name": "Broken", "to": {"name": "no id"}}
+        ]});
+        let ts = parse_transitions(&raw);
+        assert_eq!(ts.len(), 2);
+        assert_eq!((ts[0].id.as_str(), ts[0].to.id.as_str()), ("11", "3"));
+        assert_eq!(ts[1].to.category, crate::domain::Category::Done);
+    }
+
+    #[test]
+    fn a_projects_statuses_are_listed_once_across_issue_types() {
+        let raw = json!([
+            {"name": "Task", "statuses": [
+                {"id": "1", "name": "To Do", "statusCategory": {"key": "new"}},
+                {"id": "3", "name": "In Progress", "statusCategory": {"key": "indeterminate"}}
+            ]},
+            {"name": "Bug", "statuses": [
+                {"id": "1", "name": "To Do", "statusCategory": {"key": "new"}},
+                {"id": "5", "name": "Done", "statusCategory": {"key": "done"}}
+            ]}
+        ]);
+        let names: Vec<String> = parse_project_statuses(&raw).into_iter().map(|s| s.name).collect();
+        assert_eq!(names, ["To Do", "In Progress", "Done"]);
     }
 }
