@@ -132,5 +132,5 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
     },
   };
 
-  return { cardProps, now, pending, workflowOf, notice, dismissNotice: () => setNotice(null), say, bulk };
+  return { cardProps, now, pending, blocked, counts, workflowOf, notice, dismissNotice: () => setNotice(null), say, bulk };
 }
