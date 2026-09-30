@@ -22,7 +22,7 @@ mod code;
 mod drafts;
 mod watch;
 
-pub use code::CodeService;
+pub use code::{CodeRef, CodeService};
 pub use drafts::Edit;
 pub use watch::{CatalogPage, WatchState};
 
@@ -931,6 +931,11 @@ pub(crate) mod testing {
     }
 
     pub async fn fixture() -> Fixture {
+        fixture_with(None).await
+    }
+
+    /// The fixture with a scripted GitHub service in place of the real one.
+    pub async fn fixture_with(code: Option<CodeService>) -> Fixture {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
@@ -941,7 +946,11 @@ pub(crate) mod testing {
         let tracker = Arc::new(Recorder::default());
         let shared = tracker.clone();
         let registry = Registry::new(move |_| shared.clone());
-        let core = Arc::new(Core::new(Arc::new(Auth::signed_in(http, creds.clone())), registry, dir.clone()));
+        let mut core = Core::new(Arc::new(Auth::signed_in(http, creds.clone())), registry, dir.clone());
+        if let Some(code) = code {
+            core = core.with_code(code);
+        }
+        let core = Arc::new(core);
         core.registry.register(creds.connection());
 
         let fx = Fixture { core, scope, tracker, dir };

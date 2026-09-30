@@ -1,0 +1,30 @@
+[
+ {
+  "name": "main",
+  "commit": {
+   "sha": "bbb2222"
+  },
+  "protected": true
+ },
+ {
+  "name": "ca-208-gateway",
+  "commit": {
+   "sha": "aaa1111"
+  },
+  "protected": false
+ },
+ {
+  "name": "feature/CA-209_cache-warmup",
+  "commit": {
+   "sha": "ccc3333"
+  },
+  "protected": false
+ },
+ {
+  "name": "chore/deps",
+  "commit": {
+   "sha": "ddd4444"
+  },
+  "protected": false
+ }
+]

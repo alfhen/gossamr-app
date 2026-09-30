@@ -17,7 +17,14 @@ import type {
   Snapshot,
   Transition,
   Uploaded,
+  CodeChange,
+  CodeCommitQuery,
+  CodeFile,
+  CodeHit,
+  CodeRef,
   ConnectionInfo,
+  DevLink,
+  DevLinksChanged,
   DeviceStart,
   GithubSignInOptions,
   WorkComment,
@@ -27,7 +34,9 @@ import type {
   FeedPage,
   FeedQuery,
   Footprint,
+  PullRequestDetail,
   Stray,
+  TreeEntry,
   WatchChange,
   WatchChanged,
   WatchMode,
@@ -185,6 +194,47 @@ export class JiraBackend implements Backend {
 
   githubDisconnect(connectionId: string) {
     return invoke<void>("github_disconnect", { connectionId });
+  }
+
+  devLinks(item: ItemRef) {
+    return invoke<DevLink[]>("dev_links", { item });
+  }
+
+  devLinksLive(item: ItemRef) {
+    return invoke<DevLink[]>("dev_links_live", { item });
+  }
+
+  onDevLinksChanged(listener: (change: DevLinksChanged) => void) {
+    const pending = listen<DevLinksChanged>("dev-links-changed", (e) => listener(e.payload));
+    return () => void pending.then((unlisten) => unlisten());
+  }
+
+  codePullRequest(reference: CodeRef) {
+    return invoke<PullRequestDetail>("code_pull_request", { reference });
+  }
+
+  codeSearch(query: string) {
+    return invoke<CodeChange[]>("code_search", { query });
+  }
+
+  codeEvents(limit?: number) {
+    return invoke<WorkEvent[]>("code_events", { limit });
+  }
+
+  codeFile(connectionId: string, repo: string, path: string, reference: string | null = null) {
+    return invoke<CodeFile>("code_file", { connectionId, repo, path, reference });
+  }
+
+  codeTree(connectionId: string, repo: string, path: string, reference: string | null = null) {
+    return invoke<TreeEntry[]>("code_tree", { connectionId, repo, path, reference });
+  }
+
+  codeCommits(connectionId: string, repo: string, opts: CodeCommitQuery = {}) {
+    return invoke<CodeChange[]>("code_commits", { connectionId, repo, reference: opts.reference ?? null, since: opts.since ?? null, query: opts.query ?? null, limit: opts.limit });
+  }
+
+  codeSearchCode(connectionId: string, query: string, repos?: string[]) {
+    return invoke<CodeHit[]>("code_search_code", { connectionId, query, repos });
   }
 
   cacheEvents(item: ItemRef) {

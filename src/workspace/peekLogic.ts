@@ -261,6 +261,14 @@ export function historyNotes(events: readonly WorkEvent[], nameOf: (accountId: s
         return "had a check fail";
       case "reviewRequested":
         return "asked for a review";
+      case "prClosed":
+        return "closed a pull request";
+      case "prReadyForReview":
+        return "marked a pull request ready for review";
+      case "reviewSubmitted":
+        return "reviewed a pull request";
+      case "prMentioned":
+        return "mentioned you on a pull request";
       case "commentAdded":
         return "";
     }

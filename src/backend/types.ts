@@ -14,13 +14,22 @@ import type {
   Snapshot,
   Transition,
   Uploaded,
+  CodeChange,
+  CodeCommitQuery,
+  CodeFile,
+  CodeHit,
+  CodeRef,
   ConnectionInfo,
+  DevLink,
+  DevLinksChanged,
   DeviceStart,
   FeedPage,
   FeedQuery,
   Footprint,
   GithubSignInOptions,
+  PullRequestDetail,
   Stray,
+  TreeEntry,
   WatchChange,
   WatchChanged,
   WatchMode,
@@ -100,6 +109,26 @@ export interface Backend {
   githubDevicePoll(): Promise<ConnectionInfo>;
   /** Forgets the account's token and deletes what was cached for it. */
   githubDisconnect(connectionId: string): Promise<void>;
+  /** The pull requests, branches and commits that name a work item, from the cache. Instant; only watched repositories. Strongest first. */
+  devLinks(item: ItemRef): Promise<DevLink[]>;
+  /** Searches the watched repositories for the item's key, caches what it finds and returns the links. Slower; for when a person opens the item. */
+  devLinksLive(item: ItemRef): Promise<DevLink[]>;
+  /** Called when a sync or a live search changed which work items are linked to code. Returns an unsubscribe function. */
+  onDevLinksChanged(listener: (change: DevLinksChanged) => void): () => void;
+  /** A pull request with its files, recent commits and reviews. Watched repositories only. */
+  codePullRequest(ref: CodeRef): Promise<PullRequestDetail>;
+  /** Pull requests, branches and commits in watched repositories matching the text; a work item key matches exactly. */
+  codeSearch(query: string): Promise<CodeChange[]>;
+  /** Pull request and notification events, newest first, for the Activity feed. `subject.type` is `codeChange`. */
+  codeEvents(limit?: number): Promise<WorkEvent[]>;
+  /** A text file at a ref, cut at 60,000 characters. Binary and huge files are refused. Watched repositories only. */
+  codeFile(connectionId: string, repo: string, path: string, reference?: string | null): Promise<CodeFile>;
+  /** A directory listing, folders first. Watched repositories only. */
+  codeTree(connectionId: string, repo: string, path: string, reference?: string | null): Promise<TreeEntry[]>;
+  /** Commits of a branch or ref, newest first, optionally filtered by message text. Watched repositories only. */
+  codeCommits(connectionId: string, repo: string, opts?: CodeCommitQuery): Promise<CodeChange[]>;
+  /** GitHub code search limited to watched repositories; `repos` narrows it further and must be watched. */
+  codeSearchCode(connectionId: string, query: string, repos?: string[]): Promise<CodeHit[]>;
   /** Events recorded for an item, newest first. */
   cacheEvents(ref: ItemRef): Promise<WorkEvent[]>;
   /** Events across every item, newest first, one page at a time. Reading state (`unread`) is the inbox's, so `setUnread` marks an entry read. */

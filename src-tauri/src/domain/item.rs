@@ -112,6 +112,9 @@ pub enum LinkKind {
     Blocks,
     Relates,
     Duplicates,
+    /// A code change (pull request, branch or commit) carries the item out. Read from the code host, never written to
+    /// Jira: the far end is a `CodeChange::item_ref`, not an issue.
+    ImplementedBy,
 }
 
 /// Either end may live in another container or connection.

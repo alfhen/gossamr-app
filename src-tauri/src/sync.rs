@@ -244,6 +244,11 @@ impl Schedule {
         self.last_attempt.is_none_or(|at| now - at >= gap)
     }
 
+    /// Holds off the next scheduled attempt until `until`, as when the host says when a limit resets.
+    pub fn defer(&mut self, until: DateTime<Utc>) {
+        self.retry_at = Some(self.retry_at.map_or(until, |at| at.max(until)));
+    }
+
     /// Records an attempt. After a failure the next scheduled one waits twice as long as after the one before, up
     /// to a ceiling.
     pub fn finished(&mut self, now: DateTime<Utc>, ok: bool) {
