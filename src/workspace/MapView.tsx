@@ -246,6 +246,7 @@ export function MapView({ items }: CanvasProps) {
   };
 
   const onKeyDown = (ev: KeyboardEvent) => {
+    if (ev.target !== ev.currentTarget) return;
     const dir = ARROWS[ev.key];
     if (dir) {
       ev.preventDefault();
@@ -276,6 +277,7 @@ export function MapView({ items }: CanvasProps) {
         ref={box}
         tabIndex={0}
         role="application"
+        aria-activedescendant={focused ? nodeId(focused) : undefined}
         aria-label="Map of tickets. Arrow keys move between tickets, Enter opens one, plus and minus zoom, zero fits the view."
         onKeyDown={onKeyDown}
         onFocus={() => setFocused((f) => f ?? selected ?? layout.nodes[0]?.key ?? null)}
