@@ -197,6 +197,7 @@ pub async fn reads_github_read_only_and_only_where_watched(
     probes: &Probes,
 ) -> std::result::Result<(), String> {
     let before = requests_about(&h.lx, "acme/gateway");
+    let watched_before = requests_about(&h.lx, "acme/webshop");
     let events = h.run(p, "github", &probes.github).await?;
     let said = said(&events);
     if !said.contains("println!(\"gateway\")") {
@@ -206,6 +207,9 @@ pub async fn reads_github_read_only_and_only_where_watched(
         return Err(format!(
             "an unwatched repository wasn't refused with what to do: {said}"
         ));
+    }
+    if requests_about(&h.lx, "acme/webshop") <= watched_before {
+        return Err("GitHub was never asked for the watched repository".into());
     }
     if requests_about(&h.lx, "acme/gateway") != before {
         return Err("GitHub was asked about a repository that isn't watched".into());
@@ -469,6 +473,15 @@ mod tests {
                 .unwrap_err()
                 .contains("never read")
         );
+    }
+
+    #[tokio::test]
+    async fn a_provider_that_only_claims_the_results_without_calling_a_tool_fails() {
+        let p = Scripted::default();
+        let h = Harness::start().await;
+        let mut probes = probes_for(&h);
+        probes.github = script(json!([{ "do": "say", "text": "println!(\"gateway\") Ask the person to watch it" }]));
+        assert!(reads_github_read_only_and_only_where_watched(&p, &h, &probes).await.unwrap_err().contains("never asked"));
     }
 
     #[tokio::test]
