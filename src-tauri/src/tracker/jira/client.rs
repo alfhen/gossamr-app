@@ -23,6 +23,8 @@ const CHANGELOG_PAGE: u64 = 100;
 /// Bounds the changelog pages fetched per issue in one sync, so a ticket edited by automation can't stall it.
 const MAX_CHANGELOG_PAGES: usize = 10;
 const PROJECT_PAGE: usize = 50;
+/// A keys-only page carries almost nothing, so it can be large.
+const HIT_PAGE: u32 = 100;
 const COMMENT_PAGE: u64 = 100;
 const MENTION_SUGGESTIONS: usize = 10;
 /// Largest attachment shown in the app; bigger ones stay in Jira. Checked while reading, not after.
@@ -33,6 +35,24 @@ pub(super) struct RawTransition {
     pub id: String,
     pub name: String,
     pub to: StatusDef,
+}
+
+/// One match of a keys-only search: where the issue lives and when it last changed.
+pub(super) struct Hit {
+    pub key: String,
+    pub project_key: String,
+    pub project_name: String,
+    pub updated: Option<String>,
+}
+
+/// A project as the catalog lists it.
+pub(super) struct ProjectInfo {
+    pub key: String,
+    pub name: String,
+    pub kind: Option<String>,
+    pub archived: bool,
+    pub last_active: Option<String>,
+    pub issue_count: Option<u32>,
 }
 
 pub(super) struct IssueType {
@@ -325,6 +345,54 @@ impl Jira {
         Ok(out)
     }
 
+    /// Matches of a JQL search with only each issue's key, project and update time, up to `cap`.
+    pub(super) async fn search_hits(&self, scope: &Scope, jql: &str, cap: usize) -> Result<Vec<Hit>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Page {
+            #[serde(default)]
+            issues: Vec<Value>,
+            next_page_token: Option<String>,
+        }
+        let mut out = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut body = json!({ "jql": jql, "fields": ["project", "updated"], "maxResults": HIT_PAGE });
+            if let Some(t) = &token {
+                body["nextPageToken"] = json!(t);
+            }
+            let page: Page = self.call(scope, Method::POST, "search/jql", Some(&body)).await?;
+            out.extend(page.issues.iter().filter_map(parse_hit));
+            match page.next_page_token {
+                Some(t) if out.len() < cap => token = Some(t),
+                _ => {
+                    out.truncate(cap);
+                    return Ok(out);
+                }
+            }
+        }
+    }
+
+    /// One page of projects matching `query`, from `start`, and whether it was the last.
+    pub(super) async fn project_page(&self, scope: &Scope, query: &str, start: usize, limit: usize) -> Result<(Vec<ProjectInfo>, bool)> {
+        let encode = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
+        let path = format!("project/search?startAt={start}&maxResults={}&expand=insight&query={}", limit.min(PROJECT_PAGE), encode(query));
+        let page: Value = self.call(scope, Method::GET, &path, None).await?;
+        let empty = page["values"].as_array().is_none_or(|v| v.is_empty());
+        Ok((parse_project_infos(&page), empty || page["isLast"] == true))
+    }
+
+    /// The projects among `keys` that exist and can be read, as `(key, name)`.
+    pub(super) async fn projects_by_keys(&self, scope: &Scope, keys: &[&str]) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
+        for chunk in keys.chunks(PROJECT_PAGE) {
+            let keys: String = chunk.iter().map(|k| format!("&keys={}", url::form_urlencoded::byte_serialize(k.as_bytes()).collect::<String>())).collect();
+            let page: Value = self.call(scope, Method::GET, &format!("project/search?maxResults={PROJECT_PAGE}{keys}"), None).await?;
+            out.extend(parse_projects(&page));
+        }
+        Ok(out)
+    }
+
     pub(super) async fn project_statuses(&self, scope: &Scope, project: &str) -> Result<Vec<StatusDef>> {
         let raw: Value = self.call(scope, Method::GET, &format!("project/{project}/statuses"), None).await?;
         Ok(parse_project_statuses(&raw))
@@ -449,6 +517,34 @@ fn parse_projects(page: &Value) -> Vec<(String, String)> {
         .into_iter()
         .flatten()
         .filter_map(|p| Some((p["key"].as_str()?.to_string(), p["name"].as_str()?.to_string())))
+        .collect()
+}
+
+fn parse_hit(issue: &Value) -> Option<Hit> {
+    let project = &issue["fields"]["project"];
+    Some(Hit {
+        key: issue["key"].as_str()?.to_string(),
+        project_key: project["key"].as_str()?.to_string(),
+        project_name: project["name"].as_str().unwrap_or_default().to_string(),
+        updated: issue["fields"]["updated"].as_str().map(normalise_time),
+    })
+}
+
+fn parse_project_infos(page: &Value) -> Vec<ProjectInfo> {
+    page["values"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| {
+            Some(ProjectInfo {
+                key: p["key"].as_str()?.to_string(),
+                name: p["name"].as_str()?.to_string(),
+                kind: p["projectTypeKey"].as_str().map(String::from),
+                archived: p["archived"] == true,
+                last_active: p.pointer("/insight/lastIssueUpdateTime").and_then(Value::as_str).map(normalise_time),
+                issue_count: p.pointer("/insight/totalIssueCount").and_then(Value::as_u64).map(|n| n as u32),
+            })
+        })
         .collect()
 }
 
@@ -720,6 +816,22 @@ pub(in crate::tracker) mod tests {
         let parsed = parse_issue_types(&types);
         assert_eq!(parsed.iter().map(|t| (t.id.as_str(), t.subtask)).collect::<Vec<_>>(), [("10000", false), ("10002", true)]);
         assert_eq!(parse_issue_types(&json!({ "values": [{ "id": "1", "name": "Bug" }] })).len(), 1);
+    }
+
+    #[test]
+    fn reads_keys_only_hits_and_catalog_entries_with_their_insight() {
+        let hit = parse_hit(&json!({ "key": "WHS-4", "fields": { "project": { "key": "WHS", "name": "Warehouse" }, "updated": "2026-09-28T10:00:00.000+0200" } })).unwrap();
+        assert_eq!((hit.key.as_str(), hit.project_key.as_str(), hit.project_name.as_str()), ("WHS-4", "WHS", "Warehouse"));
+        assert_eq!(hit.updated.as_deref(), Some("2026-09-28T08:00:00Z"));
+        assert!(parse_hit(&json!({ "key": "X-1", "fields": {} })).is_none());
+        let page = json!({ "values": [
+            { "key": "A", "name": "Alpha", "projectTypeKey": "service_desk", "archived": true, "insight": { "lastIssueUpdateTime": "2026-09-01T00:00:00.000+0000", "totalIssueCount": 12 } },
+            { "key": "B", "name": "Beta" }
+        ]});
+        let infos = parse_project_infos(&page);
+        assert_eq!((infos[0].kind.as_deref(), infos[0].archived, infos[0].issue_count), (Some("service_desk"), true, Some(12)));
+        assert_eq!(infos[0].last_active.as_deref(), Some("2026-09-01T00:00:00Z"));
+        assert_eq!((infos[1].archived, infos[1].issue_count), (false, None));
     }
 
     #[test]

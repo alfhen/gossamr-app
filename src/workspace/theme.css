@@ -13,12 +13,15 @@
   --color-ws-accent-soft: rgb(74 91 224 / 0.1);
   --color-ws-pip: #0b8a86;
   --color-ws-pip-soft: rgb(11 138 134 / 0.1);
+  --color-ws-pip2: #5b4bd1;
   --color-ws-on-pip: #ffffff;
   --color-ws-done: #1f9d6a;
   --color-ws-done-soft: rgb(31 157 106 / 0.12);
   --color-ws-blocked: #e0475b;
   --color-ws-blocked-soft: rgb(224 71 91 / 0.1);
   --color-ws-warn: #c98a1b;
+  --color-ws-review: #8a55d6;
+  --color-ws-review-soft: rgb(160 90 220 / 0.14);
   --shadow-ws-pop: 0 12px 40px rgb(30 20 80 / 0.2);
 }
 
@@ -38,9 +41,12 @@
     --color-ws-accent-soft: rgb(106 130 255 / 0.16);
     --color-ws-pip: #37d0c0;
     --color-ws-pip-soft: rgb(55 208 192 / 0.13);
+    --color-ws-pip2: #9a8bff;
     --color-ws-on-pip: #04302c;
     --color-ws-done-soft: rgb(31 157 106 / 0.2);
     --color-ws-blocked-soft: rgb(224 71 91 / 0.2);
+    --color-ws-review: #b48af0;
+    --color-ws-review-soft: rgb(160 90 220 / 0.22);
     --shadow-ws-pop: 0 12px 40px rgb(0 0 0 / 0.6);
   }
 }
@@ -65,8 +71,38 @@
   --color-ws-accent-soft: rgb(106 130 255 / 0.16);
   --color-ws-pip: #37d0c0;
   --color-ws-pip-soft: rgb(55 208 192 / 0.13);
+  --color-ws-pip2: #9a8bff;
   --color-ws-on-pip: #04302c;
   --color-ws-done-soft: rgb(31 157 106 / 0.2);
   --color-ws-blocked-soft: rgb(224 71 91 / 0.2);
+  --color-ws-review: #b48af0;
+  --color-ws-review-soft: rgb(160 90 220 / 0.22);
   --shadow-ws-pop: 0 12px 40px rgb(0 0 0 / 0.6);
+}
+
+.ws-root,
+.ws-root * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ws-sep2) transparent;
+}
+.ws-root ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.ws-root ::-webkit-scrollbar-track,
+.ws-root ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.ws-root ::-webkit-scrollbar-thumb {
+  background: var(--color-ws-sep2);
+  border-radius: 4px;
+}
+.ws-root ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ws-ink3);
+}
+
+/* Utilities spacing is rem-based and the page root is 13px, which would shrink every gap to 81% of the design's 4px step. */
+.ws-root,
+.ws-toasts {
+  --spacing: 4px;
 }

@@ -15,7 +15,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::{Auth, Scope};
-use crate::domain::{Comment, Container, ContainerRef, Doc, Filter, Intent, ItemRef, Person, StatusDef, WorkItem, Workflow};
+use crate::domain::{
+    Comment, Container, ContainerPage, ContainerQuery, ContainerRef, ContainerScope, Doc, Filter, Footprint, Intent, ItemRef, Person, StatusDef, Stray,
+    WorkItem, Workflow,
+};
 use crate::error::Result;
 use crate::model::Uploaded;
 
@@ -98,6 +101,14 @@ pub struct SearchOptions {
     pub updated_since_minutes: Option<u32>,
 }
 
+/// What a scoped read of followed items found.
+#[derive(Debug, Default)]
+pub struct Followed {
+    pub items: Vec<WorkItem>,
+    /// Containers the tracker refused and the query went on without.
+    pub inaccessible: Vec<ContainerRef>,
+}
+
 /// A way to move an item, as offered to the person.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Move {
@@ -124,15 +135,34 @@ pub trait WorkTracker: Send + Sync {
     /// A query in the tracker's own language, for tools that still speak it.
     async fn search_native(&self, query: &str, opts: &SearchOptions) -> Result<Vec<WorkItem>>;
 
-    /// Items the signed-in person is involved in that changed within `window_days`, newest first.
-    async fn followed(&self, window_days: u32, opts: &SearchOptions) -> Result<Vec<WorkItem>>;
+    /// Items in `scope` that changed within `window_days`, newest first: in a container watched as `Involved`, those
+    /// the signed-in person is involved in; in one watched as `Whole`, all of them. A container the tracker refuses
+    /// is left out of the read and reported, rather than failing it.
+    async fn followed(&self, window_days: u32, scope: &ContainerScope, opts: &SearchOptions) -> Result<Followed>;
 
     /// Items directly under any of `parents`.
     async fn children(&self, parents: &[ItemRef], opts: &SearchOptions) -> Result<Vec<WorkItem>>;
 
     async fn item(&self, item: &ItemRef, history_since: &str) -> Result<WorkItem>;
 
+    /// Every container with its workflow.
     async fn containers(&self) -> Result<Vec<Container>>;
+
+    /// One page of the catalog, matching `q.query` on the server. No workflows, so it stays cheap for thousands.
+    async fn list_containers(&self, q: &ContainerQuery) -> Result<ContainerPage>;
+
+    /// The containers among `refs` that exist and can be read, with their workflows. Missing ones are left out.
+    async fn containers_of(&self, refs: &[ContainerRef]) -> Result<Vec<Container>>;
+
+    /// Where the person has been involved in the last `window_days`, for suggesting what to watch. Counts only.
+    async fn footprint(&self, _window_days: u32) -> Result<Vec<Footprint>> {
+        Err(crate::error::Error::Api { status: 501, message: "this tracker can't suggest containers".into() })
+    }
+
+    /// Open items assigned to the person outside `watched`, as keys grouped by container.
+    async fn assigned_outside(&self, _watched: &[ContainerRef]) -> Result<Vec<Stray>> {
+        Ok(Vec::new())
+    }
 
     async fn workflow(&self, container: &ContainerRef) -> Result<Workflow>;
 
@@ -240,6 +270,13 @@ pub(crate) mod testing {
         pub moves: Mutex<Vec<Move>>,
         /// What `comments` returns; `None` fails the request, as an offline tracker would.
         pub comments: Mutex<Option<Vec<Comment>>>,
+        /// What `list_containers` returns.
+        pub catalog: Mutex<Vec<crate::domain::ContainerSummary>>,
+        /// What `footprint` returns, and how many times it was asked.
+        pub footprint: Mutex<Vec<Footprint>>,
+        pub footprint_calls: std::sync::atomic::AtomicUsize,
+        /// What `assigned_outside` returns.
+        pub strays: Mutex<Vec<Stray>>,
     }
 
     impl Recorder {
@@ -263,7 +300,7 @@ pub(crate) mod testing {
         async fn search_native(&self, _: &str, _: &SearchOptions) -> Result<Vec<WorkItem>> {
             unimplemented!()
         }
-        async fn followed(&self, _: u32, _: &SearchOptions) -> Result<Vec<WorkItem>> {
+        async fn followed(&self, _: u32, _: &ContainerScope, _: &SearchOptions) -> Result<Followed> {
             unimplemented!()
         }
         async fn children(&self, _: &[ItemRef], _: &SearchOptions) -> Result<Vec<WorkItem>> {
@@ -277,6 +314,22 @@ pub(crate) mod testing {
         }
         async fn containers(&self) -> Result<Vec<Container>> {
             unimplemented!()
+        }
+        async fn list_containers(&self, q: &ContainerQuery) -> Result<ContainerPage> {
+            let all = self.catalog.lock().unwrap();
+            let needle = q.query.to_lowercase();
+            let containers = all.iter().filter(|c| c.key.to_lowercase().contains(&needle) || c.name.to_lowercase().contains(&needle)).take(q.limit.max(1)).cloned().collect();
+            Ok(ContainerPage { containers, next: None })
+        }
+        async fn containers_of(&self, _: &[ContainerRef]) -> Result<Vec<Container>> {
+            unimplemented!()
+        }
+        async fn footprint(&self, _: u32) -> Result<Vec<Footprint>> {
+            self.footprint_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.footprint.lock().unwrap().clone())
+        }
+        async fn assigned_outside(&self, _: &[ContainerRef]) -> Result<Vec<Stray>> {
+            Ok(self.strays.lock().unwrap().clone())
         }
         async fn workflow(&self, _: &ContainerRef) -> Result<Workflow> {
             unimplemented!()

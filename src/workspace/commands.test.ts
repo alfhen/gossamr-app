@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { buildCommands, rankCommands, ticketCommands, type CommandActions } from "./commands";
+import { buildCommands, keyCommand, newTicketIntent, projectChoices, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
 import { BUILT_IN_VIEWS } from "./filters";
 
 const containers = await new MockBackend().cacheContainers();
@@ -9,7 +9,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "openActivity", "openDrafts", "newTab", "togglePip", "jumpToItem"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "jumpToItem", "askPip"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -72,5 +72,119 @@ describe("ticket jump", () => {
 
   it("offers no tickets before anything is typed", () => {
     expect(ticketCommands(items, "", vi.fn())).toEqual([]);
+  });
+});
+
+describe("palette extras", () => {
+  const a = actions();
+  const commands = buildCommands(containers, BUILT_IN_VIEWS, a);
+
+  it("gives every entry an icon and keeps each group together when nothing is typed", () => {
+    expect(commands.every((c) => c.icon)).toBe(true);
+    const groups = commands.map((c) => c.group);
+    expect(new Set(groups).size).toBe(groups.filter((g, i) => g !== groups[i - 1]).length);
+  });
+
+  it("shows live counts beside Activity and Drafts, and marks what is current", () => {
+    const ctx = { project: containerRef("CA"), view: "board" as const, unreadActivity: 22, pendingDrafts: 3 };
+    const live = buildCommands(containers, BUILT_IN_VIEWS, a, ctx);
+    const hint = (id: string) => live.find((c) => c.id === id)?.hint;
+    expect(hint("app:activity")).toBe("22 new");
+    expect(hint("app:drafts")).toBe("3 pending");
+    expect(hint("project:CA")).toBe("current");
+    expect(hint("mode:board")).toBe("current");
+    expect(hint("mode:list")).toBeUndefined();
+    expect(hint("project:all")).toBeUndefined();
+    expect(buildCommands(containers, [], a).find((c) => c.id === "app:drafts")?.hint).toBeUndefined();
+  });
+
+  it("starts the new-ticket prompt without closing the palette", () => {
+    const entry = commands.find((c) => c.id === "create:ticket")!;
+    expect(entry.stay).toBe(true);
+    entry.run();
+    expect(a.newTicket).toHaveBeenCalled();
+  });
+
+  it("ends any non-empty query with Ask Pip, and offers only that when nothing matches", () => {
+    const ask = vi.fn();
+    const matched = withAskPip(rankCommands(commands, "devops"), "devops", ask);
+    expect(matched[0].label).toBe("DevOps");
+    expect(matched[matched.length - 1]).toMatchObject({ id: "ask:pip", group: "Ask Pip", label: "Ask Pip: “devops”" });
+    const none = withAskPip(rankCommands(commands, "zzzqq"), " zzzqq ", ask);
+    expect(none.map((c) => c.id)).toEqual(["ask:pip"]);
+    none[0].run();
+    expect(ask).toHaveBeenCalledWith("zzzqq");
+  });
+
+  it("leaves the list alone for an empty query", () => {
+    expect(withAskPip(commands, "  ", vi.fn())).toEqual(commands);
+  });
+
+  it("puts the project on screen first in the new-ticket prompt", () => {
+    const pick = vi.fn();
+    const all = projectChoices(containers, "", containerRef("WEB"), pick);
+    expect(all[0].hint).toBe("WEB");
+    expect(all).toHaveLength(containers.length);
+    expect(all.every((c) => c.stay)).toBe(true);
+    expect(projectChoices(containers, "dev", null, pick).map((c) => c.hint)).toEqual(["DEVOPS"]);
+    all[0].run();
+    expect(pick).toHaveBeenCalledWith(expect.objectContaining({ key: "WEB" }));
+  });
+
+  it("drafts a plain task in the chosen project with the title trimmed", () => {
+    expect(newTicketIntent(containerRef("CA"), "  Rotate keys ")).toEqual({
+      type: "create",
+      container: containerRef("CA"),
+      fields: { title: "Rotate keys", body: { blocks: [] }, kind: "task", assignee: null, parent: null, priority: null, labels: [] },
+      link: null,
+    });
+  });
+});
+
+describe("watch commands", () => {
+  const a = actions();
+  const target = { ref: containerRef("SUP"), key: "SUP", name: "Support" };
+
+  it("lists Manage projects in the Projects group and runs it", () => {
+    const manage = buildCommands(containers, BUILT_IN_VIEWS, a).find((c) => c.label === "Manage projects")!;
+    expect(manage.group).toBe("Projects");
+    manage.run();
+    expect(a.manageProjects).toHaveBeenCalled();
+    expect(rankCommands(buildCommands(containers, BUILT_IN_VIEWS, a), "watch").map((c) => c.label)).toContain("Manage projects");
+  });
+
+  it("offers to watch a project the person doesn't, and to unwatch one they do when they ask to stop", () => {
+    const [watch] = watchCommands([target], a);
+    expect(watch).toMatchObject({ label: "Watch Support", group: "Projects", hint: "SUP · not watched" });
+    watch.run();
+    expect(a.watch).toHaveBeenCalledWith(target, true);
+
+    const un = rankCommands(unwatchCommands(containers, "unwatch web", a), "unwatch web");
+    expect(un.map((c) => c.label)).toEqual(["Unwatch Webshop"]);
+    un[0].run();
+    expect(a.watch).toHaveBeenLastCalledWith(containers.find((c) => c.key === "WEB"), false);
+  });
+
+  it("keeps Unwatch out of ordinary searches", () => {
+    expect(unwatchCommands(containers, "web", a)).toEqual([]);
+    expect(unwatchCommands(containers, "", a)).toEqual([]);
+  });
+
+  it("caps the watch suggestions", () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ ref: containerRef(`P${i}`), key: `P${i}`, name: `Project ${i}` }));
+    expect(watchCommands(many, a)).toHaveLength(5);
+  });
+
+  it("opens any ticket key that isn't among the synced items", () => {
+    const [open] = keyCommand("sup-99", items, a.openTicket);
+    expect(open).toMatchObject({ label: "Open SUP-99", group: "Tickets" });
+    open.run();
+    expect(a.openTicket).toHaveBeenCalledWith("SUP-99");
+  });
+
+  it("leaves a synced key to the ticket results, and words alone", () => {
+    const key = items[0].item.key;
+    expect(keyCommand(key.toLowerCase(), items, a.openTicket)).toEqual([]);
+    expect(keyCommand("swatch", items, a.openTicket)).toEqual([]);
   });
 });

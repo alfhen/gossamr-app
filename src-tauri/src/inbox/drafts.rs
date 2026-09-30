@@ -62,12 +62,15 @@ impl Core {
     }
 
     /// A draft the person made themselves, such as dropping a card on a board column. Nothing is written until it is
-    /// approved. Only an existing item of the signed-in connection can be the target.
+    /// approved. Only an existing item of the signed-in connection can be the target, or a project of it for a new item.
     pub async fn draft_as_user(&self, intent: Intent, label: Option<String>) -> Result<Proposal> {
         let scope = self.scope().await?;
         let connection_id = tracker::Connection::jira_id(&scope);
-        let target = intent.target().ok_or_else(|| Error::Proposal("a draft made by hand has to be about an existing item".into()))?;
-        if target.connection_id != connection_id {
+        let drafted_in = match &intent {
+            Intent::Create { container, .. } => &container.connection_id,
+            other => &other.target().ok_or_else(|| Error::Proposal("a draft made by hand has to be about an existing item".into()))?.connection_id,
+        };
+        if *drafted_in != connection_id {
             return Err(Error::Proposal("that item belongs to another connection".into()));
         }
         let draft = Draft { origin: Origin::Board, created_by: CreatedBy::User, intent, label, basis: None };
@@ -185,6 +188,23 @@ mod tests {
         let err = fx.core.draft_as_user(Intent::Transition { item: foreign, to: "1".into() }, None).await.unwrap_err();
         assert!(err.to_string().contains("another connection"), "{err}");
         assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_hand_made_new_item_draft_is_pending_and_stays_in_its_connection() {
+        use crate::domain::{ContainerRef, ItemKind, NewItem};
+        let fx = crate::inbox::testing::fixture().await;
+        let fields = |title: &str| NewItem { title: title.into(), body: Doc::default(), kind: ItemKind::Task, assignee: None, parent: None, priority: None, labels: vec![] };
+        let container = |connection: &str| ContainerRef { connection_id: connection.into(), external_id: "10000".into() };
+        let here = fx.item("CA-1").connection_id;
+
+        let p = fx.core.draft_as_user(Intent::Create { container: container(&here), fields: fields("Rotate keys"), link: None }, None).await.unwrap();
+        assert_eq!((p.created_by, p.state.clone()), (CreatedBy::User, ProposalState::Pending));
+        assert!(fx.tracker.intents().is_empty());
+
+        let elsewhere = fx.core.draft_as_user(Intent::Create { container: container("elsewhere"), fields: fields("x"), link: None }, None).await;
+        assert!(elsewhere.unwrap_err().to_string().contains("another connection"));
+        assert!(fx.core.draft_as_user(Intent::Create { container: container(&here), fields: fields(" "), link: None }, None).await.is_err());
     }
 
     #[tokio::test]

@@ -12,9 +12,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::{Applied, Connection, Grouping, Move, SearchOptions, TrackerCaps, TransitionModel, WorkTracker};
+use std::collections::HashMap;
+
+use super::{Applied, Connection, Followed, Grouping, Move, SearchOptions, TrackerCaps, TransitionModel, WorkTracker};
 use crate::auth::{Auth, Scope};
-use crate::domain::{Comment, Container, ContainerRef, Filter, Intent, ItemRef, Person, Transitions, WorkItem, Workflow};
+use crate::domain::{
+    Comment, Container, ContainerPage, ContainerQuery, ContainerRef, ContainerScope, ContainerSummary, Filter, Footprint, Intent, ItemRef, Person, Stray,
+    Transitions, Watch, WorkItem, Workflow,
+};
 use crate::error::{Error, Result};
 use crate::model::{CachedTicket, Uploaded};
 use client::Jira;
@@ -33,6 +38,42 @@ pub(super) fn comments_from_ticket(connection_id: &str, t: &CachedTicket) -> Vec
 }
 
 const CONTAINER_LIMIT: usize = 100;
+/// Rows read per footprint question; the picker needs a ranking, not a census.
+const FOOTPRINT_ROWS: usize = 500;
+const RADAR_ROWS: usize = 200;
+
+/// Runs the scoped search through `run`. Jira fails the whole search when `project in (...)` names a project that
+/// doesn't exist or can't be read, and says which. That project is dropped and reported, and the search runs again
+/// without it. A 400 that names no project is retried once without the mention clause, which Jira may not accept.
+async fn scoped_search<F, Fut>(connection_id: &str, window_days: u32, since: Option<u32>, watches: &[Watch], mut run: F) -> Result<Followed>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<WorkItem>>>,
+{
+    let mut watches = watches.to_vec();
+    let mut inaccessible = Vec::new();
+    let mut mentions = true;
+    loop {
+        let Some(q) = jql::followed_in(window_days, since, &watches, mentions) else {
+            return Ok(Followed { items: Vec::new(), inaccessible });
+        };
+        match run(q).await {
+            Ok(items) => return Ok(Followed { items, inaccessible }),
+            Err(Error::Api { status: 400, message }) => {
+                let keys: Vec<&str> = watches.iter().map(|w| w.container.external_id.as_str()).collect();
+                if let Some(bad) = jql::bad_project(&message, &keys) {
+                    watches.retain(|w| w.container.external_id != bad);
+                    inaccessible.push(ContainerRef { connection_id: connection_id.into(), external_id: bad });
+                } else if mentions {
+                    mentions = false;
+                } else {
+                    return Err(Error::Api { status: 400, message });
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
 
 pub(super) struct JiraTracker {
     client: Jira,
@@ -51,6 +92,10 @@ impl JiraTracker {
 
     fn items(&self, tickets: Vec<CachedTicket>) -> Vec<WorkItem> {
         tickets.iter().map(|t| convert::work_item(&self.connection_id, t)).collect()
+    }
+
+    async fn followed_in(&self, window_days: u32, watches: &[Watch], opts: &SearchOptions) -> Result<Followed> {
+        scoped_search(&self.connection_id, window_days, opts.updated_since_minutes, watches, |q| async move { self.query(&q, opts).await }).await
     }
 
     async fn query(&self, jql: &str, opts: &SearchOptions) -> Result<Vec<WorkItem>> {
@@ -87,8 +132,13 @@ impl WorkTracker for JiraTracker {
         self.query(query, opts).await
     }
 
-    async fn followed(&self, window_days: u32, opts: &SearchOptions) -> Result<Vec<WorkItem>> {
-        self.query(&jql::followed(window_days, opts.updated_since_minutes), opts).await
+    async fn followed(&self, window_days: u32, scope: &ContainerScope, opts: &SearchOptions) -> Result<Followed> {
+        match scope {
+            ContainerScope::Everything => {
+                Ok(Followed { items: self.query(&jql::followed(window_days, opts.updated_since_minutes), opts).await?, inaccessible: Vec::new() })
+            }
+            ContainerScope::Only(watches) => self.followed_in(window_days, watches, opts).await,
+        }
     }
 
     async fn children(&self, parents: &[ItemRef], opts: &SearchOptions) -> Result<Vec<WorkItem>> {
@@ -110,6 +160,87 @@ impl WorkTracker for JiraTracker {
             let container_ref = ContainerRef { connection_id: self.connection_id.clone(), external_id: key.clone() };
             let workflow = self.workflow(&container_ref).await?;
             out.push(Container { container_ref, key, name, workflow });
+        }
+        Ok(out)
+    }
+
+    async fn list_containers(&self, q: &ContainerQuery) -> Result<ContainerPage> {
+        let start = q.cursor.as_deref().and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
+        let limit = if q.limit == 0 { 50 } else { q.limit };
+        let (projects, last) = self.client.project_page(&self.scope, &q.query, start, limit).await?;
+        let next = (!last).then(|| (start + projects.len()).to_string());
+        let containers = projects
+            .into_iter()
+            .take(limit)
+            .map(|p| ContainerSummary {
+                container_ref: ContainerRef { connection_id: self.connection_id.clone(), external_id: p.key.clone() },
+                key: p.key,
+                name: p.name,
+                kind: p.kind,
+                archived: p.archived,
+                last_active: p.last_active,
+                item_hint: p.issue_count,
+            })
+            .collect();
+        Ok(ContainerPage { containers, next })
+    }
+
+    async fn containers_of(&self, refs: &[ContainerRef]) -> Result<Vec<Container>> {
+        let keys: Vec<&str> = refs.iter().map(|r| r.external_id.as_str()).collect();
+        let mut out = Vec::new();
+        for (key, name) in self.client.projects_by_keys(&self.scope, &keys).await? {
+            let container_ref = ContainerRef { connection_id: self.connection_id.clone(), external_id: key.clone() };
+            let workflow = self.workflow(&container_ref).await?;
+            out.push(Container { container_ref, key, name, workflow });
+        }
+        Ok(out)
+    }
+
+    async fn footprint(&self, window_days: u32) -> Result<Vec<Footprint>> {
+        let mut by_project: HashMap<String, Footprint> = HashMap::new();
+        for (answered, (kind, q)) in jql::footprint(window_days).into_iter().enumerate() {
+            let hits = match self.client.search_hits(&self.scope, &q, FOOTPRINT_ROWS).await {
+                Ok(h) => h,
+                // Rate limited: what has been counted so far still ranks the projects.
+                Err(Error::Api { status: 429, .. }) if answered > 0 => break,
+                Err(e) => return Err(e),
+            };
+            for h in hits {
+                let f = by_project.entry(h.project_key.clone()).or_insert_with(|| Footprint {
+                    container: ContainerRef { connection_id: self.connection_id.clone(), external_id: h.project_key.clone() },
+                    key: h.project_key.clone(),
+                    name: h.project_name.clone(),
+                    ..Default::default()
+                });
+                match kind {
+                    "assigned" => f.assigned += 1,
+                    "reported" => f.reported += 1,
+                    "watching" => f.watching += 1,
+                    _ => *f.mentioned.get_or_insert(0) += 1,
+                }
+                if h.updated.as_ref() > f.last_touch.as_ref() {
+                    f.last_touch = h.updated;
+                }
+            }
+        }
+        let mut out: Vec<Footprint> = by_project.into_values().collect();
+        out.sort_by(|a, b| (b.assigned, b.reported + b.watching).cmp(&(a.assigned, a.reported + a.watching)).then_with(|| a.key.cmp(&b.key)));
+        Ok(out)
+    }
+
+    async fn assigned_outside(&self, watched: &[ContainerRef]) -> Result<Vec<Stray>> {
+        let keys: Vec<&str> = watched.iter().map(|w| w.external_id.as_str()).collect();
+        let hits = self.client.search_hits(&self.scope, &jql::assigned_outside(&keys), RADAR_ROWS).await?;
+        let mut out: Vec<Stray> = Vec::new();
+        for h in hits {
+            match out.iter_mut().find(|s| s.container.external_id == h.project_key) {
+                Some(s) => s.keys.push(h.key),
+                None => out.push(Stray {
+                    container: ContainerRef { connection_id: self.connection_id.clone(), external_id: h.project_key },
+                    container_name: h.project_name,
+                    keys: vec![h.key],
+                }),
+            }
         }
         Ok(out)
     }
@@ -238,10 +369,83 @@ mod tests {
     async fn reads_and_writes_need_a_signed_in_account() {
         let t = tracker();
         let opts = SearchOptions { limit: 10, ..Default::default() };
-        assert!(matches!(t.followed(30, &opts).await, Err(Error::NotSignedIn)));
+        assert!(matches!(t.followed(30, &ContainerScope::Everything, &opts).await, Err(Error::NotSignedIn)));
         assert!(matches!(t.transitions(&item()).await, Err(Error::NotSignedIn)));
         let comment = Intent::Comment { item: item(), body: Doc::paragraph("hi") };
         assert!(matches!(t.apply(&comment).await, Err(Error::NotSignedIn)));
+    }
+
+    fn watch(key: &str) -> Watch {
+        Watch {
+            container: ContainerRef { connection_id: "jira:site:me".into(), external_id: key.into() },
+            depth: crate::domain::Depth::Involved,
+            pinned: false,
+            source: crate::domain::WatchSource::Manual,
+            added_at: String::new(),
+            unwatched_at: None,
+            inaccessible: false,
+        }
+    }
+
+    fn bad(key: &str) -> Error {
+        Error::Api { status: 400, message: format!("{{\"errorMessages\":[\"The value '{key}' does not exist for the field 'project'.\"]}}") }
+    }
+
+    #[tokio::test]
+    async fn a_project_jira_refuses_is_dropped_reported_and_the_search_retried() {
+        let queries = std::sync::Mutex::new(Vec::new());
+        let found = scoped_search("c", 30, None, &[watch("CA"), watch("OLD"), watch("GONE")], |q| {
+            queries.lock().unwrap().push(q.clone());
+            async move {
+                match (q.contains("\"OLD\""), q.contains("\"GONE\"")) {
+                    (true, _) => Err(bad("OLD")),
+                    (_, true) => Err(bad("GONE")),
+                    _ => Ok(vec![]),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(found.inaccessible.iter().map(|c| c.external_id.as_str()).collect::<Vec<_>>(), ["OLD", "GONE"]);
+        let queries = queries.lock().unwrap();
+        assert_eq!(queries.len(), 3);
+        assert!(queries[2].contains("\"CA\"") && !queries[2].contains("OLD") && !queries[2].contains("GONE"));
+    }
+
+    #[tokio::test]
+    async fn when_every_project_is_refused_nothing_more_is_asked() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let found = scoped_search("c", 30, None, &[watch("OLD")], |_| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { Err(bad("OLD")) }
+        })
+        .await
+        .unwrap();
+        assert!(found.items.is_empty() && found.inaccessible.len() == 1);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unrelated_400_retries_once_without_mentions_then_fails() {
+        let queries = std::sync::Mutex::new(Vec::new());
+        let err = scoped_search("c", 30, None, &[watch("CA")], |q| {
+            queries.lock().unwrap().push(q);
+            async { Err(Error::Api { status: 400, message: "Error in the JQL Query".into() }) }
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, Error::Api { status: 400, .. }));
+        let queries = queries.lock().unwrap();
+        assert_eq!(queries.len(), 2);
+        assert!(queries[0].contains("comment ~") && !queries[1].contains("comment ~"));
+    }
+
+    #[tokio::test]
+    async fn other_failures_are_not_retried_and_an_empty_scope_asks_nothing() {
+        let err = scoped_search("c", 30, None, &[watch("CA")], |_| async { Err(Error::Api { status: 503, message: "down".into() }) }).await.unwrap_err();
+        assert!(matches!(err, Error::Api { status: 503, .. }));
+        let none = scoped_search("c", 30, None, &[], |_| async { panic!("no request expected") }).await.unwrap();
+        assert!(none.items.is_empty());
     }
 
     #[tokio::test]

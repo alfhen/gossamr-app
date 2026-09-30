@@ -28,7 +28,7 @@ impl Hash for ItemRef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerRef {
     pub connection_id: String,
@@ -146,6 +146,9 @@ pub struct WorkItem {
     /// The raw connector payload.
     #[serde(default)]
     pub extra: Value,
+    /// Read live from a container that isn't watched, and not stored.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unwatched: bool,
 }
 
 #[cfg(test)]

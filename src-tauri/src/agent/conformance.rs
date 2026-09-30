@@ -65,7 +65,7 @@ impl Harness {
     }
 
     pub fn request(&self, run_id: &str, prompt: &str) -> AgentRequest {
-        self.server.runs.lock().unwrap().insert(run_id.into(), self.fx.scope.clone());
+        self.server.runs.lock().unwrap().insert(run_id.into(), super::mcp::Run::new(self.fx.scope.clone()));
         AgentRequest {
             run_id: run_id.into(),
             system: super::context::system_prompt(true),

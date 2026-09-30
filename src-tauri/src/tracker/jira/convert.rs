@@ -105,6 +105,7 @@ pub(super) fn work_item(conn: &str, t: &CachedTicket) -> WorkItem {
         comment_count: t.comments.len() as u32,
         last_commenter: last.map(|c| person_ref(conn, &c.author)),
         extra: serde_json::to_value(t).unwrap_or(Value::Null),
+        unwatched: false,
     }
 }
 

@@ -1,14 +1,20 @@
 import { itemKey } from "../lib/filter";
-import type { ContainerRef, WorkContainer, WorkFilter, WorkItem } from "../types";
+import type { ContainerRef, Intent, WorkContainer, WorkFilter, WorkItem } from "../types";
 import type { SavedView } from "./filters";
 import { THEMES, THEME_LABEL, type ThemeMode } from "./prefs";
+import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
+
+export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "Ask Pip";
 
 export interface Command {
   id: string;
-  group: "Go to" | "View" | "Filter" | "Theme" | "App" | "Ticket";
+  group: CommandGroup;
   label: string;
+  icon?: string;
   hint?: string;
+  /** Runs without closing the palette, for commands that ask a follow-up question. */
+  stay?: boolean;
   /** Extra words that should find the command. */
   keywords?: string;
   run(): void;
@@ -22,12 +28,30 @@ export interface CommandActions {
   clearFilters(): void;
   setTheme(theme: ThemeMode): void;
   openSettings(): void;
+  manageProjects(): void;
+  watch(target: { ref: ContainerRef; name: string }, watched: boolean): void;
+  /** Opens a ticket by key in any project, reading it live when it isn't synced. */
+  openTicket(key: string): void;
   openActivity(): void;
   openDrafts(): void;
   newTab(): void;
+  newTicket(): void;
   togglePip(): void;
   jumpToItem(item: WorkItem): void;
+  askPip(query: string): void;
 }
+
+/** What the screen shows right now, for the hints beside entries. */
+export interface CommandContext {
+  project: ContainerRef | null;
+  view: ViewMode | null;
+  unreadActivity: number;
+  pendingDrafts: number;
+}
+
+const NO_CONTEXT: CommandContext = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
+
+const sameProject = (a: ContainerRef | null, b: ContainerRef) => !!a && a.connectionId === b.connectionId && a.externalId === b.externalId;
 
 const FILTERS: { id: string; label: string; keywords: string; filter: WorkFilter }[] = [
   { id: "mine", label: "Assigned to me", keywords: "mine my tickets", filter: { type: "mine" } },
@@ -38,24 +62,36 @@ const FILTERS: { id: string; label: string; keywords: string; filter: WorkFilter
   { id: "open", label: "Not done", keywords: "open", filter: { type: "open" } },
 ];
 
-export function buildCommands(containers: readonly WorkContainer[], savedViews: readonly SavedView[], a: CommandActions): Command[] {
+export function buildCommands(containers: readonly WorkContainer[], savedViews: readonly SavedView[], a: CommandActions, ctx: CommandContext = NO_CONTEXT): Command[] {
   return [
+    { id: "create:ticket", group: "Create", icon: "＋", label: "New ticket (Pip drafts it)", keywords: "create new ticket bug task file", stay: true, run: a.newTicket },
+    { id: "project:all", group: "Projects", icon: "◧", label: "All projects", hint: ctx.project ? undefined : "current", keywords: "everything clear project", run: () => a.goToProject(null) },
     ...containers.map(
-      (c): Command => ({ id: `project:${c.key}`, group: "Go to", label: c.name, hint: c.key, keywords: `project ${c.key}`, run: () => a.goToProject(c.ref) }),
+      (c): Command => ({
+        id: `project:${c.key}`,
+        group: "Projects",
+        icon: "◧",
+        label: c.name,
+        hint: sameProject(ctx.project, c.ref) ? "current" : c.key,
+        keywords: `project ${c.key}`,
+        run: () => a.goToProject(c.ref),
+      }),
     ),
-    { id: "project:all", group: "Go to", label: "All projects", keywords: "everything clear project", run: () => a.goToProject(null) },
-    ...savedViews.map((v): Command => ({ id: `view:${v.id}`, group: "Go to", label: v.name, hint: "Saved view", keywords: "saved view", run: () => a.openSavedView(v) })),
-    ...VIEW_MODES.map((v): Command => ({ id: `mode:${v}`, group: "View", label: `Show ${VIEW_LABEL[v]}`, keywords: "switch view layout", run: () => a.setView(v) })),
+    { id: "project:manage", group: "Projects", icon: "⚙", label: "Manage projects", keywords: "watch unwatch watching choose which projects sync pin", run: a.manageProjects },
+    ...savedViews.map((v): Command => ({ id: `view:${v.id}`, group: "Views", icon: "◎", label: v.name, keywords: "saved view show", run: () => a.openSavedView(v) })),
+    ...VIEW_MODES.map(
+      (v): Command => ({ id: `mode:${v}`, group: "Layout", icon: "▦", label: `Show ${VIEW_LABEL[v]}`, hint: ctx.view === v ? "current" : undefined, keywords: "switch view layout", run: () => a.setView(v) }),
+    ),
+    { id: "app:activity", group: "Go to", icon: "→", label: "Open activity", hint: ctx.unreadActivity ? `${ctx.unreadActivity} new` : undefined, keywords: "feed events", run: a.openActivity },
+    { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", hint: ctx.pendingDrafts ? `${ctx.pendingDrafts} pending` : undefined, keywords: "pip proposals review waiting", run: a.openDrafts },
+    { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences autopilot", run: a.openSettings },
     ...FILTERS.map(
-      (f): Command => ({ id: `filter:${f.id}`, group: "Filter", label: `Filter: ${f.label}`, keywords: f.keywords, run: () => a.addFilter(f.filter) }),
+      (f): Command => ({ id: `filter:${f.id}`, group: "Filters", icon: "⏷", label: `Filter: ${f.label}`, keywords: f.keywords, run: () => a.addFilter(f.filter) }),
     ),
-    { id: "filter:clear", group: "Filter", label: "Clear filters", keywords: "reset remove", run: a.clearFilters },
-    ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),
-    { id: "app:settings", group: "App", label: "Open settings", keywords: "preferences", run: a.openSettings },
-    { id: "app:activity", group: "App", label: "Open activity", run: a.openActivity },
-    { id: "app:drafts", group: "App", label: "Open drafts", keywords: "pip proposals review waiting", run: a.openDrafts },
-    { id: "app:tab", group: "App", label: "New tab", hint: "Workspace", run: a.newTab },
-    { id: "app:pip", group: "App", label: "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
+    { id: "filter:clear", group: "Filters", icon: "⏷", label: "Clear filters", keywords: "reset remove", run: a.clearFilters },
+    ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", icon: "◐", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),
+    { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },
+    { id: "app:pip", group: "App", icon: "✦", label: "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
   ];
 }
 
@@ -92,5 +128,53 @@ export function ticketCommands(items: readonly WorkItem[], query: string, jump: 
   return matches
     .sort((a, b) => a.rank - b.rank || b.item.updated.localeCompare(a.item.updated))
     .slice(0, limit)
-    .map(({ item }): Command => ({ id: `ticket:${itemKey(item.item)}`, group: "Ticket", label: item.title, hint: item.item.key, run: () => jump(item) }));
+    .map(({ item }): Command => ({ id: `ticket:${itemKey(item.item)}`, group: "Tickets", icon: "·", label: item.title, hint: item.item.key, run: () => jump(item) }));
+}
+
+/** Projects the person doesn't watch that match the search, each a way to start watching it. */
+export function watchCommands(unwatched: readonly { ref: ContainerRef; key: string; name: string }[], a: Pick<CommandActions, "watch">, limit = 5): Command[] {
+  return unwatched.slice(0, limit).map(
+    (c): Command => ({ id: `watch:${c.ref.externalId}`, group: "Projects", icon: "＋", label: `Watch ${c.name}`, hint: `${c.key} · not watched`, keywords: `watch ${c.key} ${c.name}`, run: () => a.watch(c, true) }),
+  );
+}
+
+/** One "Unwatch" per watched project, for a query that asks to stop watching. */
+export function unwatchCommands(containers: readonly WorkContainer[], query: string, a: Pick<CommandActions, "watch">): Command[] {
+  if (!/^\s*(unwatch|stop watching)/i.test(query)) return [];
+  return containers.map(
+    (c): Command => ({ id: `unwatch:${c.key}`, group: "Projects", icon: "－", label: `Unwatch ${c.name}`, hint: c.key, keywords: `${c.key} stop watching remove`, run: () => a.watch(c, false) }),
+  );
+}
+
+/** For a query that is a ticket key not in the synced items: opens it in any project, read live. */
+export function keyCommand(query: string, items: readonly WorkItem[], open: (key: string) => void): Command[] {
+  const key = ticketKeyOf(query);
+  if (!key || items.some((i) => i.item.key.toUpperCase() === key)) return [];
+  return [{ id: `key:${key}`, group: "Tickets", icon: "↗", label: `Open ${key}`, hint: "look up live", keywords: key, run: () => open(key) }];
+}
+
+/** The command that hands the typed words to Pip; last, for any non-empty query. */
+export function withAskPip(results: readonly Command[], query: string, ask: (query: string) => void): Command[] {
+  const q = query.trim();
+  if (!q) return [...results];
+  return [...results, { id: "ask:pip", group: "Ask Pip", icon: "✦", label: `Ask Pip: “${q}”`, hint: "↵", run: () => ask(q) }];
+}
+
+/** One entry per project for the new-ticket prompt, the one on screen first. */
+export function projectChoices(containers: readonly WorkContainer[], query: string, current: ContainerRef | null, pick: (c: WorkContainer) => void): Command[] {
+  const all = containers.map(
+    (c): Command => ({ id: `new:${c.key}`, group: "Projects", icon: "◧", label: c.name, hint: c.key, keywords: c.key, stay: true, run: () => pick(c) }),
+  );
+  const first = containers.findIndex((c) => sameProject(current, c.ref));
+  if (first > 0) all.unshift(...all.splice(first, 1));
+  return rankCommands(all, query);
+}
+
+export function newTicketIntent(container: ContainerRef, title: string): Intent {
+  return {
+    type: "create",
+    container,
+    fields: { title: title.trim(), body: { blocks: [] }, kind: "task", assignee: null, parent: null, priority: null, labels: [] },
+    link: null,
+  };
 }

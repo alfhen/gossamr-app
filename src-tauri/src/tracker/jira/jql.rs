@@ -1,6 +1,6 @@
 //! Translates the neutral filter into JQL.
 
-use crate::domain::{Category, Filter};
+use crate::domain::{Category, Depth, Filter, Watch};
 
 #[derive(Debug, PartialEq)]
 pub(super) enum Clause {
@@ -76,14 +76,71 @@ fn since_clause(window_days: Option<u32>, updated_since_minutes: Option<u32>) ->
     Some(format!("updated >= -{minutes}m"))
 }
 
+/// The window a followed query reaches back over: `window_days`, or the last `updated_since_minutes` when that is less.
+fn window(window_days: u32, updated_since_minutes: Option<u32>) -> String {
+    match updated_since_minutes {
+        None => format!("updated >= -{window_days}d"),
+        Some(_) => since_clause(Some(window_days), updated_since_minutes).expect("bounded"),
+    }
+}
+
+const INVOLVED: &str = "assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()";
+
 /// Issues the signed-in person is involved in that changed within `window_days`, and within the last
 /// `updated_since_minutes` when given.
 pub(super) fn followed(window_days: u32, updated_since_minutes: Option<u32>) -> String {
-    let involved = "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser())";
-    match updated_since_minutes {
-        None => ordered(&format!("{involved} AND updated >= -{window_days}d")),
-        Some(_) => ordered(&format!("{involved} AND {}", since_clause(Some(window_days), updated_since_minutes).expect("bounded"))),
+    ordered(&format!("({INVOLVED}) AND {}", window(window_days, updated_since_minutes)))
+}
+
+fn project_list(watches: &[&Watch]) -> String {
+    format!("project in ({})", watches.iter().map(|w| quote(&w.container.external_id)).collect::<Vec<_>>().join(", "))
+}
+
+/// Issues in the watched containers that changed within the window: the ones the person is involved in for a
+/// container watched as `Involved` (`mentions` adds comments that mention them; Jira has no cheaper test for that),
+/// all of them for one watched as `Whole`. `None` when nothing is watched.
+pub(super) fn followed_in(window_days: u32, updated_since_minutes: Option<u32>, watches: &[Watch], mentions: bool) -> Option<String> {
+    let involved: Vec<&Watch> = watches.iter().filter(|w| w.depth == Depth::Involved).collect();
+    let whole: Vec<&Watch> = watches.iter().filter(|w| w.depth == Depth::Whole).collect();
+    let who = if mentions { format!("{INVOLVED} OR comment ~ currentUser()") } else { INVOLVED.to_string() };
+    let mut parts = Vec::new();
+    if !involved.is_empty() {
+        parts.push(format!("({} AND ({who}))", project_list(&involved)));
     }
+    if !whole.is_empty() {
+        parts.push(project_list(&whole));
+    }
+    (!parts.is_empty()).then(|| ordered(&format!("({}) AND {}", parts.join(" OR "), window(window_days, updated_since_minutes))))
+}
+
+/// The project named in a Jira 400 about a project that doesn't exist or can't be read, if it is one of `keys`.
+/// Jira words it as `The value 'KEY' does not exist for the field 'project'.`
+pub(super) fn bad_project(message: &str, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find(|k| ["'", "\\\"", "\""].iter().any(|q| message.contains(&format!("{q}{k}{q}"))))
+        .map(|k| k.to_string())
+}
+
+/// Open items assigned to the person outside the watched projects.
+pub(super) fn assigned_outside(watched: &[&str]) -> String {
+    let outside = if watched.is_empty() {
+        String::new()
+    } else {
+        format!(" AND project not in ({})", watched.iter().map(|k| quote(k)).collect::<Vec<_>>().join(", "))
+    };
+    ordered(&format!("assignee = currentUser() AND statusCategory != {}{outside}", quote(category_name(Category::Done))))
+}
+
+/// How the person touches work, one query each, over the last `days`. `mentioned` is an approximation: Jira has no
+/// query for "comments that mention me", and text search over a comment finds the account.
+pub(super) fn footprint(days: u32) -> [(&'static str, String); 4] {
+    let q = |clause: &str| ordered(&format!("{clause} AND updated >= -{days}d"));
+    [
+        ("assigned", q("assignee = currentUser()")),
+        ("reported", q("reporter = currentUser()")),
+        ("watching", q("watcher = currentUser()")),
+        ("mentioned", q("comment ~ currentUser()")),
+    ]
 }
 
 pub(super) fn children(parent_keys: &[&str], updated_since_minutes: Option<u32>) -> String {
@@ -163,6 +220,55 @@ mod tests {
         assert!(followed(30, Some(15)).ends_with("AND updated >= -15m ORDER BY updated DESC"));
         assert!(followed(1, Some(5000)).ends_with("AND updated >= -1440m ORDER BY updated DESC"));
         assert_eq!(children(&["CA-1"], Some(20)), "parent in (CA-1) AND updated >= -20m ORDER BY updated DESC");
+    }
+
+    fn watch(key: &str, depth: Depth) -> Watch {
+        Watch {
+            container: ContainerRef { connection_id: "c".into(), external_id: key.into() },
+            depth,
+            pinned: false,
+            source: crate::domain::WatchSource::Manual,
+            added_at: String::new(),
+            unwatched_at: None,
+            inaccessible: false,
+        }
+    }
+
+    #[test]
+    fn a_scoped_query_limits_projects_and_separates_involved_from_whole() {
+        let w = [watch("CA", Depth::Involved), watch("WEB", Depth::Whole), watch("OPS", Depth::Involved)];
+        assert_eq!(
+            followed_in(30, None, &w, false).unwrap(),
+            "((project in (\"CA\", \"OPS\") AND (assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser())) OR project in (\"WEB\")) AND updated >= -30d ORDER BY updated DESC"
+        );
+        assert!(followed_in(30, None, &w[..1], true).unwrap().contains("OR comment ~ currentUser()))"));
+        assert!(followed_in(30, Some(15), &w[1..2], true).unwrap().ends_with("(project in (\"WEB\")) AND updated >= -15m ORDER BY updated DESC"));
+        assert_eq!(followed_in(30, None, &[], true), None);
+    }
+
+    #[test]
+    fn the_project_jira_names_in_a_400_is_found_among_the_watched_keys() {
+        let body = r#"{"errorMessages":["The value 'OLD' does not exist for the field 'project'."],"errors":{}}"#;
+        assert_eq!(bad_project(body, &["CA", "OLD"]).as_deref(), Some("OLD"));
+        assert_eq!(bad_project(body, &["CA"]), None);
+        assert_eq!(bad_project(r#"[\"The value \"OLD\" does not exist\"]"#, &["OLD"]).as_deref(), Some("OLD"));
+        assert_eq!(bad_project("Error in the JQL Query: bad", &["CA"]), None);
+    }
+
+    #[test]
+    fn the_radar_query_excludes_watched_projects_and_done_items() {
+        assert_eq!(
+            assigned_outside(&["CA", "WEB"]),
+            "assignee = currentUser() AND statusCategory != \"Done\" AND project not in (\"CA\", \"WEB\") ORDER BY updated DESC"
+        );
+        assert!(!assigned_outside(&[]).contains("project not in"));
+    }
+
+    #[test]
+    fn the_footprint_asks_four_bounded_questions() {
+        let qs = footprint(90);
+        assert_eq!(qs.iter().map(|(k, _)| *k).collect::<Vec<_>>(), ["assigned", "reported", "watching", "mentioned"]);
+        assert!(qs.iter().all(|(_, q)| q.contains("updated >= -90d")));
     }
 
     #[test]

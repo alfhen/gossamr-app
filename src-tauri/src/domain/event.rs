@@ -91,6 +91,8 @@ pub struct FeedQuery {
     pub mentions_only: bool,
     pub unread_only: bool,
     pub container: Option<ContainerRef>,
+    /// Also entries about items in containers that aren't watched.
+    pub include_unwatched: bool,
     pub before: Option<FeedCursor>,
     /// Zero asks for the default page size.
     pub limit: usize,

@@ -6,11 +6,17 @@ export interface Toast {
   id: number;
   text: string;
   tone: ToastTone;
+  action?: ToastAction;
+}
+
+export interface ToastAction {
+  label: string;
+  run(): void;
 }
 
 interface ToastState {
   toasts: Toast[];
-  push(text: string, tone?: ToastTone): void;
+  push(text: string, tone?: ToastTone, action?: ToastAction): void;
   dismiss(id: number): void;
   clear(): void;
 }
@@ -22,10 +28,10 @@ let seq = 0;
 export const useToasts = create<ToastState>((set, get) => ({
   toasts: [],
 
-  push(text, tone = "error") {
+  push(text, tone = "error", action) {
     if (get().toasts.some((t) => t.text === text)) return;
     const id = ++seq;
-    set((s) => ({ toasts: [...s.toasts, { id, text, tone }].slice(-MAX_SHOWN) }));
+    set((s) => ({ toasts: [...s.toasts, { id, text, tone, action }].slice(-MAX_SHOWN) }));
     setTimeout(() => get().dismiss(id), LIFETIME_MS);
   },
 

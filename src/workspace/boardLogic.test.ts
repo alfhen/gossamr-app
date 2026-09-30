@@ -10,6 +10,9 @@ import {
   approvableTransitions,
   blockedKeys,
   boardSections,
+  categorySection,
+  categoryVerdict,
+  planCategoryDrop,
   bulkMoves,
   bulkTargets,
   draftStatus,
@@ -153,11 +156,11 @@ describe("draft moves", () => {
     expect(draftStatus({ intent: { type: "comment" } } as Proposal, wf)).toBeNull();
   });
 
-  it("refuses a hand-made draft with no target status", async () => {
+  it("refuses a hand-made draft with no target status or a new item with no title", async () => {
     await expect(s().backend!.proposalsCreate({ type: "transition", item: itemRef("CA-402"), to: " " })).rejects.toThrow(/target status/);
     await expect(
-      s().backend!.proposalsCreate({ type: "create", container: containerRef("CA"), fields: { title: "x", body: { blocks: [] }, kind: "task", assignee: null, parent: null, priority: null, labels: [] }, link: null }),
-    ).rejects.toThrow(/existing item/);
+      s().backend!.proposalsCreate({ type: "create", container: containerRef("CA"), fields: { title: " ", body: { blocks: [] }, kind: "task", assignee: null, parent: null, priority: null, labels: [] }, link: null }),
+    ).rejects.toThrow(/needs a title/);
   });
 });
 
@@ -260,5 +263,27 @@ describe("drops where the tracker reveals moves per item", () => {
     const i = item("CA-402");
     const wf = section("CA").workflow;
     expect(targetsFor(wf, i, [])).toEqual(targetsFor(wf, i));
+  });
+});
+
+describe("category board", () => {
+  it("has a column per status category holding every project's items", () => {
+    const all = itemsByFilter(s(), ALL);
+    const cat = categorySection(all);
+    expect(cat.columns.map((c) => c.status.name)).toEqual(["To do", "In progress", "Done"]);
+    expect(cat.columns.reduce((n, c) => n + c.items.length, 0)).toBe(all.length);
+    expect(cat.columns.every((c) => c.items.every((i) => i.status.category === c.category))).toBe(true);
+    expect(new Set(cat.columns[1].items.map((i) => i.container.externalId)).size).toBeGreaterThan(1);
+  });
+
+  it("moves a card to the first status of that category its own workflow allows", () => {
+    const card = item("DEVOPS-471");
+    const own = section("DEVOPS");
+    expect(categoryVerdict(card, own, "done")).toBe("ok");
+    expect(categoryVerdict(card, own, "active")).toBe("same");
+    expect(categoryVerdict(card, own, "todo")).toBe("invalid");
+    expect(planCategoryDrop(card, own, "done")).toMatchObject({ ok: true, to: { name: "Done" }, intent: { type: "transition", to: statusId("DEVOPS", "Done") } });
+    expect(planCategoryDrop(card, own, "todo")).toEqual({ ok: false, reason: "DevOps doesn't allow In Review → To do" });
+    expect(planCategoryDrop(card, own, "active")).toEqual({ ok: false, reason: null });
   });
 });

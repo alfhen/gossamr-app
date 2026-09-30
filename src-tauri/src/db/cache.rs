@@ -5,8 +5,9 @@ use rusqlite::types::Value as Sql;
 use rusqlite::{params, params_from_iter, OptionalExtension};
 use serde::Serialize;
 
+use super::watch::in_list;
 use super::Db;
-use crate::domain::{Container, ContainerRef, Event, FeedEntry, FeedPage, FeedQuery, Filter, FilterContext, ItemRef, Subject, WorkItem, Workflow};
+use crate::domain::{Container, ContainerRef, Event, FeedEntry, FeedPage, FeedQuery, Filter, FilterContext, ItemRef, Subject, Visible, WorkItem, Workflow};
 use crate::domain::Transitions;
 use crate::error::Result;
 
@@ -188,11 +189,14 @@ impl Db {
     }
 
     /// Items refreshed at or after `since`; older ones have dropped out of every query.
-    pub fn items_synced_since(&self, connection_id: &str, since: &str) -> Result<Vec<WorkItem>> {
-        self.read_items(
-            "SELECT data FROM items WHERE connection_id = ?1 AND synced_at >= ?2",
-            vec![Sql::Text(connection_id.into()), Sql::Text(since.into())],
-        )
+    pub fn items_synced_since(&self, connection_id: &str, since: &str, visible: &Visible) -> Result<Vec<WorkItem>> {
+        let mut sql = String::from("SELECT data FROM items WHERE connection_id = ?1 AND synced_at >= ?2");
+        let mut args = vec![Sql::Text(connection_id.into()), Sql::Text(since.into())];
+        if let Visible::Only(ids) = visible {
+            sql.push_str(&format!(" AND {}", in_list("container_id", ids.len())));
+            args.extend(ids.iter().map(|i| Sql::Text(i.clone())));
+        }
+        self.read_items(&sql, args)
     }
 
     pub fn epic_ids_synced_since(&self, connection_id: &str, since: &str) -> Result<Vec<String>> {
@@ -205,9 +209,12 @@ impl Db {
 
     /// The connection's items that match `filter`, newest first. Columns narrow the candidates and
     /// `Filter::matches` has the last word.
-    pub fn search(&self, connection_id: &str, filter: &Filter, ctx: &FilterContext) -> Result<Vec<WorkItem>> {
+    pub fn search(&self, connection_id: &str, filter: &Filter, ctx: &FilterContext, visible: &Visible) -> Result<Vec<WorkItem>> {
         let mut narrowing = Narrowing::default();
         Narrowing::from(filter, ctx.now, &mut narrowing);
+        if let Visible::Only(ids) = visible {
+            narrowing.add(&in_list("container_id", ids.len()), ids.iter().map(|i| Sql::Text(i.clone())));
+        }
         let mut sql = String::from("SELECT data FROM items WHERE connection_id = ?");
         for c in &narrowing.clauses {
             sql.push_str(&format!(" AND ({c})"));
@@ -218,10 +225,14 @@ impl Db {
         let candidates = self.read_items(&sql, args)?;
         let everything;
         let all: &[WorkItem] = if filter.needs_all_items() {
-            everything = self.read_items(
-                "SELECT data FROM items WHERE connection_id = ?1 ORDER BY updated DESC, external_id",
-                vec![Sql::Text(connection_id.into())],
-            )?;
+            let mut sql = String::from("SELECT data FROM items WHERE connection_id = ?");
+            let mut args = vec![Sql::Text(connection_id.into())];
+            if let Visible::Only(ids) = visible {
+                sql.push_str(&format!(" AND {}", in_list("container_id", ids.len())));
+                args.extend(ids.iter().map(|i| Sql::Text(i.clone())));
+            }
+            sql.push_str(" ORDER BY updated DESC, external_id");
+            everything = self.read_items(&sql, args)?;
             &everything
         } else {
             &candidates
@@ -318,7 +329,7 @@ impl Db {
     }
 
     /// Events across the connection's items, newest first, with the read state the inbox keeps under the same id.
-    pub fn feed(&self, connection_id: &str, q: &FeedQuery) -> Result<FeedPage> {
+    pub fn feed(&self, connection_id: &str, q: &FeedQuery, visible: &Visible) -> Result<FeedPage> {
         let limit = if q.limit == 0 { FEED_PAGE } else { q.limit.min(FEED_MAX) };
         let mut sql = String::from(FEED_SELECT);
         sql.push_str(" WHERE c.connection_id = ? AND c.item_id IS NOT NULL");
@@ -337,6 +348,10 @@ impl Db {
         if let Some(container) = &q.container {
             sql.push_str(" AND i.container_id = ?");
             args.push(Sql::Text(container.external_id.clone()));
+        }
+        if let Visible::Only(ids) = visible {
+            sql.push_str(&format!(" AND {}", in_list("i.container_id", ids.len())));
+            args.extend(ids.iter().map(|i| Sql::Text(i.clone())));
         }
         if let Some(cursor) = &q.before {
             sql.push_str(" AND (c.at < ? OR (c.at = ? AND c.id < ?))");
@@ -360,13 +375,21 @@ impl Db {
     }
 
     /// How many events in the connection are unread.
-    pub fn feed_unread(&self, connection_id: &str) -> Result<usize> {
-        let n: i64 = self.conn.query_row(
-            "SELECT count(*) FROM cache_events c LEFT JOIN events e ON e.id = c.id
-             WHERE c.connection_id = ?1 AND c.item_id IS NOT NULL AND COALESCE(e.unread, 0) = 1",
-            params![connection_id],
-            |r| r.get(0),
-        )?;
+    pub fn feed_unread(&self, connection_id: &str, visible: &Visible) -> Result<usize> {
+        let (join, ids) = match visible {
+            Visible::All => (String::new(), &[][..]),
+            Visible::Only(ids) => (
+                format!("JOIN items i ON i.connection_id = c.connection_id AND i.external_id = c.item_id AND {}", in_list("i.container_id", ids.len())),
+                ids.as_slice(),
+            ),
+        };
+        let sql = format!(
+            "SELECT count(*) FROM cache_events c LEFT JOIN events e ON e.id = c.id {join}
+             WHERE c.connection_id = ? AND c.item_id IS NOT NULL AND COALESCE(e.unread, 0) = 1"
+        );
+        // The join's placeholders come first in the statement, so their values do too.
+        let args = ids.iter().map(String::as_str).chain(std::iter::once(connection_id));
+        let n: i64 = self.conn.query_row(&sql, rusqlite::params_from_iter(args), |r| r.get(0))?;
         Ok(n as usize)
     }
 
@@ -433,8 +456,8 @@ mod tests {
         a.title = "Renamed".into();
         assert_eq!(db.upsert_items(&[a.clone()], "t3").unwrap(), Upserted { inserted: 0, changed: 1 });
         assert_eq!(db.item(&a.item).unwrap().unwrap().title, "Renamed");
-        assert_eq!(db.items_synced_since("c", "").unwrap().len(), 1);
-        assert!(db.items_synced_since("c", "t4").unwrap().is_empty());
+        assert_eq!(db.items_synced_since("c", "", &Visible::All).unwrap().len(), 1);
+        assert!(db.items_synced_since("c", "t4", &Visible::All).unwrap().is_empty());
     }
 
     #[test]
@@ -451,7 +474,7 @@ mod tests {
     fn filters_read_from_the_cache_and_stay_within_one_connection() {
         let db = Db::in_memory().unwrap();
         seed(&db);
-        let run = |f: Filter| ids(&db.search("c", &f, &ctx()).unwrap()).into_iter().map(String::from).collect::<Vec<_>>();
+        let run = |f: Filter| ids(&db.search("c", &f, &ctx(), &Visible::All).unwrap()).into_iter().map(String::from).collect::<Vec<_>>();
         assert_eq!(run(Filter::And { filters: vec![] }), ["1", "2", "3"]);
         assert_eq!(run(Filter::Mine), ["1"]);
         assert_eq!(run(Filter::Assignee { person: person("me") }), ["1"]);
@@ -469,13 +492,48 @@ mod tests {
     }
 
     #[test]
+    fn a_search_sees_only_the_visible_containers_even_for_filters_that_read_across_items() {
+        let db = Db::in_memory().unwrap();
+        seed(&db);
+        let only = |ids: &[&str]| Visible::Only(ids.iter().map(|s| s.to_string()).collect());
+        let run = |f: Filter, v: &Visible| ids(&db.search("c", &f, &ctx(), v).unwrap()).into_iter().map(String::from).collect::<Vec<_>>();
+        assert_eq!(run(Filter::And { filters: vec![] }, &only(&["q"])), ["2"]);
+        assert_eq!(run(Filter::Open, &only(&["p"])), ["1"]);
+        assert!(run(Filter::And { filters: vec![] }, &only(&[])).is_empty());
+        assert_eq!(db.items_synced_since("c", "", &only(&["q"])).unwrap().len(), 1);
+        let mut blocker = work_item("8", "doing");
+        blocker.container.external_id = "hidden".into();
+        blocker.links.push(Link { from: item_ref("8"), to: item_ref("2"), kind: LinkKind::Blocks });
+        db.upsert_items(&[blocker], "t").unwrap();
+        assert_eq!(run(Filter::Blocked, &Visible::All), ["2"]);
+        assert!(run(Filter::Blocked, &only(&["q"])).is_empty(), "a blocker nobody can see doesn't block");
+    }
+
+    #[test]
+    fn the_feed_and_its_unread_count_leave_out_items_of_containers_that_are_not_visible() {
+        let db = feed_db();
+        let actor = serde_json::to_string(&crate::model::Person { account_id: "sam".into(), name: "Sam".into(), avatar_url: None }).unwrap();
+        for id in ["e2", "e3", "e5"] {
+            db.conn
+                .execute("INSERT INTO events (id, ticket_key, kind, actor, at, text, unread) VALUES (?1, 'K', 'status', ?2, 't', 'x', 1)", params![id, actor])
+                .unwrap();
+        }
+        let p = Visible::Only(vec!["p".into()]);
+        let ids = |v: &Visible, q: &FeedQuery| db.feed("c", q, v).unwrap().entries.into_iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(ids(&p, &FeedQuery::default()), ["e2", "e1"], "no events of q, and none of an item that left the cache");
+        assert_eq!(ids(&p, &FeedQuery { unread_only: true, ..Default::default() }), ["e2"]);
+        assert_eq!((db.feed_unread("c", &Visible::All).unwrap(), db.feed_unread("c", &p).unwrap()), (3, 1));
+        assert_eq!(db.feed_unread("c", &Visible::Only(vec![])).unwrap(), 0);
+    }
+
+    #[test]
     fn filter_matches_is_the_final_authority_for_what_columns_cannot_say() {
         let db = Db::in_memory().unwrap();
         let mut ctx = ctx();
         ctx.needs_me = HashSet::from([item_ref("2")]);
         seed(&db);
-        assert_eq!(ids(&db.search("c", &Filter::NeedsMe, &ctx).unwrap()), ["2"]);
-        assert_eq!(ids(&db.search("c", &Filter::Text { text: "task 3".into() }, &ctx).unwrap()), ["3"]);
+        assert_eq!(ids(&db.search("c", &Filter::NeedsMe, &ctx, &Visible::All).unwrap()), ["2"]);
+        assert_eq!(ids(&db.search("c", &Filter::Text { text: "task 3".into() }, &ctx, &Visible::All).unwrap()), ["3"]);
     }
 
     #[test]
@@ -487,7 +545,7 @@ mod tests {
         let blocked = work_item("2", "todo");
         db.upsert_items(&[blocker, blocked], "t").unwrap();
         let f = Filter::And { filters: vec![Filter::Container { container: work_item("2", "todo").container }, Filter::Blocked] };
-        assert_eq!(ids(&db.search("c", &f, &ctx()).unwrap()), ["2"]);
+        assert_eq!(ids(&db.search("c", &f, &ctx(), &Visible::All).unwrap()), ["2"]);
     }
 
     #[test]
@@ -496,7 +554,7 @@ mod tests {
         db.upsert_items(&[work_item("1", "todo")], "2026-01-01T00:00:00Z").unwrap();
         db.upsert_items(&[work_item("2", "todo")], "2026-09-01T00:00:00Z").unwrap();
         assert_eq!(db.prune_items("c", "2026-06-01T00:00:00Z").unwrap(), 1);
-        assert_eq!(ids(&db.search("c", &Filter::And { filters: vec![] }, &ctx()).unwrap()), ["2"]);
+        assert_eq!(ids(&db.search("c", &Filter::And { filters: vec![] }, &ctx(), &Visible::All).unwrap()), ["2"]);
     }
 
     fn container(id: &str, statuses: &[&str]) -> Container {
@@ -578,29 +636,29 @@ mod tests {
     }
 
     fn feed_ids(db: &Db, q: &FeedQuery) -> Vec<String> {
-        db.feed("c", q).unwrap().entries.into_iter().map(|e| e.id).collect()
+        db.feed("c", q, &Visible::All).unwrap().entries.into_iter().map(|e| e.id).collect()
     }
 
     #[test]
     fn the_feed_is_newest_first_across_items_and_names_the_item() {
         let db = feed_db();
-        let page = db.feed("c", &FeedQuery::default()).unwrap();
+        let page = db.feed("c", &FeedQuery::default(), &Visible::All).unwrap();
         assert_eq!(page.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e5", "e4", "e3", "e2", "e1"]);
         assert!(page.next.is_none());
         let e2 = page.entries.iter().find(|e| e.id == "e2").unwrap();
         assert_eq!((e2.item_title.as_deref(), e2.text.as_str()), (Some("Retry queue"), "To Do → Doing"));
         assert!(page.entries[0].item_title.is_none(), "an item that left the cache has no title");
-        assert!(db.feed("other", &FeedQuery::default()).unwrap().entries.is_empty());
+        assert!(db.feed("other", &FeedQuery::default(), &Visible::All).unwrap().entries.is_empty());
     }
 
     #[test]
     fn pages_follow_the_cursor_without_skipping_entries_that_share_a_time() {
         let db = feed_db();
-        let first = db.feed("c", &FeedQuery { limit: 2, ..Default::default() }).unwrap();
+        let first = db.feed("c", &FeedQuery { limit: 2, ..Default::default() }, &Visible::All).unwrap();
         assert_eq!(first.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e5", "e4"]);
-        let second = db.feed("c", &FeedQuery { limit: 2, before: first.next, ..Default::default() }).unwrap();
+        let second = db.feed("c", &FeedQuery { limit: 2, before: first.next, ..Default::default() }, &Visible::All).unwrap();
         assert_eq!(second.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e3", "e2"]);
-        let third = db.feed("c", &FeedQuery { limit: 2, before: second.next, ..Default::default() }).unwrap();
+        let third = db.feed("c", &FeedQuery { limit: 2, before: second.next, ..Default::default() }, &Visible::All).unwrap();
         assert_eq!(third.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e1"]);
         assert!(third.next.is_none());
     }
@@ -627,22 +685,22 @@ mod tests {
                 )
                 .unwrap();
         }
-        assert_eq!(db.feed_unread("c").unwrap(), 1);
+        assert_eq!(db.feed_unread("c", &Visible::All).unwrap(), 1);
         let about_code = Event { subject: Subject::CodeChange { repo: "r".into(), number: 1 }, ..feed_event("pr1", "1", EventKind::PrOpened, 30, serde_json::json!({})) };
         db.insert_cache_events(&[about_code]).unwrap();
         db.conn
             .execute("INSERT INTO events (id, ticket_key, kind, actor, at, text, unread) VALUES ('pr1', 'K', 'comment', '{}', 't', 'x', 1)", [])
             .unwrap();
-        assert_eq!(db.feed_unread("c").unwrap(), 1, "an event the feed can't show doesn't count");
+        assert_eq!(db.feed_unread("c", &Visible::All).unwrap(), 1, "an event the feed can't show doesn't count");
         assert_eq!(feed_ids(&db, &FeedQuery { unread_only: true, ..Default::default() }), ["e2"]);
-        let page = db.feed("c", &FeedQuery::default()).unwrap();
+        let page = db.feed("c", &FeedQuery::default(), &Visible::All).unwrap();
         let e2 = page.entries.iter().find(|e| e.id == "e2").unwrap();
         assert!(e2.unread && e2.actor_name.as_deref() == Some("Sam"));
         assert!(!page.entries.iter().find(|e| e.id == "e1").unwrap().unread, "events without an inbox row arrive read");
         db.set_unread("e2", false).unwrap();
-        assert_eq!(db.feed_unread("c").unwrap(), 0);
+        assert_eq!(db.feed_unread("c", &Visible::All).unwrap(), 0);
         db.set_done("e3", Some("2026-09-29T12:00:00Z")).unwrap();
-        assert!(db.feed("c", &FeedQuery::default()).unwrap().entries.iter().find(|e| e.id == "e3").unwrap().done);
+        assert!(db.feed("c", &FeedQuery::default(), &Visible::All).unwrap().entries.iter().find(|e| e.id == "e3").unwrap().done);
     }
 
     #[test]

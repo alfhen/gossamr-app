@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { useWorkspace } from "../workspaceStore";
-import { BulkBar } from "./BulkBar";
+import { daysQuiet } from "./boardLogic";
+import { ageLevel, statusTone, type StatusTone } from "./canvasShared";
+import { CanvasFooter } from "./CanvasFooter";
 import type { CanvasProps } from "./canvases";
 import { FIT, layoutMap, neighbour, shownKey, zoomAt, type Direction, type MapEdge, type MapLayout, type Viewport } from "./mapLayout";
-import { NoticeLine } from "./Notice";
 import { useTabs } from "./tabsStore";
 import { useCards } from "./useCards";
 
-const FILL = { todo: "fill-ws-ink3", active: "fill-ws-accent", done: "fill-ws-done" } as const;
-const DOT = { todo: "bg-ws-ink3", active: "bg-ws-accent", done: "bg-ws-done" } as const;
+const FILL: Record<StatusTone, string> = { todo: "fill-ws-ink3", active: "fill-ws-accent", done: "fill-ws-done", review: "fill-ws-review", blocked: "fill-ws-blocked" };
 const ARROWS: Record<string, Direction> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
 const nodeId = (key: string) => `map-node-${key}`;
 
@@ -20,6 +20,9 @@ export interface MapSvgProps {
   focused: string | null;
   hovered: string | null;
   blocked: ReadonlySet<string>;
+  /** Tickets waiting on the person, which pulse. */
+  needsMe: ReadonlySet<string>;
+  now: Date;
   drafts: Readonly<Record<string, number>>;
   onNode(key: string, ev: MouseEvent): void;
   onHover(key: string | null): void;
@@ -29,7 +32,7 @@ export interface MapSvgProps {
 const touches = (e: MapEdge, key: string | null) => key !== null && (e.from === key || e.to === key);
 
 /** The map itself, with no state of its own: the same props always draw the same picture. */
-export function MapSvg({ layout, viewport, selected, marked, focused, hovered, blocked, drafts, onNode, onHover, onCluster }: MapSvgProps) {
+export function MapSvg({ layout, viewport, selected, marked, focused, hovered, blocked, needsMe, now, drafts, onNode, onHover, onCluster }: MapSvgProps) {
   const active = hovered ?? focused;
   const clusters = new Map(layout.clusters.map((c) => [c.key, c]));
   const near = new Set(layout.edges.filter((e) => touches(e, active)).flatMap((e) => [e.from, e.to]));
@@ -85,30 +88,41 @@ export function MapSvg({ layout, viewport, selected, marked, focused, hovered, b
           const dim = active !== null && !near.has(n.key) && active !== n.key;
           const label = active === n.key || isSelected;
           const cluster = clusters.get(n.cluster);
+          const tone = statusTone(n.item.status);
+          const days = daysQuiet(n.item, now);
+          const stale = tone === "done" ? 0 : ageLevel(days);
+          const pulses = needsMe.has(n.key);
           return (
             <g
               key={n.key}
               id={nodeId(n.key)}
               role="button"
-              aria-label={`${n.item.item.key} ${n.item.title}, ${n.item.status.name}${isBlocked ? ", blocked" : ""}${drafts[n.key] ? ", has a draft" : ""}${cluster ? `, in ${cluster.label}` : ""}`}
+              aria-label={`${n.item.item.key} ${n.item.title}, ${n.item.status.name}${isBlocked ? ", blocked" : ""}${pulses ? ", needs you" : ""}${stale >= 2 ? `, quiet for ${days} days` : ""}${drafts[n.key] ? ", has a draft" : ""}${cluster ? `, in ${cluster.label}` : ""}`}
               aria-pressed={isSelected}
               data-node={n.key}
               className="cursor-pointer motion-safe:transition-opacity"
-              opacity={dim ? 0.3 : 1}
+              opacity={dim ? 0.3 : stale >= 2 ? 0.7 : 1}
               onClick={(ev) => onNode(n.key, ev)}
               onPointerEnter={() => onHover(n.key)}
               onPointerLeave={() => onHover(null)}
             >
               <title>{`${n.item.item.key} · ${n.item.title} · ${n.item.status.name}`}</title>
               {isBlocked && <circle cx={n.x} cy={n.y} r={n.r + 5} fill="none" strokeWidth={1.5} strokeDasharray="3 2" className="stroke-ws-blocked" data-blocked />}
+              {pulses && <circle cx={n.x} cy={n.y} r={n.r} fill="none" strokeWidth={2} className="ws-ring stroke-ws-pip" data-pulse />}
               <circle
                 cx={n.x}
                 cy={n.y}
                 r={n.r}
                 strokeWidth={isSelected || isMarked ? 3.5 : 2}
-                className={`${FILL[n.item.status.category]} ${isSelected ? "stroke-ws-pip" : isMarked ? "stroke-ws-accent" : "stroke-ws-win"}`}
-                fillOpacity={n.item.status.category === "done" ? 0.7 : 0.95}
+                strokeDasharray={stale >= 3 ? "3 2" : undefined}
+                className={`${FILL[tone]} ${isSelected ? "stroke-ws-pip" : isMarked ? "stroke-ws-accent" : "stroke-ws-win"}`}
+                fillOpacity={stale >= 2 ? 0.55 : tone === "done" ? 0.7 : 0.95}
               />
+              {stale >= 2 && (
+                <text x={n.x + n.r * 0.7} y={n.y - n.r * 0.5} fontSize={stale >= 3 ? 13 : 11} aria-hidden data-stale={stale >= 3 ? "spider" : "web"}>
+                  {stale >= 3 ? "🕷" : "🕸"}
+                </text>
+              )}
               {focused === n.key && <circle cx={n.x} cy={n.y} r={n.r + 8} fill="none" strokeWidth={2} className="stroke-ws-pip" data-focus />}
               {drafts[n.key] ? <circle cx={n.x + n.r * 0.75} cy={n.y - n.r * 0.75} r={4.5} strokeWidth={1.5} className="fill-ws-pip stroke-ws-win" data-draft /> : null}
               <text x={n.x} y={n.y + n.r + 11} textAnchor="middle" className="fill-ws-ink2 font-mono text-[9.5px] font-bold">
@@ -127,24 +141,38 @@ export function MapSvg({ layout, viewport, selected, marked, focused, hovered, b
   );
 }
 
+const KEY_DOTS: { tone: StatusTone; label: string }[] = [
+  { tone: "todo", label: "To do" },
+  { tone: "active", label: "In progress" },
+  { tone: "review", label: "Review / QA" },
+  { tone: "blocked", label: "Blocked" },
+  { tone: "done", label: "Done" },
+];
+const DOT: Record<StatusTone, string> = { todo: "bg-ws-ink3", active: "bg-ws-accent", done: "bg-ws-done", review: "bg-ws-review", blocked: "bg-ws-blocked" };
+
 export function MapKey() {
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ws-ink3">
-      {(["todo", "active", "done"] as const).map((c) => (
-        <span key={c} className="flex items-center gap-1">
-          <i className={`size-2 rounded-full ${DOT[c]}`} />
-          {c === "todo" ? "To do" : c === "active" ? "In progress" : "Done"}
+      {KEY_DOTS.map((d) => (
+        <span key={d.tone} className="flex items-center gap-1">
+          <i className={`size-2 rounded-full ${DOT[d.tone]}`} />
+          {d.label}
         </span>
       ))}
       <span className="flex items-center gap-1">
         <i className="size-2 rounded-full border border-dashed border-ws-blocked" />
-        Blocked
+        Blocked by another ticket
+      </span>
+      <span className="flex items-center gap-1">
+        <i className="size-2 rounded-full border-2 border-ws-pip" />
+        Needs you
       </span>
       <span className="flex items-center gap-1">
         <i className="size-2 rounded-full bg-ws-pip" />
         Draft waiting
       </span>
       <span>Size shows discussion</span>
+      <span aria-label="Web after 5 quiet days, spider after 7">🕸 5d+ 🕷 7d+</span>
     </div>
   );
 }
@@ -174,6 +202,11 @@ export function MapView({ items }: CanvasProps) {
   const suppressClick = useRef(false);
 
   useEffect(() => setViewport(FIT), [layout]);
+
+  // j and k move the selection; the arrow keys carry on from wherever it lands.
+  useEffect(() => {
+    if (selected && layout.nodes.some((n) => n.key === selected)) setFocused(selected);
+  }, [selected]);
 
   const unitsPerPixel = () => {
     const svg = box.current?.querySelector("svg");
@@ -264,7 +297,7 @@ export function MapView({ items }: CanvasProps) {
     else if (ev.key === "Escape" && cards.bulk.marked.length) useTabs.getState().clearMarks();
   };
 
-  const btn = "grid size-8 place-items-center rounded-lg border border-ws-sep2 bg-ws-win text-ws-ink2 hover:bg-ws-hover";
+  const btn = "grid h-8 min-w-8 place-items-center rounded-lg border border-ws-sep2 bg-ws-win text-ws-ink2 hover:bg-ws-hover";
 
   return (
     <div className="flex h-full flex-col">
@@ -296,6 +329,8 @@ export function MapView({ items }: CanvasProps) {
           focused={focused}
           hovered={hovered}
           blocked={cards.blocked}
+          needsMe={cards.attention.needsMe}
+          now={cards.now}
           drafts={cards.counts}
           onNode={onNode}
           onHover={setHovered}
@@ -313,20 +348,7 @@ export function MapView({ items }: CanvasProps) {
           </button>
         </div>
       </div>
-      <NoticeLine notice={cards.notice} onDismiss={cards.dismissNotice} />
-      {cards.bulk.marked.length > 1 && (
-        <BulkBar
-          count={cards.bulk.marked.length}
-          targets={cards.bulk.targets}
-          approvable={cards.bulk.approvable}
-          confirming={cards.bulk.confirming}
-          onMoveAll={(n) => void cards.bulk.move(n)}
-          onAsk={cards.bulk.ask}
-          onCancel={cards.bulk.cancel}
-          onApprove={() => void cards.bulk.approve()}
-          onClear={cards.bulk.clear}
-        />
-      )}
+      <CanvasFooter cards={cards} />
     </div>
   );
 }

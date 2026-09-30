@@ -26,9 +26,12 @@ use auth::{Auth, AuthStatus, OAuthApp, Scope};
 use agent::{AgentService, AskRequest};
 use claude::ClaudeCodeProvider;
 use tracker::{Connection, Move};
-use inbox::{ConnectionInfo, Core, Edit};
+use inbox::{CatalogPage, ConnectionInfo, Core, Edit, WatchState};
 use error::{Error, Result};
-use domain::{Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, Identity, Intent, ItemRef, Proposal, ProposalQuery, WorkItem, Workflow};
+use domain::{
+    Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, Stray,
+    WatchChange, WatchMode, WorkItem, Workflow,
+};
 use model::{Snapshot, Transition};
 use sync::Trigger;
 
@@ -53,6 +56,16 @@ async fn publish(app: &AppHandle, core: &Core) {
 /// Tells the page the cache changed, so views over it can re-read.
 fn cache_changed(app: &AppHandle, connection_id: &str) {
     let _ = app.emit("cache-changed", serde_json::json!({ "connectionId": connection_id }));
+}
+
+/// Tells the page what is watched changed, so it can re-read the settings along with everything they scope.
+fn watch_changed(app: &AppHandle, connection_id: &str) {
+    let _ = app.emit("watch-changed", serde_json::json!({ "connectionId": connection_id }));
+}
+
+/// Tells the page about open items assigned to the person in containers they don't watch. It never watches them.
+fn assigned_elsewhere(app: &AppHandle, connection_id: &str, strays: &[Stray]) {
+    let _ = app.emit("watch-assigned-elsewhere", serde_json::json!({ "connectionId": connection_id, "strays": strays }));
 }
 
 /// Tells the page the stored drafts changed, so it can re-read them.
@@ -115,8 +128,8 @@ async fn snapshot(core: State<'_, CoreState>) -> Result<Snapshot> {
 }
 
 #[tauri::command]
-async fn cache_search(core: State<'_, CoreState>, filter: Filter) -> Result<Vec<WorkItem>> {
-    core.cache_search(&filter).await
+async fn cache_search(core: State<'_, CoreState>, filter: Filter, include_unwatched: Option<bool>) -> Result<Vec<WorkItem>> {
+    core.cache_search(&filter, include_unwatched.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -125,8 +138,60 @@ async fn cache_item(core: State<'_, CoreState>, item: ItemRef) -> Result<Option<
 }
 
 #[tauri::command]
-async fn cache_containers(core: State<'_, CoreState>) -> Result<Vec<Container>> {
-    core.cache_containers().await
+async fn cache_containers(core: State<'_, CoreState>, include_unwatched: Option<bool>) -> Result<Vec<Container>> {
+    core.cache_containers(include_unwatched.unwrap_or(false)).await
+}
+
+/// Reads an item live, without storing it, flagged `unwatched` when its container isn't watched.
+#[tauri::command]
+async fn peek_item(core: State<'_, CoreState>, item: ItemRef) -> Result<Option<WorkItem>> {
+    core.peek_item(&item).await
+}
+
+#[tauri::command]
+async fn watch_get(core: State<'_, CoreState>) -> Result<Vec<WatchState>> {
+    core.watch_state().await
+}
+
+/// Everything the page shows and Pip sees depends on what is watched, so a change tells the page to re-read.
+async fn watch_edited(app: &AppHandle, core: &Core, connection_id: &str) {
+    watch_changed(app, connection_id);
+    cache_changed(app, connection_id);
+    publish(app, core).await;
+}
+
+#[tauri::command]
+async fn watch_set_mode(app: AppHandle, core: State<'_, CoreState>, connection_id: String, mode: WatchMode) -> Result<()> {
+    core.watch_set_mode(&connection_id, mode).await?;
+    watch_edited(&app, &core, &connection_id).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn watch_set_containers(app: AppHandle, core: State<'_, CoreState>, connection_id: String, changes: Vec<WatchChange>) -> Result<()> {
+    core.watch_set_containers(&connection_id, &changes).await?;
+    watch_edited(&app, &core, &connection_id).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn watch_catalog(core: State<'_, CoreState>, connection_id: String, query: String, cursor: Option<String>) -> Result<CatalogPage> {
+    core.watch_catalog(&connection_id, &query, cursor).await
+}
+
+#[tauri::command]
+async fn watch_suggestions(core: State<'_, CoreState>, connection_id: String, refresh: Option<bool>) -> Result<Vec<Footprint>> {
+    core.watch_suggestions(&connection_id, refresh.unwrap_or(false)).await
+}
+
+#[tauri::command]
+async fn watch_unwatched_assigned(core: State<'_, CoreState>, connection_id: String, refresh: Option<bool>) -> Result<Vec<Stray>> {
+    core.watch_unwatched_assigned(&connection_id, refresh.unwrap_or(false)).await
+}
+
+#[tauri::command]
+async fn watch_dismiss_assigned(core: State<'_, CoreState>, connection_id: String, container_id: String) -> Result<()> {
+    core.watch_dismiss_assigned(&connection_id, &container_id).await
 }
 
 #[tauri::command]
@@ -382,10 +447,17 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         if synced.proposals_changed {
                             proposals_changed(&app, &synced.connection_id);
                         }
+                        if synced.watch_changed {
+                            watch_changed(&app, &synced.connection_id);
+                        }
                     }
                     Err(e) => core.set_error(Some(e.to_string())),
                 }
                 publish(&app, &core).await;
+            }
+            // A failed check is tried again at the next interval; nothing depends on it.
+            if let Ok(Some((connection_id, strays))) = core.radar_if_due().await {
+                assigned_elsewhere(&app, &connection_id, &strays);
             }
             trigger = tokio::select! {
                 _ = tokio::time::sleep(TICK) => Trigger::Timer,
@@ -467,6 +539,14 @@ pub fn run() {
             cache_search,
             cache_item,
             cache_containers,
+            peek_item,
+            watch_get,
+            watch_set_mode,
+            watch_set_containers,
+            watch_catalog,
+            watch_suggestions,
+            watch_unwatched_assigned,
+            watch_dismiss_assigned,
             cache_workflow,
             cache_events,
             cache_feed,

@@ -30,6 +30,8 @@ const card = (over: Partial<ItemCardProps> = {}, item: WorkItem = s().items["moc
   now: new Date("2026-09-30T12:00:00Z"),
   wither: 0,
   blocked: false,
+  needsMe: false,
+  unread: false,
   draft: null,
   moreDrafts: 0,
   selected: false,
@@ -152,18 +154,29 @@ describe("BoardView", () => {
     return renderToStaticMarkup(<BoardView tab={tab(filter)} items={items} />);
   };
 
-  it("renders a section per project with that project's columns", () => {
+  it("falls back to the three status categories across projects and names each card's status", () => {
     const out = board(itemsByFilter(s(), ALL));
-    for (const name of ["DevOps board", "Campaigns board", "Webshop board", "Support board"]) expect(out).toContain(`aria-label="${name}"`);
-    expect(out).toContain('aria-label="In Review, 2"');
-    expect(out).toContain('aria-label="Scheduled, 1"');
+    expect(out).toContain('aria-label="All projects board"');
+    for (const name of ["To do", "In progress", "Done"]) expect(out).toMatch(new RegExp(`aria-label="${name}, \\d+"`));
+    expect(out).not.toContain('aria-label="DevOps board"');
     expect(out).toContain("DEVOPS-471");
+    expect(out).toContain(">In Review<");
+  });
+
+  it("shows one project's own workflow columns when a project is chosen", () => {
+    const devops = s().containers["mock:DEVOPS"].ref;
+    const filter = { type: "container" as const, container: devops };
+    const out = board(itemsByFilter(s(), filter), filter);
+    expect(out).toContain('aria-label="DevOps board"');
+    expect(out).toContain('aria-label="In Review, 2"');
+    expect(out).not.toContain('aria-label="To do,');
   });
 
   it("shows a pending move as a ghost in the target column and a badge on the card", async () => {
     const wf = s().containers["mock:DEVOPS"].workflow;
     await s().draftTransition(s().items["mock:DEVOPS-490"].item, wf.statuses.find((x) => x.name === "In Review")!);
-    const out = board(itemsByFilter(s(), { type: "container", container: s().containers["mock:DEVOPS"].ref }));
+    const filter = { type: "container" as const, container: s().containers["mock:DEVOPS"].ref };
+    const out = board(itemsByFilter(s(), filter), filter);
     expect(out).toContain("Draft: DEVOPS-490 moves here");
     expect(out).toContain("→ In Review (draft)");
   });
@@ -174,7 +187,18 @@ describe("BoardView", () => {
 });
 
 describe("AgeView", () => {
-  it("has a column per age bucket, holds open items only, and lets cards wither", () => {
+  it("ranks open tickets as bars by default, longest quiet first, without finished ones", () => {
+    sync();
+    const out = renderToStaticMarkup(<AgeView tab={{ ...tab(), view: "age" }} items={itemsByFilter(s(), ALL)} />);
+    expect(out).toContain('aria-label="Open tickets by days quiet"');
+    expect(out).not.toContain("DEVOPS-478");
+    const days = [...out.matchAll(/quiet for (\d+) days/g)].map((m) => Number(m[1]));
+    expect(days.length).toBeGreaterThan(3);
+    expect(days).toEqual([...days].sort((a, b) => b - a));
+  });
+
+  it("has a column per age bucket, holds open items only, and lets cards wither, when the person picked columns", () => {
+    vi.stubGlobal("localStorage", { getItem: (k: string) => (k === "gossamr-age-layout" ? JSON.stringify("columns") : null), setItem: () => {}, removeItem: () => {} });
     sync();
     const out = renderToStaticMarkup(<AgeView tab={{ ...tab(), view: "age" }} items={itemsByFilter(s(), ALL)} />);
     for (const label of ["Fresh", "This week", "Stale", "Forgotten"]) expect(out).toContain(`aria-label="${label},`);

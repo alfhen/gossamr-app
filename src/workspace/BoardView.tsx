@@ -1,24 +1,58 @@
 import { useMemo, useState, type DragEvent } from "react";
-import { itemKey } from "../lib/filter";
+import { containerKey, itemKey } from "../lib/filter";
 import { targetOf } from "../lib/proposals";
 import type { WorkItem } from "../types";
 import { knownMoves, useWorkspace } from "../workspaceStore";
-import { BulkBar } from "./BulkBar";
-import { boardSections, draftStatus, dropVerdict, movesAreOpaque, planDrop, type BoardColumn, type BoardSection } from "./boardLogic";
+import { CanvasFooter } from "./CanvasFooter";
+import {
+  boardSections,
+  categorySection,
+  categoryVerdict,
+  draftStatus,
+  dropVerdict,
+  moveHint,
+  movesAreOpaque,
+  planCategoryDrop,
+  planDrop,
+  type BoardColumn,
+  type BoardSection,
+  type DropVerdict,
+} from "./boardLogic";
 import type { CanvasProps } from "./canvases";
 import { projectOf } from "./filters";
+import { StatusPill } from "./CanvasBits";
+import { statusTone } from "./canvasShared";
 import { GhostCard, ItemCard } from "./ItemCard";
-import { NoticeLine } from "./Notice";
 import { useTabs } from "./tabsStore";
 import { useCards } from "./useCards";
 
-const DOT = { todo: "bg-ws-ink3", active: "bg-ws-accent", done: "bg-ws-done" } as const;
+const DOT = { todo: "bg-ws-ink3", active: "bg-ws-accent", done: "bg-ws-done", review: "bg-ws-review", blocked: "bg-ws-blocked" } as const;
+
+/** The project's own statuses in order, or why the columns are categories when no project is picked. */
+export function WorkflowLine({ section }: { section: BoardSection | null }) {
+  if (!section) return <p className="m-0 text-xs text-ws-ink3">Columns are status categories because each project has its own workflow. Pick a project to see its exact columns.</p>;
+  return (
+    <ol aria-label={`${section.name} workflow`} className="m-0 flex list-none flex-wrap items-center gap-1.5 p-0 text-xs text-ws-ink3">
+      <li className="font-bold text-ws-ink2">{section.name} workflow</li>
+      {section.workflow.statuses.map((s, at) => (
+        <li key={s.id} className="flex items-center gap-1.5">
+          {at > 0 && <span aria-hidden>›</span>}
+          <StatusPill status={s} title={moveHint(section.workflow, s)} />
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 export function BoardView({ tab, items }: CanvasProps) {
   const containers = useWorkspace((s) => s.containers);
   const moves = useWorkspace((s) => s.moves);
   const include = projectOf(tab.filter);
-  const sections = useMemo(() => boardSections(items, containers, include), [items, containers, include?.connectionId, include?.externalId]);
+  const projectSections = useMemo(() => boardSections(items, containers, include), [items, containers, include?.connectionId, include?.externalId]);
+  // Without a project the workflows differ, so the board falls back to the three status categories.
+  const byCategory = !include;
+  const sections = useMemo(() => (byCategory ? (items.length ? [categorySection(items)] : []) : projectSections), [byCategory, items, projectSections]);
+  const ownSection = (item: WorkItem) => projectSections.find((p) => p.key === containerKey(item.container));
   const order = useMemo(() => sections.flatMap((s) => s.columns.flatMap((c) => c.items.map((i) => itemKey(i.item)))), [sections]);
   const cards = useCards(items, order);
   const [dragging, setDragging] = useState<WorkItem | null>(null);
@@ -33,8 +67,10 @@ export function BoardView({ tab, items }: CanvasProps) {
     const item = dragging;
     endDrag();
     if (!item) return;
-    const known = movesAreOpaque(section.workflow) ? await useWorkspace.getState().loadMoves(item) : null;
-    const plan = planDrop(item, section, column.status.id, known);
+    const own = column.category ? ownSection(item) : section;
+    if (!own) return;
+    const known = movesAreOpaque(own.workflow) ? await useWorkspace.getState().loadMoves(item) : null;
+    const plan = column.category ? planCategoryDrop(item, own, column.category, known) : planDrop(item, section, column.status.id, known);
     if (!plan.ok) {
       if (plan.reason) cards.say(plan.reason, "error");
       return;
@@ -42,13 +78,22 @@ export function BoardView({ tab, items }: CanvasProps) {
     cards.cardProps(item).onMove(plan.to);
   };
 
+  const verdictOf = (item: WorkItem, section: BoardSection, column: BoardColumn): DropVerdict => {
+    if (!column.category) return dropVerdict(item, section, column.status.id, knownMoves({ moves }, item));
+    const own = ownSection(item);
+    return own ? categoryVerdict(item, own, column.category, knownMoves({ moves }, item)) : "invalid";
+  };
+
   const ghostsIn = (section: BoardSection, column: BoardColumn) =>
     [...cards.pending.values()].flatMap((p) => {
       const target = targetOf(p.intent);
       const item = target && items.find((i) => itemKey(i.item) === itemKey(target));
-      if (!item || itemKey(item.container) !== section.key || item.status.id === column.status.id) return [];
-      const to = draftStatus(p, section.workflow);
-      return to?.id === column.status.id ? [{ item, draft: { id: p.id, to: to.name } }] : [];
+      if (!item) return [];
+      const own = column.category ? ownSection(item) : section;
+      if (!own || (!column.category && itemKey(item.container) !== section.key)) return [];
+      const to = draftStatus(p, own.workflow);
+      const here = column.category ? to?.category === column.category && item.status.category !== column.category : to?.id === column.status.id && item.status.id !== column.status.id;
+      return to && here ? [{ item, draft: { id: p.id, to: to.name } }] : [];
     });
 
   if (!sections.length) return <p className="p-10 text-center text-ws-ink3">Nothing matches this filter.</p>;
@@ -59,20 +104,16 @@ export function BoardView({ tab, items }: CanvasProps) {
 
   return (
     <div className="flex h-full flex-col" onKeyDown={onKeyDown}>
+      <div className="px-6 pb-2">
+        <WorkflowLine section={byCategory ? null : (sections[0] ?? null)} />
+      </div>
       <div className="min-h-0 flex-1 overflow-auto px-6 pb-4">
         {sections.map((section) => (
-          <section key={section.key} aria-label={`${section.name} board`} className="mb-6 w-max min-w-full">
-            <h2 className="sticky left-0 mb-2 flex items-baseline gap-2 pt-1 font-bold text-ws-ink2">
-              {section.name}
-              <span className="font-mono text-sm font-semibold text-ws-ink3">{section.code}</span>
-              <span className="text-sm font-normal text-ws-ink3">
-                {section.count} {section.count === 1 ? "ticket" : "tickets"}
-              </span>
-            </h2>
-            <div className="grid min-h-40 auto-cols-[minmax(210px,1fr)] grid-flow-col gap-2.5">
+          <section key={section.key} aria-label={`${section.name} board`} className="min-w-full pt-1">
+            <div className="grid min-h-40 auto-cols-[minmax(200px,1fr)] grid-flow-col gap-2.5">
               {section.columns.map((column) => {
                 const id = `${section.key}|${column.status.id}`;
-                const verdict = dragging ? dropVerdict(dragging, section, column.status.id, knownMoves({ moves }, dragging)) : null;
+                const verdict = dragging ? verdictOf(dragging, section, column) : null;
                 const ghosts = ghostsIn(section, column);
                 return (
                   <div
@@ -95,7 +136,7 @@ export function BoardView({ tab, items }: CanvasProps) {
                     } ${verdict === "invalid" ? "opacity-40" : ""}`}
                   >
                     <div className="flex items-center text-sm font-bold text-ws-ink2">
-                      <i className={`mr-1.5 size-2 rounded-full ${DOT[column.status.category]}`} />
+                      <i className={`mr-1.5 size-2 rounded-full ${DOT[statusTone(column.status)]}`} />
                       {column.status.name}
                       <span className="ml-auto font-semibold text-ws-ink3">{column.items.length}</span>
                     </div>
@@ -106,11 +147,12 @@ export function BoardView({ tab, items }: CanvasProps) {
                       <ItemCard
                         key={itemKey(item.item)}
                         {...cards.cardProps(item)}
+                        showStatus={byCategory}
                         onDragStart={(ev) => {
                           ev.dataTransfer.setData("text/plain", itemKey(item.item));
                           ev.dataTransfer.effectAllowed = "move";
                           setDragging(item);
-                          if (movesAreOpaque(section.workflow)) void useWorkspace.getState().loadMoves(item);
+                          if (movesAreOpaque(ownSection(item)?.workflow ?? section.workflow)) void useWorkspace.getState().loadMoves(item);
                         }}
                         onDragEnd={endDrag}
                       />
@@ -125,20 +167,7 @@ export function BoardView({ tab, items }: CanvasProps) {
           </section>
         ))}
       </div>
-      <NoticeLine notice={cards.notice} onDismiss={cards.dismissNotice} />
-      {cards.bulk.marked.length > 1 && (
-        <BulkBar
-          count={cards.bulk.marked.length}
-          targets={cards.bulk.targets}
-          approvable={cards.bulk.approvable}
-          confirming={cards.bulk.confirming}
-          onMoveAll={(n) => void cards.bulk.move(n)}
-          onAsk={cards.bulk.ask}
-          onCancel={cards.bulk.cancel}
-          onApprove={() => void cards.bulk.approve()}
-          onClear={cards.bulk.clear}
-        />
-      )}
+      <CanvasFooter cards={cards} />
     </div>
   );
 }

@@ -4,6 +4,8 @@ import type { Backend } from "./backend/types";
 import { ALL, compileFilter, containerKey, itemKey, type FilterContext, type QueryLookup } from "./lib/filter";
 import { targetOf } from "./lib/proposals";
 import { movesAreOpaque } from "./workspace/boardLogic";
+import { newStrays, strayText } from "./workspace/watchLogic";
+import { useTabs } from "./workspace/tabsStore";
 import { messageOf, useToasts } from "./workspace/toasts";
 import type {
   ConnectionInfo,
@@ -13,6 +15,10 @@ import type {
   Proposal,
   ProposalStateKind,
   StatusDef,
+  Stray,
+  WatchChange,
+  WatchMode,
+  WatchState,
   WorkComment,
   WorkContainer,
   WorkEvent,
@@ -41,6 +47,12 @@ interface WorkspaceState {
   moves: Record<string, { statusId: string; to: StatusDef[] }>;
   /** The signed-in connections and how their sync is going. */
   connections: ConnectionInfo[];
+  /** What each connection follows. Items, containers, counts and Pip's view are already limited to it. */
+  watch: WatchState[];
+  /** Open items assigned to the person in containers they don't watch, until watched or dismissed. */
+  strays: Stray[];
+  /** The one ticket read live for the peek, never part of `items`. */
+  peeked: Record<string, PeekedItem>;
   /** The user's accounts across connections. */
   me: PersonRef[];
   /** Display names by account id. */
@@ -48,7 +60,22 @@ interface WorkspaceState {
   /** Loads everything and keeps it current until `dispose` or the next `init`. */
   init(backend: Backend): Promise<void>;
   refresh(): Promise<void>;
+  /** Re-reads only the set of items waiting on the user, which read, done and snooze changes alter without a sync. */
+  refreshNeedsMe(): Promise<void>;
   refreshProposals(): Promise<void>;
+  refreshWatch(): Promise<void>;
+  /** Changes what is watched, then re-reads everything the watch set scopes. */
+  watchContainers(connectionId: string, changes: WatchChange[]): Promise<void>;
+  watchMode(connectionId: string, mode: WatchMode): Promise<void>;
+  /** Starts watching `changes` and switches the connection to selected mode. The containers go first so a failure leaves the choice still to make. */
+  chooseWatch(connectionId: string, changes: WatchChange[]): Promise<void>;
+  /** Re-reads the strays of every connection; `announce` also raises a notice for them, as when the app starts. */
+  refreshStrays(announce?: boolean): Promise<void>;
+  dismissStray(stray: Stray): Promise<void>;
+  showPeeked(peeked: PeekedItem): void;
+  clearPeeked(): void;
+  /** Reads an item live without storing it, flagged `unwatched` when its project isn't watched. Null when it can't be seen. */
+  peekItem(ref: ItemRef): Promise<WorkItem | null>;
   loadEvents(ref: ItemRef): Promise<void>;
   /** Shows the cached comments at once, then the tracker's. */
   loadComments(ref: ItemRef): Promise<void>;
@@ -65,6 +92,12 @@ interface WorkspaceState {
   dispose(): void;
 }
 
+export interface PeekedItem {
+  item: WorkItem;
+  /** The container's name when the catalog knows it. */
+  containerName: string | null;
+}
+
 const empty = {
   backend: null,
   status: "idle" as const,
@@ -77,6 +110,9 @@ const empty = {
   comments: {},
   moves: {},
   connections: [],
+  watch: [],
+  strays: [],
+  peeked: {},
   me: [],
   names: {},
 };
@@ -88,6 +124,9 @@ let generation = 0;
 let refreshSeq = 0;
 const SYNC_FLAG_MS = 20_000;
 let proposalSeq = 0;
+let watchSeq = 0;
+let needsMeSeq = 0;
+let straySeq = 0;
 const commentSeq = new Map<string, number>();
 const moving = new Map<string, Promise<StatusDef[] | null>>();
 let lastSyncError: string | null = null;
@@ -106,18 +145,36 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       void get().refreshConnections();
     });
     const offProposals = backend.onProposalsChanged(() => get().refreshProposals().catch((e) => get().report("Couldn't load drafts", e)));
-    const offSnapshot = backend.subscribe(() => void get().refreshConnections());
+    const offSnapshot = backend.subscribe(() => {
+      void get().refreshConnections();
+      get().refreshNeedsMe().catch((e) => get().report("Couldn't refresh what needs you", e));
+    });
+    // A change the person makes also emits a cache change, which re-reads what the watch set scopes; this only
+    // needs to refresh the settings themselves, including when the app chose for a small catalog.
+    const offWatch = backend.onWatchChanged(() => {
+      get().refreshWatch().catch((e) => get().report("Couldn't load what you watch", e));
+      void get().refreshStrays();
+    });
+    const offStrays = backend.onAssignedElsewhere((found) => {
+      const before = get().strays;
+      const after = [...before.filter((s) => s.container.connectionId !== found.connectionId), ...found.strays];
+      set({ strays: after });
+      announceStrays(newStrays(before, after));
+    });
     stop = () => {
+      offStrays();
       offCache();
       offProposals();
       offSnapshot();
+      offWatch();
     };
     try {
-      const [identity] = await Promise.all([backend.cacheMe(), get().refresh(), get().refreshProposals()]);
+      const [identity] = await Promise.all([backend.cacheMe(), get().refresh(), get().refreshProposals(), get().refreshWatch()]);
       if (mine !== generation) return;
       const names = Object.fromEntries(identity.accounts.map((a) => [a.accountId, identity.displayName]));
       set((s) => ({ me: identity.accounts, names: { ...s.names, ...names }, status: "ready" }));
       void get().refreshConnections();
+      void get().refreshStrays(true);
     } catch (e) {
       if (mine === generation) set({ status: "error", error: String(e) });
       throw e;
@@ -129,11 +186,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!backend) return;
     const mine = ++refreshSeq;
     const before = get().items;
-    const [items, containers, needsMe, people] = await Promise.all([
+    const [items, containers, people] = await Promise.all([
       backend.cacheSearch(ALL),
       backend.cacheContainers(),
-      backend.cacheSearch({ type: "needsMe" }),
       backend.cachePeople(),
+      get().refreshNeedsMe(),
     ]);
     const loaded = Object.keys(get().events);
     const events = await Promise.all(
@@ -145,7 +202,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set((s) => ({
       items: itemMap,
       containers: containerMap,
-      needsMe: new Set(needsMe.map((i) => itemKey(i.item))),
       names: { ...s.names, ...Object.fromEntries(people.map((p) => [p.accountId, p.name])) },
       events: { ...s.events, ...Object.fromEntries(events) },
     }));
@@ -154,12 +210,83 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
+  async refreshNeedsMe() {
+    const backend = get().backend;
+    if (!backend) return;
+    const mine = ++needsMeSeq;
+    const found = await backend.cacheSearch({ type: "needsMe" });
+    if (backend === get().backend && mine === needsMeSeq) set({ needsMe: new Set(found.map((i) => itemKey(i.item))) });
+  },
+
   async refreshProposals() {
     const backend = get().backend;
     if (!backend) return;
     const mine = ++proposalSeq;
     const list = await backend.proposalsList();
     if (backend === get().backend && mine === proposalSeq) set({ proposals: byKey(list, (p) => p.id) });
+  },
+
+  async refreshWatch() {
+    const backend = get().backend;
+    if (!backend) return;
+    const mine = ++watchSeq;
+    const watch = await backend.watchGet();
+    if (backend === get().backend && mine === watchSeq) set({ watch });
+  },
+
+  async watchContainers(connectionId, changes) {
+    const backend = get().backend;
+    if (!backend || !changes.length) return;
+    await backend.watchSetContainers(connectionId, changes);
+    await Promise.all([get().refreshWatch(), get().refresh()]);
+  },
+
+  async watchMode(connectionId, mode) {
+    const backend = get().backend;
+    if (!backend) return;
+    await backend.watchSetMode(connectionId, mode);
+    await Promise.all([get().refreshWatch(), get().refresh()]);
+  },
+
+  async chooseWatch(connectionId, changes) {
+    const backend = get().backend;
+    if (!backend) return;
+    await backend.watchSetContainers(connectionId, changes);
+    await backend.watchSetMode(connectionId, "selected");
+    await Promise.all([get().refreshWatch(), get().refresh()]);
+  },
+
+  async refreshStrays(announce = false) {
+    const backend = get().backend;
+    if (!backend) return;
+    const mine = ++straySeq;
+    const connections = get().watch.map((w) => w.connectionId);
+    const found = await Promise.all(connections.map((id) => backend.watchUnwatchedAssigned(id).catch(() => [] as Stray[])));
+    if (backend !== get().backend || mine !== straySeq) return;
+    const before = get().strays;
+    const strays = found.flat();
+    set({ strays });
+    if (announce) announceStrays(newStrays(before, strays));
+  },
+
+  async dismissStray(stray) {
+    const backend = get().backend;
+    if (!backend) return;
+    set((s) => ({ strays: s.strays.filter((x) => x !== stray) }));
+    try {
+      await backend.watchDismissAssigned(stray.container.connectionId, stray.container.externalId);
+    } catch (e) {
+      get().report("Couldn't dismiss that", e);
+      void get().refreshStrays();
+    }
+  },
+
+  showPeeked: (peeked) => set({ peeked: { [itemKey(peeked.item.item)]: peeked } }),
+
+  clearPeeked: () => set((s) => (Object.keys(s.peeked).length ? { peeked: {} } : s)),
+
+  peekItem(ref) {
+    return get().backend?.peekItem(ref) ?? Promise.resolve(null);
   },
 
   async loadEvents(ref) {
@@ -294,6 +421,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 }));
 
+function announceStrays(strays: Stray[]) {
+  const first = strays[0];
+  if (!first) return;
+  const text = strays.length > 1 ? `${strayText(first)}, and in ${strays.length - 1} more.` : `${strayText(first)}.`;
+  useToasts.getState().push(text, "info", { label: "Review", run: () => useTabs.getState().setRoute("activity") });
+}
+
 function clearSyncing() {
   useWorkspace.setState((s) => ({ connections: s.connections.map((c) => ({ ...c, syncing: false })) }));
 }
@@ -304,7 +438,7 @@ function keyToRef(key: string): ItemRef {
   return { connectionId: key.slice(0, at), externalId, key: externalId };
 }
 
-type State = Pick<WorkspaceState, "items" | "containers" | "events" | "proposals" | "needsMe" | "me" | "names" | "moves">;
+type State = Pick<WorkspaceState, "items" | "containers" | "events" | "proposals" | "needsMe" | "me" | "names" | "moves" | "watch">;
 
 /** The statuses the tracker last said `item` can move to, if it said so for the status the item is in now. */
 export const knownMoves = (s: Pick<State, "moves">, item: WorkItem): StatusDef[] | null => {
@@ -341,6 +475,12 @@ export const itemsInContainer = (s: Pick<State, "items" | "needsMe" | "me">, ref
 export const childrenOf = (s: Pick<State, "items" | "needsMe" | "me">, ref: ItemRef) => itemsByFilter(s, { type: "parent", item: ref });
 
 export const needsMeItems = (s: Pick<State, "items" | "needsMe" | "me">) => itemsByFilter(s, { type: "needsMe" });
+
+/** What `connectionId` follows, or undefined before it has loaded. */
+export const watchOf = (s: Pick<State, "watch">, connectionId: string): WatchState | undefined => s.watch.find((w) => w.connectionId === connectionId);
+
+/** Whether any connection is waiting for the person to choose what to watch. */
+export const needsWatchChoice = (s: Pick<State, "watch">): boolean => s.watch.some((w) => w.needsChoice);
 
 export const eventsFor = (s: Pick<State, "events">, ref: ItemRef): WorkEvent[] => s.events[itemKey(ref)] ?? [];
 
