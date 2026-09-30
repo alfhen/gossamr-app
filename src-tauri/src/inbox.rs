@@ -18,7 +18,7 @@ use crate::proposals;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
 use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
-mod code;
+pub(crate) mod code;
 mod drafts;
 mod watch;
 

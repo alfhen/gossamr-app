@@ -226,6 +226,9 @@ impl GithubHost {
         if let Some(since) = q.since {
             target.push_str(&format!("&since={}", encode(&since.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))));
         }
+        if let Some(path) = q.path.as_deref().filter(|p| !p.is_empty()) {
+            target.push_str(&format!("&path={}", encode(path)));
+        }
         let text = q.text.as_deref().map(str::to_lowercase).filter(|t| !t.is_empty());
         let mut out = Vec::new();
         let mut next = Some(target);

@@ -274,6 +274,8 @@ pub struct CommitQuery {
     /// A branch, tag or commit; the default branch when absent.
     pub reference: Option<String>,
     pub since: Option<DateTime<Utc>>,
+    /// Only commits that touch this file or folder.
+    pub path: Option<String>,
     /// Only commits whose message contains this, ignoring case (a ticket key, say).
     pub text: Option<String>,
     pub limit: usize,

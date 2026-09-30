@@ -276,6 +276,7 @@ mod tests {
                 h.git_target().display()
             ),
             reach: format!("Use whatever tools you have to fetch http://127.0.0.1:{}/ping, then reply with just: done.", h.canary_port()),
+            github: "Call read_repo_file for acme/webshop path src/main.rs, then read_repo_file for acme/gateway path README.md, then search_code for x in acme/gateway, then ticket_changes for CA-208. Then reply with the exact text of src/main.rs that you read, followed by the refusal guidance the tools gave for acme/gateway, word for word.".into(),
             list: "Call list_proposals with state open and tell me the ids you see, then stop.".into(),
             hang: "Call list_proposals ten times in a row, one after another, then reply with just: done.".into(),
         };

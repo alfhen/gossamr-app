@@ -127,7 +127,7 @@ async fn handle(
     Json(reply).into_response()
 }
 
-fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+pub(super) fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
         "name": name,
         "description": description,
@@ -216,19 +216,22 @@ fn tool_list() -> Vec<Value> {
             &["id"],
         ),
     ]
+    .into_iter()
+    .chain(super::github::tools())
+    .collect()
 }
 
 fn text(t: impl Into<String>, is_error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": t.into() }], "isError": is_error })
 }
 
-type Reply = std::result::Result<String, String>;
+pub(super) type Reply = std::result::Result<String, String>;
 
-fn opt<'a>(args: &'a Value, k: &str) -> Option<&'a str> {
+pub(super) fn opt<'a>(args: &'a Value, k: &str) -> Option<&'a str> {
     args[k].as_str().map(str::trim).filter(|s| !s.is_empty())
 }
 
-fn required<'a>(args: &'a Value, k: &str) -> std::result::Result<&'a str, String> {
+pub(super) fn required<'a>(args: &'a Value, k: &str) -> std::result::Result<&'a str, String> {
     opt(args, k).ok_or_else(|| format!("{k} is required"))
 }
 
@@ -253,7 +256,7 @@ fn summaries_of(args: &Value) -> std::result::Result<Vec<String>, String> {
     Ok(all)
 }
 
-fn item_ref(scope: &Scope, key: &str) -> ItemRef {
+pub(super) fn item_ref(scope: &Scope, key: &str) -> ItemRef {
     ItemRef { connection_id: Connection::jira_id(scope), external_id: key.into(), key: key.into() }
 }
 
@@ -271,7 +274,7 @@ fn described(kind: ItemKind) -> String {
     format!("to create a new {kind:?}").to_lowercase()
 }
 
-async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
+pub(super) async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
     let Some(run) = st.runs.lock().expect("runs lock poisoned").get(request_id).cloned() else {
         return text("This run has ended.", true);
     };
@@ -284,7 +287,7 @@ async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
 
 /// Pip reads and drafts on items in watched projects, and on an unwatched one only when the user handed it over in this
 /// run. Creating a new item in any project is a different tool and isn't held to this.
-async fn reachable(st: &McpState, run: &Run, key: &str) -> std::result::Result<(), String> {
+pub(super) async fn reachable(st: &McpState, run: &Run, key: &str) -> std::result::Result<(), String> {
     if run.handed.contains(&key.to_uppercase()) || st.core.is_item_watched(&run.scope, key).await.map_err(|e| e.to_string())? {
         return Ok(());
     }
@@ -463,7 +466,10 @@ async fn run_tool(st: &McpState, run: &Run, run_id: &str, name: &str, args: &Val
             (st.sink)(&Connection::jira_id(scope));
             Ok(format!("Draft {} withdrawn.", retired.id))
         }
-        other => Err(format!("Unknown tool {other}")),
+        other => match super::github::run(st, run, other, args).await {
+            Some(reply) => reply,
+            None => Err(format!("Unknown tool {other}")),
+        },
     }
 }
 
@@ -524,7 +530,7 @@ pub fn tool_label(name: &str, input: &Value) -> Option<String> {
         "propose_create" => format!("Suggested a new item: {}", s("title")),
         "revise_proposal" => "Updated a draft".into(),
         "retire_proposal" => "Withdrew a draft".into(),
-        _ => return None,
+        _ => return super::github::label(name, input),
     })
 }
 
@@ -678,11 +684,39 @@ mod tests {
             "search_items", "get_item", "list_containers", "find_containers", "get_workflow", "list_next_statuses", "list_proposals",
             "propose_comment", "propose_transition", "propose_subtasks", "propose_create", "revise_proposal", "retire_proposal",
             "set_view_filter",
-        ];
+        ]
+        .map(String::from)
+        .into_iter()
+        .chain(crate::agent::github::NAMES.map(String::from))
+        .collect::<Vec<_>>();
         want.sort();
         assert_eq!(names, want);
         let described: Vec<Value> = tool_list().into_iter().filter(|t| t["name"] != "search_items").collect();
         assert!(described.iter().all(|t| t["inputSchema"]["required"].is_array()));
+    }
+
+    #[tokio::test]
+    async fn without_a_github_account_the_code_tools_say_nothing_is_watched() {
+        let r = rig().await;
+        assert!(r
+            .ok("list_watched_repos", json!({}))
+            .await
+            .contains("No repositories are watched"));
+        assert!(r
+            .err(
+                "read_repo_file",
+                json!({ "repo": "acme/webshop", "path": "a" })
+            )
+            .await
+            .contains("Ask the person to watch it"));
+        assert!(r
+            .ok("ticket_changes", json!({ "key": "CA-1" }))
+            .await
+            .contains("No pull request, branch or commit"));
+        assert!(r
+            .ok("search_code", json!({ "query": "x" }))
+            .await
+            .contains("No matches"));
     }
 
     #[tokio::test]

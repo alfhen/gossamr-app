@@ -292,14 +292,14 @@ async fn branches_and_commits_are_changes_of_their_own_kind() {
     assert_eq!(branches[2].url, "https://github.com/acme/webshop/tree/feature/CA-209_cache-warmup");
 
     let since = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
-    let q = CommitQuery { repo: "acme/webshop".into(), reference: Some("release/1".into()), since: Some(since), text: Some("ca-190".into()), limit: 0 };
+    let q = CommitQuery { repo: "acme/webshop".into(), reference: Some("release/1".into()), since: Some(since), path: Some("src/cart.rs".into()), text: Some("ca-190".into()), limit: 0 };
     let commits = host.commits(&q).await.unwrap();
     assert_eq!(commits.len(), 1, "filtered by message, ignoring case");
     let c = &commits[0];
     assert_eq!((c.kind, c.external_id.as_str(), c.title.as_str(), c.body.as_str()), (CodeChangeKind::Commit, "commit:acme/webshop@1111111aaaaaaa", "CA-190: fix cart rounding", "Rounds half up."));
     assert_eq!((c.head_ref.as_str(), c.state, c.author.as_ref().unwrap().account_id.as_str()), ("release/1", CodeChangeState::Open, "bob"));
     let target = &server.targets()[1];
-    assert!(target.contains("sha=release%2F1") && target.contains("since=2026-09-01T00%3A00%3A00Z"), "{target}");
+    assert!(target.contains("sha=release%2F1") && target.contains("since=2026-09-01T00%3A00%3A00Z") && target.contains("path=src%2Fcart.rs"), "{target}");
     let default = host.commits(&CommitQuery { repo: "acme/webshop".into(), limit: 1, ..Default::default() }).await.unwrap();
     assert_eq!((default.len(), default[0].state), (1, CodeChangeState::Merged), "commits of the default branch count as merged");
 }

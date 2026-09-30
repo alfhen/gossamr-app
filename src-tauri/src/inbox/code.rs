@@ -619,6 +619,58 @@ impl Core {
         Ok(out)
     }
 
+    /// The connection that watches `repo` (compared without regard to case) and the repository as it is spelled there.
+    pub fn code_connection_for(&self, repo: &str) -> Result<(String, String)> {
+        for id in self.code.connection_ids() {
+            if let Some(found) = self
+                .watched_repos(&id)?
+                .into_iter()
+                .find(|r| r.eq_ignore_ascii_case(repo))
+            {
+                return Ok((id, found));
+            }
+        }
+        Err(refused(repo))
+    }
+
+    /// Every watched repository with the connection that watches it.
+    pub fn watched_code_repos(&self) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
+        for id in self.code.connection_ids() {
+            out.extend(
+                self.watched_repos(&id)?
+                    .into_iter()
+                    .map(|r| (id.clone(), r)),
+            );
+        }
+        Ok(out)
+    }
+
+    /// Open pull requests of a watched repository and those updated in the last month, newest first. A pull request a
+    /// sync has already read in full comes with its review outcome and checks.
+    pub async fn code_pull_requests(
+        &self,
+        connection_id: &str,
+        repo: &str,
+    ) -> Result<Vec<CodeChange>> {
+        self.require_watched(connection_id, repo)?;
+        let listed = self
+            .code_host(connection_id)
+            .await?
+            .pull_requests(repo, Utc::now() - Duration::days(PR_WINDOW_DAYS))
+            .await?
+            .changes;
+        self.with_code_db(connection_id, |db| {
+            Ok(listed
+                .into_iter()
+                .map(|c| match db.code_change(connection_id, &c.external_id) {
+                    Ok(Some(full)) if full.updated_at == c.updated_at && full.sha == c.sha => full,
+                    _ => c,
+                })
+                .collect())
+        })
+    }
+
     pub async fn code_file(&self, connection_id: &str, repo: &str, path: &str, reference: Option<&str>) -> Result<CodeFile> {
         self.require_watched(connection_id, repo)?;
         self.code_host(connection_id).await?.file(repo, path, reference).await
@@ -654,7 +706,7 @@ impl Core {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -823,9 +875,9 @@ mod tests {
     const CODE: &str = include_str!("../codehost/github/fixtures/search_code.json");
     const NOW: &str = "2026-09-30T12:00:00Z";
 
-    struct Linked {
-        fx: Fixture,
-        server: Server,
+    pub(crate) struct Linked {
+        pub(crate) fx: Fixture,
+        pub(crate) server: Server,
     }
 
     fn now() -> DateTime<Utc> {
@@ -851,7 +903,7 @@ mod tests {
         routes
     }
 
-    async fn linked(extra: Vec<(String, Vec<Reply>)>, scopes: Option<&str>) -> Linked {
+    pub(crate) async fn linked(extra: Vec<(String, Vec<Reply>)>, scopes: Option<&str>) -> Linked {
         let repos = "[{\"full_name\":\"acme/webshop\",\"name\":\"webshop\",\"pushed_at\":\"2026-09-29T10:00:00Z\"},{\"full_name\":\"acme/gateway\",\"name\":\"gateway\",\"pushed_at\":\"2026-09-20T10:00:00Z\"}]";
         let user = match scopes {
             Some(s) => Reply::ok(USER).header("x-oauth-scopes", s),
@@ -888,7 +940,7 @@ mod tests {
             self.server.targets().iter().filter(|t| t.split('?').next() == Some(path)).count()
         }
 
-        async fn sync(&self) -> CodeSynced {
+        pub(crate) async fn sync(&self) -> CodeSynced {
             self.core().sync_code_at("github:ann", now()).await.unwrap()
         }
 
