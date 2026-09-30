@@ -77,7 +77,7 @@ export const useActivity = create<ActivityState>((set, get) => ({
     const { backend, chip, container } = get();
     if (!backend || chip === "drafts") return;
     const mine = ++seq;
-    set((s) => ({ status: s.entries.length ? s.status : "loading", error: null }));
+    set((s) => ({ status: s.entries.length ? s.status : "loading", error: null, loadingMore: false }));
     try {
       const page = await backend.cacheFeed(queryFor(chip, container));
       if (mine === seq) set({ entries: page.entries, next: page.next, status: "ready" });
@@ -119,7 +119,13 @@ export const useActivity = create<ActivityState>((set, get) => ({
   async markAllRead() {
     const { backend, container } = get();
     if (!backend) return;
-    const page = await backend.cacheFeed({ container, unreadOnly: true, limit: MARK_ALL_LIMIT });
+    let page;
+    try {
+      page = await backend.cacheFeed({ container, unreadOnly: true, limit: MARK_ALL_LIMIT });
+    } catch (e) {
+      useToasts.getState().push(`Couldn't mark read: ${messageOf(e)}`);
+      return;
+    }
     if (await get().markRead(page.entries.map((e) => e.id)) && page.next) await get().markAllRead();
   },
 }));

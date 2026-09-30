@@ -163,6 +163,28 @@ describe("the activity store on the mock", () => {
     expect(useActivity.getState().status).toBe("ready");
   });
 
+  it("reports a failed mark-all-read instead of rejecting", async () => {
+    vi.spyOn(backend, "cacheFeed").mockRejectedValueOnce(new Error("offline"));
+    await expect(useActivity.getState().markAllRead()).resolves.toBeUndefined();
+  });
+
+  it("stops showing a stale page-load as pending once the feed reloads", async () => {
+    const all = (await backend.cacheFeed({ limit: 200 })).entries;
+    let release: (page: { entries: typeof all; next: null }) => void = () => {};
+    const spy = vi.spyOn(backend, "cacheFeed");
+    spy.mockResolvedValueOnce({ entries: all.slice(0, 5), next: { at: all[4].at, id: all[4].id } });
+    await useActivity.getState().reload();
+    spy.mockImplementationOnce(() => new Promise((r) => (release = r)));
+    const more = useActivity.getState().loadMore();
+    expect(useActivity.getState().loadingMore).toBe(true);
+    spy.mockResolvedValueOnce({ entries: all.slice(0, 5), next: null });
+    await useActivity.getState().reload();
+    expect(useActivity.getState().loadingMore).toBe(false);
+    release({ entries: all.slice(5, 10), next: null });
+    await more;
+    expect(useActivity.getState().entries).toHaveLength(5);
+  });
+
   it("appends the next page without repeating entries", async () => {
     const spy = vi.spyOn(backend, "cacheFeed");
     const all = (await backend.cacheFeed({ limit: 200 })).entries;

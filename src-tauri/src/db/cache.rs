@@ -363,7 +363,7 @@ impl Db {
     pub fn feed_unread(&self, connection_id: &str) -> Result<usize> {
         let n: i64 = self.conn.query_row(
             "SELECT count(*) FROM cache_events c LEFT JOIN events e ON e.id = c.id
-             WHERE c.connection_id = ?1 AND COALESCE(e.unread, 0) = 1",
+             WHERE c.connection_id = ?1 AND c.item_id IS NOT NULL AND COALESCE(e.unread, 0) = 1",
             params![connection_id],
             |r| r.get(0),
         )?;
@@ -628,6 +628,12 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(db.feed_unread("c").unwrap(), 1);
+        let about_code = Event { subject: Subject::CodeChange { repo: "r".into(), number: 1 }, ..feed_event("pr1", "1", EventKind::PrOpened, 30, serde_json::json!({})) };
+        db.insert_cache_events(&[about_code]).unwrap();
+        db.conn
+            .execute("INSERT INTO events (id, ticket_key, kind, actor, at, text, unread) VALUES ('pr1', 'K', 'comment', '{}', 't', 'x', 1)", [])
+            .unwrap();
+        assert_eq!(db.feed_unread("c").unwrap(), 1, "an event the feed can't show doesn't count");
         assert_eq!(feed_ids(&db, &FeedQuery { unread_only: true, ..Default::default() }), ["e2"]);
         let page = db.feed("c", &FeedQuery::default()).unwrap();
         let e2 = page.entries.iter().find(|e| e.id == "e2").unwrap();
