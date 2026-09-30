@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design: a connector-based work aide</title>
+<style>
+:root{--bg:#fff;--ink:#1d1d1f;--ink2:#55555c;--ink3:#8b8b93;--line:rgba(0,0,0,.12);--soft:#f5f5f7;--accent:#4a5be0;--claude:#0b8a86;--claudesoft:rgba(11,138,134,.1);--ok:#28a06a;--warn:#c98a1b;--bad:#d64545;--code:#f2f2f5}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1c1e;--ink:#f2f2f4;--ink2:#b3b3ba;--ink3:#7d7d86;--line:rgba(255,255,255,.14);--soft:#26262a;--accent:#6a82ff;--claude:#37d0c0;--claudesoft:rgba(55,208,192,.13);--code:#2a2a2e}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:48px 24px 96px}
+h1{font-size:34px;line-height:1.2;margin:0 0 8px}
+h2{font-size:24px;margin:48px 0 8px;padding-top:12px;border-top:1px solid var(--line)}
+h3{font-size:17px;margin:26px 0 4px}
+p{margin:8px 0}
+.meta{color:var(--ink3);font-size:14px}
+.lede{font-size:18px;color:var(--ink2);margin:14px 0 6px}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:13.5px ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border-radius:10px;padding:14px 16px;overflow:auto;font:13px/1.55 ui-monospace,Menlo,Consolas,monospace;margin:12px 0}
+pre code{background:none;padding:0}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14.5px}
+th,td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line)}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink3)}
+ul,ol{padding-left:22px}li{margin:4px 0}
+.callout{border-left:4px solid var(--claude);background:var(--claudesoft);border-radius:0 10px 10px 0;padding:10px 16px;margin:16px 0}
+.callout.warn{border-left-color:var(--warn);background:rgba(201,138,27,.1)}
+.toc{background:var(--soft);border-radius:12px;padding:12px 20px;margin:22px 0}.toc ol{columns:2;margin:6px 0}.toc a{color:var(--accent);text-decoration:none}
+figure{margin:20px 0}figcaption{color:var(--ink3);font-size:13.5px;text-align:center;margin-top:6px}
+svg{width:100%;height:auto;display:block}
+svg text{font:13px -apple-system,BlinkMacSystemFont,sans-serif;fill:var(--ink)}
+svg .sub{fill:var(--ink2);font-size:11.5px}
+svg .box{fill:var(--soft);stroke:var(--line)}
+svg .hot{fill:var(--claudesoft);stroke:var(--claude)}
+svg .ok{fill:rgba(40,160,106,.12);stroke:var(--ok)}
+svg .arrow{stroke:var(--ink3);fill:none;stroke-width:1.6}
+.tag{display:inline-block;border-radius:9px;padding:0 8px;font-size:12px;font-weight:600;background:var(--soft);color:var(--ink2)}
+.tag.now{background:rgba(40,160,106,.15);color:var(--ok)}.tag.next{background:rgba(10,108,255,.12);color:var(--accent)}.tag.later{background:var(--soft)}
+.phase{border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin:12px 0}
+.phase h3{margin:0 0 4px}.phase .exit{color:var(--ink2);font-size:14.5px}
+@media print{.wrap{padding:0}body{font-size:12.5px}h2{page-break-after:avoid}pre,table,.phase,figure{page-break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="meta">Design proposal · Draft for discussion · 29 Sep 2026</div>
+<h1>A connector-based work aide</h1>
+<p class="lede">Turn Jira Inbox, now called Gossamr, into a general aide for developers and PMs. Jira, GitHub and, later, Linear become connectors. The app owns one normalised model of work, and Pip, the built-in assistant, helps by proposing changes that you approve.</p>
+<div class="callout"><b>Names.</b> <b>Gossamr</b> is the product. <b>Pip</b> is the assistant you talk to and who acts in the app. <b>Claude</b> is the default model behind Pip, reached today through Claude Code and a local MCP server. The provider is pluggable: other agents such as Codex can sit behind Pip later (section 10). This document says "Pip" when it describes what the assistant does, and "Claude" only where it means the model or the integration.</div>
+
+<div class="toc"><b>Contents</b><ol>
+<li><a href="#why">Why now, and what we are not doing</a></li>
+<li><a href="#today">Where the code is today</a></li>
+<li><a href="#principles">Principles</a></li>
+<li><a href="#arch">Architecture</a></li>
+<li><a href="#model">The domain model</a></li>
+<li><a href="#traits">Connector traits</a></li>
+<li><a href="#proposals">Proposals and approval</a></li>
+<li><a href="#events">Events and autopilot</a></li>
+<li><a href="#query">Filters as the query language</a></li>
+<li><a href="#claude">Pip and the assistant provider</a></li>
+<li><a href="#storage">Storage, sync and identity</a></li>
+<li><a href="#auth">Authentication and distribution</a></li>
+<li><a href="#frontend">The frontend contract</a></li>
+<li><a href="#plan">Migration plan</a></li>
+<li><a href="#risks">Risks and open questions</a></li>
+<li><a href="#proto">Appendix: prototype to design</a></li>
+</ol></div>
+
+<h2 id="why">1. Why now, and what we are not doing</h2>
+<p>The prototype (<code>prototype/claude-companion.html</code>) shows what the product wants to be: one workspace across projects with a board, map, list and age view. Pip follows what you are looking at, drafts changes, and can follow GitHub and Jira activity on your behalf. None of those screens needs to know it is Jira underneath. Building them on the current code would bake Jira into places that are expensive to change later.</p>
+<h3>Goals</h3>
+<ul>
+<li>One domain model that every screen, and Pip, uses. Connectors translate to and from it.</li>
+<li>Jira and GitHub first. Adding a third connector (Linear is the test case) should not change the core.</li>
+<li>Pip never writes to a system by itself. Every change is a proposal that a person approves.</li>
+<li>A pluggable assistant provider: Claude by default, others (such as Codex) later, all behind the same tools and the same approval flow.</li>
+<li>Local-first: a local cache is the source for the UI, and the app stays fast offline.</li>
+</ul>
+<h3>Non-goals</h3>
+<ul>
+<li>A dynamic plugin system. Connectors are compiled in for now.</li>
+<li>A lowest-common-denominator model. Connector-specific data stays available next to the normalised fields.</li>
+<li>Cloud sync of drafts between devices, or a server that receives webhooks. See the risks section.</li>
+</ul>
+
+<h2 id="today">2. Where the code is today</h2>
+<p>About 3,900 lines of Rust in <code>src-tauri/src</code>. It works well as a Jira client, and Jira is visible in these places:</p>
+<table>
+<tr><th>Area</th><th>Coupling to Jira</th></tr>
+<tr><td><code>model.rs</code></td><td>Status categories are Jira's (<code>new</code>, <code>indeterminate</code>, <code>done</code>). Transition ids and ADF rich text sit in the model.</td></tr>
+<tr><td><code>inbox.rs</code> (<code>Core</code>)</td><td>Holds a concrete <code>Jira</code> client. The single database is chosen by <code>Scope</code>, which is Jira site plus account.</td></tr>
+<tr><td><code>events.rs</code>, <code>db.rs</code></td><td>Inbox events are derived from Jira issue history and stored in a schema built around Jira ids.</td></tr>
+<tr><td><code>claude/mcp.rs</code></td><td>The <code>search_tickets</code> tool takes JQL. Proposals exist (<code>propose_comment</code>, <code>propose_transition</code>, <code>propose_subtasks</code>) but live only in the frontend's memory.</td></tr>
+<tr><td><code>src/types.ts</code></td><td>Hand-mirrored Rust types, including ADF nodes and Jira statuses.</td></tr>
+</table>
+<p>Two things are already in good shape: the frontend talks to the backend through an interface with a mock behind it (<code>src/backend/</code>), and the "the assistant can only propose" rule is already enforced in the MCP server. Both carry over.</p>
+
+<h2 id="principles">3. Principles</h2>
+<ol>
+<li><b>The app owns the model.</b> Connectors translate at the edge. Nothing above the connector layer sees ADF, JQL or a transition id.</li>
+<li><b>Capabilities, not assumptions.</b> Each connector declares what it supports. The UI adapts. It does not check "is this Jira".</li>
+<li><b>One write path.</b> Every change to an external system is an approved proposal executed by a connector. Nothing else writes.</li>
+<li><b>Rules decide, Pip words.</b> Deterministic rules decide whether something should be proposed. Pip (through Claude) writes the text. That keeps autopilot predictable, cheap and testable.</li>
+<li><b>Generalise on the second implementation.</b> Design the domain now. Shape the traits against two real APIs, not one plus a guess.</li>
+</ol>
+
+<h2 id="arch">4. Architecture</h2>
+<figure>
+<svg viewBox="0 0 820 470" role="img" aria-label="Layered architecture">
+<defs><marker id="a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="var(--ink3)"/></marker></defs>
+<rect class="box" x="20" y="14" width="780" height="70" rx="12"/>
+<text x="40" y="40" font-weight="700">UI (React)</text>
+<text class="sub" x="40" y="62">Board · Map · List · Age · Activity · Peek sheet · ⌘K palette · Pip pane. Pure functions of normalised entities and a filter.</text>
+<path class="arrow" d="M300 84V118" marker-end="url(#a)"/><text class="sub" x="312" y="106">typed commands and events</text>
+<rect class="box" x="20" y="120" width="560" height="190" rx="12"/>
+<text x="40" y="146" font-weight="700">App core (Rust)</text>
+<rect class="box" x="40" y="160" width="160" height="56" rx="8"/><text x="52" y="184">Domain model</text><text class="sub" x="52" y="202">items, workflows, refs</text>
+<rect class="box" x="212" y="160" width="160" height="56" rx="8"/><text x="224" y="184">Filter engine</text><text class="sub" x="224" y="202">runs on the cache</text>
+<rect class="hot" x="384" y="160" width="180" height="56" rx="8"/><text x="396" y="184">Proposals + approval</text><text class="sub" x="396" y="202">the only write path</text>
+<rect class="box" x="40" y="228" width="160" height="56" rx="8"/><text x="52" y="252">Sync scheduler</text><text class="sub" x="52" y="270">polling, cursors, ETags</text>
+<rect class="box" x="212" y="228" width="160" height="56" rx="8"/><text x="224" y="252">Local cache</text><text class="sub" x="224" y="270">SQLite, per connection</text>
+<rect class="hot" x="384" y="228" width="180" height="56" rx="8"/><text x="396" y="252">Autopilot rules</text><text class="sub" x="396" y="270">events in, proposals out</text>
+<rect class="hot" x="610" y="120" width="190" height="190" rx="12"/>
+<text x="628" y="146" font-weight="700">Pip bridge</text>
+<text class="sub" x="628" y="170">MCP server, local only</text><text class="sub" x="628" y="190">read tools</text><text class="sub" x="628" y="208">propose tools</text><text class="sub" x="628" y="226">screen context in</text>
+<text class="sub" x="628" y="252">never writes</text>
+<path class="arrow" d="M580 215H608" marker-end="url(#a)"/><path class="arrow" d="M608 235H582" marker-end="url(#a)"/>
+<path class="arrow" d="M300 310V350" marker-end="url(#a)"/>
+<rect class="box" x="20" y="352" width="780" height="52" rx="12"/>
+<text x="40" y="376" font-weight="700">Connector traits</text>
+<text class="sub" x="40" y="394"><tspan>WorkTracker · CodeHost · EventSource, plus a capabilities declaration per connector</tspan></text>
+<path class="arrow" d="M300 404V420" marker-end="url(#a)"/>
+<rect class="ok" x="20" y="422" width="180" height="40" rx="8"/><text x="34" y="446">Jira (exists today)</text>
+<rect class="box" x="214" y="422" width="180" height="40" rx="8"/><text x="228" y="446">GitHub (next)</text>
+<rect class="box" x="408" y="422" width="180" height="40" rx="8"/><text x="422" y="446">Mock (dev, tests)</text>
+<rect class="box" x="602" y="422" width="198" height="40" rx="8" stroke-dasharray="5 4"/><text x="616" y="446">Linear (the litmus test)</text>
+</svg>
+<figcaption>Everything above the connector line speaks only the app's own model.</figcaption>
+</figure>
+<p>Suggested crate split, once the boundaries have settled: <code>domain</code> (types, filter, reconcile), <code>core</code> (cache, sync, proposals, autopilot), one crate per connector, and the Tauri app with the Pip bridge. A single crate with modules is fine until Phase 3.</p>
+
+<h2 id="model">5. The domain model</h2>
+<p>Every entity carries a connection id and an opaque external id, so two Jira sites, or Jira and Linear, never collide.</p>
+<table>
+<tr><th>Entity</th><th>Key fields</th><th>Notes</th></tr>
+<tr><td><code>Connection</code></td><td>id, connector kind, workspace, account, auth state</td><td>Replaces <code>Scope</code>. "Workspace" is a Jira site, a Linear organisation or a GitHub org.</td></tr>
+<tr><td><code>ItemRef</code></td><td>connection, id (opaque), key (display, e.g. <code>ENG-123</code>)</td><td>The address of any work item.</td></tr>
+<tr><td><code>Container</code></td><td>ref, key, name, workflow</td><td>A Jira project or a Linear team.</td></tr>
+<tr><td><code>Workflow</code></td><td>statuses (name, category), transitions</td><td>Category is <code>Todo</code>, <code>Active</code> or <code>Done</code>. Transitions are either a graph of allowed moves or <code>Any</code>. This is how one board renderer serves Jira's and Linear's models.</td></tr>
+<tr><td><code>WorkItem</code></td><td>ref, container, kind, title, body, status, assignee, reporter, priority, parent, labels, timestamps, links, <code>extra</code></td><td><code>extra</code> holds the raw connector payload. Kind is task, bug, story or epic. Priority is a small enum, not Jira's free list.</td></tr>
+<tr><td><code>Doc</code></td><td>blocks and inline spans</td><td>One portable rich-text tree. ADF and Markdown convert to it at the edge. The Markdown parser from the reply renderer is the starting point.</td></tr>
+<tr><td><code>Person</code>, <code>Identity</code></td><td>per-connection ids, display name; <code>Identity</code> maps a Jira account and a GitHub login to one human</td><td>Needed so "assigned to me" works across connectors.</td></tr>
+<tr><td><code>Comment</code></td><td>id, author, <code>Doc</code>, created, mentions</td><td></td></tr>
+<tr><td><code>Link</code></td><td>from, to, kind (blocks, relates, duplicates)</td><td>Cross-container and cross-connection links are allowed. Only the ends need refs.</td></tr>
+<tr><td><code>CodeChange</code></td><td>repo, number, title, branch, state, author, reviewers, checks, linked item keys</td><td>A pull request. Linked keys come from title and branch using the tracker's key pattern.</td></tr>
+<tr><td><code>Event</code></td><td>connection, at, kind, subject, actor, payload</td><td>See section 8.</td></tr>
+<tr><td><code>Proposal</code></td><td>intent, origin, state, basis, revisions</td><td>See section 7.</td></tr>
+</table>
+
+<h2 id="traits">6. Connector traits</h2>
+<p>Small traits per role. A connector implements the ones it can. GitHub is a <code>CodeHost</code> and an <code>EventSource</code>. Jira and Linear are <code>WorkTracker</code>s and <code>EventSource</code>s.</p>
+<pre><code>#[async_trait]
+pub trait WorkTracker: Send + Sync {
+    fn capabilities(&amp;self) -&gt; TrackerCaps;
+    fn key_pattern(&amp;self) -&gt; &amp;Regex;                        // ENG-123, PROJ-45
+    async fn sync(&amp;self, since: Cursor) -&gt; Result&lt;Delta&lt;WorkItem&gt;&gt;;
+    async fn workflow(&amp;self, c: &amp;ContainerRef) -&gt; Result&lt;Workflow&gt;;
+    async fn people(&amp;self, q: &amp;PersonQuery) -&gt; Result&lt;Vec&lt;Person&gt;&gt;;
+    async fn apply(&amp;self, intent: &amp;Intent) -&gt; Result&lt;Applied&gt;;    // the only write path
+    fn compile(&amp;self, f: &amp;Filter) -&gt; Option&lt;NativeQuery&gt;;      // optional server-side narrowing
+}
+
+pub trait CodeHost: Send + Sync {
+    async fn sync(&amp;self, since: Cursor) -&gt; Result&lt;Delta&lt;CodeChange&gt;&gt;;
+    async fn comment(&amp;self, change: &amp;CodeRef, body: &amp;Doc) -&gt; Result&lt;()&gt;;   // later, and proposal-gated too
+}
+
+pub trait EventSource: Send + Sync {
+    async fn poll(&amp;self, cursor: Cursor) -&gt; Result&lt;(Vec&lt;Event&gt;, Cursor)&gt;;
+}
+
+pub struct TrackerCaps {
+    pub subtasks: bool, pub mentions: bool, pub attachments: bool,
+    pub transitions: TransitionModel,     // Graph | Any
+    pub grouping: Grouping,               // Epics | Projects | Cycles | None
+    pub custom_workflows: bool,
+}</code></pre>
+<p>Capabilities drive the UI. If <code>transitions</code> is <code>Any</code>, the board allows any drop. If it is a graph, columns the card cannot reach dim during a drag, as they do in the prototype.</p>
+<div class="callout"><b>The one write path.</b> <code>apply(&amp;Intent)</code> is called by the approval layer and by nothing else. Pip's tools have no access to it.</div>
+
+<h2 id="proposals">7. Proposals and approval</h2>
+<p>A proposal is a neutral intent plus enough context to keep it honest.</p>
+<pre><code>enum Intent {
+    Comment   { item: ItemRef, body: Doc },
+    Transition{ item: ItemRef, to: StatusId },
+    Create    { container: ContainerRef, fields: NewItem, link: Option&lt;Link&gt; },
+    Update    { item: ItemRef, patch: Patch },        // triage: assignee, epic, priority
+    Link      { from: ItemRef, to: ItemRef, kind: LinkKind },
+    Subtasks  { parent: ItemRef, summaries: Vec&lt;String&gt; },
+}
+
+struct Proposal {
+    id, created_at, origin: Origin,    // Chat | Board | Autopilot(event_id)
+    intent: Intent,
+    basis: Basis,                      // fingerprint of what it was drafted against
+    state: Pending | Applied | Discarded | Superseded(reason),
+    revisions: Vec&lt;Revision&gt;,
+}</code></pre>
+<figure>
+<svg viewBox="0 0 760 190" role="img" aria-label="Proposal states">
+<defs><marker id="b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="var(--ink3)"/></marker></defs>
+<rect class="hot" x="290" y="70" width="180" height="50" rx="10"/><text x="352" y="100" font-weight="700">Pending</text>
+<rect class="ok" x="40" y="20" width="150" height="46" rx="10"/><text x="80" y="48">Applied</text><text class="sub" x="52" y="60">you approved</text>
+<rect class="box" x="40" y="126" width="150" height="46" rx="10"/><text x="70" y="154">Discarded</text>
+<rect class="box" x="570" y="126" width="150" height="46" rx="10"/><text x="592" y="154">Superseded</text><text class="sub" x="582" y="166" style="display:none"> </text>
+<path class="arrow" d="M290 88L192 50" marker-end="url(#b)"/><text class="sub" x="210" y="62">approve</text>
+<path class="arrow" d="M290 108L192 146" marker-end="url(#b)"/><text class="sub" x="214" y="140">discard</text>
+<path class="arrow" d="M470 108L570 146" marker-end="url(#b)"/><text class="sub" x="500" y="140">reconcile: retire</text>
+<path class="arrow" d="M380 70C380 30 460 30 460 70" marker-end="url(#b)"/><text class="sub" x="372" y="22">reconcile: revise</text>
+<text class="sub" x="470" y="60">pending stays pending</text>
+</svg>
+<figcaption>Only a person moves a proposal to Applied. Reconcile can only revise or retire it.</figcaption>
+</figure>
+<h3>Keeping proposals current</h3>
+<p><code>Basis</code> records what the proposal was drafted against: the item's status, comment count, assignee, epic and so on. "Keep drafts up to date" is then a pure function, <code>reconcile(proposal, current cache) → Keep | Revise(note) | Retire(reason)</code>, run after every sync and every approval. It is easy to test and needs no model call. The prototype's cases:</p>
+<ul>
+<li>A transition whose target status is already reached is retired. If the path changed, it is revised.</li>
+<li>A reply draft is retired if the person withdrew the question or you already commented. It is extended, never silently rewritten, if a follow-up arrives.</li>
+<li>A triage proposal drops fields that someone else already set, and is retired when none are left.</li>
+</ul>
+<h3>Bulk actions</h3>
+<p>Bulk approval covers transitions only, behind a confirmation that lists each move. Comments are never bulk-approved. Discarding is always safe and undoable.</p>
+
+<h2 id="events">8. Events and autopilot</h2>
+<p><code>Event</code> kinds: <code>CommentAdded</code>, <code>StatusChanged</code>, <code>Assigned</code>, <code>ItemCreated</code>, <code>PrOpened</code>, <code>PrMerged</code>, <code>CheckFailed</code>, <code>ReviewRequested</code>. Connectors produce them, and autopilot only consumes them. That is why GitHub and Jira are symmetric.</p>
+<pre><code>fn on_event(ev: &amp;Event, cache: &amp;Cache, s: &amp;AutopilotSettings) -&gt; Vec&lt;ProposalChange&gt;</code></pre>
+<p>It is a pure function, so every rule is a unit test. The model is used only for wording, for example the body of a reply or the reason for a triage suggestion. Rules decide whether to act.</p>
+<h3>Rules that ship first</h3>
+<table>
+<tr><th>Event</th><th>Proposal</th></tr>
+<tr><td>PR opened for an item you own</td><td>Transition to the container's review status, if the workflow has one and a path exists.</td></tr>
+<tr><td>PR merged</td><td>Transition to Done, or the next status such as Testing, using the shortest workflow path.</td></tr>
+<tr><td>Check failed</td><td>Draft comment with the failing test, and flag the item as needing you.</td></tr>
+<tr><td>Comment added</td><td>Draft reply, or extend an existing one.</td></tr>
+<tr><td>Item created, unassigned</td><td>Triage: assignee, epic, priority and a link if one is likely.</td></tr>
+<tr><td>Review requested from you</td><td>No draft. The item moves into Needs me.</td></tr>
+<tr><td>Blocker done</td><td>Propose unblocking your own dependants.</td></tr>
+</table>
+<div class="callout"><b>Scope rule (decided).</b> Autopilot drafts only for items assigned to you. The exceptions are a comment arriving on any item, a review requested from you, and brand-new unassigned items for triage. It never drafts updates on someone else's items otherwise. This is a fixed rule, not a setting. Everything else is opt-in: off by default, switched on per project, with each behaviour individually toggleable.</div>
+
+<h2 id="query">9. Filters as the query language</h2>
+<p>The prototype's filter chips are already a connector-neutral query language. Make that explicit:</p>
+<pre><code>enum Filter {
+    NeedsMe, Mine, Unassigned, Blocked, Open,
+    Assignee(PersonId), Status(String), Category(Category),
+    Stale { days: u32 }, Container(ContainerRef), Parent(ItemRef),
+    Text(String), Items(Vec&lt;ItemRef&gt;),          // Items is a "lens" Pip builds
+    And(Vec&lt;Filter&gt;),
+}</code></pre>
+<p>Views run the filter locally against the cache, so they are instant and identical for every connector. A connector may implement <code>compile()</code> to narrow what it fetches (JQL for Jira, GraphQL filters for Linear), but correctness never depends on it. Pip searches with the same <code>Filter</code>, so it never writes JQL. "Show what's blocked in webshop" becomes a filter, and the user can see and edit it as chips.</p>
+
+<h2 id="claude">10. Pip and the assistant provider</h2>
+<p>The current design (a local MCP server, headless Claude Code, proposals only) stays as the default. Changes:</p>
+<ul>
+<li><b>Connector-neutral tools.</b> <code>get_item</code>, <code>search_items(filter)</code>, <code>list_next_statuses</code> and the <code>propose_*</code> tools (comment, transition, create, update, subtasks).</li>
+<li><b>Pip can see proposal state.</b> A <code>list_proposals</code> tool returns what is pending, applied or superseded. The result of every <code>propose_*</code> call says exactly where the draft appears ("saved as a draft on ENG-491, shown in Activity and on that ticket"). Today the assistant guesses where a card shows up, and guesses wrong.</li>
+<li><b>Screen context.</b> Each turn carries what the user sees: view, filters, selected item, selected text. This is what powers the always-present avatar.</li>
+<li><b>Provider-neutral tools.</b> The tool surface is plain MCP, so any MCP-capable agent can use it. The provider layer is described at the end of this section.</li>
+<li><b>Fresh sessions by default.</b> A new session scoped to the item. Resuming an old session is opt-in and labelled with what it was about.</li>
+<li><b>Untrusted input.</b> Ticket and comment text is data, never instructions. Proposal-only writes are the main defence, and every proposal shows its source.</li>
+</ul>
+
+<h3>Providers: Claude by default, others pluggable</h3>
+<p>Claude is the default provider, not a hard-wired one. Pip's persona, tools, drafts and approval flow are the same whichever model sits behind it. Because Pip's tools are a local MCP server, any agent that speaks MCP can drive them. That gives two families of provider:</p>
+<table>
+<tr><th>Family</th><th>Examples</th><th>How it runs</th><th>Trade-offs</th></tr>
+<tr><td><b>CLI agents</b></td><td>Claude Code (today), Codex CLI, Gemini CLI and similar</td><td>The app launches the user's installed agent headlessly with the user's own login, points it at our MCP server, and parses its output stream.</td><td>Uses the person's existing subscription and can read the repo in the session's folder. Each CLI has its own flags, config, event format and session store, so each needs an adapter.</td></tr>
+<tr><td><b>API providers</b></td><td>Anthropic API, OpenAI API, local models through an OpenAI-compatible endpoint</td><td>The app runs the tool loop itself against the same tool definitions.</td><td>No repo access unless we add read-only file tools. Needs API keys in the keychain and cost tracking. Good for cheap background wording.</td></tr>
+</table>
+<pre><code>#[async_trait]
+pub trait AgentProvider: Send + Sync {
+    fn id(&amp;self) -&gt; &amp;'static str;                        // "claude-code", "codex", "anthropic-api", ...
+    fn capabilities(&amp;self) -&gt; AgentCaps;
+    async fn detect(&amp;self) -&gt; Availability;               // installed? signed in? version?
+    async fn run(&amp;self, req: AgentRequest) -&gt; Result&lt;BoxStream&lt;AgentEvent&gt;&gt;;
+    async fn cancel(&amp;self, run: &amp;RunId);
+    async fn sessions(&amp;self, item: &amp;ItemRef) -&gt; Result&lt;Vec&lt;SessionInfo&gt;&gt;;   // for opt-in resume
+}
+
+struct AgentRequest {
+    prompt: String, screen_context: Context, system: String,
+    tools: McpEndpoint,                 // our local server, the only tool surface
+    cwd: Option&lt;PathBuf&gt;, session: Option&lt;SessionId&gt;,
+    task: Task,                         // Chat | Wording | Triage, so routing can pick a model
+}
+enum AgentEvent { Started { session }, Text(String), ToolUse { name, label }, Done { session, ok, message } }
+struct AgentCaps { mcp: bool, resume: bool, streaming: bool, reads_code: bool, read_only_sandbox: bool, models: Vec&lt;ModelInfo&gt; }</code></pre>
+<p>Adapters translate to and from this shape. The event stream is already normalised in the current code (<code>claude/stream.rs</code> turns Claude Code's output into text, tool and done events), so the Claude Code adapter is mostly a move, not a rewrite. Tool labels already key off the tool's own name and ignore the provider's prefix (<code>mcp__server__tool</code> in Claude Code), which is the right habit.</p>
+
+<h3>The safety rule must hold for every provider</h3>
+<p>"Propose only" is enforced by our MCP server, but a CLI agent brings its own tools (shell, file edits). Each adapter therefore has to start its agent read-only and prove it. The two ignored tests in <code>claude/mod.rs</code> (a real run that proposes through the server, and a write probe) become a <b>conformance suite</b> that every provider must pass:</p>
+<ol>
+<li>It cannot write a file.</li>
+<li>It can call <code>get_item</code> and <code>propose_comment</code>, and the proposal reaches the app.</li>
+<li>It has no route to Jira or GitHub except through our tools.</li>
+<li>A run can be cancelled and leaves no process behind.</li>
+<li>A session can be resumed, or the provider says it cannot.</li>
+</ol>
+<h3>What I found for Codex (checked 29 Sep 2026)</h3>
+<ul>
+<li><code>codex exec</code> runs Codex non-interactively. <code>--json</code> turns stdout into a JSONL event stream that includes MCP tool calls. The prompt can come from stdin (<code>codex exec -</code>).</li>
+<li>The default sandbox is read-only. Writes need an explicit <code>--sandbox workspace-write</code>.</li>
+<li><code>codex exec resume &lt;SESSION_ID&gt;</code> continues a run. <code>--ephemeral</code> avoids persisting one. <code>--ignore-user-config</code> skips the user's <code>config.toml</code>, which helps isolate a run.</li>
+<li>MCP servers are configured in <code>config.toml</code> (STDIO or HTTP transports). A server marked required makes <code>codex exec</code> fail if it cannot start.</li>
+<li><b>Not confirmed:</b> how to attach our per-run MCP endpoint without editing the user's own config. Options to test are a project-scoped <code>.codex/config.toml</code> or command-line config overrides. This is the main unknown for a Codex adapter.</li>
+</ul>
+<h3>Routing, privacy and settings</h3>
+<ul>
+<li><b>Per-task choice.</b> Pip's chat, autopilot wording and triage rationale can use different providers or models. Because rules decide and the model only words, a cheaper or local model is enough for autopilot text.</li>
+<li><b>Always visible.</b> The chat header says "powered by" and names the provider. Ticket and comment text goes to whichever provider is selected, so the privacy note and settings must always show which one that is.</li>
+<li><b>Organisation control.</b> A configuration option lists the providers a workspace may use, so an organisation can restrict them.</li>
+<li><b>Resume is provider-specific.</b> Each provider lists its own resumable sessions. A fresh session scoped to the item stays the default.</li>
+<li><b>Same persona, different behaviour.</b> Models follow instructions differently. Keep the system prompt short and provider-neutral, and tune it per adapter only where a provider needs it.</li>
+</ul>
+<p class="meta">Sources: <a href="https://learn.chatgpt.com/docs/non-interactive-mode">Codex non-interactive mode</a> (the older <code>developers.openai.com/codex/noninteractive</code> address redirects here). MCP configuration details come from a search summary of the <a href="https://developers.openai.com/codex/mcp">Codex MCP docs</a>, which I did not open directly.</p>
+
+<h2 id="storage">11. Storage, sync and identity</h2>
+<h3>Storage</h3>
+<p>SQLite. Every table is keyed by <code>(connection_id, external_id)</code>: <code>connections</code>, <code>containers</code>, <code>workflows</code>, <code>items</code>, <code>comments</code>, <code>links</code>, <code>code_changes</code>, <code>events</code>, <code>proposals</code>, <code>proposal_revisions</code> and <code>settings</code>. Proposals are persisted, so a restart no longer loses drafts. Open question: one database per profile with a <code>connection_id</code> column, versus one per connection as today.</p>
+<h3>Sync</h3>
+<p>Polling with cursors. Jira keeps its updated-since approach. GitHub uses conditional requests (ETags) on the notifications and events APIs to stay inside rate limits. The existing <code>wake</code> notifier in <code>Core</code> becomes the scheduler's trigger, and each connector gets its own backoff and rate budget.</p>
+<h3>Identity</h3>
+<p>An <code>Identity</code> links a person's accounts across connections. "Me" is defined once, and rules like "assigned to me" use it. Linking a GitHub login to a Jira account is a one-time setup step, with a suggested match from email.</p>
+<h3>Secrets</h3>
+<p>Per-connection tokens stay in the OS keychain, as they are today. How people sign in, and what we have to register to let them, is section 12.</p>
+
+<h2 id="auth">12. Authentication and distribution</h2>
+<p>Today each user registers their own Atlassian OAuth 2.0 (3LO) app and pastes in a client id and secret (<code>auth.rs</code>, <code>save_oauth_app</code>). That does not scale to other people. This section records what the providers actually allow, checked on 29 Sep 2026, and what we should do about it.</p>
+
+<h3>What the providers allow</h3>
+<table>
+<tr><th>Provider</th><th>Finding</th></tr>
+<tr><td><b>Jira Cloud (Atlassian 3LO)</b></td><td>
+<ul style="margin:0">
+<li>PKCE is only half supported. Atlassian's discovery document lists <code>S256</code> as a supported code-challenge method, but its token endpoint accepts only <code>client_secret_basic</code> and <code>client_secret_post</code>. There is no "none" method, so <b>every 3LO client is confidential and must send the client secret</b> to exchange a code and to refresh a token. PKCE can strengthen the flow but cannot replace the secret.</li>
+<li>The docs say 3LO supports only the authorization-code grant, and acknowledge this blocks standalone mobile and native apps. Refresh tokens rotate: each use invalidates the previous one, and a refresh also needs the secret.</li>
+<li>An Atlassian staff reply (May 2024) confirms there is no public-client PKCE and suggests each customer register their own app, which is what we do today. A feature request for public-client PKCE (ECO-283, opened May 2024) was the tracking ticket in the sources I found. I could not confirm its current status.</li>
+<li>Distribution is possible through the Developer Console's sharing settings. Users are then sent a direct authorisation link.</li>
+<li>The discovery document also lists a device authorisation endpoint. One secondary source says the device grant is disabled for 3LO apps. I did not test it, so treat device flow as unavailable until proven.</li></ul></td></tr>
+<tr><td><b>GitHub</b></td><td>
+<ul style="margin:0">
+<li>The device flow needs <b>only the client id</b>. The docs state the client secret is not needed. It must be switched on in the app's settings.</li>
+<li>GitHub App user tokens expire after 8 hours, with a refresh token valid for 6 months. Refreshing normally needs the client secret, <b>except for tokens that were issued through the device flow</b>. So device flow gives us sign-in and refresh with no secret at all.</li>
+<li>Limits to design for: 50 verification submissions per hour per app, and a minimum polling interval with <code>slow_down</code> back-off.</li></ul></td></tr>
+<tr><td><b>Linear</b></td><td>Not investigated yet. It is part of Phase 5.</td></tr>
+</table>
+
+<h3>Options for Jira</h3>
+<table>
+<tr><th></th><th>What it is</th><th>Strengths</th><th>Weaknesses</th></tr>
+<tr><td><b>A. Own app per user</b><br>(today)</td><td>Each person registers an Atlassian app and enters its id and secret.</td><td>No shared secret, no server, works everywhere.</td><td>Far too much setup for most people. Fine as an advanced option.</td></tr>
+<tr><td><b>B. Company-owned app</b></td><td>An admin registers one app. Its id and secret reach the team through managed configuration, and the app stores them in the keychain.</td><td>Smooth "Sign in" click. No server. Fastest to ship.</td><td>The secret is on every machine, so it can be extracted. Acceptable for an internal tool, not for public distribution.</td></tr>
+<tr><td><b>C. Shared app plus token broker</b></td><td>We publish one app. A small stateless service holds the secret and performs the code exchange and refresh on the client's behalf.</td><td>The secret never ships. Works for outside users.</td><td>We must host, secure and monitor a service that sees tokens in transit. Refresh-token rotation has to be saved on the device atomically. It is the only option that adds a server for us to run.</td></tr>
+<tr><td><b>D. API token</b></td><td>The user pastes an email plus an Atlassian API token. Data Center uses a personal access token.</td><td>No app registration at all. Simple and robust.</td><td>Broad per-user access, manual rotation, and a poorer sign-in experience.</td></tr>
+<tr><td><b>E. Wait</b></td><td>Public-client PKCE from Atlassian.</td><td>Would make everything above unnecessary.</td><td>No date. Not something to plan around.</td></tr>
+</table>
+<div class="callout"><b>Decision (29 Sep 2026): option B for now.</b> An admin registers one company-owned Atlassian app. People paste its client id and secret into the setup screen that already exists (the secret is shared through the team's password manager, not committed anywhere), then click "Sign in with Atlassian". No managed configuration and no server for the pilot. The audience is developers and technical people, so options A (own app) and D (API token) stay available for anyone who prefers them, and we will not build a polished onboarding flow yet. Option C (a token broker) is revisited only if the app is distributed outside the company before Atlassian supports public clients.<br><br>
+<b>What the admin registers:</b> an OAuth 2.0 (3LO) integration with the Jira API scopes <code>read:jira-work</code>, <code>write:jira-work</code> and <code>read:jira-user</code> (plus <code>offline_access</code>, requested by the app), and the callback URL <code>http://localhost:8723/callback</code>. The app needs no code change for this.</div>
+
+<h3>GitHub recommendation</h3>
+<p>Register one <b>GitHub App</b> owned by us, with the device flow enabled and narrow permissions. It needs read access to pull requests, checks and repository metadata. Later, PR comments would also be write-gated behind proposals. A GitHub App gives per-repo installation and lets an organisation admin approve it once, which is easier to defend than a broad OAuth scope. A fine-grained personal access token is the fallback. No user creates any app.</p>
+
+<h3>Design consequence</h3>
+<p>Authentication becomes part of the connector contract, so that adding a sign-in path never touches the core:</p>
+<pre><code>enum ClientSource { Bundled, ManagedConfig, UserSupplied }
+
+enum AuthMethod {
+    OAuthCode   { client: ClientSource, pkce: bool },   // Jira today: needs the secret
+    DeviceFlow  { client_id: String },                  // GitHub: no secret
+    ApiToken    { fields: Vec&lt;TokenField&gt; },            // Jira email+token, Data Center PAT
+    Broker      { base_url: Url },                      // option C, later
+}
+
+#[async_trait]
+pub trait Authenticator: Send + Sync {
+    fn methods(&amp;self) -&gt; Vec&lt;AuthMethod&gt;;
+    async fn begin(&amp;self, m: &amp;AuthMethod) -&gt; Result&lt;AuthChallenge&gt;;   // URL, or user code plus URL
+    async fn complete(&amp;self, c: AuthChallenge) -&gt; Result&lt;Credentials&gt;;
+    async fn refresh(&amp;self, cred: &amp;Credentials) -&gt; Result&lt;Credentials&gt;;
+}</code></pre>
+<ul>
+<li>Credentials live in the keychain per <code>Connection</code>. Refresh tokens that rotate are written back before the old value is discarded.</li>
+<li>Secrets and tokens are never logged (the existing redaction test is the pattern to keep), and sign-out revokes where the provider supports it.</li>
+<li>The setup screen shows only the methods a connector offers, in order of preference.</li>
+</ul>
+
+<h3>Distribution checklist</h3>
+<ul>
+<li>Register the Atlassian app and set its distribution (needed for B and C). The vendor details Atlassian requires for sharing are still to be confirmed.</li>
+<li>Register the GitHub App and enable device flow.</li>
+<li>Sign and notarise the macOS build, and add an updater. Without notarisation, users see Gatekeeper warnings.</li>
+<li>Have the AI policy and GDPR review done before anyone outside the pilot uses it (see section 15).</li>
+</ul>
+<p class="meta">Sources: <a href="https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/">Atlassian OAuth 2.0 (3LO) apps</a>, <a href="https://community.developer.atlassian.com/t/oauth-2-0-with-proof-key-for-code-exchange-pkce/80173">Atlassian developer community: PKCE thread</a>, <a href="https://auth.atlassian.com/.well-known/openid-configuration">Atlassian OpenID configuration</a>, <a href="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps">GitHub: authorizing OAuth apps (device flow)</a>, <a href="https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens">GitHub: refreshing user access tokens</a>.</p>
+
+<h2 id="frontend">13. The frontend contract</h2>
+<ul>
+<li>Types are generated from the Rust domain (for example with ts-rs or specta) instead of hand-mirrored in <code>types.ts</code>.</li>
+<li>The store holds normalised entities. Board, Map, List, Age and Activity are pure functions of <code>(items, workflows, filter, proposals)</code>.</li>
+<li>Board columns come from the selected container's <code>Workflow</code>. With several containers selected the board falls back to the three categories.</li>
+<li>The UI never sees ADF, JQL or transition ids. Capability flags arrive in the snapshot.</li>
+<li>The mock connector replaces <code>backend/mock.ts</code>, so the same fixtures drive the UI in dev, tests and the browser.</li>
+</ul>
+
+<h2 id="plan">14. Migration plan</h2>
+<div class="phase"><h3>Phase 0 · Domain and Jira adapter <span class="tag next">first</span></h3>
+<p>Extract the domain types. Put the existing Jira code behind <code>WorkTracker</code>. Replace <code>Scope</code> with <code>Connection</code>, and put sign-in behind the <code>Authenticator</code> trait (section 12). No visible change.</p>
+<p class="exit"><b>Done when:</b> existing tests pass, <code>Core</code> holds a registry rather than a <code>Jira</code>, and no UI-facing code imports from <code>jira</code>.</p></div>
+<div class="phase"><h3>Phase 1 · Persisted proposals</h3>
+<p>Proposals table and the approval executor. Chat cards read from it. Neutral MCP tools, including <code>list_proposals</code>. Extract an <code>AgentProvider</code> trait, with the current Claude Code integration as its first adapter. Reconcile as a pure function with tests.</p>
+<p class="exit"><b>Done when:</b> drafts survive a restart, and approving one goes through <code>apply</code> and nothing else. Each proposal keeps the <code>Connection</code> it was drafted against, and <code>apply</code> refuses it before any write if the signed-in account or workspace no longer matches (the existing <code>SiteChanged</code> guard).</p></div>
+<div class="phase"><h3>Phase 2 · Workspace UI</h3>
+<p>The prototype's board, map, list, age view, tabs, ⌘K, peek sheet, Pip pane with screen context, and draft cards. Built on the normalised store with the mock connector.</p>
+<p class="exit"><b>Done when:</b> the Jira Inbox (Gossamr) screens are replaced and the app runs fully on the mock with no network.</p></div>
+<div class="phase"><h3>Phase 3 · GitHub connector and events</h3>
+<p>CodeHost and EventSource for GitHub, signing in through the device flow with one GitHub App. Link discovery from PR titles and branches. Identity mapping. The Activity screen.</p>
+<p class="exit"><b>Done when:</b> a real PR appears linked to its ticket and produces events.</p></div>
+<div class="phase"><h3>Phase 4 · Autopilot</h3>
+<p>The rules engine, settings (opt-in, per project, per behaviour), reconcile on every sync, and the scope rule.</p>
+<p class="exit"><b>Done when:</b> the seven rules in section 8 each have unit tests, and turning autopilot off produces zero proposals.</p></div>
+<div class="phase"><h3>Phase 5 · Second tracker</h3>
+<p>Implement Linear (or GitHub Issues). Core changes are allowed only to fix real gaps, and each gap is written down.</p>
+<p class="exit"><b>Done when:</b> the gap list is short and the UI needed no connector-specific branches.</p></div>
+
+<div class="phase"><h3>Phase 6 · Second assistant provider</h3>
+<p>A Codex CLI adapter (or another provider), run through the conformance suite in section 10. Add the per-task provider setting.</p>
+<p class="exit"><b>Done when:</b> Pip runs on the second provider with the same tools and the same approval flow, and the conformance suite passes for both.</p></div>
+<h2 id="risks">15. Risks and open questions</h2>
+<h3>Risks</h3>
+<table>
+<tr><th>Risk</th><th>Mitigation</th></tr>
+<tr><td>Leaky abstractions: workflows, rich text and permissions differ a lot between trackers.</td><td>Capabilities, the <code>Any</code> transition model, <code>extra</code> raw payloads, and the Phase 5 gap list.</td></tr>
+<tr><td>Autopilot only works while the app is open, because a desktop app cannot receive webhooks.</td><td>Poll on wake and on a timer. Catch up on launch by replaying the gap. A small background helper or relay is a later option, not a requirement.</td></tr>
+<tr><td>Prompt injection through ticket or comment text.</td><td>Proposal-only writes, source shown on every proposal, no auto-approval anywhere, and bulk approval limited to transitions.</td></tr>
+<tr><td>Different providers behave differently: prompt adherence, tool-call formats and sandbox defaults.</td><td>A conformance suite every provider must pass, a short provider-neutral prompt, and adapters that start each agent read-only.</td></tr>
+<tr><td>Personal data in tickets is sent to the selected provider (Claude by default).</td><td>Confirm the use fits the company AI policy and GDPR before enabling autopilot beyond a pilot. Send only the fields a task needs.</td></tr>
+<tr><td>Atlassian requires a client secret for every 3LO client, so a shared app either ships a secret or needs a broker service.</td><td>Use a company-owned app for the pilot (decided), with API tokens or a personal app as options for technical users, and add a broker only if distribution goes beyond our organisation (section 12). The secret is shared internally, so it should be rotated if someone who had it leaves.</td></tr>
+<tr><td>A multi-operation proposal (such as subtasks) can be replayed after a lost response and create a duplicate, because a proposal has one state and only records results once a call returns.</td><td>Give <code>apply</code> a replay contract: record each operation's result as it completes, and where the tracker allows it send a stable operation key or look for an existing match before creating. A lost response after a create is an unknown outcome, not a failure: the proposal moves to an unknown state, is never replayed automatically, and the UI asks the person to check the tracker (or runs the lookup) and warns before a manual retry. Remembering created items per attempt only covers responses that did arrive.</td></tr>
+<tr><td>Scope creep: this is a much bigger product than an inbox.</td><td>Ship in the phases above. Phase 2 is a usable product on its own.</td></tr>
+</table>
+<h3>Open questions</h3>
+<ul>
+<li>Is public-client PKCE (ECO-283) still open, and does the device grant work for our app type? Both would remove the shared secret and are worth re-checking before any distribution outside the company.</li>
+<li>One database per profile, or per connection?</li>
+<li>Can GitHub Issues act as a <code>WorkTracker</code> for repos that do not use Jira, and should it be the second tracker instead of Linear?</li>
+<li>Do drafts need to follow you between devices, or is local-only enough?</li>
+<li>Which second provider first: Codex CLI, or an API provider? Can we attach our MCP endpoint to Codex per run without touching the user's own config?</li>
+<li>Should the organisation be able to restrict which providers are allowed?</li>
+<li>Does reply wording come from the model on every event, or on demand when you open the draft, to control cost?</li>
+</ul>
+
+<h2 id="proto">Appendix: prototype to design</h2>
+<table>
+<tr><th>Prototype feature</th><th>Design element</th></tr>
+<tr><td>Filter chips, "Needs me" and other tabs</td><td><code>Filter</code> over the local cache (section 9)</td></tr>
+<tr><td>Board columns per project, dimmed invalid drops</td><td><code>Workflow</code> and <code>TransitionModel</code> (sections 5 and 6)</td></tr>
+<tr><td>Draft cards that jump to the ticket</td><td><code>Proposal</code> plus <code>ItemRef</code> (section 7)</td></tr>
+<tr><td>New ticket and triage drafts</td><td><code>Intent::Create</code> and <code>Intent::Update</code></td></tr>
+<tr><td>⚡ Activity feed and event reactions</td><td><code>Event</code>, <code>on_event</code> (section 8)</td></tr>
+<tr><td>"Keep drafts up to date"</td><td><code>Basis</code> and <code>reconcile</code> (section 7)</td></tr>
+<tr><td>Autopilot settings, GitHub repo mapping</td><td><code>AutopilotSettings</code>, per-connection configuration</td></tr>
+<tr><td>Pip follows the screen</td><td>Screen context in the bridge (section 10)</td></tr>
+<tr><td>Map of clusters and links</td><td>Container/parent grouping and <code>Link</code>, rendered from <code>Grouping</code> capabilities</td></tr>
+</table>
+
+</div>
+</body>
+</html>
