@@ -48,6 +48,8 @@ interface WorkspaceState {
   /** Loads everything and keeps it current until `dispose` or the next `init`. */
   init(backend: Backend): Promise<void>;
   refresh(): Promise<void>;
+  /** Re-reads only the set of items waiting on the user, which read, done and snooze changes alter without a sync. */
+  refreshNeedsMe(): Promise<void>;
   refreshProposals(): Promise<void>;
   loadEvents(ref: ItemRef): Promise<void>;
   /** Shows the cached comments at once, then the tracker's. */
@@ -88,6 +90,7 @@ let generation = 0;
 let refreshSeq = 0;
 const SYNC_FLAG_MS = 20_000;
 let proposalSeq = 0;
+let needsMeSeq = 0;
 const commentSeq = new Map<string, number>();
 const moving = new Map<string, Promise<StatusDef[] | null>>();
 let lastSyncError: string | null = null;
@@ -106,7 +109,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       void get().refreshConnections();
     });
     const offProposals = backend.onProposalsChanged(() => get().refreshProposals().catch((e) => get().report("Couldn't load drafts", e)));
-    const offSnapshot = backend.subscribe(() => void get().refreshConnections());
+    const offSnapshot = backend.subscribe(() => {
+      void get().refreshConnections();
+      get().refreshNeedsMe().catch((e) => get().report("Couldn't refresh what needs you", e));
+    });
     stop = () => {
       offCache();
       offProposals();
@@ -129,11 +135,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!backend) return;
     const mine = ++refreshSeq;
     const before = get().items;
-    const [items, containers, needsMe, people] = await Promise.all([
+    const [items, containers, people] = await Promise.all([
       backend.cacheSearch(ALL),
       backend.cacheContainers(),
-      backend.cacheSearch({ type: "needsMe" }),
       backend.cachePeople(),
+      get().refreshNeedsMe(),
     ]);
     const loaded = Object.keys(get().events);
     const events = await Promise.all(
@@ -145,13 +151,20 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set((s) => ({
       items: itemMap,
       containers: containerMap,
-      needsMe: new Set(needsMe.map((i) => itemKey(i.item))),
       names: { ...s.names, ...Object.fromEntries(people.map((p) => [p.accountId, p.name])) },
       events: { ...s.events, ...Object.fromEntries(events) },
     }));
     for (const k of Object.keys(get().comments)) {
       if (itemMap[k] && itemMap[k].commentCount !== before[k]?.commentCount) void get().loadComments(itemMap[k].item);
     }
+  },
+
+  async refreshNeedsMe() {
+    const backend = get().backend;
+    if (!backend) return;
+    const mine = ++needsMeSeq;
+    const found = await backend.cacheSearch({ type: "needsMe" });
+    if (backend === get().backend && mine === needsMeSeq) set({ needsMe: new Set(found.map((i) => itemKey(i.item))) });
   },
 
   async refreshProposals() {

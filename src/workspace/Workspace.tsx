@@ -98,7 +98,7 @@ export function Workspace({ backend }: { backend: Backend }) {
 
   return (
     <TicketLinksContext.Provider value={workspaceTicketLinks}>
-      <div className="grid h-full overflow-hidden bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `232px minmax(0,1fr)${pipOpen ? " 380px" : ""}` }}>
+      <div className="ws-root grid h-full overflow-hidden bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `232px minmax(0,1fr)${pipOpen ? " 380px" : ""}` }}>
         <Rail />
         <main id={MAIN_ID} tabIndex={-1} className="relative flex min-h-0 min-w-0 flex-col outline-none">
           <TabBar />

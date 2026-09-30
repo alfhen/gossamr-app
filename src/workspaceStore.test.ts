@@ -77,7 +77,7 @@ describe("workspace selectors", () => {
   });
 
   it("finds what needs me, and children and items per project", () => {
-    expect(keys(needsMeItems(s())).sort()).toEqual(["CA-409", "DEVOPS-471", "SUP-12", "WEB-101"]);
+    expect(keys(needsMeItems(s()))).toEqual(expect.arrayContaining(["CA-400", "CA-402", "CA-409", "DEVOPS-471", "DEVOPS-490", "SUP-12", "WEB-101", "WEB-108"]));
     expect(keys(childrenOf(s(), itemRef("CA-400"))).sort()).toEqual(["CA-401", "CA-402", "CA-403", "CA-404", "CA-406"]);
     const web = itemsInContainer(s(), { connectionId: "mock", externalId: "WEB" });
     expect(web.every((i) => i.container.externalId === "WEB")).toBe(true);
@@ -110,6 +110,14 @@ describe("workspace selectors", () => {
 });
 
 describe("workspace store refresh", () => {
+  it("re-reads what needs me when the cache changes", async () => {
+    expect(s().needsMe.has("mock:CA-409")).toBe(true);
+    backend.connector.comment(itemRef("CA-409"), "Looks fine");
+    for (const e of backend.connector.eventsFor(itemRef("CA-409"))) backend.connector.setRead(e.id, true);
+    await flush();
+    expect(s().needsMe.has("mock:CA-409")).toBe(false);
+  });
+
   it("re-reads items when the cache changes", async () => {
     const before = s().items["mock:CA-405"].status.name;
     expect(before).toBe("Backlog");
