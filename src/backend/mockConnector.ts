@@ -3,6 +3,9 @@ import { compileFilter, itemKey, type FilterContext } from "../lib/filter";
 import { canMove, nextStatuses, statusOf } from "../lib/workflow";
 import type {
   ContainerRef,
+  FeedEntry,
+  FeedPage,
+  FeedQuery,
   ItemRef,
   Person,
   PersonRef,
@@ -191,6 +194,35 @@ const COMMENTS: [key: string, author: PersonId, minutesAgo: number, text: string
   ["SUP-12", "klara", 20, "The customer replied with their bank reference."],
 ];
 
+const MORE_COMMENTS: typeof COMMENTS = [
+  ["DEVOPS-490", "sam", 12, "@Alf Henderson does the 30s include the connect timeout?"],
+  ["DEVOPS-490", "byron", 55, "Backfill is running in staging, no errors so far."],
+  ["DEVOPS-493", "jonas", 8 * 60, "Replay skips dead-lettered events only when the batch is full."],
+  ["WEB-108", "ida", 3 * 60, "@Alf Henderson the size guide needs the new EU chart."],
+  ["WEB-104", "priya", 26 * 60, "Reproduced on iPhone 12, swatches push the title 40px."],
+  ["CA-402", "mette", 34 * 60, "Variant B reads better, can we test it against A?"],
+  ["CA-400", "mette", 2 * 60, "@Alf Henderson can you confirm the 17 Oct go-live works for the CRM side?"],
+  ["SUP-14", "byron", 5 * 60, "The 404 only happens for parcels shipped from the Aarhus depot."],
+  ["SUP-10", "klara", 70, "Discount code is valid but the cart says it's expired."],
+  ["DEVOPS-478", "jonas", 60 * 24 * 4, "Blocked until the queue is in production."],
+  ["WEB-102", "me", 40, "Copy is on its way."],
+];
+
+const ASSIGNMENTS: [key: string, actor: PersonId, minutesAgo: number][] = [
+  ["DEVOPS-490", "sam", 30],
+  ["WEB-108", "priya", 28 * 60],
+  ["CA-402", "mette", 60 * 24 * 3],
+  ["SUP-12", "klara", 6 * 60],
+];
+
+const MORE_CHANGES: typeof CHANGES = [
+  ["DEVOPS-493", "jonas", 40, "Code review", "In Review"],
+  ["WEB-105", "ida", 2 * 60 + 10, "Backlog", "To Do"],
+  ["SUP-13", "klara", 7 * 60, "Investigating", "Resolved"],
+  ["WEB-103", "byron", 27 * 60, "In Progress", "Testing"],
+  ["CA-404", "ida", 60 * 24 * 6, "Design", "QA"],
+];
+
 const CHANGES: [key: string, actor: PersonId, minutesAgo: number, from: string, to: string][] = [
   ["DEVOPS-471", "me", 60 * 26, "In Progress", "In Review"],
   ["DEVOPS-473", "jonas", 60 * 24 * 9, "In Progress", "Blocked"],
@@ -202,6 +234,10 @@ const PRIORITY_FALLBACK: WorkPriority = "medium";
 
 export type Change = { connectionId: string };
 
+/** Events by other people this recent start unread. */
+const UNREAD_WINDOW_MINUTES = 36 * 60;
+const FEED_PAGE = 50;
+
 /** A tracker held in memory: several projects, each with its own workflow, and the events around their items. */
 export class MockConnector {
   readonly connectionId = MOCK_CONNECTION;
@@ -209,6 +245,7 @@ export class MockConnector {
   readonly people: Person[] = Object.entries(PEOPLE).map(([accountId, name]) => ({ accountId, name }));
   private items = new Map<string, WorkItem>();
   private events = new Map<string, WorkEvent[]>();
+  private markedRead = new Set<string>();
   private containers: WorkContainer[];
   private needsMe: Set<string>;
   private seq = 0;
@@ -251,13 +288,14 @@ export class MockConnector {
       const item = this.items.get(from)!;
       item.links = [...item.links, { from: itemRef(from), to: itemRef(to), kind }];
     }
-    for (const [key, author, minutes, text] of COMMENTS) {
-      this.record(key, "commentAdded", author, at(minutes), { text });
+    for (const [key, author, minutes, text] of [...COMMENTS, ...MORE_COMMENTS]) {
+      this.record(key, "commentAdded", author, at(minutes), text.includes("@Alf") ? { text, mention: true } : { text });
       const item = this.items.get(key)!;
       item.commentCount += 1;
       item.lastCommenter = personRef(author);
     }
-    for (const [key, actor, minutes, from, to] of CHANGES) this.record(key, "statusChanged", actor, at(minutes), { from, to });
+    for (const [key, actor, minutes, from, to] of [...CHANGES, ...MORE_CHANGES]) this.record(key, "statusChanged", actor, at(minutes), { from, to, text: `${from} → ${to}` });
+    for (const [key, actor, minutes] of ASSIGNMENTS) this.record(key, "assigned", actor, at(minutes), { text: "Assigned to you" });
     this.needsMe = new Set(NEEDS_ME.map((k) => itemKey(itemRef(k))));
   }
 
@@ -323,6 +361,60 @@ export class MockConnector {
     const item = this.item(ref);
     const wf = item && this.workflow(item.container);
     return item && wf ? nextStatuses(wf, item.status.id).map((to) => ({ name: to.name, to })) : [];
+  }
+
+  /** Events across every item, newest first, the way the cache's feed pages them. */
+  feed(q: FeedQuery): FeedPage {
+    const limit = Math.min(q.limit || FEED_PAGE, 200);
+    const cursor = q.before;
+    const matches: FeedEntry[] = [];
+    for (const e of [...this.events.values()].flat()) {
+      if (e.subject.type !== "item" || e.kind === "itemCreated") continue;
+      const entry = this.entry(e, e.subject.item);
+      if (q.kinds?.length && !q.kinds.includes(e.kind)) continue;
+      if (q.mentionsOnly && !entry.mention) continue;
+      if (q.unreadOnly && !entry.unread) continue;
+      if (q.container && this.items.get(entry.item.externalId)?.container.externalId !== q.container.externalId) continue;
+      matches.push(entry);
+    }
+    matches.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
+    const after = cursor ? matches.filter((e) => e.at < cursor.at || (e.at === cursor.at && e.id < cursor.id)) : matches;
+    const entries = after.slice(0, limit);
+    const last = entries[entries.length - 1];
+    return { entries, next: after.length > limit && last ? { at: last.at, id: last.id } : null };
+  }
+
+  feedUnread(): number {
+    return this.feed({ unreadOnly: true, limit: 200 }).entries.length;
+  }
+
+  /** Marks a feed entry read or unread; false when the id isn't one of this connector's events. */
+  setRead(id: string, read: boolean): boolean {
+    if (![...this.events.values()].flat().some((e) => e.id === id)) return false;
+    if (read) this.markedRead.add(id);
+    else this.markedRead.delete(id);
+    this.onChange({ connectionId: MOCK_CONNECTION });
+    return true;
+  }
+
+  private entry(e: WorkEvent, item: ItemRef): FeedEntry {
+    const payload = (e.payload ?? {}) as { text?: string; mention?: boolean; from?: string; to?: string };
+    const byOther = e.actor !== null && e.actor.accountId !== this.me.accountId;
+    const recent = this.now - new Date(e.at).getTime() < UNREAD_WINDOW_MINUTES * 60_000;
+    return {
+      id: e.id,
+      connectionId: e.connectionId,
+      at: e.at,
+      kind: e.kind,
+      item,
+      itemTitle: this.items.get(item.externalId)?.title ?? null,
+      actor: e.actor,
+      actorName: e.actor ? (PEOPLE[e.actor.accountId as PersonId] ?? null) : null,
+      text: payload.text ?? "",
+      mention: payload.mention === true,
+      unread: byOther && recent && !this.markedRead.has(e.id),
+      done: false,
+    };
   }
 
   eventsFor(ref: ItemRef): WorkEvent[] {

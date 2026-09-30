@@ -6,7 +6,7 @@ use rusqlite::{params, params_from_iter, OptionalExtension};
 use serde::Serialize;
 
 use super::Db;
-use crate::domain::{Container, ContainerRef, Event, Filter, FilterContext, ItemRef, Subject, WorkItem, Workflow};
+use crate::domain::{Container, ContainerRef, Event, FeedEntry, FeedPage, FeedQuery, Filter, FilterContext, ItemRef, Subject, WorkItem, Workflow};
 use crate::domain::Transitions;
 use crate::error::Result;
 
@@ -20,6 +20,47 @@ pub fn stamp(t: DateTime<Utc>) -> String {
 /// A unit-variant enum's serialised name, which is how the schema stores kinds and categories.
 fn name_of<T: Serialize>(v: &T) -> String {
     serde_json::to_value(v).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default()
+}
+
+
+const FEED_PAGE: usize = 50;
+const FEED_MAX: usize = 200;
+
+/// The inbox's `events` row shares the cache event's id and holds what the person did with it. A stored
+/// mention flag covers events that don't come from the inbox.
+const MENTION: &str = "(e.kind = 'mention' OR json_extract(c.data, '$.payload.mention') = 1)";
+
+const FEED_SELECT: &str = "SELECT c.id, c.connection_id, c.at, c.data, i.title, e.actor, COALESCE(e.unread, 0), e.done_at IS NOT NULL,
+  (e.kind = 'mention' OR json_extract(c.data, '$.payload.mention') = 1)
+  FROM cache_events c
+  LEFT JOIN events e ON e.id = c.id
+  LEFT JOIN items i ON i.connection_id = c.connection_id AND i.external_id = c.item_id";
+
+type FeedRow = (String, String, String, String, Option<String>, Option<String>, bool, bool, Option<bool>);
+
+fn read_feed_row(r: &rusqlite::Row) -> rusqlite::Result<FeedRow> {
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
+}
+
+fn feed_entry((id, connection_id, at, data, item_title, actor, unread, done, mention): FeedRow) -> Result<Option<FeedEntry>> {
+    let event: Event = serde_json::from_str(&data)?;
+    let Subject::Item { item } = event.subject else { return Ok(None) };
+    let actor_name = actor.and_then(|a| serde_json::from_str::<crate::model::Person>(&a).ok()).map(|p| p.name);
+    let text = event.payload.get("text").and_then(|t| t.as_str()).unwrap_or_default().to_string();
+    Ok(Some(FeedEntry {
+        id,
+        connection_id,
+        at,
+        kind: event.kind,
+        item,
+        item_title,
+        actor: event.actor,
+        actor_name,
+        text,
+        mention: mention.unwrap_or(false),
+        unread,
+        done,
+    }))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -276,6 +317,59 @@ impl Db {
         Ok(out)
     }
 
+    /// Events across the connection's items, newest first, with the read state the inbox keeps under the same id.
+    pub fn feed(&self, connection_id: &str, q: &FeedQuery) -> Result<FeedPage> {
+        let limit = if q.limit == 0 { FEED_PAGE } else { q.limit.min(FEED_MAX) };
+        let mut sql = String::from(FEED_SELECT);
+        sql.push_str(" WHERE c.connection_id = ? AND c.item_id IS NOT NULL");
+        let mut args = vec![Sql::Text(connection_id.into())];
+        if !q.kinds.is_empty() {
+            let marks = vec!["?"; q.kinds.len()].join(",");
+            sql.push_str(&format!(" AND c.kind IN ({marks})"));
+            args.extend(q.kinds.iter().map(|k| Sql::Text(name_of(k))));
+        }
+        if q.mentions_only {
+            sql.push_str(&format!(" AND {MENTION}"));
+        }
+        if q.unread_only {
+            sql.push_str(" AND COALESCE(e.unread, 0) = 1");
+        }
+        if let Some(container) = &q.container {
+            sql.push_str(" AND i.container_id = ?");
+            args.push(Sql::Text(container.external_id.clone()));
+        }
+        if let Some(cursor) = &q.before {
+            sql.push_str(" AND (c.at < ? OR (c.at = ? AND c.id < ?))");
+            args.extend([Sql::Text(cursor.at.clone()), Sql::Text(cursor.at.clone()), Sql::Text(cursor.id.clone())]);
+        }
+        sql.push_str(" ORDER BY c.at DESC, c.id DESC LIMIT ?");
+        args.push(Sql::Integer(limit as i64 + 1));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(args), read_feed_row)?;
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.extend(feed_entry(row?)?);
+        }
+        let next = (entries.len() > limit).then(|| {
+            entries.truncate(limit);
+            let last = entries.last().expect("a full page has a last entry");
+            crate::domain::FeedCursor { at: last.at.clone(), id: last.id.clone() }
+        });
+        Ok(FeedPage { entries, next })
+    }
+
+    /// How many events in the connection are unread.
+    pub fn feed_unread(&self, connection_id: &str) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(*) FROM cache_events c LEFT JOIN events e ON e.id = c.id
+             WHERE c.connection_id = ?1 AND COALESCE(e.unread, 0) = 1",
+            params![connection_id],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
     pub fn sync_state(&self, connection_id: &str) -> Result<SyncState> {
         let state = self
             .conn
@@ -450,6 +544,111 @@ mod tests {
         let got = db.events_for_item(&item_ref("1"), 10).unwrap();
         assert_eq!(got.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e2", "e1"]);
         assert_eq!(db.events_for_item(&item_ref("1"), 1).unwrap().len(), 1);
+    }
+
+    fn feed_event(id: &str, item: &str, kind: EventKind, minutes: i64, payload: serde_json::Value) -> Event {
+        Event {
+            id: id.into(),
+            connection_id: "c".into(),
+            at: now() + Duration::minutes(minutes),
+            kind,
+            subject: Subject::Item { item: item_ref(item) },
+            actor: Some(person("sam")),
+            payload,
+        }
+    }
+
+    fn feed_db() -> Db {
+        let db = Db::in_memory().unwrap();
+        let mut a = work_item("1", "doing");
+        a.title = "Retry queue".into();
+        let mut b = work_item("2", "todo");
+        b.container.external_id = "q".into();
+        db.upsert_items(&[a, b], "t").unwrap();
+        let text = |t: &str| serde_json::json!({ "text": t });
+        db.insert_cache_events(&[
+            feed_event("e1", "1", EventKind::CommentAdded, 0, text("first")),
+            feed_event("e2", "1", EventKind::StatusChanged, 5, text("To Do → Doing")),
+            feed_event("e3", "2", EventKind::CommentAdded, 10, serde_json::json!({ "text": "hey @me", "mention": true })),
+            feed_event("e4", "2", EventKind::Assigned, 10, text("Assigned to you")),
+            feed_event("e5", "gone", EventKind::CommentAdded, 20, text("orphan")),
+        ])
+        .unwrap();
+        db
+    }
+
+    fn feed_ids(db: &Db, q: &FeedQuery) -> Vec<String> {
+        db.feed("c", q).unwrap().entries.into_iter().map(|e| e.id).collect()
+    }
+
+    #[test]
+    fn the_feed_is_newest_first_across_items_and_names_the_item() {
+        let db = feed_db();
+        let page = db.feed("c", &FeedQuery::default()).unwrap();
+        assert_eq!(page.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e5", "e4", "e3", "e2", "e1"]);
+        assert!(page.next.is_none());
+        let e2 = page.entries.iter().find(|e| e.id == "e2").unwrap();
+        assert_eq!((e2.item_title.as_deref(), e2.text.as_str()), (Some("Retry queue"), "To Do → Doing"));
+        assert!(page.entries[0].item_title.is_none(), "an item that left the cache has no title");
+        assert!(db.feed("other", &FeedQuery::default()).unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn pages_follow_the_cursor_without_skipping_entries_that_share_a_time() {
+        let db = feed_db();
+        let first = db.feed("c", &FeedQuery { limit: 2, ..Default::default() }).unwrap();
+        assert_eq!(first.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e5", "e4"]);
+        let second = db.feed("c", &FeedQuery { limit: 2, before: first.next, ..Default::default() }).unwrap();
+        assert_eq!(second.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e3", "e2"]);
+        let third = db.feed("c", &FeedQuery { limit: 2, before: second.next, ..Default::default() }).unwrap();
+        assert_eq!(third.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e1"]);
+        assert!(third.next.is_none());
+    }
+
+    #[test]
+    fn the_feed_narrows_by_kind_mention_and_project() {
+        let db = feed_db();
+        assert_eq!(feed_ids(&db, &FeedQuery { kinds: vec![EventKind::Assigned], ..Default::default() }), ["e4"]);
+        assert_eq!(feed_ids(&db, &FeedQuery { kinds: vec![EventKind::CommentAdded, EventKind::StatusChanged], ..Default::default() }), ["e5", "e3", "e2", "e1"]);
+        assert_eq!(feed_ids(&db, &FeedQuery { mentions_only: true, ..Default::default() }), ["e3"]);
+        let q = ContainerRef { connection_id: "c".into(), external_id: "q".into() };
+        assert_eq!(feed_ids(&db, &FeedQuery { container: Some(q), ..Default::default() }), ["e4", "e3"]);
+    }
+
+    #[test]
+    fn read_state_comes_from_the_inbox_row_with_the_same_id() {
+        let db = feed_db();
+        let actor = serde_json::to_string(&crate::model::Person { account_id: "sam".into(), name: "Sam".into(), avatar_url: None }).unwrap();
+        for (id, unread, kind) in [("e2", 1, "status"), ("e3", 0, "mention")] {
+            db.conn
+                .execute(
+                    "INSERT INTO events (id, ticket_key, kind, actor, at, text, unread) VALUES (?1, 'K', ?2, ?3, 't', 'x', ?4)",
+                    params![id, kind, actor, unread],
+                )
+                .unwrap();
+        }
+        assert_eq!(db.feed_unread("c").unwrap(), 1);
+        assert_eq!(feed_ids(&db, &FeedQuery { unread_only: true, ..Default::default() }), ["e2"]);
+        let page = db.feed("c", &FeedQuery::default()).unwrap();
+        let e2 = page.entries.iter().find(|e| e.id == "e2").unwrap();
+        assert!(e2.unread && e2.actor_name.as_deref() == Some("Sam"));
+        assert!(!page.entries.iter().find(|e| e.id == "e1").unwrap().unread, "events without an inbox row arrive read");
+        db.set_unread("e2", false).unwrap();
+        assert_eq!(db.feed_unread("c").unwrap(), 0);
+        db.set_done("e3", Some("2026-09-29T12:00:00Z")).unwrap();
+        assert!(db.feed("c", &FeedQuery::default()).unwrap().entries.iter().find(|e| e.id == "e3").unwrap().done);
+    }
+
+    #[test]
+    fn mentions_stored_before_the_flag_existed_still_count() {
+        let db = feed_db();
+        db.conn
+            .execute(
+                "INSERT INTO events (id, ticket_key, kind, actor, at, text, unread) VALUES ('e1', 'K', 'mention', '{\"accountId\":\"sam\",\"name\":\"Sam\"}', 't', 'x', 0)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(feed_ids(&db, &FeedQuery { mentions_only: true, ..Default::default() }), ["e3", "e1"]);
     }
 
     #[test]

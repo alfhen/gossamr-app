@@ -20,6 +20,8 @@ import type {
   WorkContainer,
   WorkIdentity,
   WorkMove,
+  FeedPage,
+  FeedQuery,
   WorkEvent,
   WorkFilter,
   WorkItem,
@@ -149,6 +151,14 @@ export class JiraBackend implements Backend {
 
   cacheEvents(item: ItemRef) {
     return invoke<WorkEvent[]>("cache_events", { item });
+  }
+
+  cacheFeed(query: FeedQuery) {
+    return invoke<FeedPage>("cache_feed", { query });
+  }
+
+  cacheFeedUnread() {
+    return invoke<number>("cache_feed_unread");
   }
 
   onCacheChanged(listener: (change: CacheChanged) => void) {

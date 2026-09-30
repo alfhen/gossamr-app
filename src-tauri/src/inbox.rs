@@ -10,7 +10,7 @@ use crate::auth::{Account, Auth, AuthStatus, Scope, Site};
 use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, my_actions, NewEvent};
-use crate::domain::{Comment, Container, ContainerRef, Event, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, WorkItem, Workflow};
+use crate::domain::{Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, WorkItem, Workflow};
 use crate::model::{Attachment, CachedTicket, CreatedSubtasks, MentionRef, Person, Snapshot, Status, Ticket, Transition, Uploaded};
 use crate::proposals;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
@@ -29,6 +29,7 @@ const DEFAULT_SEEN_DAYS: i64 = 3;
 
 const LAST_SYNC: &str = "last_sync_at";
 const CACHE_BACKFILLED: &str = "cache_backfilled";
+const EVENTS_BACKFILLED: &str = "events_backfilled";
 const OWN_CLAUDE_SESSIONS: &str = "claude_sessions";
 const OWN_SESSIONS_KEPT: usize = 50;
 
@@ -82,13 +83,25 @@ fn without_extra(mut item: WorkItem) -> WorkItem {
 /// Fills the cache from tickets stored before it existed, once, keeping when each was last refreshed. The old table
 /// is left as it was.
 fn backfill_cache(db: &Db, connection: &Connection) -> Result<()> {
-    if db.meta(CACHE_BACKFILLED)?.is_some() {
-        return Ok(());
+    if db.meta(CACHE_BACKFILLED)?.is_none() {
+        for (ticket, synced_at) in db.legacy_tickets()? {
+            db.upsert_items(&[tracker::item_from_ticket(connection, &ticket)], &synced_at)?;
+        }
+        db.set_meta(CACHE_BACKFILLED, &now_iso())?;
     }
-    for (ticket, synced_at) in db.legacy_tickets()? {
-        db.upsert_items(&[tracker::item_from_ticket(connection, &ticket)], &synced_at)?;
+    if db.meta(EVENTS_BACKFILLED)?.is_none() {
+        let stored: Vec<Event> = db
+            .events("")?
+            .into_iter()
+            .filter_map(|e| {
+                let e = NewEvent { id: e.id, kind: e.kind, ticket_key: e.ticket_key, actor: e.actor, at: e.at, text: e.text };
+                sync::domain_event(&connection.id, &e)
+            })
+            .collect();
+        db.insert_cache_events(&stored)?;
+        db.set_meta(EVENTS_BACKFILLED, &now_iso())?;
     }
-    db.set_meta(CACHE_BACKFILLED, &now_iso())
+    Ok(())
 }
 
 /// A signed-in connection as Settings shows it.
@@ -614,6 +627,18 @@ impl Core {
     pub async fn cache_events(&self, item: &ItemRef, limit: usize) -> Result<Vec<Event>> {
         let scope = self.scope().await?;
         self.with_db_for(&scope, |db| db.events_for_item(item, limit)).await
+    }
+
+    pub async fn cache_feed(&self, query: &FeedQuery) -> Result<FeedPage> {
+        let scope = self.scope().await?;
+        let id = self.connection(&scope)?.id;
+        self.with_db_for(&scope, |db| db.feed(&id, query)).await
+    }
+
+    pub async fn cache_feed_unread(&self) -> Result<usize> {
+        let scope = self.scope().await?;
+        let id = self.connection(&scope)?.id;
+        self.with_db_for(&scope, |db| db.feed_unread(&id)).await
     }
 
     /// `scope` is the account the user was looking at when they approved; the write is refused if that has changed.

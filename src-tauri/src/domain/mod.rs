@@ -13,7 +13,7 @@ mod proposal;
 mod workflow;
 
 pub use doc::{Block, Doc, Inline, Mark};
-pub use event::{CheckState, CodeChange, CodeChangeState, Event, EventKind, Subject};
+pub use event::{CheckState, CodeChange, CodeChangeState, Event, EventKind, FeedCursor, FeedEntry, FeedPage, FeedQuery, Subject};
 pub use filter::{Filter, FilterContext};
 pub use item::{
     Comment, Container, ContainerRef, Identity, ItemKind, ItemRef, Link, LinkKind, Person,

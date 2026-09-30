@@ -275,6 +275,44 @@ export interface WorkEvent {
   payload: unknown;
 }
 
+export interface FeedCursor {
+  at: string;
+  id: string;
+}
+
+/** What a feed shows, mirroring src-tauri/src/domain/event.rs. No kinds means every kind. */
+export interface FeedQuery {
+  kinds?: WorkEvent["kind"][];
+  mentionsOnly?: boolean;
+  unreadOnly?: boolean;
+  container?: ContainerRef | null;
+  before?: FeedCursor | null;
+  limit?: number;
+}
+
+/** One event about an item, with the state the person has given it. */
+export interface FeedEntry {
+  id: string;
+  connectionId: string;
+  at: string;
+  kind: WorkEvent["kind"];
+  item: ItemRef;
+  /** Null once the item has left the cache. */
+  itemTitle: string | null;
+  actor: PersonRef | null;
+  actorName: string | null;
+  text: string;
+  mention: boolean;
+  unread: boolean;
+  done: boolean;
+}
+
+export interface FeedPage {
+  entries: FeedEntry[];
+  /** Present when more entries follow. */
+  next: FeedCursor | null;
+}
+
 /** Emitted as the `cache-changed` event when a sync or a write changed what the cache holds. */
 export interface CacheChanged {
   connectionId: string;

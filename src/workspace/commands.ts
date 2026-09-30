@@ -23,6 +23,7 @@ export interface CommandActions {
   setTheme(theme: ThemeMode): void;
   openSettings(): void;
   openActivity(): void;
+  openDrafts(): void;
   newTab(): void;
   togglePip(): void;
   jumpToItem(item: WorkItem): void;
@@ -52,6 +53,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),
     { id: "app:settings", group: "App", label: "Open settings", keywords: "preferences", run: a.openSettings },
     { id: "app:activity", group: "App", label: "Open activity", run: a.openActivity },
+    { id: "app:drafts", group: "App", label: "Open drafts", keywords: "pip proposals review waiting", run: a.openDrafts },
     { id: "app:tab", group: "App", label: "New tab", hint: "Workspace", run: a.newTab },
     { id: "app:pip", group: "App", label: "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
   ];

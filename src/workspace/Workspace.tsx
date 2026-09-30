@@ -3,6 +3,8 @@ import { listenToClaude } from "../claudeStore";
 import type { Backend } from "../backend/types";
 import { TicketLinksContext } from "../components/ticketLinks";
 import { useItemsByFilter, useWorkspace } from "../workspaceStore";
+import { ActivityView } from "./ActivityView";
+import { useActivity } from "./activityStore";
 import { CANVASES } from "./canvases";
 import { workspaceTicketLinks } from "./jump";
 import { FilterBar } from "./FilterBar";
@@ -33,14 +35,6 @@ function Canvas() {
     );
   }
   return <View tab={tab} items={items} />;
-}
-
-function Activity() {
-  return (
-    <div className="grid h-full place-items-center p-10 text-center text-ws-ink3">
-      <p>Activity will show what happened on your tickets, including drafts waiting for you.</p>
-    </div>
-  );
 }
 
 function useGlobalKeys() {
@@ -81,7 +75,11 @@ export function Workspace({ backend }: { backend: Backend }) {
 
   useEffect(() => {
     useWorkspace.getState().init(backend).catch(() => {});
-    return () => useWorkspace.getState().dispose();
+    useActivity.getState().init(backend);
+    return () => {
+      useActivity.getState().dispose();
+      useWorkspace.getState().dispose();
+    };
   }, [backend]);
 
   if (status === "error") {
@@ -108,7 +106,7 @@ export function Workspace({ backend }: { backend: Backend }) {
           {route === "workspace" && <FilterNote />}
           <div className="min-h-0 flex-1">
             {route === "workspace" && <Canvas />}
-            {route === "activity" && <Activity />}
+            {route === "activity" && <ActivityView />}
             {route === "settings" && <Settings />}
           </div>
           <PeekSheet />

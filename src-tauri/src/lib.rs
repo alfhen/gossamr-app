@@ -28,7 +28,7 @@ use claude::ClaudeCodeProvider;
 use tracker::{Connection, Move};
 use inbox::{ConnectionInfo, Core, Edit};
 use error::{Error, Result};
-use domain::{Comment, Container, ContainerRef, Event, Filter, Identity, Intent, ItemRef, Proposal, ProposalQuery, WorkItem, Workflow};
+use domain::{Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, Identity, Intent, ItemRef, Proposal, ProposalQuery, WorkItem, Workflow};
 use model::{Snapshot, Transition};
 use sync::Trigger;
 
@@ -137,6 +137,16 @@ async fn cache_workflow(core: State<'_, CoreState>, container: ContainerRef) -> 
 #[tauri::command]
 async fn cache_events(core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<Event>> {
     core.cache_events(&item, EVENT_LIMIT).await
+}
+
+#[tauri::command]
+async fn cache_feed(core: State<'_, CoreState>, query: FeedQuery) -> Result<FeedPage> {
+    core.cache_feed(&query).await
+}
+
+#[tauri::command]
+async fn cache_feed_unread(core: State<'_, CoreState>) -> Result<usize> {
+    core.cache_feed_unread().await
 }
 
 #[tauri::command]
@@ -459,6 +469,8 @@ pub fn run() {
             cache_containers,
             cache_workflow,
             cache_events,
+            cache_feed,
+            cache_feed_unread,
             cache_me,
             cache_people,
             cache_comments,

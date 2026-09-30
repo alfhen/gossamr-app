@@ -149,7 +149,7 @@ pub fn store(
 }
 
 /// An inbox event as the neutral event it is, or `None` for the kinds the neutral model has no name for.
-fn domain_event(connection_id: &str, e: &NewEvent) -> Option<Event> {
+pub(crate) fn domain_event(connection_id: &str, e: &NewEvent) -> Option<Event> {
     let kind = match e.kind {
         InboxKind::Mention | InboxKind::Comment => EventKind::CommentAdded,
         InboxKind::Status => EventKind::StatusChanged,
@@ -164,7 +164,7 @@ fn domain_event(connection_id: &str, e: &NewEvent) -> Option<Event> {
         kind,
         subject: Subject::Item { item: ItemRef { connection_id: connection_id.into(), external_id: e.ticket_key.clone(), key: e.ticket_key.clone() } },
         actor: Some(PersonRef { connection_id: connection_id.into(), account_id: e.actor.account_id.clone() }),
-        payload: serde_json::json!({ "text": e.text }),
+        payload: if e.kind == InboxKind::Mention { serde_json::json!({ "text": e.text, "mention": true }) } else { serde_json::json!({ "text": e.text }) },
     })
 }
 
@@ -434,6 +434,8 @@ mod tests {
         let mapped: Vec<Event> = events.iter().filter_map(|e| domain_event(CONNECTION, e)).collect();
         assert_eq!(mapped.iter().map(|e| e.kind).collect::<Vec<_>>(), [EventKind::StatusChanged, EventKind::CommentAdded]);
         assert_eq!(mapped[0].id, "h:500:status");
+        assert_eq!(mapped[1].payload["mention"], true, "a mention stays distinguishable from a plain comment");
+        assert!(mapped[0].payload.get("mention").is_none());
     }
 
     #[test]

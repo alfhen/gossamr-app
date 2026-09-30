@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   AdfNode,
   CacheChanged,
+  FeedQuery,
   ConnectionInfo,
   Comment,
   ContainerRef,
@@ -468,6 +469,14 @@ export class MockBackend implements Backend {
     return this.connector.eventsFor(ref);
   }
 
+  async cacheFeed(query: FeedQuery) {
+    return this.connector.feed(query);
+  }
+
+  async cacheFeedUnread() {
+    return this.connector.feedUnread();
+  }
+
   async cachePeople() {
     return this.connector.people;
   }
@@ -572,10 +581,12 @@ export class MockBackend implements Backend {
   }
 
   async setUnread(eventId: string, unread: boolean) {
+    if (this.connector.setRead(eventId, !unread)) return;
     this.update((s) => void (this.event(s, eventId).unread = unread));
   }
 
   async setDone(eventId: string, done: boolean) {
+    if (this.connector.setRead(eventId, done)) return;
     this.update((s) => {
       const e = this.event(s, eventId);
       e.doneAt = done ? new Date().toISOString() : null;

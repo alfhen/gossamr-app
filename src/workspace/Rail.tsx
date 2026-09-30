@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { containerKey } from "../lib/filter";
 import { allContainers, useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, projectOf, sameProject } from "./filters";
+import { useActivity } from "./activityStore";
 import { useActiveTab } from "./hooks";
 import { usePrefs } from "./prefs";
 import { useTabs, VIEW_LABEL, VIEW_MODES } from "./tabsStore";
@@ -31,6 +32,7 @@ export function Rail() {
   const { setRoute, setView, setProject, openSavedView, removeSavedView } = useTabs.getState();
   const containers = useWorkspace((s) => s.containers);
   const needsMe = useWorkspace((s) => s.needsMe.size);
+  const unread = useActivity((s) => s.unread);
   const pipOpen = usePrefs((s) => s.pipOpen);
   const setPipOpen = usePrefs((s) => s.setPipOpen);
   const project = projectOf(tab.filter);
@@ -58,6 +60,11 @@ export function Rail() {
         </div>
         <RailButton current={route === "activity"} onClick={() => setRoute("activity")}>
           Activity
+          {unread > 0 && (
+            <span aria-label={`${unread} unread`} className="ml-auto rounded-full bg-ws-pip px-1.5 text-xs text-ws-on-pip">
+              {unread}
+            </span>
+          )}
         </RailButton>
 
         <Heading>Views</Heading>

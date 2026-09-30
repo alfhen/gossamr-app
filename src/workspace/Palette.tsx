@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { ALL, containerKey, itemKey } from "../lib/filter";
 import type { WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
+import { useActivity } from "./activityStore";
 import { buildCommands, rankCommands, ticketCommands, type Command, type CommandActions } from "./commands";
 import { withProject } from "./filters";
 import { usePrefs } from "./prefs";
@@ -112,6 +113,7 @@ export function appActions(): CommandActions {
     setTheme: prefs.setTheme,
     openSettings: () => tabs.setRoute("settings"),
     openActivity: () => tabs.setRoute("activity"),
+    openDrafts: () => (useActivity.getState().setChip("drafts"), tabs.setRoute("activity")),
     newTab: () => void tabs.openTab(),
     togglePip: () => prefs.setPipOpen(!usePrefs.getState().pipOpen),
     jumpToItem,

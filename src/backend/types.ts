@@ -13,6 +13,8 @@ import type {
   Transition,
   Uploaded,
   ConnectionInfo,
+  FeedPage,
+  FeedQuery,
   WorkComment,
   WorkContainer,
   WorkIdentity,
@@ -69,6 +71,10 @@ export interface Backend {
   connectionsList(): Promise<ConnectionInfo[]>;
   /** Events recorded for an item, newest first. */
   cacheEvents(ref: ItemRef): Promise<WorkEvent[]>;
+  /** Events across every item, newest first, one page at a time. Reading state (`unread`) is the inbox's, so `setUnread` marks an entry read. */
+  cacheFeed(query: FeedQuery): Promise<FeedPage>;
+  /** How many feed entries are unread. */
+  cacheFeedUnread(): Promise<number>;
   /** Called when a sync or a write changed the cache, so views over it can re-read. Returns an unsubscribe function. */
   onCacheChanged(listener: (change: CacheChanged) => void): () => void;
   /** Drafted writes, newest first. They survive a restart. */
