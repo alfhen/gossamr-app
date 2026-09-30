@@ -126,10 +126,9 @@ export function Palette() {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
 
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    return () => (opener?.isConnected ? opener : document.getElementById(MAIN_ID))?.focus();
-  }, []);
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);
+
+  useEffect(() => () => (opener?.isConnected ? opener : document.getElementById(MAIN_ID))?.focus(), [opener]);
 
   const results = useMemo(() => {
     const actions = appActions();
