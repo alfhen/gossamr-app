@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { create } from "zustand";
+import { PEEK_DEFAULT, PIP_DEFAULT, storedWidth } from "./paneSizes";
 import { readStored, writeStored } from "./storage";
 
 export const THEMES = ["auto", "light", "dark"] as const;
@@ -14,16 +15,20 @@ interface Prefs {
   uiChosen: boolean;
   theme: ThemeMode;
   pipOpen: boolean;
+  peekWidth: number;
+  pipWidth: number;
   paletteOpen: boolean;
   setUi(ui: UiMode): void;
   setTheme(theme: ThemeMode): void;
   setPipOpen(open: boolean): void;
+  setPeekWidth(width: number): void;
+  setPipWidth(width: number): void;
   setPaletteOpen(open: boolean): void;
 }
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"> {
+export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     // Installs from before the workspace was the default stored "classic" without anyone choosing it.
@@ -31,6 +36,8 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
     uiChosen: raw?.uiChosen === true,
     theme: THEMES.find((t) => t === raw?.theme) ?? "auto",
     pipOpen: raw?.pipOpen === true,
+    peekWidth: storedWidth(raw?.peekWidth, PEEK_DEFAULT),
+    pipWidth: storedWidth(raw?.pipWidth, PIP_DEFAULT),
   };
 }
 
@@ -40,10 +47,12 @@ export const usePrefs = create<Prefs>((set) => ({
   setUi: (ui) => set({ ui, uiChosen: true }),
   setTheme: (theme) => set({ theme }),
   setPipOpen: (pipOpen) => set({ pipOpen }),
+  setPeekWidth: (peekWidth) => set({ peekWidth }),
+  setPipWidth: (pipWidth) => set({ pipWidth }),
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
 }));
 
-usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen }) => writeStored(KEY, { ui, uiChosen, theme, pipOpen }));
+usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth }) => writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth }));
 
 /** The browser build has no classic inbox to fall back to, so it always shows the workspace. */
 export const isWorkspaceUi = () => !isTauri() || usePrefs.getState().ui === "workspace";

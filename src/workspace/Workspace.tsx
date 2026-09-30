@@ -15,6 +15,7 @@ import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
 import { FilterNote, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { PipPane } from "./PipPane";
+import { usePaneWidths } from "./PaneResizers";
 import { applyTheme, usePrefs } from "./prefs";
 import { Rail } from "./Rail";
 import { Settings } from "./Settings";
@@ -68,6 +69,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   const theme = usePrefs((s) => s.theme);
   const view = useActiveTab().view;
   const pipOpen = usePrefs((s) => s.pipOpen);
+  const pipWidth = usePaneWidths().pip;
   const paletteOpen = usePrefs((s) => s.paletteOpen);
   const setPipOpen = usePrefs((s) => s.setPipOpen);
   const choice = useWorkspace((s) => s.watch.find((w) => w.needsChoice));
@@ -124,7 +126,7 @@ export function Workspace({ backend }: { backend: Backend }) {
 
   return (
     <TicketLinksContext.Provider value={workspaceTicketLinks}>
-      <div className="ws-root grid h-full overflow-hidden bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `58px minmax(0,1fr)${pipOpen ? " 380px" : ""}` }}>
+      <div className="ws-root grid h-full overflow-hidden bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `58px minmax(0,1fr)${pipOpen ? ` ${pipWidth}px` : ""}` }}>
         <Rail />
         <main id={MAIN_ID} tabIndex={-1} className="relative flex min-h-0 min-w-0 flex-col outline-none">
           {route === "workspace" ? <Header /> : <div data-tauri-drag-region className="h-[34px] shrink-0" />}
