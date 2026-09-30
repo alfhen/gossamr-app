@@ -67,6 +67,13 @@ let unsubscribe: (() => void) | null = null;
 /** Bumped by each init and sign-out, so a load that finishes late can't restore a previous account's data. */
 let generation = 0;
 
+/** Drops the classic screens' live subscription and invalidates any load still in flight. */
+export function stopClassicSync() {
+  generation++;
+  unsubscribe?.();
+  unsubscribe = null;
+}
+
 export const useStore = create<Store>()((set, get) => {
   const run = async (what: string, fn: () => Promise<void>) => {
     try {
