@@ -600,8 +600,7 @@ impl Core {
         let mut seen: HashMap<String, Person> = HashMap::new();
         for item in self.search_cached(&scope, &Filter::And { filters: vec![] }).await? {
             let t = ticket_of(&item)?;
-            let authors = t.comments.iter().map(|c| &c.author);
-            for p in t.assignee.iter().chain(t.reporter.iter()).chain(t.creator.iter()).chain(authors) {
+            for p in people_on(&t) {
                 seen.entry(p.account_id.clone()).or_insert_with(|| p.clone());
             }
         }
@@ -715,10 +714,25 @@ impl Core {
     }
 }
 
+/// Everyone a ticket names, including those who only appear in its history.
+fn people_on(t: &crate::model::CachedTicket) -> impl Iterator<Item = &Person> {
+    let comment_authors = t.comments.iter().map(|c| &c.author);
+    let editors = t.history.iter().map(|h| &h.author);
+    t.assignee.iter().chain(t.reporter.iter()).chain(t.creator.iter()).chain(comment_authors).chain(editors)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::Doc;
+
+    #[test]
+    fn people_include_those_who_only_appear_in_history() {
+        let mut t = crate::tracker::testing::sample_ticket();
+        t.comments.clear();
+        t.history[0].author = Person { account_id: "557058:f58".into(), name: "Leigh".into(), avatar_url: None };
+        assert!(people_on(&t).any(|p| p.account_id == "557058:f58" && p.name == "Leigh"));
+    }
 
     #[tokio::test]
     async fn the_signed_in_person_is_known_without_the_legacy_snapshot() {

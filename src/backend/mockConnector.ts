@@ -150,7 +150,7 @@ const row = (
 const ROWS: Row[] = [
   row("DEVOPS-470", "epic", "Checkout resilience", "In Progress", "mette", 2, { priority: "high", body: "Payments must survive a partial outage of any single provider." }),
   row("DEVOPS-480", "epic", "Shopify event pipeline", "In Progress", "mette", 4, { body: "Every store event reaches the warehouse exactly once." }),
-  row("DEVOPS-471", "story", "Retry failed payment webhooks", "In Review", "me", 1, { parent: "DEVOPS-470", labels: ["payments"], priority: "high", body: "Retries back off and cap at five attempts." }),
+  row("DEVOPS-471", "story", "Retry failed payment webhooks", "In Review", "me", 1, { parent: "DEVOPS-470", labels: ["payments"], priority: "high", body: "Retries back off and cap at five attempts.\n\nThe payment provider redelivers a webhook when we answer with anything but a 2xx, so a slow handler turns one event into a burst. The handler now acknowledges first and processes from the queue, which keeps the provider's retry clock out of our own retry maths.\n\nBackoff starts at two seconds and doubles with jitter, so a provider outage does not produce a synchronised wave when it recovers. After five attempts the event moves to the dead-letter queue with the last error attached.\n\nSee https://docs.example.com/payments/webhooks/retries/backoff-and-jitter?source=ticket&section=delivery-guarantees&utm_campaign=retry-budget-review-2026-q3 for the provider's delivery guarantees.\n\nOpen questions: whether the dead-letter replay should respect the original ordering, and who owns the alert when the queue depth crosses the threshold." }),
   row("DEVOPS-472", "task", "Add dead-letter queue for webhooks", "In Progress", "sam", 6, { parent: "DEVOPS-470", labels: ["queue"] }),
   row("DEVOPS-473", "bug", "Duplicate order events on retry", "Blocked", "jonas", 9, { parent: "DEVOPS-480", labels: ["bug"], priority: "high", body: "A retried delivery emits the order event twice." }),
   row("DEVOPS-474", "task", "Dashboard for event lag", "To Do", undefined, 3, { parent: "DEVOPS-480" }),
@@ -203,6 +203,10 @@ const LINKS: [string, string, WorkLink["kind"]][] = [
 
 const COMMENTS: [key: string, author: PersonId, minutesAgo: number, text: string][] = [
   ["DEVOPS-471", "sam", 90, "Ready for another look, retries now cap at five."],
+  ["DEVOPS-471", "mette", 60 * 24 * 3, "Please keep the backoff configurable per provider.\n\nThe reference from the provider docs is https://docs.example.com/payments/webhooks/retries/backoff-and-jitter?source=review&section=delivery-guarantees&utm_campaign=retry-budget-review-2026-q3 and it is long on purpose."],
+  ["DEVOPS-471", "jonas", 60 * 24 * 2, "Stack from staging: Error: connect ETIMEDOUT 10.0.12.34:443 at TCPConnectWrap.afterConnect (node:net:1611:16) at /srv/app/node_modules/payment-client/dist/retry/backoffWithJitter.js:88:21"],
+  ["DEVOPS-471", "me", 60 * 24, "Thanks both. I capped it at five and made the base delay a setting; the dead-letter replay is next."],
+  ["DEVOPS-471", "priya", 60 * 6, "Looks right to me. One nit: the jitter should be full jitter, not equal jitter."],
   ["DEVOPS-472", "sam", 60 * 24 * 5, "Queue is provisioned in staging."],
   ["DEVOPS-473", "jonas", 60 * 24 * 2, "Waiting on the backfill before I can reproduce this."],
   ["CA-404", "ida", 60 * 24 * 3, "Can't test the segment until the sign-up form ships."],

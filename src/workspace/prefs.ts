@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { create } from "zustand";
+import type { Collapsed, PeekSectionId } from "./peekLogic";
 import { PEEK_DEFAULT, PIP_DEFAULT, storedWidth } from "./paneSizes";
 import { readStored, writeStored } from "./storage";
 
@@ -18,12 +19,15 @@ interface Prefs {
   peekWidth: number;
   pipWidth: number;
   paletteOpen: boolean;
+  /** Peek sections the person folded. Kept for the session only. */
+  peekCollapsed: Collapsed;
   setUi(ui: UiMode): void;
   setTheme(theme: ThemeMode): void;
   setPipOpen(open: boolean): void;
   setPeekWidth(width: number): void;
   setPipWidth(width: number): void;
   setPaletteOpen(open: boolean): void;
+  setPeekSection(id: PeekSectionId, collapsed: boolean): void;
 }
 
 const KEY = "gossamr-prefs";
@@ -44,12 +48,14 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
 export const usePrefs = create<Prefs>((set) => ({
   ...loadPrefs(),
   paletteOpen: false,
+  peekCollapsed: {},
   setUi: (ui) => set({ ui, uiChosen: true }),
   setTheme: (theme) => set({ theme }),
   setPipOpen: (pipOpen) => set({ pipOpen }),
   setPeekWidth: (peekWidth) => set({ peekWidth }),
   setPipWidth: (pipWidth) => set({ pipWidth }),
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+  setPeekSection: (id, collapsed) => set((s) => ({ peekCollapsed: { ...s.peekCollapsed, [id]: collapsed } })),
 }));
 
 usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth }) => writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth }));

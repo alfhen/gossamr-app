@@ -6,14 +6,15 @@ import { itemKey } from "../lib/filter";
 import { liveMentions, type Mention } from "../lib/mentions";
 import { relativeTime } from "../lib/views";
 import type { ItemRef, StatusDef, WorkEvent, WorkItem } from "../types";
-import { draftsForItem, knownMoves, nameOf, useItemsByFilter, useWorkspace, workflowOfItem } from "../workspaceStore";
+import { draftsForItem, knownMoves, useItemsByFilter, useWorkspace, workflowOfItem } from "../workspaceStore";
 import { draftStatus, movesAreOpaque, targetsFor } from "./boardLogic";
 import { PeekResizer, usePaneWidths } from "./PaneResizers";
 import { LiveDraftCard } from "./DraftCard";
 import { canvasElement, showMe } from "./jump";
 import { PEEK_DEFAULT } from "./paneSizes";
 import { usePrefs } from "./prefs";
-import { commentNotes, historyNotes, linkRows, parentCrumb, subtasksOf, type Crumb, type LinkRow, type Note, type Subtasks } from "./peekLogic";
+import { CommentCard, HistoryRow, SectionCard, SectionNav } from "./PeekParts";
+import { commentNotes, displayName, historyNotes, isCollapsed, linkRows, parentCrumb, sectionChips, subtasksOf, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type Subtasks } from "./peekLogic";
 import { useTabs } from "./tabsStore";
 import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
@@ -31,18 +32,6 @@ const EXIT_MS = 160;
 const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 const chip = "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-sm font-semibold";
-
-function Section({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
-  return (
-    <section className="grid gap-2">
-      <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
-        {title}
-        {count !== undefined && <span className="ml-1.5 font-normal">{count}</span>}
-      </h3>
-      {children}
-    </section>
-  );
-}
 
 export interface PeekViewProps {
   item: WorkItem;
@@ -81,6 +70,10 @@ export interface PeekViewProps {
   motion?: "in" | "out" | "none";
   onWide?(): void;
   onMotionEnd?(): void;
+  /** Sections the person folded; all open when omitted. */
+  collapsed?: Collapsed;
+  onToggleSection?(id: PeekSectionId): void;
+  onJump?(id: PeekSectionId): void;
 }
 
 const MOTION = { in: "ws-peek-in", out: "ws-peek-out", none: "" } as const;
@@ -89,6 +82,9 @@ export function PeekView(p: PeekViewProps) {
   const { item } = p;
   const blockedBy = p.links.filter((l) => l.kind === "blockedBy");
   const open = p.onOpen;
+  const folded = p.collapsed ?? {};
+  const section = (id: PeekSectionId) => ({ collapsed: isCollapsed(folded, id), onToggle: p.onToggleSection ? () => p.onToggleSection!(id) : undefined });
+  const commentCount = p.commentsLoading ? item.commentCount : p.comments.length;
   return (
     <aside
       id="peek-sheet"
@@ -126,7 +122,8 @@ export function PeekView(p: PeekViewProps) {
           ×
         </button>
       </div>
-      <div className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] pt-4 pb-24">
+      <div className="grid min-h-0 flex-1 scroll-pt-11 content-start gap-5 overflow-auto px-[22px] pb-24">
+        <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length })} onJump={p.onJump} />
         <div className="grid gap-2.5">
           {p.banner}
           {p.crumb && (
@@ -206,10 +203,12 @@ export function PeekView(p: PeekViewProps) {
 
         {p.drafts}
 
-        <Section title="Description">{p.description}</Section>
+        <SectionCard id="description" title="Description" {...section("description")}>
+          <div className="min-w-0 [overflow-wrap:anywhere]">{p.description}</div>
+        </SectionCard>
 
         {p.subtasks && p.subtasks.rows.length > 0 && (
-          <Section title="Subtasks" count={p.subtasks.rows.length}>
+          <SectionCard id="subtasks" title="Subtasks" count={p.subtasks.rows.length}>
             <div className="flex items-center gap-2 text-sm text-ws-ink3">
               <div
                 role="progressbar"
@@ -237,11 +236,11 @@ export function PeekView(p: PeekViewProps) {
                 </li>
               ))}
             </ul>
-          </Section>
+          </SectionCard>
         )}
 
         {p.links.length > 0 && (
-          <Section title="Links" count={p.links.length}>
+          <SectionCard id="links" title="Links" count={p.links.length} {...section("links")}>
             <ul className="m-0 grid list-none gap-1 p-0">
               {p.links.map((l) => (
                 <li key={`${l.kind}:${itemKey(l.ref)}`} className="flex items-baseline gap-2">
@@ -253,40 +252,31 @@ export function PeekView(p: PeekViewProps) {
                 </li>
               ))}
             </ul>
-          </Section>
+          </SectionCard>
         )}
 
-        <Section title="Comments" count={item.commentCount}>
-          {p.comments.length === 0 && <p className="m-0 text-ws-ink3">{p.commentsLoading ? "Loading comments…" : "No comments yet."}</p>}
-          <ul className="m-0 grid list-none gap-3 p-0">
-            {p.comments.map((c) => (
-              <li key={c.id} className="grid gap-0.5">
-                <div className="text-sm text-ws-ink3">
-                  <b className="text-ws-ink2">{c.who}</b> · {relativeTime(c.at, p.now)}
-                </div>
-                {c.doc ? (
-                  <div className="[overflow-wrap:anywhere]">
-                    <WorkDocView doc={c.doc} />
-                  </div>
-                ) : (
-                  <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{c.text}</p>
-                )}
-              </li>
-            ))}
-          </ul>
-          {p.composer}
-        </Section>
+        <div className="mt-3">
+          <SectionCard id="comments" title="Comments" count={commentCount} tone="discussion" {...section("comments")}>
+            {p.comments.length === 0 && <p className="m-0 text-ws-ink3">{p.commentsLoading ? "Loading comments…" : "No comments yet."}</p>}
+            {p.comments.length > 0 && (
+              <ul className="m-0 grid list-none gap-3 p-0">
+                {p.comments.map((c) => (
+                  <CommentCard key={c.id} note={c} now={p.now} />
+                ))}
+              </ul>
+            )}
+            {p.composer && <div className="min-w-0 rounded-md border border-ws-sep2 bg-ws-win p-3">{p.composer}</div>}
+          </SectionCard>
+        </div>
 
         {p.history.length > 0 && (
-          <Section title="History">
-            <ul className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
+          <SectionCard id="history" title="History" count={p.history.length} {...section("history")}>
+            <ul className="m-0 grid list-none gap-2 p-0 text-sm text-ws-ink2">
               {p.history.map((h) => (
-                <li key={h.id}>
-                  <b>{h.who}</b> {h.text} <span className="text-ws-ink3">· {relativeTime(h.at, p.now)}</span>
-                </li>
+                <HistoryRow key={h.id} note={h} now={p.now} />
               ))}
             </ul>
-          </Section>
+          </SectionCard>
         )}
       </div>
     </aside>
@@ -460,7 +450,14 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
     return () => window.removeEventListener("keydown", onKey);
   }, [key, menuOpen]);
 
-  const who = (accountId: string | null) => nameOf({ names }, accountId ? { connectionId: ref.connectionId, accountId } : null);
+  const me = useWorkspace((s) => s.me);
+  const collapsed = usePrefs((s) => s.peekCollapsed);
+  const who = (accountId: string | null) => (accountId === null ? "Unassigned" : displayName(names, accountId));
+  const isMine = (accountId: string | null) => accountId !== null && me.some((m) => m.accountId === accountId);
+  const jump = (id: PeekSectionId) => {
+    usePrefs.getState().setPeekSection(id, false);
+    requestAnimationFrame(() => document.getElementById(`peek-${id}`)?.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" }));
+  };
   const drafts = draftsForItem({ proposals }, ref).reverse();
   const pendingMove = drafts.find((d) => d.intent.type === "transition");
   const proposedMove = pendingMove ? (draftStatus(pendingMove, wf)?.name ?? pendingMove.label) : null;
@@ -468,8 +465,8 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
   const moves = known && opaque ? known : wf && !checking ? targetsFor(wf, item) : [];
 
   const comments: Note[] = loadedComments
-    ? loadedComments.map((c) => ({ id: c.id, at: c.created, who: who(c.author.accountId), text: docText(c.body), doc: c.body }))
-    : commentNotes(events, who);
+    ? loadedComments.map((c) => ({ id: c.id, at: c.created, who: displayName(names, c.author.accountId), text: docText(c.body), doc: c.body, mine: isMine(c.author.accountId) }))
+    : commentNotes(events, (id) => displayName(names, id), isMine);
   const description = item.body.blocks.length ? <WorkDocView doc={item.body} /> : <p className="m-0 text-ws-ink3">No description.</p>;
 
   const move = async (to: StatusDef) => {
@@ -501,16 +498,19 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       onMotionEnd={onMotionEnd}
       comments={comments}
       commentsLoading={!loadedComments}
-      history={historyNotes(events, who)}
+      history={historyNotes(events, (id) => displayName(names, id), isMine)}
+      collapsed={collapsed}
+      onToggleSection={(id) => usePrefs.getState().setPeekSection(id, !collapsed[id])}
+      onJump={jump}
       description={description}
       banner={readOnly ? <PeekNotice unwatched={!!item.unwatched} containerName={containerName} connectionId={ref.connectionId} containerId={item.container.externalId} /> : undefined}
       drafts={
         !readOnly && drafts.length > 0 ? (
-          <Section title="Drafts waiting" count={drafts.length}>
+          <SectionCard id="drafts" title="Drafts waiting" count={drafts.length}>
             {drafts.map((p) => (
               <LiveDraftCard key={p.id} proposal={p} jump={false} />
             ))}
-          </Section>
+          </SectionCard>
         ) : null
       }
       composer={readOnly ? null : <Composer item={item} disabled={!backend} />}
