@@ -199,8 +199,9 @@ function Composer({ item, disabled }: { item: WorkItem; disabled: boolean }) {
     setProblem(null);
     try {
       const linked = liveMentions(text, mentions);
+      const retry = created.current !== null;
       created.current ??= (await backend.proposalsCreate({ type: "comment", item: item.item, body: docFromText(text) })).id;
-      if (linked.length) await backend.proposalsEdit(created.current, { type: "comment", body: text, mentions: linked });
+      if (retry || linked.length) await backend.proposalsEdit(created.current, { type: "comment", body: text, mentions: linked });
       created.current = null;
       await useWorkspace.getState().refreshProposals();
       setText("");
