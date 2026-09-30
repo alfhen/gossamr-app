@@ -21,6 +21,28 @@ describe("PaletteView", () => {
     expect(out).toMatch(/id="palette-a"[^>]*aria-selected="false"/);
   });
 
+  it("puts a heading where the group changes, with an icon and hint on each entry", () => {
+    const c = (id: string, group: Command["group"], label: string, extra: Partial<Command> = {}): Command => ({ id, group, label, run: vi.fn(), ...extra });
+    const out = palette([c("a", "Projects", "DevOps", { icon: "◧", hint: "current" }), c("b", "Projects", "Webshop"), c("c", "Go to", "Open drafts", { hint: "3 pending" })]);
+    expect(out.match(/role="presentation"/g)).toHaveLength(2);
+    expect(out.indexOf("Projects")).toBeLessThan(out.indexOf("DevOps"));
+    expect(out.indexOf("Go to")).toBeGreaterThan(out.indexOf("Webshop"));
+    expect(out).toContain("◧");
+    expect(out).toContain("3 pending");
+  });
+
+  it("lists its key hints in the footer, and says what a prompt step expects", () => {
+    const out = palette([command("a", "x")]);
+    for (const hint of ["move", "select", "close"]) expect(out).toContain(hint);
+    const back = renderToStaticMarkup(
+      <PaletteView query="" results={[]} active={0} placeholder="Title" empty="Type a title" hints={["↵ select", "esc back"]} onQuery={vi.fn()} onActive={vi.fn()} onRun={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(back).toContain('placeholder="Title"');
+    expect(back).toContain("Type a title");
+    expect(back).toContain("back");
+    expect(back).not.toContain("Nothing matches");
+  });
+
   it("says so when nothing matches", () => {
     const out = palette([], 0, "zzz");
     expect(out).toContain("Nothing matches");

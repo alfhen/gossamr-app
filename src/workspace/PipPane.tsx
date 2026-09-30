@@ -17,7 +17,7 @@ export const PIP_INPUT_ID = "pip-input";
 export const WORKSPACE_CONVERSATION = "workspace";
 
 /** The screen as Pip is told about it, read fresh so a question is asked about what is on screen now. */
-function liveScreen() {
+export function liveScreen() {
   const tabs = useTabs.getState();
   const ws = useWorkspace.getState();
   const tab = tabs.tabs.find((t) => t.id === tabs.activeId) ?? tabs.tabs[0];

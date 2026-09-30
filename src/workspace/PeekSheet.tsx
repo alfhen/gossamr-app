@@ -5,13 +5,13 @@ import { docFromText, docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import { liveMentions, type Mention } from "../lib/mentions";
 import { relativeTime } from "../lib/views";
-import type { StatusDef, WorkEvent, WorkItem } from "../types";
-import { draftsForItem, knownMoves, nameOf, useWorkspace, workflowOfItem } from "../workspaceStore";
-import { daysQuiet, movesAreOpaque, targetsFor } from "./boardLogic";
+import type { ItemRef, StatusDef, WorkEvent, WorkItem } from "../types";
+import { draftsForItem, knownMoves, nameOf, useItemsByFilter, useWorkspace, workflowOfItem } from "../workspaceStore";
+import { draftStatus, movesAreOpaque, targetsFor } from "./boardLogic";
 import { LiveDraftCard } from "./DraftCard";
 import { canvasElement, showMe } from "./jump";
 import { usePrefs } from "./prefs";
-import { commentNotes, historyNotes, linkRows, type LinkRow, type Note } from "./peekLogic";
+import { commentNotes, historyNotes, linkRows, parentCrumb, subtasksOf, type Crumb, type LinkRow, type Note, type Subtasks } from "./peekLogic";
 import { useTabs } from "./tabsStore";
 import { WorkDocView } from "./WorkDocView";
 
@@ -22,6 +22,10 @@ const CATEGORY_TONE = {
 } as const;
 
 const NO_EVENTS: WorkEvent[] = [];
+
+const EXIT_MS = 160;
+
+const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 const chip = "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-sm font-semibold";
 
@@ -58,31 +62,74 @@ export interface PeekViewProps {
   onMenu(open: boolean): void;
   onMove(to: StatusDef): void;
   onLink(link: LinkRow): void;
+  onOpen(ref: ItemRef): void;
   onClose(): void;
+  /** The epic or parent above the item. */
+  crumb?: Crumb | null;
+  subtasks?: Subtasks;
+  /** Where a pending draft would move the item. */
+  proposedMove?: string | null;
+  wide?: boolean;
+  /** How the sheet arrives or leaves; `none` while browsing from one item to the next. */
+  motion?: "in" | "out" | "none";
+  onWide?(): void;
+  onMotionEnd?(): void;
 }
+
+const MOTION = { in: "ws-peek-in", out: "ws-peek-out", none: "" } as const;
 
 export function PeekView(p: PeekViewProps) {
   const { item } = p;
-  const days = daysQuiet(item, p.now);
+  const blockedBy = p.links.filter((l) => l.kind === "blockedBy");
+  const open = p.onOpen;
   return (
     <aside
       id="peek-sheet"
       aria-label={`Details for ${item.item.key}`}
-      className="ws-legacy absolute inset-y-0 right-0 z-20 flex w-[min(460px,94%)] flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)]"
+      onAnimationEnd={(ev) => ev.target === ev.currentTarget && p.onMotionEnd?.()}
+      className={`ws-legacy absolute inset-y-0 right-0 z-20 flex flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] motion-safe:transition-[width] motion-safe:duration-200 ${
+        p.wide ? "w-full" : "w-[min(520px,94%)]"
+      } ${MOTION[p.motion ?? "none"]}`}
     >
-      <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-4 py-2">
+      <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-3.5 py-2">
         <span className="font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
         <span className="text-xs text-ws-ink3">
-          <kbd className="font-sans">Esc</kbd> to close
+          peek · <kbd className="font-sans">j</kbd> <kbd className="font-sans">k</kbd> browse · <kbd className="font-sans">esc</kbd> close
         </span>
-        <button type="button" aria-label="Close details" onClick={p.onClose} className="ml-auto rounded px-1.5 text-lg leading-none text-ws-ink3 hover:bg-ws-hover">
+        {p.onWide && (
+          <button
+            type="button"
+            aria-label={p.wide ? "Shrink details" : "Expand details"}
+            aria-pressed={!!p.wide}
+            title={p.wide ? "Shrink" : "Expand"}
+            onClick={p.onWide}
+            className="ml-auto grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover"
+          >
+            {p.wide ? "⤡" : "⤢"}
+          </button>
+        )}
+        <button
+          type="button"
+          aria-label="Close details"
+          onClick={p.onClose}
+          className={`${p.onWide ? "" : "ml-auto "}grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover`}
+        >
           ×
         </button>
       </div>
-      <div className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-4 pt-4 pb-6">
+      <div className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] pt-4 pb-24">
         <div className="grid gap-2.5">
-          <h2 className="m-0 text-xl leading-tight font-semibold [overflow-wrap:anywhere]">{item.title}</h2>
-          <div className="flex flex-wrap items-center gap-1.5">
+          {p.crumb && (
+            <p className="m-0 font-mono text-sm text-ws-ink3">
+              <button type="button" onClick={() => open(p.crumb!.ref)} title={p.crumb.title ?? undefined} className="font-semibold text-ws-accent hover:underline">
+                {p.crumb.ref.key}
+              </button>
+              {" / "}
+              {item.item.key}
+            </p>
+          )}
+          <h2 className="m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{item.title}</h2>
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-ws-ink2">
             <div className="relative">
               <button
                 type="button"
@@ -108,15 +155,23 @@ export function PeekView(p: PeekViewProps) {
                 </ul>
               )}
             </div>
-            <span className={`${chip} bg-ws-hover font-normal text-ws-ink2`}>{p.assignee}</span>
-            {item.priority && <span className={`${chip} bg-ws-hover font-normal text-ws-ink2`}>{item.priority}</span>}
+            {p.proposedMove && <span className={`${chip} border border-dashed border-ws-pip bg-ws-pip-soft font-medium text-ws-pip`}>→ {p.proposedMove} (proposed)</span>}
+            <span>
+              Assignee <b className="font-semibold text-ws-ink">{p.assignee}</b>
+            </span>
+            {item.priority && (
+              <span>
+                Priority <b className="font-semibold text-ws-ink">{item.priority}</b>
+              </span>
+            )}
+            <span className="capitalize">{item.kind}</span>
             {item.labels.map((l) => (
               <span key={l} className={`${chip} bg-ws-accent-soft font-normal text-ws-accent`}>
                 {l}
               </span>
             ))}
-            <span className="ml-auto text-sm text-ws-ink3" title={`Last updated ${new Date(item.updated).toLocaleString()}`}>
-              {days === 0 ? "Updated today" : `${days} day${days === 1 ? "" : "s"} quiet`}
+            <span className="text-ws-ink3" title={`Last updated ${new Date(item.updated).toLocaleString()}`}>
+              Updated {relativeTime(item.updated, p.now)}
             </span>
           </div>
           {p.notice && (
@@ -124,11 +179,56 @@ export function PeekView(p: PeekViewProps) {
               {p.notice}
             </p>
           )}
+          {blockedBy.length > 0 && (
+            <p className="m-0 text-ws-blocked">
+              <span aria-hidden>⛓ </span>Blocked by{" "}
+              {blockedBy.map((l, i) => (
+                <span key={itemKey(l.ref)}>
+                  {i > 0 && ", "}
+                  <button type="button" onClick={() => p.onLink(l)} title={l.title ?? undefined} className="font-mono font-semibold hover:underline">
+                    {l.ref.key}
+                  </button>
+                </span>
+              ))}
+            </p>
+          )}
         </div>
 
         {p.drafts}
 
         <Section title="Description">{p.description}</Section>
+
+        {p.subtasks && p.subtasks.rows.length > 0 && (
+          <Section title="Subtasks" count={p.subtasks.rows.length}>
+            <div className="flex items-center gap-2 text-sm text-ws-ink3">
+              <div
+                role="progressbar"
+                aria-label="Subtasks done"
+                aria-valuemin={0}
+                aria-valuemax={p.subtasks.rows.length}
+                aria-valuenow={p.subtasks.done}
+                className="h-1 flex-1 overflow-hidden rounded-full bg-ws-hover"
+              >
+                <div className="h-full bg-ws-done" style={{ width: `${(p.subtasks.done / p.subtasks.rows.length) * 100}%` }} />
+              </div>
+              <span>
+                {p.subtasks.done}/{p.subtasks.rows.length} done
+              </span>
+            </div>
+            <ul className="m-0 list-none p-0">
+              {p.subtasks.rows.map((r) => (
+                <li key={itemKey(r.ref)} className="border-b border-ws-sep">
+                  <button type="button" onClick={() => open(r.ref)} className="flex w-full items-center gap-2 py-1.5 text-left hover:bg-ws-hover">
+                    <input type="checkbox" checked={r.done} disabled readOnly aria-label={r.done ? "Done" : "Not done"} className="shrink-0" />
+                    <span className="shrink-0 font-mono text-sm font-semibold text-ws-ink2">{r.ref.key}</span>
+                    <span className={`min-w-0 flex-1 truncate ${r.done ? "text-ws-ink3 line-through" : ""}`}>{r.title}</span>
+                    <span className={`${chip} shrink-0 py-0 text-xs ${CATEGORY_TONE[r.status.category]}`}>{r.status.name}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
 
         {p.links.length > 0 && (
           <Section title="Links" count={p.links.length}>
@@ -249,21 +349,57 @@ function Composer({ item, disabled }: { item: WorkItem; disabled: boolean }) {
   );
 }
 
-/** Overlays the canvas for the item in `useTabs().selected`. */
+/** Overlays the canvas for the item in `useTabs().selected`, sliding in when it first opens and out when it closes. */
 export function PeekSheet() {
   const selected = useTabs((s) => s.selected);
   const bulk = useTabs((s) => s.marked.length > 1);
-  const item = useWorkspace((s) => (selected ? s.items[selected] : undefined));
-  if (!item || bulk) return null;
-  return <OpenPeek key={itemKey(item.item)} item={item} />;
+  const current = useWorkspace((s) => (selected ? s.items[selected] : undefined));
+  const item = bulk ? undefined : current;
+  const [held, setHeld] = useState<WorkItem | null>(null);
+  const [entering, setEntering] = useState(false);
+  const [wide, setWide] = useState(false);
+
+  if (item && held !== item) {
+    setHeld(item);
+    if (!held) setEntering(true);
+  }
+  const leaving = !item && held !== null;
+
+  useEffect(() => {
+    if (!leaving) return;
+    const done = () => {
+      setHeld(null);
+      setEntering(false);
+      setWide(false);
+    };
+    if (reducedMotion()) {
+      done();
+      return;
+    }
+    const timer = setTimeout(done, EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [leaving]);
+
+  const shown = item ?? held;
+  if (!shown) return null;
+  return <OpenPeek key={itemKey(shown.item)} item={shown} motion={leaving ? "out" : entering ? "in" : "none"} wide={wide} onWide={() => setWide((w) => !w)} onMotionEnd={() => setEntering(false)} />;
 }
 
-function OpenPeek({ item }: { item: WorkItem }) {
+interface Motion {
+  motion: "in" | "out" | "none";
+  wide: boolean;
+  onWide(): void;
+  onMotionEnd(): void;
+}
+
+function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem } & Motion) {
   const ref = item.item;
   const key = itemKey(ref);
   const backend = useBackend();
   const all = useWorkspace((s) => s.items);
   const containers = useWorkspace((s) => s.containers);
+  const childFilter = useMemo(() => ({ type: "parent" as const, item: ref }), [key]);
+  const children = useItemsByFilter(childFilter);
   const loaded = useWorkspace((s) => s.events[key]);
   const loadedComments = useWorkspace((s) => s.comments[key]);
   const known = useWorkspace((s) => knownMoves(s, item));
@@ -308,6 +444,8 @@ function OpenPeek({ item }: { item: WorkItem }) {
 
   const who = (accountId: string | null) => nameOf({ names }, accountId ? { connectionId: ref.connectionId, accountId } : null);
   const drafts = draftsForItem({ proposals }, ref).reverse();
+  const pendingMove = drafts.find((d) => d.intent.type === "transition");
+  const proposedMove = pendingMove ? (draftStatus(pendingMove, wf)?.name ?? pendingMove.label) : null;
   const checking = opaque && known === null && !movesFailed;
   const moves = known && opaque ? known : wf && !checking ? targetsFor(wf, item) : [];
 
@@ -335,6 +473,13 @@ function OpenPeek({ item }: { item: WorkItem }) {
       checking={checking}
       menuOpen={menuOpen}
       links={linkRows(item, all)}
+      crumb={parentCrumb(item, all)}
+      subtasks={subtasksOf(children)}
+      proposedMove={proposedMove}
+      motion={motion}
+      wide={wide}
+      onWide={onWide}
+      onMotionEnd={onMotionEnd}
       comments={comments}
       commentsLoading={!loadedComments}
       history={historyNotes(events, who)}
@@ -353,6 +498,7 @@ function OpenPeek({ item }: { item: WorkItem }) {
       onMenu={setMenuOpen}
       onMove={(s) => void move(s)}
       onLink={(l) => showMe(l.ref)}
+      onOpen={showMe}
       onClose={() => useTabs.getState().select(null)}
     />
   );

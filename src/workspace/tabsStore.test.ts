@@ -79,6 +79,33 @@ describe("workspace tabs", () => {
   });
 });
 
+describe("the peek and the route", () => {
+  it("closes when the route changes, and only then", () => {
+    s().select("mock:CA-402");
+    s().setRoute("workspace");
+    expect(s().selected).toBe("mock:CA-402");
+    s().setRoute("activity");
+    expect(s().selected).toBeNull();
+    s().select("mock:CA-402");
+    s().setRoute("settings");
+    expect(s().selected).toBeNull();
+  });
+
+  it("closes when a view or project brings the person back from another route", () => {
+    s().setRoute("activity");
+    s().select("mock:CA-402");
+    s().setView("board");
+    expect(s()).toMatchObject({ route: "workspace", selected: null });
+  });
+
+  it("lets a jump select after switching route", () => {
+    s().setRoute("activity");
+    s().setRoute("workspace");
+    s().select("mock:CA-402");
+    expect(s().selected).toBe("mock:CA-402");
+  });
+});
+
 describe("ticking cards", () => {
   const order = ["a", "b", "c", "d"];
 
