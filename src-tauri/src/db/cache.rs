@@ -245,6 +245,16 @@ impl Db {
         Ok(self.conn.execute("DELETE FROM items WHERE connection_id = ?1 AND synced_at < ?2", params![connection_id, before])?)
     }
 
+    /// Drops one item and its events, for an issue the tracker says is gone. A 404 can also mean access was revoked, so
+    /// nothing about the item may stay readable.
+    pub fn forget_item(&self, item: &ItemRef) -> Result<bool> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM cache_events WHERE connection_id = ?1 AND item_id = ?2", params![item.connection_id, item.external_id])?;
+        let removed = tx.execute("DELETE FROM items WHERE connection_id = ?1 AND external_id = ?2", params![item.connection_id, item.external_id])? > 0;
+        tx.commit()?;
+        Ok(removed)
+    }
+
     /// Replaces the connection's containers and their workflows.
     pub fn replace_containers(&self, connection_id: &str, containers: &[Container], synced_at: &str) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
@@ -468,6 +478,27 @@ mod tests {
         assert_eq!(db.item(&other).unwrap().unwrap().status.id, "todo");
         assert_eq!(db.item(&item_ref("1")).unwrap().unwrap().status.id, "doing");
         assert!(db.item(&item_ref("9")).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_forgotten_item_leaves_the_cache_and_only_that_one() {
+        let db = Db::in_memory().unwrap();
+        seed(&db);
+        assert!(db.forget_item(&item_ref("1")).unwrap());
+        assert!(!db.forget_item(&item_ref("1")).unwrap());
+        assert!(db.item(&item_ref("1")).unwrap().is_none());
+        assert!(db.item(&item_ref("2")).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_forgotten_item_leaves_no_events_in_the_feed_or_the_item_history() {
+        let db = feed_db();
+        assert_eq!(db.events_for_item(&item_ref("1"), 10).unwrap().len(), 2);
+        db.forget_item(&item_ref("1")).unwrap();
+        assert!(db.events_for_item(&item_ref("1"), 10).unwrap().is_empty());
+        let feed = db.feed("c", &FeedQuery { include_unwatched: true, ..Default::default() }, &Visible::All).unwrap();
+        assert!(feed.entries.iter().all(|e| e.item.external_id != "1"), "{:?}", feed.entries.iter().map(|e| &e.id).collect::<Vec<_>>());
+        assert_eq!(db.events_for_item(&item_ref("2"), 10).unwrap().len(), 2, "other items keep theirs");
     }
 
     #[test]

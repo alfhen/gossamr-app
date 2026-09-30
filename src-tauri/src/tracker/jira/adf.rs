@@ -4,36 +4,110 @@ use serde_json::{json, Value};
 
 use crate::domain::{Block, Doc, Inline, Mark, PersonRef};
 
-/// Flattens an ADF document to readable plain text. Mentions become `@Name`.
+/// Real documents nest a handful of levels; anything deeper is cut off rather than risking the stack.
+const MAX_DEPTH: usize = 40;
+
+const INLINE_NODES: &[&str] = &["text", "mention", "emoji", "hardBreak", "inlineCard", "status", "date", "mediaInline", "placeholder", "inlineExtension"];
+
+/// Flattens an ADF document to readable plain text. Mentions become `@Name`. Node types it doesn't know keep
+/// whatever text they carry, and a plain string stands for itself.
 pub fn to_text(doc: &Value) -> String {
+    if let Some(s) = doc.as_str() {
+        return s.trim().to_string();
+    }
     let mut out = String::new();
-    walk(doc, &mut out);
+    walk(doc, &mut out, 0);
     out.trim().to_string()
 }
 
-fn walk(node: &Value, out: &mut String) {
+fn attr<'a>(node: &'a Value, key: &str) -> Option<&'a str> {
+    node.pointer(&format!("/attrs/{key}")).and_then(Value::as_str)
+}
+
+/// A `date` node's timestamp (milliseconds since the epoch, as a string) as `YYYY-MM-DD`.
+fn date_text(node: &Value) -> String {
+    let millis = node.pointer("/attrs/timestamp").and_then(|t| t.as_str().and_then(|s| s.parse::<i64>().ok()).or_else(|| t.as_i64()));
+    millis.and_then(chrono::DateTime::from_timestamp_millis).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default()
+}
+
+fn walk(node: &Value, out: &mut String, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
     match node.get("type").and_then(Value::as_str).unwrap_or_default() {
         "text" => out.push_str(node.get("text").and_then(Value::as_str).unwrap_or_default()),
-        "mention" => out.push_str(node.pointer("/attrs/text").and_then(Value::as_str).unwrap_or("@someone")),
-        "emoji" => out.push_str(node.pointer("/attrs/text").and_then(Value::as_str).unwrap_or_default()),
-        "inlineCard" | "blockCard" => out.push_str(node.pointer("/attrs/url").and_then(Value::as_str).unwrap_or_default()),
-        "hardBreak" => out.push('\n'),
-        "listItem" => {
-            out.push_str("• ");
-            children(node, out);
-            ensure_newline(out);
-        }
-        "paragraph" | "heading" | "codeBlock" | "blockquote" | "rule" | "panel" | "tableRow" => {
-            children(node, out);
+        "mention" => out.push_str(attr(node, "text").unwrap_or("@someone")),
+        "emoji" => out.push_str(attr(node, "text").or_else(|| attr(node, "shortName")).unwrap_or_default()),
+        "status" | "placeholder" => out.push_str(attr(node, "text").unwrap_or_default()),
+        "date" => out.push_str(&date_text(node)),
+        "inlineCard" => out.push_str(attr(node, "url").unwrap_or_default()),
+        "blockCard" | "embedCard" => {
+            out.push_str(attr(node, "url").unwrap_or_default());
             ensure_blank_line(out);
         }
-        _ => children(node, out),
+        "media" | "mediaInline" => out.push_str(attr(node, "alt").unwrap_or_default()),
+        "hardBreak" => out.push('\n'),
+        "listItem" => item(node, "• ", out, depth),
+        "taskItem" => item(node, if attr(node, "state") == Some("DONE") { "☑ " } else { "☐ " }, out, depth),
+        "decisionItem" => item(node, "→ ", out, depth),
+        "tableRow" => {
+            let cells: Vec<String> = node.get("content").and_then(Value::as_array).into_iter().flatten().map(|c| cell_text(c, depth + 1)).collect();
+            out.push_str(&cells.join(" | "));
+            ensure_newline(out);
+        }
+        "table" => {
+            children(node, out, depth);
+            ensure_blank_line(out);
+        }
+        "expand" | "nestedExpand" => {
+            if let Some(title) = attr(node, "title") {
+                out.push_str(title);
+                ensure_newline(out);
+            }
+            children(node, out, depth);
+        }
+        "unsupportedBlock" | "unsupportedInline" => {
+            if let Some(original) = node.pointer("/attrs/originalValue") {
+                walk(original, out, depth + 1);
+            }
+        }
+        "paragraph" | "heading" | "codeBlock" | "blockquote" | "rule" | "panel" | "mediaSingle" | "mediaGroup" => {
+            children(node, out, depth);
+            ensure_blank_line(out);
+        }
+        _ => {
+            let blocky = node.get("content").and_then(Value::as_array).is_some_and(|c| c.iter().any(|n| !is_inline(n)));
+            out.push_str(attr(node, "text").unwrap_or_default());
+            if blocky {
+                ensure_newline(out);
+            }
+            children(node, out, depth);
+            if blocky {
+                ensure_newline(out);
+            }
+        }
     }
 }
 
-fn children(node: &Value, out: &mut String) {
+fn is_inline(node: &Value) -> bool {
+    INLINE_NODES.contains(&node["type"].as_str().unwrap_or_default())
+}
+
+fn item(node: &Value, marker: &str, out: &mut String, depth: usize) {
+    out.push_str(marker);
+    children(node, out, depth);
+    ensure_newline(out);
+}
+
+fn cell_text(cell: &Value, depth: usize) -> String {
+    let mut out = String::new();
+    walk(cell, &mut out, depth);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn children(node: &Value, out: &mut String, depth: usize) {
     for c in node.get("content").and_then(Value::as_array).into_iter().flatten() {
-        walk(c, out);
+        walk(c, out, depth + 1);
     }
 }
 
@@ -53,38 +127,44 @@ fn ensure_blank_line(out: &mut String) {
 /// People mentioned in the document, with the name as written (without the leading `@`).
 pub fn mentioned(doc: &Value) -> Vec<crate::model::Mentioned> {
     let mut out = Vec::new();
-    collect_mentioned(doc, &mut out);
+    collect_mentioned(doc, &mut out, 0);
     out
 }
 
-fn collect_mentioned(node: &Value, out: &mut Vec<crate::model::Mentioned>) {
+fn collect_mentioned(node: &Value, out: &mut Vec<crate::model::Mentioned>, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
     if node.get("type").and_then(Value::as_str) == Some("mention") {
-        if let (Some(id), Some(text)) = (node.pointer("/attrs/id").and_then(Value::as_str), node.pointer("/attrs/text").and_then(Value::as_str)) {
+        if let (Some(id), Some(text)) = (attr(node, "id"), attr(node, "text")) {
             if !out.iter().any(|m| m.account_id == id) {
                 out.push(crate::model::Mentioned { account_id: id.into(), name: text.trim_start_matches('@').into() });
             }
         }
     }
     for c in node.get("content").and_then(Value::as_array).into_iter().flatten() {
-        collect_mentioned(c, out);
+        collect_mentioned(c, out, depth + 1);
     }
 }
 
 /// Account ids mentioned anywhere in the document.
 pub fn mentions(doc: &Value) -> Vec<String> {
     let mut ids = Vec::new();
-    collect_mentions(doc, &mut ids);
+    collect_mentions(doc, &mut ids, 0);
     ids
 }
 
-fn collect_mentions(node: &Value, ids: &mut Vec<String>) {
+fn collect_mentions(node: &Value, ids: &mut Vec<String>, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
     if node.get("type").and_then(Value::as_str) == Some("mention") {
-        if let Some(id) = node.pointer("/attrs/id").and_then(Value::as_str) {
+        if let Some(id) = attr(node, "id") {
             ids.push(id.to_string());
         }
     }
     for c in node.get("content").and_then(Value::as_array).into_iter().flatten() {
-        collect_mentions(c, ids);
+        collect_mentions(c, ids, depth + 1);
     }
 }
 
@@ -127,34 +207,48 @@ pub fn with_files(mut doc: Value, files: &[crate::model::Uploaded]) -> Value {
 /// their shape.
 pub fn to_doc(doc: &Value, connection_id: &str) -> Doc {
     let mut blocks = Vec::new();
-    push_block_children(doc, connection_id, &mut blocks);
+    if let Some(text) = doc.as_str() {
+        return Doc::paragraph(text);
+    }
+    push_block_children(doc, connection_id, &mut blocks, 0);
     Doc { blocks }
 }
 
-fn push_block_children(node: &Value, conn: &str, out: &mut Vec<Block>) {
+fn push_block_children(node: &Value, conn: &str, out: &mut Vec<Block>, depth: usize) {
     for child in node.get("content").and_then(Value::as_array).into_iter().flatten() {
-        push_block(child, conn, out);
+        push_block(child, conn, out, depth + 1);
     }
 }
 
-fn push_block(node: &Value, conn: &str, out: &mut Vec<Block>) {
-    let inlines = || {
+fn plain(text: String) -> Inline {
+    Inline::Text { text, marks: vec![] }
+}
+
+fn push_block(node: &Value, conn: &str, out: &mut Vec<Block>, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let inlines = |prefix: &str| {
         let mut content = Vec::new();
+        if !prefix.is_empty() {
+            content.push(plain(prefix.into()));
+        }
         for c in node.get("content").and_then(Value::as_array).into_iter().flatten() {
-            push_inline(c, conn, &mut content);
+            push_inline(c, conn, &mut content, depth + 1);
         }
         content
     };
     let blocks = || {
         let mut content = Vec::new();
-        push_block_children(node, conn, &mut content);
+        push_block_children(node, conn, &mut content, depth);
         content
     };
-    match node.get("type").and_then(Value::as_str).unwrap_or_default() {
-        "paragraph" => out.push(Block::Paragraph { content: inlines() }),
+    let kind = node.get("type").and_then(Value::as_str).unwrap_or_default();
+    match kind {
+        "paragraph" => out.push(Block::Paragraph { content: inlines("") }),
         "heading" => {
             let level = node.pointer("/attrs/level").and_then(Value::as_u64).unwrap_or(1).clamp(1, 6) as u8;
-            out.push(Block::Heading { level, content: inlines() });
+            out.push(Block::Heading { level, content: inlines("") });
         }
         kind @ ("bulletList" | "orderedList") => {
             let items = node
@@ -164,7 +258,7 @@ fn push_block(node: &Value, conn: &str, out: &mut Vec<Block>) {
                 .flatten()
                 .map(|item| {
                     let mut content = Vec::new();
-                    push_block_children(item, conn, &mut content);
+                    push_block_children(item, conn, &mut content, depth + 1);
                     content
                 })
                 .collect();
@@ -172,16 +266,63 @@ fn push_block(node: &Value, conn: &str, out: &mut Vec<Block>) {
         }
         "blockquote" | "panel" => out.push(Block::Quote { content: blocks() }),
         "codeBlock" => {
-            let language = node.pointer("/attrs/language").and_then(Value::as_str).filter(|l| !l.is_empty()).map(String::from);
+            let language = attr(node, "language").filter(|l| !l.is_empty()).map(String::from);
             out.push(Block::Code { language, text: to_text(node) });
         }
         "rule" => out.push(Block::Rule),
-        _ => out.extend(blocks()),
+        "taskItem" => out.push(Block::Paragraph { content: inlines(if attr(node, "state") == Some("DONE") { "☑ " } else { "☐ " }) }),
+        "decisionItem" => out.push(Block::Paragraph { content: inlines("→ ") }),
+        "tableRow" => {
+            let text = cell_text(node, depth);
+            if !text.is_empty() {
+                out.push(Block::Paragraph { content: vec![plain(text.replace('\n', " "))] });
+            }
+        }
+        "expand" | "nestedExpand" => {
+            if let Some(title) = attr(node, "title").filter(|t| !t.is_empty()) {
+                out.push(Block::Paragraph { content: vec![Inline::Text { text: title.into(), marks: vec![Mark::Bold] }] });
+            }
+            out.extend(blocks());
+        }
+        "unsupportedBlock" => {
+            if let Some(original) = node.pointer("/attrs/originalValue") {
+                push_block(original, conn, out, depth + 1);
+            }
+        }
+        "media" => {
+            if let Some(alt) = attr(node, "alt").filter(|a| !a.is_empty()) {
+                out.push(Block::Paragraph { content: vec![plain(format!("📎 {alt}"))] });
+            }
+        }
+        "blockCard" | "embedCard" => {
+            if let Some(url) = attr(node, "url").filter(|u| !u.is_empty()) {
+                out.push(Block::Paragraph { content: vec![Inline::Link { href: url.into(), text: url.into() }] });
+            }
+        }
+        _ => {
+            let has_inline = node.get("content").and_then(Value::as_array).is_some_and(|c| c.iter().any(is_inline));
+            if !INLINE_NODES.contains(&kind) {
+                if let Some(text) = attr(node, "text").filter(|t| !t.is_empty()) {
+                    out.push(Block::Paragraph { content: vec![plain(text.into())] });
+                }
+            }
+            if INLINE_NODES.contains(&kind) {
+                let mut content = Vec::new();
+                push_inline(node, conn, &mut content, depth);
+                out.push(Block::Paragraph { content });
+            } else if has_inline {
+                out.push(Block::Paragraph { content: inlines("") });
+            } else {
+                out.extend(blocks());
+            }
+        }
     }
 }
 
-fn push_inline(node: &Value, conn: &str, out: &mut Vec<Inline>) {
-    let attr = |k: &str| node.pointer(&format!("/attrs/{k}")).and_then(Value::as_str);
+fn push_inline(node: &Value, conn: &str, out: &mut Vec<Inline>, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
     match node.get("type").and_then(Value::as_str).unwrap_or_default() {
         "text" => {
             let text = node.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -205,19 +346,26 @@ fn push_inline(node: &Value, conn: &str, out: &mut Vec<Inline>) {
             });
         }
         "mention" => {
-            let name = attr("text").unwrap_or("@someone").trim_start_matches('@').to_string();
-            match attr("id") {
+            let name = attr(node, "text").unwrap_or("@someone").trim_start_matches('@').to_string();
+            match attr(node, "id") {
                 Some(id) => out.push(Inline::Mention { person: PersonRef { connection_id: conn.into(), account_id: id.into() }, name }),
-                None => out.push(Inline::Text { text: format!("@{name}"), marks: vec![] }),
+                None => out.push(plain(format!("@{name}"))),
             }
         }
         "hardBreak" => out.push(Inline::LineBreak),
-        "emoji" => out.push(Inline::Text { text: attr("text").unwrap_or_default().into(), marks: vec![] }),
+        "emoji" => out.push(plain(attr(node, "text").or_else(|| attr(node, "shortName")).unwrap_or_default().into())),
         "inlineCard" => {
-            let url = attr("url").unwrap_or_default();
+            let url = attr(node, "url").unwrap_or_default();
             out.push(Inline::Link { href: url.into(), text: url.into() });
         }
-        _ => {}
+        "date" => out.push(plain(date_text(node))),
+        _ => {
+            let mut text = String::new();
+            walk(node, &mut text, depth);
+            if !text.is_empty() {
+                out.push(plain(text));
+            }
+        }
     }
 }
 
@@ -412,5 +560,76 @@ mod tests {
     fn empty_text_is_not_sent_to_jira() {
         let doc = Doc { blocks: vec![Block::Paragraph { content: vec![Inline::Text { text: String::new(), marks: vec![] }] }] };
         assert_eq!(from_doc(&doc)["content"][0]["content"], json!([]));
+    }
+
+    const EDGE_CASES: &str = include_str!("fixtures/adf_edge_cases.json");
+
+    #[test]
+    fn panels_tables_media_and_unknown_nodes_flatten_to_readable_text() {
+        let adf: Value = serde_json::from_str(EDGE_CASES).unwrap();
+        let text = to_text(&adf);
+        let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            lines,
+            [
+                "Careful here",
+                "Env | Owner",
+                "prod | @Ida",
+                "screenshot.png",
+                "IN REVIEW due 2026-09-30@someoneinline.png",
+                "☑ ship it",
+                "☐ tell people",
+                "Logs",
+                "stack trace",
+                "from the future",
+                "inside a node nobody knows",
+                "kept from an unsupported block",
+                "https://example.com/card",
+                "https://example.com/embed",
+                "Hello world",
+                "odd inline",
+            ]
+        );
+        assert_eq!(mentions(&adf), ["acc-7", "acc-8"], "a mention without a name still counts");
+    }
+
+    #[test]
+    fn the_same_document_degrades_to_blocks_without_losing_text() {
+        let adf: Value = serde_json::from_str(EDGE_CASES).unwrap();
+        let doc = to_doc(&adf, "c");
+        let text = doc.plain_text();
+        for needle in ["Careful here", "Env | Owner", "prod | @Ida", "📎 screenshot.png", "IN REVIEW", "2026-09-30", "☑ ship it", "☐ tell people", "Logs", "stack trace", "inside a node nobody knows", "kept from an unsupported block", "from the future", "https://example.com/card", "https://example.com/embed", "Hello world", "odd inline"] {
+            assert!(text.contains(needle), "missing {needle:?} in {text:?}");
+        }
+        assert!(matches!(doc.blocks[0], Block::Quote { .. }), "a panel reads as a quote");
+        let links: Vec<&str> = doc.blocks.iter().filter_map(|b| match b {
+            Block::Paragraph { content } => match content.as_slice() {
+                [Inline::Link { href, .. }] => Some(href.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }).collect();
+        assert_eq!(links, ["https://example.com/card", "https://example.com/embed"], "block cards stay links");
+    }
+
+    #[test]
+    fn a_plain_string_body_and_a_missing_one_never_fail() {
+        assert_eq!(to_text(&json!("just text")), "just text");
+        assert_eq!(to_doc(&json!("just text"), "c").plain_text(), "just text");
+        assert_eq!(to_doc(&Value::Null, "c"), Doc::default());
+        assert_eq!(to_doc(&json!({"type": "doc", "content": "not a list"}), "c"), Doc::default());
+        assert!(mentions(&json!(42)).is_empty());
+    }
+
+    #[test]
+    fn absurd_nesting_is_cut_off_instead_of_overflowing_the_stack() {
+        let mut node = json!({"type": "paragraph", "content": [{"type": "text", "text": "deep"}]});
+        for _ in 0..200 {
+            node = json!({"type": "blockquote", "content": [node]});
+        }
+        let adf = json!({"type": "doc", "content": [node]});
+        assert_eq!(to_text(&adf), "");
+        assert!(to_doc(&adf, "c").plain_text().is_empty());
+        assert!(mentions(&adf).is_empty());
     }
 }

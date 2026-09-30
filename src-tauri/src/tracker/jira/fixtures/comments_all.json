@@ -1,0 +1,8 @@
+{
+  "startAt": 0, "maxResults": 100, "total": 3,
+  "comments": [
+    {"id": "1", "author": {"accountId": "sam", "displayName": "Sam"}, "created": "2026-09-28T10:00:00.000+0200", "body": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "one"}]}]}},
+    {"id": "2", "created": "2026-09-28T11:00:00.000+0200", "body": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "from a deleted account"}]}]}},
+    {"id": "3", "author": {"accountId": "sam", "displayName": "Sam"}, "created": "2026-09-28T12:00:00.000+0200", "body": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "three"}]}]}}
+  ]
+}

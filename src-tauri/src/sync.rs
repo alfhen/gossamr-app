@@ -183,13 +183,13 @@ pub fn store(
     Ok(Stored { upserted, new_events: if announce { fresh } else { Vec::new() } })
 }
 
-/// An inbox event as the neutral event it is, or `None` for the kinds the neutral model has no name for.
+/// An inbox event as the neutral event it is, or `None` when its timestamp can't be read.
 pub(crate) fn domain_event(connection_id: &str, e: &NewEvent) -> Option<Event> {
     let kind = match e.kind {
         InboxKind::Mention | InboxKind::Comment => EventKind::CommentAdded,
         InboxKind::Status => EventKind::StatusChanged,
         InboxKind::Assigned => EventKind::Assigned,
-        InboxKind::Field => return None,
+        InboxKind::Field => EventKind::FieldChanged,
     };
     let at = DateTime::parse_from_rfc3339(&e.at).ok()?.with_timezone(&Utc);
     Some(Event {
@@ -208,6 +208,10 @@ fn payload_of(e: &NewEvent) -> serde_json::Value {
         InboxKind::Mention => serde_json::json!({ "text": e.text, "mention": true }),
         InboxKind::Status => match e.text.split_once(" → ") {
             Some((from, to)) => serde_json::json!({ "text": e.text, "from": from, "to": to }),
+            None => serde_json::json!({ "text": e.text }),
+        },
+        InboxKind::Field => match &e.field {
+            Some(f) => serde_json::json!({ "text": e.text, "field": f.label, "from": f.from, "to": f.to }),
             None => serde_json::json!({ "text": e.text }),
         },
         _ => serde_json::json!({ "text": e.text }),
@@ -259,7 +263,9 @@ impl Schedule {
         } else {
             self.failures = self.failures.saturating_add(1);
             let doubled = BACKOFF_BASE * 2_i32.saturating_pow(self.failures.min(16));
-            self.retry_at = Some(now + doubled.min(MAX_BACKOFF));
+            let backoff = now + doubled.min(MAX_BACKOFF);
+            // A retry the person forced must not shorten a deadline the tracker set.
+            self.retry_at = Some(self.retry_at.map_or(backoff, |at| at.max(backoff)));
         }
     }
 }
@@ -595,16 +601,51 @@ mod tests {
     }
 
     #[test]
-    fn only_kinds_with_a_neutral_name_become_domain_events() {
+    fn every_inbox_kind_becomes_a_domain_event() {
         let mut t = sample_ticket();
         t.history[0].items.push(crate::model::HistoryItem { field: "priority".into(), from: None, to: Some("High".into()), to_id: None });
         let events = derive(&t, "me");
         assert_eq!(events.len(), 3);
         let mapped: Vec<Event> = events.iter().filter_map(|e| domain_event(CONNECTION, e)).collect();
-        assert_eq!(mapped.iter().map(|e| e.kind).collect::<Vec<_>>(), [EventKind::StatusChanged, EventKind::CommentAdded]);
+        assert_eq!(mapped.iter().map(|e| e.kind).collect::<Vec<_>>(), [EventKind::StatusChanged, EventKind::FieldChanged, EventKind::CommentAdded]);
         assert_eq!(mapped[0].id, "h:500:status");
-        assert_eq!(mapped[1].payload["mention"], true, "a mention stays distinguishable from a plain comment");
+        assert_eq!(mapped[2].payload["mention"], true, "a mention stays distinguishable from a plain comment");
+        let p = &mapped[1].payload;
+        assert_eq!((p["field"].as_str(), p["from"].as_str(), p["to"].as_str()), (Some("Priority"), None, Some("High")));
         assert!(mapped[0].payload.get("mention").is_none());
+    }
+
+    #[test]
+    fn a_field_payload_keeps_the_values_as_recorded() {
+        let mut t = sample_ticket();
+        t.history[0].items = vec![
+            crate::model::HistoryItem { field: "summary".into(), from: Some("A".into()), to: Some("B → C".into()), to_id: None },
+            crate::model::HistoryItem { field: "labels".into(), from: Some("None".into()), to: None, to_id: None },
+        ];
+        t.comments.clear();
+        let payloads: Vec<serde_json::Value> = derive(&t, "me").iter().filter_map(|e| domain_event(CONNECTION, e)).map(|e| e.payload).collect();
+        assert_eq!((payloads[0]["from"].as_str(), payloads[0]["to"].as_str()), (Some("A"), Some("B → C")));
+        assert_eq!((payloads[1]["from"].as_str(), payloads[1]["to"].as_str()), (Some("None"), None));
+    }
+
+    #[test]
+    fn field_events_reach_the_item_history_and_the_feed() {
+        let db = Db::in_memory().unwrap();
+        let mut t = sample_ticket();
+        t.history[0].items.push(crate::model::HistoryItem { field: "labels".into(), from: Some("a".into()), to: Some("a b".into()), to_id: None });
+        let fake = Fake { followed: vec![crate::tracker::item_from_ticket(&Connection::jira(&crate::auth::Scope { cloud_id: "site".into(), account_id: "me".into() }, "Site"), &t)], ..Default::default() };
+        let run = async {
+            let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
+            store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        };
+        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(run);
+        let item = ItemRef { connection_id: CONNECTION.into(), external_id: "CA-1".into(), key: "CA-1".into() };
+        let kinds: Vec<EventKind> = db.events_for_item(&item, 10).unwrap().iter().map(|e| e.kind).collect();
+        assert!(kinds.contains(&EventKind::FieldChanged));
+        let feed = db.feed(CONNECTION, &crate::domain::FeedQuery { kinds: vec![EventKind::FieldChanged], ..Default::default() }, &Visible::All).unwrap();
+        assert_eq!(feed.entries.len(), 1);
+        assert!(feed.entries[0].unread);
+        assert_eq!(feed.entries[0].text, "Labels a → a b");
     }
 
     #[test]
@@ -652,6 +693,36 @@ mod tests {
         s.finished(now, true);
         assert!(!s.due(now + Duration::seconds(30), Trigger::Timer));
         assert!(s.due(now + POLL_INTERVAL, Trigger::Timer));
+    }
+
+    #[test]
+    fn a_failed_forced_retry_keeps_the_longer_deadline() {
+        let mut s = Schedule::default();
+        let t0 = at(NOW);
+        s.finished(t0, false);
+        s.defer(t0 + Duration::minutes(40));
+        let later = t0 + Duration::minutes(5);
+        s.finished(later, false);
+        assert!(!s.due(t0 + Duration::minutes(39), Trigger::Timer), "the 40 minute deadline survives a failed manual retry");
+        assert!(s.due(t0 + Duration::minutes(40), Trigger::Timer));
+        s.finished(t0 + Duration::minutes(41), true);
+        assert!(s.due(t0 + Duration::minutes(42), Trigger::Timer), "success clears it");
+    }
+
+    #[test]
+    fn a_rate_limit_holds_off_for_as_long_as_the_tracker_asked() {
+        let mut s = Schedule::default();
+        let t0 = at(NOW);
+        s.finished(t0, false);
+        s.defer(t0 + Duration::minutes(40));
+        assert!(!s.due(t0 + Duration::minutes(39), Trigger::Timer));
+        assert!(!s.due(t0 + Duration::minutes(39), Trigger::Focus));
+        assert!(s.due(t0 + Duration::minutes(40), Trigger::Timer));
+        assert!(s.due(t0 + Duration::seconds(1), Trigger::Now), "the person asking still goes through");
+        let mut s = Schedule::default();
+        s.finished(t0, false);
+        s.defer(t0 + Duration::seconds(1));
+        assert!(!s.due(t0 + Duration::seconds(59), Trigger::Timer), "never sooner than an ordinary failure");
     }
 
     #[test]

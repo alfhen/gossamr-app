@@ -3,7 +3,7 @@
 use serde_json::{json, Map, Value};
 
 use super::adf;
-use super::client::{IssueType, RawTransition};
+use super::client::{IssueType, RawTransition, RequiredField};
 use crate::domain::{ItemKind, ItemRef, LinkKind, NewItem, Patch, Priority};
 
 fn priority_name(p: Priority) -> &'static str {
@@ -73,14 +73,48 @@ pub(super) fn link_body(from: &ItemRef, to: &ItemRef, kind: LinkKind) -> Option<
     Some(json!({ "type": { "name": name }, "inwardIssue": { "key": from.external_id }, "outwardIssue": { "key": to.external_id } }))
 }
 
-/// The transition that leads to `status_id`. Jira may offer several; the first is taken.
-pub(super) fn transition_to<'a>(transitions: &'a [RawTransition], status_id: &str) -> Option<&'a RawTransition> {
-    transitions.iter().find(|t| t.to.id == status_id)
+/// What Gossamr can fill in for a required field: only `resolution`, preferring "Done", since closing an issue is the one
+/// move that routinely demands it.
+fn fill(field: &RequiredField) -> Option<Value> {
+    if field.id != "resolution" {
+        return None;
+    }
+    let (id, _) = field.allowed.iter().find(|(_, name)| name.eq_ignore_ascii_case("done")).or_else(|| field.allowed.first())?;
+    Some(json!({ "id": id }))
 }
 
-/// The body of the request that performs `transition`.
-pub(super) fn transition_body(transition: &RawTransition) -> Value {
-    json!({ "transition": { "id": transition.id } })
+fn fillable(t: &RawTransition) -> bool {
+    t.required.iter().all(|f| fill(f).is_some())
+}
+
+/// The transition that leads to `status_id`. Jira may offer several; the first one whose required fields can be filled
+/// is taken, else the first, so `transition_body` can say what is missing.
+pub(super) fn transition_to<'a>(transitions: &'a [RawTransition], status_id: &str) -> Option<&'a RawTransition> {
+    let mut to = transitions.iter().filter(|t| t.to.id == status_id);
+    let first = to.next()?;
+    Some(std::iter::once(first).chain(to).find(|t| fillable(t)).unwrap_or(first))
+}
+
+/// The body of the request that performs `transition`, or the names of the required fields it can't fill.
+pub(super) fn transition_body(transition: &RawTransition) -> std::result::Result<Value, Vec<String>> {
+    let mut fields = Map::new();
+    let mut missing = Vec::new();
+    for f in &transition.required {
+        match fill(f) {
+            Some(v) => {
+                fields.insert(f.id.clone(), v);
+            }
+            None => missing.push(f.name.clone()),
+        }
+    }
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+    let mut body = json!({ "transition": { "id": transition.id } });
+    if !fields.is_empty() {
+        body["fields"] = Value::Object(fields);
+    }
+    Ok(body)
 }
 
 #[cfg(test)]
@@ -97,7 +131,7 @@ mod tests {
     }
 
     fn transition(id: &str, name: &str, to: &str) -> RawTransition {
-        RawTransition { id: id.into(), name: name.into(), to: StatusDef { id: to.into(), name: name.into(), category: Category::Active } }
+        RawTransition { id: id.into(), name: name.into(), to: StatusDef { id: to.into(), name: name.into(), category: Category::Active }, required: vec![] }
     }
 
     #[test]
@@ -116,8 +150,34 @@ mod tests {
         ]});
         let available = super::super::client::parse_transitions(&recorded);
         let chosen = transition_to(&available, "10001").unwrap();
-        assert_eq!(transition_body(chosen), json!({ "transition": { "id": "31" } }));
+        assert_eq!(transition_body(chosen), Ok(json!({ "transition": { "id": "31" } })));
         assert!(transition_to(&available, "31").is_none(), "a transition id is not a status id");
+    }
+
+    fn required(id: &str, name: &str, allowed: &[(&str, &str)]) -> RequiredField {
+        RequiredField { id: id.into(), name: name.into(), allowed: allowed.iter().map(|(i, n)| (i.to_string(), n.to_string())).collect() }
+    }
+
+    #[test]
+    fn a_required_resolution_is_filled_with_done_and_other_required_fields_are_named() {
+        let resolutions = [("10000", "Won't Do"), ("10001", "Done")];
+        let mut t = transition("31", "Done", "5");
+        t.required = vec![required("resolution", "Resolution", &resolutions)];
+        assert_eq!(transition_body(&t), Ok(json!({ "transition": { "id": "31" }, "fields": { "resolution": { "id": "10001" } } })));
+        t.required = vec![required("resolution", "Resolution", &[("7", "Fixed")])];
+        assert_eq!(transition_body(&t).unwrap()["fields"]["resolution"]["id"], "7", "no Done to prefer, so the first");
+        t.required = vec![required("customfield_10040", "Root cause", &[]), required("resolution", "Resolution", &resolutions)];
+        assert_eq!(transition_body(&t), Err(vec!["Root cause".to_string()]));
+    }
+
+    #[test]
+    fn a_transition_needing_nothing_unfillable_is_preferred_among_several() {
+        let mut blocked = transition("21", "Finish with cause", "5");
+        blocked.required = vec![required("customfield_10040", "Root cause", &[])];
+        let ts = [blocked, transition("22", "Finish", "5")];
+        assert_eq!(transition_to(&ts, "5").map(|t| t.id.as_str()), Some("22"));
+        let only = [ts.into_iter().next().unwrap()];
+        assert_eq!(transition_to(&only, "5").map(|t| t.id.as_str()), Some("21"), "still found, so the error can name what's missing");
     }
 
     #[test]

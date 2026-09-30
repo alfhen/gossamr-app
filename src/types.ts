@@ -280,7 +280,8 @@ export interface WorkEvent {
     | "prClosed"
     | "prReadyForReview"
     | "reviewSubmitted"
-    | "prMentioned";
+    | "prMentioned"
+    | "fieldChanged";
   subject: { type: "item"; item: ItemRef } | { type: "codeChange"; repo: string; number: number };
   actor: PersonRef | null;
   payload: unknown;
