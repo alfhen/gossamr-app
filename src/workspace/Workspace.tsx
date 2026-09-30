@@ -21,7 +21,6 @@ import { Rail } from "./Rail";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
 import { ChooseWatch } from "./WatchPicker";
-import { ShortcutHint } from "./ShortcutHint";
 import { ToastHost } from "./ToastHost";
 import { useTabs } from "./tabsStore";
 
@@ -67,7 +66,6 @@ export function Workspace({ backend }: { backend: Backend }) {
   const error = useWorkspace((s) => s.error);
   const route = useTabs((s) => s.route);
   const theme = usePrefs((s) => s.theme);
-  const view = useActiveTab().view;
   const pipOpen = usePrefs((s) => s.pipOpen);
   const pipWidth = usePaneWidths().pip;
   const paletteOpen = usePrefs((s) => s.paletteOpen);
@@ -137,7 +135,6 @@ export function Workspace({ backend }: { backend: Backend }) {
             {route === "activity" && <ActivityView />}
             {route === "settings" && <Settings />}
           </div>
-          {route === "workspace" && <ShortcutHint view={view} />}
           <PeekSheet />
           {!pipOpen && <PipLauncher />}
           <SelectionAsk />

@@ -8,8 +8,10 @@ import { WORKSPACE_CONVERSATION } from "./PipPane";
 import { PipAvatar } from "./PipAvatar";
 import { lookAt } from "./pipGaze";
 import { chipCount, unassignedIn, useItemScene, useScreen } from "./pipHooks";
+import { usePaneWidths } from "./PaneResizers";
 import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
+import { useTabs } from "./tabsStore";
 
 /** The line under the filter bar after Pip narrowed the view; hidden once the person edits the filter themselves. */
 export function PipFilterNote({ filtered, onUndo, onDismiss }: { filtered: PipFiltered; onUndo(): void; onDismiss(): void }) {
@@ -68,14 +70,17 @@ export function Nudge({ text, onOpen, onDismiss, onHold }: { text: string; onOpe
   );
 }
 
-export function Launcher({ drafts, onOpen, nudge, thinking = false }: { drafts: number; onOpen(): void; nudge: ReactNode; thinking?: boolean }) {
+/** Keeps the launcher clear of the footer and, while the ticket peek is open, of the peek. */
+export const launcherStyle = (clearRight = 0) => ({ right: `calc(${clearRight}px + 1.25rem)`, bottom: "calc(var(--ws-footer-h, 2rem) + 0.75rem)" });
+
+export function Launcher({ drafts, onOpen, nudge, thinking = false, clearRight = 0 }: { drafts: number; onOpen(): void; nudge: ReactNode; thinking?: boolean; clearRight?: number }) {
   const bubble = useRef<HTMLDivElement>(null);
   const showing = !!nudge;
   useEffect(() => {
     if (showing) requestAnimationFrame(() => lookAt(bubble.current));
   }, [showing]);
   return (
-    <div className="absolute right-5 bottom-5 z-30 flex items-center gap-2.5">
+    <div style={launcherStyle(clearRight)} className="absolute z-30 flex max-w-[calc(100%-2.5rem)] items-center gap-2.5">
       <div ref={bubble}>{nudge}</div>
       <div className="relative">
         <i aria-hidden className="pip-thread pointer-events-none absolute bottom-full left-1/2 h-[46px] w-[1.5px] -translate-x-1/2 opacity-60" />
@@ -159,8 +164,10 @@ export function PipLauncher() {
   const nudge = usePip((s) => s.nudge);
   const thinking = useClaude((s) => !!s.byTicket[WORKSPACE_CONVERSATION]?.turns.some((t) => t.status === "running"));
   const drafts = pendingDrafts({ proposals }).length;
+  const peekOpen = useTabs((s) => !!s.selected && s.marked.length <= 1);
+  const peekWidth = usePaneWidths().peek;
   useNudges();
-  return <Launcher drafts={drafts} thinking={thinking} onOpen={() => usePrefs.getState().setPipOpen(true)} nudge={nudge && <NudgeBubble nudge={nudge} />} />;
+  return <Launcher clearRight={peekOpen ? peekWidth : 0} drafts={drafts} thinking={thinking} onOpen={() => usePrefs.getState().setPipOpen(true)} nudge={nudge && <NudgeBubble nudge={nudge} />} />;
 }
 
 const MIN_SELECTION = 4;

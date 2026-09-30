@@ -348,7 +348,7 @@ export function MapView({ items }: CanvasProps) {
           </button>
         </div>
       </div>
-      <CanvasFooter cards={cards} />
+      <CanvasFooter cards={cards} view="map" />
     </div>
   );
 }

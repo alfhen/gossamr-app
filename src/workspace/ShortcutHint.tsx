@@ -1,16 +1,26 @@
+import { footerHints, RANK_CLASS } from "./footerHints";
 import type { ViewMode } from "./tabsStore";
 
-const LEAD: Partial<Record<ViewMode, string>> = {
-  board: "Drag a card to draft a status change. ",
-  map: "Scroll to zoom, drag to pan. ",
-};
+const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 
+/** One line, left-aligned; what does not fit is dropped lowest-priority first and the rest is ellipsised. */
 export function ShortcutHint({ view }: { view: ViewMode }) {
-  const k = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
+  const hints = footerHints(view);
   return (
-    <p className="m-0 shrink-0 px-6 py-1.5 text-center text-xs text-ws-ink3">
-      {LEAD[view]}
-      <kbd className={k}>j</kbd> <kbd className={k}>k</kbd> move and peek · <kbd className={k}>Esc</kbd> close · <kbd className={k}>⌘J</kbd> Pip · <kbd className={k}>⌘K</kbd> jump
+    <p className="m-0 min-w-0 flex-1 truncate">
+      {hints.map((h, at) => (
+        <span key={h.id} className={RANK_CLASS[h.rank]}>
+          {at > 0 && (h.keys.length ? " · " : " ")}
+          {h.keys.map((k, i) => (
+            <span key={k}>
+              {i > 0 && " "}
+              <kbd className={KBD}>{k}</kbd>
+            </span>
+          ))}
+          {h.keys.length > 0 && " "}
+          {h.text}
+        </span>
+      ))}
     </p>
   );
 }
