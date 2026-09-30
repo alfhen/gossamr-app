@@ -38,7 +38,7 @@ Rules for every agent: no Hobbii references, bundle id stays `dk.alfhen.gossamr`
 | 6 | Second provider (Codex CLI or API) + conformance suite + per-task setting | 1c | Suite passes for both |
 | R | Release: Developer ID, notarisation, GitHub Actions, company Atlassian app | 2f | Signed installer builds in CI |
 
-Parallel waves: (0a) then (0b, 1b) then (0c, 1a, 1c) then (2a) then (2b) then (2c, 2d, 2e) then (2f) then (3a, 3b) then (4a, 4b). Phase 2 is a usable product on its own, so 5, 6 and R are optional after it.
+Parallel waves: (0a) then (0b, 1b) then (0c, 1a, 1c) then (2a, 3a) then (2b) then (2c, 2d, 2e) then (2f) then (3b) then (4a) then (4b). Phase 2 is a usable product on its own, so 5, 6 and R are optional after it.
 
 ## Prerequisite
 

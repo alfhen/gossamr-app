@@ -420,7 +420,7 @@ pub trait Authenticator: Send + Sync {
 <p class="exit"><b>Done when:</b> existing tests pass, <code>Core</code> holds a registry rather than a <code>Jira</code>, and no UI-facing code imports from <code>jira</code>.</p></div>
 <div class="phase"><h3>Phase 1 · Persisted proposals</h3>
 <p>Proposals table and the approval executor. Chat cards read from it. Neutral MCP tools, including <code>list_proposals</code>. Extract an <code>AgentProvider</code> trait, with the current Claude Code integration as its first adapter. Reconcile as a pure function with tests.</p>
-<p class="exit"><b>Done when:</b> drafts survive a restart, and approving one goes through <code>apply</code> and nothing else.</p></div>
+<p class="exit"><b>Done when:</b> drafts survive a restart, and approving one goes through <code>apply</code> and nothing else. Each proposal keeps the <code>Connection</code> it was drafted against, and <code>apply</code> refuses it before any write if the signed-in account or workspace no longer matches (the existing <code>SiteChanged</code> guard).</p></div>
 <div class="phase"><h3>Phase 2 · Workspace UI</h3>
 <p>The prototype's board, map, list, age view, tabs, ⌘K, peek sheet, Pip pane with screen context, and draft cards. Built on the normalised store with the mock connector.</p>
 <p class="exit"><b>Done when:</b> the Jira Inbox (Gossamr) screens are replaced and the app runs fully on the mock with no network.</p></div>
@@ -447,6 +447,7 @@ pub trait Authenticator: Send + Sync {
 <tr><td>Different providers behave differently: prompt adherence, tool-call formats and sandbox defaults.</td><td>A conformance suite every provider must pass, a short provider-neutral prompt, and adapters that start each agent read-only.</td></tr>
 <tr><td>Personal data in tickets is sent to the selected provider (Claude by default).</td><td>Confirm the use fits the company AI policy and GDPR before enabling autopilot beyond a pilot. Send only the fields a task needs.</td></tr>
 <tr><td>Atlassian requires a client secret for every 3LO client, so a shared app either ships a secret or needs a broker service.</td><td>Use a company-owned app for the pilot (decided), with API tokens or a personal app as options for technical users, and add a broker only if distribution goes beyond our organisation (section 12). The secret is shared internally, so it should be rotated if someone who had it leaves.</td></tr>
+<tr><td>A multi-operation proposal (such as subtasks) can be replayed after a lost response and create a duplicate, because a proposal has one state and only records results once a call returns.</td><td>Give <code>apply</code> a replay contract: record each operation's result as it completes, and where the tracker allows it send a stable operation key or look for an existing match before creating. A lost response after a create is an unknown outcome, not a failure: the proposal moves to an unknown state, is never replayed automatically, and the UI asks the person to check the tracker (or runs the lookup) and warns before a manual retry. Remembering created items per attempt only covers responses that did arrive.</td></tr>
 <tr><td>Scope creep: this is a much bigger product than an inbox.</td><td>Ship in the phases above. Phase 2 is a usable product on its own.</td></tr>
 </table>
 <h3>Open questions</h3>
@@ -458,7 +459,6 @@ pub trait Authenticator: Send + Sync {
 <li>Which second provider first: Codex CLI, or an API provider? Can we attach our MCP endpoint to Codex per run without touching the user's own config?</li>
 <li>Should the organisation be able to restrict which providers are allowed?</li>
 <li>Does reply wording come from the model on every event, or on demand when you open the draft, to control cost?</li>
-<li>What is the product called, now that it is not only an inbox?</li>
 </ul>
 
 <h2 id="proto">Appendix: prototype to design</h2>
