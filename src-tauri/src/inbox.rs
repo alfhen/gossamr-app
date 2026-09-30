@@ -527,7 +527,7 @@ impl Core {
         let now = Utc::now();
         self.with_db_for(scope, |db| {
             let needs_me = db
-                .needs_me_keys(&stamp(now))?
+                .needs_me_keys(&connection_id, &me.account_id, &stamp(now))?
                 .into_iter()
                 .map(|key| ItemRef { connection_id: connection_id.clone(), external_id: key.clone(), key })
                 .collect();

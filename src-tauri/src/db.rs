@@ -57,13 +57,29 @@ impl Db {
         Ok(out)
     }
 
-    /// Keys of tickets with an unread, undone event that isn't snoozed past `now`.
-    pub fn needs_me_keys(&self, now: &str) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT ticket_key FROM events
-             WHERE unread = 1 AND done_at IS NULL AND (snoozed_until IS NULL OR snoozed_until <= ?1)",
-        )?;
-        let rows = stmt.query_map(params![now], |r| r.get(0))?;
+    /// Keys of tickets that need the user: an unread, undone event that isn't snoozed past `now`, or a mention (or a
+    /// comment on a ticket they're assigned or reported) on an open ticket that they haven't answered since.
+    /// Mirrors `waitingOnMe` in `src/lib/views.ts`: a mention counts even after its notification was cleared.
+    pub fn needs_me_keys(&self, connection_id: &str, me: &str, now: &str) -> Result<Vec<String>> {
+        const AWAKE: &str = "(e.snoozed_until IS NULL OR e.snoozed_until <= ?3)";
+        const OPEN: &str = "i.status_category != 'done'";
+        // My own comments are stored as activity; `lastCommenter` covers ones from before they were.
+        const NOT_ANSWERED: &str = "json_extract(i.data, '$.lastCommenter.accountId') IS NOT ?2
+             AND NOT EXISTS (SELECT 1 FROM activity a WHERE a.ticket_key = e.ticket_key AND a.kind = 'comment' AND a.at > e.at)";
+        const NO_LATER_ACTION: &str = "NOT EXISTS (SELECT 1 FROM activity a WHERE a.ticket_key = e.ticket_key AND a.at > e.at)";
+        let sql = format!(
+            "SELECT e.ticket_key FROM events e
+               WHERE e.unread = 1 AND e.done_at IS NULL AND {AWAKE}
+             UNION
+             SELECT e.ticket_key FROM events e JOIN items i ON i.connection_id = ?1 AND i.key = e.ticket_key
+               WHERE e.kind = 'mention' AND {AWAKE} AND {OPEN} AND {NOT_ANSWERED}
+             UNION
+             SELECT e.ticket_key FROM events e JOIN items i ON i.connection_id = ?1 AND i.key = e.ticket_key
+               WHERE e.kind = 'comment' AND (i.assignee = ?2 OR i.reporter = ?2) AND {AWAKE} AND {OPEN}
+                 AND {NOT_ANSWERED} AND {NO_LATER_ACTION}"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![connection_id, me, now], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -102,10 +118,12 @@ impl Db {
         Ok(())
     }
 
-    /// The user's actions at or after `since`, newest first.
+    /// The user's transitions and creations at or after `since`, newest first. Their comments are stored too, for
+    /// `needs_me_keys`, but the page derives those from the tickets and would list them twice.
     pub fn activity(&self, since: &str) -> Result<Vec<MyAction>> {
-        let mut stmt =
-            self.conn.prepare("SELECT ticket_key, kind, at, text FROM activity WHERE at >= ?1 ORDER BY at DESC")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT ticket_key, kind, at, text FROM activity WHERE at >= ?1 AND kind != 'comment' ORDER BY at DESC",
+        )?;
         let rows = stmt.query_map(params![since], |r| {
             Ok(MyAction { ticket_key: r.get(0)?, kind: r.get(1)?, at: r.get(2)?, text: r.get(3)? })
         })?;
@@ -250,5 +268,101 @@ mod tests {
         assert_eq!(e.done_at.as_deref(), Some("2026-09-28T12:00:00Z"));
         assert!(e.snoozed_until.is_none() && !e.unread);
         assert!(db.set_done("missing", None).is_err());
+    }
+
+    mod needs_me {
+        use super::*;
+        use crate::domain::fixtures::{person, work_item};
+        use crate::model::Person;
+
+        const NOW: &str = "2026-09-29T12:00:00Z";
+
+        fn sam() -> Person {
+            Person { account_id: "sam".into(), name: "Sam".into(), avatar_url: None }
+        }
+
+        fn event(id: &str, key: &str, kind: EventKind, at: &str) -> NewEvent {
+            NewEvent { id: id.into(), kind, ticket_key: key.into(), actor: sam(), at: at.into(), text: String::new() }
+        }
+
+        fn my_comment(id: &str, key: &str, at: &str) -> (String, MyAction) {
+            (id.into(), MyAction { ticket_key: key.into(), at: at.into(), kind: "comment".into(), text: String::new() })
+        }
+
+        fn db_with(status: &str, assignee: Option<&str>, events: &[NewEvent]) -> Db {
+            let db = Db::in_memory().unwrap();
+            let mut item = work_item("1", status);
+            item.assignee = assignee.map(person);
+            db.upsert_items(&[item], "t").unwrap();
+            db.insert_events(events, "2000-01-01T00:00:00Z").unwrap();
+            db.conn.execute("UPDATE events SET unread = 0", []).unwrap();
+            db
+        }
+
+        fn keys(db: &Db) -> Vec<String> {
+            db.needs_me_keys("c", "me", NOW).unwrap()
+        }
+
+        #[test]
+        fn an_unread_undone_unsnoozed_event_counts_without_the_ticket() {
+            let db = Db::in_memory().unwrap();
+            db.insert_events(&[event("c:1", "GONE-1", EventKind::Status, "2026-09-28T09:00:00Z")], "2000-01-01T00:00:00Z").unwrap();
+            assert_eq!(keys(&db), ["GONE-1"]);
+            db.snooze("c:1", Some("2026-09-30T00:00:00Z")).unwrap();
+            assert!(keys(&db).is_empty());
+        }
+
+        #[test]
+        fn an_unanswered_mention_counts_even_once_cleared() {
+            let db = db_with("doing", None, &[event("c:1", "ENG-1", EventKind::Mention, "2026-09-28T09:00:00Z")]);
+            db.set_done("c:1", Some("2026-09-28T10:00:00Z")).unwrap();
+            assert_eq!(keys(&db), ["ENG-1"]);
+        }
+
+        #[test]
+        fn a_reply_after_the_mention_answers_it_and_one_before_does_not() {
+            let db = db_with("doing", None, &[event("c:1", "ENG-1", EventKind::Mention, "2026-09-28T09:00:00Z")]);
+            db.insert_activity(&[my_comment("c:0", "ENG-1", "2026-09-28T08:00:00Z")]).unwrap();
+            assert_eq!(keys(&db), ["ENG-1"]);
+            db.insert_activity(&[my_comment("c:2", "ENG-1", "2026-09-28T09:30:00Z")]).unwrap();
+            assert!(keys(&db).is_empty());
+        }
+
+        #[test]
+        fn being_the_last_commenter_answers_mentions_that_predate_stored_replies() {
+            let db = Db::in_memory().unwrap();
+            let mut item = work_item("1", "doing");
+            item.last_commenter = Some(person("me"));
+            db.upsert_items(&[item], "t").unwrap();
+            db.insert_events(&[event("c:1", "ENG-1", EventKind::Mention, "2026-09-28T09:00:00Z")], "2030-01-01T00:00:00Z").unwrap();
+            assert!(keys(&db).is_empty());
+        }
+
+        #[test]
+        fn a_closed_ticket_needs_nobody() {
+            let db = db_with("done", None, &[event("c:1", "ENG-1", EventKind::Mention, "2026-09-28T09:00:00Z")]);
+            assert!(keys(&db).is_empty());
+        }
+
+        #[test]
+        fn a_snoozed_mention_waits_until_the_snooze_ends() {
+            let db = db_with("doing", None, &[event("c:1", "ENG-1", EventKind::Mention, "2026-09-28T09:00:00Z")]);
+            db.snooze("c:1", Some("2026-09-30T00:00:00Z")).unwrap();
+            assert!(keys(&db).is_empty());
+            assert_eq!(db.needs_me_keys("c", "me", "2026-09-30T00:00:01Z").unwrap(), ["ENG-1"]);
+        }
+
+        #[test]
+        fn a_comment_needs_me_only_on_a_ticket_i_own_and_until_i_act() {
+            let comment = event("c:1", "ENG-1", EventKind::Comment, "2026-09-28T09:00:00Z");
+            let mine = db_with("doing", Some("me"), std::slice::from_ref(&comment));
+            assert_eq!(keys(&mine), ["ENG-1"]);
+            let transition = MyAction { ticket_key: "ENG-1".into(), at: "2026-09-28T10:00:00Z".into(), kind: "transition".into(), text: "A → B".into() };
+            mine.insert_activity(&[("h:1:status".into(), transition)]).unwrap();
+            assert!(keys(&mine).is_empty());
+
+            let not_involved = db_with("doing", Some("sam"), &[comment]);
+            assert!(keys(&not_involved).is_empty());
+        }
     }
 }

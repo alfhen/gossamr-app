@@ -180,9 +180,6 @@ const LINKS: [string, string, WorkLink["kind"]][] = [
   ["SUP-11", "DEVOPS-473", "relates"],
 ];
 
-/** Items waiting on the user: a review asked for, a mention, a customer reply. */
-const NEEDS_ME = ["DEVOPS-471", "CA-409", "WEB-101", "SUP-12"];
-
 const COMMENTS: [key: string, author: PersonId, minutesAgo: number, text: string][] = [
   ["DEVOPS-471", "sam", 90, "Ready for another look, retries now cap at five."],
   ["DEVOPS-472", "sam", 60 * 24 * 5, "Queue is provisioned in staging."],
@@ -247,7 +244,6 @@ export class MockConnector {
   private events = new Map<string, WorkEvent[]>();
   private markedRead = new Set<string>();
   private containers: WorkContainer[];
-  private needsMe: Set<string>;
   private seq = 0;
   private nextNumber: Record<string, number> = {};
 
@@ -296,7 +292,6 @@ export class MockConnector {
     }
     for (const [key, actor, minutes, from, to] of [...CHANGES, ...MORE_CHANGES]) this.record(key, "statusChanged", actor, at(minutes), { from, to, text: `${from} → ${to}` });
     for (const [key, actor, minutes] of ASSIGNMENTS) this.record(key, "assigned", actor, at(minutes), { text: "Assigned to you" });
-    this.needsMe = new Set(NEEDS_ME.map((k) => itemKey(itemRef(k))));
   }
 
   private record(key: string, kind: WorkEvent["kind"], actor: string | null, at: string, payload: unknown) {
@@ -313,7 +308,27 @@ export class MockConnector {
   }
 
   private get ctx(): FilterContext {
-    return { me: [this.me], now: this.now, needsMe: this.needsMe };
+    return { me: [this.me], now: this.now, needsMe: this.needsMe() };
+  }
+
+  /** Mentions, and comments on my own items, that I haven't answered on open items; the backend also counts unread events. */
+  private needsMe(): Set<string> {
+    const mine = this.me.accountId;
+    const out = new Set<string>();
+    for (const [key, events] of this.events) {
+      const item = this.items.get(key);
+      if (!item) continue;
+      const byOthers = events.filter((e) => e.actor && e.actor.accountId !== mine);
+      if (item.status.category === "done") continue;
+      const latest = (keep: (e: WorkEvent) => boolean) => events.filter((e) => e.actor?.accountId === mine && keep(e)).reduce((at, e) => (e.at > at ? e.at : at), "");
+      const replied = latest((e) => e.kind === "commentAdded");
+      const acted = latest(() => true);
+      const comments = byOthers.filter((e) => e.kind === "commentAdded");
+      const mentioned = comments.some((e) => (e.payload as { mention?: boolean } | null)?.mention === true && e.at > replied);
+      const onMine = item.assignee?.accountId === mine && comments.some((e) => e.at > acted);
+      if (mentioned || onMine) out.add(itemKey(item.item));
+    }
+    return out;
   }
 
   has(ref: ItemRef) {

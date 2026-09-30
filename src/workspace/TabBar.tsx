@@ -27,7 +27,7 @@ export function TabStrip({
   };
 
   return (
-    <div data-tauri-drag-region className="flex items-end gap-0.5 overflow-x-auto border-b border-ws-sep bg-ws-bar px-3 pt-3.5">
+    <div data-tauri-drag-region className="flex items-end gap-0.5 overflow-x-auto overflow-y-hidden border-b border-ws-sep bg-ws-bar px-3 pt-3.5 pb-px">
       <div role="tablist" aria-label="Workspace tabs" className="flex gap-0.5" onKeyDown={onKeyDown}>
         {tabs.map((t) => {
           const on = t.id === activeId;
