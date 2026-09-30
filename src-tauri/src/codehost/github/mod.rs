@@ -184,7 +184,7 @@ impl CodeHost for GithubHost {
         let (recent, recent_unchanged) = self.pulls(repo, "all", Some(since)).await?;
         let mut seen: HashSet<u64> = HashSet::new();
         let mut changes: Vec<CodeChange> = open.into_iter().chain(recent).filter(|c| seen.insert(c.number.unwrap_or_default())).collect();
-        changes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        changes.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
         Ok(PullList { changes, unchanged: open_unchanged && recent_unchanged })
     }
 }
