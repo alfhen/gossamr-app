@@ -2,10 +2,13 @@ import { itemKey } from "../lib/filter";
 import type { ContainerRef, Intent, WorkContainer, WorkFilter, WorkItem } from "../types";
 import type { SavedView } from "./filters";
 import { THEMES, THEME_LABEL, type ThemeMode } from "./prefs";
+import { CODE_FILTERS, CODE_FILTER_LABEL } from "../lib/devLinks";
+import { parsePullRef, pullLabel, type PullRef } from "../lib/githubUrl";
+import { isWorkConnection } from "./domains";
 import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
 
-export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "Ask Pip";
+export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Ask Pip";
 
 export interface Command {
   id: string;
@@ -34,6 +37,10 @@ export interface CommandActions {
   openTicket(key: string): void;
   openActivity(): void;
   openDrafts(): void;
+  connectGithub(): void;
+  manageRepositories(): void;
+  /** Opens the pull request's ticket when one is known, else its page on GitHub. */
+  openPull(ref: PullRef): void;
   newTab(): void;
   newTicket(): void;
   togglePip(): void;
@@ -47,6 +54,8 @@ export interface CommandContext {
   view: ViewMode | null;
   unreadActivity: number;
   pendingDrafts: number;
+  /** A GitHub account is connected. */
+  github?: boolean;
 }
 
 const NO_CONTEXT: CommandContext = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
@@ -88,7 +97,14 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     ...FILTERS.map(
       (f): Command => ({ id: `filter:${f.id}`, group: "Filters", icon: "⏷", label: `Filter: ${f.label}`, keywords: f.keywords, run: () => a.addFilter(f.filter) }),
     ),
+    ...(ctx.github
+      ? CODE_FILTERS.map(
+          (k): Command => ({ id: `filter:code-${k}`, group: "Filters", icon: "⏷", label: `Filter: ${CODE_FILTER_LABEL[k]}`, keywords: "github pull request pr checks ci code", run: () => a.addFilter({ type: "code", check: k }) }),
+        )
+      : []),
     { id: "filter:clear", group: "Filters", icon: "⏷", label: "Clear filters", keywords: "reset remove", run: a.clearFilters },
+    { id: "github:connect", group: "GitHub", icon: "↗", label: ctx.github ? "Connect another GitHub account" : "Connect GitHub", keywords: "sign in token pull requests code", run: a.connectGithub },
+    ...(ctx.github ? [{ id: "github:repos", group: "GitHub" as const, icon: "⚙", label: "Manage repositories", keywords: "github watch unwatch repos code", run: a.manageRepositories }] : []),
     ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", icon: "◐", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },
     { id: "app:pip", group: "App", icon: "✦", label: "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
@@ -133,9 +149,18 @@ export function ticketCommands(items: readonly WorkItem[], query: string, jump: 
 
 /** Projects the person doesn't watch that match the search, each a way to start watching it. */
 export function watchCommands(unwatched: readonly { ref: ContainerRef; key: string; name: string }[], a: Pick<CommandActions, "watch">, limit = 5): Command[] {
-  return unwatched.slice(0, limit).map(
-    (c): Command => ({ id: `watch:${c.ref.externalId}`, group: "Projects", icon: "＋", label: `Watch ${c.name}`, hint: `${c.key} · not watched`, keywords: `watch ${c.key} ${c.name}`, run: () => a.watch(c, true) }),
-  );
+  return unwatched.slice(0, limit).map((c): Command => {
+    const code = !isWorkConnection(c.ref.connectionId);
+    return {
+      id: `watch:${c.ref.connectionId}:${c.ref.externalId}`,
+      group: code ? "GitHub" : "Projects",
+      icon: "＋",
+      label: code ? `Watch repository ${c.key}` : `Watch ${c.name}`,
+      hint: code ? "not watched" : `${c.key} · not watched`,
+      keywords: `watch ${c.key} ${c.name}`,
+      run: () => a.watch(c, true),
+    };
+  });
 }
 
 /** One "Unwatch" per watched project, for a query that asks to stop watching. */
@@ -151,6 +176,13 @@ export function keyCommand(query: string, items: readonly WorkItem[], open: (key
   const key = ticketKeyOf(query);
   if (!key || items.some((i) => i.item.key.toUpperCase() === key)) return [];
   return [{ id: `key:${key}`, group: "Tickets", icon: "↗", label: `Open ${key}`, hint: "look up live", keywords: key, run: () => open(key) }];
+}
+
+/** For a query that names a pull request, as `owner/repo#123` or by its address: opens its ticket, else its page on GitHub. */
+export function pullCommand(query: string, open: (ref: PullRef) => void): Command[] {
+  const ref = parsePullRef(query);
+  if (!ref) return [];
+  return [{ id: `pull:${pullLabel(ref)}`, group: "GitHub", icon: "↗", label: `Open PR ${pullLabel(ref)}`, hint: "ticket or GitHub", keywords: `${ref.repo} pull request`, run: () => open(ref) }];
 }
 
 /** The command that hands the typed words to Pip; last, for any non-empty query. */

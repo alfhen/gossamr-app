@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { buildCommands, keyCommand, newTicketIntent, projectChoices, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
+import { buildCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
 import { BUILT_IN_VIEWS } from "./filters";
 
 const containers = await new MockBackend().cacheContainers();
@@ -186,5 +186,34 @@ describe("watch commands", () => {
     const key = items[0].item.key;
     expect(keyCommand(key.toLowerCase(), items, a.openTicket)).toEqual([]);
     expect(keyCommand("swatch", items, a.openTicket)).toEqual([]);
+  });
+});
+
+describe("GitHub commands", () => {
+  const noop = new Proxy({}, { get: () => () => {} }) as CommandActions;
+
+  it("offers to connect, and to manage repositories only once connected", () => {
+    const labels = (github: boolean) => buildCommands([], [], noop, { project: null, view: null, unreadActivity: 0, pendingDrafts: 0, github }).map((c) => c.label);
+    expect(labels(false)).toContain("Connect GitHub");
+    expect(labels(false)).not.toContain("Manage repositories");
+    expect(labels(false).some((l) => l.startsWith("Filter: PR"))).toBe(false);
+    expect(labels(true)).toContain("Manage repositories");
+    expect(labels(true)).toEqual(expect.arrayContaining(["Filter: Has PR", "Filter: No PR", "Filter: PR open", "Filter: PR merged", "Filter: Checks failing"]));
+  });
+
+  it("opens a pull request named by reference or address, and nothing else", () => {
+    const opened: unknown[] = [];
+    const [cmd] = pullCommand("acme/webshop#208", (r) => opened.push(r));
+    expect(cmd.label).toBe("Open PR acme/webshop#208");
+    cmd.run();
+    expect(opened).toEqual([{ repo: "acme/webshop", number: 208 }]);
+    expect(pullCommand("https://github.com/acme/webshop/pull/9", () => {})[0].label).toBe("Open PR acme/webshop#9");
+    expect(pullCommand("CA-208", () => {})).toEqual([]);
+    expect(pullCommand("https://evil.com/acme/webshop/pull/9", () => {})).toEqual([]);
+  });
+
+  it("labels an unwatched repository as one", () => {
+    const [c] = watchCommands([{ ref: { connectionId: "github:ada", externalId: "acme/infra" }, key: "acme/infra", name: "infra" }], { watch: () => {} });
+    expect(c).toMatchObject({ group: "GitHub", label: "Watch repository acme/infra" });
   });
 });

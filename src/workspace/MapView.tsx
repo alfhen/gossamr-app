@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
+import { summaryLine, type CodeSummary } from "../lib/devLinks";
 import { useWorkspace } from "../workspaceStore";
 import { daysQuiet } from "./boardLogic";
 import { ageLevel, statusTone, type StatusTone } from "./canvasShared";
@@ -8,6 +9,7 @@ import { FIT, layoutMap, neighbour, placeKeyLabels, shownKey, textWidth, zoomAt,
 import { useTabs } from "./tabsStore";
 import { useCards } from "./useCards";
 
+const PR_FILL = { open: "fill-ws-done", draft: "fill-ws-ink3", merged: "fill-ws-review", closed: "fill-ws-ink3 opacity-60" } as const;
 const FILL: Record<StatusTone, string> = { todo: "fill-ws-ink3", active: "fill-ws-accent", done: "fill-ws-done", review: "fill-ws-review", blocked: "fill-ws-blocked" };
 const ARROWS: Record<string, Direction> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
 const nodeId = (key: string) => `map-node-${key}`;
@@ -24,6 +26,8 @@ export interface MapSvgProps {
   needsMe: ReadonlySet<string>;
   now: Date;
   drafts: Readonly<Record<string, number>>;
+  /** What the code linked to each ticket adds up to, once read; a pull request marks the node's lower corner. */
+  code?: ReadonlyMap<string, CodeSummary>;
   /** Screen pixels per map unit at zoom 1; ticket keys appear once zoom makes them readable. */
   scale?: number;
   hoveredCluster?: string | null;
@@ -59,7 +63,7 @@ function ClusterTip({ cluster }: { cluster: MapCluster }) {
 const touches = (e: MapEdge, key: string | null) => key !== null && (e.from === key || e.to === key);
 
 /** The map itself, with no state of its own: the same props always draw the same picture. */
-export function MapSvg({ layout, viewport, selected, marked, focused, hovered, blocked, needsMe, now, drafts, scale = 1, hoveredCluster = null, onNode, onHover, onHoverCluster, onCluster }: MapSvgProps) {
+export function MapSvg({ layout, viewport, selected, marked, focused, hovered, blocked, needsMe, now, drafts, code, scale = 1, hoveredCluster = null, onNode, onHover, onHoverCluster, onCluster }: MapSvgProps) {
   const active = hovered ?? focused;
   const clusters = new Map(layout.clusters.map((c) => [c.key, c]));
   const near = new Set(layout.edges.filter((e) => touches(e, active)).flatMap((e) => [e.from, e.to]));
@@ -143,6 +147,7 @@ export function MapSvg({ layout, viewport, selected, marked, focused, hovered, b
           const days = daysQuiet(n.item, now);
           const stale = tone === "done" ? 0 : ageLevel(days);
           const pulses = needsMe.has(n.key);
+          const sum = code?.get(n.key);
           return (
             <g
               key={n.key}
@@ -157,7 +162,7 @@ export function MapSvg({ layout, viewport, selected, marked, focused, hovered, b
               onPointerEnter={() => onHover(n.key)}
               onPointerLeave={() => onHover(null)}
             >
-              <title>{`${n.item.item.key} · ${n.item.title} · ${n.item.status.name}`}</title>
+              <title>{`${n.item.item.key} · ${n.item.title} · ${n.item.status.name}${sum && summaryLine(sum) ? ` · ${summaryLine(sum)}` : ""}`}</title>
               {isBlocked && <circle cx={n.x} cy={n.y} r={n.r + 5} fill="none" strokeWidth={1.5} strokeDasharray="3 2" className="stroke-ws-blocked" data-blocked />}
               {pulses && <circle cx={n.x} cy={n.y} r={n.r} fill="none" strokeWidth={2} className="ws-ring stroke-ws-pip" data-pulse />}
               <circle
@@ -175,6 +180,18 @@ export function MapSvg({ layout, viewport, selected, marked, focused, hovered, b
                 </text>
               )}
               {focused === n.key && <circle cx={n.x} cy={n.y} r={n.r + 8} fill="none" strokeWidth={2} className="stroke-ws-pip" data-focus />}
+              {sum && sum.prs > 0 && sum.state && (
+                <circle
+                  cx={n.x + n.r * 0.75}
+                  cy={n.y + n.r * 0.75}
+                  r={4.5}
+                  strokeWidth={sum.failing ? 2 : 1.5}
+                  strokeDasharray={sum.state === "draft" ? "2 1.5" : undefined}
+                  className={`${PR_FILL[sum.state]} ${sum.failing ? "stroke-ws-blocked" : "stroke-ws-win"}`}
+                  data-pr={sum.state}
+                  data-checks={sum.failing ? "failing" : undefined}
+                />
+              )}
               {drafts[n.key] ? <circle cx={n.x + n.r * 0.75} cy={n.y - n.r * 0.75} r={4.5} strokeWidth={1.5} className="fill-ws-pip stroke-ws-win" data-draft /> : null}
               {keyLabel && (
                 <text x={n.x} y={keyLabel.y + 9.5} textAnchor="middle" strokeWidth={3} paintOrder="stroke" className="fill-ws-ink2 stroke-ws-bar font-mono text-[10px] font-bold" data-key-label>
@@ -402,6 +419,7 @@ export function MapView({ items }: CanvasProps) {
           needsMe={cards.attention.needsMe}
           now={cards.now}
           drafts={cards.counts}
+          code={cards.code}
           scale={scale}
           hoveredCluster={hoveredCluster}
           onHoverCluster={setHoveredCluster}

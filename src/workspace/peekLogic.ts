@@ -157,11 +157,12 @@ export function replyDraft(note: Note): ReplyDraft {
   };
 }
 
-export type PeekSectionId = "description" | "links" | "comments" | "history";
+export type PeekSectionId = "description" | "links" | "development" | "comments" | "history";
 
 export const SECTION_TITLE: Record<PeekSectionId, string> = {
   description: "Description",
   links: "Links",
+  development: "Development",
   comments: "Comments",
   history: "History",
 };
@@ -172,10 +173,11 @@ export interface SectionChip {
   count?: number;
 }
 
-/** The sections that have something to jump to, in reading order. Description and Comments are always there. */
-export function sectionChips(n: { links: number; comments: number; history: number }): SectionChip[] {
+/** The sections that have something to jump to, in reading order. Description and Comments are always there; Development is there while a code host is connected. */
+export function sectionChips(n: { links: number; comments: number; history: number; development?: number }): SectionChip[] {
   const chips: SectionChip[] = [{ id: "description", title: SECTION_TITLE.description }];
   if (n.links > 0) chips.push({ id: "links", title: SECTION_TITLE.links, count: n.links });
+  if (n.development !== undefined) chips.push({ id: "development", title: SECTION_TITLE.development, count: n.development });
   chips.push({ id: "comments", title: SECTION_TITLE.comments, count: n.comments });
   if (n.history > 0) chips.push({ id: "history", title: SECTION_TITLE.history, count: n.history });
   return chips;

@@ -2,13 +2,15 @@ import { useEffect, useMemo } from "react";
 import { listenToClaude } from "../claudeStore";
 import type { Backend } from "../backend/types";
 import { TicketLinksContext } from "../components/ticketLinks";
+import type { WorkFilter } from "../types";
 import { useItemsByFilter, useWorkspace } from "../workspaceStore";
 import { ActivityView } from "./ActivityView";
 import { useActivity } from "./activityStore";
 import { CANVASES } from "./canvases";
 import { useStepKeys } from "./browse";
-import { itemKey } from "../lib/filter";
+import { itemKey, usesCode, withoutCode } from "../lib/filter";
 import { workspaceTicketLinks } from "./jump";
+import { workConnections } from "./domains";
 import { FilterBar } from "./FilterBar";
 import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
@@ -20,15 +22,26 @@ import { applyTheme, usePrefs } from "./prefs";
 import { Rail } from "./Rail";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
+import { ConnectGithubDialog } from "./ConnectGithub";
+import { useGithubUi } from "./githubUi";
+import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
 import { ToastHost } from "./ToastHost";
 import { useTabs } from "./tabsStore";
 
+/** Matches no item, for a filter that has nothing to read. */
+const NOTHING: WorkFilter = { type: "items", items: [] };
+
 function Canvas() {
   const tab = useActiveTab();
   const items = useItemsByFilter(tab.filter);
+  const wantsCode = usesCode(tab.filter);
+  const candidates = useItemsByFilter(wantsCode ? withoutCode(tab.filter) : NOTHING);
+  useEffect(() => {
+    if (wantsCode) useDev.getState().ensure(candidates.slice(0, FILTER_LIMIT).map((i) => i.item));
+  }, [wantsCode, candidates]);
   const anything = useWorkspace((s) => Object.keys(s.items).length > 0);
-  const connection = useWorkspace((s) => s.connections[0]);
+  const connection = useWorkspace((s) => workConnections(s.connections)[0]);
   const View = CANVASES[tab.view];
   const filterOrder = useMemo(() => items.map((i) => itemKey(i.item)), [items]);
   useStepKeys(filterOrder);
@@ -72,6 +85,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   const setPipOpen = usePrefs((s) => s.setPipOpen);
   const choice = useWorkspace((s) => s.watch.find((w) => w.needsChoice));
   const choiceConnection = useWorkspace((s) => s.connections.find((c) => c.id === choice?.connectionId));
+  const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   useGlobalKeys();
   usePipView();
 
@@ -90,11 +104,23 @@ export function Workspace({ backend }: { backend: Backend }) {
   useEffect(() => {
     useWorkspace.getState().init(backend).catch(() => {});
     useActivity.getState().init(backend);
+    useDev.getState().init(backend);
     return () => {
+      useDev.getState().dispose();
       useActivity.getState().dispose();
       useWorkspace.getState().dispose();
     };
   }, [backend]);
+
+  useEffect(() => {
+    useDev.getState().setEnabled(hasGithub);
+  }, [hasGithub, backend]);
+
+  // The forced picker replaces the whole window, so a connect dialog left open would come back after it.
+  const choosing = !!choice;
+  useEffect(() => {
+    if (choosing) useGithubUi.getState().closeConnect();
+  }, [choosing]);
 
   if (status === "error") {
     return (
@@ -142,6 +168,7 @@ export function Workspace({ backend }: { backend: Backend }) {
         {pipOpen && <PipPane onClose={() => setPipOpen(false)} />}
         {paletteOpen && <Palette />}
       </div>
+      <ConnectGithubDialog />
       <ToastHost />
     </TicketLinksContext.Provider>
   );

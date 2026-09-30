@@ -5,7 +5,7 @@ import { useWorkspace } from "../workspaceStore";
 import { keyColour, keyInitials } from "./projects";
 import { useCatalog, type Catalog } from "./useCatalog";
 import { messageOf, useToasts } from "./toasts";
-import { activityHint, choiceChanges, count, nounFor, suggestedIds, toggled, type Noun } from "./watchLogic";
+import { activityHint, agoText, choiceChanges, count, nounFor, permissionLabel, repoParts, suggestedIds, toggled, type Noun } from "./watchLogic";
 
 export function Badge({ k }: { k: string }) {
   return (
@@ -15,6 +15,50 @@ export function Badge({ k }: { k: string }) {
   );
 }
 
+/** A repository as `owner/name`, the owner quiet so the name is what is read. */
+export function RepoName({ k }: { k: string }) {
+  const { owner, name } = repoParts(k);
+  return (
+    <>
+      {owner && <span className="text-ws-ink3">{owner}/</span>}
+      <span className="font-semibold text-ws-ink">{name}</span>
+    </>
+  );
+}
+
+const PERMISSION_TITLE: Record<string, string> = {
+  admin: "You administer this repository",
+  maintain: "You can manage it without admin rights",
+  push: "You can push to it",
+  triage: "You can triage issues and pull requests",
+  pull: "You can read it",
+};
+
+export function PermissionBadge({ kind }: { kind: string | null }) {
+  const label = permissionLabel(kind);
+  if (!label) return null;
+  return (
+    <span title={PERMISSION_TITLE[kind ?? ""]} className="shrink-0 rounded-full border border-ws-sep2 px-1.5 text-xs text-ws-ink2">
+      {label}
+    </span>
+  );
+}
+
+export function ArchivedBadge() {
+  return (
+    <span title="Archived repositories are read-only on GitHub" className="shrink-0 rounded-full bg-ws-sel px-1.5 text-xs text-ws-ink3">
+      archived
+    </span>
+  );
+}
+
+/** What the catalog knows about a repository beyond its name. */
+export interface RepoMeta {
+  permission: string | null;
+  archived: boolean;
+  lastActive: string | null;
+}
+
 export interface PickerRowProps {
   k: string;
   name: string;
@@ -22,20 +66,38 @@ export interface PickerRowProps {
   /** Items the tracker says the container holds, when it says. */
   itemHint: number | null;
   footprint?: Footprint;
+  /** Set for a repository, which is listed by owner and name with its permission and last push. */
+  repo?: RepoMeta;
+  now?: Date;
   onToggle(): void;
 }
 
-export function PickerRow({ k, name, checked, itemHint, footprint, onToggle }: PickerRowProps) {
+export function PickerRow({ k, name, checked, itemHint, footprint, repo, now = new Date(), onToggle }: PickerRowProps) {
   const hint = footprint ? activityHint(footprint) : null;
   return (
     <li className="border-b border-ws-sep last:border-b-0">
-      <label className={`flex cursor-pointer items-center gap-2.5 px-3 py-1.5 hover:bg-ws-hover ${checked ? "" : "text-ws-ink2"}`}>
+      <label className={`flex cursor-pointer items-center gap-2.5 px-3 py-1.5 hover:bg-ws-hover ${checked ? "" : "text-ws-ink2"} ${repo?.archived ? "opacity-60" : ""}`}>
         <input type="checkbox" checked={checked} onChange={onToggle} className="size-4 shrink-0 accent-ws-accent" />
-        <Badge k={k} />
-        <span className="min-w-0 flex-1 truncate">
-          <span className="font-semibold text-ws-ink">{name}</span>
-          <span className="ml-1.5 text-sm text-ws-ink3">{k}</span>
-        </span>
+        <Badge k={repo ? repoParts(k).name : k} />
+        {repo ? (
+          <>
+            <span className="min-w-0 flex-1 truncate">
+              <RepoName k={k} />
+            </span>
+            {repo.archived && <ArchivedBadge />}
+            <PermissionBadge kind={repo.permission} />
+            {repo.lastActive && (
+              <span className="hidden w-24 shrink-0 text-right text-sm text-ws-ink3 sm:block" title={`Last push ${new Date(repo.lastActive).toLocaleString()}`}>
+                pushed {agoText(repo.lastActive, now)}
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="min-w-0 flex-1 truncate">
+            <span className="font-semibold text-ws-ink">{name}</span>
+            <span className="ml-1.5 text-sm text-ws-ink3">{k}</span>
+          </span>
+        )}
         {hint && <span className="hidden shrink-0 truncate text-sm text-ws-pip sm:block">{hint}</span>}
         {itemHint !== null && <span className="w-16 shrink-0 text-right text-sm text-ws-ink3">{itemHint} items</span>}
       </label>
@@ -114,6 +176,7 @@ export interface WatchPickerViewProps {
   selected: ReadonlySet<string>;
   saving: boolean;
   saveError: string | null;
+  now?: Date;
   onQuery(q: string): void;
   onToggle(id: string): void;
   onSelectNone(): void;
@@ -133,16 +196,27 @@ export function WatchPickerView(p: WatchPickerViewProps) {
   const suggested = searching ? [] : p.suggested.list;
   const rows: CatalogEntry[] = searching ? catalog.entries : catalog.entries.filter((e) => !fp.has(e.ref.externalId));
   const n = selected.size;
-  const row = (id: string, k: string, name: string, itemHint: number | null) => (
-    <PickerRow key={id} k={k} name={name} checked={selected.has(id)} itemHint={itemHint} footprint={fp.get(id)} onToggle={() => p.onToggle(id)} />
+  const code = noun.domain === "code";
+  const row = (id: string, k: string, name: string, itemHint: number | null, entry?: CatalogEntry) => (
+    <PickerRow
+      key={id}
+      k={k}
+      name={name}
+      checked={selected.has(id)}
+      itemHint={itemHint}
+      footprint={fp.get(id)}
+      repo={code ? { permission: entry?.kind ?? null, archived: entry?.archived ?? false, lastActive: entry?.lastActive ?? null } : undefined}
+      now={p.now}
+      onToggle={() => p.onToggle(id)}
+    />
   );
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-[780px] flex-col px-8 pt-12 pb-6">
       <h1 className="m-0 text-2xl font-bold">Choose what to watch</h1>
       <p className="mt-1 mb-4 max-w-[620px] text-ws-ink2">
-        Gossamr only syncs, shows and lets Pip read the {noun.many} you watch in {p.workspace}. Anything else is one search away and is never stored. You can change this any time in Settings.
+        Gossamr only syncs, shows and lets Pip read the {noun.many} you watch in {p.workspace}. {code ? "Anything else isn't read at all." : "Anything else is one search away and is never stored."} You can change this any time in Settings.
       </p>
-      <SearchBox value={p.query} label={`Search ${noun.many}`} placeholder={`Search ${noun.many} by name or key`} onChange={p.onQuery} />
+      <SearchBox value={p.query} label={`Search ${noun.many}`} placeholder={code ? `Search ${noun.many} by name or owner` : `Search ${noun.many} by name or key`} onChange={p.onQuery} />
       <div className="my-2.5 flex flex-wrap items-center gap-1.5">
         <button type="button" onClick={p.onSelectNone} disabled={n === 0} className="rounded-full border border-ws-sep2 px-2.5 py-px text-sm text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
           Select none
@@ -160,14 +234,14 @@ export function WatchPickerView(p: WatchPickerViewProps) {
             {!searching && p.suggested.status === "loading" && <GroupHeading>Looking at where you've worked in the last 90 days…</GroupHeading>}
             {!searching && p.suggested.status === "error" && <GroupHeading>Suggestions aren't available right now</GroupHeading>}
             {suggested.length > 0 && <GroupHeading right="your last 90 days">Suggested for you</GroupHeading>}
-            {suggested.map((f) => row(f.container.externalId, f.key, f.name, null))}
+            {suggested.map((f) => row(f.container.externalId, f.key, f.name, null, catalog.entries.find((e) => e.ref.externalId === f.container.externalId)))}
             {(suggested.length > 0 || searching) && rows.length > 0 && <GroupHeading>{searching ? `Matching “${p.query.trim()}”` : `All ${noun.many}`}</GroupHeading>}
             {catalog.status === "loading" && catalog.entries.length === 0 && (
               <li role="status" className="px-3 py-6 text-center text-ws-ink3">
                 Loading {noun.many}…
               </li>
             )}
-            {rows.map((e) => row(e.ref.externalId, e.key, e.name, e.itemHint))}
+            {rows.map((e) => row(e.ref.externalId, e.key, e.name, e.itemHint, e))}
             {catalog.status === "ready" && rows.length === 0 && suggested.length === 0 && (
               <li role="status" className="px-3 py-6 text-center text-ws-ink3">
                 {searching ? `No ${noun.many} match “${p.query.trim()}”.` : `There are no ${noun.many} to watch.`}
@@ -197,7 +271,7 @@ export function WatchPickerView(p: WatchPickerViewProps) {
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-ws-sep pt-3">
         <p className="m-0 min-w-0 flex-1 text-sm text-ws-ink3">
-          Prefer not to choose? Watching everything syncs every {noun.one} you can see, so the first sync is slower, tickets from {noun.many} you never use show up, and Pip can read all of it.
+          Prefer not to choose? Watching everything syncs every {noun.one} you can see, so the first sync is slower, {code ? `pull requests from ${noun.many} you never use show up` : `tickets from ${noun.many} you never use show up`}, and Pip can read all of it.
         </p>
         <button type="button" onClick={p.onEverything} disabled={p.saving} className="shrink-0 rounded-lg border border-ws-sep2 px-3 py-1.5 font-semibold hover:bg-ws-hover disabled:opacity-45">
           Watch everything
