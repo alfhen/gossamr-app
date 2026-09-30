@@ -90,12 +90,13 @@ impl TokenStore for KeychainStore {
     }
 
     fn save(&self, session: &GithubSession) -> Result<()> {
-        secrets::save(&entry(&session.login), session)?;
+        // Indexed first: a secret the index doesn't name could never be restored or forgotten.
         let mut logins = self.logins()?;
         if !logins.iter().any(|l| l.eq_ignore_ascii_case(&session.login)) {
             logins.push(session.login.clone());
             secrets::save(INDEX_KEY, &logins)?;
         }
+        secrets::save(&entry(&session.login), session)?;
         Ok(())
     }
 

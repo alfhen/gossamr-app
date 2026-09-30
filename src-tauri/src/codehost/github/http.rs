@@ -167,6 +167,8 @@ impl Api {
         let scopes = header(&h, "x-oauth-scopes").map(|s| s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
         if status == StatusCode::NOT_MODIFIED {
             let c = cached.ok_or_else(|| Error::CodeHost { status: 304, message: "GitHub answered 'not modified' to a request that wasn't conditional.".into() })?;
+            // A repository that never changes is polled forever, so the answer must not age out of the cache.
+            let _ = self.db.lock().expect("db lock poisoned").http_cache_touch(&self.connection_id, &url, &stamp(Utc::now()));
             return Ok(Page { body: c.body, unchanged: true, next: c.next, last_modified: c.last_modified, poll_interval, scopes });
         }
         let body = res.text().await?;
@@ -281,6 +283,8 @@ mod tests {
         assert_eq!(server.header_of(0, "if-none-match"), None);
         assert_eq!(server.header_of(1, "if-none-match").as_deref(), Some("\"v1\""));
         assert_eq!(server.header_of(1, "authorization").as_deref(), Some("Bearer tok"));
+        let cutoff = stamp(Utc::now() - chrono::Duration::minutes(1));
+        assert_eq!(api.db.lock().unwrap().http_cache_prune("github:ann", &cutoff).unwrap(), 0, "the 304 refreshed the entry");
         assert_eq!(server.header_of(1, "x-github-api-version").as_deref(), Some(API_VERSION));
     }
 
