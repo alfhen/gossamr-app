@@ -213,6 +213,20 @@ describe("workspace store refresh", () => {
     expect(created).toBe(0);
   });
 
+  it("gives a request from the replaced workspace no answer, even when the new one asks the same question", async () => {
+    const item = s().items["mock:CA-402"];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    backend.cacheTransitions = async () => (await gate, []);
+    const old = s().loadMoves(item);
+    const other = new MockBackend();
+    await s().init(other);
+    const fresh = s().loadMoves(s().items["mock:CA-402"]);
+    release();
+    expect(await old).toBeNull();
+    expect(await fresh).not.toBeNull();
+  });
+
   it("clears the syncing flag when a sync can't be started", async () => {
     useWorkspace.setState({ connections: [{ ...(await backend.connectionsList())[0], syncing: false }] });
     backend.syncNow = () => Promise.reject(new Error("offline"));

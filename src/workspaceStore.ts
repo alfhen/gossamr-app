@@ -192,15 +192,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const known = get().moves[key];
     if (!backend) return Promise.resolve(null);
     if (known?.statusId === item.status.id) return Promise.resolve(known.to);
-    const flight = `${key}|${item.status.id}`;
+    const mine = generation;
+    const flight = `${mine}|${key}|${item.status.id}`;
     const running = moving.get(flight);
     if (running) return running;
-    const mine = generation;
     const job = backend
       .cacheTransitions(item.item)
       .then((offered) => {
+        if (backend !== get().backend || mine !== generation) return null;
         const to = offered.map((m) => m.to);
-        if (backend === get().backend && mine === generation) set((s) => ({ moves: { ...s.moves, [key]: { statusId: item.status.id, to } } }));
+        set((s) => ({ moves: { ...s.moves, [key]: { statusId: item.status.id, to } } }));
         return to;
       })
       .catch((e) => {
