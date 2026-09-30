@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { claude, type ClaudeSessions } from "../backend/claude";
+import { claude } from "../backend/claude";
 import { useClaude, type Turn } from "../claudeStore";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, participants, type Mention } from "../lib/mentions";
 import { draftsForTurn, earlierDrafts, targetOf } from "../lib/proposals";
-import { relativeTime } from "../lib/views";
 import { selectedTicket, useStore } from "../store";
 import type { Proposal, Status, Ticket } from "../types";
 import { Sparkle } from "./icons";
@@ -12,47 +11,13 @@ import { Markdown } from "./Markdown";
 import { MentionTextarea } from "./MentionTextarea";
 import { StatusPill } from "./primitives";
 
-const HOME = "~";
-
 function suggestions(t: Ticket): string[] {
   return [
     t.children.length ? "How is this epic doing?" : "What changed and what do I need to do?",
     "Draft a reply to the latest comment",
     "Break this into subtasks",
-    "Is this done in the code?",
     "Move it forward",
   ];
-}
-
-function folderName(cwd: string) {
-  return cwd.replace(/^\/Users\/[^/]+/, HOME);
-}
-
-interface SessionOption {
-  value: string;
-  label: string;
-  sessionId: string | null;
-  cwd: string | null;
-}
-
-function sessionOptions(s: ClaudeSessions | null, now: Date): SessionOption[] {
-  const opts: SessionOption[] = [];
-  if (s?.last) {
-    opts.push({ value: `resume:${s.last.id}`, label: "Continue this ticket's session", sessionId: s.last.id, cwd: s.last.cwd });
-  }
-  for (const r of s?.recent ?? []) {
-    if (r.id === s?.last?.id) continue;
-    opts.push({
-      value: `resume:${r.id}`,
-      label: `Continue “${r.title}” · ${folderName(r.cwd).split("/").pop()} · ${relativeTime(r.updated, now)}`,
-      sessionId: r.id,
-      cwd: r.cwd,
-    });
-  }
-  const folders = [...new Set((s?.recent ?? []).map((r) => r.cwd))].slice(0, 5);
-  for (const cwd of folders) opts.push({ value: `new:${cwd}`, label: `New session in ${folderName(cwd)}`, sessionId: null, cwd });
-  opts.push({ value: "new:", label: "New session in your home folder", sessionId: null, cwd: null });
-  return opts;
 }
 
 export function ClaudeDrawer() {
@@ -60,12 +25,10 @@ export function ClaudeDrawer() {
   const ticket = selectedTicket(store);
   const { open, setOpen, byTicket, proposals, ask, cancel } = useClaude();
   const conv = ticket ? byTicket[ticket.key] : undefined;
-  const [sessions, setSessions] = useState<ClaudeSessions | null>(null);
-  const [choice, setChoice] = useState<string>("");
+  const [sessions, setSessions] = useState<{ key: string; last: string | null } | null>(null);
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const options = useMemo(() => sessionOptions(sessions, store.now), [sessions, store.now]);
   const running = conv?.turns.some((t) => t.status === "running") ?? false;
   const earlier = useMemo(
     () => (ticket ? earlierDrafts(proposals, ticket.key, conv?.turns.map((t) => t.requestId) ?? []) : []),
@@ -79,12 +42,9 @@ export function ClaudeDrawer() {
       .sessions(ticket.key)
       .then((s) => {
         if (!live) return;
-        setSessions(s);
-        // Default to this ticket's own session, else a fresh one in the folder you used most recently.
-        const firstFolder = sessionOptions(s, new Date()).find((o) => o.value.startsWith("new:") && o.cwd);
-        setChoice(s.last ? `resume:${s.last.id}` : (firstFolder?.value ?? "new:"));
+        setSessions({ key: ticket.key, last: s.last });
       })
-      .catch(() => live && setSessions({ last: null, recent: [] }));
+      .catch(() => live && setSessions({ key: ticket.key, last: null }));
     inputRef.current?.focus();
     return () => {
       live = false;
@@ -96,16 +56,14 @@ export function ClaudeDrawer() {
   }, [conv, proposals]);
 
   if (!open || !ticket) return null;
+  const session = conv?.sessionId ?? (sessions?.key === ticket.key ? sessions.last : null);
 
   const submit = (prompt: string) => {
     const text = prompt.trim();
     if (!text || running) return;
     // Follow-ups continue the session this conversation already started.
-    const opt = options.find((o) => o.value === choice);
-    const sessionId = conv?.sessionId ?? opt?.sessionId ?? null;
-    const cwd = conv?.cwd ?? opt?.cwd ?? null;
     setInput("");
-    void ask(ticket.key, text, sessionId, cwd);
+    void ask(ticket.key, text, session);
   };
 
   return (
@@ -124,27 +82,10 @@ export function ClaudeDrawer() {
             ×
           </button>
         </div>
-        {conv?.sessionId ? (
+        {session && (
           <div className="text-sm text-ink-2">
-            Continuing session <span className="font-mono">{conv.sessionId.slice(0, 8)}</span>
-            {conv.cwd && <> in {folderName(conv.cwd)}</>}
+            Continuing session <span className="font-mono">{session.slice(0, 8)}</span>
           </div>
-        ) : (
-          <label className="flex items-center gap-1.5 text-sm text-ink-2">
-            Session
-            <select
-              id="claude-session"
-              value={choice}
-              onChange={(e) => setChoice(e.target.value)}
-              className="min-w-0 flex-1 rounded-md border border-field-border bg-field px-1.5 py-1 text-sm text-ink"
-            >
-              {options.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
         )}
       </header>
 
@@ -152,7 +93,7 @@ export function ClaudeDrawer() {
         {!conv?.turns.length && (
           <>
             <p className="text-ink-2">
-              Pip reads the ticket, its history and the repo in the chosen session's folder. Anything it wants to change in Jira shows up
+              Pip reads the ticket and its history. It can't read files on your computer. Anything it wants to change in Jira shows up
               here as a card for you to approve.
             </p>
             <div className="flex flex-wrap gap-1.5">
@@ -208,8 +149,7 @@ export function ClaudeDrawer() {
           )}
         </div>
         <p className="text-xs text-ink-3">
-          Runs your Claude Code with your login, CLAUDE.md and skills. It can read code and git history; nothing changes in Jira until you
-          approve it.
+          Runs your Claude Code with your login, using only Gossamr's tools. Nothing changes in Jira until you approve it.
         </p>
       </form>
     </aside>

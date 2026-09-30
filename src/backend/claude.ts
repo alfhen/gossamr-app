@@ -4,17 +4,9 @@ import type { ScreenContext, WorkFilter } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { mockAsk, mockCancel, mockPipEvents, type PipDrafter } from "./mockPip";
 
-export interface SessionInfo {
-  id: string;
-  title: string;
-  cwd: string;
-  updated: string;
-  source: "cli" | "desktop" | "app";
-}
-
 export interface ClaudeSessions {
-  last: { id: string; cwd: string } | null;
-  recent: SessionInfo[];
+  /** The session to continue for the ticket, when the backend can resume it. */
+  last: string | null;
 }
 
 export type ClaudeEvent =
@@ -28,7 +20,6 @@ export interface AskRequest {
   prompt: string;
   context: ScreenContext;
   sessionId: string | null;
-  cwd: string | null;
 }
 
 /** Emitted as the `pip-view` event when Pip narrows the view the person is looking at. */
