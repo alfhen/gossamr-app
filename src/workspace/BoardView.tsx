@@ -131,7 +131,7 @@ export function BoardView({ tab, items }: CanvasProps) {
                       ev.preventDefault();
                       void drop(section, column);
                     }}
-                    className={`flex flex-col gap-2 rounded-xl border-2 p-2 transition-colors ${
+                    className={`flex min-w-0 flex-col gap-2 rounded-xl border-2 p-2 transition-colors ${
                       verdict === "ok" ? `border-dashed border-ws-pip ${over === id ? "bg-ws-pip-soft" : "bg-ws-bar"}` : "border-transparent bg-ws-bar"
                     } ${verdict === "invalid" ? "opacity-40" : ""}`}
                   >

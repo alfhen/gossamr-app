@@ -137,7 +137,7 @@ export function ItemCard(p: ItemCardProps) {
           ⋯
         </button>
       </div>
-      <p className="my-1 font-medium">{item.title}</p>
+      <p className="my-1 font-medium [overflow-wrap:anywhere]">{item.title}</p>
       {item.labels.length > 0 && (
         <ul className="mb-1.5 flex flex-wrap gap-1" aria-label="Labels">
           {shownLabels.map((l) => (

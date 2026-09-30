@@ -101,8 +101,8 @@ export function PeekView(p: PeekViewProps) {
     >
       {!p.wide && p.onWide && <PeekResizer />}
       <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-3.5 py-2">
-        <span className="font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
-        <span className="text-xs text-ws-ink3">
+        <span className="shrink-0 font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
+        <span className="min-w-0 truncate text-xs text-ws-ink3">
           peek · <kbd className="font-sans">j</kbd> <kbd className="font-sans">k</kbd> browse · <kbd className="font-sans">esc</kbd> close
         </span>
         {p.onWide && (
