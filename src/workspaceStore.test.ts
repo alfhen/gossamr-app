@@ -197,6 +197,43 @@ describe("workspace store refresh", () => {
     expect((await s().draftTransition(item.item, refused)).intent).toMatchObject({ to: refused.id });
   });
 
+  it("does not draft a move for an account that was replaced while the tracker was being asked", async () => {
+    const item = s().items["mock:CA-402"];
+    const wf = s().containers["mock:CA"].workflow;
+    s().containers["mock:CA"].workflow = { ...wf, transitions: { kind: "graph", moves: [] } };
+    const [offered] = wf.statuses.filter((x) => x.id !== item.status.id);
+    let created = 0;
+    const create = backend.proposalsCreate.bind(backend);
+    backend.proposalsCreate = (...args) => ((created += 1), create(...args));
+    backend.cacheTransitions = async () => {
+      s().dispose();
+      return [{ name: offered.name, to: offered }];
+    };
+    await expect(s().draftTransition(item.item, offered)).rejects.toThrow(/changed/);
+    expect(created).toBe(0);
+  });
+
+  it("gives a request from the replaced workspace no answer, even when the new one asks the same question", async () => {
+    const item = s().items["mock:CA-402"];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    backend.cacheTransitions = async () => (await gate, []);
+    const old = s().loadMoves(item);
+    const other = new MockBackend();
+    await s().init(other);
+    const fresh = s().loadMoves(s().items["mock:CA-402"]);
+    release();
+    expect(await old).toBeNull();
+    expect(await fresh).not.toBeNull();
+  });
+
+  it("clears the syncing flag when a sync can't be started", async () => {
+    useWorkspace.setState({ connections: [{ ...(await backend.connectionsList())[0], syncing: false }] });
+    backend.syncNow = () => Promise.reject(new Error("offline"));
+    await s().syncNow();
+    expect(s().connections.every((c) => !c.syncing)).toBe(true);
+  });
+
   it("holds the connection rows and reports a new sync failure once", async () => {
     useToasts.getState().clear();
     await flush();

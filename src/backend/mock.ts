@@ -359,7 +359,7 @@ export class MockBackend implements Backend {
         await this.comment(intent.item.key, docText(intent.body));
         return [];
       case "transition": {
-        const to = Object.keys(S).find((k) => S[k as keyof typeof S].name === intent.to);
+        const to = Object.keys(S).find((k) => k === intent.to || S[k as keyof typeof S].name === intent.to);
         await this.transition(intent.item.key, `${intent.item.key}:${to}`);
         return [];
       }

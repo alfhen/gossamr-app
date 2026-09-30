@@ -192,15 +192,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const known = get().moves[key];
     if (!backend) return Promise.resolve(null);
     if (known?.statusId === item.status.id) return Promise.resolve(known.to);
-    const flight = `${key}|${item.status.id}`;
+    const mine = generation;
+    const flight = `${mine}|${key}|${item.status.id}`;
     const running = moving.get(flight);
     if (running) return running;
-    const mine = generation;
     const job = backend
       .cacheTransitions(item.item)
       .then((offered) => {
+        if (backend !== get().backend || mine !== generation) return null;
         const to = offered.map((m) => m.to);
-        if (backend === get().backend && mine === generation) set((s) => ({ moves: { ...s.moves, [key]: { statusId: item.status.id, to } } }));
+        set((s) => ({ moves: { ...s.moves, [key]: { statusId: item.status.id, to } } }));
         return to;
       })
       .catch((e) => {
@@ -224,6 +225,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       lastSyncError = error;
     } catch {
       // The connection row is informational; a failure to read it is not worth interrupting anyone for.
+      if (backend === get().backend) clearSyncing();
     }
   },
 
@@ -235,6 +237,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       await backend.syncNow();
     } catch (e) {
       get().report("Couldn't start a sync", e);
+      if (backend === get().backend) clearSyncing();
     }
     // The sync announces itself when it ends; this only clears the flag if that never comes.
     setTimeout(() => void get().refreshConnections(), SYNC_FLAG_MS);
@@ -271,6 +274,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (current && wf && movesAreOpaque(wf)) {
       // A lookup that fails leaves the choice open, since approval asks the tracker again; one that succeeds is binding.
       const offered = await get().loadMoves(current);
+      if (backend !== get().backend || mine !== generation) throw new Error("The workspace changed while checking where the ticket can move");
       if (offered && !offered.some((s) => s.id === to.id)) throw new Error(`${item.key} can't move to ${to.name} from ${current.status.name}`);
     }
     try {
@@ -289,6 +293,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ ...empty });
   },
 }));
+
+function clearSyncing() {
+  useWorkspace.setState((s) => ({ connections: s.connections.map((c) => ({ ...c, syncing: false })) }));
+}
 
 function keyToRef(key: string): ItemRef {
   const at = key.indexOf(":");
