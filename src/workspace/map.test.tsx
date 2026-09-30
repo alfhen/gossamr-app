@@ -5,7 +5,7 @@ import { ALL, itemKey } from "../lib/filter";
 import type { WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
 import { CapNotice, MapSvg, type MapSvgProps } from "./MapView";
-import { FIT, layoutMap, MAP_CAP, neighbour, shownKey, zoomAt } from "./mapLayout";
+import { FIT, labelRects, layoutMap, MAP_CAP, neighbour, placeKeyLabels, rectsOverlap, shownKey, textWidth, zoomAt, type MapLayout } from "./mapLayout";
 
 const s = () => useWorkspace.getState();
 
@@ -112,6 +112,127 @@ describe("layoutMap", () => {
   });
 });
 
+describe("cluster labels and packing", () => {
+  const long = "Harden the incognito-app against reload-storm traffic bursts (2026-09-21 incident follow-up)";
+  const stress = () => {
+    const base = s().items["mock:DEVOPS-473"];
+    const sizes = [1, 12, 2, 1, 7, 3, 1, 9, 2, 5, 1, 4, 1, 1, 6, 2];
+    const all: Record<string, WorkItem> = {};
+    const items: WorkItem[] = [];
+    let n = 0;
+    sizes.forEach((size, c) => {
+      const parent = { connectionId: "mock", externalId: `E-${c}`, key: `E-${c}` };
+      all[`mock:E-${c}`] = { ...base, item: parent, kind: "epic", title: c % 3 === 0 ? long : c % 3 === 1 ? `Epic ${c}` : "Customer Experience", parent: null, links: [] };
+      for (let k = 0; k < size; k++) {
+        const item = { connectionId: "mock", externalId: `T-${n}`, key: `T-${n}` };
+        items.push({ ...base, item, parent, links: [], title: `Ticket ${n}` });
+        n++;
+      }
+    });
+    return layoutMap(items, all, {});
+  };
+
+  const clear = (l: MapLayout) => {
+    const rects = labelRects(l);
+    for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) expect(rectsOverlap(rects[i], rects[j])).toBe(false);
+  };
+
+  it("reserves label rectangles that never intersect each other or another cluster's circle", () => {
+    for (const l of [layout(), stress()]) {
+      clear(l);
+      l.clusters.forEach((_c, i) => {
+        l.clusters.forEach((o, j) => {
+          if (i === j) return;
+          const circle = { x: o.x - o.r, y: o.y - o.r, w: 2 * o.r, h: 2 * o.r };
+          expect(rectsOverlap(labelRects(l)[i], circle)).toBe(false);
+        });
+      });
+    }
+  });
+
+  it("keeps every label inside the layout bounds and its text inside the label width", () => {
+    const l = stress();
+    for (const c of l.clusters) {
+      expect(c.box.x).toBeGreaterThanOrEqual(-0.001);
+      expect(c.box.x + c.box.w).toBeLessThanOrEqual(l.width + 0.001);
+      expect(c.box.y).toBeGreaterThanOrEqual(-0.001);
+      expect(c.box.lines.length).toBeLessThanOrEqual(2);
+      for (const line of c.box.lines) expect(textWidth(line, 13)).toBeLessThanOrEqual(c.box.w);
+      expect(textWidth(c.box.sub, 10)).toBeLessThanOrEqual(c.box.w);
+    }
+  });
+
+  it("cuts long titles with an ellipsis and leaves short ones whole", () => {
+    const l = stress();
+    const longOne = l.clusters.find((c) => c.label === long)!;
+    expect(longOne.box.truncated).toBe(true);
+    expect(longOne.box.lines[longOne.box.lines.length - 1].endsWith("…")).toBe(true);
+    const short = l.clusters.find((c) => c.label === "Epic 1")!;
+    expect(short.box).toMatchObject({ lines: ["Epic 1"], truncated: false });
+    expect(short.box.sub).toMatch(/^E-1 · 0\/12 done$/);
+  });
+
+  it("sizes circles by content between sane bounds", () => {
+    const l = stress();
+    const r = (n: number) => l.clusters.find((c) => c.sub === `E-${n}`)!.r;
+    expect(r(0)).toBeLessThan(45);
+    expect(r(1)).toBeGreaterThan(r(2));
+    expect(r(2)).toBeGreaterThan(r(0));
+  });
+
+  it("packs with consistent gutters and uses the space evenly", () => {
+    const l = stress();
+    const cells = l.clusters.map((c) => ({ cy: c.y, x: c.x - Math.max(c.r, c.box.w / 2), w: 2 * Math.max(c.r, c.box.w / 2) }));
+    const rows = new Map<number, typeof cells>();
+    for (const c of cells) rows.set(c.cy, [...(rows.get(c.cy) ?? []), c]);
+    for (const row of rows.values()) {
+      const sorted = [...row].sort((a, b) => a.x - b.x);
+      for (let i = 1; i < sorted.length; i++) expect(sorted[i].x - (sorted[i - 1].x + sorted[i - 1].w)).toBeGreaterThanOrEqual(26 - 0.001);
+    }
+    const area = l.clusters.reduce((sum, c) => sum + Math.PI * c.r * c.r, 0);
+    expect(area / (l.width * l.height)).toBeGreaterThan(0.25);
+  });
+
+  it("shapes the layout toward the requested aspect ratio", () => {
+    const items = fake(120, (i) => ({ parent: { connectionId: "mock", externalId: `p${i % 24}`, key: `P-${i % 24}` } }));
+    const wide = layoutMap(items, {}, {}, 300, 3);
+    const square = layoutMap(items, {}, {}, 300, 1);
+    expect(wide.width / wide.height).toBeGreaterThan(square.width / square.height);
+  });
+
+  it("is deterministic for the same input and stays clear with 500 tickets", () => {
+    const items = fake(500, (i) => ({ title: `Ticket ${i} ${long}`, parent: { connectionId: "mock", externalId: `p${i % 40}`, key: `P-${i % 40}` } }));
+    const a = layoutMap(items, {}, {}, 500);
+    expect(layoutMap(items, {}, {}, 500)).toEqual(a);
+    clear(a);
+  });
+});
+
+describe("placeKeyLabels", () => {
+  const dots = [
+    { key: "a", x: 0, y: 0, r: 10 },
+    { key: "b", x: 30, y: 0, r: 10 },
+    { key: "c", x: 400, y: 0, r: 10 },
+  ].map((d) => ({ ...d, cluster: "k", item: { ...s().items["mock:DEVOPS-473"], item: { connectionId: "mock", externalId: d.key, key: `KEY-${d.key}` } } }));
+
+  it("never overlaps labels, and drops a colliding one unless forced", () => {
+    const packed = [
+      { ...dots[0] },
+      { ...dots[1], x: 4, y: 26 },
+    ];
+    const out = placeKeyLabels(packed, ["a", "b"], new Set());
+    const rects = [...out.values()];
+    for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) expect(rectsOverlap(rects[i], rects[j])).toBe(false);
+    const forced = placeKeyLabels(packed, ["a", "b"], new Set(["b"]));
+    expect(forced.has("b")).toBe(true);
+  });
+
+  it("places by priority order", () => {
+    const out = placeKeyLabels(dots, ["c", "a"], new Set());
+    expect([...out.keys()]).toEqual(["c", "a"]);
+  });
+});
+
 describe("viewport and keyboard", () => {
   it("zooms around a point so it stays fixed", () => {
     const vp = zoomAt({ x: 10, y: 20, k: 1 }, 100, 50, 2);
@@ -197,6 +318,29 @@ describe("MapSvg", () => {
     const out = render(props({ focused: "mock:DEVOPS-473", viewport: { x: 5, y: 6, k: 2 } }));
     expect(out).toContain("data-focus");
     expect(out).toContain("translate(5 6) scale(2)");
+  });
+
+  it("draws each cluster title in its reserved box with the full text as a tooltip", () => {
+    const p = props();
+    const out = render(p);
+    expect((out.match(/data-cluster-label/g) ?? []).length).toBe(p.layout.clusters.length);
+    expect(out).toContain("<title>Checkout resilience (DEVOPS-470)</title>");
+  });
+
+  it("writes ticket keys only once zoom makes them readable, always for the selection", () => {
+    const far = render(props({ scale: 0.3 }));
+    expect(far).not.toContain("data-key-label");
+    expect(render(props({ scale: 0.3, selected: "mock:DEVOPS-473" }))).toContain(">DEVOPS-473</text>");
+    const near = render(props({ scale: 1 }));
+    expect((near.match(/data-key-label/g) ?? []).length).toBeGreaterThan(5);
+    expect(near).not.toMatch(/>\d{3}<\/text>/);
+  });
+
+  it("shows the full title of a hovered ticket and of a hovered truncated cluster", () => {
+    expect(render(props({ hovered: "mock:DEVOPS-473" }))).toContain("data-tip");
+    const l = layout();
+    const cut = l.clusters.find((c) => c.box.truncated);
+    if (cut) expect(render(props({ hoveredCluster: cut.key }))).toContain("data-cluster-tip");
   });
 
   it("says when the cap hides tickets", () => {
