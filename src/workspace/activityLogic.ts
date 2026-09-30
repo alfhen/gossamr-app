@@ -170,7 +170,7 @@ const str = (v: unknown): string | null => (typeof v === "string" && v ? v : nul
 export function codeUrl(repo: string, number: number | null, url: string | null): string | null {
   const given = url && safeGithubUrl(url);
   if (given) return given;
-  return number ? `https://github.com/${repo}/pull/${number}` : null;
+  return number && /^[\w.-]+\/[\w.-]+$/.test(repo) ? `https://github.com/${repo}/pull/${number}` : null;
 }
 
 export interface CodeContext {

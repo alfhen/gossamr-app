@@ -174,5 +174,5 @@ export function orderLinks(links: readonly DevLink[]): DevLink[] {
 
 /** Work item keys in a text, such as a pull request title. */
 export function keysIn(text: string): string[] {
-  return [...new Set((text.match(/\b[A-Z][A-Z0-9_]+-\d+\b/g) ?? []).map((k) => k.toUpperCase()))];
+  return [...new Set((text.match(/(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9_]+-\d+(?![0-9])/g) ?? []).map((k) => k.toUpperCase()))];
 }

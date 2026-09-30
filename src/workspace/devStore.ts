@@ -58,10 +58,16 @@ export const useDev = create<DevState>((set, get) => {
   const pump = () => {
     const { backend, enabled } = get();
     const mine = generation;
+    // A read started before an invalidation may still be running; its key waits for it instead of being read twice.
+    const blocked: ItemRef[] = [];
     while (backend && enabled && running < CONCURRENCY && waiting.length) {
       const ref = waiting.shift()!;
       const key = itemKey(ref);
-      if (get().index.has(key) || pending.has(key) || inFlight.has(key)) continue;
+      if (get().index.has(key) || pending.has(key)) continue;
+      if (inFlight.has(key)) {
+        blocked.push(ref);
+        continue;
+      }
       running++;
       inFlight.add(key);
       backend
@@ -77,13 +83,13 @@ export const useDev = create<DevState>((set, get) => {
           },
         )
         .finally(() => {
-          if (mine !== generation) return;
           running--;
           inFlight.delete(key);
-          if (!flushTimer) flushTimer = setTimeout(flush, FLUSH_MS);
+          if (mine === generation && !flushTimer) flushTimer = setTimeout(flush, FLUSH_MS);
           pump();
         });
     }
+    waiting = [...blocked, ...waiting];
   };
 
   return {
@@ -111,8 +117,6 @@ export const useDev = create<DevState>((set, get) => {
       asked = [];
       pending = new Map();
       pendingChanges = new Map();
-      inFlight.clear();
-      running = 0;
       if (flushTimer) clearTimeout(flushTimer);
       flushTimer = null;
       set({ backend: null, enabled: false, index: new Map(), byChange: new Map() });
@@ -127,9 +131,7 @@ export const useDev = create<DevState>((set, get) => {
         waiting = [];
         pending = new Map();
         pendingChanges = new Map();
-        inFlight.clear();
-        running = 0;
-        set({ index: new Map(), byChange: new Map() });
+            set({ index: new Map(), byChange: new Map() });
       }
     },
 
@@ -163,8 +165,6 @@ export const useDev = create<DevState>((set, get) => {
       generation++;
       pending = new Map();
       pendingChanges = new Map();
-      inFlight.clear();
-      running = 0;
       if (flushTimer) clearTimeout(flushTimer);
       flushTimer = null;
       set({ index: new Map(), byChange: new Map() });

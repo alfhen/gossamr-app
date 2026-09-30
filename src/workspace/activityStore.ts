@@ -160,6 +160,7 @@ export const useActivity = create<ActivityState>((set, get) => ({
     const { backend, container, codeEvents, codeRead, source } = get();
     if (!backend) return;
     if (source !== "jira") get().markCodeRead(codeEvents.filter((e) => isCodeUnread(e, codeRead, Date.now())).map((e) => e.id));
+    if (source === "github") return;
     let page;
     try {
       page = await backend.cacheFeed({ container, unreadOnly: true, limit: MARK_ALL_LIMIT });

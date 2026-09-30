@@ -49,6 +49,30 @@ describe("the development index", () => {
     expect(useDev.getState().index.size).toBe(30);
   });
 
+  it("keeps the cap and reads a key once when links change while reads are in flight", async () => {
+    const backend = await connected();
+    let flying = 0;
+    let peak = 0;
+    const calls = new Map<string, number>();
+    const real = backend.devLinks.bind(backend);
+    vi.spyOn(backend, "devLinks").mockImplementation(async (item) => {
+      calls.set(item.key, (calls.get(item.key) ?? 0) + 1);
+      flying++;
+      peak = Math.max(peak, flying);
+      await new Promise((r) => setTimeout(r, 20));
+      flying--;
+      return real(item);
+    });
+    useDev.getState().ensure(Array.from({ length: 12 }, (_, i) => ref(`CA-${i}`)));
+    await new Promise((r) => setTimeout(r, 5));
+    useDev.getState().invalidate();
+    useDev.getState().invalidate();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(Math.max(...calls.values())).toBeLessThanOrEqual(2);
+    expect(useDev.getState().index.size).toBe(12);
+  });
+
   it("reads nothing while no code host is connected, and forgets everything when it goes", async () => {
     const backend = new MockBackend();
     const spy = vi.spyOn(backend, "devLinks");

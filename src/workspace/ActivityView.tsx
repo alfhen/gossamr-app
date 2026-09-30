@@ -254,7 +254,8 @@ export function ActivityView() {
   const { chip, entries, next, status, error, loadingMore, unread: jiraUnread, codeUnread, source, codeEvents, codeRead } = useActivity();
   const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const byChange = useDev((s) => s.byChange);
-  const unread = jiraUnread + codeUnread;
+  const shownSource: ActivitySource = hasGithub ? source : "jira";
+  const unread = shownSource === "jira" ? jiraUnread : shownSource === "github" ? codeUnread : jiraUnread + codeUnread;
   const [now, setNow] = useState(() => new Date());
   const sentinel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -263,7 +264,6 @@ export function ActivityView() {
   const drafts = useMemo(() => draftsFor(pendingDrafts({ proposals }), items, project), [proposals, items, project]);
   const byKey = useMemo(() => new Map(Object.values(items).map((i) => [i.item.key.toUpperCase(), i.item] as const)), [items]);
   const codeEntries = useMemo(() => codeEvents.flatMap((e) => toCodeEntry(e, { byKey, byChange, read: codeRead, now: Date.now() }) ?? []), [codeEvents, byKey, byChange, codeRead]);
-  const shownSource: ActivitySource = hasGithub ? source : "jira";
   const rows = useMemo(
     () => buildRows({ source: shownSource, chip, container: project, jira: entries, more: next !== null, code: codeEntries, containerOf: (ref: ItemRef) => items[itemKey(ref)]?.container ?? null }),
     [shownSource, chip, projectKey, entries, next, codeEntries, items],

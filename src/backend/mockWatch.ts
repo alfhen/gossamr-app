@@ -86,7 +86,7 @@ export class MockWatch {
   }
 }
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied` or `expired` ends the GitHub device flow that way. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -100,6 +100,6 @@ export function mockOptionsFromUrl(): MockOptions {
   if (projects) options.catalogSize = projects;
   if (repos) options.githubRepos = repos;
   const outcome = params.get("mockDevice");
-  options.device = { delayMs: 4000, outcome: outcome === "denied" || outcome === "expired" ? outcome : "authorised" };
+  if (outcome === "denied" || outcome === "expired" || outcome === "slow") options.device = { delayMs: 4000, outcome: outcome === "slow" ? "authorised" : outcome };
   return options;
 }

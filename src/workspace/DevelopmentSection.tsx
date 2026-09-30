@@ -324,6 +324,7 @@ export function Development({ item, collapsed, onToggle, onCount }: { item: Work
   const [details, setDetails] = useState<Record<string, DetailState>>({});
   const [now, setNow] = useState(() => new Date());
   const seq = useRef(0);
+  const itemSeq = useRef(0);
 
   const load = () => {
     if (!backend) return;
@@ -340,6 +341,8 @@ export function Development({ item, collapsed, onToggle, onCount }: { item: Work
   };
 
   useEffect(() => {
+    itemSeq.current++;
+    setSearching(false);
     setLinks(null);
     setError(null);
     setExpanded(null);
@@ -358,8 +361,10 @@ export function Development({ item, collapsed, onToggle, onCount }: { item: Work
     if (!backend || searching) return;
     setSearching(true);
     const before = links?.length ?? 0;
+    const mine = itemSeq.current;
     try {
       const found = await backend.devLinksLive(ref);
+      if (mine !== itemSeq.current) return;
       setLinks(found);
       setError(null);
       setNow(new Date());
@@ -367,18 +372,19 @@ export function Development({ item, collapsed, onToggle, onCount }: { item: Work
       const fresh = Math.max(0, found.length - before);
       useToasts.getState().push(found.length === 0 ? `Nothing on GitHub names ${ref.key} yet.` : `Found ${plural(found.length, "link")} for ${ref.key}${fresh ? ` (${fresh} new)` : ""}.`, "info");
     } catch (e) {
-      useToasts.getState().push(`Couldn't search GitHub for ${ref.key}: ${messageOf(e)}`);
+      if (mine === itemSeq.current) useToasts.getState().push(`Couldn't search GitHub for ${ref.key}: ${messageOf(e)}`);
     } finally {
-      setSearching(false);
+      if (mine === itemSeq.current) setSearching(false);
     }
   };
 
   const fetchDetail = (change: CodeChange) => {
     if (!backend || change.number === null) return;
+    const mine = itemSeq.current;
     setDetails((d) => ({ ...d, [change.externalId]: { status: "loading" } }));
     backend.codePullRequest({ connectionId: change.connectionId, repo: change.repo, number: change.number }).then(
-      (detail) => setDetails((d) => ({ ...d, [change.externalId]: { status: "ready", detail } })),
-      (e) => setDetails((d) => ({ ...d, [change.externalId]: { status: "error", error: messageOf(e) } })),
+      (detail) => mine === itemSeq.current && setDetails((d) => ({ ...d, [change.externalId]: { status: "ready", detail } })),
+      (e) => mine === itemSeq.current && setDetails((d) => ({ ...d, [change.externalId]: { status: "error", error: messageOf(e) } })),
     );
   };
 

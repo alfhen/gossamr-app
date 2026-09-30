@@ -41,6 +41,11 @@ describe("GitHub events as feed rows", () => {
     expect(toCodeEntry(event("u", "prOpened", "2026-09-30T10:00:00Z", { payload: { url: "javascript:alert(1)" } }), ctx)?.url).toBe("https://github.com/acme/webshop/pull/208");
   });
 
+  it("builds no address from a repository name that isn't owner/name", () => {
+    const odd = toCodeEntry(event("r", "prOpened", "2026-09-30T10:00:00Z", { subject: { type: "codeChange", repo: "../evil?x=1", number: 3 }, payload: {} }), ctx);
+    expect(odd?.url).toBeNull();
+  });
+
   it("is ignored when the event isn't about a code change", () => {
     expect(toCodeEntry(event("i", "commentAdded", "2026-09-30T10:00:00Z", { subject: { type: "item", item: ref("CA-1") } }), ctx)).toBeNull();
   });
