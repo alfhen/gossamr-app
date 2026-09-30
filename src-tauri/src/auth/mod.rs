@@ -2,6 +2,7 @@
 
 mod atlassian;
 mod callback;
+mod github;
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,6 +15,9 @@ use crate::error::{Error, Result};
 use crate::secrets;
 use crate::tracker::Connection;
 
+pub use github::{DeviceChallenge, DeviceStart, SignInOptions, GithubAuth, GithubSession, KeychainStore, TokenStore};
+#[cfg(test)]
+pub use github::MemoryStore;
 pub use atlassian::{redirect_uri, Atlassian, ClientConfig, OAuthApp, SCOPES};
 
 const SESSION_KEY: &str = "session";
@@ -46,6 +50,8 @@ pub enum AuthMethod {
     OAuthCode { client: ClientSource, pkce: bool },
     DeviceFlow { client_id: String },
     ApiToken { fields: Vec<TokenField> },
+    /// Import the token the GitHub CLI holds, when the person asks.
+    GhCli,
     Broker { base_url: String },
 }
 

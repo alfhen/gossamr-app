@@ -18,6 +18,8 @@ import type {
   Transition,
   Uploaded,
   ConnectionInfo,
+  DeviceStart,
+  GithubSignInOptions,
   WorkComment,
   WorkContainer,
   WorkIdentity,
@@ -159,6 +161,30 @@ export class JiraBackend implements Backend {
 
   connectionsList() {
     return invoke<ConnectionInfo[]>("connections_list");
+  }
+
+  githubSignInOptions() {
+    return invoke<GithubSignInOptions>("github_sign_in_options");
+  }
+
+  githubConnectToken(token: string) {
+    return invoke<ConnectionInfo>("github_connect_token", { token });
+  }
+
+  githubImportGhToken() {
+    return invoke<ConnectionInfo>("github_import_gh_token");
+  }
+
+  githubDeviceStart() {
+    return invoke<DeviceStart>("github_device_start");
+  }
+
+  githubDevicePoll() {
+    return invoke<ConnectionInfo>("github_device_poll");
+  }
+
+  githubDisconnect(connectionId: string) {
+    return invoke<void>("github_disconnect", { connectionId });
   }
 
   cacheEvents(item: ItemRef) {

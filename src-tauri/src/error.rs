@@ -22,6 +22,11 @@ pub enum Error {
     Claude(String),
     #[error("{0}")]
     Proposal(String),
+    /// A code host refused or failed a request; `message` is already written for the person.
+    #[error("{message}")]
+    CodeHost { status: u16, message: String },
+    #[error("{message}")]
+    RateLimited { message: String, retry_after_secs: u64 },
     #[error("Jira returned {status}: {message}")]
     Api { status: u16, message: String },
 }

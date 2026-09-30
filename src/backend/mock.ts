@@ -38,6 +38,7 @@ import { targetOf } from "../lib/proposals";
 import { MockProposals } from "./mockProposals";
 import { seedDrafts } from "./mockDrafts";
 import type { MockOptions } from "./mockWatch";
+import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
 import type { Backend, ReadScope } from "./types";
 
 export type { MockOptions };
@@ -361,10 +362,13 @@ export class MockBackend implements Backend {
 
   /** The multi-project tracker behind the cache reads; the snapshot above keeps serving the current screens. */
   readonly connector: MockConnector;
+  /** The sample GitHub connection: signed out until a sign-in command runs, unless `githubRepos` is set. */
+  readonly github: MockGithub;
 
   /** `options.catalogSize` sets how many projects there are to choose from; the default is the four sample ones. */
   constructor(options: MockOptions = {}) {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
+    this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined);
   }
 
   /** Drafts live in memory; `proposals.draft` stands in for the assistant. */
@@ -482,28 +486,34 @@ export class MockBackend implements Backend {
   }
 
   async watchGet(): Promise<WatchState[]> {
-    return [this.connector.watchState()];
+    const github = this.github.watchState();
+    return github ? [this.connector.watchState(), github] : [this.connector.watchState()];
   }
 
-  async watchSetMode(_connectionId: string, mode: WatchMode) {
+  async watchSetMode(connectionId: string, mode: WatchMode) {
+    if (connectionId === GITHUB_CONNECTION) return this.github.setWatchMode(mode);
     this.connector.setWatchMode(mode);
   }
 
-  async watchSetContainers(_connectionId: string, changes: WatchChange[]) {
+  async watchSetContainers(connectionId: string, changes: WatchChange[]) {
+    if (connectionId === GITHUB_CONNECTION) return this.github.setWatched(changes);
     this.connector.setWatched(changes);
   }
 
-  async watchCatalog(_connectionId: string, query: string, cursor: string | null = null): Promise<CatalogPage> {
+  async watchCatalog(connectionId: string, query: string, cursor: string | null = null): Promise<CatalogPage> {
+    if (connectionId === GITHUB_CONNECTION) return this.github.catalogPage(query, cursor);
     return this.connector.catalogPage(query, cursor);
   }
 
-  async watchSuggestions(): Promise<Footprint[]> {
+  async watchSuggestions(connectionId?: string): Promise<Footprint[]> {
+    if (connectionId === GITHUB_CONNECTION) return this.github.footprint();
     return this.connector.footprint();
   }
 
   private dismissed = new Set<string>();
 
-  async watchUnwatchedAssigned(): Promise<Stray[]> {
+  async watchUnwatchedAssigned(connectionId?: string): Promise<Stray[]> {
+    if (connectionId === GITHUB_CONNECTION) return [];
     return this.connector.strays().filter((s) => !this.dismissed.has(s.container.externalId));
   }
 
@@ -512,7 +522,8 @@ export class MockBackend implements Backend {
   }
 
   onWatchChanged(listener: (c: WatchChanged) => void) {
-    return this.connector.onWatchChanged(listener);
+    const off = [this.connector.onWatchChanged(listener), this.github.onWatchChanged(listener)];
+    return () => off.forEach((f) => f());
   }
 
   /** The sample data has no background check to run, so nothing is ever announced. */
@@ -553,9 +564,32 @@ export class MockBackend implements Backend {
   }
 
   async connectionsList(): Promise<ConnectionInfo[]> {
-    return [
-      { id: MOCK_CONNECTION, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null },
-    ];
+    const sample: ConnectionInfo = { id: MOCK_CONNECTION, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null };
+    return this.github.connected ? [sample, this.github.info()] : [sample];
+  }
+
+  async githubSignInOptions() {
+    return this.github.signInOptions();
+  }
+
+  async githubConnectToken(token: string) {
+    return this.github.connectToken(token);
+  }
+
+  async githubImportGhToken() {
+    return this.github.importGhToken();
+  }
+
+  async githubDeviceStart() {
+    return this.github.deviceStart();
+  }
+
+  async githubDevicePoll() {
+    return this.github.devicePoll();
+  }
+
+  async githubDisconnect(connectionId: string) {
+    this.github.disconnect(connectionId);
   }
 
   onCacheChanged(listener: (c: CacheChanged) => void) {

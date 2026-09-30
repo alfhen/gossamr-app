@@ -15,9 +15,11 @@ import type {
   Transition,
   Uploaded,
   ConnectionInfo,
+  DeviceStart,
   FeedPage,
   FeedQuery,
   Footprint,
+  GithubSignInOptions,
   Stray,
   WatchChange,
   WatchChanged,
@@ -86,6 +88,18 @@ export interface Backend {
   cacheTransitions(ref: ItemRef): Promise<WorkMove[]>;
   /** The signed-in connections with their sync state. */
   connectionsList(): Promise<ConnectionInfo[]>;
+  /** Which ways of connecting GitHub work here. */
+  githubSignInOptions(): Promise<GithubSignInOptions>;
+  /** Validates a personal access token (classic or fine-grained) and connects the account it belongs to. */
+  githubConnectToken(token: string): Promise<ConnectionInfo>;
+  /** Connects with the token `gh auth token` prints. Runs `gh` only when this is called. */
+  githubImportGhToken(): Promise<ConnectionInfo>;
+  /** Starts the browser device flow: show `userCode`, open `verificationUri`, then await `githubDevicePoll`. */
+  githubDeviceStart(): Promise<DeviceStart>;
+  /** Resolves with the connection once the code is authorised; rejects if it expires or is denied. */
+  githubDevicePoll(): Promise<ConnectionInfo>;
+  /** Forgets the account's token and deletes what was cached for it. */
+  githubDisconnect(connectionId: string): Promise<void>;
   /** Events recorded for an item, newest first. */
   cacheEvents(ref: ItemRef): Promise<WorkEvent[]>;
   /** Events across every item, newest first, one page at a time. Reading state (`unread`) is the inbox's, so `setUnread` marks an entry read. */

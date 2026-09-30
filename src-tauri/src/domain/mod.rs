@@ -5,6 +5,7 @@
 //! below once they have one.
 #![allow(dead_code, unused_imports)]
 
+mod code;
 mod doc;
 mod event;
 mod filter;
@@ -14,7 +15,10 @@ mod watch;
 mod workflow;
 
 pub use doc::{Block, Doc, Inline, Mark};
-pub use event::{CheckState, CodeChange, CodeChangeState, Event, EventKind, FeedCursor, FeedEntry, FeedPage, FeedQuery, Subject};
+pub use code::{
+    clip, ChangedFile, CheckState, CodeChange, CodeChangeKind, CodeChangeState, CommitInfo, DevLink, LinkSource, PullRequestDetail, ReviewInfo, ReviewState, BODY_LIMIT,
+};
+pub use event::{Event, EventKind, FeedCursor, FeedEntry, FeedPage, FeedQuery, Subject};
 pub use filter::{Filter, FilterContext};
 pub use item::{
     Comment, Container, ContainerRef, Identity, ItemKind, ItemRef, Link, LinkKind, Person,
