@@ -1,15 +1,22 @@
 import { docFromText } from "../lib/docs";
 import { compileFilter, itemKey, type FilterContext } from "../lib/filter";
 import { canMove, nextStatuses, statusOf } from "../lib/workflow";
+import { MockWatch, type MockOptions } from "./mockWatch";
 import type {
+  CatalogPage,
   ContainerRef,
   FeedEntry,
   FeedPage,
   FeedQuery,
+  Footprint,
   ItemRef,
   Person,
   PersonRef,
+  Stray,
   StatusDef,
+  WatchChange,
+  WatchMode,
+  WatchState,
   WorkCategory,
   WorkComment,
   WorkContainer,
@@ -91,6 +98,20 @@ const PROJECTS: Project[] = [
     statuses: [["New", "todo"], ["Investigating", "active"], ["Waiting on customer", "active"], ["Resolved", "done"]],
   },
 ];
+
+/** The four sample projects, then quiet ones with no items, so the catalog can be as big as a test needs. */
+function catalogOf(size: number): Project[] {
+  const extra = Math.max(0, size - PROJECTS.length);
+  return [
+    ...PROJECTS,
+    ...Array.from({ length: extra }, (_, n): Project => {
+      const key = `P${String(n + PROJECTS.length + 1).padStart(2, "0")}`;
+      return { key, name: `Project ${key.slice(1)}`, statuses: [["To Do", "todo"], ["In Progress", "active"], ["Done", "done"]] };
+    }),
+  ];
+}
+
+const CATALOG_PAGE = 50;
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 export const statusId = (project: string, name: string) => `${project.toLowerCase()}-${slug(name)}`;
@@ -247,11 +268,18 @@ export class MockConnector {
   private seq = 0;
   private nextNumber: Record<string, number> = {};
 
+  readonly watch: MockWatch;
+  private catalog: Project[];
+  private watchListeners = new Set<(c: Change) => void>();
+
   constructor(
     private readonly now: number = Date.now(),
     private readonly onChange: (c: Change) => void = () => {},
+    options: MockOptions = {},
   ) {
-    this.containers = PROJECTS.map((p) => ({ ref: containerRef(p.key), key: p.key, name: p.name, workflow: workflowOf(p) }));
+    this.catalog = catalogOf(options.catalogSize ?? PROJECTS.length);
+    this.watch = new MockWatch(MOCK_CONNECTION, this.catalog.length);
+    this.containers = this.catalog.map((p) => ({ ref: containerRef(p.key), key: p.key, name: p.name, workflow: workflowOf(p) }));
     const at = (minutes: number) => new Date(this.now - minutes * 60_000).toISOString();
     const statusIn = (project: string, name: string) => this.containers.find((c) => c.key === project)!.workflow.statuses.find((s) => s.name === name)!;
 
@@ -317,7 +345,7 @@ export class MockConnector {
     const out = new Set<string>();
     for (const [key, events] of this.events) {
       const item = this.items.get(key);
-      if (!item) continue;
+      if (!item || !this.watch.isWatched(item.container.externalId)) continue;
       const byOthers = events.filter((e) => e.actor && e.actor.accountId !== mine);
       const unread = byOthers.some((e) => this.now - new Date(e.at).getTime() < UNREAD_WINDOW_MINUTES * 60_000 && !this.markedRead.has(e.id));
       if (unread) {
@@ -340,9 +368,9 @@ export class MockConnector {
     return ref.connectionId === MOCK_CONNECTION && this.items.has(ref.externalId);
   }
 
-  /** Items that match, newest first. */
-  search(filter: WorkFilter): WorkItem[] {
-    const all = [...this.items.values()];
+  /** Items that match, newest first. Only watched containers unless `includeUnwatched`. */
+  search(filter: WorkFilter, includeUnwatched = false): WorkItem[] {
+    const all = [...this.items.values()].filter((i) => includeUnwatched || this.watch.isWatched(i.container.externalId));
     return all.filter(compileFilter(filter, all, this.ctx)).sort((a, b) => b.updated.localeCompare(a.updated));
   }
 
@@ -350,8 +378,91 @@ export class MockConnector {
     return ref.connectionId === MOCK_CONNECTION ? (this.items.get(ref.externalId) ?? null) : null;
   }
 
-  listContainers(): WorkContainer[] {
-    return this.containers;
+  /** A watched item as the cache has it; any other is read "live" and flagged, the way the real backend peeks. */
+  cacheItem(ref: ItemRef): WorkItem | null {
+    const item = this.item(ref);
+    return item && this.watch.isWatched(item.container.externalId) ? item : this.peek(ref);
+  }
+
+  peek(ref: ItemRef): WorkItem | null {
+    const item = this.item(ref);
+    return item ? { ...item, unwatched: !this.watch.isWatched(item.container.externalId) } : null;
+  }
+
+  listContainers(includeUnwatched = false): WorkContainer[] {
+    return this.containers.filter((c) => includeUnwatched || this.watch.isWatched(c.ref.externalId));
+  }
+
+  watchState(): WatchState {
+    return this.watch.state((id) => {
+      const c = this.containers.find((x) => x.ref.externalId === id);
+      return { key: c?.key ?? id, name: c?.name ?? id, cachedItems: [...this.items.values()].filter((i) => i.container.externalId === id).length };
+    });
+  }
+
+  setWatchMode(mode: WatchMode) {
+    this.watch.setMode(mode);
+    this.watchChanged();
+  }
+
+  setWatched(changes: WatchChange[]) {
+    this.watch.apply(changes);
+    this.watchChanged();
+  }
+
+  private watchChanged() {
+    this.watchListeners.forEach((l) => l({ connectionId: MOCK_CONNECTION }));
+    this.onChange({ connectionId: MOCK_CONNECTION });
+  }
+
+  onWatchChanged(listener: (c: Change) => void) {
+    this.watchListeners.add(listener);
+    return () => void this.watchListeners.delete(listener);
+  }
+
+  /** The catalog, matching on key or name, fifty at a time. */
+  catalogPage(query: string, cursor: string | null): CatalogPage {
+    const q = query.trim().toLowerCase();
+    const matches = this.containers.filter((c) => !q || c.key.toLowerCase().includes(q) || c.name.toLowerCase().includes(q));
+    const start = cursor ? Number(cursor) : 0;
+    const page = matches.slice(start, start + CATALOG_PAGE);
+    return {
+      containers: page.map((c) => ({ ref: c.ref, key: c.key, name: c.name, kind: null, archived: false, lastActive: null, itemHint: null, watched: this.watch.isWatched(c.ref.externalId) })),
+      next: start + CATALOG_PAGE < matches.length ? String(start + CATALOG_PAGE) : null,
+      offline: false,
+    };
+  }
+
+  /** Where the signed-in person is involved, counted from the sample items. */
+  footprint(): Footprint[] {
+    const byProject = new Map<string, Footprint>();
+    for (const i of this.items.values()) {
+      const mine = i.assignee?.accountId === this.me.accountId;
+      const reported = i.reporter?.accountId === this.me.accountId;
+      if (!mine && !reported) continue;
+      const id = i.container.externalId;
+      const c = this.containers.find((x) => x.ref.externalId === id)!;
+      const f = byProject.get(id) ?? { container: c.ref, key: c.key, name: c.name, assigned: 0, reported: 0, watching: 0, commented: null, mentioned: null, lastTouch: null };
+      if (mine) f.assigned += 1;
+      if (reported) f.reported += 1;
+      if (!f.lastTouch || i.updated > f.lastTouch) f.lastTouch = i.updated;
+      byProject.set(id, f);
+    }
+    return [...byProject.values()].sort((a, b) => b.assigned - a.assigned || a.key.localeCompare(b.key));
+  }
+
+  /** Open items assigned to the person in projects they don't watch. */
+  strays(): Stray[] {
+    const out = new Map<string, Stray>();
+    for (const i of this.items.values()) {
+      const id = i.container.externalId;
+      if (i.assignee?.accountId !== this.me.accountId || i.status.category === "done" || this.watch.isWatched(id)) continue;
+      const c = this.containers.find((x) => x.ref.externalId === id)!;
+      const s = out.get(id) ?? { container: c.ref, containerName: c.name, keys: [] };
+      s.keys.push(i.item.key);
+      out.set(id, s);
+    }
+    return [...out.values()];
   }
 
   workflow(c: ContainerRef): Workflow | null {
@@ -395,6 +506,8 @@ export class MockConnector {
       if (q.mentionsOnly && !entry.mention) continue;
       if (q.unreadOnly && !entry.unread) continue;
       if (q.container && this.items.get(entry.item.externalId)?.container.externalId !== q.container.externalId) continue;
+      const container = this.items.get(entry.item.externalId)?.container.externalId;
+      if (!q.includeUnwatched && (!container || !this.watch.isWatched(container))) continue;
       matches.push(entry);
     }
     matches.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));

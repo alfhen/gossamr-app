@@ -13,6 +13,7 @@ import type {
   Proposal,
   ProposalStateKind,
   StatusDef,
+  WatchState,
   WorkComment,
   WorkContainer,
   WorkEvent,
@@ -41,6 +42,8 @@ interface WorkspaceState {
   moves: Record<string, { statusId: string; to: StatusDef[] }>;
   /** The signed-in connections and how their sync is going. */
   connections: ConnectionInfo[];
+  /** What each connection follows. Items, containers, counts and Pip's view are already limited to it. */
+  watch: WatchState[];
   /** The user's accounts across connections. */
   me: PersonRef[];
   /** Display names by account id. */
@@ -51,6 +54,9 @@ interface WorkspaceState {
   /** Re-reads only the set of items waiting on the user, which read, done and snooze changes alter without a sync. */
   refreshNeedsMe(): Promise<void>;
   refreshProposals(): Promise<void>;
+  refreshWatch(): Promise<void>;
+  /** Reads an item live without storing it, flagged `unwatched` when its project isn't watched. Null when it can't be seen. */
+  peekItem(ref: ItemRef): Promise<WorkItem | null>;
   loadEvents(ref: ItemRef): Promise<void>;
   /** Shows the cached comments at once, then the tracker's. */
   loadComments(ref: ItemRef): Promise<void>;
@@ -79,6 +85,7 @@ const empty = {
   comments: {},
   moves: {},
   connections: [],
+  watch: [],
   me: [],
   names: {},
 };
@@ -90,6 +97,7 @@ let generation = 0;
 let refreshSeq = 0;
 const SYNC_FLAG_MS = 20_000;
 let proposalSeq = 0;
+let watchSeq = 0;
 let needsMeSeq = 0;
 const commentSeq = new Map<string, number>();
 const moving = new Map<string, Promise<StatusDef[] | null>>();
@@ -113,13 +121,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       void get().refreshConnections();
       get().refreshNeedsMe().catch((e) => get().report("Couldn't refresh what needs you", e));
     });
+    // A change the person makes also emits a cache change, which re-reads what the watch set scopes; this only
+    // needs to refresh the settings themselves, including when the app chose for a small catalog.
+    const offWatch = backend.onWatchChanged(() => get().refreshWatch().catch((e) => get().report("Couldn't load what you watch", e)));
     stop = () => {
       offCache();
       offProposals();
       offSnapshot();
+      offWatch();
     };
     try {
-      const [identity] = await Promise.all([backend.cacheMe(), get().refresh(), get().refreshProposals()]);
+      const [identity] = await Promise.all([backend.cacheMe(), get().refresh(), get().refreshProposals(), get().refreshWatch()]);
       if (mine !== generation) return;
       const names = Object.fromEntries(identity.accounts.map((a) => [a.accountId, identity.displayName]));
       set((s) => ({ me: identity.accounts, names: { ...s.names, ...names }, status: "ready" }));
@@ -173,6 +185,18 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const mine = ++proposalSeq;
     const list = await backend.proposalsList();
     if (backend === get().backend && mine === proposalSeq) set({ proposals: byKey(list, (p) => p.id) });
+  },
+
+  async refreshWatch() {
+    const backend = get().backend;
+    if (!backend) return;
+    const mine = ++watchSeq;
+    const watch = await backend.watchGet();
+    if (backend === get().backend && mine === watchSeq) set({ watch });
+  },
+
+  peekItem(ref) {
+    return get().backend?.peekItem(ref) ?? Promise.resolve(null);
   },
 
   async loadEvents(ref) {
@@ -317,7 +341,7 @@ function keyToRef(key: string): ItemRef {
   return { connectionId: key.slice(0, at), externalId, key: externalId };
 }
 
-type State = Pick<WorkspaceState, "items" | "containers" | "events" | "proposals" | "needsMe" | "me" | "names" | "moves">;
+type State = Pick<WorkspaceState, "items" | "containers" | "events" | "proposals" | "needsMe" | "me" | "names" | "moves" | "watch">;
 
 /** The statuses the tracker last said `item` can move to, if it said so for the status the item is in now. */
 export const knownMoves = (s: Pick<State, "moves">, item: WorkItem): StatusDef[] | null => {
@@ -354,6 +378,12 @@ export const itemsInContainer = (s: Pick<State, "items" | "needsMe" | "me">, ref
 export const childrenOf = (s: Pick<State, "items" | "needsMe" | "me">, ref: ItemRef) => itemsByFilter(s, { type: "parent", item: ref });
 
 export const needsMeItems = (s: Pick<State, "items" | "needsMe" | "me">) => itemsByFilter(s, { type: "needsMe" });
+
+/** What `connectionId` follows, or undefined before it has loaded. */
+export const watchOf = (s: Pick<State, "watch">, connectionId: string): WatchState | undefined => s.watch.find((w) => w.connectionId === connectionId);
+
+/** Whether any connection is waiting for the person to choose what to watch. */
+export const needsWatchChoice = (s: Pick<State, "watch">): boolean => s.watch.some((w) => w.needsChoice);
 
 export const eventsFor = (s: Pick<State, "events">, ref: ItemRef): WorkEvent[] => s.events[itemKey(ref)] ?? [];
 

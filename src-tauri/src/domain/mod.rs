@@ -10,6 +10,7 @@ mod event;
 mod filter;
 mod item;
 mod proposal;
+mod watch;
 mod workflow;
 
 pub use doc::{Block, Doc, Inline, Mark};
@@ -22,6 +23,10 @@ pub use item::{
 pub use proposal::{
     reconcile, Basis, CreatedBy, Intent, NewItem, Origin, Patch, Proposal, ProposalQuery, ProposalState, ReconcileContext,
     Revised, Revision, StateKind, Verdict,
+};
+pub use watch::{
+    ContainerPage, ContainerQuery, ContainerScope, ContainerSummary, Depth, Footprint, Stray, Visible, Watch, WatchChange, WatchMode, WatchSet,
+    WatchSource, AUTO_EVERYTHING_MAX,
 };
 pub use workflow::{Category, StatusDef, StatusRef, Transition, Transitions, Workflow};
 
@@ -71,6 +76,7 @@ pub(crate) mod fixtures {
             comment_count: 0,
             last_commenter: None,
             extra: serde_json::Value::Null,
+            unwatched: false,
         }
     }
 }

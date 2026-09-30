@@ -2,8 +2,16 @@ import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   AdfNode,
+  AssignedElsewhere,
   CacheChanged,
+  CatalogPage,
   FeedQuery,
+  Footprint,
+  Stray,
+  WatchChange,
+  WatchChanged,
+  WatchMode,
+  WatchState,
   ConnectionInfo,
   Comment,
   ContainerRef,
@@ -29,7 +37,10 @@ import { MOCK_CONNECTION, MockConnector, PEOPLE } from "./mockConnector";
 import { targetOf } from "../lib/proposals";
 import { MockProposals } from "./mockProposals";
 import { seedDrafts } from "./mockDrafts";
-import type { Backend } from "./types";
+import type { MockOptions } from "./mockWatch";
+import type { Backend, ReadScope } from "./types";
+
+export type { MockOptions };
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
@@ -349,7 +360,12 @@ export class MockBackend implements Backend {
   private simulated = 0;
 
   /** The multi-project tracker behind the cache reads; the snapshot above keeps serving the current screens. */
-  readonly connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)));
+  readonly connector: MockConnector;
+
+  /** `options.catalogSize` sets how many projects there are to choose from; the default is the four sample ones. */
+  constructor(options: MockOptions = {}) {
+    this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
+  }
 
   /** Drafts live in memory; `proposals.draft` stands in for the assistant. */
   readonly proposals = new MockProposals(async (intent, already) => {
@@ -449,16 +465,59 @@ export class MockBackend implements Backend {
     }
   }
 
-  async cacheSearch(filter: WorkFilter) {
-    return this.connector.search(filter);
+  async cacheSearch(filter: WorkFilter, opts: ReadScope = {}) {
+    return this.connector.search(filter, opts.includeUnwatched);
   }
 
   async cacheItem(ref: ItemRef) {
-    return this.connector.item(ref);
+    return this.connector.cacheItem(ref);
   }
 
-  async cacheContainers() {
-    return this.connector.listContainers();
+  async peekItem(ref: ItemRef) {
+    return this.connector.peek(ref);
+  }
+
+  async cacheContainers(opts: ReadScope = {}) {
+    return this.connector.listContainers(opts.includeUnwatched);
+  }
+
+  async watchGet(): Promise<WatchState[]> {
+    return [this.connector.watchState()];
+  }
+
+  async watchSetMode(_connectionId: string, mode: WatchMode) {
+    this.connector.setWatchMode(mode);
+  }
+
+  async watchSetContainers(_connectionId: string, changes: WatchChange[]) {
+    this.connector.setWatched(changes);
+  }
+
+  async watchCatalog(_connectionId: string, query: string, cursor: string | null = null): Promise<CatalogPage> {
+    return this.connector.catalogPage(query, cursor);
+  }
+
+  async watchSuggestions(): Promise<Footprint[]> {
+    return this.connector.footprint();
+  }
+
+  private dismissed = new Set<string>();
+
+  async watchUnwatchedAssigned(): Promise<Stray[]> {
+    return this.connector.strays().filter((s) => !this.dismissed.has(s.container.externalId));
+  }
+
+  async watchDismissAssigned(_connectionId: string, containerId: string) {
+    this.dismissed.add(containerId);
+  }
+
+  onWatchChanged(listener: (c: WatchChanged) => void) {
+    return this.connector.onWatchChanged(listener);
+  }
+
+  /** The sample data has no background check to run, so nothing is ever announced. */
+  onAssignedElsewhere(_listener: (found: AssignedElsewhere) => void) {
+    return () => {};
   }
 
   async cacheWorkflow(container: ContainerRef) {

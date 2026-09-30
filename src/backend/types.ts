@@ -1,6 +1,8 @@
 import type { Mention } from "../lib/mentions";
 import type {
+  AssignedElsewhere,
   CacheChanged,
+  CatalogPage,
   ContainerRef,
   Intent,
   ItemRef,
@@ -15,6 +17,12 @@ import type {
   ConnectionInfo,
   FeedPage,
   FeedQuery,
+  Footprint,
+  Stray,
+  WatchChange,
+  WatchChanged,
+  WatchMode,
+  WatchState,
   WorkComment,
   WorkContainer,
   WorkIdentity,
@@ -24,6 +32,11 @@ import type {
   WorkItem,
   Workflow,
 } from "../types";
+
+/** Reads are limited to watched containers; this lifts that for views that must reach everything, like jumping to a key. */
+export interface ReadScope {
+  includeUnwatched?: boolean;
+}
 
 export interface Backend {
   readonly kind: "mock" | "jira";
@@ -51,10 +64,14 @@ export interface Backend {
   setUnread(eventId: string, unread: boolean): Promise<void>;
   setDone(eventId: string, done: boolean): Promise<void>;
   snooze(eventId: string, until: Date | null): Promise<void>;
-  /** Items in the local cache that match the filter, newest first. Works offline. */
-  cacheSearch(filter: WorkFilter): Promise<WorkItem[]>;
+  /** Items in the local cache that match the filter, newest first. Works offline. Only watched containers unless `includeUnwatched`. */
+  cacheSearch(filter: WorkFilter, opts?: ReadScope): Promise<WorkItem[]>;
+  /** A watched item from the cache. Any other is read live and flagged `unwatched`, without being stored; null when it can't be read. */
   cacheItem(ref: ItemRef): Promise<WorkItem | null>;
-  cacheContainers(): Promise<WorkContainer[]>;
+  /** Reads an item live, never from the cache and never storing it, flagged `unwatched` when its container isn't watched. Null when it doesn't exist or can't be seen. */
+  peekItem(ref: ItemRef): Promise<WorkItem | null>;
+  /** Watched containers only, unless `includeUnwatched`. */
+  cacheContainers(opts?: ReadScope): Promise<WorkContainer[]>;
   cacheWorkflow(container: ContainerRef): Promise<Workflow | null>;
   /** People the cache has seen, so views can name an assignee. */
   cachePeople(): Promise<Person[]>;
@@ -92,6 +109,24 @@ export interface Backend {
   proposalsApprove(id: string): Promise<Proposal>;
   /** Called when drafts changed, including by a sync revising or retiring them. Returns an unsubscribe function. */
   onProposalsChanged(listener: (change: ProposalsChanged) => void): () => void;
+  /** What each signed-in connection follows. */
+  watchGet(): Promise<WatchState[]>;
+  /** Choosing `selected` with nothing watched yet syncs nothing; add containers with `watchSetContainers`. */
+  watchSetMode(connectionId: string, mode: WatchMode): Promise<void>;
+  /** Watches, unwatches (softly: hidden at once, deleted after 14 days), pins, or sets the depth of containers. */
+  watchSetContainers(connectionId: string, changes: WatchChange[]): Promise<void>;
+  /** One page of every container the tracker has, matching the query, each marked watched or not. */
+  watchCatalog(connectionId: string, query: string, cursor?: string | null): Promise<CatalogPage>;
+  /** Where the person was involved in the last 90 days, for suggesting what to watch. Kept for a few hours unless `refresh`. */
+  watchSuggestions(connectionId: string, refresh?: boolean): Promise<Footprint[]>;
+  /** Open items assigned to the person in containers they don't watch. */
+  watchUnwatchedAssigned(connectionId: string, refresh?: boolean): Promise<Stray[]>;
+  /** Stops suggesting a container until something new is assigned there. */
+  watchDismissAssigned(connectionId: string, containerId: string): Promise<void>;
+  /** Called when the watch settings changed, by the person or by the app choosing for a small catalog. */
+  onWatchChanged(listener: (change: WatchChanged) => void): () => void;
+  /** Called when a periodic check finds newly assigned items in unwatched containers. */
+  onAssignedElsewhere(listener: (found: AssignedElsewhere) => void): () => void;
   syncNow(): Promise<void>;
   openUrl(url: string): Promise<void>;
   /** Releases anything the backend holds, when the app switches to another one. */

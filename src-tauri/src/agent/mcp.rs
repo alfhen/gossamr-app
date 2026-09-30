@@ -34,9 +34,25 @@ pub type ChangeSink = Arc<dyn Fn(&str) + Send + Sync>;
 /// Told the request id, the filter and a one-line note when Pip wants the page to narrow its current view.
 pub type ViewSink = Arc<dyn Fn(&str, &Filter, &str) + Send + Sync>;
 
-/// The account each running request belongs to. Tools answer only for runs listed here, and only as that account, so
-/// switching accounts mid-run can't hand the agent another account's tickets.
-pub type Runs = Arc<std::sync::Mutex<std::collections::HashMap<String, Scope>>>;
+/// One running request: the account it belongs to, and the tickets the user handed to Pip in it.
+#[derive(Clone, Debug)]
+pub struct Run {
+    pub scope: Scope,
+    /// Keys (upper case) of tickets the user opened or named in the request. Pip may read and draft on these even in a
+    /// project that isn't watched, and on nothing else outside the watched projects.
+    pub handed: std::collections::HashSet<String>,
+}
+
+impl Run {
+    #[cfg(test)]
+    pub fn new(scope: Scope) -> Self {
+        Self { scope, handed: Default::default() }
+    }
+}
+
+/// The runs in progress. Tools answer only for runs listed here, and only as that run's account, so switching accounts
+/// mid-run can't hand the agent another account's tickets.
+pub type Runs = Arc<std::sync::Mutex<std::collections::HashMap<String, Run>>>;
 
 pub(super) struct McpState {
     pub core: Arc<Core>,
@@ -131,12 +147,18 @@ fn tool_list() -> Vec<Value> {
     vec![
         tool(
             "search_items",
-            "Find items in the local cache. Give a filter, plain text, or both. Returns up to 50 with key, status, assignee and title.",
+            "Find items in the watched projects. Give a filter, plain text, or both. Returns up to 50 with key, status, assignee and title.",
             json!({ "filter": { "type": "object", "description": FILTER_HELP }, "text": text("Plain-text search over titles, keys and descriptions"), "limit": { "type": "integer" } }),
             &[],
         ),
         tool("get_item", "Read an item: fields, description, subtasks, recent comments and history, and the open drafts on it.", json!({ "key": key }), &["key"]),
-        tool("list_containers", "List the projects (containers) items live in, with the id propose_create takes.", json!({}), &[]),
+        tool("list_containers", "List the projects (containers) the user watches, with the id propose_create takes. Items in other projects are out of reach.", json!({}), &[]),
+        tool(
+            "find_containers",
+            "Search every project the user can see, watched or not, by key or name. Use it to pick where propose_create should put a new item. It says nothing about the items in them.",
+            json!({ "query": text("Part of a project key or name") }),
+            &["query"],
+        ),
         tool("get_workflow", "A container's statuses (with the ids propose_transition takes) and how they connect.", json!({ "container": text("Container id from list_containers") }), &["container"]),
         tool("list_next_statuses", "List the statuses an item can move to right now, with their ids.", json!({ "key": key }), &["key"]),
         tool(
@@ -250,18 +272,30 @@ fn described(kind: ItemKind) -> String {
 }
 
 async fn call_tool(st: &McpState, request_id: &str, params: &Value) -> Value {
-    let Some(scope) = st.runs.lock().expect("runs lock poisoned").get(request_id).cloned() else {
+    let Some(run) = st.runs.lock().expect("runs lock poisoned").get(request_id).cloned() else {
         return text("This run has ended.", true);
     };
     let name = params["name"].as_str().unwrap_or_default();
-    match run_tool(st, &scope, request_id, name, &params["arguments"]).await {
+    match run_tool(st, &run, request_id, name, &params["arguments"]).await {
         Ok(t) => text(t, false),
         Err(e) => text(e, true),
     }
 }
 
-async fn run_tool(st: &McpState, scope: &Scope, run_id: &str, name: &str, args: &Value) -> Reply {
+/// Pip reads and drafts on items in watched projects, and on an unwatched one only when the user handed it over in this
+/// run. Creating a new item in any project is a different tool and isn't held to this.
+async fn reachable(st: &McpState, run: &Run, key: &str) -> std::result::Result<(), String> {
+    if run.handed.contains(&key.to_uppercase()) || st.core.is_item_watched(&run.scope, key).await.map_err(|e| e.to_string())? {
+        return Ok(());
+    }
+    Err(format!(
+        "{key} isn't in a project the user watches, so it is out of reach. Only the user can hand it to you, by opening it or naming it in their request."
+    ))
+}
+
+async fn run_tool(st: &McpState, run: &Run, run_id: &str, name: &str, args: &Value) -> Reply {
     let core = &st.core;
+    let scope = &run.scope;
     match name {
         "search_items" => {
             let raw = structured(args, "filter");
@@ -290,6 +324,7 @@ async fn run_tool(st: &McpState, scope: &Scope, run_id: &str, name: &str, args: 
         }
         "get_item" => {
             let key = required(args, "key")?;
+            reachable(st, run, key).await?;
             let ticket = core.ticket(scope, key).await.map_err(|e| format!("Couldn't read {key}: {e}"))?;
             let query = ProposalQuery { states: Some(open_states()), item: Some(item_ref(scope, key)), ..Default::default() };
             let drafts = core.proposals_in(scope, &query).await.unwrap_or_default();
@@ -300,12 +335,27 @@ async fn run_tool(st: &McpState, scope: &Scope, run_id: &str, name: &str, args: 
             }
             Ok(out)
         }
+        "find_containers" => {
+            let found = core.find_containers(scope, required(args, "query")?, SEARCH_DEFAULT).await.map_err(|e| format!("Couldn't search the projects: {e}"))?;
+            if found.is_empty() {
+                return Ok("No project matches.".into());
+            }
+            Ok(found
+                .iter()
+                .map(|(c, watched)| format!("{} · {} · {}{}", c.container_ref.external_id, c.key, c.name, if *watched { "" } else { " · not watched" }))
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
         "list_containers" => {
             let all = core.containers_in(scope).await.map_err(|e| format!("Couldn't list containers: {e}"))?;
             Ok(all.iter().map(|c| format!("{} · {} · {}", c.container_ref.external_id, c.key, c.name)).collect::<Vec<_>>().join("\n"))
         }
         "get_workflow" => {
             let container = ContainerRef { connection_id: Connection::jira_id(scope), external_id: required(args, "container")?.into() };
+            let watched = core.containers_in(scope).await.map_err(|e| e.to_string())?;
+            if !watched.iter().any(|c| c.container_ref == container) {
+                return Err("no such container among the watched ones; call list_containers".into());
+            }
             let w = core.workflow_in(scope, &container).await.map_err(|e| e.to_string())?.ok_or("no such container; call list_containers")?;
             let mut out = w.statuses.iter().map(|s| format!("{} · {} · {:?}", s.id, s.name, s.category)).collect::<Vec<_>>().join("\n");
             match &w.transitions {
@@ -319,6 +369,7 @@ async fn run_tool(st: &McpState, scope: &Scope, run_id: &str, name: &str, args: 
         }
         "list_next_statuses" => {
             let key = required(args, "key")?;
+            reachable(st, run, key).await?;
             let ts = core.transitions(scope, key).await.map_err(|e| format!("Couldn't list statuses for {key}: {e}"))?;
             Ok(ts.iter().map(|t| format!("{}: {} → {}", t.id, t.name, t.to.name)).collect::<Vec<_>>().join("\n"))
         }
@@ -345,21 +396,29 @@ async fn run_tool(st: &McpState, scope: &Scope, run_id: &str, name: &str, args: 
         }
         "propose_comment" => {
             let key = required(args, "key")?;
+            reachable(st, run, key).await?;
             let intent = Intent::Comment { item: item_ref(scope, key), body: Doc::from_text(required(args, "body")?, &[]) };
             propose(st, scope, run_id, intent, None).await
         }
         "propose_subtasks" => {
-            let intent = Intent::Subtasks { parent: item_ref(scope, required(args, "key")?), summaries: summaries_of(args)? };
+            let key = required(args, "key")?;
+            reachable(st, run, key).await?;
+            let intent = Intent::Subtasks { parent: item_ref(scope, key), summaries: summaries_of(args)? };
             propose(st, scope, run_id, intent, None).await
         }
         "propose_transition" => {
-            let (intent, label) = transition(st, scope, required(args, "key")?, required(args, "status_id")?).await?;
+            let key = required(args, "key")?;
+            reachable(st, run, key).await?;
+            let (intent, label) = transition(st, scope, key, required(args, "status_id")?).await?;
             propose(st, scope, run_id, intent, Some(label)).await
         }
         "propose_create" => {
             let container = required(args, "container")?;
-            let all = core.containers_in(scope).await.map_err(|e| e.to_string())?;
-            let found = all.iter().find(|c| c.container_ref.external_id == container).ok_or("no such container; call list_containers")?;
+            // Any project will do, watched or not: a new item reads nothing of what is already there.
+            let found = core.container_named(scope, container).await.map_err(|e| e.to_string())?.ok_or("no such container; call list_containers or find_containers")?;
+            if let Some(parent) = opt(args, "parent") {
+                reachable(st, run, parent).await?;
+            }
             let kind = match opt(args, "kind").unwrap_or("task") {
                 "task" => ItemKind::Task,
                 "bug" => ItemKind::Bug,
@@ -376,7 +435,7 @@ async fn run_tool(st: &McpState, scope: &Scope, run_id: &str, name: &str, args: 
                 priority: None,
                 labels: vec![],
             };
-            propose(st, scope, run_id, Intent::Create { container: found.container_ref.clone(), fields, link: None }, None).await
+            propose(st, scope, run_id, Intent::Create { container: found, fields, link: None }, None).await
         }
         "revise_proposal" => {
             let id = required(args, "id")?;
@@ -454,6 +513,7 @@ pub fn tool_label(name: &str, input: &Value) -> Option<String> {
         "get_item" => format!("Looked up {}", s("key")),
         "search_items" => "Searched the items".into(),
         "list_containers" => "Listed the projects".into(),
+        "find_containers" => format!("Looked for projects matching {}", s("query")),
         "get_workflow" => "Checked a workflow".into(),
         "list_next_statuses" => format!("Checked the statuses for {}", s("key")),
         "list_proposals" => "Checked the open drafts".into(),
@@ -531,12 +591,34 @@ mod tests {
         let views: Views = Arc::default();
         let seen = views.clone();
         let runs: Runs = Arc::default();
-        runs.lock().unwrap().insert("run-1".into(), fx.scope.clone());
+        runs.lock().unwrap().insert("run-1".into(), Run::new(fx.scope.clone()));
         let st = McpState { core: fx.core.clone(), token: "t".into(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), view: Arc::new(move |run, f, note| seen.lock().unwrap().push((run.into(), f.clone(), note.into()))), runs };
         Rig { fx, st, changes, views }
     }
 
     impl Rig {
+        /// The user hands Pip these tickets in this run.
+        fn hand(&self, keys: &[&str]) {
+            self.st.runs.lock().unwrap().get_mut("run-1").unwrap().handed = keys.iter().map(|k| k.to_uppercase()).collect();
+        }
+
+        /// Watches only `CA`, with another project's ticket `OTH-1` in the cache and both projects known.
+        async fn only_ca_watched(&self) {
+            self.fx.add_in("OTH-1", "OTH").await;
+            let ca = self.fx.core.containers_in(&self.fx.scope).await.unwrap().remove(0);
+            let oth = crate::domain::Container {
+                container_ref: ContainerRef { connection_id: ca.container_ref.connection_id.clone(), external_id: "OTH".into() },
+                key: "OTH".into(),
+                name: "Other".into(),
+                workflow: ca.workflow.clone(),
+            };
+            let id = ca.container_ref.connection_id.clone();
+            self.fx.set_containers(&[ca, oth]).await;
+            self.fx.core.watch_set_mode(&id, crate::domain::WatchMode::Selected).await.unwrap();
+            let change = crate::domain::WatchChange { container_id: "CA".into(), watched: Some(true), ..Default::default() };
+            self.fx.core.watch_set_containers(&id, &[change]).await.unwrap();
+        }
+
         async fn call(&self, name: &str, args: Value) -> (String, bool) {
             let r = call_tool(&self.st, "run-1", &json!({ "name": name, "arguments": args })).await;
             (r["content"][0]["text"].as_str().unwrap().to_string(), r["isError"].as_bool().unwrap())
@@ -593,7 +675,7 @@ mod tests {
         let mut names: Vec<String> = tool_list().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         names.sort();
         let mut want = [
-            "search_items", "get_item", "list_containers", "get_workflow", "list_next_statuses", "list_proposals",
+            "search_items", "get_item", "list_containers", "find_containers", "get_workflow", "list_next_statuses", "list_proposals",
             "propose_comment", "propose_transition", "propose_subtasks", "propose_create", "revise_proposal", "retire_proposal",
             "set_view_filter",
         ];
@@ -814,5 +896,100 @@ mod tests {
         r.ok("revise_proposal", json!({ "id": c, "title": "New" })).await;
         let Intent::Create { fields, .. } = r.stored(&c).await.intent else { panic!() };
         assert_eq!((fields.title.as_str(), fields.body.plain_text().as_str()), ("New", "Keep me"));
+    }
+
+    #[tokio::test]
+    async fn search_and_the_container_tools_stop_at_the_watched_projects() {
+        let r = rig().await;
+        r.only_ca_watched().await;
+        let found = r.ok("search_items", json!({})).await;
+        assert!(found.contains("CA-1") && !found.contains("OTH-1"), "{found}");
+        assert!(r.ok("search_items", json!({ "text": "OTH-1" })).await.starts_with("0 items match"));
+        let containers = r.ok("list_containers", json!({})).await;
+        assert!(containers.contains("· CA ·") && !containers.contains("OTH"), "{containers}");
+        assert!(r.err("get_workflow", json!({ "container": "OTH" })).await.contains("watched"));
+        assert!(r.ok("get_workflow", json!({ "container": "CA" })).await.contains("Done"));
+    }
+
+    #[tokio::test]
+    async fn an_unwatched_ticket_is_out_of_reach_until_the_user_hands_it_over() {
+        let r = rig().await;
+        r.only_ca_watched().await;
+        for (tool, args) in [
+            ("get_item", json!({ "key": "OTH-1" })),
+            ("list_next_statuses", json!({ "key": "OTH-1" })),
+            ("propose_comment", json!({ "key": "OTH-1", "body": "hi" })),
+            ("propose_transition", json!({ "key": "OTH-1", "status_id": "10001" })),
+            ("propose_subtasks", json!({ "key": "OTH-1", "summaries": ["a"] })),
+        ] {
+            let e = r.err(tool, args).await;
+            assert!(e.contains("OTH-1 isn't in a project the user watches"), "{tool}: {e}");
+        }
+        assert!(r.drafts().await.is_empty());
+        assert_eq!(r.changes.load(Ordering::SeqCst), 0);
+
+        r.hand(&["oth-1"]);
+        assert!(r.ok("get_item", json!({ "key": "OTH-1" })).await.contains("\"summary\""));
+        assert_eq!(r.ok("list_next_statuses", json!({ "key": "OTH-1" })).await, "10001: Finish → Done");
+        r.ok("propose_comment", json!({ "key": "OTH-1", "body": "hi" })).await;
+        r.ok("propose_transition", json!({ "key": "OTH-1", "status_id": "10001" })).await;
+        r.ok("propose_subtasks", json!({ "key": "OTH-1", "summaries": ["a"] })).await;
+        assert_eq!(r.drafts().await.len(), 3);
+        assert!(r.err("propose_comment", json!({ "key": "OTH-2", "body": "hi" })).await.contains("OTH-2 isn't in a project"), "handing over one ticket hands over only that one");
+        assert!(r.fx.tracker.intents().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_watched_ticket_needs_no_handoff_and_an_uncached_one_is_out_of_reach() {
+        let r = rig().await;
+        r.only_ca_watched().await;
+        r.ok("propose_comment", json!({ "key": "CA-1", "body": "fine" })).await;
+        assert!(r.err("get_item", json!({ "key": "CA-404" })).await.contains("out of reach"));
+    }
+
+    #[tokio::test]
+    async fn pip_may_create_in_any_project_and_can_look_projects_up() {
+        let r = rig().await;
+        r.only_ca_watched().await;
+        let summary = |key: &str| crate::domain::ContainerSummary {
+            container_ref: ContainerRef { connection_id: "jira:site:me".into(), external_id: key.into() },
+            key: key.into(),
+            name: format!("Project {key}"),
+            kind: None,
+            archived: false,
+            last_active: None,
+            item_hint: None,
+        };
+        *r.fx.tracker.catalog.lock().unwrap() = vec![summary("CA"), summary("WHS")];
+
+        let found = r.ok("find_containers", json!({ "query": "whs" })).await;
+        assert_eq!(found, "WHS · WHS · Project WHS · not watched");
+        assert!(r.ok("find_containers", json!({ "query": "ca" })).await.lines().all(|l| !l.contains("not watched")));
+        assert_eq!(r.ok("find_containers", json!({ "query": "zzz" })).await, "No project matches.");
+
+        let created = r.ok("propose_create", json!({ "container": "whs", "title": "Pallet count off" })).await;
+        assert!(created.contains("to create a new task"), "{created}");
+        let drafts = r.drafts().await;
+        assert!(matches!(&drafts[0].intent, Intent::Create { container, .. } if container.external_id == "WHS"));
+        assert!(r.err("propose_create", json!({ "container": "NOPE", "title": "x" })).await.contains("find_containers"));
+    }
+
+    #[tokio::test]
+    async fn a_new_item_cannot_hang_off_a_parent_pip_was_not_handed() {
+        let r = rig().await;
+        r.only_ca_watched().await;
+        r.fx.tracker.catalog.lock().unwrap().push(crate::domain::ContainerSummary {
+            container_ref: ContainerRef { connection_id: "jira:site:me".into(), external_id: "OTH".into() },
+            key: "OTH".into(),
+            name: "Other".into(),
+            kind: None,
+            archived: false,
+            last_active: None,
+            item_hint: None,
+        });
+        let args = json!({ "container": "OTH", "title": "Child", "parent": "OTH-1" });
+        assert!(r.err("propose_create", args.clone()).await.contains("OTH-1 isn't in a project"));
+        r.hand(&["OTH-1"]);
+        r.ok("propose_create", args).await;
     }
 }
