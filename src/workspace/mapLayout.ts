@@ -217,3 +217,7 @@ export function neighbour(nodes: readonly MapNode[], from: string, dir: Directio
   }
   return best?.key ?? null;
 }
+
+export function shownKey(nodes: readonly { key: string }[], key: string | null): string | null {
+  return key !== null && nodes.some((n) => n.key === key) ? key : null;
+}
