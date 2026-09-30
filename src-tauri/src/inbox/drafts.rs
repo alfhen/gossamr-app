@@ -21,6 +21,9 @@ pub enum Edit {
         body: String,
         #[serde(default)]
         mentions: Vec<MentionRef>,
+        /// The comment being answered, quoted after the first paragraph.
+        #[serde(default)]
+        quote: Option<String>,
     },
     Subtasks {
         summaries: Vec<String>,
@@ -30,12 +33,17 @@ pub enum Edit {
 impl Edit {
     fn apply_to(&self, current: &Intent) -> Result<Intent> {
         match (self, current) {
-            (Edit::Comment { body, mentions }, Intent::Comment { item, .. }) => {
+            (Edit::Comment { body, mentions, quote }, Intent::Comment { item, .. }) => {
                 let people: Vec<_> = mentions
                     .iter()
                     .map(|m| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: m.account_id.clone() }, m.name.clone()))
                     .collect();
-                Ok(Intent::Comment { item: item.clone(), body: tracker::comment_doc(body.trim(), &people) })
+                let doc = tracker::comment_doc(body.trim(), &people);
+                let doc = match quote.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+                    Some(q) => doc.with_quote_after_first(q),
+                    None => doc,
+                };
+                Ok(Intent::Comment { item: item.clone(), body: doc })
             }
             (Edit::Subtasks { summaries }, Intent::Subtasks { parent, .. }) => Ok(Intent::Subtasks {
                 parent: parent.clone(),
@@ -164,7 +172,7 @@ impl Core {
 mod tests {
     use super::*;
     use crate::domain::fixtures::item_ref;
-    use crate::domain::Doc;
+    use crate::domain::{Block, Doc};
 
     #[tokio::test]
     async fn a_hand_made_draft_is_pending_by_the_user_and_writes_nothing() {
@@ -237,12 +245,34 @@ mod tests {
     #[test]
     fn a_comment_edit_links_the_mentions_it_names() {
         let current = Intent::Comment { item: item_ref("1"), body: Doc::paragraph("old") };
-        let edit = Edit::Comment { body: " Thanks @Sam ".into(), mentions: vec![MentionRef { account_id: "sam".into(), name: "Sam".into() }] };
+        let edit = Edit::Comment { body: " Thanks @Sam ".into(), mentions: vec![MentionRef { account_id: "sam".into(), name: "Sam".into() }], quote: None };
         let Intent::Comment { item, body } = edit.apply_to(&current).unwrap() else { panic!() };
         assert_eq!(item, item_ref("1"));
         assert_eq!(body.plain_text(), "Thanks @Sam");
         let has_mention = |d: &Doc| format!("{d:?}").contains("Mention");
         assert!(has_mention(&body));
+    }
+
+    #[test]
+    fn a_reply_edit_quotes_the_original_between_the_mention_and_the_answer() {
+        let current = Intent::Comment { item: item_ref("1"), body: Doc::paragraph("old") };
+        let edit: Edit = serde_json::from_str(
+            r#"{"type":"comment","body":"@Sam\n\nAgreed, will do.","mentions":[{"accountId":"sam","name":"Sam"}],"quote":" Ready for another look "}"#,
+        )
+        .unwrap();
+        let Intent::Comment { body, .. } = edit.apply_to(&current).unwrap() else { panic!() };
+        let [Block::Paragraph { content: lead }, Block::Quote { content: quoted }, Block::Paragraph { .. }] = body.blocks.as_slice() else { panic!("{:?}", body.blocks) };
+        assert!(matches!(lead[0], crate::domain::Inline::Mention { .. }));
+        assert_eq!(Doc { blocks: quoted.clone() }.plain_text(), "Ready for another look");
+        assert!(body.plain_text().ends_with("Agreed, will do."));
+    }
+
+    #[test]
+    fn a_single_paragraph_reply_still_ends_with_the_quote() {
+        let current = Intent::Comment { item: item_ref("1"), body: Doc::paragraph("old") };
+        let edit = Edit::Comment { body: "Thanks".into(), mentions: vec![], quote: Some("q".into()) };
+        let Intent::Comment { body, .. } = edit.apply_to(&current).unwrap() else { panic!() };
+        assert!(matches!(body.blocks.as_slice(), [Block::Paragraph { .. }, Block::Quote { .. }]));
     }
 
     #[test]

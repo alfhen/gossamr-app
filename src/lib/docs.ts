@@ -50,3 +50,11 @@ export function docFromText(text: string): WorkDoc {
     })),
   };
 }
+
+/** The doc with `excerpt` quoted after its first paragraph, the shape a reply is posted in. */
+export function quoteAfterFirst(doc: WorkDoc, excerpt: string): WorkDoc {
+  const quote: WorkBlock = { type: "quote", content: [{ type: "paragraph", content: [{ type: "text", text: excerpt, marks: [] }] }] };
+  const blocks = [...doc.blocks];
+  blocks.splice(Math.min(1, blocks.length), 0, quote);
+  return { blocks };
+}

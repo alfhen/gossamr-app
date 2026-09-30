@@ -1,4 +1,4 @@
-import { docFromText } from "../lib/docs";
+import { docFromText, docText } from "../lib/docs";
 import { compileFilter, itemKey, type FilterContext } from "../lib/filter";
 import { canMove, nextStatuses, statusOf } from "../lib/workflow";
 import { MockWatch, type MockOptions } from "./mockWatch";
@@ -18,6 +18,7 @@ import type {
   WatchMode,
   WatchState,
   WorkCategory,
+  WorkDoc,
   WorkComment,
   WorkContainer,
   WorkEvent,
@@ -201,6 +202,20 @@ const LINKS: [string, string, WorkLink["kind"]][] = [
   ["SUP-11", "DEVOPS-473", "relates"],
 ];
 
+/** Replies to DEVOPS-471's comments: the quoted comment's author and text, then what the replier wrote. */
+const REPLIES: [key: string, author: PersonId, minutesAgo: number, to: PersonId, quoted: string, text: string][] = [
+  ["DEVOPS-471", "me", 60 * 4, "priya", "Looks right to me. One nit: the jitter should be full jitter, not equal jitter.", "Agreed, switching to full jitter in the next push."],
+  ["DEVOPS-471", "sam", 60 * 2, "jonas", "Stack from staging: Error: connect ETIMEDOUT 10.0.12.34:443 at TCPConnectWrap.afterConnect (node:net:1611:16) at /srv/app/node_modules/payment-client/dist/retry/backoffWithJitter.js:88:21", "That timeout is the connect phase, not the handler. Is the staging egress allow-listed for the provider?"],
+];
+
+const replyDoc = (to: string, who: string, quoted: string, text: string): WorkDoc => ({
+  blocks: [
+    { type: "paragraph", content: [{ type: "mention", person: { connectionId: MOCK_CONNECTION, accountId: to }, name: who }] },
+    { type: "quote", content: [{ type: "paragraph", content: [{ type: "text", text: quoted, marks: [] }] }] },
+    { type: "paragraph", content: [{ type: "text", text, marks: [] }] },
+  ],
+});
+
 const COMMENTS: [key: string, author: PersonId, minutesAgo: number, text: string][] = [
   ["DEVOPS-471", "sam", 90, "Ready for another look, retries now cap at five."],
   ["DEVOPS-471", "mette", 60 * 24 * 3, "Please keep the backoff configurable per provider.\n\nThe reference from the provider docs is https://docs.example.com/payments/webhooks/retries/backoff-and-jitter?source=review&section=delivery-guarantees&utm_campaign=retry-budget-review-2026-q3 and it is long on purpose."],
@@ -311,6 +326,13 @@ export class MockConnector {
       });
       this.nextNumber[project] = Math.max(this.nextNumber[project] ?? 0, Number(r.key.split("-")[1]) + 1);
       this.record(r.key, "itemCreated", "mette", at((r.age + 30) * 24 * 60), null);
+    }
+    for (const [key, author, minutes, to, quoted, text] of REPLIES) {
+      const reply = replyDoc(to, PEOPLE[to], quoted, text);
+      this.record(key, "commentAdded", author, at(minutes), { text: docText(reply), doc: reply });
+      const item = this.items.get(key)!;
+      item.commentCount += 1;
+      item.lastCommenter = personRef(author);
     }
     for (const [from, to, kind] of LINKS) {
       const item = this.items.get(from)!;
@@ -484,7 +506,7 @@ export class MockConnector {
       .map((e) => ({
         id: e.id,
         author: e.actor ?? this.me,
-        body: docFromText(String((e.payload as { text?: unknown } | null)?.text ?? "")),
+        body: (e.payload as { doc?: WorkDoc } | null)?.doc ?? docFromText(String((e.payload as { text?: unknown } | null)?.text ?? "")),
         created: e.at,
         mentions: [],
       }))
@@ -572,12 +594,12 @@ export class MockConnector {
     this.onChange({ connectionId: MOCK_CONNECTION });
   }
 
-  comment(ref: ItemRef, text: string) {
+  comment(ref: ItemRef, text: string, doc?: WorkDoc) {
     const item = this.item(ref);
     if (!item) throw new Error(`${ref.key} isn't in the sample data`);
     const at = new Date().toISOString();
     this.items.set(ref.externalId, { ...item, commentCount: item.commentCount + 1, lastCommenter: this.me, updated: at });
-    this.record(ref.externalId, "commentAdded", "me", at, { text });
+    this.record(ref.externalId, "commentAdded", "me", at, doc ? { text, doc } : { text });
     this.onChange({ connectionId: MOCK_CONNECTION });
   }
 

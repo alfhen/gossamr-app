@@ -401,7 +401,7 @@ export interface ProposalQuery {
 
 /** A person's edit to a draft, in the terms the editor works in. */
 export type ProposalEdit =
-  | { type: "comment"; body: string; mentions: { accountId: string; name: string }[] }
+  | { type: "comment"; body: string; mentions: { accountId: string; name: string }[]; /** A comment being answered, quoted after the first paragraph. */ quote?: string }
   | { type: "subtasks"; summaries: string[] };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */

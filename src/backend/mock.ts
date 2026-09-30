@@ -452,7 +452,7 @@ export class MockBackend implements Backend {
     this.appliedToConnector = [];
     switch (intent.type) {
       case "comment":
-        this.connector.comment(intent.item, docText(intent.body));
+        this.connector.comment(intent.item, docText(intent.body), intent.body);
         return true;
       case "transition":
         this.connector.transition(intent.item, intent.to);

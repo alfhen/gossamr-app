@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { relativeTime } from "../lib/views";
-import { initials, type Note, type PeekSectionId, type SectionChip } from "./peekLogic";
+import { initials, type Note, type ReplyInfo, type PeekSectionId, type SectionChip } from "./peekLogic";
 import { WorkDocView } from "./WorkDocView";
 
 const ICON: Record<PeekSectionId, ReactNode> = {
@@ -20,8 +20,8 @@ export function SectionIcon({ id }: { id: PeekSectionId }) {
 
 const fullDate = (iso: string) => new Date(iso).toLocaleString();
 
-export function CountBadge({ count }: { count: number }) {
-  return <span className="rounded-full bg-ws-sel px-1.5 text-xs leading-[18px] font-semibold text-ws-ink2 tabular-nums">{count}</span>;
+export function CountBadge({ count, accent = false }: { count: number; accent?: boolean }) {
+  return <span className={`rounded-full px-1.5 text-xs leading-[18px] font-semibold tabular-nums ${accent ? "bg-ws-accent-soft text-ws-accent" : "bg-ws-sel text-ws-ink2"}`}>{count}</span>;
 }
 
 export interface SectionCardProps {
@@ -38,22 +38,19 @@ export interface SectionCardProps {
 /** A titled region with a header bar that stays under the section nav while its body scrolls. */
 export function SectionCard({ id, title, count, collapsed = false, onToggle, tone = "plain", children }: SectionCardProps) {
   const icon = id in ICON ? <SectionIcon id={id as PeekSectionId} /> : null;
-  const discussion = tone === "discussion";
-  const bar = `sticky top-9 z-[5] flex w-full items-center gap-2 px-3 py-2 text-left ${collapsed ? "rounded-lg" : "rounded-t-lg"} ${
-    discussion ? "bg-[linear-gradient(var(--color-ws-accent-soft),var(--color-ws-accent-soft)),linear-gradient(var(--color-ws-win),var(--color-ws-win))] text-ws-accent" : "bg-ws-bar text-ws-ink2"
-  }`;
+  const bar = `sticky top-9 z-[5] flex w-full items-center gap-2 bg-ws-bar px-3 py-2 text-left text-ws-ink2 ${collapsed ? "rounded-lg" : "rounded-t-lg"}`;
   const label = (
     <>
       {icon}
       <h3 className="m-0 text-xs font-bold tracking-wide text-ws-ink uppercase">{title}</h3>
-      {count !== undefined && <CountBadge count={count} />}
+      {count !== undefined && <CountBadge count={count} accent={tone === "discussion"} />}
     </>
   );
   return (
     <section
       id={`peek-${id}`}
       data-section={id}
-      className={`grid rounded-lg border border-ws-sep2 bg-ws-win ${discussion ? "border-l-[3px] border-l-ws-accent" : ""}`}
+      className="grid rounded-lg border border-ws-sep2 bg-ws-win"
     >
       {onToggle ? (
         <button type="button" aria-expanded={!collapsed} aria-controls={`peek-${id}-body`} onClick={onToggle} className={`${bar} hover:brightness-95`}>
@@ -68,7 +65,7 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
       <div
         id={`peek-${id}-body`}
         hidden={collapsed}
-        className={`${collapsed ? "hidden" : "grid"} min-w-0 gap-3 rounded-b-lg p-3 ${discussion ? "bg-ws-bar/60" : ""} ${id === "description" ? "" : "border-t border-ws-sep"}`}
+        className={`${collapsed ? "hidden" : "grid"} min-w-0 gap-3 rounded-b-lg p-3 ${id === "description" ? "" : "border-t border-ws-sep"}`}
       >
         {children}
       </div>
@@ -99,30 +96,116 @@ export function Avatar({ name, mine = false, small = false }: { name: string; mi
   return (
     <span
       aria-hidden
-      className={`grid shrink-0 place-items-center rounded-full font-semibold ${small ? "size-5 text-[9px]" : "size-7 text-[11px]"} ${mine ? "bg-ws-accent text-ws-win" : "bg-ws-sel text-ws-ink2"}`}
+      className={`grid shrink-0 place-items-center rounded-full font-semibold ${small ? "size-5 text-[9px]" : "size-7 text-[11px]"} ${mine ? "bg-ws-accent-soft text-ws-accent" : "bg-ws-sel text-ws-ink2"}`}
     >
       {initials(name)}
     </span>
   );
 }
 
-export function CommentCard({ note, now }: { note: Note; now: Date }) {
+const HIGHLIGHT = ["ring-2", "ring-ws-accent/40"];
+
+/** Scrolls to a comment card and outlines it for a moment. */
+export function showComment(id: string) {
+  const el = document.getElementById(commentDomId(id));
+  if (!el) return;
+  const calm = !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
+  el.classList.add(...HIGHLIGHT);
+  setTimeout(() => el.classList.remove(...HIGHLIGHT), 1400);
+}
+
+export const commentDomId = (id: string) => `comment-${id}`;
+
+const LONG_QUOTE = 110;
+
+function ReplyQuote({ reply, onShow }: { reply: ReplyInfo; onShow?(id: string): void }) {
+  const [open, setOpen] = useState(false);
+  const long = reply.quote.length > LONG_QUOTE;
+  const who = reply.replyingTo;
+  return (
+    <div className="grid min-w-0 gap-1 text-xs text-ws-ink3">
+      <p className="m-0 min-w-0 [overflow-wrap:anywhere]">
+        <span aria-hidden>↩ </span>
+        {reply.targetId && onShow ? (
+          <button type="button" onClick={() => onShow(reply.targetId!)} title="Show the comment this answers" className="text-left hover:text-ws-ink2 hover:underline">
+            replying to <b className="font-semibold">{who ?? "a comment"}</b>
+          </button>
+        ) : (
+          <span>
+            replying to <b className="font-semibold">{who ?? "a comment"}</b>
+          </span>
+        )}
+      </p>
+      <blockquote data-reply-quote className={`m-0 min-w-0 text-sm [overflow-wrap:anywhere] ${open ? "" : "line-clamp-2"}`}>
+        {reply.quote}
+      </blockquote>
+      {long && (
+        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="justify-self-start text-xs font-semibold text-ws-ink2 hover:underline">
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export interface CommentCardProps {
+  note: Note;
+  now: Date;
+  onReply?(note: Note): void;
+  /** Scrolls to an earlier comment; omitted where there is nothing to scroll. */
+  onShow?(id: string): void;
+}
+
+export const REPLY_KEY = "r";
+
+export function CommentCard({ note, now, onReply, onShow }: CommentCardProps) {
+  const reply = note.reply;
+  const onKey = (ev: KeyboardEvent<HTMLLIElement>) => {
+    if (!onReply || ev.key.toLowerCase() !== REPLY_KEY || ev.metaKey || ev.ctrlKey || ev.altKey || ev.defaultPrevented) return;
+    if (ev.target instanceof HTMLElement && (ev.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName))) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    onReply(note);
+  };
   return (
     <li
+      id={commentDomId(note.id)}
       data-comment={note.mine ? "mine" : "other"}
-      className={`grid min-w-0 gap-2 rounded-md border border-l-[3px] p-3 ${
-        note.mine ? "border-ws-sep border-l-ws-accent bg-ws-accent-soft" : "border-ws-sep border-l-ws-sep2 bg-ws-win"
+      data-reply={reply ? "true" : undefined}
+      tabIndex={onReply ? 0 : undefined}
+      onKeyDown={onKey}
+      className={`group grid min-w-0 scroll-mt-24 gap-2 rounded-md border border-ws-sep bg-ws-bar/40 p-3 transition-shadow outline-none focus-visible:ring-2 focus-visible:ring-ws-accent/40 ${
+        reply ? "border-l-2 border-l-ws-accent/50" : ""
       }`}
     >
       <div className="flex min-w-0 items-center gap-2">
-        <Avatar name={note.who} mine={note.mine} />
+        <Avatar name={note.who} mine={note.mine} small />
         <b className="min-w-0 truncate text-ws-ink">{note.who}</b>
-        {note.mine && <span className="shrink-0 rounded bg-ws-accent px-1.5 text-xs leading-[18px] font-semibold text-ws-win">you</span>}
-        <time dateTime={note.at} title={fullDate(note.at)} className="ml-auto shrink-0 text-xs text-ws-ink3">
+        {note.mine && <span className="shrink-0 text-xs font-semibold text-ws-accent">you</span>}
+        <time dateTime={note.at} title={fullDate(note.at)} className="shrink-0 text-xs text-ws-ink3">
           {relativeTime(note.at, now)}
         </time>
+        {onReply && (
+          <button
+            type="button"
+            onClick={() => onReply(note)}
+            title={`Reply to ${note.who} (press ${REPLY_KEY.toUpperCase()} on this comment)`}
+            aria-label={`Reply to ${note.who}`}
+            className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold text-ws-ink3 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-ws-hover hover:text-ws-ink2 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+          >
+            <span aria-hidden>↩ </span>Reply
+          </button>
+        )}
       </div>
-      {note.doc ? (
+      {reply && <ReplyQuote reply={reply} onShow={onShow} />}
+      {reply ? (
+        reply.body.blocks.length > 0 && (
+          <div className="min-w-0 [overflow-wrap:anywhere]">
+            <WorkDocView doc={reply.body} />
+          </div>
+        )
+      ) : note.doc ? (
         <div className="min-w-0 [overflow-wrap:anywhere]">
           <WorkDocView doc={note.doc} />
         </div>
