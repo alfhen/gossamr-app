@@ -1,9 +1,11 @@
 import { useState, type KeyboardEvent } from "react";
-import { containerKey, describeFilter, filterChips } from "../lib/filter";
-import type { ContainerRef, WorkContainer, WorkFilter } from "../types";
-import { allContainers, useItemsByFilter, useWorkspace } from "../workspaceStore";
-import { projectOf, refine, withoutChip } from "./filters";
+import { ALL, containerKey, describeFilter } from "../lib/filter";
+import type { ContainerRef, WorkContainer } from "../types";
+import { filterChips } from "../lib/filter";
+import { projectOf, sameProject, refine, scopeTo, showsEntry, visibleChips, withoutChip, withProject } from "./filters";
 import { useActiveTab, useLookup } from "./hooks";
+import { SaveViewInline } from "./SavedViews";
+import { buildTabItems } from "./tabItems";
 import { useTabs } from "./tabsStore";
 
 export function ChipRow({ chips, onRemove }: { chips: { label: string }[]; onRemove(index: number): void }) {
@@ -55,28 +57,28 @@ export function ProjectSwitcher({
 export function FilterBar() {
   const tab = useActiveTab();
   const lookup = useLookup();
-  const containers = useWorkspace((s) => s.containers);
-  const setFilter = useTabs((s) => s.setFilter);
-  const setProject = useTabs((s) => s.setProject);
-  const saveView = useTabs((s) => s.saveView);
-  const count = useItemsByFilter(tab.filter).length;
+  const tabs = useTabs((s) => s.tabs);
+  const savedViews = useTabs((s) => s.savedViews);
+  const { setFilter, saveView } = useTabs.getState();
   const [text, setText] = useState("");
 
-  const chips: WorkFilter[] = filterChips(tab.filter);
+  const stand = buildTabItems(tabs, tab.id, savedViews, () => "").find((i) => i.active && i.kind !== "custom");
+  const chips = visibleChips(tab.filter, stand?.filter ?? null);
+  const project = projectOf(tab.filter);
+  const saved = savedViews.find((v) => showsEntry(v.filter, tab.filter) && sameProject(projectOf(v.filter), project));
 
   const onKeyDown = (ev: KeyboardEvent<HTMLInputElement>) => {
     if (ev.key === "Enter" && text.trim()) {
       setFilter(refine(tab.filter, text, lookup));
       setText("");
     } else if (ev.key === "Backspace" && !text && chips.length) {
-      setFilter(withoutChip(tab.filter, chips.length - 1));
+      setFilter(withoutChip(tab.filter, chips[chips.length - 1].index));
     }
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-ws-sep px-6 py-2">
-      <ProjectSwitcher containers={allContainers({ containers })} value={projectOf(tab.filter)} onChange={setProject} />
-      <ChipRow chips={chips.map((c) => ({ label: describeFilter(c, lookup) }))} onRemove={(i) => setFilter(withoutChip(tab.filter, i))} />
+    <div className="flex flex-wrap items-center gap-2 px-6 pt-2.5 pb-1">
+      <ChipRow chips={chips.map((c) => ({ label: describeFilter(c.chip, lookup) }))} onRemove={(i) => setFilter(withoutChip(tab.filter, chips[i].index))} />
       <input
         type="text"
         aria-label="Filter"
@@ -86,14 +88,17 @@ export function FilterBar() {
         onKeyDown={onKeyDown}
         className="min-w-[200px] flex-1 rounded-md bg-transparent px-2 py-1 outline-none placeholder:text-ws-ink3 focus-visible:bg-ws-hover"
       />
-      <span className="text-sm text-ws-ink3" aria-live="polite">
-        {count} {count === 1 ? "item" : "items"}
-      </span>
       {chips.length > 0 && (
-        <button type="button" className="text-sm text-ws-ink3 underline" onClick={() => saveView(describeFilter(tab.filter, lookup))}>
-          Save view
+        <button type="button" className="shrink-0 text-sm text-ws-ink3 underline hover:text-ws-ink" onClick={() => setFilter(scopeTo(stand?.filter ?? ALL, project))}>
+          Reset
         </button>
       )}
+      {filterChips(tab.filter).some((c) => c.type !== "container") &&
+        (saved ? (
+          <span className="shrink-0 text-sm text-ws-ink3">Saved as {saved.name}</span>
+        ) : (
+          <SaveViewInline suggested={describeFilter(withProject(tab.filter, null), lookup)} onSave={saveView} />
+        ))}
     </div>
   );
 }

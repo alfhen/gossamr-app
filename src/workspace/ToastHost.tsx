@@ -5,7 +5,7 @@ export function ToastHost() {
   const toasts = useToasts((s) => s.toasts);
   const dismiss = useToasts((s) => s.dismiss);
   return (
-    <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-4 left-4 z-50 grid max-w-[min(420px,calc(100vw-2rem))] gap-2">
+    <div role="status" aria-live="polite" className="ws-toasts pointer-events-none fixed bottom-4 left-4 z-50 grid max-w-[min(420px,calc(100vw-2rem))] gap-2">
       {toasts.map((t) => (
         <div
           key={t.id}

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { containerRef } from "../backend/mockConnector";
 import { filterChips } from "../lib/filter";
-import { activeTab, loadTabs, nextMarked, useTabs } from "./tabsStore";
+import { activeTab, dedupeViews, loadTabs, nextMarked, useTabs } from "./tabsStore";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -76,6 +76,113 @@ describe("workspace tabs", () => {
     expect(activeTab(s()).title).toBe("Mine");
     s().openSavedView({ ...view, name: "Again" });
     expect(s().tabs).toHaveLength(2);
+  });
+});
+
+describe("saved views", () => {
+  const saveMine = (name: string) => {
+    s().setFilter({ type: "mine" });
+    return s().saveView(name)!;
+  };
+
+  it("saves whatever filter the tab holds under a trimmed name and names the tab", () => {
+    s().setFilter({ type: "blocked" });
+    const id = s().saveView("  Waiting on others ")!;
+    expect(s().savedViews).toEqual([{ id, name: "Waiting on others", filter: { type: "blocked" } }]);
+    expect(activeTab(s()).title).toBe("Waiting on others");
+    expect(s().saveView("   ")).toBeNull();
+    expect(s().savedViews).toHaveLength(1);
+  });
+
+  it("renames, reorders, pins and removes, and keeps the tabs that show the view in step", () => {
+    const a = saveMine("A");
+    s().setFilter({ type: "blocked" });
+    const b = s().saveView("B")!;
+    s().renameSavedView(b, "  Blocked lately ");
+    expect(s().savedViews.map((v) => v.name)).toEqual(["A", "Blocked lately"]);
+    expect(activeTab(s()).title).toBe("Blocked lately");
+    s().renameSavedView(b, "  ");
+    expect(s().savedViews[1].name).toBe("Blocked lately");
+
+    s().moveSavedView(b, -1);
+    expect(s().savedViews.map((v) => v.id)).toEqual([b, a]);
+    s().moveSavedView(b, -1);
+    s().moveSavedView(a, 1);
+    expect(s().savedViews.map((v) => v.id)).toEqual([b, a]);
+
+    s().pinSavedView(a, true);
+    expect(s().savedViews.find((v) => v.id === a)?.pinned).toBe(true);
+    s().removeSavedView(b);
+    expect(s().savedViews.map((v) => v.id)).toEqual([a]);
+  });
+
+  it("refuses a rename to a name another saved view already has, ignoring case and spaces", () => {
+    const a = saveMine("Mine");
+    s().setFilter({ type: "blocked" });
+    const b = s().saveView("Blocked")!;
+    s().renameSavedView(b, "  mine ");
+    expect(s().savedViews.find((v) => v.id === b)?.name).toBe("Blocked");
+    s().renameSavedView(a, "MINE");
+    expect(s().savedViews.find((v) => v.id === a)?.name).toBe("MINE");
+  });
+
+  it("drops duplicate views when loading, keeping order and any pin", () => {
+    const mine = { type: "mine" } as const;
+    const out = dedupeViews([
+      { id: "1", name: "Mine", filter: mine },
+      { id: "2", name: "Other", filter: { type: "blocked" } },
+      { id: "3", name: " mine", filter: mine, pinned: true },
+      { id: "1", name: "Again", filter: { type: "stale", days: 3 } },
+    ]);
+    expect(out).toEqual([
+      { id: "1", name: "Mine", filter: mine, pinned: true },
+      { id: "2", name: "Other", filter: { type: "blocked" } },
+    ]);
+  });
+
+  it("survives a restart in order, with its pinned state", () => {
+    const a = saveMine("A");
+    s().setFilter({ type: "blocked" });
+    const b = s().saveView("B")!;
+    s().pinSavedView(b, true);
+    const saved = localStorage.getItem("gossamr-tabs")!;
+    vi.stubGlobal("localStorage", { ...memory(), getItem: () => saved });
+    useTabs.setState({ savedViews: [] });
+    reload();
+    expect(s().savedViews.map((v) => [v.id, v.name, v.pinned ?? false])).toEqual([
+      [a, "A", false],
+      [b, "B", true],
+    ]);
+  });
+
+  it("drops stored views it can't read", () => {
+    localStorage.setItem("gossamr-tabs", JSON.stringify({ tabs: [], savedViews: [{ id: 1 }, { id: "v", name: "Ok", filter: { type: "mine" }, pinned: "yes" }] }));
+    expect(loadTabs().savedViews).toEqual([{ id: "v", name: "Ok", filter: { type: "mine" } }]);
+  });
+});
+
+describe("showing a preset", () => {
+  it("re-filters the active tab and keeps its project", () => {
+    s().setProject(containerRef("WEB"));
+    s().showView({ type: "blocked" });
+    expect(s().tabs).toHaveLength(1);
+    expect(filterChips(activeTab(s()).filter)).toEqual([{ type: "blocked" }, { type: "container", container: containerRef("WEB") }]);
+  });
+
+  it("switches to a tab already showing it instead of making another", () => {
+    const first = s().tabs[0].id;
+    s().setFilter({ type: "blocked" });
+    s().openTab({ filter: { type: "mine" } });
+    s().showView({ type: "blocked" });
+    expect(s().activeId).toBe(first);
+    expect(s().tabs).toHaveLength(2);
+  });
+
+  it("leaves a view that names its own project in that project", () => {
+    s().setProject(containerRef("WEB"));
+    s().showView({ type: "and", filters: [{ type: "container", container: containerRef("CA") }, { type: "blocked" }] });
+    expect(filterChips(activeTab(s()).filter)).toContainEqual({ type: "container", container: containerRef("CA") });
+    expect(filterChips(activeTab(s()).filter)).not.toContainEqual({ type: "container", container: containerRef("WEB") });
   });
 });
 
