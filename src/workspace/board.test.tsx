@@ -152,18 +152,29 @@ describe("BoardView", () => {
     return renderToStaticMarkup(<BoardView tab={tab(filter)} items={items} />);
   };
 
-  it("renders a section per project with that project's columns", () => {
+  it("falls back to the three status categories across projects and names each card's status", () => {
     const out = board(itemsByFilter(s(), ALL));
-    for (const name of ["DevOps board", "Campaigns board", "Webshop board", "Support board"]) expect(out).toContain(`aria-label="${name}"`);
-    expect(out).toContain('aria-label="In Review, 2"');
-    expect(out).toContain('aria-label="Scheduled, 1"');
+    expect(out).toContain('aria-label="All projects board"');
+    for (const name of ["To do", "In progress", "Done"]) expect(out).toMatch(new RegExp(`aria-label="${name}, \\d+"`));
+    expect(out).not.toContain('aria-label="DevOps board"');
     expect(out).toContain("DEVOPS-471");
+    expect(out).toContain(">In Review<");
+  });
+
+  it("shows one project's own workflow columns when a project is chosen", () => {
+    const devops = s().containers["mock:DEVOPS"].ref;
+    const filter = { type: "container" as const, container: devops };
+    const out = board(itemsByFilter(s(), filter), filter);
+    expect(out).toContain('aria-label="DevOps board"');
+    expect(out).toContain('aria-label="In Review, 2"');
+    expect(out).not.toContain('aria-label="To do,');
   });
 
   it("shows a pending move as a ghost in the target column and a badge on the card", async () => {
     const wf = s().containers["mock:DEVOPS"].workflow;
     await s().draftTransition(s().items["mock:DEVOPS-490"].item, wf.statuses.find((x) => x.name === "In Review")!);
-    const out = board(itemsByFilter(s(), { type: "container", container: s().containers["mock:DEVOPS"].ref }));
+    const filter = { type: "container" as const, container: s().containers["mock:DEVOPS"].ref };
+    const out = board(itemsByFilter(s(), filter), filter);
     expect(out).toContain("Draft: DEVOPS-490 moves here");
     expect(out).toContain("→ In Review (draft)");
   });

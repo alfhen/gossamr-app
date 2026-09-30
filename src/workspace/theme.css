@@ -91,3 +91,9 @@
 .ws-root ::-webkit-scrollbar-thumb:hover {
   background: var(--color-ws-ink3);
 }
+
+/* Utilities spacing is rem-based and the page root is 13px, which would shrink every gap to 81% of the design's 4px step. */
+.ws-root,
+.ws-toasts {
+  --spacing: 4px;
+}

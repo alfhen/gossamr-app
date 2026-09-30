@@ -6,6 +6,8 @@ import type { ContainerRef, Intent, Proposal, StatusDef, WorkCategory, WorkConta
 
 export interface BoardColumn {
   status: StatusDef;
+  /** Set on the columns of the cross-project board, which stand for a status category rather than one status. */
+  category?: WorkCategory;
   items: WorkItem[];
 }
 
@@ -46,6 +48,41 @@ export function boardSections(items: readonly WorkItem[], containers: Record<str
       return { key, name: container?.name ?? key, code: container?.key ?? key, workflow: { ...workflow, statuses }, columns, count: list.length };
     })
     .sort((a, b) => a.code.localeCompare(b.code));
+}
+
+export const CATEGORY_LABEL: Record<WorkCategory, string> = { todo: "To do", active: "In progress", done: "Done" };
+
+/**
+ * The board for several projects at once: their workflows differ, so the columns are the three status categories
+ * and every project's items sit in the one they belong to.
+ */
+export function categorySection(items: readonly WorkItem[]): BoardSection {
+  const columns = (["todo", "active", "done"] as const).map(
+    (category): BoardColumn => ({
+      category,
+      status: { id: `category:${category}`, name: CATEGORY_LABEL[category], category },
+      items: items.filter((i) => i.status.category === category),
+    }),
+  );
+  return { key: "all", name: "All projects", code: "", workflow: { statuses: columns.map((c) => c.status), transitions: { kind: "any" } }, columns, count: items.length };
+}
+
+/** The status in `own`'s workflow that dropping `item` on a category column would move it to. */
+function categoryTarget(item: WorkItem, own: BoardSection, category: WorkCategory, known: readonly StatusDef[] | null): StatusDef | null {
+  return targetsFor(own.workflow, item, known).find((s) => s.category === category) ?? null;
+}
+
+/** Like `dropVerdict` for a category column; `own` is the section of the item's own project. */
+export function categoryVerdict(item: WorkItem, own: BoardSection, category: WorkCategory, known: readonly StatusDef[] | null = null): DropVerdict {
+  if (item.status.category === category) return "same";
+  return categoryTarget(item, own, category, known) ? "ok" : "invalid";
+}
+
+export function planCategoryDrop(item: WorkItem, own: BoardSection, category: WorkCategory, known: readonly StatusDef[] | null = null): DropPlan {
+  const to = categoryTarget(item, own, category, known);
+  if (item.status.category === category) return { ok: false, reason: null };
+  if (!to) return { ok: false, reason: `${own.name} doesn't allow ${item.status.name} → ${CATEGORY_LABEL[category]}` };
+  return { ok: true, to, intent: { type: "transition", item: item.item, to: to.id } };
 }
 
 /** A tracker that reveals moves per item leaves the graph empty; there the backend is the one to refuse a move. */

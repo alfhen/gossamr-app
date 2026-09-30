@@ -16,7 +16,7 @@ import { PipPane } from "./PipPane";
 import { applyTheme, usePrefs } from "./prefs";
 import { Rail } from "./Rail";
 import { Settings } from "./Settings";
-import { TabBar } from "./TabBar";
+import { Header } from "./Header";
 import { ToastHost } from "./ToastHost";
 import { useTabs } from "./tabsStore";
 
@@ -98,10 +98,10 @@ export function Workspace({ backend }: { backend: Backend }) {
 
   return (
     <TicketLinksContext.Provider value={workspaceTicketLinks}>
-      <div className="ws-root grid h-full overflow-hidden bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `232px minmax(0,1fr)${pipOpen ? " 380px" : ""}` }}>
+      <div className="ws-root grid h-full overflow-hidden bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `58px minmax(0,1fr)${pipOpen ? " 380px" : ""}` }}>
         <Rail />
         <main id={MAIN_ID} tabIndex={-1} className="relative flex min-h-0 min-w-0 flex-col outline-none">
-          <TabBar />
+          {route === "workspace" ? <Header /> : <div data-tauri-drag-region className="h-[34px] shrink-0" />}
           {route === "workspace" && <FilterBar />}
           {route === "workspace" && <FilterNote />}
           <div className="min-h-0 flex-1">
