@@ -395,6 +395,20 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_posts_as_a_mention_a_blockquote_and_the_answer() {
+        let sam = (PersonRef { connection_id: "c".into(), account_id: "sam".into() }, "Sam".to_string());
+        let doc = Doc::from_text("@Sam\n\nAgreed.", &[sam]).with_quote_after_first("Ready for another look");
+        let adf = from_doc(&doc);
+        let kinds: Vec<_> = adf["content"].as_array().unwrap().iter().map(|n| n["type"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["paragraph", "blockquote", "paragraph"]);
+        assert_eq!(adf["content"][0]["content"][0]["type"], "mention");
+        assert_eq!(adf["content"][0]["content"][0]["attrs"]["id"], "sam");
+        assert_eq!(adf["content"][1]["content"][0]["type"], "paragraph");
+        assert_eq!(adf["content"][1]["content"][0]["content"][0]["text"], "Ready for another look");
+        assert_eq!(to_doc(&adf, "c"), doc);
+    }
+
+    #[test]
     fn empty_text_is_not_sent_to_jira() {
         let doc = Doc { blocks: vec![Block::Paragraph { content: vec![Inline::Text { text: String::new(), marks: vec![] }] }] };
         assert_eq!(from_doc(&doc)["content"][0]["content"], json!([]));

@@ -13,8 +13,8 @@ import { LiveDraftCard } from "./DraftCard";
 import { canvasElement, showMe } from "./jump";
 import { PEEK_DEFAULT } from "./paneSizes";
 import { usePrefs } from "./prefs";
-import { CommentCard, HistoryRow, SectionCard, SectionNav } from "./PeekParts";
-import { commentNotes, displayName, historyNotes, isCollapsed, linkRows, parentCrumb, sectionChips, subtasksOf, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type Subtasks } from "./peekLogic";
+import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
+import { commentNotes, displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, subtasksOf, withReplies, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
 import { useTabs } from "./tabsStore";
 import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
@@ -74,6 +74,8 @@ export interface PeekViewProps {
   collapsed?: Collapsed;
   onToggleSection?(id: PeekSectionId): void;
   onJump?(id: PeekSectionId): void;
+  /** Starts a reply to a comment; replying is not offered when omitted. */
+  onReply?(note: Note): void;
 }
 
 const MOTION = { in: "ws-peek-in", out: "ws-peek-out", none: "" } as const;
@@ -261,7 +263,7 @@ export function PeekView(p: PeekViewProps) {
             {p.comments.length > 0 && (
               <ul className="m-0 grid list-none gap-3 p-0">
                 {p.comments.map((c) => (
-                  <CommentCard key={c.id} note={c} now={p.now} />
+                  <CommentCard key={c.id} note={c} now={p.now} onReply={p.onReply} onShow={showComment} />
                 ))}
               </ul>
             )}
@@ -283,7 +285,7 @@ export function PeekView(p: PeekViewProps) {
   );
 }
 
-function Composer({ item, disabled }: { item: WorkItem; disabled: boolean }) {
+function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; disabled: boolean; reply: ReplyDraft | null; onCancelReply(): void }) {
   const backend = useBackend();
   const names = useWorkspace((s) => s.names);
   const people = useMemo(() => Object.entries(names).map(([accountId, name]) => ({ accountId, name })), [names]);
@@ -302,19 +304,34 @@ function Composer({ item, disabled }: { item: WorkItem; disabled: boolean }) {
     setSent(false);
   }, [itemKey(item.item)]);
 
+  useEffect(() => {
+    if (!reply) return;
+    setText(reply.text);
+    setMentions(reply.mentions);
+    setSent(false);
+    setProblem(null);
+    const field = document.getElementById("peek-composer") as HTMLTextAreaElement | null;
+    field?.scrollIntoView({ block: "nearest" });
+    field?.focus();
+    field?.setSelectionRange(reply.text.length, reply.text.length);
+  }, [reply]);
+
+  const ready = !!text.trim() && (!reply || text.trim() !== reply.text.trim());
+
   const submit = async () => {
-    if (!backend || !text.trim() || disabled) return;
+    if (!backend || !ready || disabled) return;
     setProblem(null);
     try {
       const linked = liveMentions(text, mentions);
       const retry = created.current !== null;
       created.current ??= (await backend.proposalsCreate({ type: "comment", item: item.item, body: docFromText(text) })).id;
-      if (retry || linked.length) await backend.proposalsEdit(created.current, { type: "comment", body: text, mentions: linked });
+      if (retry || linked.length || reply) await backend.proposalsEdit(created.current, { type: "comment", body: text, mentions: linked, ...(reply ? { quote: reply.quote } : {}) });
       created.current = null;
       await useWorkspace.getState().refreshProposals();
       setText("");
       setMentions([]);
       setSent(true);
+      onCancelReply();
     } catch (e) {
       setProblem(e instanceof Error ? e.message : String(e));
     }
@@ -322,6 +339,16 @@ function Composer({ item, disabled }: { item: WorkItem; disabled: boolean }) {
 
   return (
     <div className="grid gap-1.5">
+      {reply && (
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-ws-ink3">
+          <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-ws-hover py-0.5 pr-1 pl-2">
+            <span className="min-w-0 truncate">↩ Replying to <b className="font-semibold text-ws-ink2">{reply.to.who}</b></span>
+            <button type="button" aria-label="Cancel reply" title="Cancel reply" onClick={onCancelReply} className="grid size-4 shrink-0 place-items-center rounded-full leading-none hover:bg-ws-sel">
+              ×
+            </button>
+          </span>
+        </div>
+      )}
       <MentionTextarea
         id="peek-composer"
         value={text}
@@ -334,15 +361,15 @@ function Composer({ item, disabled }: { item: WorkItem; disabled: boolean }) {
         onSubmit={() => void submit()}
         ticketKey={item.item.key}
         people={people}
-        placeholder="Write a comment. It becomes a draft you approve."
+        placeholder={reply ? "Write your reply. It becomes a draft you approve." : "Write a comment. It becomes a draft you approve."}
         className="rounded-md border border-ws-sep2 bg-ws-win"
       />
       <div className="flex items-center gap-2">
         <span role="status" className="text-sm text-ws-ink3">
           {problem ?? (sent ? "Drafted above. Nothing is posted until you approve." : "")}
         </span>
-        <button type="button" disabled={!text.trim() || disabled} onClick={() => void submit()} className="ml-auto rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45">
-          Draft comment
+        <button type="button" disabled={!ready || disabled} onClick={() => void submit()} className="ml-auto rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45">
+          {reply ? "Draft reply" : "Draft comment"}
         </button>
       </div>
     </div>
@@ -464,9 +491,22 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
   const checking = opaque && known === null && !movesFailed;
   const moves = known && opaque ? known : wf && !checking ? targetsFor(wf, item) : [];
 
-  const comments: Note[] = loadedComments
-    ? loadedComments.map((c) => ({ id: c.id, at: c.created, who: displayName(names, c.author.accountId), text: docText(c.body), doc: c.body, mine: isMine(c.author.accountId) }))
-    : commentNotes(events, (id) => displayName(names, id), isMine);
+  const comments: Note[] = useMemo(
+    () =>
+      withReplies(
+        loadedComments
+          ? loadedComments
+              .map((c) => ({ id: c.id, at: c.created, who: displayName(names, c.author.accountId), text: docText(c.body), doc: c.body, mine: isMine(c.author.accountId), accountId: c.author.accountId }))
+              .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+          : commentNotes(events, (id) => displayName(names, id), isMine),
+      ),
+    [loadedComments, events, names, me],
+  );
+  const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
+  const startReply = (note: Note) => {
+    usePrefs.getState().setPeekSection("comments", false);
+    setReplyTo(replyDraft(note));
+  };
   const description = item.body.blocks.length ? <WorkDocView doc={item.body} /> : <p className="m-0 text-ws-ink3">No description.</p>;
 
   const move = async (to: StatusDef) => {
@@ -502,6 +542,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       collapsed={collapsed}
       onToggleSection={(id) => usePrefs.getState().setPeekSection(id, !collapsed[id])}
       onJump={jump}
+      onReply={readOnly ? undefined : startReply}
       description={description}
       banner={readOnly ? <PeekNotice unwatched={!!item.unwatched} containerName={containerName} connectionId={ref.connectionId} containerId={item.container.externalId} /> : undefined}
       drafts={
@@ -513,7 +554,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
           </SectionCard>
         ) : null
       }
-      composer={readOnly ? null : <Composer item={item} disabled={!backend} />}
+      composer={readOnly ? null : <Composer item={item} disabled={!backend} reply={replyTo} onCancelReply={() => setReplyTo(null)} />}
       notice={notice}
       onMenu={setMenuOpen}
       onMove={(s) => void move(s)}

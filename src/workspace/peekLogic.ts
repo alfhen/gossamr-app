@@ -1,5 +1,7 @@
+import { docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
-import type { ItemRef, WorkDoc, WorkEvent, WorkItem } from "../types";
+import type { Mention } from "../lib/mentions";
+import type { ItemRef, WorkBlock, WorkDoc, WorkEvent, WorkItem } from "../types";
 
 export type LinkKind = "blocks" | "blockedBy" | "relates" | "duplicates" | "duplicatedBy";
 
@@ -50,6 +52,109 @@ export interface Note {
   doc?: WorkDoc;
   /** Written by the signed-in person. */
   mine?: boolean;
+  /** The author's account, for @mentioning them in a reply. */
+  accountId?: string | null;
+  /** Set on a comment that opens with a quote of another comment. */
+  reply?: ReplyInfo;
+}
+
+export interface ReplyInfo {
+  /** The quoted text, as plain text. */
+  quote: string;
+  /** Who the reply answers: the matched comment's author, else the person @mentioned above the quote. */
+  replyingTo: string | null;
+  /** The earlier comment the quote was matched to. */
+  targetId: string | null;
+  /** What the author wrote below the quote. */
+  body: WorkDoc;
+}
+
+export const EXCERPT_LENGTH = 200;
+
+const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+
+/** The first `max` characters of `text` on one line, cut at a word boundary where there is one. */
+export function excerpt(text: string, max = EXCERPT_LENGTH): string {
+  const flat = squash(text);
+  if (flat.length <= max) return flat;
+  const cut = flat.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+const comparable = (text: string) => squash(text).replace(/(…|\.\.\.)$/, "").trimEnd().toLowerCase();
+
+const isMentionLead = (b: WorkBlock): string | null => {
+  if (b.type !== "paragraph") return null;
+  const mentions = b.content.filter((i) => i.type === "mention");
+  const onlyMentions = b.content.every((i) => i.type === "mention" || (i.type === "text" && !i.text.trim()));
+  return onlyMentions && mentions[0]?.type === "mention" ? mentions[0].name : null;
+};
+
+interface Opening {
+  mentioned: string | null;
+  quote: string;
+  body: WorkDoc;
+}
+
+/** A comment body that opens with a quote block, optionally after a paragraph holding only an @mention. */
+function opening(doc: WorkDoc | undefined): Opening | null {
+  if (!doc) return null;
+  const mentioned = doc.blocks[0] ? isMentionLead(doc.blocks[0]) : null;
+  const at = mentioned === null ? 0 : 1;
+  const block = doc.blocks[at];
+  if (block?.type !== "quote") return null;
+  return { mentioned, quote: squash(docText({ blocks: [block] })), body: { blocks: doc.blocks.slice(at + 1) } };
+}
+
+/** What a comment says of its own: for a reply, the text below the quote. */
+export const ownText = (n: Note): string => (n.reply ? docText(n.reply.body) : n.text);
+
+/**
+ * Marks the comments that answer another one. Jira comments are a flat list, so a reply is a comment that opens
+ * with a quote; it is tied to the comment whose text starts with that quote, preferring the @mentioned author and
+ * an earlier comment, and is still a reply when nothing matches.
+ */
+export function withReplies(notes: readonly Note[]): Note[] {
+  const found = notes.map((n) => opening(n.doc));
+  const own = notes.map((n, i) => comparable(found[i] ? docText(found[i]!.body) : n.text));
+  return notes.map((n, i) => {
+    const o = found[i];
+    if (!o) return n;
+    const wanted = comparable(o.quote);
+    const hits = wanted ? notes.flatMap((_, j) => (j !== i && own[j].startsWith(wanted) ? [j] : [])) : [];
+    const pick = (list: number[]) => list.find((j) => notes[j].who === o.mentioned) ?? list[0];
+    const earlier = hits.filter((j) => j < i).reverse();
+    const target = pick(earlier) ?? pick(hits);
+    const reply: ReplyInfo = {
+      quote: o.quote,
+      replyingTo: target !== undefined ? notes[target].who : o.mentioned,
+      targetId: target !== undefined && target < i ? notes[target].id : null,
+      body: o.body,
+    };
+    return { ...n, reply };
+  });
+}
+
+export interface ReplyDraft {
+  /** The comment being answered. */
+  to: { id: string; who: string };
+  /** What the composer starts with: the @mention on its own line above where the answer goes. */
+  text: string;
+  mentions: Mention[];
+  /** The quoted excerpt that is posted between the mention and the answer. */
+  quote: string;
+}
+
+/** How the composer starts when answering `note`. Someone whose name isn't known is quoted but not @mentioned. */
+export function replyDraft(note: Note): ReplyDraft {
+  const person = note.accountId && note.who !== "Someone" ? { accountId: note.accountId, name: note.who } : null;
+  return {
+    to: { id: note.id, who: note.who },
+    text: person ? `@${person.name}\n\n` : "",
+    mentions: person ? [person] : [],
+    quote: excerpt(ownText(note)),
+  };
 }
 
 export type PeekSectionId = "description" | "links" | "comments" | "history";

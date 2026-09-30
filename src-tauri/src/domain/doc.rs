@@ -70,6 +70,13 @@ impl Doc {
         Doc { blocks }
     }
 
+    /// Puts `excerpt` as a quote after the first paragraph, so a reply reads as mention, quote, then the answer.
+    pub fn with_quote_after_first(mut self, excerpt: &str) -> Self {
+        let quote = Block::Quote { content: Doc::paragraph(excerpt).blocks };
+        self.blocks.insert(self.blocks.len().min(1), quote);
+        self
+    }
+
     pub fn plain_text(&self) -> String {
         let mut out = String::new();
         push_blocks(&self.blocks, &mut out);

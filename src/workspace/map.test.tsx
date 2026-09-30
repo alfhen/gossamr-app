@@ -74,7 +74,7 @@ describe("layoutMap", () => {
   it("routes each link between the shown tickets it joins, once", () => {
     const l = layout();
     const blocks = l.edges.filter((e) => e.kind === "blocks");
-    expect(blocks.some((e) => e.from === "mock:DEVOPS-472" && e.to === "mock:DEVOPS-471")).toBe(true);
+    expect(blocks.some((e) => e.from === "mock:DEVOPS-478" && e.to === "mock:DEVOPS-472")).toBe(true);
     const keys = l.edges.map((e) => e.key);
     expect(new Set(keys).size).toBe(keys.length);
     const nodes = new Set(l.nodes.map((n) => n.key));

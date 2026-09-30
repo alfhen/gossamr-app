@@ -1,4 +1,4 @@
-import { docFromText } from "../lib/docs";
+import { docFromText, quoteAfterFirst } from "../lib/docs";
 import { targetOf } from "../lib/proposals";
 import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged } from "../types";
 
@@ -88,7 +88,7 @@ export class MockProposals {
     const { intent } = this.pending(id);
     if (edit.type === "comment" && intent.type === "comment") {
       if (!edit.body.trim()) throw new Error("a comment can't be empty");
-      return this.set(id, { intent: { ...intent, body: docFromText(edit.body) }, error: null });
+      return this.set(id, { intent: { ...intent, body: edit.quote?.trim() ? quoteAfterFirst(docFromText(edit.body), edit.quote.trim()) : docFromText(edit.body) }, error: null });
     }
     if (edit.type === "subtasks" && intent.type === "subtasks") {
       if (!edit.summaries.length || edit.summaries.some((s) => !s.trim())) throw new Error("list at least one subtask");

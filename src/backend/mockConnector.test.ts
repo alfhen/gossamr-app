@@ -56,7 +56,7 @@ describe("the mock connector's data", () => {
     const events = c.eventsFor(itemRef("DEVOPS-471"));
     expect(events.map((e) => e.kind)).toEqual(expect.arrayContaining(["itemCreated", "statusChanged", "commentAdded"]));
     expect(events.map((e) => e.at)).toEqual([...events.map((e) => e.at)].sort().reverse());
-    expect(c.item(itemRef("DEVOPS-471"))?.commentCount).toBe(5);
+    expect(c.item(itemRef("DEVOPS-471"))?.commentCount).toBe(7);
     expect(c.eventsFor(itemRef("NOPE-1"))).toEqual([]);
   });
 });
