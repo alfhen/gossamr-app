@@ -34,7 +34,7 @@ describe("section navigation", () => {
 });
 
 describe("section cards", () => {
-  it("are open by default and fold to a header", () => {
+  it("are open by default and fold to a header, keeping the body mounted so a half-written comment survives", () => {
     expect(isCollapsed({}, "comments")).toBe(false);
     expect(isCollapsed({ comments: true }, "comments")).toBe(true);
     const open = renderToStaticMarkup(<SectionCard id="comments" title="Comments" count={2} onToggle={vi.fn()}>body text</SectionCard>);
@@ -43,7 +43,8 @@ describe("section cards", () => {
     expect(open).toContain('id="peek-comments"');
     const folded = renderToStaticMarkup(<SectionCard id="comments" title="Comments" count={2} collapsed onToggle={vi.fn()}>body text</SectionCard>);
     expect(folded).toContain('aria-expanded="false"');
-    expect(folded).not.toContain("body text");
+    expect(folded).toMatch(/<div[^>]*hidden=""[^>]*class="hidden /);
+    expect(folded).toContain("body text");
   });
 
   it("has no toggle when it cannot be folded", () => {

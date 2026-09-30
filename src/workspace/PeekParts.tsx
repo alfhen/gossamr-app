@@ -65,11 +65,13 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
       ) : (
         <div className={bar}>{label}</div>
       )}
-      {!collapsed && (
-        <div id={`peek-${id}-body`} className={`grid min-w-0 gap-3 rounded-b-lg p-3 ${discussion ? "bg-ws-bar/60" : ""} ${id === "description" ? "" : "border-t border-ws-sep"}`}>
-          {children}
-        </div>
-      )}
+      <div
+        id={`peek-${id}-body`}
+        hidden={collapsed}
+        className={`${collapsed ? "hidden" : "grid"} min-w-0 gap-3 rounded-b-lg p-3 ${discussion ? "bg-ws-bar/60" : ""} ${id === "description" ? "" : "border-t border-ws-sep"}`}
+      >
+        {children}
+      </div>
     </section>
   );
 }
