@@ -200,8 +200,20 @@ impl Authenticator for Atlassian {
         let refresh = &current.tokens.refresh_token;
         let tokens = self
             .exchange(&app, &[("grant_type", "refresh_token"), ("refresh_token", refresh)], Some(refresh))
-            .await?;
+            .await
+            .map_err(refresh_failure)?;
         Ok(Credentials { tokens, ..current.clone() })
+    }
+}
+
+/// A refresh token that Atlassian no longer honours (revoked, expired, or spent elsewhere) can't be retried into
+/// working, so say that the person has to sign in again instead of showing the raw token error.
+fn refresh_failure(e: Error) -> Error {
+    match e {
+        Error::Api { status: 400 | 401 | 403, message } if message.contains("invalid_grant") => {
+            Error::Auth("Atlassian ended this sign-in (it was revoked or has expired). Sign in to Jira again.".into())
+        }
+        other => other,
     }
 }
 
@@ -362,6 +374,14 @@ mod tests {
         assert_eq!(kept.refresh_token, "old-refresh");
         let err = a.exchange(&client, &[("grant_type", "authorization_code")], None).await.err().unwrap();
         assert!(matches!(err, Error::Auth(_)), "a first sign-in without offline_access has nothing to refresh with");
+    }
+
+    #[test]
+    fn a_dead_refresh_token_asks_for_a_new_sign_in_and_other_failures_pass_through() {
+        let dead = Error::Api { status: 403, message: r#"{"error":"invalid_grant","error_description":"Unknown or invalid refresh token."}"#.into() };
+        assert!(matches!(refresh_failure(dead), Error::Auth(m) if m.contains("Sign in to Jira again")));
+        assert!(matches!(refresh_failure(Error::Api { status: 500, message: "invalid_grant".into() }), Error::Api { status: 500, .. }));
+        assert!(matches!(refresh_failure(Error::Api { status: 400, message: "bad request".into() }), Error::Api { status: 400, .. }));
     }
 
     #[tokio::test]

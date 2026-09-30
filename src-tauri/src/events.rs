@@ -21,6 +21,13 @@ fn label(field: &str) -> Option<&'static str> {
     FIELDS.iter().find(|(f, _)| f.eq_ignore_ascii_case(field)).map(|(_, l)| *l)
 }
 
+/// A field event's text as its parts: the field's label, and the values it moved from and to (`None` when empty).
+pub fn split_field_text(text: &str) -> Option<(&'static str, Option<&str>, Option<&str>)> {
+    let (label, rest) = FIELDS.iter().map(|(_, l)| *l).find_map(|l| Some((l, text.strip_prefix(l)?.strip_prefix(' ')?)))?;
+    let (from, to) = rest.split_once(" → ")?;
+    Some((label, (from != "None").then_some(from), (to != "None").then_some(to)))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewEvent {
     /// Stable across syncs, so inserting the same event twice is a no-op.
@@ -148,6 +155,15 @@ mod tests {
         assert_eq!(events[0].id, "h:500:status");
         assert_eq!(events[1].kind, EventKind::Mention);
         assert_eq!(events[1].id, "c:10");
+    }
+
+    #[test]
+    fn a_field_text_splits_back_into_label_and_values() {
+        assert_eq!(split_field_text("Priority High → Low"), Some(("Priority", Some("High"), Some("Low"))));
+        assert_eq!(split_field_text("Due date None → 2026-10-01"), Some(("Due date", None, Some("2026-10-01"))));
+        assert_eq!(split_field_text("Fix version 1.2 → None"), Some(("Fix version", Some("1.2"), None)));
+        assert_eq!(split_field_text("Something else A → B"), None);
+        assert_eq!(split_field_text("Priority High"), None);
     }
 
     #[test]

@@ -1,0 +1,26 @@
+{
+  "issues": [
+    {
+      "key": "CA-1",
+      "fields": {
+        "summary": "Has many comments",
+        "status": {"id": "3", "name": "In Review", "statusCategory": {"key": "indeterminate"}},
+        "issuetype": {"name": "Story", "hierarchyLevel": 0},
+        "priority": null,
+        "assignee": null,
+        "reporter": {"accountId": "rep", "displayName": "Rep"},
+        "description": "a plain string, not a document",
+        "comment": {"comments": [
+          {"id": "1", "author": {"accountId": "sam", "displayName": "Sam"}, "created": "2026-09-28T10:00:00.000+0200", "body": "also a string"}
+        ], "total": 3, "maxResults": 1, "startAt": 0},
+        "updated": "2026-09-28T10:05:00.000+0200",
+        "labels": []
+      },
+      "changelog": {"histories": [
+        {"id": "9", "created": "2026-09-28T09:00:00.000+0200", "items": [{"field": "priority", "fromString": "Low", "toString": "High"}]}
+      ]}
+    },
+    {"key": "CA-2", "fields": {"summary": "No status at all"}}
+  ],
+  "nextPageToken": "page-2"
+}

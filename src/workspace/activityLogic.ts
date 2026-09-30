@@ -83,6 +83,8 @@ export function verb(e: Pick<FeedEntry, "kind" | "mention">): string {
       return "had a failing check on";
     case "reviewRequested":
       return "asked you to review";
+    case "fieldChanged":
+      return "updated";
   }
 }
 

@@ -245,6 +245,11 @@ impl Db {
         Ok(self.conn.execute("DELETE FROM items WHERE connection_id = ?1 AND synced_at < ?2", params![connection_id, before])?)
     }
 
+    /// Drops one item, for an issue the tracker says is gone. Its events stay.
+    pub fn forget_item(&self, item: &ItemRef) -> Result<bool> {
+        Ok(self.conn.execute("DELETE FROM items WHERE connection_id = ?1 AND external_id = ?2", params![item.connection_id, item.external_id])? > 0)
+    }
+
     /// Replaces the connection's containers and their workflows.
     pub fn replace_containers(&self, connection_id: &str, containers: &[Container], synced_at: &str) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
@@ -468,6 +473,16 @@ mod tests {
         assert_eq!(db.item(&other).unwrap().unwrap().status.id, "todo");
         assert_eq!(db.item(&item_ref("1")).unwrap().unwrap().status.id, "doing");
         assert!(db.item(&item_ref("9")).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_forgotten_item_leaves_the_cache_and_only_that_one() {
+        let db = Db::in_memory().unwrap();
+        seed(&db);
+        assert!(db.forget_item(&item_ref("1")).unwrap());
+        assert!(!db.forget_item(&item_ref("1")).unwrap());
+        assert!(db.item(&item_ref("1")).unwrap().is_none());
+        assert!(db.item(&item_ref("2")).unwrap().is_some());
     }
 
     #[test]

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkEvent } from "../types";
 import { CommentCard, HistoryRow, SectionCard, SectionNav } from "./PeekParts";
-import { displayName, historyNotes, initials, isCollapsed, sectionChips, statusMove, type Note } from "./peekLogic";
+import { displayName, fieldLine, historyNotes, initials, isCollapsed, sectionChips, statusMove, type Note } from "./peekLogic";
 import { usePrefs } from "./prefs";
 
 const event = (kind: WorkEvent["kind"], payload: unknown, actor: string | null = "a1"): WorkEvent => ({
@@ -119,6 +119,14 @@ describe("history", () => {
     expect(text({ to: "Sam" })).toBe("assigned it to Sam");
     expect(text({ from: "Ida", to: "Sam" })).toBe("changed the assignee from Ida to Sam");
     expect(text({})).toBe("changed the assignee");
+  });
+
+  it("words a field change by what moved", () => {
+    expect(fieldLine({ field: "Priority", from: "High", to: "Low" })).toBe("changed the priority from High to Low");
+    expect(fieldLine({ field: "Due date", to: "2026-10-01" })).toBe("set the due date to 2026-10-01");
+    expect(fieldLine({ field: "Labels", from: "urgent" })).toBe("cleared the labels (was urgent)");
+    expect(fieldLine({ text: "Priority High → Low" })).toBe("updated a field");
+    expect(historyNotes([event("fieldChanged", { field: "Summary", from: "A", to: "B" })], name)[0].text).toBe("changed the summary from A to B");
   });
 
   it("names the actor, falling back to Someone for an opaque account id", () => {

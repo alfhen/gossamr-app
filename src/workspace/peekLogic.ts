@@ -231,6 +231,19 @@ const assignedLine = (payload: unknown): string => {
   return /^assigned to you$/i.test(textOf(payload).trim()) ? "assigned it to you" : "changed the assignee";
 };
 
+/** What a field event did, as a clause: "set the priority to High", "changed the labels from a to b", "cleared the due date". */
+export function fieldLine(payload: unknown): string {
+  const p = payload as { field?: unknown; from?: unknown; to?: unknown } | null;
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const field = str(p?.field)?.toLowerCase();
+  const [from, to] = [str(p?.from), str(p?.to)];
+  if (!field) return "updated a field";
+  if (from && to) return `changed the ${field} from ${from} to ${to}`;
+  if (to) return `set the ${field} to ${to}`;
+  if (from) return `cleared the ${field} (was ${from})`;
+  return `changed the ${field}`;
+}
+
 type Mine = (accountId: string | null) => boolean;
 
 /** Comments recorded as events, oldest first. */
@@ -261,6 +274,8 @@ export function historyNotes(events: readonly WorkEvent[], nameOf: (accountId: s
         return "had a check fail";
       case "reviewRequested":
         return "asked for a review";
+      case "fieldChanged":
+        return fieldLine(e.payload);
       case "commentAdded":
         return "";
     }

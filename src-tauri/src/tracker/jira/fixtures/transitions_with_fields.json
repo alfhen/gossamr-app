@@ -1,0 +1,24 @@
+{
+  "expand": "transitions",
+  "transitions": [
+    {
+      "id": "31", "name": "Done", "hasScreen": true,
+      "to": {"id": "10001", "name": "Done", "statusCategory": {"id": 3, "key": "done"}},
+      "fields": {
+        "resolution": {
+          "required": true, "hasDefaultValue": false, "fieldId": "resolution", "name": "Resolution",
+          "allowedValues": [{"id": "10000", "name": "Won't Do"}, {"id": "10001", "name": "Done"}]
+        },
+        "assignee": {"required": false, "hasDefaultValue": false, "fieldId": "assignee", "name": "Assignee"},
+        "customfield_10010": {"required": true, "hasDefaultValue": true, "fieldId": "customfield_10010", "name": "Has a default"}
+      }
+    },
+    {
+      "id": "41", "name": "Reject", "hasScreen": true,
+      "to": {"id": "10002", "name": "Rejected", "statusCategory": {"id": 3, "key": "done"}},
+      "fields": {
+        "customfield_10040": {"required": true, "hasDefaultValue": false, "fieldId": "customfield_10040", "name": "Reason", "allowedValues": [{"id": "1", "value": "Duplicate"}]}
+      }
+    }
+  ]
+}

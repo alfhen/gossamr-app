@@ -20,6 +20,8 @@ pub enum EventKind {
     ReviewSubmitted,
     /// The person was mentioned on a pull request or issue.
     PrMentioned,
+    /// Another field of an item changed: priority, labels, due date, summary and the like.
+    FieldChanged,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

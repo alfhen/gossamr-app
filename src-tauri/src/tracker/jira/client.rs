@@ -29,12 +29,26 @@ const COMMENT_PAGE: u64 = 100;
 const MENTION_SUGGESTIONS: usize = 10;
 /// Largest attachment shown in the app; bigger ones stay in Jira. Checked while reading, not after.
 const PREVIEW_LIMIT: usize = 25 * 1024 * 1024;
+const API_BASE: &str = "https://api.atlassian.com";
+/// Rate-limited requests are retried this many times before giving up.
+const RATE_RETRIES: u32 = 3;
+/// A `Retry-After` longer than this is reported instead of waited out, so a sync never hangs on it.
+const MAX_INLINE_WAIT_SECS: u64 = 20;
 
 /// A transition as Jira lists it: its own id, and the status it leads to.
 pub(super) struct RawTransition {
     pub id: String,
     pub name: String,
     pub to: StatusDef,
+    /// Fields the transition's screen insists on and has no default for. Only read with `transitions(.., true)`.
+    pub required: Vec<RequiredField>,
+}
+
+pub(super) struct RequiredField {
+    pub id: String,
+    pub name: String,
+    /// `(id, name)` of each value Jira accepts, when it lists them.
+    pub allowed: Vec<(String, String)>,
 }
 
 /// One match of a keys-only search: where the issue lives and when it last changed.
@@ -66,21 +80,27 @@ pub(super) struct Jira {
     /// Doesn't follow redirects, so a redirect's target can be read (see `media_id`).
     no_redirect: reqwest::Client,
     auth: Arc<Auth>,
+    base: String,
 }
 
 impl Jira {
     pub(super) fn new(http: reqwest::Client, auth: Arc<Auth>) -> Self {
+        Self::at(API_BASE, http, auth)
+    }
+
+    pub(super) fn at(base: &str, http: reqwest::Client, auth: Arc<Auth>) -> Self {
         let no_redirect = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("static client config");
-        Self { http, no_redirect, auth }
+        Self { http, no_redirect, auth, base: base.trim_end_matches('/').into() }
     }
 
     /// Sends one request as `scope`. It is refused before sending if the signed-in site or account is no longer
-    /// `scope`, so work started for one account can never read or write as another. `build` may run twice, since a
-    /// 401 is retried once with a refreshed token.
+    /// `scope`, so work started for one account can never read or write as another. `build` may run several times:
+    /// a 401 is retried once with a refreshed token, and a 429 (or a 503 that says when to come back) is retried after
+    /// the wait Jira asks for, up to a few times, then reported as `RateLimited`.
     async fn send(
         &self,
         client: &reqwest::Client,
@@ -90,16 +110,25 @@ impl Jira {
         build: impl Fn(RequestBuilder) -> RequestBuilder,
     ) -> Result<reqwest::Response> {
         let mut force_refresh = false;
+        let mut limited = 0;
         loop {
             let creds = self.auth.credentials(force_refresh).await?;
             if &creds.scope != scope {
                 return Err(Error::SiteChanged);
             }
-            let url = format!("https://api.atlassian.com/ex/jira/{}/rest/api/3/{path}", scope.cloud_id);
+            let url = format!("{}/ex/jira/{}/rest/api/3/{path}", self.base, scope.cloud_id);
             let res = build(client.request(method.clone(), url).bearer_auth(&creds.access_token)).send().await?;
             // A token can be revoked or rotated elsewhere before it expires; refresh once and retry.
             if res.status() == StatusCode::UNAUTHORIZED && !force_refresh {
                 force_refresh = true;
+                continue;
+            }
+            if let Some(wait) = rate_limit_wait(&res, limited) {
+                if limited >= RATE_RETRIES || wait > MAX_INLINE_WAIT_SECS {
+                    return Err(Error::RateLimited { message: format!("Jira is limiting requests; try again in {wait} seconds."), retry_after_secs: wait });
+                }
+                limited += 1;
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
                 continue;
             }
             return Ok(res);
@@ -142,6 +171,7 @@ impl Jira {
             let page: Page = self.call(scope, Method::POST, "search/jql", Some(&body)).await?;
             for raw in &page.issues {
                 if let Some(t) = parse_issue(raw) {
+                    let t = self.with_all_comments(scope, t, raw).await?;
                     out.push(match history_since {
                         Some(since) => self.with_history_since(scope, t, raw, since).await?,
                         None => t,
@@ -149,7 +179,7 @@ impl Jira {
                 }
             }
             match page.next_page_token {
-                Some(t) if out.len() < limit => token = Some(t),
+                Some(t) if out.len() < limit && !page.issues.is_empty() => token = Some(t),
                 _ => return Ok(out),
             }
         }
@@ -159,15 +189,44 @@ impl Jira {
     pub(super) async fn issue(&self, scope: &Scope, key: &str, history_since: &str) -> Result<CachedTicket> {
         let raw: Value = self
             .call(scope, Method::GET, &format!("issue/{key}?fields={}&expand=changelog", FIELDS.join(",")), None)
-            .await?;
+            .await
+            .map_err(|e| match e {
+                Error::Api { status: 404 | 410, .. } => Error::Api { status: 404, message: format!("{key} doesn't exist, or you can no longer see it") },
+                other => other,
+            })?;
         let t = parse_issue(&raw).ok_or_else(|| Error::Api { status: 200, message: format!("couldn't read {key}") })?;
+        let t = self.with_all_comments(scope, t, &raw).await?;
         self.with_history_since(scope, t, &raw, history_since).await
+    }
+
+    /// An issue read carries a bounded number of comments. When Jira says there are more, read them all, since the
+    /// newest are the ones that become events.
+    async fn with_all_comments(&self, scope: &Scope, mut t: CachedTicket, raw: &Value) -> Result<CachedTicket> {
+        let total = raw.pointer("/fields/comment/total").and_then(Value::as_u64).unwrap_or(0);
+        if total > t.comments.len() as u64 {
+            t.comments = self.comments(scope, &t.key).await?;
+        }
+        Ok(t)
+    }
+
+    /// The changelog's length when the expanded one may not hold all of it. Jira may leave out `total`; a page that
+    /// came back full then counts as cut off, and the changelog endpoint says how long it is.
+    async fn changelog_total(&self, scope: &Scope, key: &str, raw: &Value) -> Result<Option<u64>> {
+        if let Some(total) = incomplete_changelog_total(raw) {
+            return Ok(Some(total));
+        }
+        let have = raw.pointer("/changelog/histories").and_then(Value::as_array).map_or(0, Vec::len) as u64;
+        if raw.pointer("/changelog/total").is_some() || have < CHANGELOG_PAGE {
+            return Ok(None);
+        }
+        let page: Value = self.call(scope, Method::GET, &format!("issue/{key}/changelog?startAt=0&maxResults=1"), None).await?;
+        Ok(page["total"].as_u64().filter(|total| *total > have))
     }
 
     /// An expanded changelog holds only its first page, which is the oldest history. When there is more, replace it
     /// with the newest pages, walking back until the history reaches `since`, since that's where new events come from.
     async fn with_history_since(&self, scope: &Scope, mut t: CachedTicket, raw: &Value, since: &str) -> Result<CachedTicket> {
-        let Some(total) = incomplete_changelog_total(raw) else { return Ok(t) };
+        let Some(total) = self.changelog_total(scope, &t.key, raw).await? else { return Ok(t) };
         let mut history = Vec::new();
         let mut end = total;
         for _ in 0..MAX_CHANGELOG_PAGES {
@@ -188,8 +247,9 @@ impl Jira {
     }
 
     /// Each transition open to `key` with the status it leads to.
-    pub(super) async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<RawTransition>> {
-        let raw: Value = self.call(scope, Method::GET, &format!("issue/{key}/transitions"), None).await?;
+    pub(super) async fn transitions(&self, scope: &Scope, key: &str, with_fields: bool) -> Result<Vec<RawTransition>> {
+        let expand = if with_fields { "?expand=transitions.fields" } else { "" };
+        let raw: Value = self.call(scope, Method::GET, &format!("issue/{key}/transitions{expand}"), None).await?;
         Ok(parse_transitions(&raw))
     }
 
@@ -332,11 +392,13 @@ impl Jira {
     /// Projects the person can see, as `(key, name)`, up to `limit`.
     pub(super) async fn projects(&self, scope: &Scope, limit: usize) -> Result<Vec<(String, String)>> {
         let mut out = Vec::new();
+        let mut start = 0;
         while out.len() < limit {
-            let page: Value = self.call(scope, Method::GET, &format!("project/search?startAt={}&maxResults={PROJECT_PAGE}", out.len()), None).await?;
-            let found = parse_projects(&page);
-            let empty = page["values"].as_array().is_none_or(|v| v.is_empty());
-            out.extend(found);
+            let page: Value = self.call(scope, Method::GET, &format!("project/search?startAt={start}&maxResults={PROJECT_PAGE}"), None).await?;
+            let read = page["values"].as_array().map_or(0, Vec::len);
+            let empty = read == 0;
+            start += read;
+            out.extend(parse_projects(&page));
             if empty || page["isLast"] == true {
                 break;
             }
@@ -364,7 +426,7 @@ impl Jira {
             let page: Page = self.call(scope, Method::POST, "search/jql", Some(&body)).await?;
             out.extend(page.issues.iter().filter_map(parse_hit));
             match page.next_page_token {
-                Some(t) if out.len() < cap => token = Some(t),
+                Some(t) if out.len() < cap && !page.issues.is_empty() => token = Some(t),
                 _ => {
                     out.truncate(cap);
                     return Ok(out);
@@ -429,6 +491,17 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     Ok(serde_json::from_slice(bytes)?)
 }
 
+/// How long Jira wants us to wait, when the response is a rate limit: a 429, or a 503 that carries `Retry-After`.
+/// Without the header the wait doubles per attempt, as Atlassian advises.
+fn rate_limit_wait(res: &reqwest::Response, attempt: u32) -> Option<u64> {
+    let asked = res.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
+    match res.status() {
+        StatusCode::TOO_MANY_REQUESTS => Some(asked.unwrap_or(2u64 << attempt.min(6))),
+        StatusCode::SERVICE_UNAVAILABLE => asked,
+        _ => None,
+    }
+}
+
 /// Jira timestamps look like `2026-09-28T10:00:00.000+0200`; normalise to UTC RFC 3339 so they sort as strings.
 pub(super) fn normalise_time(s: &str) -> String {
     DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f%z")
@@ -443,6 +516,11 @@ fn person(v: &Value) -> Option<Person> {
         name: v["displayName"].as_str().unwrap_or("Someone").to_string(),
         avatar_url: v.pointer("/avatarUrls/48x48").and_then(Value::as_str).map(String::from),
     })
+}
+
+/// Jira leaves the author off changes made by deleted accounts, imports and some automation. Their events still count.
+fn person_or_unknown(v: &Value) -> Person {
+    person(v).unwrap_or_else(|| Person { account_id: "unknown".into(), name: "Someone".into(), avatar_url: None })
 }
 
 fn status(v: &Value) -> Option<Status> {
@@ -484,7 +562,7 @@ fn previous_page(end: u64) -> Option<(u64, u64)> {
 fn parse_history(h: &Value) -> Option<History> {
     Some(History {
         id: h["id"].as_str()?.to_string(),
-        author: person(&h["author"])?,
+        author: person_or_unknown(&h["author"]),
         at: normalise_time(h["created"].as_str()?),
         items: h["items"]
             .as_array()?
@@ -502,7 +580,7 @@ fn parse_history(h: &Value) -> Option<History> {
 fn parse_comment(c: &Value) -> Option<Comment> {
     Some(Comment {
         id: c["id"].as_str()?.to_string(),
-        author: person(&c["author"])?,
+        author: person_or_unknown(&c["author"]),
         created: normalise_time(c["created"].as_str()?),
         body: adf::to_text(&c["body"]),
         mentions: adf::mentions(&c["body"]),
@@ -564,7 +642,31 @@ pub(super) fn parse_transitions(raw: &Value) -> Vec<RawTransition> {
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|t| Some(RawTransition { id: t["id"].as_str()?.into(), name: t["name"].as_str()?.into(), to: status_def(&t["to"])? }))
+        .filter_map(|t| {
+            Some(RawTransition { id: t["id"].as_str()?.into(), name: t["name"].as_str()?.into(), to: status_def(&t["to"])?, required: required_fields(&t["fields"]) })
+        })
+        .collect()
+}
+
+fn required_fields(fields: &Value) -> Vec<RequiredField> {
+    fields
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, f)| f["required"] == true && f["hasDefaultValue"] != true)
+        .map(|(id, f)| RequiredField {
+            id: f["fieldId"].as_str().unwrap_or(id).into(),
+            name: f["name"].as_str().unwrap_or(id).into(),
+            allowed: f["allowedValues"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| {
+                    let id = v["id"].as_str().map(String::from).or_else(|| v["id"].as_u64().map(|n| n.to_string()))?;
+                    Some((id, v["name"].as_str().or_else(|| v["value"].as_str())?.to_string()))
+                })
+                .collect(),
+        })
         .collect()
 }
 

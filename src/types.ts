@@ -271,7 +271,8 @@ export interface WorkEvent {
     | "prOpened"
     | "prMerged"
     | "checkFailed"
-    | "reviewRequested";
+    | "reviewRequested"
+    | "fieldChanged";
   subject: { type: "item"; item: ItemRef } | { type: "codeChange"; repo: string; number: number };
   actor: PersonRef | null;
   payload: unknown;

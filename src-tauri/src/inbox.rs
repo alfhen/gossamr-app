@@ -269,7 +269,13 @@ impl Core {
         self.syncing.store(true, Ordering::SeqCst);
         let result = self.sync().await;
         self.syncing.store(false, Ordering::SeqCst);
-        self.schedules.lock().expect("schedule lock poisoned").entry(id).or_default().finished(Utc::now(), result.is_ok());
+        let mut schedules = self.schedules.lock().expect("schedule lock poisoned");
+        let schedule = schedules.entry(id).or_default();
+        match &result {
+            Err(Error::RateLimited { retry_after_secs, .. }) => schedule.rate_limited(Utc::now(), Duration::seconds(i64::try_from(*retry_after_secs).unwrap_or(i64::MAX / 1000))),
+            _ => schedule.finished(Utc::now(), result.is_ok()),
+        }
+        drop(schedules);
         Some(result)
     }
 
@@ -314,15 +320,25 @@ impl Core {
     async fn refresh(&self, scope: &Scope, key: &str) -> Result<()> {
         let last_sync = self.with_db_for(scope, |db| db.meta(LAST_SYNC)).await?;
         let since = unread_cutoff(last_sync.as_deref());
-        let item = self.tracker(scope)?.item(&Self::item(scope, key), &since).await?;
+        let target = Self::item(scope, key);
+        let item = match self.tracker(scope)?.item(&target, &since).await {
+            Err(e @ Error::Api { status: 404, .. }) => {
+                self.with_db_for(scope, |db| db.forget_item(&target)).await?;
+                return Err(e);
+            }
+            other => other?,
+        };
         let t = ticket_of(&item)?;
+        let connection_id = Connection::jira_id(scope);
         self.with_db_for(scope, |db| {
             // An item the person was handed in a container they don't watch isn't kept.
             if !db.watch_set(&item.item.connection_id)?.is_watched(&item.container.external_id) {
                 return Ok(());
             }
             db.upsert_items(&[item], &now_iso())?;
-            db.insert_events(&derive(&t, &scope.account_id), &since)?;
+            let events = derive(&t, &scope.account_id);
+            db.insert_events(&events, &since)?;
+            db.insert_cache_events(&events.iter().filter_map(|e| sync::domain_event(&connection_id, e)).collect::<Vec<_>>())?;
             db.insert_activity(&my_actions(&t, &scope.account_id))?;
             Ok(())
         })

@@ -7,6 +7,8 @@ mod client;
 mod convert;
 mod intent;
 mod jql;
+#[cfg(test)]
+mod http_tests;
 
 use std::sync::Arc;
 
@@ -90,8 +92,28 @@ impl JiraTracker {
         }
     }
 
+    #[cfg(test)]
+    fn at(base: &str, http: reqwest::Client, auth: Arc<Auth>, connection: &Connection) -> Self {
+        Self { client: Jira::at(base, http, auth), scope: Scope { cloud_id: connection.workspace.clone(), account_id: connection.account.clone() }, connection_id: connection.id.clone() }
+    }
+
     fn items(&self, tickets: Vec<CachedTicket>) -> Vec<WorkItem> {
         tickets.iter().map(|t| convert::work_item(&self.connection_id, t)).collect()
+    }
+
+    /// Each project with its workflow. One the person can list but not read the statuses of is left out, as a project
+    /// that can't be read, rather than failing the rest.
+    async fn with_workflows(&self, projects: Vec<(String, String)>) -> Result<Vec<Container>> {
+        let mut out = Vec::new();
+        for (key, name) in projects {
+            let container_ref = ContainerRef { connection_id: self.connection_id.clone(), external_id: key.clone() };
+            match self.workflow(&container_ref).await {
+                Ok(workflow) => out.push(Container { container_ref, key, name, workflow }),
+                Err(Error::Api { status: 403 | 404 | 410, .. }) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(out)
     }
 
     async fn followed_in(&self, window_days: u32, watches: &[Watch], opts: &SearchOptions) -> Result<Followed> {
@@ -155,13 +177,8 @@ impl WorkTracker for JiraTracker {
     }
 
     async fn containers(&self) -> Result<Vec<Container>> {
-        let mut out = Vec::new();
-        for (key, name) in self.client.projects(&self.scope, CONTAINER_LIMIT).await? {
-            let container_ref = ContainerRef { connection_id: self.connection_id.clone(), external_id: key.clone() };
-            let workflow = self.workflow(&container_ref).await?;
-            out.push(Container { container_ref, key, name, workflow });
-        }
-        Ok(out)
+        let projects = self.client.projects(&self.scope, CONTAINER_LIMIT).await?;
+        self.with_workflows(projects).await
     }
 
     async fn list_containers(&self, q: &ContainerQuery) -> Result<ContainerPage> {
@@ -187,13 +204,8 @@ impl WorkTracker for JiraTracker {
 
     async fn containers_of(&self, refs: &[ContainerRef]) -> Result<Vec<Container>> {
         let keys: Vec<&str> = refs.iter().map(|r| r.external_id.as_str()).collect();
-        let mut out = Vec::new();
-        for (key, name) in self.client.projects_by_keys(&self.scope, &keys).await? {
-            let container_ref = ContainerRef { connection_id: self.connection_id.clone(), external_id: key.clone() };
-            let workflow = self.workflow(&container_ref).await?;
-            out.push(Container { container_ref, key, name, workflow });
-        }
-        Ok(out)
+        let projects = self.client.projects_by_keys(&self.scope, &keys).await?;
+        self.with_workflows(projects).await
     }
 
     async fn footprint(&self, window_days: u32) -> Result<Vec<Footprint>> {
@@ -202,7 +214,7 @@ impl WorkTracker for JiraTracker {
             let hits = match self.client.search_hits(&self.scope, &q, FOOTPRINT_ROWS).await {
                 Ok(h) => h,
                 // Rate limited: what has been counted so far still ranks the projects.
-                Err(Error::Api { status: 429, .. }) if answered > 0 => break,
+                Err(Error::RateLimited { .. }) if answered > 0 => break,
                 Err(e) => return Err(e),
             };
             for h in hits {
@@ -258,7 +270,7 @@ impl WorkTracker for JiraTracker {
 
     async fn transitions(&self, item: &ItemRef) -> Result<Vec<Move>> {
         let mut moves: Vec<Move> = Vec::new();
-        for t in self.client.transitions(&self.scope, &item.external_id).await? {
+        for t in self.client.transitions(&self.scope, &item.external_id, false).await? {
             if !moves.iter().any(|m| m.to.id == t.to.id) {
                 moves.push(Move { name: t.name, to: t.to });
             }
@@ -283,12 +295,16 @@ impl WorkTracker for JiraTracker {
                 Ok(Applied::default())
             }
             Intent::Transition { item, to } => {
-                let available = self.client.transitions(scope, &item.external_id).await?;
+                let available = self.client.transitions(scope, &item.external_id, true).await?;
                 let t = intent::transition_to(&available, to).ok_or_else(|| Error::Api {
                     status: 400,
                     message: format!("{} can't move to that status from where it is", item.key),
                 })?;
-                self.client.transition(scope, &item.external_id, &intent::transition_body(t)).await?;
+                let body = intent::transition_body(t).map_err(|missing| Error::Api {
+                    status: 400,
+                    message: format!("Jira needs {} to move {} to {}; set it in Jira.", missing.join(", "), item.key, t.to.name),
+                })?;
+                self.client.transition(scope, &item.external_id, &body).await?;
                 Ok(Applied::default())
             }
             Intent::Update { item, patch } => {

@@ -1,0 +1,13 @@
+{
+  "issues": [
+    {
+      "key": "CA-3",
+      "fields": {
+        "summary": "Second page",
+        "status": {"id": "1", "name": "To Do", "statusCategory": {"key": "new"}},
+        "issuetype": {"name": "Bug"},
+        "updated": "2026-09-27T10:05:00.000+0200"
+      }
+    }
+  ]
+}

@@ -56,6 +56,7 @@ describe("row wording and read state", () => {
   it("says what happened", () => {
     expect(verb({ kind: "commentAdded", mention: true })).toBe("mentioned you on");
     expect(verb({ kind: "commentAdded", mention: false })).toBe("commented on");
+    expect(verb({ kind: "fieldChanged", mention: false })).toBe("updated");
     expect(verb({ kind: "assigned", mention: false })).toBe("assigned you");
   });
 

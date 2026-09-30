@@ -1,0 +1,42 @@
+{
+  "type": "doc",
+  "version": 1,
+  "content": [
+    {"type": "panel", "attrs": {"panelType": "warning"}, "content": [
+      {"type": "paragraph", "content": [{"type": "text", "text": "Careful here"}]}
+    ]},
+    {"type": "table", "attrs": {"isNumberColumnEnabled": false, "layout": "default"}, "content": [
+      {"type": "tableRow", "content": [
+        {"type": "tableHeader", "attrs": {}, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Env"}]}]},
+        {"type": "tableHeader", "attrs": {}, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Owner"}]}]}
+      ]},
+      {"type": "tableRow", "content": [
+        {"type": "tableCell", "attrs": {}, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "prod"}]}]},
+        {"type": "tableCell", "attrs": {}, "content": [{"type": "paragraph", "content": [{"type": "mention", "attrs": {"id": "acc-7", "text": "@Ida"}}]}]}
+      ]}
+    ]},
+    {"type": "mediaSingle", "attrs": {"layout": "center"}, "content": [
+      {"type": "media", "attrs": {"type": "file", "id": "abc", "collection": "", "alt": "screenshot.png", "width": 10, "height": 10}}
+    ]},
+    {"type": "paragraph", "content": [
+      {"type": "status", "attrs": {"text": "IN REVIEW", "color": "purple", "localId": "x"}},
+      {"type": "text", "text": " due "},
+      {"type": "date", "attrs": {"timestamp": "1790726400000"}},
+      {"type": "mention", "attrs": {"id": "acc-8"}},
+      {"type": "mediaInline", "attrs": {"id": "m", "collection": "", "alt": "inline.png"}}
+    ]},
+    {"type": "taskList", "attrs": {"localId": "t"}, "content": [
+      {"type": "taskItem", "attrs": {"localId": "1", "state": "DONE"}, "content": [{"type": "text", "text": "ship it"}]},
+      {"type": "taskItem", "attrs": {"localId": "2", "state": "TODO"}, "content": [{"type": "text", "text": "tell people"}]}
+    ]},
+    {"type": "expand", "attrs": {"title": "Logs"}, "content": [
+      {"type": "paragraph", "content": [{"type": "text", "text": "stack trace"}]}
+    ]},
+    {"type": "futureBlockNode", "attrs": {"text": "from the future"}, "content": [
+      {"type": "paragraph", "content": [{"type": "text", "text": "inside a node nobody knows"}]}
+    ]},
+    {"type": "unsupportedBlock", "attrs": {"originalValue": {"type": "paragraph", "content": [{"type": "text", "text": "kept from an unsupported block"}]}}},
+    {"type": "paragraph", "content": [{"type": "futureInline", "content": [{"type": "text", "text": "odd inline"}]}]},
+    {"type": "paragraph"}
+  ]
+}
