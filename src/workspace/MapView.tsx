@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEve
 import { useWorkspace } from "../workspaceStore";
 import { BulkBar } from "./BulkBar";
 import type { CanvasProps } from "./canvases";
-import { FIT, layoutMap, neighbour, zoomAt, type Direction, type MapEdge, type MapLayout, type Viewport } from "./mapLayout";
+import { FIT, layoutMap, neighbour, shownKey, zoomAt, type Direction, type MapEdge, type MapLayout, type Viewport } from "./mapLayout";
 import { NoticeLine } from "./Notice";
 import { useTabs } from "./tabsStore";
 import { useCards } from "./useCards";

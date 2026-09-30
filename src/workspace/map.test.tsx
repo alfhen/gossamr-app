@@ -5,7 +5,7 @@ import { ALL, itemKey } from "../lib/filter";
 import type { WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
 import { CapNotice, MapSvg, type MapSvgProps } from "./MapView";
-import { FIT, layoutMap, MAP_CAP, neighbour, zoomAt } from "./mapLayout";
+import { FIT, layoutMap, MAP_CAP, neighbour, shownKey, zoomAt } from "./mapLayout";
 
 const s = () => useWorkspace.getState();
 
@@ -200,5 +200,14 @@ describe("MapSvg", () => {
   it("says when the cap hides tickets", () => {
     expect(renderToStaticMarkup(<CapNotice shown={300} total={412} />)).toContain("Showing 300 of 412 tickets. Narrow the filter");
     expect(renderToStaticMarkup(<CapNotice shown={4} total={4} />)).toBe("");
+  });
+});
+
+describe("shownKey", () => {
+  it("drops a focus key that is no longer displayed", () => {
+    const nodes = [{ key: "a" }, { key: "b" }];
+    expect(shownKey(nodes, "b")).toBe("b");
+    expect(shownKey(nodes, "gone")).toBeNull();
+    expect(shownKey(nodes, null)).toBeNull();
   });
 });
