@@ -169,6 +169,7 @@ pub fn store(
             let (found, missing): (Vec<_>, Vec<_>) = watch
                 .watches
                 .iter()
+                .filter(|w| w.unwatched_at.is_none())
                 .map(|w| w.container.external_id.clone())
                 .partition(|id| containers.iter().any(|c| &c.container_ref.external_id == id));
             db.set_inaccessible(connection_id, &found, false)?;
@@ -531,6 +532,23 @@ mod tests {
         let flag = |id: &str| set.watch(id).unwrap().inaccessible;
         assert_eq!((flag("CA"), flag("GONE"), flag("OLD")), (false, true, true));
         assert!(set.is_watched("OLD"), "still watched, so what is cached stays visible");
+    }
+
+    #[tokio::test]
+    async fn a_container_unwatched_and_watched_again_inside_the_grace_period_is_asked_for_again() {
+        let db = Db::in_memory().unwrap();
+        selected(&db, &[watching("CA"), watching("WEB")]);
+        db.apply_watch_changes(CONNECTION, &[WatchChange { container_id: "WEB".into(), watched: Some(false), ..Default::default() }], "2026-09-28T00:00:00Z").unwrap();
+        let fake = Fake::default();
+        let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &db.watch_set(CONNECTION).unwrap()).await.unwrap();
+        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        let set = db.watch_set(CONNECTION).unwrap();
+        assert!(!set.watch("WEB").unwrap().inaccessible, "it wasn't looked up, so it wasn't found missing");
+
+        db.set_inaccessible(CONNECTION, &["WEB".to_string()], true).unwrap();
+        db.apply_watch_changes(CONNECTION, &[watching("WEB")], "2026-09-29T00:00:00Z").unwrap();
+        let set = db.watch_set(CONNECTION).unwrap();
+        assert!(!set.watch("WEB").unwrap().inaccessible && set.sync_scope().allows("WEB"));
     }
 
     #[tokio::test]

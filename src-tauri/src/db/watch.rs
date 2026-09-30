@@ -86,7 +86,7 @@ impl Db {
             }
             if c.watched == Some(true) {
                 tx.execute(
-                    "UPDATE watched_containers SET unwatched_at = NULL WHERE connection_id = ?1 AND container_id = ?2",
+                    "UPDATE watched_containers SET unwatched_at = NULL, inaccessible = 0 WHERE connection_id = ?1 AND container_id = ?2",
                     params![connection_id, c.container_id],
                 )?;
             }
