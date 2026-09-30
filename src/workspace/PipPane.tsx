@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Markdown } from "../components/Markdown";
 import { draftsForTurn } from "../lib/proposals";
+import { developmentLine } from "../lib/devLinks";
 import { describeFilter, itemKey } from "../lib/filter";
 import { useClaude, type Turn } from "../claudeStore";
 import type { ItemRef, Proposal, ScreenContext } from "../types";
+import { useDev } from "./devStore";
 import { LiveDraftPreview } from "./DraftPreview";
 import { useLookup } from "./hooks";
 import { PipResizer } from "./PaneResizers";
@@ -202,13 +204,19 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const following = pinned === null;
   const live = useMemo(() => buildScreenContext(screen), [screen]);
   const context: ScreenContext = pinned ?? live;
+  const code = useDev((s) => s.index);
   const words = useMemo(
     () => ({
       titleOf: (ref: ItemRef) => screen.items[itemKey(ref)]?.title ?? null,
       describeFilter: (f: Parameters<typeof describeFilter>[0]) => describeFilter(f, lookup),
+      developmentOf: (ref: ItemRef) => developmentLine(code.get(itemKey(ref))),
     }),
-    [screen.items, lookup],
+    [screen.items, lookup, code],
   );
+  const openRef = context.item;
+  useEffect(() => {
+    if (openRef) useDev.getState().ensure([openRef]);
+  }, [openRef?.connectionId, openRef?.externalId]);
   const { kind, label } = contextLabel(context, quote, words.titleOf);
   const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
   const chips = suggestionsFor({

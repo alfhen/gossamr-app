@@ -39,8 +39,9 @@ describe("the choice", () => {
   });
 
   it("names a connection's containers without hard-coding a tracker", () => {
-    expect(nounFor("jira")).toEqual({ one: "project", many: "projects" });
-    expect(nounFor("something-else")).toEqual({ one: "container", many: "containers" });
+    expect(nounFor("jira")).toMatchObject({ one: "project", many: "projects", domain: "work" });
+    expect(nounFor("github")).toMatchObject({ one: "repository", many: "repositories", domain: "code" });
+    expect(nounFor("something-else")).toMatchObject({ one: "container", many: "containers" });
     expect(count(1, nounFor("jira"))).toBe("1 project");
     expect(count(12, nounFor("jira"))).toBe("12 projects");
   });

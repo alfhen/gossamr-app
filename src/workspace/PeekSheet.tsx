@@ -15,6 +15,7 @@ import { PEEK_DEFAULT } from "./paneSizes";
 import { usePrefs } from "./prefs";
 import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
 import { commentNotes, displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, subtasksOf, withReplies, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
+import { Development } from "./DevelopmentSection";
 import { useTabs } from "./tabsStore";
 import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
@@ -76,6 +77,10 @@ export interface PeekViewProps {
   onJump?(id: PeekSectionId): void;
   /** Starts a reply to a comment; replying is not offered when omitted. */
   onReply?(note: Note): void;
+  /** The Development section, or the banner that stands in for it; nothing on a build without a code host. */
+  development?: ReactNode;
+  /** How many changes the section lists; leaves the nav chip out when omitted. */
+  developmentCount?: number;
 }
 
 const MOTION = { in: "ws-peek-in", out: "ws-peek-out", none: "" } as const;
@@ -125,7 +130,7 @@ export function PeekView(p: PeekViewProps) {
         </button>
       </div>
       <div className="grid min-h-0 flex-1 scroll-pt-11 content-start gap-5 overflow-auto px-[22px] pb-24">
-        <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length })} onJump={p.onJump} />
+        <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length, development: p.developmentCount })} onJump={p.onJump} />
         <div className="grid gap-2.5">
           {p.banner}
           {p.crumb && (
@@ -256,6 +261,8 @@ export function PeekView(p: PeekViewProps) {
             </ul>
           </SectionCard>
         )}
+
+        {p.development}
 
         <div className="mt-3">
           <SectionCard id="comments" title="Comments" count={commentCount} tone="discussion" {...section("comments")}>
@@ -502,6 +509,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       ),
     [loadedComments, events, names, me],
   );
+  const [devCount, setDevCount] = useState<number | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
   const startReply = (note: Note) => {
     usePrefs.getState().setPeekSection("comments", false);
@@ -543,6 +551,8 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       onToggleSection={(id) => usePrefs.getState().setPeekSection(id, !collapsed[id])}
       onJump={jump}
       onReply={readOnly ? undefined : startReply}
+      development={<Development item={item} collapsed={isCollapsed(collapsed, "development")} onToggle={() => usePrefs.getState().setPeekSection("development", !collapsed.development)} onCount={setDevCount} />}
+      developmentCount={devCount}
       description={description}
       banner={readOnly ? <PeekNotice unwatched={!!item.unwatched} containerName={containerName} connectionId={ref.connectionId} containerId={item.container.externalId} /> : undefined}
       drafts={

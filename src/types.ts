@@ -257,7 +257,12 @@ export type WorkFilter =
   | { type: "label"; label: string }
   | { type: "text"; text: string }
   | { type: "items"; items: ItemRef[] }
+  /** Client-only: the backend has no code links in its filter, so this is applied over the cached links and never sent to it. */
+  | { type: "code"; check: CodeFilterKind }
   | { type: "and"; filters: WorkFilter[] };
+
+/** `has`/`none`: a linked pull request or not. `open` includes drafts. `failing` looks at open and draft ones. */
+export type CodeFilterKind = "has" | "none" | "open" | "merged" | "failing";
 
 export interface WorkEvent {
   id: string;

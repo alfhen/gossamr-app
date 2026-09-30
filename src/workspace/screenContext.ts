@@ -1,6 +1,6 @@
 import type { ContainerRef, ItemRef, ScreenContext, WorkContainer, WorkItem } from "../types";
 import { projectOf } from "./filters";
-import { containerKey } from "../lib/filter";
+import { containerKey, withoutCode } from "../lib/filter";
 import { CHIP_LABEL, type ActivityChip } from "./activityLogic";
 import { VIEW_LABEL, type Route, type Tab } from "./tabsStore";
 
@@ -34,11 +34,13 @@ export function screenLine(s: Pick<Screen, "route" | "tab" | "shown" | "containe
 export function buildScreenContext(s: Screen): ScreenContext {
   const open = s.route !== "settings" && s.selected ? (s.items[s.selected] ?? s.peeked?.[s.selected]) : undefined;
   const onBoard = s.route === "workspace";
-  const filtered = onBoard && (s.tab.filter.type !== "and" || s.tab.filter.filters.length > 0);
+  // Filters over linked code exist only in the page, and the backend rejects a filter it can't parse.
+  const filter = withoutCode(s.tab.filter);
+  const filtered = onBoard && (filter.type !== "and" || filter.filters.length > 0);
   return {
     view: screenLine(s),
     item: open?.item ?? null,
-    filter: filtered ? s.tab.filter : null,
+    filter: filtered ? filter : null,
     selection: onBoard ? s.marked.flatMap((k) => (s.items[k] ? [s.items[k].item] : [])) : [],
   };
 }
@@ -46,6 +48,8 @@ export function buildScreenContext(s: Screen): ScreenContext {
 export interface ContextWords {
   titleOf(ref: ItemRef): string | null;
   describeFilter(filter: NonNullable<ScreenContext["filter"]>): string;
+  /** A line about the pull requests linked to an item, when it has any. */
+  developmentOf?(ref: ItemRef): string | null;
 }
 
 const clip = (text: string, n: number) => (text.length > n ? `${text.slice(0, n)}…` : text);
@@ -53,9 +57,11 @@ const clip = (text: string, n: number) => (text.length > n ? `${text.slice(0, n)
 /** What Pip can see, one line per thing sent: built from the very context that goes with the question, plus the selected text if any. */
 export function contextLines(ctx: ScreenContext, quote: string | null, words: ContextWords): string[] {
   const title = ctx.item ? words.titleOf(ctx.item) : null;
+  const development = ctx.item ? words.developmentOf?.(ctx.item) : null;
   return [
     `Screen: ${ctx.view ?? "unknown"}`,
     ...(ctx.item ? [`Open ticket: ${ctx.item.key}${title ? ` · ${title}` : ""}`] : []),
+    ...(development ? [development] : []),
     ...(ctx.filter ? [`Filter: ${words.describeFilter(ctx.filter)}`] : []),
     ...(ctx.selection.length ? [`Ticked tickets: ${ctx.selection.map((r) => r.key).join(", ")}`] : []),
     ...(quote ? [`Selected text: “${clip(quote.replace(/\s+/g, " "), 90)}”`] : []),

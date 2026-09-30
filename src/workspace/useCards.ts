@@ -5,6 +5,7 @@ import type { StatusDef, WorkItem, Workflow } from "../types";
 import { draftCounts, knownMoves, nameOf, workflowOfItem, useWorkspace } from "../workspaceStore";
 import { approvableTransitions, blockedKeys, bulkMoves, bulkTargets, draftStatus, movesAreOpaque, pendingMoves, targetsFor, witherOf } from "./boardLogic";
 import { useCanvasOrder } from "./browse";
+import { useDev, VISIBLE_LIMIT } from "./devStore";
 import { useAttention } from "./CanvasBits";
 import type { ItemCardProps } from "./ItemCard";
 import { useTabs } from "./tabsStore";
@@ -24,6 +25,10 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
   const moves = useWorkspace((s) => s.moves);
   const names = useWorkspace((s) => s.names);
   const selected = useTabs((s) => s.selected);
+  const code = useDev((s) => s.index);
+  useEffect(() => {
+    useDev.getState().ensure(items.slice(0, VISIBLE_LIMIT).map((i) => i.item));
+  }, [items]);
   const ticked = useTabs((s) => s.marked);
   useCanvasOrder(order);
   const attention = useAttention();
@@ -79,6 +84,7 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
       ...attention.marks(item),
       draft: p ? { id: p.id, to: to! } : null,
       moreDrafts: (counts[key] ?? 0) - (p ? 1 : 0),
+      code: code.get(key) ?? null,
       selected: selected === key,
       marked: marked.includes(key),
       menuOpen: menuFor === key,
@@ -137,5 +143,5 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
     },
   };
 
-  return { cardProps, attention, now, pending, blocked, counts, workflowOf, notice, dismissNotice: () => setNotice(null), say, bulk };
+  return { cardProps, code, attention, now, pending, blocked, counts, workflowOf, notice, dismissNotice: () => setNotice(null), say, bulk };
 }

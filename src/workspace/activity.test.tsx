@@ -196,3 +196,44 @@ describe("the activity store on the mock", () => {
     expect(useActivity.getState().next).toBeNull();
   });
 });
+
+describe("marking everything read with GitHub events in the feed", () => {
+  const container = { connectionId: "mock", externalId: "CA" };
+
+  async function start(state: Partial<ReturnType<typeof useActivity.getState>> = {}) {
+    const backend = new MockBackend({ githubRepos: 10 });
+    useActivity.setState({ chip: "all", source: "all", container: null, codeRead: new Set(), ...state });
+    useActivity.getState().init(backend);
+    await flush();
+    return backend;
+  }
+
+  it("marks the GitHub events too when no project is chosen", async () => {
+    await start();
+    expect(useActivity.getState().codeUnread).toBeGreaterThan(0);
+    await useActivity.getState().markAllRead();
+    expect(useActivity.getState().codeUnread).toBe(0);
+  });
+
+  it("leaves GitHub events alone when a project is chosen and the page named none of them", async () => {
+    await start({ container });
+    const before = useActivity.getState().codeUnread;
+    await useActivity.getState().markAllRead();
+    expect(useActivity.getState().codeUnread).toBe(before);
+    const ids = useActivity.getState().codeEvents.slice(0, 1).map((e) => e.id);
+    await useActivity.getState().markAllRead(ids);
+    expect(useActivity.getState().codeUnread).toBeLessThan(before);
+  });
+
+  it("leaves GitHub events alone on the Jira source, and Jira entries alone on the GitHub source", async () => {
+    const backend = await start({ source: "jira" });
+    const before = useActivity.getState().codeUnread;
+    await useActivity.getState().markAllRead();
+    expect(useActivity.getState().codeUnread).toBe(before);
+    useActivity.setState({ source: "github" });
+    const jiraBefore = await backend.cacheFeedUnread();
+    await useActivity.getState().markAllRead();
+    expect(useActivity.getState().codeUnread).toBe(0);
+    expect(await backend.cacheFeedUnread()).toBe(jiraBefore);
+  });
+});

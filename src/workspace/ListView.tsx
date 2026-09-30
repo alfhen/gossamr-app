@@ -2,6 +2,7 @@ import { useMemo, useState, type KeyboardEvent } from "react";
 import { itemKey } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { AgeChip, AttentionDot, Avatar, NeedsPill, StatusPill } from "./CanvasBits";
+import { PrBadge } from "./DevBits";
 import { CanvasFooter } from "./CanvasFooter";
 import { daysQuiet } from "./boardLogic";
 import type { CanvasProps } from "./canvases";
@@ -50,7 +51,7 @@ export function GroupHeader({ group, collapsed, onToggle }: { group: ListGroup; 
   );
 }
 
-type RowProps = Pick<ItemCardProps, "item" | "assignee" | "now" | "blocked" | "needsMe" | "unread" | "draft" | "moreDrafts" | "selected" | "marked" | "onSelect">;
+type RowProps = Pick<ItemCardProps, "item" | "assignee" | "now" | "blocked" | "needsMe" | "unread" | "draft" | "moreDrafts" | "code" | "selected" | "marked" | "onSelect">;
 
 export function ListRow(p: RowProps) {
   const { item } = p;
@@ -63,7 +64,7 @@ export function ListRow(p: RowProps) {
       aria-selected={p.selected}
       data-marked={p.marked ? "true" : undefined}
       onClick={(ev) => p.onSelect(selectHow(ev))}
-      className={`grid cursor-pointer grid-cols-[96px_minmax(0,1fr)_40px_110px_22px] items-center gap-2.5 border-t border-ws-sep px-3 py-1.5 ${lit}`}
+      className={`grid cursor-pointer grid-cols-[96px_minmax(0,1fr)_44px_40px_110px_22px] items-center gap-2.5 border-t border-ws-sep px-3 py-1.5 ${lit}`}
     >
       <span className="flex items-center gap-1.5">
         <AttentionDot needsMe={p.needsMe} unread={p.unread} />
@@ -83,6 +84,9 @@ export function ListRow(p: RowProps) {
           </span>
         )}
         {p.blocked && <span className="flex-none text-xs text-ws-blocked">⛓ blocked</span>}
+      </span>
+      <span className="flex justify-end">
+        <PrBadge summary={p.code} />
       </span>
       <span className="text-right">{showsAge(item, days) && <AgeChip days={days} />}</span>
       <StatusPill status={item.status} />

@@ -2,6 +2,7 @@ import { itemKey } from "../lib/filter";
 import type { TicketLinks } from "../components/ticketLinks";
 import type { ItemRef } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { workConnections, workWatch } from "./domains";
 import { cardId } from "./ItemCard";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -40,7 +41,7 @@ export async function openTicketByKey(key: string): Promise<boolean> {
   const ws = useWorkspace.getState();
   const cached = Object.values(ws.items).find((i) => i.item.key.toLowerCase() === key.toLowerCase());
   if (cached) return showMe(cached.item);
-  const connectionId = ws.connections[0]?.id ?? ws.watch[0]?.connectionId;
+  const connectionId = workConnections(ws.connections)[0]?.id ?? workWatch(ws.watch)[0]?.connectionId;
   if (!connectionId) {
     useToasts.getState().push("Not connected yet.");
     return false;

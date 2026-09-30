@@ -5,11 +5,14 @@ import { itemsByFilter, pendingDrafts, useWorkspace } from "../workspaceStore";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { buildCommands, keyCommand, newTicketIntent, projectChoices, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
+import { buildCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
+import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
 import { usePrefs } from "./prefs";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
 import { openTicketByKey } from "./jump";
+import { useGithubUi } from "./githubUi";
+import { openPull } from "./openPull";
 
 /** Where focus lands when the palette closes and the element that opened it is gone. */
 export const MAIN_ID = "workspace-main";
@@ -157,6 +160,9 @@ export function appActions(): CommandActions {
     openTicket: (key) => void openTicketByKey(key),
     openActivity: () => tabs.setRoute("activity"),
     openDrafts: () => (useActivity.getState().setChip("drafts"), tabs.setRoute("activity")),
+    connectGithub: () => useGithubUi.getState().openConnect(),
+    manageRepositories: () => tabs.openSettings("watching"),
+    openPull: (ref) => void openPull(ref),
     newTab: () => void tabs.openTab(),
     newTicket: () => {},
     togglePip: () => prefs.setPipOpen(!usePrefs.getState().pipOpen),
@@ -214,7 +220,8 @@ export function Palette() {
   const items = useWorkspace((s) => s.items);
   const watch = useWorkspace((s) => s.watch);
   const proposals = useWorkspace((s) => s.proposals);
-  const unread = useActivity((s) => s.unread);
+  const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
+  const unread = useActivity((s) => s.unread + s.codeUnread);
   const savedViews = useTabs((s) => s.savedViews);
   const tab = useTabs((s) => activeTab(s));
   const [query, setQuery] = useState("");
@@ -229,7 +236,7 @@ export function Palette() {
   const go = (next: Step) => (setStep(next), setQuery(""), setActive(0));
 
   const results = useMemo(() => {
-    const sorted = Object.values(containers).sort((a, b) => containerKey(a.ref).localeCompare(containerKey(b.ref)));
+    const sorted = workContainers(Object.values(containers)).sort((a, b) => containerKey(a.ref).localeCompare(containerKey(b.ref)));
     if (step.type === "project") return projectChoices(sorted, query, currentProject(), (c) => go({ type: "title", container: c }));
     if (step.type === "title") {
       const title = query.trim();
@@ -237,17 +244,18 @@ export function Palette() {
       return title ? [{ id: "new:create", group: "Create" as const, icon: "＋", label: `Draft “${title}” in ${container.name}`, hint: "↵", run: () => void draftTicket(container, title) }] : [];
     }
     const actions = { ...appActions(), newTicket: () => go({ type: "project" }) };
-    const ctx: CommandContext = { project: projectOf(tab.filter) ?? null, view: tab.view, unreadActivity: unread, pendingDrafts: pendingDrafts({ proposals }).length };
+    const ctx: CommandContext = { project: projectOf(tab.filter) ?? null, view: tab.view, unreadActivity: unread, pendingDrafts: pendingDrafts({ proposals }).length, github };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);
     const found = [
       ...ticketCommands(all, query, actions.jumpToItem),
       ...keyCommand(query, all, actions.openTicket),
+      ...pullCommand(query, actions.openPull),
       ...rankCommands([...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query),
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, unread, savedViews, tab.filter, tab.view, query, step, unwatched]);
+  }, [containers, items, watch, proposals, github, unread, savedViews, tab.filter, tab.view, query, step, unwatched]);
 
   const prompting = step.type !== "search";
   return (

@@ -372,7 +372,10 @@ export class MockBackend implements Backend {
   constructor(options: MockOptions = {}) {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined);
+    this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
   }
+
+  private readonly device: NonNullable<MockOptions["device"]>;
 
   /** Drafts live in memory; `proposals.draft` stands in for the assistant. */
   readonly proposals = new MockProposals(async (intent, already) => {
@@ -628,6 +631,9 @@ export class MockBackend implements Backend {
   }
 
   async githubDevicePoll() {
+    await new Promise((resolve) => setTimeout(resolve, this.device.delayMs));
+    if (this.device.outcome === "denied") throw new Error("access_denied");
+    if (this.device.outcome === "expired") throw new Error("the code expired before it was entered; start again");
     return this.github.devicePoll();
   }
 

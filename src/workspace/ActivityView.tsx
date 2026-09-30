@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
 import { relativeTime } from "../lib/views";
-import type { ContainerRef, FeedEntry, Proposal } from "../types";
+import type { ContainerRef, FeedEntry, ItemRef, Proposal } from "../types";
 import { allContainers, nameOf, pendingDrafts, useWorkspace } from "../workspaceStore";
-import { CHIPS, CHIP_LABEL, draftsFor, groupByDay, initials, stepIndex, verb, type ActivityChip } from "./activityLogic";
+import { CHIPS, CHIP_LABEL, SOURCES, SOURCE_LABEL, buildRows, codeVerb, draftsFor, groupByDay, initials, rowAt, rowId, stepIndex, toCodeEntry, verb, type ActivityChip, type ActivitySource, type CodeEntry } from "./activityLogic";
+import { GithubMark } from "./DevBits";
+import { useDev } from "./devStore";
+import { openOnGithub } from "./githubUi";
 import { useActivity } from "./activityStore";
 import { LiveDraftCard } from "./DraftCard";
 import { ProjectSwitcher } from "./FilterBar";
@@ -87,6 +90,101 @@ export function FeedRow({ entry: e, actor, title, now, selected, needsMe, openab
   );
 }
 
+export interface CodeRowProps {
+  entry: CodeEntry;
+  /** The linked ticket's title, when there is one in the cache. */
+  ticketTitle: string | null;
+  now: Date;
+  selected: boolean;
+  position: number;
+  total: number;
+  onOpen(): void;
+  onMarkRead(): void;
+  onOpenGithub(): void;
+}
+
+/** A GitHub event. It opens the linked ticket, or the pull request on GitHub when no ticket is known. */
+export function CodeFeedRow({ entry: e, ticketTitle, now, selected, position, total, onOpen, onMarkRead, onOpenGithub }: CodeRowProps) {
+  const openable = !!e.item || !!e.url;
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.target !== ev.currentTarget || !openable) return;
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      onOpen();
+    }
+  };
+  return (
+    <article
+      id={feedRowId(e.id)}
+      data-source="github"
+      tabIndex={0}
+      aria-posinset={position}
+      aria-setsize={total}
+      aria-current={selected ? "true" : undefined}
+      data-unread={e.unread ? "true" : undefined}
+      onKeyDown={onKey}
+      className={`group flex gap-3 rounded-lg px-2 py-2.5 outline-offset-[-2px] hover:bg-ws-hover ${selected ? "bg-ws-sel" : ""}`}
+    >
+      <span aria-hidden className={`mt-2 size-2 shrink-0 rounded-full ${e.unread ? "bg-ws-accent" : "bg-transparent"}`} />
+      <span aria-hidden title="GitHub" className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-ws-sel text-ws-ink2">
+        <GithubMark className="size-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <button type="button" disabled={!openable} onClick={onOpen} className="block w-full text-left disabled:cursor-default">
+          <span className={`block [overflow-wrap:anywhere] ${e.unread ? "font-semibold" : ""}`}>
+            <span className="sr-only">{codeVerb(e.kind)}: </span>
+            {e.text}
+          </span>
+          {e.item ? (
+            <span className="mt-0.5 block text-ws-ink2 [overflow-wrap:anywhere]">
+              <span className="font-mono text-sm font-semibold">{e.item.key}</span>
+              {ticketTitle && <span> {ticketTitle}</span>}
+            </span>
+          ) : (
+            <span className="mt-0.5 block text-sm text-ws-ink3">Not linked to a ticket. Opens on GitHub.</span>
+          )}
+        </button>
+        <div className="mt-1 flex items-center gap-1 text-sm text-ws-ink3">
+          <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
+          <span className="rounded-full bg-ws-sel px-2 text-xs">{codeVerb(e.kind)}</span>
+          {e.needsYou && e.unread && <span className="ml-1 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Needs you</span>}
+          <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+            {e.url && (
+              <button type="button" className={action} onClick={onOpenGithub}>
+                Open on GitHub
+              </button>
+            )}
+            {e.unread && (
+              <button type="button" className={action} onClick={onMarkRead}>
+                Mark read
+              </button>
+            )}
+          </span>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+export function SourceBar({ source, onChange }: { source: ActivitySource; onChange(source: ActivitySource): void }) {
+  return (
+    <div role="group" aria-label="Source" className="flex flex-wrap gap-1.5">
+      {SOURCES.map((s) => (
+        <button
+          key={s}
+          type="button"
+          aria-pressed={source === s}
+          onClick={() => onChange(s)}
+          className={`rounded-xl border px-2.5 py-px text-sm font-semibold ${source === s ? "border-ws-accent bg-ws-accent-soft text-ws-accent" : "border-ws-sep2 text-ws-ink2 hover:bg-ws-hover"}`}
+        >
+          {s === "github" && <GithubMark className="mr-1 inline size-3 align-[-1px]" />}
+          {SOURCE_LABEL[s]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function DayHeading({ label }: { label: string }) {
   return <h3 className="sticky top-0 z-10 m-0 bg-ws-win px-2 pt-4 pb-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">{label}</h3>;
 }
@@ -118,6 +216,8 @@ export function EmptyNote({ children }: { children: ReactNode }) {
     </p>
   );
 }
+
+const EMPTY_GITHUB = "No GitHub activity yet. Pull request events from the repositories you watch show up here.";
 
 const EMPTY: Record<ActivityChip, string> = {
   all: "Nothing has happened on your tickets yet.",
@@ -151,21 +251,31 @@ export function ActivityView() {
   const needsMe = useWorkspace((s) => s.needsMe);
   const proposals = useWorkspace((s) => s.proposals);
   const selected = useTabs((s) => s.selected);
-  const { chip, entries, next, status, error, loadingMore, unread } = useActivity();
+  const { chip, entries, next, status, error, loadingMore, unread: jiraUnread, codeUnread, source, codeEvents, codeRead } = useActivity();
+  const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
+  const byChange = useDev((s) => s.byChange);
+  const shownSource: ActivitySource = hasGithub ? source : "jira";
+  const unread = shownSource === "jira" ? jiraUnread : shownSource === "github" ? codeUnread : jiraUnread + codeUnread;
   const [now, setNow] = useState(() => new Date());
   const sentinel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
 
-  const drafts = useMemo(() => draftsFor(pendingDrafts({ proposals }), items, project), [proposals, items, project]);
-  const groups = useMemo(() => groupByDay(entries, now), [entries, now]);
   const projectKey = project ? `${project.connectionId}:${project.externalId}` : "";
+  const drafts = useMemo(() => draftsFor(pendingDrafts({ proposals }), items, project), [proposals, items, project]);
+  const byKey = useMemo(() => new Map(Object.values(items).map((i) => [i.item.key.toUpperCase(), i.item] as const)), [items]);
+  const codeEntries = useMemo(() => codeEvents.flatMap((e) => toCodeEntry(e, { byKey, byChange, read: codeRead, now: Date.now() }) ?? []), [codeEvents, byKey, byChange, codeRead]);
+  const rows = useMemo(
+    () => buildRows({ source: shownSource, chip, container: project, jira: entries, more: next !== null, code: codeEntries, containerOf: (ref: ItemRef) => items[itemKey(ref)]?.container ?? null }),
+    [shownSource, chip, projectKey, entries, next, codeEntries, items],
+  );
+  const groups = useMemo(() => groupByDay(rows.map((row) => ({ at: rowAt(row), row })), now), [rows, now]);
 
   useEffect(() => {
     useActivity.getState().showProject(project);
     // The project object changes identity with every filter edit; its key is what matters.
   }, [projectKey]);
 
-  useEffect(() => setNow(new Date()), [entries]);
+  useEffect(() => setNow(new Date()), [entries, codeEvents]);
 
   useEffect(() => {
     const el = sentinel.current;
@@ -180,8 +290,14 @@ export function ActivityView() {
     void useActivity.getState().markRead(e.unread ? [e.id] : []);
   };
 
-  const entriesRef = useRef(entries);
-  entriesRef.current = entries;
+  const openCode = (e: CodeEntry) => {
+    useActivity.getState().markCodeRead([e.id]);
+    if (e.item && items[itemKey(e.item)]) useTabs.getState().select(itemKey(e.item));
+    else if (e.url) openOnGithub(e.url);
+  };
+
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
 
   useEffect(() => {
     const onKey = (ev: globalThis.KeyboardEvent) => {
@@ -189,18 +305,19 @@ export function ActivityView() {
       if (ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet")) return;
       const delta = ev.key === "j" ? 1 : ev.key === "k" ? -1 : 0;
       if (delta) {
-        const rows = [...(list.current?.querySelectorAll<HTMLElement>("article[id^='feed-']") ?? [])];
-        if (!rows.length) return;
+        const articles = [...(list.current?.querySelectorAll<HTMLElement>("article[id^='feed-']") ?? [])];
+        if (!articles.length) return;
         ev.preventDefault();
-        const to = rows[stepIndex(rows.indexOf(target.closest("article") as HTMLElement), delta, rows.length)];
+        const to = articles[stepIndex(articles.indexOf(target.closest("article") as HTMLElement), delta, articles.length)];
         to?.focus();
         to?.scrollIntoView({ block: "nearest" });
       } else if (ev.key === "m") {
         const id = target.closest?.("article")?.id.replace(/^feed-/, "");
-        const entry = entriesRef.current.find((e) => e.id === id);
-        if (entry?.unread) {
+        const row = rowsRef.current.find((r) => rowId(r) === id);
+        if (row?.entry.unread) {
           ev.preventDefault();
-          void useActivity.getState().markRead([entry.id]);
+          if (row.source === "github") useActivity.getState().markCodeRead([row.entry.id]);
+          else void useActivity.getState().markRead([row.entry.id]);
         }
       }
     };
@@ -209,7 +326,7 @@ export function ActivityView() {
   }, []);
 
   let position = 0;
-  const total = entries.length;
+  const total = rows.length;
   const showDrafts = chip === "drafts";
 
   return (
@@ -221,9 +338,10 @@ export function ActivityView() {
           value={project}
           onChange={(p) => useTabs.getState().setFilter(withProject(tab.filter, p))}
         />
+        {hasGithub && <SourceBar source={source} onChange={(s) => useActivity.getState().setSource(s)} />}
         <ChipBar chip={chip} counts={{ needsMe: unread, drafts: drafts.length }} onChange={(c) => useActivity.getState().setChip(c)} />
         {!showDrafts && (
-          <button type="button" disabled={unread === 0} onClick={() => void useActivity.getState().markAllRead()} className="ml-auto text-sm text-ws-ink3 underline disabled:no-underline disabled:opacity-45">
+          <button type="button" disabled={unread === 0} onClick={() => void useActivity.getState().markAllRead(codeEntries.filter((e) => e.unread && (!project || (!!e.item && items[itemKey(e.item)]?.container.connectionId === project.connectionId && items[itemKey(e.item)]?.container.externalId === project.externalId))).map((e) => e.id))} className="ml-auto text-sm text-ws-ink3 underline disabled:no-underline disabled:opacity-45">
             Mark all read
           </button>
         )}
@@ -242,14 +360,33 @@ export function ActivityView() {
             </div>
           ) : status !== "ready" ? (
             <EmptyNote>Loading activity…</EmptyNote>
-          ) : entries.length === 0 ? (
-            <EmptyNote>{EMPTY[chip]}</EmptyNote>
+          ) : rows.length === 0 ? (
+            <EmptyNote>{shownSource === "github" ? EMPTY_GITHUB : EMPTY[chip]}</EmptyNote>
           ) : (
             <div role="feed" aria-label="Activity" aria-busy={loadingMore}>
               {groups.map((g) => (
                 <section key={g.day} aria-label={g.label}>
                   <DayHeading label={g.label} />
-                  {g.entries.map((e) => {
+                  {g.entries.map(({ row }) => {
+                    if (row.source === "github") {
+                      const c = row.entry;
+                      const linked = c.item ? items[itemKey(c.item)] : undefined;
+                      return (
+                        <CodeFeedRow
+                          key={c.id}
+                          entry={c}
+                          ticketTitle={linked?.title ?? null}
+                          now={now}
+                          selected={!!c.item && selected === itemKey(c.item)}
+                          position={++position}
+                          total={total}
+                          onOpen={() => openCode(c)}
+                          onMarkRead={() => useActivity.getState().markCodeRead([c.id])}
+                          onOpenGithub={() => (useActivity.getState().markCodeRead([c.id]), c.url && openOnGithub(c.url))}
+                        />
+                      );
+                    }
+                    const e = row.entry;
                     const key = itemKey(e.item);
                     const item = items[key];
                     return (

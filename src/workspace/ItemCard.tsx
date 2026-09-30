@@ -1,9 +1,11 @@
 import { useEffect, useRef, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { Cobweb } from "../components/Cobweb";
 import type { WitherLevel } from "../lib/views";
+import type { CodeSummary } from "../lib/devLinks";
 import type { StatusDef, WorkItem, WorkPriority } from "../types";
 import { daysQuiet } from "./boardLogic";
 import { AgeChip, AttentionDot, Avatar, StatusPill } from "./CanvasBits";
+import { PrBadge } from "./DevBits";
 import { selectHow, showsAge } from "./canvasShared";
 
 export interface CardDraft {
@@ -23,6 +25,8 @@ export interface ItemCardProps {
   draft: CardDraft | null;
   /** Other pending drafts on the item, such as comments, that aren't shown here. */
   moreDrafts: number;
+  /** What the pull requests linked to the ticket add up to, once read. */
+  code?: CodeSummary | null;
   selected: boolean;
   marked: boolean;
   menuOpen: boolean;
@@ -157,6 +161,7 @@ export function ItemCard(p: ItemCardProps) {
             ✦ {p.moreDrafts}
           </span>
         )}
+        <PrBadge summary={p.code} />
         {showsAge(item, days) && <AgeChip days={days} className="ml-auto" />}
       </div>
       {p.draft && <DraftLine draft={p.draft} onApprove={p.onApprove} onSkip={p.onSkip} />}
