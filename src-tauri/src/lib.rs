@@ -2,6 +2,7 @@ mod adf;
 mod auth;
 mod claude;
 mod db;
+mod domain;
 mod error;
 mod events;
 mod inbox;
