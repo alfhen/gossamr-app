@@ -107,10 +107,10 @@ export function BoardView({ tab, items }: CanvasProps) {
       <div className="px-6 pb-2">
         <WorkflowLine section={byCategory ? null : (sections[0] ?? null)} />
       </div>
-      <div className="min-h-0 flex-1 overflow-auto px-6 pb-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pb-2">
         {sections.map((section) => (
-          <section key={section.key} aria-label={`${section.name} board`} className="min-w-full pt-1">
-            <div className="grid min-h-40 auto-cols-[minmax(200px,1fr)] grid-flow-col gap-2.5">
+          <section key={section.key} aria-label={`${section.name} board`} className="min-h-72 min-w-full flex-1 pt-1 pb-2">
+            <div className="grid h-full auto-cols-[minmax(200px,1fr)] grid-flow-col gap-2.5">
               {section.columns.map((column) => {
                 const id = `${section.key}|${column.status.id}`;
                 const verdict = dragging ? verdictOf(dragging, section, column) : null;
@@ -131,7 +131,7 @@ export function BoardView({ tab, items }: CanvasProps) {
                       ev.preventDefault();
                       void drop(section, column);
                     }}
-                    className={`flex min-w-0 flex-col gap-2 rounded-xl border-2 p-2 transition-colors ${
+                    className={`flex min-h-0 min-w-0 flex-col gap-2 rounded-xl border-2 p-2 transition-colors ${
                       verdict === "ok" ? `border-dashed border-ws-pip ${over === id ? "bg-ws-pip-soft" : "bg-ws-bar"}` : "border-transparent bg-ws-bar"
                     } ${verdict === "invalid" ? "opacity-40" : ""}`}
                   >
@@ -140,26 +140,28 @@ export function BoardView({ tab, items }: CanvasProps) {
                       {column.status.name}
                       <span className="ml-auto font-semibold text-ws-ink3">{column.items.length}</span>
                     </div>
-                    {ghosts.map((g) => (
-                      <GhostCard key={g.draft.id} item={g.item} draft={g.draft} onApprove={(d) => cards.cardProps(g.item).onApprove(d)} onSkip={(d) => cards.cardProps(g.item).onSkip(d)} />
-                    ))}
-                    {column.items.map((item) => (
-                      <ItemCard
-                        key={itemKey(item.item)}
-                        {...cards.cardProps(item)}
-                        showStatus={byCategory}
-                        onDragStart={(ev) => {
-                          ev.dataTransfer.setData("text/plain", itemKey(item.item));
-                          ev.dataTransfer.effectAllowed = "move";
-                          setDragging(item);
-                          if (movesAreOpaque(ownSection(item)?.workflow ?? section.workflow)) void useWorkspace.getState().loadMoves(item);
-                        }}
-                        onDragEnd={endDrag}
-                      />
-                    ))}
-                    {!column.items.length && !ghosts.length && (
-                      <p className="rounded-lg border border-dashed border-ws-sep2 p-3 text-center text-sm text-ws-ink3">{dragging ? "Drop here" : "Empty"}</p>
-                    )}
+                    <div className="-m-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-1">
+                      {ghosts.map((g) => (
+                        <GhostCard key={g.draft.id} item={g.item} draft={g.draft} onApprove={(d) => cards.cardProps(g.item).onApprove(d)} onSkip={(d) => cards.cardProps(g.item).onSkip(d)} />
+                      ))}
+                      {column.items.map((item) => (
+                        <ItemCard
+                          key={itemKey(item.item)}
+                          {...cards.cardProps(item)}
+                          showStatus={byCategory}
+                          onDragStart={(ev) => {
+                            ev.dataTransfer.setData("text/plain", itemKey(item.item));
+                            ev.dataTransfer.effectAllowed = "move";
+                            setDragging(item);
+                            if (movesAreOpaque(ownSection(item)?.workflow ?? section.workflow)) void useWorkspace.getState().loadMoves(item);
+                          }}
+                          onDragEnd={endDrag}
+                        />
+                      ))}
+                      {!column.items.length && !ghosts.length && (
+                        <p className="rounded-lg border border-dashed border-ws-sep2 p-3 text-center text-sm text-ws-ink3">{dragging ? "Drop here" : "Empty"}</p>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -167,7 +169,7 @@ export function BoardView({ tab, items }: CanvasProps) {
           </section>
         ))}
       </div>
-      <CanvasFooter cards={cards} />
+      <CanvasFooter cards={cards} view="board" />
     </div>
   );
 }

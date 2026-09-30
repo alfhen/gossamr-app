@@ -153,7 +153,7 @@ export function ListView({ items }: CanvasProps) {
           })}
         </div>
       </div>
-      <CanvasFooter cards={cards} />
+      <CanvasFooter cards={cards} view="list" />
     </div>
   );
 }

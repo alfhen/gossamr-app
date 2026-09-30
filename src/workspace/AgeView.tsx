@@ -123,7 +123,7 @@ export function AgeView({ items }: CanvasProps) {
           </div>
         )}
       </div>
-      <CanvasFooter cards={cards} />
+      <CanvasFooter cards={cards} view="age" />
     </div>
   );
 }

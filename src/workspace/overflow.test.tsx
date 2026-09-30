@@ -6,7 +6,7 @@ import itemCard from "./ItemCard.tsx?raw";
 describe("nothing is wider than its pane", () => {
   it("wraps long words in card titles and lets board columns shrink", () => {
     expect(itemCard).toContain('className="my-1 font-medium [overflow-wrap:anywhere]"');
-    expect(boardView).toContain("flex min-w-0 flex-col gap-2 rounded-xl");
+    expect(boardView).toContain("flex min-h-0 min-w-0 flex-col gap-2 rounded-xl");
   });
 
   it("keeps the canvas at its minimum wherever the panes can fit", () => {
