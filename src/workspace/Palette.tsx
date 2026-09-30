@@ -194,6 +194,7 @@ function useUnwatchedMatches(query: string, enabled: boolean): CatalogEntry[] {
   useEffect(() => {
     if (!enabled || !backend || !selectedModes || q.length < 2) return setHits([]);
     let current = true;
+    setHits([]);
     const timer = setTimeout(() => {
       Promise.all(selectedModes.split(",").map((id) => backend.watchCatalog(id, q).then((p) => p.containers, () => [] as CatalogEntry[]))).then(
         (pages) => current && setHits(pages.flat().filter((e) => !e.watched)),

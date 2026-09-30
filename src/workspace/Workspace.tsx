@@ -77,6 +77,11 @@ export function Workspace({ backend }: { backend: Backend }) {
 
   useEffect(() => listenToClaude(), []);
 
+  const missingConnection = !!choice && !choiceConnection;
+  useEffect(() => {
+    if (missingConnection) void useWorkspace.getState().refreshConnections();
+  }, [missingConnection]);
+
   useEffect(() => {
     applyTheme(theme);
     return () => applyTheme("auto");
@@ -103,7 +108,7 @@ export function Workspace({ backend }: { backend: Backend }) {
       </div>
     );
   }
-  if (status !== "ready" || (choice && !choiceConnection)) return <div className="grid h-full place-items-center bg-ws-win text-ws-ink3">Loading…</div>;
+  if (status !== "ready") return <div className="grid h-full place-items-center bg-ws-win text-ws-ink3">Loading…</div>;
 
   if (choice) {
     return (

@@ -50,6 +50,7 @@ export function useCatalog(backend: Backend | null, connectionId: string, query:
         (e) => {
           if (mine !== seq.current) return;
           setError(messageOf(e));
+          setLoadingMore(false);
           setStatus("error");
         },
       );
