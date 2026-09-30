@@ -68,7 +68,7 @@ export function PeekView(p: PeekViewProps) {
     <aside
       id="peek-sheet"
       aria-label={`Details for ${item.item.key}`}
-      className="ws-legacy absolute inset-y-0 right-0 z-20 flex w-[min(460px,94%)] flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)]"
+      className="selectable ws-legacy absolute inset-y-0 right-0 z-20 flex w-[min(460px,94%)] flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)]"
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-4 py-2">
         <span className="font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>

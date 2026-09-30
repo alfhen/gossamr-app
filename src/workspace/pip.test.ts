@@ -8,9 +8,10 @@ import { useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
 import { handlePipView } from "./PipExtras";
 import { commentNotes, historyNotes, linkRows } from "./peekLogic";
-import { LARGE_LIST, isStillFiltered, nudgeFor, usePip } from "./pipStore";
+import { NUDGE_GAP_MS, NUDGE_DWELL_MS, LARGE_LIST, nudgeCandidates, nudgeDelay, pickNudge, type NudgeScene } from "./nudges";
+import { isStillFiltered, usePip } from "./pipStore";
 import { buildScreenContext, screenLine } from "./screenContext";
-import { activeTab, loadTabs, useTabs, type Tab } from "./tabsStore";
+import { activeTab, loadTabs, useTabs, type Route, type Tab } from "./tabsStore";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -24,11 +25,13 @@ beforeEach(async () => {
   useTabs.setState(loadTabs());
   useTabs.getState().setFilter(ALL);
   useTabs.getState().select(null);
-  usePip.setState({ filtered: null, dismissed: [] });
+  usePip.setState({ filtered: null, applied: {}, dismissed: [], seen: [], nudge: null, lastNudgeAt: 0, pinned: null, quote: null, prefill: null });
   await ws().init(new MockBackend());
 });
 
-const screen = (tab: Tab, selected: string | null = null, marked: string[] = []) => ({
+const screen = (tab: Tab, selected: string | null = null, marked: string[] = [], route: Route = "workspace") => ({
+  route,
+  activity: { chip: "all" as const, container: null },
   tab,
   shown: Object.values(ws().items).slice(0, 12),
   items: ws().items,
@@ -58,6 +61,27 @@ describe("screen context", () => {
   it("leaves the filter out when nothing narrows the view, and the item out when it is gone", () => {
     const ctx = buildScreenContext(screen({ id: "t", title: null, filter: ALL, view: "list" }, "mock:NOPE-1"));
     expect(ctx).toMatchObject({ filter: null, item: null, selection: [] });
+  });
+});
+
+describe("screen context by route", () => {
+  const tab: Tab = { id: "t", title: null, filter: { type: "mine" }, view: "board" };
+
+  it("says Settings on Settings, with no open item, filter or ticked cards", () => {
+    const s = screen(tab, "mock:DEVOPS-471", ["mock:DEVOPS-471", "mock:DEVOPS-473"], "settings");
+    expect(screenLine(s)).toBe("Settings");
+    expect(buildScreenContext(s)).toEqual({ view: "Settings", item: null, filter: null, selection: [] });
+  });
+
+  it("names the feed filter and project on Activity and keeps the open item", () => {
+    const devops = Object.values(ws().containers).find((c) => c.key === "DEVOPS")!;
+    const s = { ...screen(tab, "mock:DEVOPS-471", ["mock:DEVOPS-473"], "activity"), activity: { chip: "mentions" as const, container: devops.ref } };
+    expect(screenLine(s)).toBe("Activity · Mentions · DEVOPS");
+    const ctx = buildScreenContext(s);
+    expect(ctx.view).toBe("Activity · Mentions · DEVOPS");
+    expect(ctx.item?.key).toBe("DEVOPS-471");
+    expect(ctx).toMatchObject({ filter: null, selection: [] });
+    expect(screenLine({ ...s, activity: { chip: "drafts", container: null } })).toBe("Activity · Drafts · All projects");
   });
 });
 
@@ -104,19 +128,72 @@ describe("Claude-driven filters", () => {
 });
 
 describe("nudges", () => {
-  it("suggests a filter for an empty filtered view or a large list, and stays quiet once dismissed", () => {
-    expect(nudgeFor(0, 1, [])?.kind).toBe("empty-filter");
-    expect(nudgeFor(0, 0, [])).toBeNull();
-    expect(nudgeFor(LARGE_LIST, 0, [])?.text).toContain("filter tasks in this view");
-    expect(nudgeFor(LARGE_LIST - 1, 0, [])).toBeNull();
-    expect(nudgeFor(LARGE_LIST, 0, ["large-list"])).toBeNull();
+  const scene = (over: Partial<NudgeScene> = {}): NudgeScene => ({ route: "workspace", filter: ALL, count: 3, chips: 0, item: null, unassignedInView: 0, ...over });
+  const item = (over: Partial<NonNullable<NudgeScene["item"]>> = {}) => ({ key: "DEVOPS-9", open: true, staleDays: null, blockedBy: null, waitingOn: null, unassigned: false, linked: false, ...over });
+  const ids = (s: NudgeScene) => nudgeCandidates(s).map((n) => n.id);
+
+  it("suggests a filter for an empty filtered view, many unassigned tickets or a large list", () => {
+    expect(ids(scene({ count: 0, chips: 1 }))).toEqual(["empty-filter"]);
+    expect(ids(scene({ count: 0, chips: 0 }))).toEqual([]);
+    expect(ids(scene({ unassignedInView: 3 }))).toEqual(["unassigned-view"]);
+    expect(ids(scene({ unassignedInView: 2 }))).toEqual([]);
+    expect(ids(scene({ count: LARGE_LIST }))).toEqual(["large-list"]);
+    expect(ids(scene({ count: LARGE_LIST - 1 }))).toEqual([]);
+    expect(ids(scene({ count: LARGE_LIST, unassignedInView: 5 }))).toEqual(["unassigned-view", "large-list"]);
   });
 
-  it("remembers what was dismissed", () => {
+  it("offers to show unassigned tickets by narrowing the current filter", () => {
+    const [n] = nudgeCandidates(scene({ filter: { type: "stale", days: 5 }, unassignedInView: 4 }));
+    expect(n.text).toBe("4 tickets here have no owner. Want me to show them?");
+    expect(n.action).toEqual({ type: "filter", filter: { type: "and", filters: [{ type: "stale", days: 5 }, { type: "unassigned" }] }, note: "Tickets with no owner" });
+  });
+
+  it("speaks about the open ticket, most pressing first, each with a prompt for Pip", () => {
+    const all = nudgeCandidates(scene({ item: item({ waitingOn: "Byron", blockedBy: "DEVOPS-2", staleDays: 9, unassigned: true }) }));
+    expect(all.map((n) => n.kind)).toEqual(["waiting", "blocked", "stale", "unowned"]);
+    expect(all.map((n) => n.id)).toEqual(["waiting:DEVOPS-9", "blocked:DEVOPS-9", "stale:DEVOPS-9", "unowned:DEVOPS-9"]);
+    expect(all[0]).toMatchObject({ text: "Byron is waiting on you in DEVOPS-9. Want a reply drafted?", action: { type: "ask", prompt: "Draft a reply on DEVOPS-9" } });
+    expect(all[2].text).toBe("DEVOPS-9 has been quiet for 9 days. Want a nudge drafted?");
+  });
+
+  it("says nothing about a finished ticket or on a screen without a board, and view nudges give way to an open ticket", () => {
+    expect(nudgeCandidates(scene({ item: item({ open: false, staleDays: 20 }) }))).toEqual([]);
+    expect(ids(scene({ route: "settings", count: LARGE_LIST }))).toEqual([]);
+    expect(ids(scene({ route: "activity", count: LARGE_LIST }))).toEqual([]);
+    expect(ids(scene({ count: LARGE_LIST, item: item() }))).toEqual([]);
+    expect(ids(scene({ route: "activity", item: item({ staleDays: 6 }) }))).toEqual(["stale:DEVOPS-9"]);
+  });
+
+  it("skips what was closed or already shown and takes the next", () => {
+    const cands = nudgeCandidates(scene({ item: item({ waitingOn: "Byron", staleDays: 9 }) }));
+    expect(pickNudge(cands, [], [])?.kind).toBe("waiting");
+    expect(pickNudge(cands, ["waiting:DEVOPS-9"], [])?.kind).toBe("stale");
+    expect(pickNudge(cands, [], ["waiting:DEVOPS-9"])?.kind).toBe("stale");
+    expect(pickNudge(cands, ["waiting:DEVOPS-9"], ["stale:DEVOPS-9"])).toBeNull();
+  });
+
+  it("waits out the dwell, and the gap since the last one", () => {
+    expect(nudgeDelay(1_000_000, 0)).toBe(NUDGE_DWELL_MS);
+    expect(nudgeDelay(1_000_000, 1_000_000 - NUDGE_GAP_MS - 1)).toBe(NUDGE_DWELL_MS);
+    expect(nudgeDelay(1_000_000, 1_000_000 - 10_000)).toBe(NUDGE_GAP_MS - 10_000);
+  });
+
+  it("remembers what was dismissed, closes the shown one, and forgets it only on reset", () => {
+    const n = nudgeCandidates(scene({ count: LARGE_LIST }))[0];
+    usePip.getState().showNudge(n, 5);
+    expect(usePip.getState()).toMatchObject({ nudge: n, lastNudgeAt: 5, seen: ["large-list"] });
     usePip.getState().dismiss("large-list");
     usePip.getState().dismiss("large-list");
     expect(usePip.getState().dismissed).toEqual(["large-list"]);
+    expect(usePip.getState().nudge).toBeNull();
     expect(JSON.parse(localStorage.getItem("gossamr-pip")!)).toEqual({ dismissed: ["large-list"] });
+  });
+
+  it("keeps only the most recent dismissals", () => {
+    for (let i = 0; i < 230; i++) usePip.getState().dismiss(`stale:T-${i}`);
+    const { dismissed } = usePip.getState();
+    expect(dismissed).toHaveLength(200);
+    expect(dismissed[199]).toBe("stale:T-229");
   });
 });
 

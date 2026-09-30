@@ -11,7 +11,7 @@ import { FilterBar } from "./FilterBar";
 import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
-import { FilterNote, PipLauncher, usePipView } from "./PipExtras";
+import { FilterNote, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { PipPane } from "./PipPane";
 import { applyTheme, usePrefs } from "./prefs";
 import { Rail } from "./Rail";
@@ -111,6 +111,7 @@ export function Workspace({ backend }: { backend: Backend }) {
           </div>
           <PeekSheet />
           {!pipOpen && <PipLauncher />}
+          <SelectionAsk />
         </main>
         {pipOpen && <PipPane onClose={() => setPipOpen(false)} />}
         {paletteOpen && <Palette />}
