@@ -7,7 +7,7 @@ import { daysQuiet } from "./boardLogic";
 import type { CanvasProps } from "./canvases";
 import { selectHow, showsAge } from "./canvasShared";
 import type { ItemCardProps } from "./ItemCard";
-import { listGroups, visibleOrder, type ListGroup } from "./listLogic";
+import { listGroups, selectionAfterCollapse, visibleOrder, type ListGroup } from "./listLogic";
 import { stepKey } from "./peekLogic";
 import { useTabs } from "./tabsStore";
 import { useCards } from "./useCards";
@@ -102,12 +102,13 @@ export function ListView({ items }: CanvasProps) {
   const cards = useCards(items, order);
   const shown = selected !== null && order.includes(selected);
 
-  const toggle = (key: string) =>
-    setCollapsed((c) => {
-      const next = new Set(c);
-      if (!next.delete(key)) next.add(key);
-      return next;
-    });
+  const toggle = (key: string) => {
+    const next = new Set(collapsed);
+    if (!next.delete(key)) next.add(key);
+    setCollapsed(next);
+    const moved = selectionAfterCollapse(groups, next, selected);
+    if (moved) useTabs.getState().select(moved);
+  };
 
   const onKeyDown = (ev: KeyboardEvent) => {
     const step = ev.key === "ArrowDown" ? 1 : ev.key === "ArrowUp" ? -1 : 0;

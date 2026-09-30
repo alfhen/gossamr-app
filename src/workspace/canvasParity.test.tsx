@@ -10,7 +10,7 @@ import { WorkflowLine } from "./BoardView";
 import { AgeChip, AttentionDot, StatusPill } from "./CanvasBits";
 import { ageLevel, initials, progressOf, selectHow, showsAge, statusTone, unreadItems } from "./canvasShared";
 import { GroupHeader, ListRow } from "./ListView";
-import { listGroups, visibleOrder } from "./listLogic";
+import { listGroups, selectionAfterCollapse, visibleOrder } from "./listLogic";
 import { MapKey, MapSvg, type MapSvgProps } from "./MapView";
 import { FIT, layoutMap } from "./mapLayout";
 import { stepKey } from "./peekLogic";
@@ -51,6 +51,7 @@ describe("shared canvas helpers", () => {
     expect(initials("Sam Holt")).toBe("SH");
     expect(initials("Mary Ann Smith")).toBe("MA");
     expect(initials("")).toBe("?");
+    expect(initials("😀 smile")).toBe("😀S");
   });
 
   it("tells review, blocked and finished statuses apart from plain ones", () => {
@@ -133,6 +134,19 @@ describe("list order for j and k", () => {
     expect(order.length).toBe(visibleOrder(g, new Set()).length - g[0].items.length);
     const last = itemKey(g[0].items[0].item);
     expect(stepKey(order, last, 1)).toBe(order[0]);
+  });
+
+  it("moves a selection that a collapse hides to the next visible row, else the previous", () => {
+    const g = groups();
+    const inFirst = itemKey(g[0].items[0].item);
+    expect(selectionAfterCollapse(g, new Set([g[0].key]), inFirst)).toBe(itemKey(g[1].items[0].item));
+    expect(selectionAfterCollapse(g, new Set(), inFirst)).toBeNull();
+    expect(selectionAfterCollapse(g, new Set([g[1].key]), inFirst)).toBeNull();
+    const last = g[g.length - 1];
+    const before = itemKey(g[g.length - 2].items[g[g.length - 2].items.length - 1].item);
+    expect(selectionAfterCollapse(g, new Set([last.key]), itemKey(last.items[0].item))).toBe(before);
+    expect(selectionAfterCollapse(g, new Set(g.map((x) => x.key)), inFirst)).toBeNull();
+    expect(selectionAfterCollapse(g, new Set([g[0].key]), null)).toBeNull();
   });
 
   it("steps from the last visible row of a group into the next group", () => {

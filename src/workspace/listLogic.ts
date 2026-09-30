@@ -56,3 +56,16 @@ export function listGroups(items: readonly WorkItem[], all: Record<string, WorkI
 /** The item keys as the list shows them top to bottom, leaving out the rows of collapsed groups. */
 export const visibleOrder = (groups: readonly ListGroup[], collapsed: ReadonlySet<string>): string[] =>
   groups.flatMap((g) => (collapsed.has(g.key) ? [] : g.items.map((i) => itemKey(i.item))));
+
+/**
+ * Where the selection goes when a group collapses over it: the next visible row, else the previous one. Null when it is
+ * still shown, was not in the list, or nothing is left to show.
+ */
+export function selectionAfterCollapse(groups: readonly ListGroup[], collapsed: ReadonlySet<string>, selected: string | null): string | null {
+  const all = visibleOrder(groups, new Set());
+  const at = selected === null ? -1 : all.indexOf(selected);
+  if (at < 0) return null;
+  const shown = new Set(visibleOrder(groups, collapsed));
+  if (shown.has(selected!)) return null;
+  return all.slice(at + 1).find((k) => shown.has(k)) ?? all.slice(0, at).reverse().find((k) => shown.has(k)) ?? null;
+}
