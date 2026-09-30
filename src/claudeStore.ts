@@ -10,6 +10,10 @@ export interface Turn {
   text: string;
   status: "running" | "done" | "failed";
   error: string | null;
+  /** What Pip was looking at when asked, for "Looking at ..." while it works. */
+  looking?: string;
+  /** Text the question was about; the assistant is given it after the prompt. */
+  quote?: string;
 }
 
 export interface Conversation {
@@ -25,7 +29,7 @@ interface ClaudeState {
   /** Every draft the backend holds. The chat cards read from here, so drafts outlive the conversation that made them. */
   proposals: Proposal[];
   setOpen(open: boolean): void;
-  ask(ticketKey: string, prompt: string, sessionId: string | null, cwd: string | null, context?: ScreenContext): Promise<void>;
+  ask(ticketKey: string, prompt: string, sessionId: string | null, cwd: string | null, context?: ScreenContext, extra?: { looking?: string; quote?: string }): Promise<void>;
   cancel(ticketKey: string): void;
   /** Puts a draft the backend just returned in place, ahead of the `proposals-changed` refresh. */
   putProposal(p: Proposal): void;
@@ -38,6 +42,9 @@ export const ticketContext = (key: string): ScreenContext => ({
   filter: null,
   selection: [],
 });
+
+/** The prompt as the assistant gets it: what was typed, then the text it is about. */
+export const withQuote = (prompt: string, quote: string | undefined): string => (quote ? `${prompt}\n\nThe text I selected:\n${quote.replace(/^/gm, "> ")}` : prompt);
 
 const empty: Conversation = { turns: [], sessionId: null, cwd: null };
 
@@ -70,13 +77,13 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
 
   setOpen: (open) => set({ open }),
 
-  async ask(ticketKey, prompt, sessionId, cwd, context = ticketContext(ticketKey)) {
+  async ask(ticketKey, prompt, sessionId, cwd, context = ticketContext(ticketKey), extra = {}) {
     const requestId = newRequestId();
     const conv = get().byTicket[ticketKey] ?? empty;
-    const turn: Turn = { requestId, prompt, steps: [], text: "", status: "running", error: null };
+    const turn: Turn = { requestId, prompt, steps: [], text: "", status: "running", error: null, ...extra };
     set({ byTicket: { ...get().byTicket, [ticketKey]: { ...conv, cwd, turns: [...conv.turns, turn] } } });
     try {
-      await claude.ask({ requestId, prompt, sessionId, cwd, context });
+      await claude.ask({ requestId, prompt: withQuote(prompt, extra.quote), sessionId, cwd, context });
     } catch (err) {
       updateByRequest(requestId, (c) => applyEvent(c, requestId, { type: "done", sessionId: null, ok: false, message: String(err) }));
     }

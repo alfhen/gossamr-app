@@ -1,95 +1,112 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Markdown } from "../components/Markdown";
-import { draftsForTurn, targetOf } from "../lib/proposals";
-import { itemKey } from "../lib/filter";
+import { draftsForTurn } from "../lib/proposals";
+import { describeFilter, itemKey } from "../lib/filter";
 import { useClaude, type Turn } from "../claudeStore";
-import type { Proposal } from "../types";
-import { draftStatus } from "./boardLogic";
-import { draftSummary, draftTitle, LiveDraftCard } from "./DraftCard";
-import { useActiveTab } from "./hooks";
-import { showMe } from "./jump";
+import type { ItemRef, Proposal, ScreenContext } from "../types";
+import { LiveDraftPreview } from "./DraftPreview";
+import { useLookup } from "./hooks";
 import { PipAvatar } from "./PipAvatar";
-import { buildScreenContext, screenLine } from "./screenContext";
+import { chipCount, currentContext, unassignedIn, useItemScene, useScreen } from "./pipHooks";
+import { appliedState, usePip, type AppliedState } from "./pipStore";
+import { usePrefs } from "./prefs";
+import { buildScreenContext, contextLabel, contextLines } from "./screenContext";
+import { suggestionsFor } from "./suggestions";
 import { useTabs } from "./tabsStore";
-import { itemsByFilter, pendingDrafts, useItemsByFilter, useWorkspace, workflowOfItem } from "../workspaceStore";
+import { draftsForItem, pendingDrafts, useWorkspace } from "../workspaceStore";
 
 export const PIP_INPUT_ID = "pip-input";
 export const WORKSPACE_CONVERSATION = "workspace";
 
-/** The screen as Pip is told about it, read fresh so a question is asked about what is on screen now. */
-export function liveScreen() {
-  const tabs = useTabs.getState();
-  const ws = useWorkspace.getState();
-  const tab = tabs.tabs.find((t) => t.id === tabs.activeId) ?? tabs.tabs[0];
-  const shown = itemsByFilter(ws, tab.filter);
-  return { tab, shown, items: ws.items, containers: ws.containers, selected: tabs.selected, marked: tabs.marked };
-}
-
-export function ContextChip({ line, open }: { line: string; open: string | null }) {
+export function ContextChip({ kind, label, following, open, onToggle }: { kind: string; label: string; following: boolean; open: boolean; onToggle(): void }) {
   return (
-    <p className="m-0 flex flex-wrap items-center gap-1.5 border-b border-ws-sep px-4 py-2 text-sm text-ws-ink3">
-      <span>Pip sees</span>
-      <span className="rounded-full bg-ws-pip-soft px-2 py-px font-semibold text-ws-pip">{line}</span>
-      {open && <span className="rounded-full bg-ws-pip-soft px-2 py-px font-mono font-semibold text-ws-pip">{open}</span>}
-    </p>
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-controls="pip-seeing"
+      title="What Pip can see right now"
+      className={`flex w-fit max-w-full min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-sm text-ws-ink2 hover:border-ws-pip ${open || !following ? "border-ws-pip" : "border-ws-sep2"} ${following ? "" : "bg-ws-pip-soft"}`}
+    >
+      <span aria-hidden className={`size-2 shrink-0 rounded-full ${following ? "bg-ws-done" : "bg-ws-ink3"}`} />
+      {following ? (
+        <>
+          <span className="shrink-0">{kind}</span>
+          <b className="min-w-0 truncate font-semibold text-ws-ink">{label}</b>
+        </>
+      ) : (
+        <b className="min-w-0 truncate font-semibold text-ws-ink">Pinned: {label}</b>
+      )}
+    </button>
   );
 }
 
-export function DraftRow({ proposal: p, statusName, onShow, expanded }: { proposal: Proposal; statusName: string | null; onShow(): void; expanded?: ReactNode }) {
+export function SeeingPanel({ lines, following, onFollow }: { lines: string[]; following: boolean; onFollow(on: boolean): void }) {
   return (
-    <li className="grid gap-1.5">
-      <div className="grid gap-0.5 rounded-lg border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5">
-        <div className="flex items-center gap-2">
-          <span className="min-w-0 truncate font-semibold">{draftTitle(p)}</span>
-          <button type="button" onClick={onShow} className="ml-auto shrink-0 text-sm text-ws-pip hover:underline">
-            {targetOf(p.intent) ? "Show me" : "Review"}
-          </button>
-        </div>
-        <p className="m-0 truncate text-sm text-ws-ink2">{draftSummary(p, statusName)}</p>
-      </div>
-      {expanded}
-    </li>
-  );
-}
-
-function Drafts() {
-  const proposals = useWorkspace((s) => s.proposals);
-  const items = useWorkspace((s) => s.items);
-  const containers = useWorkspace((s) => s.containers);
-  const [reviewing, setReviewing] = useState<string | null>(null);
-  const open = useMemo(() => pendingDrafts({ proposals }), [proposals]);
-  if (!open.length) return null;
-  return (
-    <section aria-label="Drafts" className="grid gap-1.5">
-      <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
-        Drafts waiting <span className="font-normal">{open.length}</span>
-      </h3>
-      <ul className="m-0 grid list-none gap-1.5 p-0">
-        {open.map((p) => {
-          const target = targetOf(p.intent);
-          const item = target ? items[itemKey(target)] : undefined;
-          const status = item && p.intent.type === "transition" ? draftStatus(p, workflowOfItem({ containers }, item))?.name : null;
-          return (
-            <DraftRow
-              key={p.id}
-              proposal={p}
-              statusName={status ?? null}
-              onShow={() => (target ? showMe(target) : setReviewing(reviewing === p.id ? null : p.id))}
-              expanded={reviewing === p.id ? <LiveDraftCard proposal={p} /> : undefined}
-            />
-          );
-        })}
+    <div id="pip-seeing" className="rounded-[10px] border border-ws-sep bg-ws-win px-2.5 py-2 text-sm text-ws-ink2">
+      <p className="m-0 font-semibold text-ws-ink">What I can see right now</p>
+      <ul className="my-1 mb-1.5 grid list-disc gap-0.5 pl-4">
+        {lines.map((l) => (
+          <li key={l} className="[overflow-wrap:anywhere]">
+            {l}
+          </li>
+        ))}
       </ul>
-    </section>
+      {!following && <p className="m-0 mb-1.5 text-ws-ink3">Pinned: I keep this even as you move around.</p>}
+      <button type="button" role="switch" aria-checked={following} onClick={() => onFollow(!following)} className="flex items-center gap-1.5">
+        <i aria-hidden className={`relative h-[15px] w-[26px] rounded-full transition ${following ? "bg-ws-done" : "bg-ws-sep2"}`}>
+          <i className={`absolute top-0.5 size-[11px] rounded-full bg-white transition-all ${following ? "left-[13px]" : "left-0.5"}`} />
+        </i>
+        Follow my screen
+      </button>
+    </div>
   );
+}
+
+const APPLIED: Record<AppliedState, { title: string; action: string | null }> = {
+  applied: { title: "View updated", action: "Undo" },
+  undone: { title: "View restored", action: "Redo" },
+  changed: { title: "View updated", action: null },
+  gone: { title: "View updated", action: null },
+};
+
+/** A filter Pip put on a tab, inside the answer that asked for it. */
+export function AppliedCard({ note, state, onAct }: { note: string; state: AppliedState; onAct(): void }) {
+  const { title, action } = APPLIED[state];
+  return (
+    <div role="status" className="flex items-center gap-2 rounded-[10px] border border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-ws-pip">
+      <span aria-hidden>◉</span>
+      <div className="grid min-w-0">
+        <b>{title}</b>
+        <span className="truncate text-sm font-normal text-ws-ink2">{state === "changed" ? `${note} · You changed it since` : note}</span>
+      </div>
+      {action && (
+        <button type="button" onClick={onAct} className="ml-auto shrink-0 rounded-md border border-ws-pip px-2.5 py-px font-semibold hover:bg-ws-pip hover:text-ws-on-pip">
+          {action}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function LiveApplied({ requestId }: { requestId: string }) {
+  const applied = usePip((s) => s.applied[requestId]);
+  const tabs = useTabs((s) => s.tabs);
+  if (!applied) return null;
+  const state = appliedState(applied, tabs);
+  return <AppliedCard note={applied.note} state={state} onAct={() => (state === "applied" ? usePip.getState().undoApplied(requestId) : usePip.getState().redoApplied(requestId))} />;
 }
 
 function TurnView({ turn, proposals }: { turn: Turn; proposals: Proposal[] }) {
   const drafts = draftsForTurn(proposals, turn.requestId);
+  const working = turn.status === "running" && !turn.text;
   return (
     <div className="grid gap-2">
-      <div className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">{turn.prompt}</div>
-      {(turn.steps.length > 0 || (turn.status === "running" && !turn.text)) && (
+      <div className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
+        {turn.prompt}
+        {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{turn.quote}</blockquote>}
+      </div>
+      {(turn.steps.length > 0 || working) && (
         <ul className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
           {turn.steps.map((s, i) => (
             <li key={i} className="flex items-center gap-1.5">
@@ -97,7 +114,7 @@ function TurnView({ turn, proposals }: { turn: Turn; proposals: Proposal[] }) {
               {s}
             </li>
           ))}
-          {turn.status === "running" && !turn.text && <li className="animate-pulse text-ws-ink3">Working…</li>}
+          {working && <li className="animate-pulse text-ws-ink3">Looking at {turn.looking ?? "the screen"}…</li>}
         </ul>
       )}
       {turn.text && (
@@ -105,8 +122,9 @@ function TurnView({ turn, proposals }: { turn: Turn; proposals: Proposal[] }) {
           <Markdown text={turn.text} />
         </div>
       )}
+      <LiveApplied requestId={turn.requestId} />
       {drafts.map((p) => (
-        <LiveDraftCard key={p.id} proposal={p} />
+        <LiveDraftPreview key={p.id} proposal={p} />
       ))}
       {turn.status === "failed" && (
         <p role="alert" className="m-0 rounded-md bg-ws-blocked-soft px-3 py-2 text-ws-blocked">
@@ -117,38 +135,118 @@ function TurnView({ turn, proposals }: { turn: Turn; proposals: Proposal[] }) {
   );
 }
 
-const suggestions = (hasItem: boolean) => ["Show stale tickets", "What is blocked?", ...(hasItem ? ["Draft a comment on this one"] : ["Show my tickets"])];
+/** Drafts still waiting that no question in this conversation made, such as ones from before a restart. */
+function EarlierDrafts({ proposals, turns }: { proposals: Proposal[]; turns: Turn[] }) {
+  const asked = new Set(turns.map((t) => t.requestId));
+  const waiting = proposals.filter((p) => p.state.type === "pending" && !(p.origin.type === "chat" && asked.has(p.origin.requestId)));
+  if (!waiting.length) return null;
+  return (
+    <section aria-label="Drafts" className="grid gap-1.5">
+      <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+        Drafts waiting <span className="font-normal">{waiting.length}</span>
+      </h3>
+      {waiting.map((p) => (
+        <LiveDraftPreview key={p.id} proposal={p} />
+      ))}
+    </section>
+  );
+}
 
-/** Docked to the right of the canvas: the conversation with Pip, and every draft waiting on a decision. */
+/** Esc closes the pane unless something else should take it: a peek sheet or ticked cards to dismiss first, or a field being edited other than Pip's own. */
+export function escapeClosesPane(s: { peekOpen: boolean; ticked: boolean; editing: boolean; inPipInput: boolean; handled: boolean }): boolean {
+  if (s.handled || s.peekOpen || s.ticked) return false;
+  return !s.editing || s.inPipInput;
+}
+
+function usePaneEscape(onClose: () => void) {
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      const tabs = useTabs.getState();
+      const field = document.activeElement;
+      const editable = field instanceof HTMLElement && (field.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(field.tagName));
+      const close = escapeClosesPane({
+        peekOpen: tabs.selected !== null && tabs.route !== "settings",
+        ticked: tabs.marked.length > 0,
+        editing: editable,
+        inPipInput: field?.id === PIP_INPUT_ID,
+        handled: ev.defaultPrevented || usePrefs.getState().paletteOpen,
+      });
+      if (!close) return;
+      ev.preventDefault();
+      onClose();
+    };
+    // Capture: the peek sheet clears the selection on the same keypress, and this has to see it still open.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+}
+
+/** Docked to the right of the canvas: the conversation with Pip, with what it can see and the drafts it made. */
 export function PipPane({ onClose }: { onClose(): void }) {
-  const tab = useActiveTab();
-  const shown = useItemsByFilter(tab.filter);
-  const items = useWorkspace((s) => s.items);
-  const containers = useWorkspace((s) => s.containers);
-  const selected = useTabs((s) => s.selected);
+  const screen = useScreen();
+  const itemScene = useItemScene(screen);
+  const lookup = useLookup();
   const conv = useClaude((s) => s.byTicket[WORKSPACE_CONVERSATION]);
   const proposals = useWorkspace((s) => s.proposals);
+  const pinned = usePip((s) => s.pinned);
+  const quote = usePip((s) => s.quote);
+  const prefill = usePip((s) => s.prefill);
   const turns = conv?.turns ?? [];
   const running = turns.some((t) => t.status === "running");
   const [input, setInput] = useState("");
+  const [seeing, setSeeing] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const proposalList = useMemo(() => Object.values(proposals), [proposals]);
-  const line = screenLine({ tab, shown, containers });
-  const open = selected && items[selected] ? items[selected].item.key : null;
+  const following = pinned === null;
+  const live = useMemo(() => buildScreenContext(screen), [screen]);
+  const context: ScreenContext = pinned ?? live;
+  const words = useMemo(
+    () => ({
+      titleOf: (ref: ItemRef) => screen.items[itemKey(ref)]?.title ?? null,
+      describeFilter: (f: Parameters<typeof describeFilter>[0]) => describeFilter(f, lookup),
+    }),
+    [screen.items, lookup],
+  );
+  const { kind, label } = contextLabel(context, quote, words.titleOf);
+  const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
+  const chips = suggestionsFor({
+    route: screen.route,
+    quote: quote !== null,
+    marked: screen.marked.length,
+    item: itemScene,
+    pendingDrafts: pendingDrafts({ proposals }).length,
+    itemDrafts: open ? draftsForItem({ proposals }, open.item).length : 0,
+    unassignedInView: unassignedIn(screen.shown),
+    shown: screen.shown.length,
+    filtered: chipCount(screen) > 0,
+  });
 
   useEffect(() => {
     document.getElementById(PIP_INPUT_ID)?.focus();
   }, []);
 
   useEffect(() => {
+    if (!prefill) return;
+    setInput(prefill.text);
+    usePip.getState().clearPrefill();
+    document.getElementById(PIP_INPUT_ID)?.focus();
+  }, [prefill]);
+
+  useEffect(() => {
     bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight });
   }, [turns, proposals]);
+
+  usePaneEscape(onClose);
 
   const ask = (prompt: string) => {
     const text = prompt.trim();
     if (!text || running) return;
     setInput("");
-    void useClaude.getState().ask(WORKSPACE_CONVERSATION, text, conv?.sessionId ?? null, conv?.cwd ?? null, buildScreenContext(liveScreen()));
+    const pip = usePip.getState();
+    const about = pip.quote ?? undefined;
+    pip.clearQuote();
+    void useClaude.getState().ask(WORKSPACE_CONVERSATION, text, conv?.sessionId ?? null, conv?.cwd ?? null, pip.pinned ?? currentContext(), { looking: pip.pinned ? "your question" : label, quote: about });
   };
 
   const submit = (ev: FormEvent) => {
@@ -157,52 +255,64 @@ export function PipPane({ onClose }: { onClose(): void }) {
   };
 
   return (
-    <aside aria-label="Pip" className="ws-legacy flex min-h-0 flex-col border-l border-ws-sep bg-ws-bar">
-      <header data-tauri-drag-region className="flex items-center gap-2 border-b border-ws-sep px-4 pt-[14px] pb-2.5">
-        <PipAvatar size={26} />
-        <div className="grid leading-tight">
-          <h2 className="m-0 text-base font-semibold">Pip</h2>
-          <span className="text-xs text-ws-ink3">powered by Claude</span>
-        </div>
-        <button type="button" aria-label="Close Pip" onClick={onClose} className="ml-auto rounded px-1.5 text-lg leading-none text-ws-ink3 hover:bg-ws-hover">
-          ×
-        </button>
-      </header>
-      <ContextChip line={line} open={open} />
-      <div ref={bodyRef} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-4 py-3">
-        <Drafts />
-        {turns.length === 0 && (
-          <div className="grid gap-2">
-            <p className="m-0 text-ws-ink2">Ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing changes until you approve.</p>
-            <div className="flex flex-wrap gap-1.5">
-              {suggestions(!!open).map((s) => (
-                <button key={s} type="button" onClick={() => ask(s)} className="rounded-full border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover">
-                  {s}
-                </button>
-              ))}
-            </div>
+    <aside aria-label="Pip" className="ws-legacy flex min-h-0 flex-col border-l border-ws-sep bg-ws-win">
+      <header data-tauri-drag-region className="grid gap-1.5 border-b border-ws-sep bg-ws-bar px-3 pt-[14px] pb-2.5">
+        <div className="flex items-center gap-2">
+          <PipAvatar size={26} thinking={running} />
+          <div className="grid leading-tight">
+            <h2 className="m-0 text-base font-semibold">Pip</h2>
+            <span className="text-xs text-ws-ink3">powered by Claude</span>
           </div>
+          <kbd className="ml-1 rounded bg-ws-hover px-1.5 font-mono text-xs text-ws-ink3">⌘J</kbd>
+          <button type="button" aria-label="Close Pip" title="Close (Esc)" onClick={onClose} className="ml-auto rounded px-1.5 text-lg leading-none text-ws-ink3 hover:bg-ws-hover">
+            ×
+          </button>
+        </div>
+        <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
+        {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
+      </header>
+      <div ref={bodyRef} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 py-3">
+        <EarlierDrafts proposals={proposalList} turns={turns} />
+        {turns.length === 0 && (
+          <p className="m-0 text-ws-ink2">I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing changes until you approve.</p>
         )}
         {turns.map((t) => (
           <TurnView key={t.requestId} turn={t} proposals={proposalList} />
         ))}
       </div>
+      {!running && chips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-3 pb-2">
+          {chips.map((s) => (
+            <button key={s} type="button" onClick={() => ask(s)} className="rounded-full border border-ws-sep2 px-2.5 py-0.5 text-sm hover:border-ws-pip hover:text-ws-pip">
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+      {quote && (
+        <div className="mx-3 mb-2 flex items-start gap-2 rounded-md border border-ws-pip bg-ws-pip-soft px-2.5 py-1 text-sm text-ws-ink2">
+          <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">“{quote}”</span>
+          <button type="button" aria-label="Forget the selected text" onClick={() => usePip.getState().clearQuote()} className="shrink-0 text-lg leading-none text-ws-ink3">
+            ×
+          </button>
+        </div>
+      )}
       <form onSubmit={submit} className="flex gap-2 border-t border-ws-sep p-3">
         <input
           id={PIP_INPUT_ID}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           aria-label="Ask Pip"
-          placeholder="Ask about what you're looking at…"
+          placeholder={quote ? "Ask about the selected text…" : itemScene ? `Ask about ${itemScene.key}…` : "Ask about what you're looking at…"}
           autoComplete="off"
-          className="min-w-0 flex-1 rounded-md border border-ws-sep2 bg-ws-win px-2.5 py-1.5"
+          className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 outline-none focus:border-ws-pip"
         />
         {running ? (
           <button type="button" onClick={() => useClaude.getState().cancel(WORKSPACE_CONVERSATION)} className="rounded-md border border-ws-sep2 px-3 font-semibold">
             Stop
           </button>
         ) : (
-          <button type="submit" disabled={!input.trim()} className="rounded-md bg-ws-pip px-3 font-semibold text-ws-on-pip disabled:opacity-45">
+          <button type="submit" disabled={!input.trim()} className="rounded-md bg-gradient-to-br from-ws-pip to-ws-pip2 px-3 font-semibold text-ws-on-pip disabled:opacity-45">
             Ask
           </button>
         )}

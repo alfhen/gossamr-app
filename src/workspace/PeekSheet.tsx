@@ -87,7 +87,7 @@ export function PeekView(p: PeekViewProps) {
       id="peek-sheet"
       aria-label={`Details for ${item.item.key}`}
       onAnimationEnd={(ev) => ev.target === ev.currentTarget && p.onMotionEnd?.()}
-      className={`ws-legacy absolute inset-y-0 right-0 z-20 flex flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] motion-safe:transition-[width] motion-safe:duration-200 ${
+      className={`selectable ws-legacy absolute inset-y-0 right-0 z-20 flex flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] motion-safe:transition-[width] motion-safe:duration-200 ${
         p.wide ? "w-full" : "w-[min(520px,94%)]"
       } ${MOTION[p.motion ?? "none"]}`}
     >

@@ -8,7 +8,8 @@ import { DraftCard, draftSummary, draftTitle, type DraftCardProps } from "./Draf
 import { PeekView, type PeekViewProps } from "./PeekSheet";
 import { PipAvatar } from "./PipAvatar";
 import { FilterNote, Launcher, Nudge, PipFilterNote } from "./PipExtras";
-import { ContextChip, DraftRow } from "./PipPane";
+import { ContextChip } from "./PipPane";
+import { DraftPreview } from "./DraftPreview";
 import { WorkDocView } from "./WorkDocView";
 
 const ws = () => useWorkspace.getState();
@@ -199,18 +200,20 @@ describe("PeekView", () => {
 
 describe("Pip pane parts", () => {
   it("shows what Pip sees and the open item", () => {
-    const out = renderToStaticMarkup(<ContextChip line="Board · DEVOPS · 12 items" open="DEVOPS-471" />);
-    expect(out).toContain("Board · DEVOPS · 12 items");
-    expect(out).toContain("DEVOPS-471");
+    const out = renderToStaticMarkup(<ContextChip kind="Ticket" label="DEVOPS-471 · Rotate keys" following open={false} onToggle={vi.fn()} />);
+    expect(out).toContain("Ticket");
+    expect(out).toContain("DEVOPS-471 · Rotate keys");
+    expect(out).toContain('aria-expanded="false"');
   });
 
-  it("lists a draft on any item with a jump, and lets a new-item draft be reviewed instead", () => {
-    const on = renderToStaticMarkup(<DraftRow proposal={proposal({})} statusName={null} onShow={vi.fn()} />);
-    expect(on).toContain("Show me");
+  it("previews a draft on any item as a card that opens its ticket, and a new-item draft as one to review", () => {
+    const on = renderToStaticMarkup(<DraftPreview proposal={proposal({})} statusName={null} targetTitle="Rotate keys" onOpen={vi.fn()} />);
+    expect(on).toContain("Review on DEVOPS-471");
+    expect(on).toContain("Rotate keys");
     const create = proposal({
       intent: { type: "create", container: { connectionId: "mock", externalId: "DEVOPS" }, link: null, fields: { title: "New thing", body: { blocks: [] }, kind: "task", assignee: null, parent: null, priority: null, labels: [] } },
     });
-    expect(renderToStaticMarkup(<DraftRow proposal={create} statusName={null} onShow={vi.fn()} />)).toContain("Review");
+    expect(renderToStaticMarkup(<DraftPreview proposal={create} statusName={null} targetTitle={null} onOpen={vi.fn()} />)).toContain("Review draft");
   });
 
   it("draws the avatar with its own gradient ids", () => {

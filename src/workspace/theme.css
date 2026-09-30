@@ -13,6 +13,7 @@
   --color-ws-accent-soft: rgb(74 91 224 / 0.1);
   --color-ws-pip: #0b8a86;
   --color-ws-pip-soft: rgb(11 138 134 / 0.1);
+  --color-ws-pip2: #5b4bd1;
   --color-ws-on-pip: #ffffff;
   --color-ws-done: #1f9d6a;
   --color-ws-done-soft: rgb(31 157 106 / 0.12);
@@ -38,6 +39,7 @@
     --color-ws-accent-soft: rgb(106 130 255 / 0.16);
     --color-ws-pip: #37d0c0;
     --color-ws-pip-soft: rgb(55 208 192 / 0.13);
+    --color-ws-pip2: #9a8bff;
     --color-ws-on-pip: #04302c;
     --color-ws-done-soft: rgb(31 157 106 / 0.2);
     --color-ws-blocked-soft: rgb(224 71 91 / 0.2);
@@ -65,6 +67,7 @@
   --color-ws-accent-soft: rgb(106 130 255 / 0.16);
   --color-ws-pip: #37d0c0;
   --color-ws-pip-soft: rgb(55 208 192 / 0.13);
+  --color-ws-pip2: #9a8bff;
   --color-ws-on-pip: #04302c;
   --color-ws-done-soft: rgb(31 157 106 / 0.2);
   --color-ws-blocked-soft: rgb(224 71 91 / 0.2);

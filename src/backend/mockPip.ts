@@ -14,6 +14,7 @@ export interface PipScript {
 const FILTERS: { pattern: RegExp; filter: WorkFilter; note: string }[] = [
   { pattern: /\b(stale|quiet|old)\b/, filter: { type: "stale", days: 5 }, note: "Tickets untouched for 5 days or more" },
   { pattern: /\b(blocked|stuck)\b/, filter: { type: "blocked" }, note: "Blocked tickets" },
+  { pattern: /\b(unassigned|no owner)\b/, filter: { type: "unassigned" }, note: "Tickets with no owner" },
   { pattern: /\b(mine|my)\b|assigned to me/, filter: { type: "mine" }, note: "Tickets assigned to you" },
 ];
 
@@ -27,7 +28,7 @@ export function scriptPip(prompt: string, context: ScreenContext): PipScript {
     const filter = context.filter ? and(context.filter, wanted.filter) : wanted.filter;
     return {
       steps: ["Searched the items"],
-      text: `${wanted.note}. I filtered this view for you; undo it above if that wasn't what you meant.`,
+      text: `${wanted.note}. I filtered this view for you; undo it below if that wasn't what you meant.`,
       filter: { filter, note: wanted.note },
       draft: null,
     };
