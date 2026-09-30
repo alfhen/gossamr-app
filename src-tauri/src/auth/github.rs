@@ -61,6 +61,11 @@ impl GithubSession {
         Connection::github(&self.login, &self.login)
     }
 
+    /// Whether the token can be used to read notifications, which classic tokens grant with `notifications` or `repo`.
+    pub fn can_read_notifications(&self) -> bool {
+        self.scopes.as_ref().is_some_and(|s| s.iter().any(|s| s == "notifications" || s == "repo"))
+    }
+
     fn needs_refresh(&self, now: u64) -> bool {
         self.refresh_token.is_some() && self.expires_at.is_some_and(|at| at <= now + REFRESH_MARGIN_SECS)
     }

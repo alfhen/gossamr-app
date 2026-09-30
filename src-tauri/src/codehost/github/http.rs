@@ -12,6 +12,7 @@ use crate::db::{stamp, CachedHttp, Db};
 use crate::error::{Error, Result};
 
 const API_VERSION: &str = "2022-11-28";
+const JSON: &str = "application/vnd.github+json";
 /// Requests stop this far short of the limit, so a burst from somewhere else can't push the account over.
 const CORE_RESERVE: u64 = 5;
 const SEARCH_RESERVE: u64 = 1;
@@ -143,14 +144,21 @@ impl Api {
     }
 
     pub async fn get(&self, target: &str) -> Result<Page> {
+        self.get_with(target, JSON).await
+    }
+
+    /// Like `get`, for a different media type (text matches in code search).
+    pub async fn get_with(&self, target: &str, accept: &str) -> Result<Page> {
         let url = self.url(target);
         self.guard(&url)?;
-        let cached = self.cached(&url);
+        // The same URL answers differently per media type, so each is cached apart.
+        let key = if accept == JSON { url.clone() } else { format!("{url}#{accept}") };
+        let cached = self.cached(&key);
         let mut req = self
             .http
             .get(&url)
             .bearer_auth(&self.token)
-            .header(ACCEPT, "application/vnd.github+json")
+            .header(ACCEPT, accept)
             .header("X-GitHub-Api-Version", API_VERSION);
         if let Some(c) = &cached {
             if let Some(etag) = &c.etag {
@@ -168,7 +176,7 @@ impl Api {
         if status == StatusCode::NOT_MODIFIED {
             let c = cached.ok_or_else(|| Error::CodeHost { status: 304, message: "GitHub answered 'not modified' to a request that wasn't conditional.".into() })?;
             // A repository that never changes is polled forever, so the answer must not age out of the cache.
-            let _ = self.db.lock().expect("db lock poisoned").http_cache_touch(&self.connection_id, &url, &stamp(Utc::now()));
+            let _ = self.db.lock().expect("db lock poisoned").http_cache_touch(&self.connection_id, &key, &stamp(Utc::now()));
             return Ok(Page { body: c.body, unchanged: true, next: c.next, last_modified: c.last_modified, poll_interval, scopes });
         }
         let body = res.text().await?;
@@ -180,7 +188,7 @@ impl Api {
         if etag.is_some() || page.last_modified.is_some() {
             let entry = CachedHttp { etag, last_modified: page.last_modified.clone(), next: page.next.clone(), body: page.body.clone() };
             // A full disk must not turn a good answer into an error.
-            let _ = self.db.lock().expect("db lock poisoned").http_cache_put(&self.connection_id, &url, &entry, &stamp(Utc::now()));
+            let _ = self.db.lock().expect("db lock poisoned").http_cache_put(&self.connection_id, &key, &entry, &stamp(Utc::now()));
         }
         Ok(page)
     }

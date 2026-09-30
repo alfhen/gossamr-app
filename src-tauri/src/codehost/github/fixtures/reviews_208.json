@@ -1,0 +1,35 @@
+[
+ {
+  "id": 501,
+  "user": {
+   "login": "bob"
+  },
+  "state": "COMMENTED",
+  "submitted_at": "2026-09-26T10:00:00Z",
+  "body": "Looks ok so far"
+ },
+ {
+  "id": 502,
+  "user": {
+   "login": "cy"
+  },
+  "state": "CHANGES_REQUESTED",
+  "submitted_at": "2026-09-27T10:00:00Z"
+ },
+ {
+  "id": 503,
+  "user": {
+   "login": "cy"
+  },
+  "state": "COMMENTED",
+  "submitted_at": "2026-09-27T11:00:00Z"
+ },
+ {
+  "id": 504,
+  "user": {
+   "login": "dee"
+  },
+  "state": "PENDING",
+  "submitted_at": null
+ }
+]

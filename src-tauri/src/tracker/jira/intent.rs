@@ -62,14 +62,15 @@ pub(super) fn create_fields(project: &str, issue_type: &IssueType, item: &NewIte
 }
 
 /// `from` blocks / relates to / duplicates `to`. Jira names the ends by their link description, so the issue that
-/// does the blocking is the inward one.
-pub(super) fn link_body(from: &ItemRef, to: &ItemRef, kind: LinkKind) -> Value {
+/// does the blocking is the inward one. `None` for kinds that aren't issue links, which must never reach Jira.
+pub(super) fn link_body(from: &ItemRef, to: &ItemRef, kind: LinkKind) -> Option<Value> {
     let name = match kind {
         LinkKind::Blocks => "Blocks",
         LinkKind::Relates => "Relates",
         LinkKind::Duplicates => "Duplicate",
+        LinkKind::ImplementedBy => return None,
     };
-    json!({ "type": { "name": name }, "inwardIssue": { "key": from.external_id }, "outwardIssue": { "key": to.external_id } })
+    Some(json!({ "type": { "name": name }, "inwardIssue": { "key": from.external_id }, "outwardIssue": { "key": to.external_id } }))
 }
 
 /// The transition that leads to `status_id`. Jira may offer several; the first is taken.
@@ -168,10 +169,11 @@ mod tests {
 
     #[test]
     fn links_name_jiras_own_link_types() {
-        let body = link_body(&item("CA-1"), &item("CA-2"), LinkKind::Blocks);
+        let body = link_body(&item("CA-1"), &item("CA-2"), LinkKind::Blocks).unwrap();
         assert_eq!(body["type"]["name"], "Blocks");
         assert_eq!(body["inwardIssue"]["key"], "CA-1", "the blocker is the inward issue");
         assert_eq!(body["outwardIssue"]["key"], "CA-2");
-        assert_eq!(link_body(&item("a"), &item("b"), LinkKind::Duplicates)["type"]["name"], "Duplicate");
+        assert_eq!(link_body(&item("a"), &item("b"), LinkKind::Duplicates).unwrap()["type"]["name"], "Duplicate");
+        assert!(link_body(&item("a"), &item("b"), LinkKind::ImplementedBy).is_none(), "code links are never written to Jira");
     }
 }

@@ -298,7 +298,8 @@ impl WorkTracker for JiraTracker {
                 Ok(Applied::default())
             }
             Intent::Link { from, to, kind } => {
-                self.client.link_issues(scope, &intent::link_body(from, to, *kind)).await?;
+                let body = intent::link_body(from, to, *kind).ok_or_else(not_an_issue_link)?;
+                self.client.link_issues(scope, &body).await?;
                 Ok(Applied::default())
             }
             Intent::Subtasks { parent, summaries } => {
@@ -309,6 +310,9 @@ impl WorkTracker for JiraTracker {
             }
             // The link's `from` stands for the new item, so only its `to` and kind are used.
             Intent::Create { container, fields, link } => {
+                if link.as_ref().is_some_and(|l| intent::link_body(&l.from, &l.to, l.kind).is_none()) {
+                    return Err(not_an_issue_link());
+                }
                 let project = container.external_id.as_str();
                 let types = self.client.issue_types(scope, project).await?;
                 let issue_type = intent::pick_type(fields.kind, &types).ok_or_else(|| Error::Api {
@@ -318,7 +322,10 @@ impl WorkTracker for JiraTracker {
                 let key = self.client.create_issue(scope, intent::create_fields(project, issue_type, fields)).await?;
                 let created = ItemRef { connection_id: self.connection_id.clone(), external_id: key.clone(), key };
                 let error = match link {
-                    Some(l) => self.client.link_issues(scope, &intent::link_body(&created, &l.to, l.kind)).await.err(),
+                    Some(l) => match intent::link_body(&created, &l.to, l.kind) {
+                        Some(body) => self.client.link_issues(scope, &body).await.err(),
+                        None => Some(not_an_issue_link()),
+                    },
                     None => None,
                 };
                 Ok(Applied { created: vec![created], error })
@@ -341,6 +348,10 @@ impl WorkTracker for JiraTracker {
     async fn download(&self, attachment_id: &str) -> Result<(String, Vec<u8>)> {
         self.client.download(&self.scope, attachment_id).await
     }
+}
+
+fn not_an_issue_link() -> Error {
+    Error::Proposal("code changes are read from the code host; they can't be linked as a Jira issue link".into())
 }
 
 #[cfg(test)]
@@ -453,6 +464,13 @@ mod tests {
         let err = tracker().search(&Filter::NeedsMe, &SearchOptions::default()).await.unwrap_err();
         assert!(matches!(err, Error::Api { status: 400, .. }));
         assert!(tracker().search(&Filter::Items { items: vec![] }, &SearchOptions::default()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_code_link_is_refused_before_anything_is_sent_to_jira() {
+        let link = Intent::Link { from: item(), to: item(), kind: crate::domain::LinkKind::ImplementedBy };
+        let err = tracker().apply(&link).await.unwrap_err();
+        assert!(matches!(err, Error::Proposal(_)), "{err}");
     }
 
     #[tokio::test]

@@ -1,0 +1,36 @@
+[
+ {
+  "sha": "c0ffee1234567",
+  "html_url": "https://github.com/acme/webshop/commit/c0ffee1234567",
+  "commit": {
+   "message": "CA-208: first step\n\nlonger text",
+   "author": {
+    "name": "Ann Example",
+    "date": "2026-09-25T09:00:00Z"
+   },
+   "committer": {
+    "name": "Ann Example",
+    "date": "2026-09-25T09:05:00Z"
+   }
+  },
+  "author": {
+   "login": "ann"
+  }
+ },
+ {
+  "sha": "deadbeef00000",
+  "html_url": "https://github.com/acme/webshop/commit/deadbeef00000",
+  "commit": {
+   "message": "wip",
+   "author": {
+    "name": "Ann Example",
+    "date": "2026-09-26T09:00:00Z"
+   },
+   "committer": {
+    "name": "Ann Example",
+    "date": "2026-09-26T09:05:00Z"
+   }
+  },
+  "author": null
+ }
+]

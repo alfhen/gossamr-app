@@ -1,4 +1,5 @@
 import type { CatalogPage, ConnectionInfo, ContainerRef, ContainerSummary, DeviceStart, Footprint, GithubSignInOptions, WatchChange, WatchChanged, WatchMode, WatchState } from "../types";
+import { MockCode } from "./mockCode";
 import { MockWatch } from "./mockWatch";
 
 export const GITHUB_LOGIN = "ada";
@@ -37,12 +38,15 @@ export class MockGithub {
   private repos: ContainerSummary[] = [];
   private listeners = new Set<(c: WatchChanged) => void>();
   private pendingDevice = false;
+  /** The sample pull requests, branches and commits, tied to the sample tickets. Empty reads until connected. */
+  readonly code: MockCode;
 
   constructor(
     private readonly repoCount: number,
     private readonly now = Date.now(),
     connected = false,
   ) {
+    this.code = new MockCode(GITHUB_CONNECTION, now, GITHUB_LOGIN, (repo) => this.isWatched(repo));
     if (connected) this.connect();
   }
 

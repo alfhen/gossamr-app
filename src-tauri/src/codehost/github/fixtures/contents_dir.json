@@ -1,0 +1,26 @@
+[
+ {
+  "name": "README.md",
+  "path": "README.md",
+  "type": "file",
+  "size": 120
+ },
+ {
+  "name": "src",
+  "path": "src",
+  "type": "dir",
+  "size": 0
+ },
+ {
+  "name": "link",
+  "path": "link",
+  "type": "symlink",
+  "size": 4
+ },
+ {
+  "name": "Cargo.toml",
+  "path": "Cargo.toml",
+  "type": "file",
+  "size": 300
+ }
+]

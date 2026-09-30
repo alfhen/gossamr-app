@@ -27,11 +27,11 @@ use auth::{Auth, AuthStatus, DeviceStart, OAuthApp, Scope};
 use agent::{AgentService, AskRequest};
 use claude::ClaudeCodeProvider;
 use tracker::{Connection, Move};
-use inbox::{CatalogPage, ConnectionInfo, Core, Edit, WatchState};
+use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState};
 use error::{Error, Result};
 use domain::{
-    Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, Stray,
-    WatchChange, WatchMode, WorkItem, Workflow,
+    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, ContainerRef, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Stray,
+    TreeEntry, WatchChange, WatchMode, WorkItem, Workflow,
 };
 use model::{Snapshot, Transition};
 use sync::Trigger;
@@ -57,6 +57,11 @@ async fn publish(app: &AppHandle, core: &Core) {
 /// Tells the page the cache changed, so views over it can re-read.
 fn cache_changed(app: &AppHandle, connection_id: &str) {
     let _ = app.emit("cache-changed", serde_json::json!({ "connectionId": connection_id }));
+}
+
+/// Tells the page which work items' code links changed, so it can re-read them.
+fn dev_links_changed(app: &AppHandle, connection_id: &str) {
+    let _ = app.emit("dev-links-changed", serde_json::json!({ "connectionId": connection_id }));
 }
 
 /// Tells the page what is watched changed, so it can re-read the settings along with everything they scope.
@@ -283,6 +288,69 @@ async fn github_disconnect(app: AppHandle, core: State<'_, CoreState>, connectio
     Ok(())
 }
 
+/// The pull requests, branches and commits that name a work item, from the cache. Instant; only watched repositories.
+#[tauri::command]
+fn dev_links(core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<DevLink>> {
+    core.dev_links(&item)
+}
+
+/// Searches the watched repositories for the item's key, caches what it finds, and returns the links.
+#[tauri::command]
+async fn dev_links_live(app: AppHandle, core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<DevLink>> {
+    let (links, changed) = core.dev_links_live(&item).await?;
+    changed.iter().for_each(|id| dev_links_changed(&app, id));
+    Ok(links)
+}
+
+/// Pull request and notification events of the GitHub connections, newest first, for the Activity feed.
+#[tauri::command]
+fn code_events(core: State<'_, CoreState>, limit: Option<usize>) -> Result<Vec<Event>> {
+    core.code_events(limit.unwrap_or(EVENT_LIMIT))
+}
+
+#[tauri::command]
+async fn code_pull_request(core: State<'_, CoreState>, reference: CodeRef) -> Result<PullRequestDetail> {
+    core.code_pull_request(&reference).await
+}
+
+#[tauri::command]
+async fn code_search(core: State<'_, CoreState>, query: String) -> Result<Vec<CodeChange>> {
+    core.code_search(&query).await
+}
+
+#[tauri::command]
+async fn code_file(core: State<'_, CoreState>, connection_id: String, repo: String, path: String, reference: Option<String>) -> Result<CodeFile> {
+    core.code_file(&connection_id, &repo, &path, reference.as_deref()).await
+}
+
+#[tauri::command]
+async fn code_tree(core: State<'_, CoreState>, connection_id: String, repo: String, path: String, reference: Option<String>) -> Result<Vec<TreeEntry>> {
+    core.code_tree(&connection_id, &repo, &path, reference.as_deref()).await
+}
+
+/// Commits of a branch or ref, newest first. `since` is RFC 3339; `query` filters by message text such as a ticket key.
+#[tauri::command]
+async fn code_commits(
+    core: State<'_, CoreState>,
+    connection_id: String,
+    repo: String,
+    reference: Option<String>,
+    since: Option<String>,
+    query: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<CodeChange>> {
+    let since = since
+        .map(|s| chrono::DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&chrono::Utc)).map_err(|_| Error::Api { status: 400, message: format!("not a valid time: {s}") }))
+        .transpose()?;
+    core.code_commits(&connection_id, &CommitQuery { repo, reference, since, text: query, limit: limit.unwrap_or(0) }).await
+}
+
+/// GitHub code search, limited to watched repositories (all of them when `repos` is left out).
+#[tauri::command]
+async fn code_search_code(core: State<'_, CoreState>, connection_id: String, query: String, repos: Option<Vec<String>>) -> Result<Vec<CodeHit>> {
+    core.code_search_code(&connection_id, &query, repos.as_deref()).await
+}
+
 #[tauri::command]
 async fn proposals_list(core: State<'_, CoreState>, query: Option<ProposalQuery>) -> Result<Vec<Proposal>> {
     core.proposals(&query.unwrap_or_default()).await
@@ -492,6 +560,25 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                 }
                 publish(&app, &core).await;
             }
+            for (connection_id, result) in core.sync_code_if_due(trigger).await {
+                // A failure shows on the connection's own row. It can follow repositories that were stored, so what
+                // the page reads from the cache is refreshed either way.
+                match result {
+                    Ok(synced) => {
+                        if synced.changed {
+                            cache_changed(&app, &connection_id);
+                        }
+                        if synced.links_changed {
+                            dev_links_changed(&app, &connection_id);
+                        }
+                    }
+                    Err(_) => {
+                        cache_changed(&app, &connection_id);
+                        dev_links_changed(&app, &connection_id);
+                    }
+                }
+                publish(&app, &core).await;
+            }
             // A failed check is tried again at the next interval; nothing depends on it.
             if let Ok(Some((connection_id, strays))) = core.radar_if_due().await {
                 assigned_elsewhere(&app, &connection_id, &strays);
@@ -594,6 +681,15 @@ pub fn run() {
             cache_comments,
             cache_transitions,
             connections_list,
+            dev_links,
+            dev_links_live,
+            code_events,
+            code_pull_request,
+            code_search,
+            code_file,
+            code_tree,
+            code_commits,
+            code_search_code,
             github_connect_token,
             github_import_gh_token,
             github_sign_in_options,
