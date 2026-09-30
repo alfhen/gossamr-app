@@ -395,20 +395,13 @@ async fn create_subtasks(
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ClaudeSessions {
-    /// The session last used for this ticket from the app, as `{id, cwd}`.
-    last: Option<serde_json::Value>,
-    recent: Vec<claude::sessions::SessionInfo>,
+    /// The session to continue for this ticket, when Pip can resume it.
+    last: Option<String>,
 }
 
 #[tauri::command]
 async fn claude_sessions(core: State<'_, CoreState>, key: String) -> Result<ClaudeSessions> {
-    let (last, own) = core.claude_sessions(&key).await?;
-    let recent = tauri::async_runtime::spawn_blocking(move || {
-        claude::sessions::projects_dir().map(|root| claude::sessions::recent(&root, &own, 15)).unwrap_or_default()
-    })
-    .await
-    .unwrap_or_default();
-    Ok(ClaudeSessions { last, recent })
+    Ok(ClaudeSessions { last: core.claude_session_for(&key).await? })
 }
 
 #[tauri::command]

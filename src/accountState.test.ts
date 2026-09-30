@@ -24,7 +24,7 @@ describe("per-account state", () => {
     stubStorage();
     resetAccountState("jira:site:me");
     await useWorkspace.getState().init(new MockBackend());
-    useClaude.setState({ open: true, byTicket: { "CA-1": { turns: [], sessionId: "s", cwd: null } } });
+    useClaude.setState({ open: true, byTicket: { "CA-1": { turns: [], sessionId: "s" } } });
     usePip.setState({ filtered: { tabId: "t", before: { type: "open" }, beforeTitle: null, filter: { type: "open" }, note: "" }, dismissed: ["large-list"] });
     useTabs.getState().openTab({ title: "Mine" });
     useToasts.getState().push("old");

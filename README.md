@@ -61,9 +61,9 @@ The Jira adapter was written against the REST v3 documentation and tested with r
 
 ## Ask Claude
 
-Press `⌘J` on a ticket to ask Claude about it. The app runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription and loads your CLAUDE.md, memory and skills. You can continue this ticket's last session, continue any recent CLI or desktop session, or start a new one in a recent folder. It runs Sonnet at medium effort, whatever your Claude Code default is.
+Press `⌘J` on a ticket to ask Claude about it. The app runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription. It does not load your CLAUDE.md, memory, skills, hooks, plugins or other MCP servers. It runs in an empty folder inside the app's data directory, and follow-ups continue the session Pip started there. It runs Sonnet at medium effort, whatever your Claude Code default is.
 
-Claude can read the ticket through a local MCP server the app runs, and read code and git history in the session's folder. It can't write files or change Jira: comments, transitions and subtasks come back as cards you approve, edit or skip.
+Claude can read the ticket through a local MCP server the app runs, and nothing else: no built-in Claude Code tools, so it can't read local files, run commands, browse the web or write files. It can't change Jira either: comments, transitions and subtasks come back as cards you approve, edit or skip.
 
 ## Development
 
