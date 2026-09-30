@@ -20,6 +20,8 @@
   --color-ws-blocked: #e0475b;
   --color-ws-blocked-soft: rgb(224 71 91 / 0.1);
   --color-ws-warn: #c98a1b;
+  --color-ws-review: #8a55d6;
+  --color-ws-review-soft: rgb(160 90 220 / 0.14);
   --shadow-ws-pop: 0 12px 40px rgb(30 20 80 / 0.2);
 }
 
@@ -43,6 +45,8 @@
     --color-ws-on-pip: #04302c;
     --color-ws-done-soft: rgb(31 157 106 / 0.2);
     --color-ws-blocked-soft: rgb(224 71 91 / 0.2);
+    --color-ws-review: #b48af0;
+    --color-ws-review-soft: rgb(160 90 220 / 0.22);
     --shadow-ws-pop: 0 12px 40px rgb(0 0 0 / 0.6);
   }
 }
@@ -71,6 +75,8 @@
   --color-ws-on-pip: #04302c;
   --color-ws-done-soft: rgb(31 157 106 / 0.2);
   --color-ws-blocked-soft: rgb(224 71 91 / 0.2);
+  --color-ws-review: #b48af0;
+  --color-ws-review-soft: rgb(160 90 220 / 0.22);
   --shadow-ws-pop: 0 12px 40px rgb(0 0 0 / 0.6);
 }
 

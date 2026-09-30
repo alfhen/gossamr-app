@@ -30,6 +30,8 @@ const card = (over: Partial<ItemCardProps> = {}, item: WorkItem = s().items["moc
   now: new Date("2026-09-30T12:00:00Z"),
   wither: 0,
   blocked: false,
+  needsMe: false,
+  unread: false,
   draft: null,
   moreDrafts: 0,
   selected: false,
@@ -185,7 +187,18 @@ describe("BoardView", () => {
 });
 
 describe("AgeView", () => {
-  it("has a column per age bucket, holds open items only, and lets cards wither", () => {
+  it("ranks open tickets as bars by default, longest quiet first, without finished ones", () => {
+    sync();
+    const out = renderToStaticMarkup(<AgeView tab={{ ...tab(), view: "age" }} items={itemsByFilter(s(), ALL)} />);
+    expect(out).toContain('aria-label="Open tickets by days quiet"');
+    expect(out).not.toContain("DEVOPS-478");
+    const days = [...out.matchAll(/quiet for (\d+) days/g)].map((m) => Number(m[1]));
+    expect(days.length).toBeGreaterThan(3);
+    expect(days).toEqual([...days].sort((a, b) => b - a));
+  });
+
+  it("has a column per age bucket, holds open items only, and lets cards wither, when the person picked columns", () => {
+    vi.stubGlobal("localStorage", { getItem: (k: string) => (k === "gossamr-age-layout" ? JSON.stringify("columns") : null), setItem: () => {}, removeItem: () => {} });
     sync();
     const out = renderToStaticMarkup(<AgeView tab={{ ...tab(), view: "age" }} items={itemsByFilter(s(), ALL)} />);
     for (const label of ["Fresh", "This week", "Stale", "Forgotten"]) expect(out).toContain(`aria-label="${label},`);

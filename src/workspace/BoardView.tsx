@@ -3,13 +3,14 @@ import { containerKey, itemKey } from "../lib/filter";
 import { targetOf } from "../lib/proposals";
 import type { WorkItem } from "../types";
 import { knownMoves, useWorkspace } from "../workspaceStore";
-import { BulkBar } from "./BulkBar";
+import { CanvasFooter } from "./CanvasFooter";
 import {
   boardSections,
   categorySection,
   categoryVerdict,
   draftStatus,
   dropVerdict,
+  moveHint,
   movesAreOpaque,
   planCategoryDrop,
   planDrop,
@@ -19,12 +20,29 @@ import {
 } from "./boardLogic";
 import type { CanvasProps } from "./canvases";
 import { projectOf } from "./filters";
+import { StatusPill } from "./CanvasBits";
+import { statusTone } from "./canvasShared";
 import { GhostCard, ItemCard } from "./ItemCard";
-import { NoticeLine } from "./Notice";
 import { useTabs } from "./tabsStore";
 import { useCards } from "./useCards";
 
-const DOT = { todo: "bg-ws-ink3", active: "bg-ws-accent", done: "bg-ws-done" } as const;
+const DOT = { todo: "bg-ws-ink3", active: "bg-ws-accent", done: "bg-ws-done", review: "bg-ws-review", blocked: "bg-ws-blocked" } as const;
+
+/** The project's own statuses in order, or why the columns are categories when no project is picked. */
+export function WorkflowLine({ section }: { section: BoardSection | null }) {
+  if (!section) return <p className="m-0 text-xs text-ws-ink3">Columns are status categories because each project has its own workflow. Pick a project to see its exact columns.</p>;
+  return (
+    <ol aria-label={`${section.name} workflow`} className="m-0 flex list-none flex-wrap items-center gap-1.5 p-0 text-xs text-ws-ink3">
+      <li className="font-bold text-ws-ink2">{section.name} workflow</li>
+      {section.workflow.statuses.map((s, at) => (
+        <li key={s.id} className="flex items-center gap-1.5">
+          {at > 0 && <span aria-hidden>›</span>}
+          <StatusPill status={s} title={moveHint(section.workflow, s)} />
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 export function BoardView({ tab, items }: CanvasProps) {
   const containers = useWorkspace((s) => s.containers);
@@ -86,6 +104,9 @@ export function BoardView({ tab, items }: CanvasProps) {
 
   return (
     <div className="flex h-full flex-col" onKeyDown={onKeyDown}>
+      <div className="px-6 pb-2">
+        <WorkflowLine section={byCategory ? null : (sections[0] ?? null)} />
+      </div>
       <div className="min-h-0 flex-1 overflow-auto px-6 pb-4">
         {sections.map((section) => (
           <section key={section.key} aria-label={`${section.name} board`} className="min-w-full pt-1">
@@ -115,7 +136,7 @@ export function BoardView({ tab, items }: CanvasProps) {
                     } ${verdict === "invalid" ? "opacity-40" : ""}`}
                   >
                     <div className="flex items-center text-sm font-bold text-ws-ink2">
-                      <i className={`mr-1.5 size-2 rounded-full ${DOT[column.status.category]}`} />
+                      <i className={`mr-1.5 size-2 rounded-full ${DOT[statusTone(column.status)]}`} />
                       {column.status.name}
                       <span className="ml-auto font-semibold text-ws-ink3">{column.items.length}</span>
                     </div>
@@ -146,20 +167,7 @@ export function BoardView({ tab, items }: CanvasProps) {
           </section>
         ))}
       </div>
-      <NoticeLine notice={cards.notice} onDismiss={cards.dismissNotice} />
-      {cards.bulk.marked.length > 1 && (
-        <BulkBar
-          count={cards.bulk.marked.length}
-          targets={cards.bulk.targets}
-          approvable={cards.bulk.approvable}
-          confirming={cards.bulk.confirming}
-          onMoveAll={(n) => void cards.bulk.move(n)}
-          onAsk={cards.bulk.ask}
-          onCancel={cards.bulk.cancel}
-          onApprove={() => void cards.bulk.approve()}
-          onClear={cards.bulk.clear}
-        />
-      )}
+      <CanvasFooter cards={cards} />
     </div>
   );
 }

@@ -145,6 +145,8 @@ const props = (over: Partial<MapSvgProps> = {}): MapSvgProps => ({
   focused: null,
   hovered: null,
   blocked: new Set(),
+  needsMe: new Set(),
+  now: new Date(),
   drafts: {},
   onNode: vi.fn(),
   onHover: vi.fn(),

@@ -5,6 +5,7 @@ import type { StatusDef, WorkItem, Workflow } from "../types";
 import { draftCounts, knownMoves, nameOf, workflowOfItem, useWorkspace } from "../workspaceStore";
 import { approvableTransitions, blockedKeys, bulkMoves, bulkTargets, draftStatus, movesAreOpaque, pendingMoves, targetsFor, witherOf } from "./boardLogic";
 import { useCanvasOrder } from "./browse";
+import { useAttention } from "./CanvasBits";
 import type { ItemCardProps } from "./ItemCard";
 import { useTabs } from "./tabsStore";
 
@@ -25,6 +26,7 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
   const selected = useTabs((s) => s.selected);
   const ticked = useTabs((s) => s.marked);
   useCanvasOrder(order);
+  const attention = useAttention();
   const marked = useMemo(() => ticked.filter((k) => order.includes(k)), [ticked, order]);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -74,6 +76,7 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
       now,
       wither: witherOf(item, now),
       blocked: blocked.has(key),
+      ...attention.marks(item),
       draft: p ? { id: p.id, to: to! } : null,
       moreDrafts: (counts[key] ?? 0) - (p ? 1 : 0),
       selected: selected === key,
@@ -134,5 +137,5 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
     },
   };
 
-  return { cardProps, now, pending, blocked, counts, workflowOf, notice, dismissNotice: () => setNotice(null), say, bulk };
+  return { cardProps, attention, now, pending, blocked, counts, workflowOf, notice, dismissNotice: () => setNotice(null), say, bulk };
 }
