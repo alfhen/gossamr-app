@@ -79,7 +79,7 @@ pub fn derive(t: &CachedTicket, me: &str) -> Vec<NewEvent> {
     out
 }
 
-/// The user's own status changes on a ticket, and its creation if they created it, keyed by an id that's stable
+/// The user's own status changes and comments on a ticket, and its creation if they created it, keyed by an id that's stable
 /// across syncs so storing them twice is a no-op.
 pub fn my_actions(t: &CachedTicket, me: &str) -> Vec<(String, MyAction)> {
     let action = |kind: &str, at: &str, text: String| MyAction { ticket_key: t.key.clone(), at: at.to_string(), kind: kind.into(), text };
@@ -94,6 +94,7 @@ pub fn my_actions(t: &CachedTicket, me: &str) -> Vec<(String, MyAction)> {
             })
         })
         .collect();
+    out.extend(t.comments.iter().filter(|c| c.author.account_id == me).map(|c| (format!("c:{}", c.id), action("comment", &c.created, String::new()))));
     if let (Some(creator), Some(created)) = (&t.creator, &t.created) {
         if creator.account_id == me {
             out.push((format!("created:{}", t.key), action("created", created, String::new())));
@@ -185,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn my_actions_are_my_status_changes_and_tickets_i_created() {
+    fn my_actions_are_my_status_changes_comments_and_tickets_i_created() {
         let mut t = ticket();
         t.history.push(History {
             id: "501".into(),
@@ -199,7 +200,7 @@ mod tests {
         let actions = my_actions(&t, "me");
         let kinds: Vec<(&str, &str, &str)> = actions.iter().map(|(id, a)| (id.as_str(), a.kind.as_str(), a.text.as_str())).collect();
         assert_eq!(kinds, vec![("h:501:status", "transition", "In Review → Done"), ("created:CA-1", "created", "")]);
-        assert!(my_actions(&t, "sam").iter().all(|(_, a)| a.kind == "transition"), "Sam didn't create it");
+        assert!(my_actions(&t, "sam").iter().all(|(_, a)| a.kind != "created"), "Sam didn't create it");
     }
 
     #[test]

@@ -7,7 +7,7 @@ import { ALL } from "../lib/filter";
 import type { Proposal, ScreenContext } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
-import { AskPipButton, askPlacement, Launcher, Nudge } from "./PipExtras";
+import { AskPipButton, askPlacement, fireNudge, Launcher, Nudge } from "./PipExtras";
 import { AppliedCard, ContextChip, escapeClosesPane, SeeingPanel } from "./PipPane";
 import { PipAvatar } from "./PipAvatar";
 import { pupilOffset } from "./pipGaze";
@@ -226,6 +226,27 @@ describe("the avatar and launcher", () => {
     const out = renderToStaticMarkup(<Nudge text="DEVOPS-9 has been quiet for 9 days." onOpen={vi.fn()} onDismiss={vi.fn()} />);
     expect(out).toContain("DEVOPS-9 has been quiet for 9 days.");
     expect(out).toContain("Dismiss suggestion");
+  });
+});
+
+describe("showing a suggestion", () => {
+  const nudge = (text: string) => ({ id: "unassigned-view", kind: "unassigned-view" as const, text, action: { type: "open" as const } });
+
+  it("shows the candidate it is given, with the text it has now, and counts it as seen", () => {
+    fireNudge([nudge("5 tickets here have no owner. Want me to show them?")], 100, false);
+    expect(usePip.getState()).toMatchObject({ nudge: { text: "5 tickets here have no owner. Want me to show them?" }, lastNudgeAt: 100, seen: ["unassigned-view"] });
+  });
+
+  it("stays quiet while one is up, while the page is hidden and for one the person closed", () => {
+    fireNudge([nudge("a")], 1, true);
+    expect(usePip.getState().nudge).toBeNull();
+    usePip.getState().dismiss("unassigned-view");
+    fireNudge([nudge("a")], 1, false);
+    expect(usePip.getState().nudge).toBeNull();
+    usePip.setState({ dismissed: [] });
+    fireNudge([nudge("first")], 2, false);
+    fireNudge([{ ...nudge("second"), id: "other" }], 3, false);
+    expect(usePip.getState().nudge?.text).toBe("first");
   });
 });
 

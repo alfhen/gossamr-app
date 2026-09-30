@@ -2,6 +2,7 @@
 @import "./workspace/theme.css";
 @import "./workspace/board.css";
 @import "./workspace/pip.css";
+@import "./workspace/motion.css";
 
 @theme {
   --font-sans: system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;

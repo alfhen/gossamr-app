@@ -4,6 +4,7 @@ import { targetOf } from "../lib/proposals";
 import type { StatusDef, WorkItem, Workflow } from "../types";
 import { draftCounts, knownMoves, nameOf, workflowOfItem, useWorkspace } from "../workspaceStore";
 import { approvableTransitions, blockedKeys, bulkMoves, bulkTargets, draftStatus, movesAreOpaque, pendingMoves, targetsFor, witherOf } from "./boardLogic";
+import { useCanvasOrder } from "./browse";
 import type { ItemCardProps } from "./ItemCard";
 import { useTabs } from "./tabsStore";
 
@@ -23,6 +24,7 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
   const names = useWorkspace((s) => s.names);
   const selected = useTabs((s) => s.selected);
   const ticked = useTabs((s) => s.marked);
+  useCanvasOrder(order);
   const marked = useMemo(() => ticked.filter((k) => order.includes(k)), [ticked, order]);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);

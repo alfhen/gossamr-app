@@ -3,6 +3,7 @@ import { itemKey } from "../lib/filter";
 import { relativeTime } from "../lib/views";
 import type { StatusDef, WorkCategory } from "../types";
 import { nameOf, useWorkspace } from "../workspaceStore";
+import { useCanvasOrder } from "./browse";
 import type { CanvasProps } from "./canvases";
 import { useTabs } from "./tabsStore";
 
@@ -23,6 +24,8 @@ export function ListView({ items }: CanvasProps) {
   const selected = useTabs((s) => s.selected);
   const select = useTabs((s) => s.select);
   const now = useMemo(() => new Date(), [items]);
+  const order = useMemo(() => items.map((i) => itemKey(i.item)), [items]);
+  useCanvasOrder(order);
 
   const onKeyDown = (ev: KeyboardEvent) => {
     const step = ev.key === "ArrowDown" ? 1 : ev.key === "ArrowUp" ? -1 : 0;

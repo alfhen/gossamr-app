@@ -23,6 +23,21 @@ function RailButton({ current, onClick, children, label }: { current?: boolean; 
   );
 }
 
+function IconButton({ current, onClick, children, label, title }: { current?: boolean; onClick(): void; children: ReactNode; label: string; title: string }) {
+  return (
+    <button
+      type="button"
+      aria-current={current ? "page" : undefined}
+      aria-label={label}
+      title={title}
+      onClick={onClick}
+      className={`relative grid size-[36px] place-items-center rounded-[10px] text-lg font-bold transition-colors ${current ? "bg-ws-win text-ws-ink shadow-[0_1px_4px_rgb(0_0_0/0.2)]" : "text-ws-ink2 hover:bg-ws-hover"}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 const Heading = ({ children }: { children: ReactNode }) => <h2 className="m-0 px-2 pt-3.5 pb-1 text-xs font-semibold text-ws-ink3">{children}</h2>;
 
 export function Rail() {
@@ -58,14 +73,6 @@ export function Rail() {
             </button>
           ))}
         </div>
-        <RailButton current={route === "activity"} onClick={() => setRoute("activity")}>
-          Activity
-          {unread > 0 && (
-            <span aria-label={`${unread} unread`} className="ml-auto rounded-full bg-ws-pip px-1.5 text-xs text-ws-on-pip">
-              {unread}
-            </span>
-          )}
-        </RailButton>
 
         <Heading>Views</Heading>
         {[...BUILT_IN_VIEWS, ...savedViews].map((v) => {
@@ -104,14 +111,27 @@ export function Rail() {
           </RailButton>
         ))}
       </nav>
-      <div className="grid gap-0.5 border-t border-ws-sep p-2">
-        <RailButton current={pipOpen} onClick={() => setPipOpen(!pipOpen)}>
+      <div className="flex items-center gap-1 border-t border-ws-sep p-2">
+        <IconButton label="Activity" title="Activity: events and Pip's drafts" current={route === "activity"} onClick={() => setRoute("activity")}>
+          <span aria-hidden>⚡</span>
+          {unread > 0 && (
+            <span aria-label={`${unread} unread`} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
+              {unread > 99 ? "99+" : unread}
+            </span>
+          )}
+        </IconButton>
+        <IconButton label="Settings" title="Settings" current={route === "settings"} onClick={() => setRoute("settings")}>
+          <span aria-hidden>⚙</span>
+        </IconButton>
+        <button
+          type="button"
+          aria-pressed={pipOpen}
+          onClick={() => setPipOpen(!pipOpen)}
+          className={`ml-auto flex items-center gap-2 rounded-md px-2 py-[5px] hover:bg-ws-hover ${pipOpen ? "bg-ws-sel font-semibold" : "text-ws-ink2"}`}
+        >
           Pip
-          <kbd className="ml-auto rounded border border-ws-sep2 px-1 font-mono text-xs text-ws-ink3">⌘J</kbd>
-        </RailButton>
-        <RailButton current={route === "settings"} onClick={() => setRoute("settings")}>
-          Settings
-        </RailButton>
+          <kbd className="rounded border border-ws-sep2 px-1 font-mono text-xs text-ws-ink3">⌘J</kbd>
+        </button>
       </div>
     </aside>
   );

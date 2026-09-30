@@ -78,7 +78,7 @@ export function itemsForView(
     case "watching":
       return tickets(snap.watching);
     case "waiting":
-      return waitingOnMe(snap).filter((i) => inProject(i.ticketKey));
+      return waitingOnMe(snap, now).filter((i) => inProject(i.ticketKey));
     case "work":
       return myWork(snap, now, workDays).filter((i) => inProject(i.ticketKey));
   }
@@ -87,9 +87,9 @@ export function itemsForView(
 /**
  * Open tickets where someone needs something from the user, longest wait first: a mention with no reply from them
  * since (even if the notification was cleared), a ticket assigned to them that hasn't started, or a ticket they
- * reported that someone else has sent to review.
+ * reported that someone else has sent to review. A mention that is snoozed doesn't count until the snooze ends.
  */
-export function waitingOnMe(snap: Snapshot): ListItem[] {
+export function waitingOnMe(snap: Snapshot, now = new Date()): ListItem[] {
   const me = snap.me.accountId;
   const found = new Map<string, Waiting>();
   const lastReply = (t: Ticket) =>
@@ -97,6 +97,7 @@ export function waitingOnMe(snap: Snapshot): ListItem[] {
   for (const e of snap.events) {
     const t = snap.tickets[e.ticketKey];
     if (e.kind !== "mention" || !t || t.status.category === "done" || lastReply(t) > e.at) continue;
+    if (e.doneAt === null && isSnoozed(e, now)) continue;
     const seen = found.get(t.key);
     if (!seen || e.at < seen.since) found.set(t.key, { reason: "question", who: e.actor, since: e.at });
   }
@@ -254,7 +255,7 @@ export function viewCounts(snap: Snapshot, now: Date): Record<ViewId, number> {
   const unread = (keep: (e: InboxEvent) => boolean) => tickets((e) => e.unread && keep(e));
   return {
     inbox: unread((e) => isActive(e, now)),
-    waiting: waitingOnMe(snap).length,
+    waiting: waitingOnMe(snap, now).length,
     watching: snap.watching.length,
     work: Object.values(snap.tickets).filter(
       (t) => t.assignee?.accountId === snap.me.accountId && t.status.category !== "done",

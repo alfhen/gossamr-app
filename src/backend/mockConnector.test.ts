@@ -33,7 +33,23 @@ describe("the mock connector's data", () => {
     expect(c.search({ type: "stale", days: 7 }).length).toBeGreaterThan(3);
     expect(c.search({ type: "stale", days: 3 }).length).toBeGreaterThan(c.search({ type: "stale", days: 7 }).length);
     expect(keys(c.search({ type: "blocked" }))).toEqual(expect.arrayContaining(["DEVOPS-471", "DEVOPS-473", "CA-404"]));
-    expect(keys(c.search({ type: "needsMe" })).sort()).toEqual(["CA-409", "DEVOPS-471", "SUP-12", "WEB-101"]);
+    expect(keys(c.search({ type: "needsMe" }))).toEqual(expect.arrayContaining(["CA-400", "CA-402", "CA-409", "DEVOPS-471", "DEVOPS-490", "SUP-12", "WEB-101", "WEB-108"]));
+  });
+
+  it("stops needing me once I reply", () => {
+    expect(keys(c.search({ type: "needsMe" }))).toContain("CA-409");
+    c.comment(itemRef("CA-409"), "Looks fine");
+    for (const e of c.eventsFor(itemRef("CA-409"))) c.setRead(e.id, true);
+    expect(keys(c.search({ type: "needsMe" }))).not.toContain("CA-409");
+  });
+
+  it("needs me while an event from someone else is unread, and stops once it is read", () => {
+    const events = c.eventsFor(itemRef("DEVOPS-493")).filter((e) => e.actor && e.actor.accountId !== c.me.accountId);
+    expect(keys(c.search({ type: "needsMe" }))).toContain("DEVOPS-493");
+    for (const e of events) c.setRead(e.id, true);
+    expect(keys(c.search({ type: "needsMe" }))).not.toContain("DEVOPS-493");
+    c.setRead(events[0].id, false);
+    expect(keys(c.search({ type: "needsMe" }))).toContain("DEVOPS-493");
   });
 
   it("records events and comments per item, newest first", () => {

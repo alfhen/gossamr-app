@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { listenToClaude } from "../claudeStore";
 import type { Backend } from "../backend/types";
 import { TicketLinksContext } from "../components/ticketLinks";
@@ -6,6 +6,8 @@ import { useItemsByFilter, useWorkspace } from "../workspaceStore";
 import { ActivityView } from "./ActivityView";
 import { useActivity } from "./activityStore";
 import { CANVASES } from "./canvases";
+import { useStepKeys } from "./browse";
+import { itemKey } from "../lib/filter";
 import { workspaceTicketLinks } from "./jump";
 import { FilterBar } from "./FilterBar";
 import { useActiveTab } from "./hooks";
@@ -16,6 +18,7 @@ import { PipPane } from "./PipPane";
 import { applyTheme, usePrefs } from "./prefs";
 import { Rail } from "./Rail";
 import { Settings } from "./Settings";
+import { ShortcutHint } from "./ShortcutHint";
 import { TabBar } from "./TabBar";
 import { ToastHost } from "./ToastHost";
 import { useTabs } from "./tabsStore";
@@ -26,6 +29,8 @@ function Canvas() {
   const anything = useWorkspace((s) => Object.keys(s.items).length > 0);
   const connection = useWorkspace((s) => s.connections[0]);
   const View = CANVASES[tab.view];
+  const filterOrder = useMemo(() => items.map((i) => itemKey(i.item)), [items]);
+  useStepKeys(filterOrder);
   if (!anything) {
     const waiting = !connection || connection.syncing || (!connection.lastSyncAt && !connection.error);
     return (
@@ -60,6 +65,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   const error = useWorkspace((s) => s.error);
   const route = useTabs((s) => s.route);
   const theme = usePrefs((s) => s.theme);
+  const view = useActiveTab().view;
   const pipOpen = usePrefs((s) => s.pipOpen);
   const paletteOpen = usePrefs((s) => s.paletteOpen);
   const setPipOpen = usePrefs((s) => s.setPipOpen);
@@ -98,7 +104,7 @@ export function Workspace({ backend }: { backend: Backend }) {
 
   return (
     <TicketLinksContext.Provider value={workspaceTicketLinks}>
-      <div className="grid h-full overflow-hidden bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `232px minmax(0,1fr)${pipOpen ? " 380px" : ""}` }}>
+      <div className="ws-root grid h-full overflow-hidden bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `232px minmax(0,1fr)${pipOpen ? " 380px" : ""}` }}>
         <Rail />
         <main id={MAIN_ID} tabIndex={-1} className="relative flex min-h-0 min-w-0 flex-col outline-none">
           <TabBar />
@@ -109,6 +115,7 @@ export function Workspace({ backend }: { backend: Backend }) {
             {route === "activity" && <ActivityView />}
             {route === "settings" && <Settings />}
           </div>
+          {route === "workspace" && <ShortcutHint view={view} />}
           <PeekSheet />
           {!pipOpen && <PipLauncher />}
           <SelectionAsk />

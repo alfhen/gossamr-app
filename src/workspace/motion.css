@@ -1,0 +1,36 @@
+.ws-peek-in {
+  animation: ws-peek-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ws-peek-out {
+  animation: ws-peek-out 0.16s ease-in forwards;
+}
+@keyframes ws-peek-in {
+  from {
+    transform: translateX(40px);
+    opacity: 0;
+  }
+}
+@keyframes ws-peek-out {
+  to {
+    transform: translateX(40px);
+    opacity: 0;
+  }
+}
+
+.ws-pop {
+  animation: ws-pop 0.15s ease-out;
+}
+@keyframes ws-pop {
+  from {
+    transform: translateY(-6px) scale(0.98);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-peek-in,
+  .ws-peek-out,
+  .ws-pop {
+    animation: none;
+  }
+}

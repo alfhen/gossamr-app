@@ -73,3 +73,24 @@
   --color-ws-blocked-soft: rgb(224 71 91 / 0.2);
   --shadow-ws-pop: 0 12px 40px rgb(0 0 0 / 0.6);
 }
+
+.ws-root,
+.ws-root * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ws-sep2) transparent;
+}
+.ws-root ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.ws-root ::-webkit-scrollbar-track,
+.ws-root ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.ws-root ::-webkit-scrollbar-thumb {
+  background: var(--color-ws-sep2);
+  border-radius: 4px;
+}
+.ws-root ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ws-ink3);
+}

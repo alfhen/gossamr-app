@@ -71,6 +71,12 @@ describe("waitingOnMe", () => {
     expect(waitingOnMe(s)).toEqual([]);
   });
 
+  it("hides a snoozed mention until the snooze ends", () => {
+    const s = snap([event("m", { kind: "mention", at: "2026-09-28T09:00:00Z", snoozedUntil: "2026-09-29T09:00:00Z" })], [ticket("A-1")]);
+    expect(waitingOnMe(s, now)).toEqual([]);
+    expect(waitingOnMe(s, new Date("2026-09-30T00:00:00Z")).map((i) => i.ticketKey)).toEqual(["A-1"]);
+  });
+
   it("lists my unstarted tickets and tickets I reported that are in review", () => {
     const s = snap(
       [],

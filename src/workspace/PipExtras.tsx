@@ -122,6 +122,13 @@ function NudgeBubble({ nudge }: { nudge: Nudge }) {
   return <Nudge text={nudge.text} onOpen={() => act(nudge)} onDismiss={() => usePip.getState().dismiss(nudge.id)} onHold={setHeld} />;
 }
 
+/** Shows the first suggestion that is still allowed, unless one is up already or the page is hidden. */
+export function fireNudge(candidates: readonly Nudge[], now: number, hidden: boolean) {
+  const pip = usePip.getState();
+  const next = pip.nudge || hidden ? null : pickNudge(candidates, pip.dismissed, pip.seen);
+  if (next) pip.showNudge(next, now);
+}
+
 /** Picks suggestions for what is on screen: once the person has stayed put a moment, never one they closed, each only once a session and not too soon after the last. */
 function useNudges() {
   const screen = useScreen();
@@ -132,15 +139,14 @@ function useNudges() {
   );
   const candidates = useMemo(() => nudgeCandidates(scene), [scene]);
   const key = candidates.map((c) => c.id).join("|");
+  // The timer fires up to a gap after `key` changed; the text or filter behind an unchanged id may have moved on since.
+  const latest = useRef(candidates);
+  latest.current = candidates;
 
   useEffect(() => {
     const pip = usePip.getState();
     if (pip.nudge && !candidates.some((c) => c.id === pip.nudge!.id)) pip.hideNudge();
-    const timer = setTimeout(() => {
-      const now = usePip.getState();
-      const next = now.nudge || document.hidden ? null : pickNudge(candidates, now.dismissed, now.seen);
-      if (next) now.showNudge(next, Date.now());
-    }, nudgeDelay(Date.now(), pip.lastNudgeAt));
+    const timer = setTimeout(() => fireNudge(latest.current, Date.now(), document.hidden), nudgeDelay(Date.now(), pip.lastNudgeAt));
     return () => clearTimeout(timer);
   }, [key]);
 
