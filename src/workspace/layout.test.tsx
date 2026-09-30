@@ -44,6 +44,14 @@ describe("tab items", () => {
     expect(items.filter((i) => i.kind === "custom")).toHaveLength(0);
   });
 
+  it("keeps a tab in another project reachable instead of folding it into the preset", () => {
+    const web = withProject({ type: "blocked" }, containerRef("WEB"));
+    const ca = withProject({ type: "blocked" }, containerRef("CA"));
+    const items = buildTabItems([tab("a", web), tab("b", ca)], "a", [], (t) => `tab ${t.id}`);
+    expect(items.find((i) => i.label === "Blocked")?.active).toBe(true);
+    expect(items.filter((i) => i.kind === "custom")).toMatchObject([{ label: "tab b", tabId: "b", active: false }]);
+  });
+
   it("tells a view that names its own project from the same filter in another project", () => {
     const view = and({ type: "container", container: containerRef("CA") }, { type: "blocked" });
     expect(showsEntry(view, withProject({ type: "blocked" }, containerRef("CA")))).toBe(true);

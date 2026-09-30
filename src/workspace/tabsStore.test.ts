@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { containerRef } from "../backend/mockConnector";
 import { filterChips } from "../lib/filter";
-import { activeTab, loadTabs, nextMarked, useTabs } from "./tabsStore";
+import { activeTab, dedupeViews, loadTabs, nextMarked, useTabs } from "./tabsStore";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -114,6 +114,30 @@ describe("saved views", () => {
     expect(s().savedViews.find((v) => v.id === a)?.pinned).toBe(true);
     s().removeSavedView(b);
     expect(s().savedViews.map((v) => v.id)).toEqual([a]);
+  });
+
+  it("refuses a rename to a name another saved view already has, ignoring case and spaces", () => {
+    const a = saveMine("Mine");
+    s().setFilter({ type: "blocked" });
+    const b = s().saveView("Blocked")!;
+    s().renameSavedView(b, "  mine ");
+    expect(s().savedViews.find((v) => v.id === b)?.name).toBe("Blocked");
+    s().renameSavedView(a, "MINE");
+    expect(s().savedViews.find((v) => v.id === a)?.name).toBe("MINE");
+  });
+
+  it("drops duplicate views when loading, keeping order and any pin", () => {
+    const mine = { type: "mine" } as const;
+    const out = dedupeViews([
+      { id: "1", name: "Mine", filter: mine },
+      { id: "2", name: "Other", filter: { type: "blocked" } },
+      { id: "3", name: " mine", filter: mine, pinned: true },
+      { id: "1", name: "Again", filter: { type: "stale", days: 3 } },
+    ]);
+    expect(out).toEqual([
+      { id: "1", name: "Mine", filter: mine, pinned: true },
+      { id: "2", name: "Other", filter: { type: "blocked" } },
+    ]);
   });
 
   it("survives a restart in order, with its pinned state", () => {

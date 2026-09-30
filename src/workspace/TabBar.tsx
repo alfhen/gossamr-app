@@ -1,7 +1,7 @@
 import type { KeyboardEvent } from "react";
 import { ALL, describeFilter } from "../lib/filter";
 import { useItemsByFilter } from "../workspaceStore";
-import { projectOf, scopeTo, withProject } from "./filters";
+import { projectOf, sameProject, scopeTo, withProject } from "./filters";
 import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
 import { buildTabItems, type TabItem } from "./tabItems";
 import { useTabs } from "./tabsStore";
@@ -81,7 +81,7 @@ export function TabBar() {
   const lookup = useLookup();
   const { showView, activate, closeTab, openTab } = useTabs.getState();
   const project = projectOf(tab.filter);
-  const items = buildTabItems(tabs, activeId, savedViews, (t) => t.title ?? describeFilter(withProject(t.filter, null), lookup));
+  const items = buildTabItems(tabs, activeId, savedViews, (t) => t.title ?? describeFilter(sameProject(projectOf(t.filter), project) ? withProject(t.filter, null) : t.filter, lookup));
   const counts = useFilterCounts(items.map((i) => (i.tabId ? i.filter : scopeTo(i.filter, project))));
   const shown = useItemsByFilter(tab.filter).length;
   const total = useItemsByFilter(withProject(ALL, project)).length;
