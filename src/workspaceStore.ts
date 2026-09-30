@@ -3,6 +3,7 @@ import { create } from "zustand";
 import type { Backend } from "./backend/types";
 import { ALL, compileFilter, containerKey, itemKey, type FilterContext, type QueryLookup } from "./lib/filter";
 import { targetOf } from "./lib/proposals";
+import { movesAreOpaque } from "./workspace/boardLogic";
 import { messageOf, useToasts } from "./workspace/toasts";
 import type {
   ConnectionInfo,
@@ -87,6 +88,7 @@ let generation = 0;
 let refreshSeq = 0;
 const SYNC_FLAG_MS = 20_000;
 let proposalSeq = 0;
+const commentSeq = new Map<string, number>();
 const moving = new Map<string, Promise<StatusDef[] | null>>();
 let lastSyncError: string | null = null;
 
@@ -96,6 +98,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   async init(backend) {
     get().dispose();
     lastSyncError = null;
+    commentSeq.clear();
     const mine = ++generation;
     set({ ...empty, backend, status: "loading" });
     const offCache = backend.onCacheChanged(() => {
@@ -171,7 +174,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!backend) return;
     const mine = generation;
     const key = itemKey(ref);
-    const put = (list: WorkComment[]) => backend === get().backend && mine === generation && set((s) => ({ comments: { ...s.comments, [key]: list } }));
+    const seq = (commentSeq.get(key) ?? 0) + 1;
+    commentSeq.set(key, seq);
+    const put = (list: WorkComment[]) =>
+      backend === get().backend && mine === generation && commentSeq.get(key) === seq && set((s) => ({ comments: { ...s.comments, [key]: list } }));
     try {
       put(await backend.cacheComments(ref, false));
       put(await backend.cacheComments(ref, true));
@@ -260,6 +266,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const backend = get().backend!;
     const mine = generation;
     const old = draftsForItem(get(), item).filter((d) => d.intent.type === "transition");
+    const current = get().items[itemKey(item)];
+    const wf = current && workflowOfItem(get(), current);
+    if (current && wf && movesAreOpaque(wf)) {
+      // A lookup that fails leaves the choice open, since approval asks the tracker again; one that succeeds is binding.
+      const offered = await get().loadMoves(current);
+      if (offered && !offered.some((s) => s.id === to.id)) throw new Error(`${item.key} can't move to ${to.name} from ${current.status.name}`);
+    }
     try {
       const p = await backend.proposalsCreate({ type: "transition", item, to: to.id }, to.name);
       for (const d of old) await backend.proposalsSkip(d.id);

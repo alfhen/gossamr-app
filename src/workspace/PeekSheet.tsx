@@ -285,7 +285,11 @@ function OpenPeek({ item }: { item: WorkItem }) {
   const opaque = !!wf && movesAreOpaque(wf);
   useEffect(() => {
     setMovesFailed(false);
-    if (opaque) void useWorkspace.getState().loadMoves(item).then((to) => setMovesFailed(to === null));
+    let current = true;
+    if (opaque) void useWorkspace.getState().loadMoves(item).then((to) => current && setMovesFailed(to === null));
+    return () => {
+      current = false;
+    };
   }, [key, item.status.id, opaque]);
 
   useEffect(() => {

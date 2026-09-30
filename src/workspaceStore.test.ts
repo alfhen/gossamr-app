@@ -184,6 +184,19 @@ describe("workspace store refresh", () => {
     expect(useToasts.getState().toasts[0].text).toMatch(/CA-402.*offline/);
   });
 
+  it("refuses to draft a move to a status the tracker didn't offer, but drafts when it can't be asked", async () => {
+    const item = s().items["mock:CA-402"];
+    const wf = s().containers["mock:CA"].workflow;
+    s().containers["mock:CA"].workflow = { ...wf, transitions: { kind: "graph", moves: [] } };
+    const [offered, refused] = wf.statuses.filter((x) => x.id !== item.status.id);
+    backend.cacheTransitions = async () => [{ name: offered.name, to: offered }];
+    await expect(s().draftTransition(item.item, refused)).rejects.toThrow(/can't move to/);
+    expect((await s().draftTransition(item.item, offered)).intent).toMatchObject({ type: "transition", to: offered.id });
+    useWorkspace.setState({ moves: {} });
+    backend.cacheTransitions = () => Promise.reject(new Error("offline"));
+    expect((await s().draftTransition(item.item, refused)).intent).toMatchObject({ to: refused.id });
+  });
+
   it("holds the connection rows and reports a new sync failure once", async () => {
     useToasts.getState().clear();
     await flush();
