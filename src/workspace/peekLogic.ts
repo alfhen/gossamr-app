@@ -94,3 +94,42 @@ export function historyNotes(events: readonly WorkEvent[], nameOf: (accountId: s
     .flatMap((e) => (line(e) ? [{ id: e.id, at: e.at, who: nameOf(e.actor?.accountId ?? null), text: line(e) }] : []))
     .sort((a, b) => b.at.localeCompare(a.at));
 }
+
+export interface Crumb {
+  ref: ItemRef;
+  title: string | null;
+}
+
+/** The parent (an epic, or a story above a subtask) with its title when it is cached. */
+export function parentCrumb(item: WorkItem, all: Record<string, WorkItem>): Crumb | null {
+  if (!item.parent) return null;
+  return { ref: item.parent, title: all[itemKey(item.parent)]?.title ?? null };
+}
+
+export interface SubtaskRow {
+  ref: ItemRef;
+  title: string;
+  status: WorkItem["status"];
+  done: boolean;
+}
+
+export interface Subtasks {
+  rows: SubtaskRow[];
+  done: number;
+}
+
+/** Children in key order, with how many are finished. */
+export function subtasksOf(children: readonly WorkItem[]): Subtasks {
+  const rows = children
+    .map((c): SubtaskRow => ({ ref: c.item, title: c.title, status: c.status, done: c.status.category === "done" }))
+    .sort((a, b) => a.ref.key.localeCompare(b.ref.key, undefined, { numeric: true }));
+  return { rows, done: rows.filter((r) => r.done).length };
+}
+
+/** The key `step` places from `current` in `order`, stopping at the ends. Starts at the first (or last) key when nothing is selected. */
+export function stepKey(order: readonly string[], current: string | null, step: 1 | -1): string | null {
+  if (!order.length) return null;
+  const at = current === null ? -1 : order.indexOf(current);
+  if (at < 0) return order[step > 0 ? 0 : order.length - 1];
+  return order[Math.max(0, Math.min(order.length - 1, at + step))];
+}

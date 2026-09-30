@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { containerKey, describeFilter, filterChips } from "../lib/filter";
 import { allContainers, useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, projectOf, sameProject } from "./filters";
@@ -10,11 +10,14 @@ import { usePrefs } from "./prefs";
 import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
 
-export function RailTip({ label, hint }: { label: string; hint?: string }) {
+/** Fixed so the scrolling project list can't clip it. */
+export function RailTip({ label, hint, at }: { label: string; hint?: string; at: { x: number; y: number } | null }) {
+  if (!at) return null;
   return (
     <span
       role="tooltip"
-      className="pointer-events-none absolute top-1/2 left-full z-40 ml-2 -translate-y-1/2 rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm font-semibold whitespace-nowrap text-ws-ink opacity-0 shadow-ws-pop transition-opacity group-hover/tip:opacity-100 group-has-[:focus-visible]/tip:opacity-100"
+      style={{ left: at.x, top: at.y }}
+      className="pointer-events-none fixed z-40 -translate-y-1/2 rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm font-semibold whitespace-nowrap text-ws-ink shadow-ws-pop"
     >
       {label}
       {hint && <kbd className="ml-1.5">{hint}</kbd>}
@@ -46,21 +49,30 @@ export function RailButton({
   "data-popover-trigger"?: boolean;
   "aria-expanded"?: boolean;
 }) {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const show = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    setAt({ x: r.right + 8, y: r.top + r.height / 2 });
+  };
   return (
-    <span className="group/tip relative">
+    <span className="relative">
       <button
         type="button"
         aria-label={label}
         aria-current={current ? "page" : undefined}
         aria-pressed={pressed}
         onClick={onClick}
+        onMouseEnter={(ev) => show(ev.currentTarget)}
+        onMouseLeave={() => setAt(null)}
+        onFocus={(ev) => ev.currentTarget.matches(":focus-visible") && show(ev.currentTarget)}
+        onBlur={() => setAt(null)}
         style={style}
         className={`relative grid size-9 place-items-center rounded-[10px] font-bold transition-colors ${className}`}
         {...rest}
       >
         {children}
       </button>
-      {tip && <RailTip label={label} hint={hint} />}
+      {tip && <RailTip label={label} hint={hint} at={at} />}
     </span>
   );
 }
@@ -122,7 +134,7 @@ export function Rail() {
   return (
     <aside className="relative flex min-h-0 flex-col items-center gap-2 border-r border-ws-sep bg-ws-side pt-10 pb-2.5">
       <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-10" />
-      <nav aria-label="Workspace" className="flex flex-col items-center gap-2">
+      <nav aria-label="Workspace" className="flex min-h-0 w-full flex-1 flex-col items-center gap-2">
         <RailButton label="Search and jump" hint="⌘K" onClick={() => setPaletteOpen(true)} className={`text-lg ${plain(false)}`}>
           <span aria-hidden>⌕</span>
         </RailButton>
@@ -130,6 +142,7 @@ export function Rail() {
         <RailButton label="All projects" current={inWorkspace && !project} onClick={() => setProject(null)} className={`text-lg ${plain(inWorkspace && !project)}`}>
           <span aria-hidden>∗</span>
         </RailButton>
+        <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-x-hidden overflow-y-auto py-1" aria-label="Projects" role="group">
         {list.map((c) => {
           const on = inWorkspace && sameProject(project, c.ref);
           const colour = projectColour(list, c.ref);
@@ -146,11 +159,11 @@ export function Rail() {
             </RailButton>
           );
         })}
+        </div>
         <Divider />
         <ViewsButton />
       </nav>
-      <div className="flex-1" />
-      <div className="flex flex-col items-center gap-2 border-t border-ws-sep pt-2.5">
+      <div className="flex shrink-0 flex-col items-center gap-2 border-t border-ws-sep pt-2.5">
         <RailButton label="Activity" current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
           <span aria-hidden>⚡</span>
           {unread > 0 && (

@@ -6,7 +6,7 @@ import { ALL, and } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, PRESETS, showsEntry, visibleChips, withProject } from "./filters";
 import { Header, ProjectMenu, ViewSegment } from "./Header";
-import { Rail } from "./Rail";
+import { Rail, RailTip } from "./Rail";
 import { SavedViewsPanel, type SavedViewsPanelProps } from "./SavedViews";
 import { buildTabItems } from "./tabItems";
 import { useTabs, type Tab } from "./tabsStore";
@@ -129,9 +129,27 @@ describe("header and rail", () => {
   it("renders a 58px icon rail with labelled buttons and the activity, settings and Pip cluster", () => {
     const out = renderToStaticMarkup(<Rail />);
     for (const label of ["Search and jump", "All projects", "Views", "Activity", "Settings", "Pip"]) expect(out).toContain(`aria-label="${label}"`);
-    expect(out).toContain('role="tooltip"');
     expect(out).toContain('aria-label="DevOps"');
     expect(out).toContain("DE</button>");
     expect(out).toContain("data-tauri-drag-region");
+  });
+
+  it("keeps the bottom cluster outside the scrolling project list however many projects there are", () => {
+    const base = Object.values(useWorkspace.getState().containers)[0];
+    const many = Object.fromEntries(Array.from({ length: 46 }, (_, i) => [`mock:P${i}`, { ...base, key: `P${i}`, name: `Project ${i}`, ref: { connectionId: "mock", externalId: `P${i}` } }]));
+    useWorkspace.getInitialState().containers = many;
+    const out = renderToStaticMarkup(<Rail />);
+    expect(out.match(/aria-label="Project \d+"/g)).toHaveLength(46);
+    const list = out.indexOf('aria-label="Projects"');
+    expect(out.slice(out.lastIndexOf("<div", list), list)).toContain("overflow-y-auto");
+    expect(out.indexOf('aria-label="Activity"')).toBeGreaterThan(out.indexOf('aria-label="Project 45"'));
+    expect(out).toMatch(/<div class="flex shrink-0[^"]*border-t[^"]*"><span class="relative"><button[^>]*aria-label="Activity"/);
+  });
+
+  it("shows a tooltip only where it was asked for", () => {
+    expect(renderToStaticMarkup(<RailTip label="Views" at={null} />)).toBe("");
+    const out = renderToStaticMarkup(<RailTip label="Search" hint="⌘K" at={{ x: 66, y: 20 }} />);
+    expect(out).toContain('role="tooltip"');
+    expect(out).toContain("⌘K");
   });
 });

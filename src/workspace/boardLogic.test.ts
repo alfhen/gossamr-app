@@ -156,11 +156,11 @@ describe("draft moves", () => {
     expect(draftStatus({ intent: { type: "comment" } } as Proposal, wf)).toBeNull();
   });
 
-  it("refuses a hand-made draft with no target status", async () => {
+  it("refuses a hand-made draft with no target status or a new item with no title", async () => {
     await expect(s().backend!.proposalsCreate({ type: "transition", item: itemRef("CA-402"), to: " " })).rejects.toThrow(/target status/);
     await expect(
-      s().backend!.proposalsCreate({ type: "create", container: containerRef("CA"), fields: { title: "x", body: { blocks: [] }, kind: "task", assignee: null, parent: null, priority: null, labels: [] }, link: null }),
-    ).rejects.toThrow(/existing item/);
+      s().backend!.proposalsCreate({ type: "create", container: containerRef("CA"), fields: { title: " ", body: { blocks: [] }, kind: "task", assignee: null, parent: null, priority: null, labels: [] }, link: null }),
+    ).rejects.toThrow(/needs a title/);
   });
 });
 
