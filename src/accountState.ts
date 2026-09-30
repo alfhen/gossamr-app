@@ -1,5 +1,5 @@
-import { useClaude } from "./claudeStore";
-import { useStore } from "./store";
+import { stopWatchingProposals, useClaude } from "./claudeStore";
+import { stopClassicSync, useStore } from "./store";
 import { resetPip } from "./workspace/pipStore";
 import { readStored, writeStored } from "./workspace/storage";
 import { useTabs } from "./workspace/tabsStore";
@@ -20,6 +20,8 @@ const lastAccount = (): string | null => {
  */
 export function resetAccountState(accountId: string | null) {
   const changed = accountId !== lastAccount();
+  stopClassicSync();
+  stopWatchingProposals();
   useClaude.setState({ open: false, byTicket: {}, proposals: [] });
   resetPip(changed);
   useWorkspace.getState().dispose();
