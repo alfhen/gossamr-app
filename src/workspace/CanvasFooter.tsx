@@ -7,20 +7,20 @@ import type { useCards } from "./useCards";
 
 export const FOOTER_HEIGHT_VAR = "--ws-footer-h";
 
-/** Publishes its height on the column so the floating Pip launcher can sit above it. */
+/** Publishes its height on the root so floating layers (Pip launcher, toasts) can sit above it. */
 function useFooterHeight() {
   const ref = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
-    const column = el?.closest("main");
-    if (!el || !column) return;
-    const publish = () => column.style.setProperty(FOOTER_HEIGHT_VAR, `${el.offsetHeight}px`);
+    if (!el) return;
+    const root = document.documentElement;
+    const publish = () => root.style.setProperty(FOOTER_HEIGHT_VAR, `${el.offsetHeight}px`);
     publish();
     const watch = new ResizeObserver(publish);
     watch.observe(el);
     return () => {
       watch.disconnect();
-      column.style.removeProperty(FOOTER_HEIGHT_VAR);
+      root.style.removeProperty(FOOTER_HEIGHT_VAR);
     };
   }, []);
   return ref;
