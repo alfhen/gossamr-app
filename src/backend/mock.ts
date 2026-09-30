@@ -1,7 +1,34 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { AdfNode, Comment, EventKind, InboxEvent, Person, Snapshot, Status, Ticket, Transition, Uploaded } from "../types";
+import type {
+  AdfNode,
+  CacheChanged,
+  FeedQuery,
+  ConnectionInfo,
+  Comment,
+  ContainerRef,
+  Intent,
+  EventKind,
+  InboxEvent,
+  ItemRef,
+  Person,
+  Proposal,
+  ProposalEdit,
+  ProposalQuery,
+  ProposalsChanged,
+  Snapshot,
+  Status,
+  Ticket,
+  Transition,
+  Uploaded,
+  WorkFilter,
+} from "../types";
 import { fold, type Mention } from "../lib/mentions";
+import { docText } from "../lib/docs";
+import { MOCK_CONNECTION, MockConnector, PEOPLE } from "./mockConnector";
+import { targetOf } from "../lib/proposals";
+import { MockProposals } from "./mockProposals";
+import { seedDrafts } from "./mockDrafts";
 import type { Backend } from "./types";
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -318,7 +345,66 @@ export class MockBackend implements Backend {
   readonly kind = "mock" as const;
   private snap = sampleSnapshot();
   private listeners = new Set<(s: Snapshot) => void>();
+  private cacheListeners = new Set<(c: CacheChanged) => void>();
   private simulated = 0;
+
+  /** The multi-project tracker behind the cache reads; the snapshot above keeps serving the current screens. */
+  readonly connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)));
+
+  /** Drafts live in memory; `proposals.draft` stands in for the assistant. */
+  readonly proposals = new MockProposals(async (intent, already) => {
+    if (this.applyToConnector(intent, already)) return this.appliedToConnector;
+    switch (intent.type) {
+      case "comment":
+        await this.comment(intent.item.key, docText(intent.body));
+        return [];
+      case "transition": {
+        const to = Object.keys(S).find((k) => k === intent.to || S[k as keyof typeof S].name === intent.to);
+        await this.transition(intent.item.key, `${intent.item.key}:${to}`);
+        return [];
+      }
+      case "subtasks": {
+        const rest = intent.summaries.slice(already.length);
+        const { created } = await this.createSubtasks(intent.parent.key, rest);
+        return created.map((key) => ({ connectionId: "mock", externalId: key, key }));
+      }
+      default:
+        throw new Error("the sample data can't apply that");
+    }
+  });
+
+  proposalsList(query?: ProposalQuery): Promise<Proposal[]> {
+    return Promise.resolve(this.proposals.list(query));
+  }
+
+  async proposalsGet(id: string) {
+    return this.proposals.get(id);
+  }
+
+  proposalsCreate(intent: Intent, label: string | null = null) {
+    return this.proposals.create(intent, label);
+  }
+
+  /** Stores a draft the way the assistant would, for the scripted Pip. */
+  async pipDraft(intent: Intent, label: string | null, requestId: string) {
+    return this.proposals.draft(intent, label, requestId);
+  }
+
+  proposalsEdit(id: string, edit: ProposalEdit) {
+    return this.proposals.edit(id, edit);
+  }
+
+  proposalsSkip(id: string) {
+    return this.proposals.skip(id);
+  }
+
+  proposalsApprove(id: string) {
+    return this.proposals.approve(id);
+  }
+
+  onProposalsChanged(listener: (c: ProposalsChanged) => void) {
+    return this.proposals.onChanged(listener);
+  }
 
   async load() {
     return this.snap;
@@ -334,6 +420,88 @@ export class MockBackend implements Backend {
     fn(next);
     this.snap = next;
     this.listeners.forEach((l) => l(next));
+    this.cacheListeners.forEach((l) => l({ connectionId: "mock" }));
+  }
+
+  /** Puts sample drafts from the assistant on the connector's items. */
+  seedSampleDrafts() {
+    seedDrafts(this.proposals);
+  }
+
+  private appliedToConnector: ItemRef[] = [];
+
+  private applyToConnector(intent: Intent, already: ItemRef[]): boolean {
+    const target = targetOf(intent);
+    if (!target || !this.connector.has(target)) return false;
+    this.appliedToConnector = [];
+    switch (intent.type) {
+      case "comment":
+        this.connector.comment(intent.item, docText(intent.body));
+        return true;
+      case "transition":
+        this.connector.transition(intent.item, intent.to);
+        return true;
+      case "subtasks":
+        this.appliedToConnector = this.connector.createSubtasks(intent.parent, intent.summaries.slice(already.length));
+        return true;
+      default:
+        throw new Error("the sample data can't apply that");
+    }
+  }
+
+  async cacheSearch(filter: WorkFilter) {
+    return this.connector.search(filter);
+  }
+
+  async cacheItem(ref: ItemRef) {
+    return this.connector.item(ref);
+  }
+
+  async cacheContainers() {
+    return this.connector.listContainers();
+  }
+
+  async cacheWorkflow(container: ContainerRef) {
+    return this.connector.workflow(container);
+  }
+
+  async cacheEvents(ref: ItemRef) {
+    return this.connector.eventsFor(ref);
+  }
+
+  async cacheFeed(query: FeedQuery) {
+    return this.connector.feed(query);
+  }
+
+  async cacheFeedUnread() {
+    return this.connector.feedUnread();
+  }
+
+  async cachePeople() {
+    return this.connector.people;
+  }
+
+  async cacheMe() {
+    return this.connector.identity();
+  }
+
+  async cacheComments(ref: ItemRef) {
+    return this.connector.comments(ref);
+  }
+
+  async cacheTransitions(ref: ItemRef) {
+    return this.connector.moves(ref);
+  }
+
+  async connectionsList(): Promise<ConnectionInfo[]> {
+    return [
+      { id: MOCK_CONNECTION, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null },
+    ];
+  }
+
+  onCacheChanged(listener: (c: CacheChanged) => void) {
+    this.cacheListeners.add(listener);
+    return () => void this.cacheListeners.delete(listener);
   }
 
   private event(s: Snapshot, eventId: string) {
@@ -413,10 +581,12 @@ export class MockBackend implements Backend {
   }
 
   async setUnread(eventId: string, unread: boolean) {
+    if (this.connector.setRead(eventId, !unread)) return;
     this.update((s) => void (this.event(s, eventId).unread = unread));
   }
 
   async setDone(eventId: string, done: boolean) {
+    if (this.connector.setRead(eventId, done)) return;
     this.update((s) => {
       const e = this.event(s, eventId);
       e.doneAt = done ? new Date().toISOString() : null;

@@ -136,3 +136,306 @@ export interface MyAction {
   /** The comment, or the transition as "From → To". */
   text: string;
 }
+
+/* Connector-neutral model, mirroring src-tauri/src/domain. Names carry a `Work` prefix where they would clash with
+   the Jira-shaped types above or with DOM globals. */
+
+export interface ItemRef {
+  connectionId: string;
+  externalId: string;
+  /** For display only; identity is `connectionId` plus `externalId`. */
+  key: string;
+}
+
+export interface ContainerRef {
+  connectionId: string;
+  externalId: string;
+}
+
+export interface PersonRef {
+  connectionId: string;
+  accountId: string;
+}
+
+export type WorkCategory = "todo" | "active" | "done";
+
+export interface StatusDef {
+  id: string;
+  name: string;
+  category: WorkCategory;
+}
+
+export type Transitions = { kind: "any" } | { kind: "graph"; moves: { from: string; to: string }[] };
+
+export interface Workflow {
+  statuses: StatusDef[];
+  /** Jira only reveals moves per issue, so its graph is empty; ask `transitions` for a real ticket. */
+  transitions: Transitions;
+}
+
+export interface WorkContainer {
+  ref: ContainerRef;
+  key: string;
+  name: string;
+  workflow: Workflow;
+}
+
+export type WorkMark = "bold" | "italic" | "strike" | "code";
+
+export type WorkInline =
+  | { type: "text"; text: string; marks: WorkMark[] }
+  | { type: "link"; href: string; text: string }
+  | { type: "mention"; person: PersonRef; name: string }
+  | { type: "lineBreak" };
+
+export type WorkBlock =
+  | { type: "paragraph"; content: WorkInline[] }
+  | { type: "heading"; level: number; content: WorkInline[] }
+  | { type: "list"; ordered: boolean; items: WorkBlock[][] }
+  | { type: "quote"; content: WorkBlock[] }
+  | { type: "code"; language: string | null; text: string }
+  | { type: "rule" };
+
+export interface WorkDoc {
+  blocks: WorkBlock[];
+}
+
+export type WorkItemKind = "task" | "bug" | "story" | "epic";
+export type WorkPriority = "lowest" | "low" | "medium" | "high" | "highest";
+
+export interface WorkLink {
+  /** `from` blocks, relates to or duplicates `to`. */
+  from: ItemRef;
+  to: ItemRef;
+  kind: "blocks" | "relates" | "duplicates";
+}
+
+/** A cached item. The tracker's raw payload stays in the backend, so it is always null here. */
+export interface WorkItem {
+  item: ItemRef;
+  container: ContainerRef;
+  kind: WorkItemKind;
+  title: string;
+  body: WorkDoc;
+  status: StatusDef;
+  assignee: PersonRef | null;
+  reporter: PersonRef | null;
+  priority: WorkPriority | null;
+  parent: ItemRef | null;
+  labels: string[];
+  created: string;
+  updated: string;
+  links: WorkLink[];
+  commentCount: number;
+  lastCommenter: PersonRef | null;
+  extra: null;
+}
+
+/** The query language for views and search. The backend narrows in SQL and then applies it exactly. */
+/** What the person can see when they ask Pip. A page that doesn't know an item's connection sends an empty `connectionId`. */
+export interface ScreenContext {
+  view: string | null;
+  item: ItemRef | null;
+  filter: WorkFilter | null;
+  selection: ItemRef[];
+}
+
+export type WorkFilter =
+  | { type: "needsMe" }
+  | { type: "mine" }
+  | { type: "unassigned" }
+  | { type: "blocked" }
+  | { type: "open" }
+  | { type: "assignee"; person: PersonRef }
+  | { type: "status"; name: string }
+  | { type: "category"; category: WorkCategory }
+  | { type: "stale"; days: number }
+  | { type: "container"; container: ContainerRef }
+  | { type: "parent"; item: ItemRef }
+  | { type: "label"; label: string }
+  | { type: "text"; text: string }
+  | { type: "items"; items: ItemRef[] }
+  | { type: "and"; filters: WorkFilter[] };
+
+export interface WorkEvent {
+  id: string;
+  connectionId: string;
+  at: string;
+  kind:
+    | "commentAdded"
+    | "statusChanged"
+    | "assigned"
+    | "itemCreated"
+    | "prOpened"
+    | "prMerged"
+    | "checkFailed"
+    | "reviewRequested";
+  subject: { type: "item"; item: ItemRef } | { type: "codeChange"; repo: string; number: number };
+  actor: PersonRef | null;
+  payload: unknown;
+}
+
+export interface FeedCursor {
+  at: string;
+  id: string;
+}
+
+/** What a feed shows, mirroring src-tauri/src/domain/event.rs. No kinds means every kind. */
+export interface FeedQuery {
+  kinds?: WorkEvent["kind"][];
+  mentionsOnly?: boolean;
+  unreadOnly?: boolean;
+  container?: ContainerRef | null;
+  before?: FeedCursor | null;
+  limit?: number;
+}
+
+/** One event about an item, with the state the person has given it. */
+export interface FeedEntry {
+  id: string;
+  connectionId: string;
+  at: string;
+  kind: WorkEvent["kind"];
+  item: ItemRef;
+  /** Null once the item has left the cache. */
+  itemTitle: string | null;
+  actor: PersonRef | null;
+  actorName: string | null;
+  text: string;
+  mention: boolean;
+  unread: boolean;
+  done: boolean;
+}
+
+export interface FeedPage {
+  entries: FeedEntry[];
+  /** Present when more entries follow. */
+  next: FeedCursor | null;
+}
+
+/** Emitted as the `cache-changed` event when a sync or a write changed what the cache holds. */
+export interface CacheChanged {
+  connectionId: string;
+}
+
+/** A write drafted for approval, mirroring src-tauri/src/domain/proposal.rs. Only an approval applies it. */
+export type Intent =
+  | { type: "comment"; item: ItemRef; body: WorkDoc }
+  | { type: "transition"; item: ItemRef; to: string }
+  | { type: "create"; container: ContainerRef; fields: NewWorkItem; link: WorkLink | null }
+  | { type: "update"; item: ItemRef; patch: WorkPatch }
+  | { type: "link"; from: ItemRef; to: ItemRef; kind: WorkLink["kind"] }
+  | { type: "subtasks"; parent: ItemRef; summaries: string[] };
+
+export interface NewWorkItem {
+  title: string;
+  body: WorkDoc;
+  kind: WorkItemKind;
+  assignee: PersonRef | null;
+  parent: ItemRef | null;
+  priority: WorkPriority | null;
+  labels: string[];
+}
+
+/** Triage fields; null leaves a field alone. */
+export interface WorkPatch {
+  assignee: PersonRef | null;
+  parent: ItemRef | null;
+  priority: WorkPriority | null;
+}
+
+export type ProposalOrigin = { type: "chat"; requestId: string } | { type: "board" } | { type: "autopilot"; eventId: string };
+
+export type ProposalState =
+  | { type: "pending" }
+  | { type: "applying" }
+  | { type: "applied" }
+  | { type: "skipped" }
+  | { type: "retired"; reason: string };
+
+export type ProposalStateKind = ProposalState["type"];
+
+export interface ProposalBasis {
+  item: ItemRef;
+  statusId: string;
+  commentCount: number;
+  assignee: PersonRef | null;
+  parent: ItemRef | null;
+  priority: WorkPriority | null;
+}
+
+export interface ProposalRevision {
+  at: string;
+  note: string;
+  intent: Intent;
+}
+
+export interface Proposal {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  origin: ProposalOrigin;
+  createdBy: "user" | "pip" | "autopilot";
+  intent: Intent;
+  /** What the approve button says when the intent doesn't (a transition's name). */
+  label: string | null;
+  basis: ProposalBasis | null;
+  state: ProposalState;
+  revisions: ProposalRevision[];
+  /** Items an attempt created before it stopped; for subtasks, entry `i` belongs to summary `i`. */
+  created: ItemRef[];
+  /** Why the last attempt to apply it failed. */
+  error: string | null;
+}
+
+/** Which proposals to list. Every field that is set must match. */
+export interface ProposalQuery {
+  states?: ProposalStateKind[];
+  item?: ItemRef;
+  connectionId?: string;
+}
+
+/** A person's edit to a draft, in the terms the editor works in. */
+export type ProposalEdit =
+  | { type: "comment"; body: string; mentions: { accountId: string; name: string }[] }
+  | { type: "subtasks"; summaries: string[] };
+
+/** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
+export interface ProposalsChanged {
+  connectionId: string;
+}
+
+/** A comment on a work item, mirroring the domain model. */
+export interface WorkComment {
+  id: string;
+  author: PersonRef;
+  body: WorkDoc;
+  created: string;
+  mentions: PersonRef[];
+}
+
+/** The signed-in person across connections. */
+export interface WorkIdentity {
+  displayName: string;
+  accounts: PersonRef[];
+}
+
+/** A move open to one item right now, as the tracker offers it. */
+export interface WorkMove {
+  name: string;
+  to: StatusDef;
+}
+
+/** A signed-in connection and how its sync is going. */
+export interface ConnectionInfo {
+  id: string;
+  kind: "jira" | "mock";
+  /** The site or organisation. */
+  workspace: string;
+  url: string | null;
+  /** The person's name on it. */
+  account: string;
+  lastSyncAt: string | null;
+  syncing: boolean;
+  error: string | null;
+}

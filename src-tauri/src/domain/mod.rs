@@ -1,4 +1,8 @@
 //! Connector-neutral model. Everything above the connector line speaks these types.
+//!
+//! Items, workflows, containers, events, filters, docs, people and comments are used by the trackers and the cache.
+//! Proposals with `reconcile`, code changes and workflow paths wait for their consumers (1b, 3b, 4a); drop the allow
+//! below once they have one.
 #![allow(dead_code, unused_imports)]
 
 mod doc;
@@ -9,15 +13,15 @@ mod proposal;
 mod workflow;
 
 pub use doc::{Block, Doc, Inline, Mark};
-pub use event::{CheckState, CodeChange, CodeChangeState, Event, EventKind, Subject};
+pub use event::{CheckState, CodeChange, CodeChangeState, Event, EventKind, FeedCursor, FeedEntry, FeedPage, FeedQuery, Subject};
 pub use filter::{Filter, FilterContext};
 pub use item::{
     Comment, Container, ContainerRef, Identity, ItemKind, ItemRef, Link, LinkKind, Person,
     PersonRef, Priority, WorkItem,
 };
 pub use proposal::{
-    reconcile, Basis, Intent, NewItem, Origin, Patch, Proposal, ProposalState, ReconcileContext,
-    Revised, Revision, Verdict,
+    reconcile, Basis, CreatedBy, Intent, NewItem, Origin, Patch, Proposal, ProposalQuery, ProposalState, ReconcileContext,
+    Revised, Revision, StateKind, Verdict,
 };
 pub use workflow::{Category, StatusDef, StatusRef, Transition, Transitions, Workflow};
 

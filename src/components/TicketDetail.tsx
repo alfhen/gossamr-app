@@ -76,10 +76,10 @@ export function TicketDetail() {
         <ToolbarButton
           variant="claude"
           disabled={backend?.kind !== "jira"}
-          title={backend?.kind === "jira" ? "Ask Claude (⌘J)" : "Sign in to Jira to ask Claude"}
+          title={backend?.kind === "jira" ? "Ask Pip (⌘J)" : "Sign in to Jira to ask Pip"}
           onClick={() => useClaude.getState().setOpen(!useClaude.getState().open)}
         >
-          <Sparkle /> Ask Claude <kbd>⌘J</kbd>
+          <Sparkle /> Ask Pip <kbd>⌘J</kbd>
         </ToolbarButton>
       </header>
 

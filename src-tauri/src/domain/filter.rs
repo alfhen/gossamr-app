@@ -20,6 +20,7 @@ pub enum Filter {
     Stale { days: u32 },
     Container { container: ContainerRef },
     Parent { item: ItemRef },
+    Label { label: String },
     Text { text: String },
     /// A lens: exactly these items.
     Items { items: Vec<ItemRef> },
@@ -38,6 +39,15 @@ impl Filter {
         items.iter().filter(|i| self.matches(i, items, ctx)).collect()
     }
 
+    /// Whether matching depends on items other than the one being tested, which is so for links.
+    pub fn needs_all_items(&self) -> bool {
+        match self {
+            Filter::Blocked => true,
+            Filter::And { filters } => filters.iter().any(Filter::needs_all_items),
+            _ => false,
+        }
+    }
+
     /// `all` is the wider slice used to resolve links; a blocker missing from it counts as still blocking.
     pub fn matches(&self, item: &WorkItem, all: &[WorkItem], ctx: &FilterContext) -> bool {
         let open = item.status.category != Category::Done;
@@ -53,6 +63,7 @@ impl Filter {
             Filter::Stale { days } => open && ctx.now - item.updated >= Duration::days(i64::from(*days)),
             Filter::Container { container } => item.container == *container,
             Filter::Parent { item: parent } => item.parent.as_ref() == Some(parent),
+            Filter::Label { label } => item.labels.iter().any(|l| l.eq_ignore_ascii_case(label)),
             Filter::Text { text } => {
                 let needle = text.to_lowercase();
                 item.title.to_lowercase().contains(&needle)
@@ -96,7 +107,11 @@ mod tests {
     }
 
     fn run(filter: Filter, items: &[WorkItem]) -> Vec<String> {
-        ids(filter.select(items, &ctx())).into_iter().map(String::from).collect()
+        run_with(filter, items, &ctx())
+    }
+
+    fn run_with(filter: Filter, items: &[WorkItem], ctx: &FilterContext) -> Vec<String> {
+        ids(filter.select(items, ctx)).into_iter().map(String::from).collect()
     }
 
     #[test]
@@ -182,6 +197,14 @@ mod tests {
     }
 
     #[test]
+    fn label_matches_case_insensitively() {
+        let mut a = work_item("1", "todo");
+        a.labels = vec!["Backend".into()];
+        let items = [a, work_item("2", "todo")];
+        assert_eq!(run(Filter::Label { label: "backend".into() }, &items), ["1"]);
+    }
+
+    #[test]
     fn and_requires_all_and_empty_matches_everything() {
         let mut a = work_item("1", "todo");
         a.assignee = Some(person("me"));
@@ -191,6 +214,22 @@ mod tests {
         let both = Filter::And { filters: vec![Filter::Mine, Filter::Open] };
         assert_eq!(run(both, &items), ["1"]);
         assert_eq!(run(Filter::And { filters: vec![] }, &items), ["1", "2"]);
+    }
+
+    #[test]
+    fn matches_the_fixtures_the_frontend_engine_also_runs() {
+        let raw: serde_json::Value = serde_json::from_str(include_str!("../../../src/lib/filter.fixtures.json")).unwrap();
+        let items: Vec<WorkItem> = serde_json::from_value(raw["items"].clone()).unwrap();
+        let ctx = FilterContext {
+            me: Identity { display_name: "Me".into(), accounts: serde_json::from_value(raw["me"].clone()).unwrap() },
+            now: serde_json::from_value(raw["now"].clone()).unwrap(),
+            needs_me: serde_json::from_value::<Vec<ItemRef>>(raw["needsMe"].clone()).unwrap().into_iter().collect(),
+        };
+        for case in raw["cases"].as_array().unwrap() {
+            let filter: Filter = serde_json::from_value(case["filter"].clone()).unwrap();
+            let expected: Vec<String> = serde_json::from_value(case["expect"].clone()).unwrap();
+            assert_eq!(run_with(filter, &items, &ctx), expected, "{}", case["name"]);
+        }
     }
 
     #[test]

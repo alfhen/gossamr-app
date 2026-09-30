@@ -1,12 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { applyEvent, applyProposal, type Conversation } from "./claudeStore";
+import { beforeEach, describe, expect, it } from "vitest";
+import { MockBackend } from "./backend/mock";
+import { applyEvent, useClaude, watchProposals, type Conversation } from "./claudeStore";
+import type { Intent } from "./types";
 
 const conv = (): Conversation => ({
   sessionId: null,
   cwd: null,
   turns: [
-    { requestId: "r1", prompt: "q", steps: [], text: "", proposals: [], status: "running", error: null },
-    { requestId: "r2", prompt: "q2", steps: [], text: "", proposals: [], status: "running", error: null },
+    { requestId: "r1", prompt: "q", steps: [], text: "", status: "running", error: null },
+    { requestId: "r2", prompt: "q2", steps: [], text: "", status: "running", error: null },
   ],
 });
 
@@ -33,12 +35,71 @@ describe("applyEvent", () => {
   });
 });
 
-describe("applyProposal", () => {
-  it("adds a pending card to the turn that proposed it", () => {
-    const c = applyProposal(conv(), { requestId: "r2", id: "0", kind: "comment", key: "A-1", body: "Hi" });
-    expect(c.turns[1].proposals).toEqual([
-      { proposal: { requestId: "r2", id: "0", kind: "comment", key: "A-1", body: "Hi" }, state: "pending", error: null },
-    ]);
-    expect(c.turns[0].proposals).toEqual([]);
+const ref = { connectionId: "mock", externalId: "CA-1", key: "CA-1" };
+const comment = (text: string): Intent => ({
+  type: "comment",
+  item: ref,
+  body: { blocks: [{ type: "paragraph", content: [{ type: "text", text, marks: [] }] }] },
+});
+
+describe("watchProposals", () => {
+  beforeEach(() => useClaude.setState({ proposals: [] }));
+
+  it("loads the backend's drafts and follows changes, so drafts survive a restart", async () => {
+    const backend = new MockBackend();
+    const before = backend.proposals.draft(comment("made before the window opened"));
+    watchProposals(backend);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useClaude.getState().proposals.map((p) => p.id)).toEqual([before.id]);
+
+    const later = backend.proposals.draft(comment("made while it was open"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useClaude.getState().proposals.map((p) => p.id)).toEqual([later.id, before.id]);
+
+    await backend.proposalsSkip(before.id);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useClaude.getState().proposals.find((p) => p.id === before.id)?.state.type).toBe("skipped");
+  });
+
+  it("stops following a backend once another is watched", async () => {
+    const first = new MockBackend();
+    const second = new MockBackend();
+    watchProposals(first);
+    watchProposals(second);
+    first.proposals.draft(comment("ignored"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useClaude.getState().proposals).toEqual([]);
+  });
+
+  it("puts a returned draft in place without waiting for the refresh", () => {
+    const backend = new MockBackend();
+    const p = backend.proposals.draft(comment("x"));
+    useClaude.getState().putProposal(p);
+    useClaude.getState().putProposal({ ...p, state: { type: "applied" } });
+    expect(useClaude.getState().proposals).toHaveLength(1);
+    expect(useClaude.getState().proposals[0].state.type).toBe("applied");
+  });
+});
+
+describe("ask", () => {
+  it("sends the screen context with the question and never relies on the session for it", async () => {
+    const sent: unknown[] = [];
+    const { claude } = await import("./backend/claude");
+    const original = claude.ask;
+    claude.ask = async (req) => void sent.push(req);
+    try {
+      await useClaude.getState().ask("CA-9", "what next?", null, null);
+      const custom = { view: "board", item: null, filter: { type: "mine" as const }, selection: [ref] };
+      await useClaude.getState().ask("CA-9", "and now?", null, null, custom);
+    } finally {
+      claude.ask = original;
+    }
+    expect(sent[0]).toMatchObject({
+      prompt: "what next?",
+      context: { view: null, item: { connectionId: "", externalId: "CA-9", key: "CA-9" }, filter: null, selection: [] },
+    });
+    expect(sent[1]).toMatchObject({ context: { view: "board", filter: { type: "mine" }, selection: [ref] } });
+    expect(sent[0]).not.toHaveProperty("ticketKey");
   });
 });

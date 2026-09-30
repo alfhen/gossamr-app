@@ -1,29 +1,20 @@
 import { create } from "zustand";
-import { claude, type ClaudeEvent, type Proposal } from "./backend/claude";
-
-export type ProposalState = "pending" | "applying" | "applied" | "skipped";
-
-export interface ProposalCard {
-  proposal: Proposal;
-  state: ProposalState;
-  error: string | null;
-  /** For subtasks: the key created for each summary so far, by index, so a retry never creates one twice. */
-  created?: Record<number, string>;
-}
+import { claude, type ClaudeEvent } from "./backend/claude";
+import type { Backend } from "./backend/types";
+import type { Proposal, ScreenContext } from "./types";
 
 export interface Turn {
   requestId: string;
   prompt: string;
   steps: string[];
   text: string;
-  proposals: ProposalCard[];
   status: "running" | "done" | "failed";
   error: string | null;
 }
 
 export interface Conversation {
   turns: Turn[];
-  /** Set once Claude reports a session, so follow-up questions continue it. */
+  /** Set once the assistant reports a session, so follow-up questions continue it. */
   sessionId: string | null;
   cwd: string | null;
 }
@@ -31,11 +22,22 @@ export interface Conversation {
 interface ClaudeState {
   open: boolean;
   byTicket: Record<string, Conversation>;
+  /** Every draft the backend holds. The chat cards read from here, so drafts outlive the conversation that made them. */
+  proposals: Proposal[];
   setOpen(open: boolean): void;
-  ask(ticketKey: string, prompt: string, sessionId: string | null, cwd: string | null): Promise<void>;
+  ask(ticketKey: string, prompt: string, sessionId: string | null, cwd: string | null, context?: ScreenContext): Promise<void>;
   cancel(ticketKey: string): void;
-  setProposal(ticketKey: string, requestId: string, id: string, patch: Partial<ProposalCard>): void;
+  /** Puts a draft the backend just returned in place, ahead of the `proposals-changed` refresh. */
+  putProposal(p: Proposal): void;
 }
+
+/** The screen as far as the page knows it today: the open ticket. */
+export const ticketContext = (key: string): ScreenContext => ({
+  view: null,
+  item: { connectionId: "", externalId: key, key },
+  filter: null,
+  selection: [],
+});
 
 const empty: Conversation = { turns: [], sessionId: null, cwd: null };
 
@@ -61,28 +63,20 @@ export function applyEvent(conv: Conversation, requestId: string, e: ClaudeEvent
   return { ...conv, turns, sessionId };
 }
 
-export function applyProposal(conv: Conversation, p: Proposal): Conversation {
-  return {
-    ...conv,
-    turns: conv.turns.map((t) =>
-      t.requestId === p.requestId ? { ...t, proposals: [...t.proposals, { proposal: p, state: "pending", error: null }] } : t,
-    ),
-  };
-}
-
 export const useClaude = create<ClaudeState>()((set, get) => ({
   open: false,
   byTicket: {},
+  proposals: [],
 
   setOpen: (open) => set({ open }),
 
-  async ask(ticketKey, prompt, sessionId, cwd) {
+  async ask(ticketKey, prompt, sessionId, cwd, context = ticketContext(ticketKey)) {
     const requestId = newRequestId();
     const conv = get().byTicket[ticketKey] ?? empty;
-    const turn: Turn = { requestId, prompt, steps: [], text: "", proposals: [], status: "running", error: null };
+    const turn: Turn = { requestId, prompt, steps: [], text: "", status: "running", error: null };
     set({ byTicket: { ...get().byTicket, [ticketKey]: { ...conv, cwd, turns: [...conv.turns, turn] } } });
     try {
-      await claude.ask({ requestId, ticketKey, prompt, sessionId, cwd });
+      await claude.ask({ requestId, prompt, sessionId, cwd, context });
     } catch (err) {
       updateByRequest(requestId, (c) => applyEvent(c, requestId, { type: "done", sessionId: null, ok: false, message: String(err) }));
     }
@@ -97,15 +91,9 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
       .catch((err) => updateByRequest(id, (c) => applyEvent(c, id, { type: "done", sessionId: null, ok: false, message: String(err) })));
   },
 
-  setProposal(ticketKey, requestId, id, patch) {
-    const conv = get().byTicket[ticketKey];
-    if (!conv) return;
-    const turns = conv.turns.map((t) =>
-      t.requestId !== requestId
-        ? t
-        : { ...t, proposals: t.proposals.map((p) => (p.proposal.id === id ? { ...p, ...patch } : p)) },
-    );
-    set({ byTicket: { ...get().byTicket, [ticketKey]: { ...conv, turns } } });
+  putProposal(p) {
+    const all = get().proposals;
+    set({ proposals: all.some((x) => x.id === p.id) ? all.map((x) => (x.id === p.id ? p : x)) : [p, ...all] });
   },
 }));
 
@@ -122,5 +110,31 @@ export function listenToClaude() {
   if (listening) return;
   listening = true;
   claude.onEvent((requestId, e) => updateByRequest(requestId, (c) => applyEvent(c, requestId, e)));
-  claude.onProposal((p) => updateByRequest(p.requestId, (c) => applyProposal(c, p)));
+}
+
+let stopWatching: (() => void) | null = null;
+
+export function stopWatchingProposals() {
+  stopWatching?.();
+  stopWatching = null;
+}
+
+/** Loads the backend's drafts now and again whenever they change, replacing any earlier watch. */
+export function watchProposals(backend: Backend) {
+  stopWatching?.();
+  let live = true;
+  let latest = 0;
+  const refresh = () => {
+    const mine = ++latest;
+    backend
+      .proposalsList()
+      .then((proposals) => live && mine === latest && useClaude.setState({ proposals }))
+      .catch(() => {});
+  };
+  const off = backend.onProposalsChanged(refresh);
+  stopWatching = () => {
+    live = false;
+    off();
+  };
+  refresh();
 }

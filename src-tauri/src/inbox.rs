@@ -1,37 +1,42 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, SecondsFormat, Utc};
 use tokio::sync::Notify;
 
-use crate::auth::{Account, Auth, Scope, Site};
-use crate::db::Db;
+use crate::auth::{Account, Auth, AuthStatus, Scope, Site};
+use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, my_actions, NewEvent};
-use crate::jira::{Jira, CONTEXT_LIMIT, TRACKED_LIMIT};
-use crate::model::{Attachment, CachedTicket, CreatedSubtasks, Person, Snapshot, Ticket, Transition, Uploaded};
+use crate::domain::{Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, WorkItem, Workflow};
+use crate::model::{Attachment, CachedTicket, CreatedSubtasks, MentionRef, Person, Snapshot, Status, Ticket, Transition, Uploaded};
+use crate::proposals;
+use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
+use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
-/// Tickets the user follows. Anything else only appears as context, e.g. the children of an epic they watch.
-const TRACKED_JQL: &str =
-    "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND updated >= -30d ORDER BY updated DESC";
+mod drafts;
+
+pub use drafts::Edit;
+
 /// Events this old drop out of the inbox unless they are still unread.
 const EVENT_WINDOW_DAYS: i64 = 30;
 /// How far back My work can reach.
 const ACTIVITY_DAYS: i64 = 30;
 /// Before a ticket has been opened in the app, "since you last looked" covers this many days.
 const DEFAULT_SEEN_DAYS: i64 = 3;
-/// Leeway for clock differences between this machine and Jira when deciding what arrived since the last sync.
-const CLOCK_SKEW_MINUTES: i64 = 10;
 
 const LAST_SYNC: &str = "last_sync_at";
+const CACHE_BACKFILLED: &str = "cache_backfilled";
+const EVENTS_BACKFILLED: &str = "events_backfilled";
 const OWN_CLAUDE_SESSIONS: &str = "claude_sessions";
 const OWN_SESSIONS_KEPT: usize = 50;
 
 /// Events after this are new since the previous sync (or, before the first sync, from the last 24 hours).
 fn unread_cutoff(last_sync: Option<&str>) -> String {
     match last_sync.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) {
-        Some(at) => (at.with_timezone(&Utc) - Duration::minutes(CLOCK_SKEW_MINUTES)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        Some(at) => (at.with_timezone(&Utc) - Duration::minutes(i64::from(CLOCK_SKEW_MINUTES))).to_rfc3339_opts(SecondsFormat::Secs, true),
         None => ago(Duration::hours(24)),
     }
 }
@@ -49,25 +54,153 @@ fn media_key(attachment_id: &str) -> String {
     format!("media:{attachment_id}")
 }
 
-fn db_file(scope: &Scope) -> String {
+fn db_file(connection: &Connection) -> String {
     let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect::<String>();
-    format!("inbox-{}-{}.sqlite", safe(&scope.cloud_id), safe(&scope.account_id))
+    format!("inbox-{}-{}.sqlite", safe(&connection.workspace), safe(&connection.account))
+}
+
+/// The ticket a tracker left in `extra` for the inbox.
+fn ticket_of(item: &WorkItem) -> Result<CachedTicket> {
+    Ok(serde_json::from_value(item.extra.clone())?)
+}
+
+pub(crate) fn tickets_of(items: &[WorkItem]) -> Result<Vec<CachedTicket>> {
+    items.iter().map(ticket_of).collect()
+}
+
+fn identity_of(connection_id: &str, me: &Account) -> Identity {
+    Identity {
+        display_name: me.name.clone(),
+        accounts: vec![PersonRef { connection_id: connection_id.into(), account_id: me.account_id.clone() }],
+    }
+}
+
+fn without_extra(mut item: WorkItem) -> WorkItem {
+    item.extra = serde_json::Value::Null;
+    item
+}
+
+/// Fills the cache from tickets stored before it existed, once, keeping when each was last refreshed. The old table
+/// is left as it was.
+fn backfill_cache(db: &Db, connection: &Connection) -> Result<()> {
+    if db.meta(CACHE_BACKFILLED)?.is_none() {
+        for (ticket, synced_at) in db.legacy_tickets()? {
+            db.upsert_items(&[tracker::item_from_ticket(connection, &ticket)], &synced_at)?;
+        }
+        db.set_meta(CACHE_BACKFILLED, &now_iso())?;
+    }
+    if db.meta(EVENTS_BACKFILLED)?.is_none() {
+        let stored: Vec<Event> = db
+            .events("")?
+            .into_iter()
+            .filter_map(|e| {
+                let e = NewEvent { id: e.id, kind: e.kind, ticket_key: e.ticket_key, actor: e.actor, at: e.at, text: e.text };
+                sync::domain_event(&connection.id, &e)
+            })
+            .collect();
+        db.insert_cache_events(&stored)?;
+        db.set_meta(EVENTS_BACKFILLED, &now_iso())?;
+    }
+    Ok(())
+}
+
+/// A signed-in connection as Settings shows it.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionInfo {
+    pub id: String,
+    pub kind: tracker::ConnectionKind,
+    /// The site or organisation.
+    pub workspace: String,
+    pub url: String,
+    /// The person's name on it.
+    pub account: String,
+    pub last_sync_at: Option<String>,
+    pub syncing: bool,
+    pub error: Option<String>,
 }
 
 pub struct Core {
     pub auth: Arc<Auth>,
-    pub jira: Jira,
+    registry: Registry,
     data_dir: PathBuf,
-    /// One database per Jira site and account, opened for whichever is signed in. Keyed by account too, so two
+    /// One database per connection, opened for whichever is signed in. A connection is a site and an account, so two
     /// people signing in to the same site on one Mac never see each other's tickets or inbox.
-    db: Mutex<Option<(Scope, Db)>>,
+    db: Mutex<Option<(String, Db)>>,
     last_error: Mutex<Option<String>>,
+    syncing: AtomicBool,
+    schedules: Mutex<HashMap<String, Schedule>>,
+    /// Ask for a sync now, whatever the schedule says.
     pub wake: Notify,
+    /// The window gained focus: sync if it has been a while and no failure is being waited out.
+    pub focus: Notify,
+}
+
+/// What a sync left behind.
+pub struct Synced {
+    pub connection_id: String,
+    pub new_events: Vec<NewEvent>,
+    /// Whether any cached item was added or changed.
+    pub changed: bool,
+    /// Whether reconciling the drafts against the fresh cache revised or retired any.
+    pub proposals_changed: bool,
 }
 
 impl Core {
-    pub fn new(auth: Arc<Auth>, jira: Jira, data_dir: PathBuf) -> Self {
-        Self { auth, jira, data_dir, db: Mutex::new(None), last_error: Mutex::new(None), wake: Notify::new() }
+    pub fn new(auth: Arc<Auth>, registry: Registry, data_dir: PathBuf) -> Self {
+        Self {
+            auth,
+            registry,
+            data_dir,
+            db: Mutex::new(None),
+            last_error: Mutex::new(None),
+            syncing: AtomicBool::new(false),
+            schedules: Mutex::new(HashMap::new()),
+            wake: Notify::new(),
+            focus: Notify::new(),
+        }
+    }
+
+    /// The registered connection for `scope`. Callers still hold a `Scope`, so this is the adapter between the two;
+    /// a scope that isn't registered is one the person has since signed out of or replaced.
+    fn connection(&self, scope: &Scope) -> Result<Connection> {
+        self.registry.connection(&Connection::jira_id(scope)).ok_or(Error::SiteChanged)
+    }
+
+    fn tracker(&self, scope: &Scope) -> Result<Arc<dyn WorkTracker>> {
+        Ok(self.registry.tracker(&self.connection(scope)?))
+    }
+
+    fn item(scope: &Scope, key: &str) -> ItemRef {
+        ItemRef { connection_id: Connection::jira_id(scope), external_id: key.into(), key: key.into() }
+    }
+
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_dir.clone()
+    }
+
+    /// Signs in and registers the resulting connection.
+    pub async fn sign_in(&self, open_browser: impl FnOnce(&str) -> Result<()>) -> Result<AuthStatus> {
+        let connection = self.auth.sign_in(open_browser).await?;
+        self.registry.register(connection);
+        self.auth.status().await
+    }
+
+    /// Registers the connection restored from the Keychain, if any.
+    pub async fn restore(&self) {
+        if let Some(connection) = self.auth.connection().await {
+            self.registry.register(connection);
+        }
+    }
+
+    pub async fn sign_out(&self) -> Result<()> {
+        let connection = self.auth.connection().await;
+        self.auth.sign_out().await?;
+        if let Some(c) = connection {
+            self.registry.remove(&c.id);
+        }
+        self.close_db();
+        Ok(())
     }
 
     async fn identity(&self) -> Result<(Site, Account)> {
@@ -87,8 +220,12 @@ impl Core {
             return Err(Error::SiteChanged);
         }
         let mut guard = self.db.lock().expect("db lock poisoned");
-        if guard.as_ref().map(|(open, _)| open != scope).unwrap_or(true) {
-            *guard = Some((scope.clone(), Db::open(&self.data_dir.join(db_file(scope)))?));
+        let connection = self.connection(scope)?;
+        if guard.as_ref().map(|(open, _)| *open != connection.id).unwrap_or(true) {
+            let db = Db::open(&self.data_dir.join(db_file(&connection)))?;
+            backfill_cache(&db, &connection)?;
+            db.release_interrupted(Utc::now())?;
+            *guard = Some((connection.id.clone(), db));
         }
         f(&guard.as_ref().expect("opened above").1)
     }
@@ -101,33 +238,52 @@ impl Core {
         *self.last_error.lock().expect("error lock poisoned") = e;
     }
 
-    /// Fetches tracked tickets and epic children, stores them, and returns events that are new and unread.
-    /// The first sync for a site returns nothing, so connecting doesn't fire a burst of notifications.
-    pub async fn sync(&self) -> Result<Vec<NewEvent>> {
+    /// Runs a sync if `trigger` says this connection is due one, and records how it went for the backoff.
+    pub async fn sync_if_due(&self, trigger: Trigger) -> Option<Result<Synced>> {
+        let (site, me) = self.auth.identity().await?;
+        let id = Connection::jira_id(&Scope::of(&site, &me));
+        let due = self.schedules.lock().expect("schedule lock poisoned").entry(id.clone()).or_default().due(Utc::now(), trigger);
+        if !due {
+            return None;
+        }
+        self.syncing.store(true, Ordering::SeqCst);
+        let result = self.sync().await;
+        self.syncing.store(false, Ordering::SeqCst);
+        self.schedules.lock().expect("schedule lock poisoned").entry(id).or_default().finished(Utc::now(), result.is_ok());
+        Some(result)
+    }
+
+    /// Fetches what changed since the last sync (or everything, when due), stores it in the cache, and returns the
+    /// events that are new and unread.
+    pub async fn sync(&self) -> Result<Synced> {
         let (site, me) = self.identity().await?;
         let scope = Scope::of(&site, &me);
-        let started = now_iso();
-        let previous = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
+        let connection_id = Connection::jira_id(&scope);
+        let started = Utc::now();
+        let (previous, state, known_epics) = self
+            .with_db_for(&scope, |db| {
+                let last = db.meta(LAST_SYNC)?;
+                let epics = db.epic_ids_synced_since(&connection_id, &stamp(started - Duration::days(1)))?;
+                Ok((last, db.sync_state(&connection_id)?, epics))
+            })
+            .await?;
         let unread_after = unread_cutoff(previous.as_deref());
-        let tracked = self.jira.search(&scope, TRACKED_JQL, Some(&unread_after), TRACKED_LIMIT).await?;
-        let epics: Vec<&str> = tracked.iter().filter(|t| t.is_epic).map(|t| t.key.as_str()).collect();
-        let context = if epics.is_empty() {
-            Vec::new()
-        } else {
-            let jql = format!("parent in ({}) ORDER BY updated DESC", epics.join(","));
-            self.jira.search(&scope, &jql, None, CONTEXT_LIMIT).await?
-        };
+        let plan = sync::plan(&state, started);
+        let tracker = self.tracker(&scope)?;
+        let pulled = sync::pull(tracker.as_ref(), &connection_id, plan, &state, &known_epics, &unread_after, started).await?;
 
         self.with_db_for(&scope, |db| {
-            let tracked_keys: std::collections::HashSet<&str> = tracked.iter().map(|t| t.key.as_str()).collect();
-            for t in tracked.iter().chain(context.iter().filter(|t| !tracked_keys.contains(t.key.as_str()))) {
-                db.upsert_ticket(t, &started)?;
-            }
-            let derived: Vec<NewEvent> = tracked.iter().flat_map(|t| derive(t, &me.account_id)).collect();
-            let fresh = db.insert_events(&derived, &unread_after)?;
-            db.insert_activity(&tracked.iter().flat_map(|t| my_actions(t, &me.account_id)).collect::<Vec<_>>())?;
-            db.set_meta(LAST_SYNC, &started)?;
-            Ok(if previous.is_some() { fresh } else { Vec::new() })
+            let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after, previous.is_some())?;
+            db.set_meta(LAST_SYNC, &stamp(started))?;
+            let containers_changed = pulled.containers.is_some();
+            // A draft that can't be re-judged must not stop the items from syncing.
+            let revised = proposals::reconcile_pending(db, &identity_of(&connection_id, &me), Utc::now()).unwrap_or_default();
+            Ok(Synced {
+                connection_id: connection_id.clone(),
+                new_events: stored.new_events,
+                changed: stored.upserted.any() || containers_changed,
+                proposals_changed: revised > 0,
+            })
         })
         .await
     }
@@ -136,9 +292,10 @@ impl Core {
     async fn refresh(&self, scope: &Scope, key: &str) -> Result<()> {
         let last_sync = self.with_db_for(scope, |db| db.meta(LAST_SYNC)).await?;
         let since = unread_cutoff(last_sync.as_deref());
-        let t = self.jira.issue(scope, key, &since).await?;
+        let item = self.tracker(scope)?.item(&Self::item(scope, key), &since).await?;
+        let t = ticket_of(&item)?;
         self.with_db_for(scope, |db| {
-            db.upsert_ticket(&t, &now_iso())?;
+            db.upsert_items(&[item], &now_iso())?;
             db.insert_events(&derive(&t, &scope.account_id), &since)?;
             db.insert_activity(&my_actions(&t, &scope.account_id))?;
             Ok(())
@@ -150,7 +307,8 @@ impl Core {
         let (site, me) = self.identity().await?;
         let sync_error = self.last_error.lock().expect("error lock poisoned").clone();
         // The identity above labels the snapshot, so the data must come from that same account's database.
-        self.with_db_for(&Scope::of(&site, &me), |db| {
+        let scope = Scope::of(&site, &me);
+        self.with_db_for(&scope.clone(), |db| {
             let last_sync = db.meta(LAST_SYNC)?;
             // Tickets refreshed within a day of the last sync; older ones have dropped out of every query.
             let cutoff = last_sync
@@ -158,7 +316,7 @@ impl Core {
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| (d.with_timezone(&Utc) - Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true))
                 .unwrap_or_default();
-            let cached = db.tickets(&cutoff)?;
+            let cached = tickets_of(&db.items_synced_since(&Connection::jira_id(&scope), &cutoff)?)?;
             let seen = db.seen()?;
             let default_since = ago(Duration::days(DEFAULT_SEEN_DAYS));
 
@@ -245,16 +403,23 @@ impl Core {
     }
 
     pub async fn mentionable(&self, scope: &Scope, key: &str, query: &str) -> Result<Vec<Person>> {
-        self.jira.mentionable(scope, key, query).await
+        let people = self.tracker(scope)?.people(&Self::item(scope, key), query).await?;
+        Ok(people
+            .into_iter()
+            .map(|p| Person { account_id: p.person_ref.account_id, name: p.display_name, avatar_url: p.avatar_url })
+            .collect())
     }
 
+    /// The moves open to a ticket. A move's id is its target status, which `transition` takes back.
     pub async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<Transition>> {
-        self.jira.transitions(scope, key).await
+        let moves = self.tracker(scope)?.transitions(&Self::item(scope, key)).await?;
+        Ok(moves.into_iter().map(|m| Transition { id: m.to.id.clone(), name: m.name, to: Status::from(&m.to) }).collect())
     }
 
     /// `scope` is the account the user was looking at when they acted; the write is refused if that has changed.
-    pub async fn transition(&self, scope: &Scope, key: &str, transition_id: &str) -> Result<()> {
-        self.jira.transition(scope, key, transition_id).await?;
+    pub async fn transition(&self, scope: &Scope, key: &str, status_id: &str) -> Result<()> {
+        let intent = Intent::Transition { item: Self::item(scope, key), to: status_id.into() };
+        self.tracker(scope)?.apply(&intent).await?;
         self.after_write(scope, key).await;
         Ok(())
     }
@@ -265,14 +430,20 @@ impl Core {
         scope: &Scope,
         key: &str,
         body: &str,
-        mentions: &[crate::adf::MentionRef],
+        mentions: &[MentionRef],
         files: &[Uploaded],
     ) -> Result<()> {
         let body = body.trim();
         if body.is_empty() && files.is_empty() {
             return Err(Error::Api { status: 400, message: "a comment can't be empty".into() });
         }
-        self.jira.comment(scope, key, body, mentions, files).await?;
+        let connection = Connection::jira_id(scope);
+        let people: Vec<(PersonRef, String)> = mentions
+            .iter()
+            .map(|m| (PersonRef { connection_id: connection.clone(), account_id: m.account_id.clone() }, m.name.clone()))
+            .collect();
+        let intent = Intent::Comment { item: Self::item(scope, key), body: tracker::comment_doc(body, &people) };
+        self.tracker(scope)?.apply_with_files(&intent, files).await?;
         self.after_write(scope, key).await;
         Ok(())
     }
@@ -289,7 +460,7 @@ impl Core {
             let media = match media {
                 Some(m) => m,
                 None => {
-                    let Some(m) = self.jira.media_id(scope, &id).await? else { continue };
+                    let Some(m) = self.tracker(scope)?.media_id(&id).await? else { continue };
                     self.with_db_for(scope, |db| db.set_meta(&media_key(&id), &m)).await?;
                     m
                 }
@@ -305,12 +476,12 @@ impl Core {
             return Err(Error::Api { status: 400, message: "not an attachment id".into() });
         }
         let scope = self.scope().await?;
-        self.jira.download(&scope, id).await
+        self.tracker(&scope)?.download(id).await
     }
 
     /// Uploads a file to a ticket. The ticket isn't refreshed here: the comment that follows does that.
     pub async fn attach(&self, scope: &Scope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
-        let uploaded = self.jira.attach(scope, key, filename, mime_type, bytes).await?;
+        let uploaded = self.tracker(scope)?.attach(&Self::item(scope, key), filename, mime_type, bytes).await?;
         if let Some(m) = &uploaded.media_id {
             let _ = self.with_db_for(scope, |db| db.set_meta(&media_key(&uploaded.id), m)).await;
         }
@@ -318,7 +489,7 @@ impl Core {
     }
 
     pub async fn attachment_limit(&self, scope: &Scope) -> Result<Option<u64>> {
-        self.jira.attachment_limit(scope).await
+        self.tracker(scope)?.attachment_limit().await
     }
 
     /// Re-reads a ticket after a successful write. A failure here must not be reported as a failed write, or a retry
@@ -332,18 +503,150 @@ impl Core {
 
     /// The cached ticket, or a fresh read from Jira when it isn't cached.
     pub async fn ticket(&self, scope: &Scope, key: &str) -> Result<CachedTicket> {
-        let (cached, last_sync) =
-            self.with_db_for(scope, |db| Ok((db.tickets("")?.into_iter().find(|t| t.key == key), db.meta(LAST_SYNC)?))).await?;
+        let item = Self::item(scope, key);
+        let (cached, last_sync) = self.with_db_for(scope, |db| Ok((db.item(&item)?, db.meta(LAST_SYNC)?))).await?;
         match cached {
-            Some(t) => Ok(t),
-            None => self.jira.issue(scope, key, &unread_cutoff(last_sync.as_deref())).await,
+            Some(item) => ticket_of(&item),
+            None => ticket_of(&self.tracker(scope)?.item(&item, &unread_cutoff(last_sync.as_deref())).await?),
         }
+    }
+
+    /// The cached items that match `filter`. The raw tracker payload is left out; it is for Core, not for the page.
+    pub async fn cache_search(&self, filter: &Filter) -> Result<Vec<WorkItem>> {
+        let scope = self.scope().await?;
+        Ok(self.search_cached(&scope, filter).await?.into_iter().map(without_extra).collect())
+    }
+
+    /// Like `cache_search`, for `scope` only, and with each item's tracker payload kept.
+    pub async fn search_cached(&self, scope: &Scope, filter: &Filter) -> Result<Vec<WorkItem>> {
+        let (site, me) = self.identity().await?;
+        if &Scope::of(&site, &me) != scope {
+            return Err(Error::SiteChanged);
+        }
+        let connection_id = Connection::jira_id(scope);
+        let now = Utc::now();
+        self.with_db_for(scope, |db| {
+            let needs_me = db
+                .needs_me_keys(&stamp(now))?
+                .into_iter()
+                .map(|key| ItemRef { connection_id: connection_id.clone(), external_id: key.clone(), key })
+                .collect();
+            let me = identity_of(&connection_id, &me);
+            db.search(&connection_id, filter, &FilterContext { me, now, needs_me })
+        })
+        .await
+    }
+
+    pub async fn cache_item(&self, item: &ItemRef) -> Result<Option<WorkItem>> {
+        let scope = self.scope().await?;
+        Ok(self.with_db_for(&scope, |db| db.item(item)).await?.map(without_extra))
+    }
+
+    pub async fn cache_containers(&self) -> Result<Vec<Container>> {
+        self.containers_in(&self.scope().await?).await
+    }
+
+    pub async fn containers_in(&self, scope: &Scope) -> Result<Vec<Container>> {
+        self.with_db_for(scope, |db| db.containers(&Connection::jira_id(scope))).await
+    }
+
+    pub async fn cache_workflow(&self, container: &ContainerRef) -> Result<Option<Workflow>> {
+        self.workflow_in(&self.scope().await?, container).await
+    }
+
+    pub async fn workflow_in(&self, scope: &Scope, container: &ContainerRef) -> Result<Option<Workflow>> {
+        self.with_db_for(scope, |db| db.workflow(container)).await
+    }
+
+    /// The signed-in person, across connections.
+    pub async fn cache_me(&self) -> Result<Identity> {
+        let (site, me) = self.identity().await?;
+        Ok(identity_of(&Connection::jira_id(&Scope::of(&site, &me)), &me))
+    }
+
+    /// People named on cached tickets, so views can show a name for an account id.
+    pub async fn cache_people(&self) -> Result<Vec<Person>> {
+        let scope = self.scope().await?;
+        let mut seen: HashMap<String, Person> = HashMap::new();
+        for item in self.search_cached(&scope, &Filter::And { filters: vec![] }).await? {
+            let t = ticket_of(&item)?;
+            let authors = t.comments.iter().map(|c| &c.author);
+            for p in t.assignee.iter().chain(t.reporter.iter()).chain(t.creator.iter()).chain(authors) {
+                seen.entry(p.account_id.clone()).or_insert_with(|| p.clone());
+            }
+        }
+        Ok(seen.into_values().collect())
+    }
+
+    /// An item's comments, oldest first. From the cache unless `refresh`, which reads them from the tracker and
+    /// falls back to the cached ones when it can't be reached.
+    pub async fn cache_comments(&self, item: &ItemRef, refresh: bool) -> Result<Vec<Comment>> {
+        let scope = self.scope().await?;
+        let connection = self.connection(&scope)?;
+        if item.connection_id != connection.id {
+            return Err(Error::SiteChanged);
+        }
+        if refresh {
+            if let Ok(live) = self.tracker(&scope)?.comments(item).await {
+                return Ok(live);
+            }
+        }
+        match self.with_db_for(&scope, |db| db.item(item)).await? {
+            Some(cached) => Ok(tracker::comments_from_ticket(&connection, &ticket_of(&cached)?)),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The moves open to an item right now; Jira reveals them per item.
+    pub async fn cache_transitions(&self, item: &ItemRef) -> Result<Vec<Move>> {
+        let scope = self.scope().await?;
+        if item.connection_id != Connection::jira_id(&scope) {
+            return Err(Error::SiteChanged);
+        }
+        self.tracker(&scope)?.transitions(item).await
+    }
+
+    /// The signed-in connection with how its sync is going.
+    pub async fn connections(&self) -> Result<Vec<ConnectionInfo>> {
+        let Some((site, me)) = self.auth.identity().await else { return Ok(Vec::new()) };
+        let scope = Scope::of(&site, &me);
+        let connection = self.connection(&scope)?;
+        let last_sync_at = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
+        Ok(vec![ConnectionInfo {
+            id: connection.id,
+            kind: connection.kind,
+            workspace: site.name,
+            url: site.url,
+            account: me.name,
+            last_sync_at,
+            syncing: self.syncing.load(Ordering::SeqCst),
+            error: self.last_error.lock().expect("error lock poisoned").clone(),
+        }])
+    }
+
+    pub async fn cache_events(&self, item: &ItemRef, limit: usize) -> Result<Vec<Event>> {
+        let scope = self.scope().await?;
+        self.with_db_for(&scope, |db| db.events_for_item(item, limit)).await
+    }
+
+    pub async fn cache_feed(&self, query: &FeedQuery) -> Result<FeedPage> {
+        let scope = self.scope().await?;
+        let id = self.connection(&scope)?.id;
+        self.with_db_for(&scope, |db| db.feed(&id, query)).await
+    }
+
+    pub async fn cache_feed_unread(&self) -> Result<usize> {
+        let scope = self.scope().await?;
+        let id = self.connection(&scope)?.id;
+        self.with_db_for(&scope, |db| db.feed_unread(&id)).await
     }
 
     /// `scope` is the account the user was looking at when they approved; the write is refused if that has changed.
     /// A failure part-way still reports what was created, so a retry can skip those and not duplicate them.
     pub async fn create_subtasks(&self, scope: &Scope, key: &str, summaries: &[String]) -> Result<CreatedSubtasks> {
-        let (created, error) = self.jira.create_subtasks(scope, key, summaries).await?;
+        let intent = Intent::Subtasks { parent: Self::item(scope, key), summaries: summaries.to_vec() };
+        let tracker::Applied { created, error } = self.tracker(scope)?.apply(&intent).await?;
+        let created: Vec<String> = created.into_iter().map(|r| r.key).collect();
         if created.is_empty() {
             if let Some(e) = error {
                 return Err(e);
@@ -381,6 +684,62 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::Doc;
+
+    #[tokio::test]
+    async fn the_signed_in_person_is_known_without_the_legacy_snapshot() {
+        let fx = super::testing::fixture().await;
+        let me = fx.core.cache_me().await.unwrap();
+        assert_eq!(me.display_name, "Me");
+        assert_eq!(me.accounts, vec![PersonRef { connection_id: "jira:site:me".into(), account_id: "me".into() }]);
+    }
+
+    #[tokio::test]
+    async fn people_come_from_the_cached_tickets() {
+        let fx = super::testing::fixture().await;
+        let names: Vec<String> = fx.core.cache_people().await.unwrap().into_iter().map(|p| p.name).collect();
+        assert!(names.contains(&"Me Myself".to_string()) && names.contains(&"Sam".to_string()), "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn comments_come_from_the_tracker_and_fall_back_to_the_cache_when_it_is_unreachable() {
+        let fx = super::testing::fixture().await;
+        let item = fx.item("CA-1");
+        let cached = fx.core.cache_comments(&item, false).await.unwrap();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].author.account_id, "sam");
+
+        let live = crate::domain::Comment {
+            id: "77".into(),
+            author: PersonRef { connection_id: item.connection_id.clone(), account_id: "kim".into() },
+            body: Doc::paragraph("fresh"),
+            created: chrono::Utc::now(),
+            mentions: vec![],
+        };
+        *fx.tracker.comments.lock().unwrap() = Some(vec![live.clone()]);
+        assert_eq!(fx.core.cache_comments(&item, true).await.unwrap(), vec![live]);
+        assert_eq!(fx.core.cache_comments(&item, false).await.unwrap().len(), 1, "without refresh the cache answers");
+
+        *fx.tracker.comments.lock().unwrap() = None;
+        assert_eq!(fx.core.cache_comments(&item, true).await.unwrap(), cached);
+    }
+
+    #[tokio::test]
+    async fn another_connections_items_are_refused() {
+        let fx = super::testing::fixture().await;
+        let mut foreign = fx.item("CA-1");
+        foreign.connection_id = "jira:other:me".into();
+        assert!(fx.core.cache_comments(&foreign, true).await.is_err());
+        assert!(fx.core.cache_transitions(&foreign).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_connection_row_names_the_site_and_the_last_sync() {
+        let fx = super::testing::fixture().await;
+        let rows = fx.core.connections().await.unwrap();
+        assert_eq!((rows[0].workspace.as_str(), rows[0].account.as_str(), rows[0].syncing), ("Acme", "Me", false));
+        assert_eq!(rows[0].last_sync_at, None);
+    }
 
     #[test]
     fn unread_cutoff_allows_for_clock_skew_and_defaults_to_a_day() {
@@ -391,10 +750,128 @@ mod tests {
 
     #[test]
     fn each_site_and_account_gets_its_own_database_file() {
-        let a = Scope { cloud_id: "c1".into(), account_id: "712020:ab-cd".into() };
-        let b = Scope { cloud_id: "c1".into(), account_id: "someone-else".into() };
+        let of = |cloud: &str, account: &str| Connection::jira(&Scope { cloud_id: cloud.into(), account_id: account.into() }, "Site");
+        let a = of("c1", "712020:ab-cd");
+        let b = of("c1", "someone-else");
         assert_eq!(db_file(&a), "inbox-c1-712020_ab-cd.sqlite");
         assert_ne!(db_file(&a), db_file(&b));
-        assert!(!db_file(&Scope { cloud_id: "../x".into(), account_id: "y".into() }).contains('/'));
+        assert!(!db_file(&of("../x", "y")).contains('/'));
+    }
+
+    #[test]
+    fn a_ticket_comes_back_out_of_its_work_item() {
+        let ticket = crate::tracker::testing::sample_ticket();
+        let item = WorkItem { extra: serde_json::to_value(&ticket).unwrap(), ..crate::domain::fixtures::work_item("1", "todo") };
+        assert_eq!(ticket_of(&item).unwrap().key, ticket.key);
+        assert!(ticket_of(&crate::domain::fixtures::work_item("1", "todo")).is_err(), "no payload, no ticket");
+    }
+
+    #[test]
+    fn a_database_from_before_the_cache_is_migrated_in_place_and_backfilled_once() {
+        let dir = std::env::temp_dir().join(format!("gossamr-backfill-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("inbox-site-me.sqlite");
+        let ticket = crate::tracker::testing::sample_ticket();
+        let mut stored = serde_json::to_value(&ticket).unwrap();
+        stored.as_object_mut().unwrap().retain(|k, _| k != "labels" && k != "links");
+        {
+            let old = rusqlite::Connection::open(&path).unwrap();
+            old.execute_batch(
+                "CREATE TABLE tickets (key TEXT PRIMARY KEY, data TEXT NOT NULL, synced_at TEXT NOT NULL);
+                 CREATE TABLE events (id TEXT PRIMARY KEY, ticket_key TEXT NOT NULL, kind TEXT NOT NULL, actor TEXT NOT NULL,
+                   at TEXT NOT NULL, text TEXT NOT NULL, unread INTEGER NOT NULL, done_at TEXT, snoozed_until TEXT);
+                 CREATE TABLE activity (id TEXT PRIMARY KEY, ticket_key TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL, text TEXT NOT NULL);
+                 CREATE TABLE seen (ticket_key TEXT PRIMARY KEY, at TEXT NOT NULL);
+                 CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+                 INSERT INTO seen VALUES ('CA-1', '2026-09-01T00:00:00Z');
+                 INSERT INTO meta VALUES ('last_sync_at', '2026-09-28T10:00:00Z');",
+            )
+            .unwrap();
+            old.execute(
+                "INSERT INTO tickets VALUES (?1, ?2, '2026-09-28T10:00:00Z')",
+                rusqlite::params![ticket.key, stored.to_string()],
+            )
+            .unwrap();
+        }
+        let connection = Connection::jira(&Scope { cloud_id: "site".into(), account_id: "me".into() }, "Site");
+
+        let db = Db::open(&path).unwrap();
+        backfill_cache(&db, &connection).unwrap();
+        backfill_cache(&db, &connection).unwrap();
+
+        let item = db.item(&connection.item("CA-1")).unwrap().expect("backfilled");
+        assert_eq!(item.title, "Do the thing");
+        assert_eq!(ticket_of(&item).unwrap().key, "CA-1");
+        assert_eq!(db.items_synced_since(&connection.id, "2026-09-28T10:00:00Z").unwrap().len(), 1);
+        assert_eq!(db.seen().unwrap().len(), 1, "inbox state survives");
+        assert_eq!(db.meta(LAST_SYNC).unwrap().as_deref(), Some("2026-09-28T10:00:00Z"));
+        assert_eq!(db.sync_state(&connection.id).unwrap().full_at, None, "the first sync is a full one, which fills in labels and links");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A signed-in Core over a temporary database and a recording tracker, for tests that need the whole path.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::auth::{Credentials, Tokens};
+    use crate::domain::{Category, StatusDef, Transitions};
+    use crate::tracker::testing::{sample_ticket, Recorder};
+
+    pub struct Fixture {
+        pub core: Arc<Core>,
+        pub scope: Scope,
+        pub tracker: Arc<Recorder>,
+        pub dir: PathBuf,
+    }
+
+    impl Fixture {
+        pub fn item(&self, key: &str) -> ItemRef {
+            Core::item(&self.scope, key)
+        }
+
+        /// Adds `CA-<n>` (a copy of the sample ticket) to the cache.
+        pub async fn add_item(&self, n: u32) {
+            let connection = self.core.connection(&self.scope).unwrap();
+            let mut item = tracker::item_from_ticket(&connection, &sample_ticket());
+            let key = format!("CA-{n}");
+            item.item = connection.item(&key);
+            item.title = format!("Ticket {n}");
+            self.core.with_db_for(&self.scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    pub async fn fixture() -> Fixture {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
+        let me = Account { account_id: "me".into(), name: "Me".into(), avatar_url: None };
+        let scope = Scope::of(&site, &me);
+        let creds = Credentials { tokens: Tokens { access_token: "t".into(), refresh_token: "r".into(), expires_at: u64::MAX / 2 }, site, me };
+        let http = reqwest::Client::new();
+        let tracker = Arc::new(Recorder::default());
+        let shared = tracker.clone();
+        let registry = Registry::new(move |_| shared.clone());
+        let core = Arc::new(Core::new(Arc::new(Auth::signed_in(http, creds.clone())), registry, dir.clone()));
+        core.registry.register(creds.connection());
+
+        let fx = Fixture { core, scope, tracker, dir };
+        fx.add_item(1).await;
+        let connection = fx.core.connection(&fx.scope).unwrap();
+        let item = fx.core.cache_item(&connection.item("CA-1")).await.unwrap().unwrap();
+        let done = StatusDef { id: "10001".into(), name: "Done".into(), category: Category::Done };
+        let workflow = Workflow { statuses: vec![item.status.clone(), done], transitions: Transitions::Any };
+        let container = Container { container_ref: item.container, key: "CA".into(), name: "Cats".into(), workflow };
+        fx.core.with_db_for(&fx.scope, |db| db.replace_containers(&connection.id, &[container], "2026-09-29T12:00:00Z")).await.unwrap();
+        fx
     }
 }

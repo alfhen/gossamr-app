@@ -62,7 +62,7 @@ export const SHORTCUTS: [string, string][] = [
   ["c", "Comment"],
   ["o", "Open in Jira"],
   ["⌘K", "Search tickets and actions"],
-  ["⌘J", "Ask Claude about this ticket"],
+  ["⌘J", "Ask Pip about this ticket"],
   ["⌘↵", "Send comment"],
   ["Esc", "Close"],
 ];

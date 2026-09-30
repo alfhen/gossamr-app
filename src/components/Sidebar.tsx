@@ -1,5 +1,6 @@
 import { isInboxView, projectsOf, relativeTime, viewCounts } from "../lib/views";
 import { useStore } from "../store";
+import { usePrefs } from "../workspace/prefs";
 import { Icon, VIEW_ICON } from "./icons";
 
 const SECTIONS = [
@@ -76,6 +77,9 @@ export function Sidebar() {
             Sign out
           </button>
         )}
+        <button type="button" className="text-left text-accent" onClick={() => usePrefs.getState().setUi("workspace")}>
+          Try the new workspace
+        </button>
         {backend && (
           <button type="button" className="text-left text-accent" onClick={() => void backend.syncNow()}>
             {backend.kind === "mock" ? "Simulate a new notification" : "Sync now"}

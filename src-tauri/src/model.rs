@@ -13,9 +13,32 @@ pub struct Person {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Status {
+    /// The tracker's id for the status. Empty on tickets cached before it was recorded.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub name: String,
     /// Jira's status category key: `new`, `indeterminate` or `done`.
     pub category: String,
+}
+
+impl From<&crate::domain::StatusDef> for Status {
+    fn from(s: &crate::domain::StatusDef) -> Self {
+        use crate::domain::Category;
+        let category = match s.category {
+            Category::Todo => "new",
+            Category::Active => "indeterminate",
+            Category::Done => "done",
+        };
+        Self { id: s.id.clone(), name: s.name.clone(), category: category.into() }
+    }
+}
+
+/// Someone to @mention: `@{name}` in the text becomes a mention of `account_id`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MentionRef {
+    pub account_id: String,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -119,6 +142,21 @@ pub struct CachedTicket {
     pub creator: Option<Person>,
     pub watching: bool,
     pub history: Vec<History>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub links: Vec<TicketLink>,
+}
+
+/// One of a ticket's issue links, from this ticket's side.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TicketLink {
+    /// Jira's link type name, e.g. `Blocks`.
+    pub kind: String,
+    /// The key of the issue at the other end.
+    pub other: String,
+    /// Whether this ticket is the outward end, which for `Blocks` means it blocks `other`.
+    pub outward: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

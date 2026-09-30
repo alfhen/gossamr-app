@@ -1,5 +1,29 @@
 import type { Mention } from "../lib/mentions";
-import type { Person, Snapshot, Transition, Uploaded } from "../types";
+import type {
+  CacheChanged,
+  ContainerRef,
+  Intent,
+  ItemRef,
+  Person,
+  Proposal,
+  ProposalEdit,
+  ProposalQuery,
+  ProposalsChanged,
+  Snapshot,
+  Transition,
+  Uploaded,
+  ConnectionInfo,
+  FeedPage,
+  FeedQuery,
+  WorkComment,
+  WorkContainer,
+  WorkIdentity,
+  WorkMove,
+  WorkEvent,
+  WorkFilter,
+  WorkItem,
+  Workflow,
+} from "../types";
 
 export interface Backend {
   readonly kind: "mock" | "jira";
@@ -27,6 +51,47 @@ export interface Backend {
   setUnread(eventId: string, unread: boolean): Promise<void>;
   setDone(eventId: string, done: boolean): Promise<void>;
   snooze(eventId: string, until: Date | null): Promise<void>;
+  /** Items in the local cache that match the filter, newest first. Works offline. */
+  cacheSearch(filter: WorkFilter): Promise<WorkItem[]>;
+  cacheItem(ref: ItemRef): Promise<WorkItem | null>;
+  cacheContainers(): Promise<WorkContainer[]>;
+  cacheWorkflow(container: ContainerRef): Promise<Workflow | null>;
+  /** People the cache has seen, so views can name an assignee. */
+  cachePeople(): Promise<Person[]>;
+  /** The signed-in person, so views can tell which items are theirs. */
+  cacheMe(): Promise<WorkIdentity>;
+  /**
+   * An item's comments, oldest first. Without `refresh` they come from the cache; with it, from the tracker, falling
+   * back to the cache when it can't be reached.
+   */
+  cacheComments(ref: ItemRef, refresh: boolean): Promise<WorkComment[]>;
+  /** The moves open to one item right now. A tracker that reveals workflows per item is the only place to ask. */
+  cacheTransitions(ref: ItemRef): Promise<WorkMove[]>;
+  /** The signed-in connections with their sync state. */
+  connectionsList(): Promise<ConnectionInfo[]>;
+  /** Events recorded for an item, newest first. */
+  cacheEvents(ref: ItemRef): Promise<WorkEvent[]>;
+  /** Events across every item, newest first, one page at a time. Reading state (`unread`) is the inbox's, so `setUnread` marks an entry read. */
+  cacheFeed(query: FeedQuery): Promise<FeedPage>;
+  /** How many feed entries are unread. */
+  cacheFeedUnread(): Promise<number>;
+  /** Called when a sync or a write changed the cache, so views over it can re-read. Returns an unsubscribe function. */
+  onCacheChanged(listener: (change: CacheChanged) => void): () => void;
+  /** Drafted writes, newest first. They survive a restart. */
+  proposalsList(query?: ProposalQuery): Promise<Proposal[]>;
+  proposalsGet(id: string): Promise<Proposal | null>;
+  /** Drafts a write the person made by hand, such as dropping a card on a column. Nothing is written until it is approved. */
+  proposalsCreate(intent: Intent, label?: string | null): Promise<Proposal>;
+  /** Replaces a pending draft's payload. */
+  proposalsEdit(id: string, edit: ProposalEdit): Promise<Proposal>;
+  proposalsSkip(id: string): Promise<Proposal>;
+  /**
+   * Applies a pending draft; nothing else writes on the assistant's behalf. A failed attempt resolves with the draft
+   * back to pending and `error` set, and subtasks it did create remembered so a retry doesn't repeat them.
+   */
+  proposalsApprove(id: string): Promise<Proposal>;
+  /** Called when drafts changed, including by a sync revising or retiring them. Returns an unsubscribe function. */
+  onProposalsChanged(listener: (change: ProposalsChanged) => void): () => void;
   syncNow(): Promise<void>;
   openUrl(url: string): Promise<void>;
   /** Releases anything the backend holds, when the app switches to another one. */

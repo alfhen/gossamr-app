@@ -2,7 +2,31 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Mention } from "../lib/mentions";
-import type { Person, Snapshot, Transition, Uploaded } from "../types";
+import type {
+  CacheChanged,
+  ContainerRef,
+  Intent,
+  ItemRef,
+  Person,
+  Proposal,
+  ProposalEdit,
+  ProposalQuery,
+  ProposalsChanged,
+  Snapshot,
+  Transition,
+  Uploaded,
+  ConnectionInfo,
+  WorkComment,
+  WorkContainer,
+  WorkIdentity,
+  WorkMove,
+  FeedPage,
+  FeedQuery,
+  WorkEvent,
+  WorkFilter,
+  WorkItem,
+  Workflow,
+} from "../types";
 import type { Backend } from "./types";
 
 /** The Jira site and account this backend acts for. */
@@ -87,6 +111,88 @@ export class JiraBackend implements Backend {
 
   snooze(id: string, until: Date | null) {
     return invoke<void>("snooze", { id, until: until?.toISOString() ?? null });
+  }
+
+  cacheSearch(filter: WorkFilter) {
+    return invoke<WorkItem[]>("cache_search", { filter });
+  }
+
+  cacheItem(item: ItemRef) {
+    return invoke<WorkItem | null>("cache_item", { item });
+  }
+
+  cacheContainers() {
+    return invoke<WorkContainer[]>("cache_containers");
+  }
+
+  cacheWorkflow(container: ContainerRef) {
+    return invoke<Workflow | null>("cache_workflow", { container });
+  }
+
+  cachePeople() {
+    return invoke<Person[]>("cache_people");
+  }
+
+  cacheMe() {
+    return invoke<WorkIdentity>("cache_me");
+  }
+
+  cacheComments(item: ItemRef, refresh: boolean) {
+    return invoke<WorkComment[]>("cache_comments", { item, refresh });
+  }
+
+  cacheTransitions(item: ItemRef) {
+    return invoke<WorkMove[]>("cache_transitions", { item });
+  }
+
+  connectionsList() {
+    return invoke<ConnectionInfo[]>("connections_list");
+  }
+
+  cacheEvents(item: ItemRef) {
+    return invoke<WorkEvent[]>("cache_events", { item });
+  }
+
+  cacheFeed(query: FeedQuery) {
+    return invoke<FeedPage>("cache_feed", { query });
+  }
+
+  cacheFeedUnread() {
+    return invoke<number>("cache_feed_unread");
+  }
+
+  onCacheChanged(listener: (change: CacheChanged) => void) {
+    const pending = listen<CacheChanged>("cache-changed", (e) => listener(e.payload));
+    return () => void pending.then((unlisten) => unlisten());
+  }
+
+  proposalsList(query: ProposalQuery = {}) {
+    return invoke<Proposal[]>("proposals_list", { query });
+  }
+
+  proposalsGet(id: string) {
+    return invoke<Proposal | null>("proposals_get", { id });
+  }
+
+  proposalsCreate(intent: Intent, label: string | null = null) {
+    return invoke<Proposal>("proposals_create", { intent, label });
+  }
+
+  proposalsEdit(id: string, edit: ProposalEdit) {
+    return invoke<Proposal>("proposals_edit", { id, edit });
+  }
+
+  proposalsSkip(id: string) {
+    return invoke<Proposal>("proposals_skip", { id });
+  }
+
+  proposalsApprove(id: string) {
+    return invoke<Proposal>("proposals_approve", { id });
+  }
+
+  onProposalsChanged(listener: (change: ProposalsChanged) => void) {
+    const pending = listen<ProposalsChanged>("proposals-changed", (e) => listener(e.payload));
+    return () => void pending.then((unlisten) => unlisten());
   }
 
   syncNow() {

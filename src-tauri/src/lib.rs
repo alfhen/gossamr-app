@@ -1,16 +1,19 @@
-mod adf;
+mod agent;
 mod auth;
 mod claude;
+mod config;
 mod db;
 mod domain;
 mod error;
 mod events;
 mod inbox;
-mod jira;
 mod legacy;
 mod model;
 mod notify;
+mod proposals;
 mod secrets;
+mod sync;
+mod tracker;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,15 +23,21 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use auth::{Auth, AuthStatus, OAuthApp, Scope};
-use claude::{AskRequest, Claude};
-use inbox::Core;
+use agent::{AgentService, AskRequest};
+use claude::ClaudeCodeProvider;
+use tracker::{Connection, Move};
+use inbox::{ConnectionInfo, Core, Edit};
 use error::{Error, Result};
+use domain::{Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, Identity, Intent, ItemRef, Proposal, ProposalQuery, WorkItem, Workflow};
 use model::{Snapshot, Transition};
+use sync::Trigger;
 
-const POLL_INTERVAL: Duration = Duration::from_secs(60);
+/// How often the scheduler checks whether a sync is due. Waking from sleep is noticed within one tick.
+const TICK: Duration = Duration::from_secs(15);
+const EVENT_LIMIT: usize = 100;
 
 type CoreState = Arc<Core>;
-type ClaudeState = Arc<Claude>;
+type AgentState = Arc<AgentService>;
 
 /// Sends the latest snapshot to the window and updates the Dock badge. Failures only mean there is nothing to
 /// show yet (e.g. signed out).
@@ -39,6 +48,21 @@ async fn publish(app: &AppHandle, core: &Core) {
         let _ = win.set_badge_count((unread > 0).then_some(unread as i64));
     }
     let _ = app.emit("snapshot", snap);
+}
+
+/// Tells the page the cache changed, so views over it can re-read.
+fn cache_changed(app: &AppHandle, connection_id: &str) {
+    let _ = app.emit("cache-changed", serde_json::json!({ "connectionId": connection_id }));
+}
+
+/// Tells the page the stored drafts changed, so it can re-read them.
+fn proposals_changed(app: &AppHandle, connection_id: &str) {
+    let _ = app.emit("proposals-changed", serde_json::json!({ "connectionId": connection_id }));
+}
+
+/// Asks the page to narrow the view the person is looking at.
+fn pip_view(app: &AppHandle, request_id: &str, filter: &domain::Filter, note: &str) {
+    let _ = app.emit("pip-view", serde_json::json!({ "requestId": request_id, "filter": filter, "note": note }));
 }
 
 /// Shows native notifications for new events, unless the window is focused and the user can already see them.
@@ -66,7 +90,6 @@ async fn save_oauth_app(core: State<'_, CoreState>, client_id: String, client_se
 #[tauri::command]
 async fn sign_in(app: AppHandle, core: State<'_, CoreState>) -> Result<AuthStatus> {
     let status = core
-        .auth
         .sign_in(|url| {
             app.opener()
                 .open_url(url, None::<&str>)
@@ -79,8 +102,7 @@ async fn sign_in(app: AppHandle, core: State<'_, CoreState>) -> Result<AuthStatu
 
 #[tauri::command]
 async fn sign_out(app: AppHandle, core: State<'_, CoreState>) -> Result<()> {
-    core.auth.sign_out().await?;
-    core.close_db();
+    core.sign_out().await?;
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.set_badge_count(None);
     }
@@ -90,6 +112,110 @@ async fn sign_out(app: AppHandle, core: State<'_, CoreState>) -> Result<()> {
 #[tauri::command]
 async fn snapshot(core: State<'_, CoreState>) -> Result<Snapshot> {
     core.snapshot().await
+}
+
+#[tauri::command]
+async fn cache_search(core: State<'_, CoreState>, filter: Filter) -> Result<Vec<WorkItem>> {
+    core.cache_search(&filter).await
+}
+
+#[tauri::command]
+async fn cache_item(core: State<'_, CoreState>, item: ItemRef) -> Result<Option<WorkItem>> {
+    core.cache_item(&item).await
+}
+
+#[tauri::command]
+async fn cache_containers(core: State<'_, CoreState>) -> Result<Vec<Container>> {
+    core.cache_containers().await
+}
+
+#[tauri::command]
+async fn cache_workflow(core: State<'_, CoreState>, container: ContainerRef) -> Result<Option<Workflow>> {
+    core.cache_workflow(&container).await
+}
+
+#[tauri::command]
+async fn cache_events(core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<Event>> {
+    core.cache_events(&item, EVENT_LIMIT).await
+}
+
+#[tauri::command]
+async fn cache_feed(core: State<'_, CoreState>, query: FeedQuery) -> Result<FeedPage> {
+    core.cache_feed(&query).await
+}
+
+#[tauri::command]
+async fn cache_feed_unread(core: State<'_, CoreState>) -> Result<usize> {
+    core.cache_feed_unread().await
+}
+
+#[tauri::command]
+async fn cache_me(core: State<'_, CoreState>) -> Result<Identity> {
+    core.cache_me().await
+}
+
+#[tauri::command]
+async fn cache_people(core: State<'_, CoreState>) -> Result<Vec<model::Person>> {
+    core.cache_people().await
+}
+
+#[tauri::command]
+async fn cache_comments(core: State<'_, CoreState>, item: ItemRef, refresh: bool) -> Result<Vec<Comment>> {
+    core.cache_comments(&item, refresh).await
+}
+
+#[tauri::command]
+async fn cache_transitions(core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<Move>> {
+    core.cache_transitions(&item).await
+}
+
+#[tauri::command]
+async fn connections_list(core: State<'_, CoreState>) -> Result<Vec<ConnectionInfo>> {
+    core.connections().await
+}
+
+#[tauri::command]
+async fn proposals_list(core: State<'_, CoreState>, query: Option<ProposalQuery>) -> Result<Vec<Proposal>> {
+    core.proposals(&query.unwrap_or_default()).await
+}
+
+#[tauri::command]
+async fn proposals_get(core: State<'_, CoreState>, id: String) -> Result<Option<Proposal>> {
+    core.proposal(&id).await
+}
+
+/// Drafts a write the person made by hand. It stays a draft until `proposals_approve`.
+#[tauri::command]
+async fn proposals_create(app: AppHandle, core: State<'_, CoreState>, intent: Intent, label: Option<String>) -> Result<Proposal> {
+    let made = core.draft_as_user(intent, label).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(made)
+}
+
+#[tauri::command]
+async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, edit: Edit) -> Result<Proposal> {
+    let edited = core.edit_proposal(&id, &edit).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(edited)
+}
+
+#[tauri::command]
+async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+    let skipped = core.skip_proposal(&id).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(skipped)
+}
+
+/// Applies the draft. A failed attempt still returns it, back to pending with `error` set.
+#[tauri::command]
+async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+    let result = core.approve_proposal(&id).await;
+    if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
+        proposals_changed(&app, &connection);
+        cache_changed(&app, &connection);
+    }
+    publish(&app, &core).await;
+    result
 }
 
 #[tauri::command]
@@ -133,6 +259,7 @@ async fn transitions(core: State<'_, CoreState>, key: String) -> Result<Vec<Tran
 #[tauri::command]
 async fn transition(app: AppHandle, core: State<'_, CoreState>, scope: Scope, key: String, transition_id: String) -> Result<()> {
     core.transition(&scope, &key, &transition_id).await?;
+    cache_changed(&app, &Connection::jira_id(&scope));
     publish(&app, &core).await;
     Ok(())
 }
@@ -144,10 +271,11 @@ async fn comment(
     scope: Scope,
     key: String,
     body: String,
-    mentions: Option<Vec<adf::MentionRef>>,
+    mentions: Option<Vec<model::MentionRef>>,
     files: Option<Vec<model::Uploaded>>,
 ) -> Result<()> {
     core.comment(&scope, &key, &body, &mentions.unwrap_or_default(), &files.unwrap_or_default()).await?;
+    cache_changed(&app, &Connection::jira_id(&scope));
     publish(&app, &core).await;
     Ok(())
 }
@@ -194,6 +322,7 @@ async fn create_subtasks(
     summaries: Vec<String>,
 ) -> Result<model::CreatedSubtasks> {
     let created = core.create_subtasks(&scope, &key, &summaries).await?;
+    cache_changed(&app, &Connection::jira_id(&scope));
     publish(&app, &core).await;
     Ok(created)
 }
@@ -218,8 +347,8 @@ async fn claude_sessions(core: State<'_, CoreState>, key: String) -> Result<Clau
 }
 
 #[tauri::command]
-async fn ask_claude(app: AppHandle, claude: State<'_, ClaudeState>, request: AskRequest) -> Result<()> {
-    claude
+async fn ask_claude(app: AppHandle, agent: State<'_, AgentState>, request: AskRequest) -> Result<()> {
+    agent
         .ask(request, Arc::new(move |u| {
             let _ = app.emit("claude", u);
         }))
@@ -227,8 +356,8 @@ async fn ask_claude(app: AppHandle, claude: State<'_, ClaudeState>, request: Ask
 }
 
 #[tauri::command]
-fn cancel_claude(claude: State<'_, ClaudeState>, request_id: String) {
-    claude.cancel(&request_id);
+fn cancel_claude(agent: State<'_, AgentState>, request_id: String) {
+    agent.cancel(&request_id);
 }
 
 fn random_token() -> std::result::Result<String, getrandom::Error> {
@@ -239,21 +368,30 @@ fn random_token() -> std::result::Result<String, getrandom::Error> {
 
 fn spawn_sync_loop(app: AppHandle, core: CoreState) {
     tauri::async_runtime::spawn(async move {
+        // Launch catches up straight away, from the cursor the last run left in the cache.
+        let mut trigger = Trigger::Now;
         loop {
-            if core.auth.identity().await.is_some() {
-                match core.sync().await {
-                    Ok(new) => {
+            if let Some(result) = core.sync_if_due(trigger).await {
+                match result {
+                    Ok(synced) => {
                         core.set_error(None);
-                        announce(&app, &new);
+                        announce(&app, &synced.new_events);
+                        if synced.changed {
+                            cache_changed(&app, &synced.connection_id);
+                        }
+                        if synced.proposals_changed {
+                            proposals_changed(&app, &synced.connection_id);
+                        }
                     }
                     Err(e) => core.set_error(Some(e.to_string())),
                 }
                 publish(&app, &core).await;
             }
-            tokio::select! {
-                _ = tokio::time::sleep(POLL_INTERVAL) => {}
-                _ = core.wake.notified() => {}
-            }
+            trigger = tokio::select! {
+                _ = tokio::time::sleep(TICK) => Trigger::Timer,
+                _ = core.wake.notified() => Trigger::Now,
+                _ = core.focus.notified() => Trigger::Focus,
+            };
         }
     });
 }
@@ -283,30 +421,39 @@ pub fn run() {
                 responder.respond(response.expect("static response parts"));
             });
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(true) = event {
+                if let Some(core) = window.app_handle().try_state::<CoreState>() {
+                    core.focus.notify_one();
+                }
+            }
+        })
         .setup(|app| {
             let http = reqwest::Client::builder()
                 .user_agent(concat!("gossamr/", env!("CARGO_PKG_VERSION")))
                 .timeout(Duration::from_secs(30))
                 .build()?;
             let auth = Arc::new(Auth::load(http.clone()));
-            let jira = jira::Jira::new(http, auth.clone());
+            let registry = tracker::Registry::jira(http, auth.clone());
             let data_dir = app.path().app_data_dir()?;
             if let Err(e) = legacy::adopt_legacy_data(&data_dir) {
                 eprintln!("couldn't move data from the previous app name, starting fresh: {e}");
             }
-            let core: CoreState = Arc::new(Core::new(auth, jira, data_dir));
+            let core: CoreState = Arc::new(Core::new(auth, registry, data_dir));
+            tauri::async_runtime::block_on(core.restore());
             app.manage(core.clone());
 
             let handle = app.handle().clone();
+            let view_handle = handle.clone();
             let token = random_token().map_err(|e| Error::Claude(format!("no randomness available: {e}")))?;
-            let mcp = tauri::async_runtime::block_on(claude::mcp::McpServer::start(
+            let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(
                 core.clone(),
                 token,
-                Arc::new(move |p| {
-                    let _ = handle.emit("claude-proposal", p);
-                }),
+                Arc::new(move |connection_id| proposals_changed(&handle, connection_id)),
+                Arc::new(move |request_id, filter, note| pip_view(&view_handle, request_id, filter, note)),
             ))?;
-            app.manage::<ClaudeState>(Arc::new(Claude::new(core.clone(), mcp)));
+            let config = config::AppConfig::load(&core.data_dir());
+            app.manage::<AgentState>(Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config)));
 
             spawn_sync_loop(app.handle().clone(), core);
             Ok(())
@@ -317,6 +464,24 @@ pub fn run() {
             sign_in,
             sign_out,
             snapshot,
+            cache_search,
+            cache_item,
+            cache_containers,
+            cache_workflow,
+            cache_events,
+            cache_feed,
+            cache_feed_unread,
+            cache_me,
+            cache_people,
+            cache_comments,
+            cache_transitions,
+            connections_list,
+            proposals_list,
+            proposals_get,
+            proposals_create,
+            proposals_edit,
+            proposals_skip,
+            proposals_approve,
             sync_now,
             mark_seen,
             set_unread,
