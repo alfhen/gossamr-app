@@ -10,6 +10,8 @@ export interface Screen {
   /** What the tab's filter shows, in the order the canvas shows it. */
   shown: readonly WorkItem[];
   items: Record<string, WorkItem>;
+  /** The ticket open in a read-only peek that isn't in `items`. */
+  peeked?: Record<string, WorkItem>;
   containers: Record<string, WorkContainer>;
   selected: string | null;
   marked: readonly string[];
@@ -30,7 +32,7 @@ export function screenLine(s: Pick<Screen, "route" | "tab" | "shown" | "containe
 
 /** The context Pip is asked with. The open item is included only if it is still in the cache; on Settings there is no open item, and Activity has no view filter or ticked cards. */
 export function buildScreenContext(s: Screen): ScreenContext {
-  const open = s.route !== "settings" && s.selected ? s.items[s.selected] : undefined;
+  const open = s.route !== "settings" && s.selected ? (s.items[s.selected] ?? s.peeked?.[s.selected]) : undefined;
   const onBoard = s.route === "workspace";
   const filtered = onBoard && (s.tab.filter.type !== "and" || s.tab.filter.filters.length > 0);
   return {

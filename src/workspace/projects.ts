@@ -10,3 +10,12 @@ export function projectColour(containers: readonly WorkContainer[], ref: Contain
 }
 
 export const projectInitials = (c: WorkContainer) => c.key.slice(0, 2).toUpperCase();
+
+/** A colour for a container that isn't in the watched list, such as a row in the picker; stable for a given key. */
+export function keyColour(key: string): string {
+  let h = 0;
+  for (const ch of key) h = (h * 31 + ch.codePointAt(0)!) >>> 0;
+  return COLOURS[h % COLOURS.length];
+}
+
+export const keyInitials = (key: string) => key.slice(0, 2).toUpperCase();

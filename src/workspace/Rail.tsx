@@ -1,6 +1,7 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { containerKey, describeFilter, filterChips } from "../lib/filter";
-import { allContainers, useWorkspace } from "../workspaceStore";
+import type { WorkContainer } from "../types";
+import { useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, projectOf, sameProject } from "./filters";
 import { useActivity } from "./activityStore";
 import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
@@ -9,6 +10,7 @@ import { projectColour, projectInitials } from "./projects";
 import { usePrefs } from "./prefs";
 import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
+import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watchLogic";
 
 /** Fixed so the scrolling project list can't clip it. */
 export function RailTip({ label, hint, at }: { label: string; hint?: string; at: { x: number; y: number } | null }) {
@@ -118,18 +120,96 @@ function ViewsButton() {
   );
 }
 
+export interface ProjectsMenuPanelProps {
+  rest: readonly WorkContainer[];
+  colourOf(c: WorkContainer): string;
+  noun: Noun;
+  query: string;
+  onQuery(q: string): void;
+  onPick(c: WorkContainer): void;
+  onManage(): void;
+}
+
+/** The watched containers that have no badge, with a way to find one and to change what is watched. */
+export function ProjectsMenuPanel({ rest, colourOf, noun, query, onQuery, onPick, onManage }: ProjectsMenuPanelProps) {
+  const shown = rest.filter((c) => matchesQuery(c, query));
+  return (
+    <div className="grid">
+      <input
+        type="search"
+        aria-label={`Search watched ${noun.many}`}
+        placeholder={`Find a ${noun.one}`}
+        value={query}
+        onChange={(ev) => onQuery(ev.target.value)}
+        className="m-2.5 rounded-lg border border-ws-sep2 bg-ws-win px-2.5 py-1 outline-none placeholder:text-ws-ink3 focus:border-ws-accent"
+      />
+      <ul role="menu" aria-label={`Watched ${noun.many}`} className="m-0 max-h-[min(320px,50vh)] list-none overflow-y-auto p-0 pb-1">
+        {shown.map((c) => (
+          <li key={containerKey(c.ref)} role="none">
+            <button type="button" role="menuitem" onClick={() => onPick(c)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-ws-hover">
+              <span aria-hidden style={{ background: colourOf(c) }} className="grid size-6 shrink-0 place-items-center rounded-[7px] text-[10px] font-bold text-white">
+                {projectInitials(c)}
+              </span>
+              <span className="min-w-0 flex-1 truncate">{c.name}</span>
+              <span className="shrink-0 text-xs text-ws-ink3">{c.key}</span>
+            </button>
+          </li>
+        ))}
+        {shown.length === 0 && (
+          <li role="presentation" className="px-3 py-2 text-ws-ink3">
+            {query.trim() ? `No watched ${noun.one} matches.` : `Every ${noun.one} you watch is pinned.`}
+          </li>
+        )}
+      </ul>
+      <button type="button" onClick={onManage} className="border-t border-ws-sep px-3 py-2 text-left font-semibold text-ws-accent hover:bg-ws-hover">
+        Manage {noun.many}…
+      </button>
+    </div>
+  );
+}
+
+function ProjectsMenuButton({ rest, colourOf, noun }: Pick<ProjectsMenuPanelProps, "rest" | "colourOf" | "noun">) {
+  const { open, setOpen, root } = usePopover();
+  const [query, setQuery] = useState("");
+  return (
+    <div ref={root} className="relative">
+      <RailButton label={`More ${noun.many}`} tip={!open} aria-expanded={open} data-popover-trigger onClick={() => (setQuery(""), setOpen(!open))} className={`text-lg ${plain(open)}`}>
+        <span aria-hidden>⋯</span>
+      </RailButton>
+      {open && (
+        <div role="dialog" aria-label={`Watched ${noun.many}`} className="absolute bottom-0 left-full z-40 ml-2 w-[280px] overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win text-ws-ink shadow-ws-pop">
+          <ProjectsMenuPanel
+            rest={rest}
+            colourOf={colourOf}
+            noun={noun}
+            query={query}
+            onQuery={setQuery}
+            onPick={(c) => (setOpen(false), useTabs.getState().setProject(c.ref))}
+            onManage={() => (setOpen(false), useTabs.getState().openSettings("watching"))}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Rail() {
   const tab = useActiveTab();
   const route = useTabs((s) => s.route);
   const { setRoute, setProject } = useTabs.getState();
   const containers = useWorkspace((s) => s.containers);
+  const watch = useWorkspace((s) => s.watch);
+  const kind = useWorkspace((s) => s.connections[0]?.kind);
   const unread = useActivity((s) => s.unread);
   const pipOpen = usePrefs((s) => s.pipOpen);
   const setPipOpen = usePrefs((s) => s.setPipOpen);
   const setPaletteOpen = usePrefs((s) => s.setPaletteOpen);
   const project = projectOf(tab.filter);
   const inWorkspace = route === "workspace";
-  const list = allContainers({ containers });
+  const all = Object.values(containers).sort((a, b) => a.key.localeCompare(b.key));
+  const { badges, rest } = railSplit(all, watch, project, RAIL_BADGES);
+  const colourOf = (c: WorkContainer) => projectColour(all, c.ref);
+  const noun = nounFor(kind);
 
   return (
     <aside className="relative flex min-h-0 flex-col items-center gap-2 border-r border-ws-sep bg-ws-side pt-10 pb-2.5">
@@ -143,9 +223,9 @@ export function Rail() {
           <span aria-hidden>∗</span>
         </RailButton>
         <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-x-hidden overflow-y-auto py-1" aria-label="Projects" role="group">
-        {list.map((c) => {
+        {badges.map((c) => {
           const on = inWorkspace && sameProject(project, c.ref);
-          const colour = projectColour(list, c.ref);
+          const colour = colourOf(c);
           return (
             <RailButton
               key={containerKey(c.ref)}
@@ -160,6 +240,7 @@ export function Rail() {
           );
         })}
         </div>
+        <ProjectsMenuButton rest={rest} colourOf={colourOf} noun={noun} />
         <Divider />
         <ViewsButton />
       </nav>

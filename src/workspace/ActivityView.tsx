@@ -11,6 +11,7 @@ import { projectOf, withProject } from "./filters";
 import { useActiveTab } from "./hooks";
 import { showMe } from "./jump";
 import { useTabs } from "./tabsStore";
+import { StrayNotices } from "./WatchNotices";
 
 export const feedRowId = (id: string) => `feed-${id}`;
 
@@ -229,6 +230,7 @@ export function ActivityView() {
       </header>
       <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-4 pb-8">
         <div className="mx-auto max-w-[780px]">
+          <StrayNotices />
           {showDrafts ? (
             <Drafts drafts={drafts} />
           ) : status === "error" ? (

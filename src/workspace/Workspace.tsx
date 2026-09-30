@@ -19,6 +19,7 @@ import { applyTheme, usePrefs } from "./prefs";
 import { Rail } from "./Rail";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
+import { ChooseWatch } from "./WatchPicker";
 import { ShortcutHint } from "./ShortcutHint";
 import { ToastHost } from "./ToastHost";
 import { useTabs } from "./tabsStore";
@@ -69,6 +70,8 @@ export function Workspace({ backend }: { backend: Backend }) {
   const pipOpen = usePrefs((s) => s.pipOpen);
   const paletteOpen = usePrefs((s) => s.paletteOpen);
   const setPipOpen = usePrefs((s) => s.setPipOpen);
+  const choice = useWorkspace((s) => s.watch.find((w) => w.needsChoice));
+  const choiceConnection = useWorkspace((s) => s.connections.find((c) => c.id === choice?.connectionId));
   useGlobalKeys();
   usePipView();
 
@@ -100,7 +103,19 @@ export function Workspace({ backend }: { backend: Backend }) {
       </div>
     );
   }
-  if (status !== "ready") return <div className="grid h-full place-items-center bg-ws-win text-ws-ink3">Loading…</div>;
+  if (status !== "ready" || (choice && !choiceConnection)) return <div className="grid h-full place-items-center bg-ws-win text-ws-ink3">Loading…</div>;
+
+  if (choice) {
+    return (
+      <>
+        <div className="ws-root relative h-full overflow-hidden bg-ws-win text-ws-ink">
+          <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-10" />
+          <ChooseWatch key={choice.connectionId} backend={backend} state={choice} connection={choiceConnection} />
+        </div>
+        <ToastHost />
+      </>
+    );
+  }
 
   return (
     <TicketLinksContext.Provider value={workspaceTicketLinks}>

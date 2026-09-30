@@ -13,6 +13,7 @@ import { canvasElement, showMe } from "./jump";
 import { usePrefs } from "./prefs";
 import { commentNotes, historyNotes, linkRows, parentCrumb, subtasksOf, type Crumb, type LinkRow, type Note, type Subtasks } from "./peekLogic";
 import { useTabs } from "./tabsStore";
+import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
 
 const CATEGORY_TONE = {
@@ -67,6 +68,8 @@ export interface PeekViewProps {
   /** The epic or parent above the item. */
   crumb?: Crumb | null;
   subtasks?: Subtasks;
+  /** A line above the title, such as the read-only notice. */
+  banner?: ReactNode;
   /** Where a pending draft would move the item. */
   proposedMove?: string | null;
   wide?: boolean;
@@ -119,6 +122,7 @@ export function PeekView(p: PeekViewProps) {
       </div>
       <div className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] pt-4 pb-24">
         <div className="grid gap-2.5">
+          {p.banner}
           {p.crumb && (
             <p className="m-0 font-mono text-sm text-ws-ink3">
               <button type="button" onClick={() => open(p.crumb!.ref)} title={p.crumb.title ?? undefined} className="font-semibold text-ws-accent hover:underline">
@@ -353,7 +357,12 @@ function Composer({ item, disabled }: { item: WorkItem; disabled: boolean }) {
 export function PeekSheet() {
   const selected = useTabs((s) => s.selected);
   const bulk = useTabs((s) => s.marked.length > 1);
-  const current = useWorkspace((s) => (selected ? s.items[selected] : undefined));
+  const current = useWorkspace((s) => (selected ? (s.items[selected] ?? s.peeked[selected]?.item) : undefined));
+  const peekedKey = useWorkspace((s) => Object.keys(s.peeked)[0]);
+
+  useEffect(() => {
+    if (peekedKey && peekedKey !== selected) useWorkspace.getState().clearPeeked();
+  }, [peekedKey, selected]);
   const item = bulk ? undefined : current;
   const [held, setHeld] = useState<WorkItem | null>(null);
   const [entering, setEntering] = useState(false);
@@ -397,6 +406,8 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
   const key = itemKey(ref);
   const backend = useBackend();
   const all = useWorkspace((s) => s.items);
+  const readOnly = !all[key];
+  const containerName = useWorkspace((s) => s.peeked[key]?.containerName ?? null);
   const containers = useWorkspace((s) => s.containers);
   const childFilter = useMemo(() => ({ type: "parent" as const, item: ref }), [key]);
   const children = useItemsByFilter(childFilter);
@@ -484,8 +495,9 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       commentsLoading={!loadedComments}
       history={historyNotes(events, who)}
       description={description}
+      banner={readOnly ? <PeekNotice unwatched={!!item.unwatched} containerName={containerName} connectionId={ref.connectionId} containerId={item.container.externalId} /> : undefined}
       drafts={
-        drafts.length > 0 ? (
+        !readOnly && drafts.length > 0 ? (
           <Section title="Drafts waiting" count={drafts.length}>
             {drafts.map((p) => (
               <LiveDraftCard key={p.id} proposal={p} jump={false} />
@@ -493,7 +505,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
           </Section>
         ) : null
       }
-      composer={<Composer item={item} disabled={!backend} />}
+      composer={readOnly ? null : <Composer item={item} disabled={!backend} />}
       notice={notice}
       onMenu={setMenuOpen}
       onMove={(s) => void move(s)}

@@ -1,14 +1,15 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ALL, containerKey, itemKey } from "../lib/filter";
-import type { ContainerRef, WorkContainer, WorkItem } from "../types";
+import type { CatalogEntry, ContainerRef, WorkContainer, WorkItem } from "../types";
 import { itemsByFilter, pendingDrafts, useWorkspace } from "../workspaceStore";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { buildCommands, newTicketIntent, projectChoices, rankCommands, ticketCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
+import { buildCommands, keyCommand, newTicketIntent, projectChoices, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
 import { projectOf, withProject } from "./filters";
 import { usePrefs } from "./prefs";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
+import { openTicketByKey } from "./jump";
 
 /** Where focus lands when the palette closes and the element that opened it is gone. */
 export const MAIN_ID = "workspace-main";
@@ -145,6 +146,15 @@ export function appActions(): CommandActions {
     clearFilters: () => tabs.setFilter({ type: "and", filters: [] }),
     setTheme: prefs.setTheme,
     openSettings: () => tabs.setRoute("settings"),
+    manageProjects: () => tabs.openSettings("watching"),
+    watch: (target, watched) => {
+      const ws = useWorkspace.getState();
+      ws.watchContainers(target.ref.connectionId, [{ containerId: target.ref.externalId, watched, source: "manual" }]).then(
+        () => useToasts.getState().push(watched ? `Watching ${target.name}.` : `Stopped watching ${target.name}. It stays in Settings for 14 days in case you change your mind.`, "info"),
+        (e) => ws.report(`Couldn't ${watched ? "watch" : "unwatch"} ${target.name}`, e),
+      );
+    },
+    openTicket: (key) => void openTicketByKey(key),
     openActivity: () => tabs.setRoute("activity"),
     openDrafts: () => (useActivity.getState().setChip("drafts"), tabs.setRoute("activity")),
     newTab: () => void tabs.openTab(),
@@ -175,10 +185,33 @@ async function draftTicket(container: WorkContainer, title: string) {
   }
 }
 
+/** Containers matching the query that the person doesn't watch, searched on the server. */
+function useUnwatchedMatches(query: string, enabled: boolean): CatalogEntry[] {
+  const backend = useWorkspace((s) => s.backend);
+  const selectedModes = useWorkspace((s) => s.watch.filter((w) => w.mode === "selected").map((w) => w.connectionId).join(","));
+  const [hits, setHits] = useState<CatalogEntry[]>([]);
+  const q = query.trim();
+  useEffect(() => {
+    if (!enabled || !backend || !selectedModes || q.length < 2) return setHits([]);
+    let current = true;
+    const timer = setTimeout(() => {
+      Promise.all(selectedModes.split(",").map((id) => backend.watchCatalog(id, q).then((p) => p.containers, () => [] as CatalogEntry[]))).then(
+        (pages) => current && setHits(pages.flat().filter((e) => !e.watched)),
+      );
+    }, 250);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [backend, selectedModes, q, enabled]);
+  return hits;
+}
+
 export function Palette() {
   const close = usePrefs((s) => s.setPaletteOpen);
   const containers = useWorkspace((s) => s.containers);
   const items = useWorkspace((s) => s.items);
+  const watch = useWorkspace((s) => s.watch);
   const proposals = useWorkspace((s) => s.proposals);
   const unread = useActivity((s) => s.unread);
   const savedViews = useTabs((s) => s.savedViews);
@@ -186,6 +219,7 @@ export function Palette() {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [step, setStep] = useState<Step>({ type: "search" });
+  const unwatched = useUnwatchedMatches(query, step.type === "search");
 
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
 
@@ -204,8 +238,15 @@ export function Palette() {
     const actions = { ...appActions(), newTicket: () => go({ type: "project" }) };
     const ctx: CommandContext = { project: projectOf(tab.filter) ?? null, view: tab.view, unreadActivity: unread, pendingDrafts: pendingDrafts({ proposals }).length };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
-    return withAskPip([...ticketCommands(Object.values(items), query, actions.jumpToItem), ...rankCommands(commands, query)], query, actions.askPip);
-  }, [containers, items, proposals, unread, savedViews, tab.filter, tab.view, query, step]);
+    const all = Object.values(items);
+    const found = [
+      ...ticketCommands(all, query, actions.jumpToItem),
+      ...keyCommand(query, all, actions.openTicket),
+      ...rankCommands([...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query),
+      ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
+    ];
+    return withAskPip(found, query, actions.askPip);
+  }, [containers, items, watch, proposals, unread, savedViews, tab.filter, tab.view, query, step, unwatched]);
 
   const prompting = step.type !== "search";
   return (

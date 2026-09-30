@@ -10,6 +10,9 @@ export const VIEW_LABEL: Record<ViewMode, string> = { board: "Board", list: "Lis
 
 export type Route = "workspace" | "activity" | "settings";
 
+/** A part of Settings that something else can open directly. */
+export type SettingsSection = "watching";
+
 export interface Tab {
   id: string;
   /** Set when a saved view or a project named the tab; otherwise the filter describes it. */
@@ -27,6 +30,8 @@ interface TabsState {
   /** Keys of the cards ticked for a bulk action; when it is not empty it includes `selected`. */
   marked: string[];
   savedViews: SavedView[];
+  /** The section Settings should scroll to when it shows, until it has. */
+  settingsSection: SettingsSection | null;
   openTab(init?: Partial<Omit<Tab, "id">>): string;
   closeTab(id: string): void;
   activate(id: string): void;
@@ -45,6 +50,7 @@ interface TabsState {
   /** Shows a preset or pinned view: switches to a tab already showing it, otherwise re-filters the active tab, always keeping the project. */
   showView(filter: WorkFilter): void;
   setRoute(route: Route): void;
+  openSettings(section?: SettingsSection): void;
   select(key: string | null): void;
   /** Ticks a card without losing the others: `toggle` adds or removes it, `range` ticks everything from the selected card to it in `order`. */
   mark(key: string, how: "toggle" | "range", order: readonly string[]): void;
@@ -121,6 +127,7 @@ const patchActive = (s: TabsState, patch: Partial<Tab>) => ({ tabs: s.tabs.map((
 export const useTabs = create<TabsState>((set, get) => ({
   ...loadTabs(),
   route: "workspace",
+  settingsSection: null,
   selected: null,
   marked: [],
 
@@ -208,6 +215,7 @@ export const useTabs = create<TabsState>((set, get) => ({
     else set((st) => ({ ...patchActive(st, { filter: scoped, title: null }), route: "workspace" }));
   },
   setRoute: (route) => set((s) => routeTo(s, route)),
+  openSettings: (section) => set((s) => ({ ...routeTo(s, "settings"), settingsSection: section ?? null })),
   select: (selected) => set({ selected, marked: [] }),
   mark: (key, how, order) =>
     set((s) => {

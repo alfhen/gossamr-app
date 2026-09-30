@@ -6,6 +6,9 @@ import { relativeTime } from "../lib/views";
 import type { ConnectionInfo } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { THEME_LABEL, THEMES, usePrefs } from "./prefs";
+import { useTabs } from "./tabsStore";
+import { count, nounFor } from "./watchLogic";
+import { WatchingSection } from "./WatchSettings";
 
 export function connectionsOf(containers: { ref: { connectionId: string } }[]): { id: string; name: string; projects: number }[] {
   const counts = new Map<string, number>();
@@ -52,7 +55,7 @@ function ConnectionRow({ c, projects }: { c: ConnectionInfo; projects: number })
         <span className="font-semibold">{c.workspace}</span>
         <span className="text-ws-ink3">{c.account}</span>
         <span className="ml-auto text-ws-ink3">
-          {projects} {projects === 1 ? "project" : "projects"}
+          {count(projects, nounFor(c.kind))}
         </span>
       </div>
       <p role="status" className={`m-0 pl-4 text-sm [overflow-wrap:anywhere] ${line.tone === "error" ? "text-ws-blocked" : "text-ws-ink3"}`}>
@@ -72,9 +75,9 @@ function ConnectionRow({ c, projects }: { c: ConnectionInfo; projects: number })
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, id, children }: { title: string; id?: string; children: ReactNode }) {
   return (
-    <section className="border-b border-ws-sep py-5">
+    <section id={id} className="scroll-mt-4 border-b border-ws-sep py-5">
       <h2 className="m-0 mb-2.5 text-lg font-semibold">{title}</h2>
       {children}
     </section>
@@ -87,12 +90,18 @@ export function Settings() {
   const setUi = usePrefs((s) => s.setUi);
   const containers = useWorkspace((s) => s.containers);
   const connections = useWorkspace((s) => s.connections);
+  const section = useTabs((s) => s.settingsSection);
+  useEffect(() => {
+    if (!section) return;
+    document.getElementById(`settings-${section}`)?.scrollIntoView({ block: "start" });
+    useTabs.setState({ settingsSection: null });
+  }, [section]);
   const projects = useMemo(() => new Map(connectionsOf(Object.values(containers)).map((c) => [c.id, c.projects])), [containers]);
 
   return (
     <div className="h-full overflow-auto px-8 pb-10">
       <h1 className="m-0 pt-6 text-xl font-bold">Settings</h1>
-      <div className="max-w-[640px]">
+      <div className="max-w-[720px]">
         <Section title="Theme">
           <div role="radiogroup" aria-label="Theme" className="inline-flex rounded-lg bg-ws-sel p-0.5">
             {THEMES.map((t) => (
@@ -117,6 +126,10 @@ export function Settings() {
             ))}
             {!connections.length && <li className="text-ws-ink3">No connections yet.</li>}
           </ul>
+        </Section>
+
+        <Section title="Watching" id="settings-watching">
+          <WatchingSection syncLine={syncLine} />
         </Section>
 
         <Section title="Autopilot">
