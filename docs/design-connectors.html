@@ -420,7 +420,7 @@ pub trait Authenticator: Send + Sync {
 <p class="exit"><b>Done when:</b> existing tests pass, <code>Core</code> holds a registry rather than a <code>Jira</code>, and no UI-facing code imports from <code>jira</code>.</p></div>
 <div class="phase"><h3>Phase 1 · Persisted proposals</h3>
 <p>Proposals table and the approval executor. Chat cards read from it. Neutral MCP tools, including <code>list_proposals</code>. Extract an <code>AgentProvider</code> trait, with the current Claude Code integration as its first adapter. Reconcile as a pure function with tests.</p>
-<p class="exit"><b>Done when:</b> drafts survive a restart, and approving one goes through <code>apply</code> and nothing else.</p></div>
+<p class="exit"><b>Done when:</b> drafts survive a restart, and approving one goes through <code>apply</code> and nothing else. Each proposal keeps the <code>Connection</code> it was drafted against, and <code>apply</code> refuses it before any write if the signed-in account or workspace no longer matches (the existing <code>SiteChanged</code> guard).</p></div>
 <div class="phase"><h3>Phase 2 · Workspace UI</h3>
 <p>The prototype's board, map, list, age view, tabs, ⌘K, peek sheet, Pip pane with screen context, and draft cards. Built on the normalised store with the mock connector.</p>
 <p class="exit"><b>Done when:</b> the Jira Inbox (Gossamr) screens are replaced and the app runs fully on the mock with no network.</p></div>
@@ -458,7 +458,6 @@ pub trait Authenticator: Send + Sync {
 <li>Which second provider first: Codex CLI, or an API provider? Can we attach our MCP endpoint to Codex per run without touching the user's own config?</li>
 <li>Should the organisation be able to restrict which providers are allowed?</li>
 <li>Does reply wording come from the model on every event, or on demand when you open the draft, to control cost?</li>
-<li>What is the product called, now that it is not only an inbox?</li>
 </ul>
 
 <h2 id="proto">Appendix: prototype to design</h2>
