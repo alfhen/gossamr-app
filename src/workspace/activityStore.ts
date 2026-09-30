@@ -44,7 +44,7 @@ interface ActivityState {
   /** Marks unread entries read. Resolves false when the backend refused. */
   markRead(ids: string[]): Promise<boolean>;
   /** Marks everything unread in the current project read, not only the entries loaded so far. */
-  markAllRead(): Promise<void>;
+  markAllRead(codeIds?: string[]): Promise<void>;
 }
 
 const idle = { entries: [], codeEvents: [] as WorkEvent[], codeUnread: 0, next: null, status: "idle" as const, loadingMore: false, error: null, unread: 0 };
@@ -156,10 +156,12 @@ export const useActivity = create<ActivityState>((set, get) => ({
     }
   },
 
-  async markAllRead() {
+  async markAllRead(codeIds?: string[]) {
     const { backend, container, codeEvents, codeRead, source } = get();
     if (!backend) return;
-    if (source !== "jira") get().markCodeRead(codeEvents.filter((e) => isCodeUnread(e, codeRead, Date.now())).map((e) => e.id));
+    // GitHub events only know their project through their ticket, which the page resolves; without a project they are all in scope.
+    const scoped = codeIds ?? (container ? [] : codeEvents.filter((e) => isCodeUnread(e, codeRead, Date.now())).map((e) => e.id));
+    if (source !== "jira") get().markCodeRead(scoped);
     if (source === "github") return;
     let page;
     try {
@@ -168,6 +170,6 @@ export const useActivity = create<ActivityState>((set, get) => ({
       useToasts.getState().push(`Couldn't mark read: ${messageOf(e)}`);
       return;
     }
-    if (await get().markRead(page.entries.map((e) => e.id)) && page.next) await get().markAllRead();
+    if (await get().markRead(page.entries.map((e) => e.id)) && page.next) await get().markAllRead([]);
   },
 }));

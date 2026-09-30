@@ -90,6 +90,7 @@ describe("rows and their marks", () => {
   it("finds ticket keys in a title", () => {
     expect(keysIn("CA-208: route, see DEVOPS-471 and DEVOPS-471")).toEqual(["CA-208", "DEVOPS-471"]);
     expect(keysIn("feature/ca-209_cache-warmup")).toEqual(["CA-209"]);
+    expect(keysIn("CA-208fix and xCA-208")).toEqual([]);
   });
 });
 
