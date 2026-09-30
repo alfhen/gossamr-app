@@ -257,6 +257,6 @@ describe("peek logic", () => {
     const events = [ev("c2", "commentAdded", 5, { text: "later" }), ev("s", "statusChanged", 3, { from: "To Do", to: "Done" }), ev("c1", "commentAdded", 1, { text: "first" }), ev("empty", "commentAdded", 2, {})];
     const name = (a: string | null) => (a === "sam" ? "Sam" : "Nobody");
     expect(commentNotes(events, name).map((n) => [n.who, n.text])).toEqual([["Sam", "first"], ["Sam", "later"]]);
-    expect(historyNotes(events, name).map((n) => n.text)).toEqual(["moved it To Do → Done"]);
+    expect(historyNotes(events, name).map((n) => n.text)).toEqual(["moved from To Do to Done"]);
   });
 });

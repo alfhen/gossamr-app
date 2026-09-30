@@ -199,8 +199,19 @@ pub(crate) fn domain_event(connection_id: &str, e: &NewEvent) -> Option<Event> {
         kind,
         subject: Subject::Item { item: ItemRef { connection_id: connection_id.into(), external_id: e.ticket_key.clone(), key: e.ticket_key.clone() } },
         actor: Some(PersonRef { connection_id: connection_id.into(), account_id: e.actor.account_id.clone() }),
-        payload: if e.kind == InboxKind::Mention { serde_json::json!({ "text": e.text, "mention": true }) } else { serde_json::json!({ "text": e.text }) },
+        payload: payload_of(e),
     })
+}
+
+fn payload_of(e: &NewEvent) -> serde_json::Value {
+    match e.kind {
+        InboxKind::Mention => serde_json::json!({ "text": e.text, "mention": true }),
+        InboxKind::Status => match e.text.split_once(" → ") {
+            Some((from, to)) => serde_json::json!({ "text": e.text, "from": from, "to": to }),
+            None => serde_json::json!({ "text": e.text }),
+        },
+        _ => serde_json::json!({ "text": e.text }),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -589,6 +600,15 @@ mod tests {
         assert_eq!(mapped[0].id, "h:500:status");
         assert_eq!(mapped[1].payload["mention"], true, "a mention stays distinguishable from a plain comment");
         assert!(mapped[0].payload.get("mention").is_none());
+    }
+
+    #[test]
+    fn a_status_event_carries_where_it_moved_from_and_to() {
+        let events = derive(&sample_ticket(), "me");
+        let moved = domain_event(CONNECTION, &events[0]).unwrap();
+        assert_eq!(moved.payload["from"], "In Progress");
+        assert_eq!(moved.payload["to"], "In Review");
+        assert_eq!(moved.payload["text"], "In Progress → In Review");
     }
 
     #[test]
