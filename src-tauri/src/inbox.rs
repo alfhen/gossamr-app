@@ -36,7 +36,7 @@ const DEFAULT_SEEN_DAYS: i64 = 3;
 const LAST_SYNC: &str = "last_sync_at";
 const CACHE_BACKFILLED: &str = "cache_backfilled";
 const EVENTS_BACKFILLED: &str = "events_backfilled";
-const OWN_CLAUDE_SESSIONS: &str = "claude_sessions";
+const PIP_SESSIONS: &str = "pip_sessions";
 const OWN_SESSIONS_KEPT: usize = 50;
 
 /// Events after this are new since the previous sync (or, before the first sync, from the last 24 hours).
@@ -704,28 +704,42 @@ impl Core {
         Ok(CreatedSubtasks { created, error: error.map(|e| e.to_string()) })
     }
 
-    /// Remembers the Claude session last used for a ticket, and that the app started it.
-    pub async fn remember_claude_session(&self, key: &str, session_id: &str, cwd: &str) -> Result<()> {
+    /// Records a session started in Pip's sandbox folder, and as the one to continue for `key` when there is one.
+    /// Sessions recorded by earlier versions, which ran in a user-chosen folder, never enter this list.
+    pub async fn remember_claude_session(&self, key: Option<&str>, session_id: &str) -> Result<()> {
         self.with_db(|db| {
-            db.set_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id, "cwd": cwd }).to_string())?;
+            if let Some(key) = key {
+                db.set_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id }).to_string())?;
+            }
             let mut own: Vec<String> =
-                db.meta(OWN_CLAUDE_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+                db.meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             own.retain(|s| s != session_id);
             own.insert(0, session_id.to_string());
             own.truncate(OWN_SESSIONS_KEPT);
-            db.set_meta(OWN_CLAUDE_SESSIONS, &serde_json::to_string(&own)?)
+            db.set_meta(PIP_SESSIONS, &serde_json::to_string(&own)?)
         })
         .await
     }
 
-    /// The last session used for `key` (as `{id, cwd}`), and every session the app started.
-    pub async fn claude_sessions(&self, key: &str) -> Result<(Option<serde_json::Value>, Vec<String>)> {
+    /// Whether Pip started `session_id` in its sandbox folder, which is the only place it can be resumed from.
+    pub async fn is_pip_session(&self, session_id: &str) -> Result<bool> {
         self.with_db(|db| {
-            let last = db.meta(&format!("claude:{key}"))?.and_then(|s| serde_json::from_str(&s).ok());
-            let own = db.meta(OWN_CLAUDE_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-            Ok((last, own))
+            let own: Vec<String> = db.meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            Ok(own.iter().any(|s| s == session_id))
         })
         .await
+    }
+
+    /// The session to continue for `key`, if it is one Pip can resume.
+    pub async fn claude_session_for(&self, key: &str) -> Result<Option<String>> {
+        let last = self
+            .with_db(|db| Ok(db.meta(&format!("claude:{key}"))?.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())))
+            .await?
+            .and_then(|v| v["id"].as_str().map(String::from));
+        match last {
+            Some(id) if self.is_pip_session(&id).await? => Ok(Some(id)),
+            _ => Ok(None),
+        }
     }
 }
 
@@ -747,6 +761,23 @@ mod tests {
         t.comments.clear();
         t.history[0].author = Person { account_id: "557058:f58".into(), name: "Leigh".into(), avatar_url: None };
         assert!(people_on(&t).any(|p| p.account_id == "557058:f58" && p.name == "Leigh"));
+    }
+
+    #[tokio::test]
+    async fn only_sessions_started_in_the_sandbox_can_be_resumed() {
+        let fx = super::testing::fixture().await;
+        fx.core
+            .with_db(|db| db.set_meta("claude:CA-1", r#"{"id":"old-1","cwd":"/Users/me/code/app"}"#))
+            .await
+            .unwrap();
+        assert!(!fx.core.is_pip_session("old-1").await.unwrap());
+        assert_eq!(fx.core.claude_session_for("CA-1").await.unwrap(), None);
+
+        fx.core.remember_claude_session(Some("CA-1"), "new-1").await.unwrap();
+        fx.core.remember_claude_session(None, "ws-1").await.unwrap();
+        assert!(fx.core.is_pip_session("new-1").await.unwrap() && fx.core.is_pip_session("ws-1").await.unwrap());
+        assert_eq!(fx.core.claude_session_for("CA-1").await.unwrap().as_deref(), Some("new-1"));
+        assert!(!fx.core.is_pip_session("old-1").await.unwrap());
     }
 
     #[tokio::test]

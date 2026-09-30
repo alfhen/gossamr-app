@@ -15,5 +15,5 @@ export function askPip(query: string) {
     useToasts.getState().push("Pip is still answering. Ask again when it has finished.", "info");
     return;
   }
-  void useClaude.getState().ask(WORKSPACE_CONVERSATION, text, conv?.sessionId ?? null, conv?.cwd ?? null, usePip.getState().pinned ?? currentContext());
+  void useClaude.getState().ask(WORKSPACE_CONVERSATION, text, conv?.sessionId ?? null, usePip.getState().pinned ?? currentContext());
 }

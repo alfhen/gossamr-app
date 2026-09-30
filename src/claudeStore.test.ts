@@ -5,7 +5,6 @@ import type { Intent } from "./types";
 
 const conv = (): Conversation => ({
   sessionId: null,
-  cwd: null,
   turns: [
     { requestId: "r1", prompt: "q", steps: [], text: "", status: "running", error: null },
     { requestId: "r2", prompt: "q2", steps: [], text: "", status: "running", error: null },
@@ -89,9 +88,9 @@ describe("ask", () => {
     const original = claude.ask;
     claude.ask = async (req) => void sent.push(req);
     try {
-      await useClaude.getState().ask("CA-9", "what next?", null, null);
+      await useClaude.getState().ask("CA-9", "what next?", null);
       const custom = { view: "board", item: null, filter: { type: "mine" as const }, selection: [ref] };
-      await useClaude.getState().ask("CA-9", "and now?", null, null, custom);
+      await useClaude.getState().ask("CA-9", "and now?", null, custom);
     } finally {
       claude.ask = original;
     }
@@ -101,5 +100,6 @@ describe("ask", () => {
     });
     expect(sent[1]).toMatchObject({ context: { view: "board", filter: { type: "mine" }, selection: [ref] } });
     expect(sent[0]).not.toHaveProperty("ticketKey");
+    expect(sent.every((r) => !("cwd" in (r as object)))).toBe(true);
   });
 });

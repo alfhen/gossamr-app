@@ -247,7 +247,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
     const pip = usePip.getState();
     const about = pip.quote ?? undefined;
     pip.clearQuote();
-    void useClaude.getState().ask(WORKSPACE_CONVERSATION, text, conv?.sessionId ?? null, conv?.cwd ?? null, pip.pinned ?? currentContext(), { looking: pip.pinned ? "your question" : label, quote: about });
+    void useClaude.getState().ask(WORKSPACE_CONVERSATION, text, conv?.sessionId ?? null, pip.pinned ?? currentContext(), { looking: pip.pinned ? "your question" : label, quote: about });
   };
 
   const submit = (ev: FormEvent) => {

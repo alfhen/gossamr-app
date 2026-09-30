@@ -73,7 +73,14 @@ pub fn keys_in(text: &str) -> Vec<String> {
 }
 
 pub fn system_prompt(reads_code: bool) -> String {
-    let code = if reads_code { " You can read files in the working folder and run read-only git commands." } else { "" };
+    let code = if reads_code {
+        " You have only the gossamr tools and cannot run commands or browse the web; code is readable only through them."
+    } else {
+        " You have only the gossamr tools: you cannot read local files, run commands or browse the web. When asked what \
+         has been built or whether something is done in the code, say that the GitHub connector, when it is connected, \
+         provides pull requests, branches, commits and file contents; if it isn't, say you can't check the code yet and \
+         ask for links to the pull requests."
+    };
     format!(
         "You are Pip, the assistant inside Gossamr, a desktop work aide for issue trackers. \
          Read work with the gossamr tools: search_items, get_item, list_containers, get_workflow, list_next_statuses \
@@ -168,6 +175,19 @@ mod tests {
             created: vec![],
             error: None,
         }
+    }
+
+    #[test]
+    fn the_prompt_says_pip_has_only_the_gossamr_tools_and_points_code_questions_at_the_connector() {
+        let p = system_prompt(false);
+        assert!(p.contains("only the gossamr tools"));
+        assert!(p.contains("cannot read local files, run commands or browse the web"));
+        assert!(p.contains("GitHub connector, when it is connected"));
+        assert!(p.contains("can't check the code yet") && p.contains("links to the pull requests"));
+        for stale in ["working folder", "git commands", "read-only git", "the repo"] {
+            assert!(!p.contains(stale), "{stale}");
+        }
+        assert!(!system_prompt(true).contains("cannot read local files"));
     }
 
     #[test]
