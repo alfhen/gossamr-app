@@ -110,7 +110,40 @@ CREATE TABLE proposals (
 CREATE INDEX proposals_state ON proposals(state, created_at);
 CREATE INDEX proposals_item ON proposals(connection_id, item_id);";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS];
+/// What each connection follows. A connection with no `watch_settings` row has not chosen yet (`unset`), which is what
+/// every database from before this step is, so it keeps syncing everything. `watched_containers` is separate from
+/// `containers` because that table is rewritten on every refresh.
+const WATCH: &str = "
+CREATE TABLE watch_settings (
+  connection_id TEXT PRIMARY KEY,
+  mode TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE watched_containers (
+  connection_id TEXT NOT NULL,
+  container_id TEXT NOT NULL,
+  depth TEXT NOT NULL DEFAULT 'involved',
+  pinned INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL,
+  added_at TEXT NOT NULL,
+  unwatched_at TEXT,
+  inaccessible INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (connection_id, container_id)
+) WITHOUT ROWID;
+CREATE TABLE container_catalog (
+  connection_id TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  kind TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  last_active TEXT,
+  item_hint INTEGER,
+  seen_at TEXT NOT NULL,
+  PRIMARY KEY (connection_id, external_id)
+) WITHOUT ROWID;";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -137,7 +170,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
-        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals"] {
+        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
@@ -170,6 +203,33 @@ mod tests {
 
         assert!(tables(&conn).contains(&"proposals".to_string()));
         assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_cache_from_before_watching_keeps_everything_and_has_not_chosen_yet() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in [INBOX, CACHE, PROPOSALS] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 3).unwrap();
+        conn.execute("INSERT INTO sync_state (connection_id, cursor) VALUES ('c', 'x')", []).unwrap();
+        conn.execute("INSERT INTO containers (connection_id, external_id, key, name, synced_at) VALUES ('c', 'CA', 'CA', 'Cats', 't')", []).unwrap();
+        conn.execute(
+            "INSERT INTO items (connection_id, external_id, key, container_id, kind, title, status_id, status_name, status_category,
+               created, updated, data, synced_at) VALUES ('c', 'CA-1', 'CA-1', 'CA', 'task', 't', '1', 'To Do', 'todo', 'a', 'a', '{}', 'a')",
+            [],
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        for t in ["sync_state", "containers", "items"] {
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
+        }
+        for t in ["watch_settings", "watched_containers", "container_catalog"] {
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
+        }
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 4);
     }
 
     #[test]

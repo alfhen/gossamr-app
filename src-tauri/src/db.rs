@@ -2,6 +2,7 @@ use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::domain::Visible;
 use crate::error::{Error, Result};
 use crate::events::NewEvent;
 use crate::model::{CachedTicket, EventKind, InboxEvent, MyAction, Person};
@@ -15,6 +16,7 @@ impl From<rusqlite::Error> for Error {
 mod cache;
 mod proposals;
 mod schema;
+mod watch;
 
 pub use cache::{stamp, SyncState, Upserted};
 
@@ -60,26 +62,37 @@ impl Db {
     /// Keys of tickets that need the user: an unread, undone event that isn't snoozed past `now`, or a mention (or a
     /// comment on a ticket they're assigned or reported) on an open ticket that they haven't answered since.
     /// Mirrors `waitingOnMe` in `src/lib/views.ts`: a mention counts even after its notification was cleared.
-    pub fn needs_me_keys(&self, connection_id: &str, me: &str, now: &str) -> Result<Vec<String>> {
+    pub fn needs_me_keys(&self, connection_id: &str, me: &str, now: &str, visible: &Visible) -> Result<Vec<String>> {
         const AWAKE: &str = "(e.snoozed_until IS NULL OR e.snoozed_until <= ?3)";
         const OPEN: &str = "i.status_category != 'done'";
         // My own comments are stored as activity; `lastCommenter` covers ones from before they were.
         const NOT_ANSWERED: &str = "json_extract(i.data, '$.lastCommenter.accountId') IS NOT ?2
              AND NOT EXISTS (SELECT 1 FROM activity a WHERE a.ticket_key = e.ticket_key AND a.kind = 'comment' AND a.at > e.at)";
         const NO_LATER_ACTION: &str = "NOT EXISTS (SELECT 1 FROM activity a WHERE a.ticket_key = e.ticket_key AND a.at > e.at)";
+        // Numbered so the one list of containers serves all three branches.
+        let (only, unread_join, args): (String, String, Vec<&str>) = match visible {
+            Visible::All => (String::new(), String::new(), Vec::new()),
+            Visible::Only(ids) => {
+                let marks: Vec<String> = (0..ids.len()).map(|n| format!("?{}", n + 4)).collect();
+                let list = if ids.is_empty() { "0 = 1".to_string() } else { format!("i.container_id IN ({})", marks.join(",")) };
+                let join = format!("JOIN items i ON i.connection_id = ?1 AND i.key = e.ticket_key AND {list}");
+                (format!(" AND {list}"), join, ids.iter().map(String::as_str).collect())
+            }
+        };
         let sql = format!(
-            "SELECT e.ticket_key FROM events e
+            "SELECT e.ticket_key FROM events e {unread_join}
                WHERE e.unread = 1 AND e.done_at IS NULL AND {AWAKE}
              UNION
              SELECT e.ticket_key FROM events e JOIN items i ON i.connection_id = ?1 AND i.key = e.ticket_key
-               WHERE e.kind = 'mention' AND {AWAKE} AND {OPEN} AND {NOT_ANSWERED}
+               WHERE e.kind = 'mention' AND {AWAKE} AND {OPEN} AND {NOT_ANSWERED}{only}
              UNION
              SELECT e.ticket_key FROM events e JOIN items i ON i.connection_id = ?1 AND i.key = e.ticket_key
                WHERE e.kind = 'comment' AND (i.assignee = ?2 OR i.reporter = ?2) AND {AWAKE} AND {OPEN}
-                 AND {NOT_ANSWERED} AND {NO_LATER_ACTION}"
+                 AND {NOT_ANSWERED} AND {NO_LATER_ACTION}{only}"
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![connection_id, me, now], |r| r.get(0))?;
+        let all: Vec<&str> = [connection_id, me, now].into_iter().chain(args).collect();
+        let rows = stmt.query_map(rusqlite::params_from_iter(all), |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -300,7 +313,7 @@ mod tests {
         }
 
         fn keys(db: &Db) -> Vec<String> {
-            db.needs_me_keys("c", "me", NOW).unwrap()
+            db.needs_me_keys("c", "me", NOW, &Visible::All).unwrap()
         }
 
         #[test]
@@ -339,6 +352,27 @@ mod tests {
         }
 
         #[test]
+        fn needs_me_leaves_out_tickets_of_containers_that_are_not_visible_including_unread_events() {
+            let mut other = work_item("2", "doing");
+            other.container.external_id = "q".into();
+            let db = db_with("doing", None, &[event("c:1", "ENG-1", EventKind::Mention, "2026-09-28T09:00:00Z")]);
+            db.upsert_items(&[other], "t").unwrap();
+            db.insert_events(&[event("c:2", "ENG-2", EventKind::Mention, "2026-09-28T09:00:00Z"), event("c:3", "ENG-1", EventKind::Status, "2026-09-28T09:00:00Z")], "2000-01-01T00:00:00Z").unwrap();
+            db.conn.execute("UPDATE events SET unread = 1 WHERE id = 'c:3'", []).unwrap();
+            db.insert_events(&[event("c:9", "GONE-1", EventKind::Status, "2026-09-28T09:00:00Z")], "2000-01-01T00:00:00Z").unwrap();
+
+            let ask = |v: &Visible| {
+                let mut k = db.needs_me_keys("c", "me", NOW, v).unwrap();
+                k.sort();
+                k
+            };
+            assert_eq!(ask(&Visible::All), ["ENG-1", "ENG-2", "GONE-1"]);
+            assert_eq!(ask(&Visible::Only(vec!["p".into()])), ["ENG-1"]);
+            assert_eq!(ask(&Visible::Only(vec!["q".into()])), ["ENG-2"]);
+            assert!(ask(&Visible::Only(vec![])).is_empty());
+        }
+
+        #[test]
         fn a_closed_ticket_needs_nobody() {
             let db = db_with("done", None, &[event("c:1", "ENG-1", EventKind::Mention, "2026-09-28T09:00:00Z")]);
             assert!(keys(&db).is_empty());
@@ -349,7 +383,7 @@ mod tests {
             let db = db_with("doing", None, &[event("c:1", "ENG-1", EventKind::Mention, "2026-09-28T09:00:00Z")]);
             db.snooze("c:1", Some("2026-09-30T00:00:00Z")).unwrap();
             assert!(keys(&db).is_empty());
-            assert_eq!(db.needs_me_keys("c", "me", "2026-09-30T00:00:01Z").unwrap(), ["ENG-1"]);
+            assert_eq!(db.needs_me_keys("c", "me", "2026-09-30T00:00:01Z", &Visible::All).unwrap(), ["ENG-1"]);
         }
 
         #[test]

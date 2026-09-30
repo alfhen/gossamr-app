@@ -3,7 +3,9 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Mention } from "../lib/mentions";
 import type {
+  AssignedElsewhere,
   CacheChanged,
+  CatalogPage,
   ContainerRef,
   Intent,
   ItemRef,
@@ -22,12 +24,18 @@ import type {
   WorkMove,
   FeedPage,
   FeedQuery,
+  Footprint,
+  Stray,
+  WatchChange,
+  WatchChanged,
+  WatchMode,
+  WatchState,
   WorkEvent,
   WorkFilter,
   WorkItem,
   Workflow,
 } from "../types";
-import type { Backend } from "./types";
+import type { Backend, ReadScope } from "./types";
 
 /** The Jira site and account this backend acts for. */
 export interface Scope {
@@ -113,16 +121,20 @@ export class JiraBackend implements Backend {
     return invoke<void>("snooze", { id, until: until?.toISOString() ?? null });
   }
 
-  cacheSearch(filter: WorkFilter) {
-    return invoke<WorkItem[]>("cache_search", { filter });
+  cacheSearch(filter: WorkFilter, opts: ReadScope = {}) {
+    return invoke<WorkItem[]>("cache_search", { filter, includeUnwatched: opts.includeUnwatched ?? false });
   }
 
   cacheItem(item: ItemRef) {
     return invoke<WorkItem | null>("cache_item", { item });
   }
 
-  cacheContainers() {
-    return invoke<WorkContainer[]>("cache_containers");
+  peekItem(item: ItemRef) {
+    return invoke<WorkItem | null>("peek_item", { item });
+  }
+
+  cacheContainers(opts: ReadScope = {}) {
+    return invoke<WorkContainer[]>("cache_containers", { includeUnwatched: opts.includeUnwatched ?? false });
   }
 
   cacheWorkflow(container: ContainerRef) {
@@ -192,6 +204,44 @@ export class JiraBackend implements Backend {
 
   onProposalsChanged(listener: (change: ProposalsChanged) => void) {
     const pending = listen<ProposalsChanged>("proposals-changed", (e) => listener(e.payload));
+    return () => void pending.then((unlisten) => unlisten());
+  }
+
+  watchGet() {
+    return invoke<WatchState[]>("watch_get");
+  }
+
+  watchSetMode(connectionId: string, mode: WatchMode) {
+    return invoke<void>("watch_set_mode", { connectionId, mode });
+  }
+
+  watchSetContainers(connectionId: string, changes: WatchChange[]) {
+    return invoke<void>("watch_set_containers", { connectionId, changes });
+  }
+
+  watchCatalog(connectionId: string, query: string, cursor: string | null = null) {
+    return invoke<CatalogPage>("watch_catalog", { connectionId, query, cursor });
+  }
+
+  watchSuggestions(connectionId: string, refresh = false) {
+    return invoke<Footprint[]>("watch_suggestions", { connectionId, refresh });
+  }
+
+  watchUnwatchedAssigned(connectionId: string, refresh = false) {
+    return invoke<Stray[]>("watch_unwatched_assigned", { connectionId, refresh });
+  }
+
+  watchDismissAssigned(connectionId: string, containerId: string) {
+    return invoke<void>("watch_dismiss_assigned", { connectionId, containerId });
+  }
+
+  onWatchChanged(listener: (change: WatchChanged) => void) {
+    const pending = listen<WatchChanged>("watch-changed", (e) => listener(e.payload));
+    return () => void pending.then((unlisten) => unlisten());
+  }
+
+  onAssignedElsewhere(listener: (found: AssignedElsewhere) => void) {
+    const pending = listen<AssignedElsewhere>("watch-assigned-elsewhere", (e) => listener(e.payload));
     return () => void pending.then((unlisten) => unlisten());
   }
 

@@ -16,9 +16,11 @@ import {
   knownMoves,
   nameOf,
   needsMeItems,
+  needsWatchChoice,
   pendingDrafts,
   queryLookup,
   useWorkspace,
+  watchOf,
   workflowOfItem,
 } from "./workspaceStore";
 
@@ -268,5 +270,51 @@ describe("workspace store refresh", () => {
     await s().init(other);
     await slow;
     expect(s().backend).toBe(other);
+  });
+});
+
+describe("the store and what is watched", () => {
+  it("loads the watch settings with everything else", () => {
+    expect(s().watch).toHaveLength(1);
+    expect(s().watch[0]).toMatchObject({ connectionId: "mock", mode: "everything" });
+    expect(needsWatchChoice(s())).toBe(false);
+    expect(watchOf(s(), "mock")?.mode).toBe("everything");
+    expect(watchOf(s(), "other")).toBeUndefined();
+  });
+
+  it("asks for a choice when the catalog is too big, and shows everything meanwhile", async () => {
+    await s().init(new MockBackend({ catalogSize: 14 }));
+    expect(needsWatchChoice(s())).toBe(true);
+    expect(Object.keys(s().containers)).toHaveLength(14);
+  });
+
+  it("holds only watched items, containers and waiting-on-me after the person chooses, and follows later changes", async () => {
+    const b = new MockBackend({ catalogSize: 14 });
+    await s().init(b);
+    const all = Object.keys(s().items).length;
+    await b.watchSetMode("mock", "selected");
+    await b.watchSetContainers("mock", [{ containerId: "CA", watched: true }]);
+    await flush();
+    expect(Object.keys(s().items).length).toBeLessThan(all);
+    expect(allContainers(s()).map((c) => c.key)).toEqual(["CA"]);
+    expect([...s().needsMe].every((k) => k.includes("CA-"))).toBe(true);
+    expect(s().watch[0]).toMatchObject({ mode: "selected", needsChoice: false });
+    expect(s().watch[0].watches.map((w) => w.key)).toEqual(["CA"]);
+
+    await b.watchSetContainers("mock", [{ containerId: "WEB", watched: true }]);
+    await flush();
+    expect(allContainers(s()).map((c) => c.key)).toEqual(["CA", "WEB"]);
+  });
+
+  it("peeks at an item in an unwatched project without adding it to the store", async () => {
+    const b = new MockBackend();
+    await s().init(b);
+    await b.watchSetMode("mock", "selected");
+    await b.watchSetContainers("mock", [{ containerId: "CA", watched: true }]);
+    await flush();
+    const peeked = await s().peekItem(itemRef("WEB-101"));
+    expect(peeked).toMatchObject({ unwatched: true, title: "Lazy-load swatch images" });
+    expect(itemByRef(s(), itemRef("WEB-101"))).toBeUndefined();
+    expect(await s().peekItem(itemRef("NOPE-1"))).toBeNull();
   });
 });

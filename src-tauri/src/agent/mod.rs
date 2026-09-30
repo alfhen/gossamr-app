@@ -128,7 +128,12 @@ impl AgentService {
             .ok_or_else(|| Error::Claude(format!("The assistant provider “{id}” isn't available.")))?;
 
         let scope = self.core.scope().await?;
-        let context = req.context.in_connection(&crate::tracker::Connection::jira_id(&scope));
+        let mut context = req.context.in_connection(&crate::tracker::Connection::jira_id(&scope));
+        let mut handed: std::collections::HashSet<String> = context::keys_in(&req.prompt).into_iter().collect();
+        if let Some(r) = &context.item {
+            handed.insert(r.key.to_uppercase());
+            context.unwatched_item = !self.core.is_item_watched(&scope, &r.key).await?;
+        }
         let item = match &context.item {
             Some(r) => Some(mcp::describe(&self.core.ticket(&scope, &r.key).await?)),
             None => None,
@@ -154,7 +159,7 @@ impl AgentService {
         };
 
         // Registered before the run starts, since the agent may call the tools straight away.
-        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), scope);
+        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), mcp::Run { scope, handed });
         self.running.lock().expect("lock poisoned").insert(run_id.clone(), provider.clone());
         let mut events = match provider.run(agent_req).await {
             Ok(e) => e,

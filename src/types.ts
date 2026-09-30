@@ -229,6 +229,8 @@ export interface WorkItem {
   commentCount: number;
   lastCommenter: PersonRef | null;
   extra: null;
+  /** Set on an item read live from a container that isn't watched. It isn't stored, so it is read-only. */
+  unwatched?: boolean;
 }
 
 /** The query language for views and search. The backend narrows in SQL and then applies it exactly. */
@@ -286,6 +288,8 @@ export interface FeedQuery {
   mentionsOnly?: boolean;
   unreadOnly?: boolean;
   container?: ContainerRef | null;
+  /** Also entries about items in containers that aren't watched. */
+  includeUnwatched?: boolean;
   before?: FeedCursor | null;
   limit?: number;
 }
@@ -438,4 +442,106 @@ export interface ConnectionInfo {
   lastSyncAt: string | null;
   syncing: boolean;
   error: string | null;
+}
+
+/**
+ * What a connection follows, mirroring src-tauri/src/domain/watch.rs. Only watched containers are synced, listed,
+ * counted and visible to Pip. `unset` behaves like `everything` until the person chooses.
+ */
+export type WatchMode = "unset" | "everything" | "selected";
+
+/** `involved`: items the person is on or was mentioned in. `whole`: everything in the container within the sync window. */
+export type WatchDepth = "involved" | "whole";
+
+export type WatchSource = "manual" | "footprint" | "auto" | "everything";
+
+/** A catalog this small is watched whole without asking. */
+export const AUTO_WATCH_EVERYTHING_MAX = 12;
+
+/** One watched container. A set `unwatchedAt` means it is inside its 14-day grace period and already hidden. */
+export interface WatchRow {
+  container: ContainerRef;
+  depth: WatchDepth;
+  pinned: boolean;
+  source: WatchSource;
+  addedAt: string;
+  unwatchedAt: string | null;
+  /** The tracker refused it (deleted, or no access); what is cached stays visible. */
+  inaccessible: boolean;
+  key: string;
+  name: string;
+  /** Items of it in the local cache. */
+  cachedItems: number;
+}
+
+export interface WatchState {
+  connectionId: string;
+  mode: WatchMode;
+  /** Nothing is chosen and the catalog is too big to watch whole, so the picker must be shown. */
+  needsChoice: boolean;
+  /** Containers seen when the catalog was last probed; 13 means "more than 12". */
+  catalogSize: number | null;
+  watches: WatchRow[];
+}
+
+/** One edit to a container's watch; fields left out keep their value. */
+export interface WatchChange {
+  containerId: string;
+  watched?: boolean;
+  depth?: WatchDepth;
+  pinned?: boolean;
+  source?: WatchSource;
+}
+
+/** A container in the catalog. */
+export interface ContainerSummary {
+  ref: ContainerRef;
+  key: string;
+  name: string;
+  kind: string | null;
+  archived: boolean;
+  lastActive: string | null;
+  itemHint: number | null;
+}
+
+export interface CatalogEntry extends ContainerSummary {
+  watched: boolean;
+}
+
+export interface CatalogPage {
+  containers: CatalogEntry[];
+  /** Pass back as the cursor for the next page. */
+  next: string | null;
+  /** The tracker couldn't be reached; this is what was listed before. */
+  offline: boolean;
+}
+
+/** How much the person has been involved in one container in the last 90 days. */
+export interface Footprint {
+  container: ContainerRef;
+  key: string;
+  name: string;
+  assigned: number;
+  reported: number;
+  watching: number;
+  /** Null when the tracker can't count them. */
+  commented: number | null;
+  mentioned: number | null;
+  lastTouch: string | null;
+}
+
+/** Open items assigned to the person in a container they don't watch. Suggesting it never watches it. */
+export interface Stray {
+  container: ContainerRef;
+  containerName: string;
+  keys: string[];
+}
+
+export interface WatchChanged {
+  connectionId: string;
+}
+
+export interface AssignedElsewhere {
+  connectionId: string;
+  strays: Stray[];
 }

@@ -10,15 +10,19 @@ use crate::auth::{Account, Auth, AuthStatus, Scope, Site};
 use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, my_actions, NewEvent};
-use crate::domain::{Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, WorkItem, Workflow};
+use crate::domain::{
+    Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, Visible, WorkItem, Workflow,
+};
 use crate::model::{Attachment, CachedTicket, CreatedSubtasks, MentionRef, Person, Snapshot, Status, Ticket, Transition, Uploaded};
 use crate::proposals;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
 use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
 mod drafts;
+mod watch;
 
 pub use drafts::Edit;
+pub use watch::{CatalogPage, WatchState};
 
 /// Events this old drop out of the inbox unless they are still unread.
 const EVENT_WINDOW_DAYS: i64 = 30;
@@ -130,6 +134,8 @@ pub struct Core {
     last_error: Mutex<Option<String>>,
     syncing: AtomicBool,
     schedules: Mutex<HashMap<String, Schedule>>,
+    /// When each connection was last checked for work assigned outside what it watches.
+    radar: Mutex<HashMap<String, chrono::DateTime<Utc>>>,
     /// Ask for a sync now, whatever the schedule says.
     pub wake: Notify,
     /// The window gained focus: sync if it has been a while and no failure is being waited out.
@@ -144,6 +150,8 @@ pub struct Synced {
     pub changed: bool,
     /// Whether reconciling the drafts against the fresh cache revised or retired any.
     pub proposals_changed: bool,
+    /// Whether the watch settings changed, as when a small catalog was watched whole.
+    pub watch_changed: bool,
 }
 
 impl Core {
@@ -156,6 +164,7 @@ impl Core {
             last_error: Mutex::new(None),
             syncing: AtomicBool::new(false),
             schedules: Mutex::new(HashMap::new()),
+            radar: Mutex::new(HashMap::new()),
             wake: Notify::new(),
             focus: Notify::new(),
         }
@@ -260,17 +269,18 @@ impl Core {
         let scope = Scope::of(&site, &me);
         let connection_id = Connection::jira_id(&scope);
         let started = Utc::now();
-        let (previous, state, known_epics) = self
+        let (previous, state, known_epics, watch) = self
             .with_db_for(&scope, |db| {
                 let last = db.meta(LAST_SYNC)?;
                 let epics = db.epic_ids_synced_since(&connection_id, &stamp(started - Duration::days(1)))?;
-                Ok((last, db.sync_state(&connection_id)?, epics))
+                Ok((last, db.sync_state(&connection_id)?, epics, db.watch_set(&connection_id)?))
             })
             .await?;
         let unread_after = unread_cutoff(previous.as_deref());
-        let plan = sync::plan(&state, started);
         let tracker = self.tracker(&scope)?;
-        let pulled = sync::pull(tracker.as_ref(), &connection_id, plan, &state, &known_epics, &unread_after, started).await?;
+        let (watch, watch_changed) = self.settle_watch_mode(&scope, tracker.as_ref(), watch).await?;
+        let plan = sync::plan(&state, started);
+        let pulled = sync::pull(tracker.as_ref(), &connection_id, plan, &state, &known_epics, &unread_after, started, &watch).await?;
 
         self.with_db_for(&scope, |db| {
             let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after, previous.is_some())?;
@@ -283,6 +293,7 @@ impl Core {
                 new_events: stored.new_events,
                 changed: stored.upserted.any() || containers_changed,
                 proposals_changed: revised > 0,
+                watch_changed,
             })
         })
         .await
@@ -295,6 +306,10 @@ impl Core {
         let item = self.tracker(scope)?.item(&Self::item(scope, key), &since).await?;
         let t = ticket_of(&item)?;
         self.with_db_for(scope, |db| {
+            // An item the person was handed in a container they don't watch isn't kept.
+            if !db.watch_set(&item.item.connection_id)?.is_watched(&item.container.external_id) {
+                return Ok(());
+            }
             db.upsert_items(&[item], &now_iso())?;
             db.insert_events(&derive(&t, &scope.account_id), &since)?;
             db.insert_activity(&my_actions(&t, &scope.account_id))?;
@@ -316,7 +331,11 @@ impl Core {
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| (d.with_timezone(&Utc) - Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true))
                 .unwrap_or_default();
-            let cached = tickets_of(&db.items_synced_since(&Connection::jira_id(&scope), &cutoff)?)?;
+            let connection_id = Connection::jira_id(&scope);
+            let visible = db.watch_set(&connection_id)?.visible();
+            let cached = tickets_of(&db.items_synced_since(&connection_id, &cutoff, &visible)?)?;
+            let keys = db.visible_keys(&connection_id, &visible)?;
+            let shown = |key: &str| keys.as_ref().is_none_or(|k| k.contains(key));
             let seen = db.seen()?;
             let default_since = ago(Duration::days(DEFAULT_SEEN_DAYS));
 
@@ -361,11 +380,11 @@ impl Core {
                 me: Person { account_id: me.account_id.clone(), name: me.name.clone(), avatar_url: me.avatar_url.clone() },
                 site: site.name.clone(),
                 tickets,
-                events: db.events(&ago(Duration::days(EVENT_WINDOW_DAYS)))?,
+                events: db.events(&ago(Duration::days(EVENT_WINDOW_DAYS)))?.into_iter().filter(|e| shown(&e.ticket_key)).collect(),
                 watching,
                 last_sync_at: last_sync,
                 sync_error,
-                activity: db.activity(&ago(Duration::days(ACTIVITY_DAYS)))?,
+                activity: db.activity(&ago(Duration::days(ACTIVITY_DAYS)))?.into_iter().filter(|a| shown(&a.ticket_key)).collect(),
             })
         })
         .await
@@ -512,13 +531,17 @@ impl Core {
     }
 
     /// The cached items that match `filter`. The raw tracker payload is left out; it is for Core, not for the page.
-    pub async fn cache_search(&self, filter: &Filter) -> Result<Vec<WorkItem>> {
+    pub async fn cache_search(&self, filter: &Filter, include_unwatched: bool) -> Result<Vec<WorkItem>> {
         let scope = self.scope().await?;
-        Ok(self.search_cached(&scope, filter).await?.into_iter().map(without_extra).collect())
+        Ok(self.search_cached_with(&scope, filter, include_unwatched).await?.into_iter().map(without_extra).collect())
     }
 
-    /// Like `cache_search`, for `scope` only, and with each item's tracker payload kept.
+    /// Like `cache_search`, for `scope` only, and with each item's tracker payload kept. Only watched containers.
     pub async fn search_cached(&self, scope: &Scope, filter: &Filter) -> Result<Vec<WorkItem>> {
+        self.search_cached_with(scope, filter, false).await
+    }
+
+    async fn search_cached_with(&self, scope: &Scope, filter: &Filter, include_unwatched: bool) -> Result<Vec<WorkItem>> {
         let (site, me) = self.identity().await?;
         if &Scope::of(&site, &me) != scope {
             return Err(Error::SiteChanged);
@@ -526,28 +549,35 @@ impl Core {
         let connection_id = Connection::jira_id(scope);
         let now = Utc::now();
         self.with_db_for(scope, |db| {
+            let visible = if include_unwatched { Visible::All } else { db.watch_set(&connection_id)?.visible() };
             let needs_me = db
-                .needs_me_keys(&connection_id, &me.account_id, &stamp(now))?
+                .needs_me_keys(&connection_id, &me.account_id, &stamp(now), &visible)?
                 .into_iter()
                 .map(|key| ItemRef { connection_id: connection_id.clone(), external_id: key.clone(), key })
                 .collect();
             let me = identity_of(&connection_id, &me);
-            db.search(&connection_id, filter, &FilterContext { me, now, needs_me })
+            db.search(&connection_id, filter, &FilterContext { me, now, needs_me }, &visible)
         })
         .await
     }
 
-    pub async fn cache_item(&self, item: &ItemRef) -> Result<Option<WorkItem>> {
+    pub async fn cache_containers(&self, include_unwatched: bool) -> Result<Vec<Container>> {
         let scope = self.scope().await?;
-        Ok(self.with_db_for(&scope, |db| db.item(item)).await?.map(without_extra))
+        self.containers_with(&scope, include_unwatched).await
     }
 
-    pub async fn cache_containers(&self) -> Result<Vec<Container>> {
-        self.containers_in(&self.scope().await?).await
-    }
-
+    /// The watched containers of `scope`'s connection.
     pub async fn containers_in(&self, scope: &Scope) -> Result<Vec<Container>> {
-        self.with_db_for(scope, |db| db.containers(&Connection::jira_id(scope))).await
+        self.containers_with(scope, false).await
+    }
+
+    async fn containers_with(&self, scope: &Scope, include_unwatched: bool) -> Result<Vec<Container>> {
+        let id = Connection::jira_id(scope);
+        self.with_db_for(scope, |db| {
+            let visible = if include_unwatched { Visible::All } else { db.watch_set(&id)?.visible() };
+            Ok(db.containers(&id)?.into_iter().filter(|c| visible.allows(&c.container_ref.external_id)).collect())
+        })
+        .await
     }
 
     pub async fn cache_workflow(&self, container: &ContainerRef) -> Result<Option<Workflow>> {
@@ -632,13 +662,17 @@ impl Core {
     pub async fn cache_feed(&self, query: &FeedQuery) -> Result<FeedPage> {
         let scope = self.scope().await?;
         let id = self.connection(&scope)?.id;
-        self.with_db_for(&scope, |db| db.feed(&id, query)).await
+        self.with_db_for(&scope, |db| {
+            let visible = if query.include_unwatched { Visible::All } else { db.watch_set(&id)?.visible() };
+            db.feed(&id, query, &visible)
+        })
+        .await
     }
 
     pub async fn cache_feed_unread(&self) -> Result<usize> {
         let scope = self.scope().await?;
         let id = self.connection(&scope)?.id;
-        self.with_db_for(&scope, |db| db.feed_unread(&id)).await
+        self.with_db_for(&scope, |db| db.feed_unread(&id, &db.watch_set(&id)?.visible())).await
     }
 
     /// `scope` is the account the user was looking at when they approved; the write is refused if that has changed.
@@ -803,7 +837,7 @@ mod tests {
         let item = db.item(&connection.item("CA-1")).unwrap().expect("backfilled");
         assert_eq!(item.title, "Do the thing");
         assert_eq!(ticket_of(&item).unwrap().key, "CA-1");
-        assert_eq!(db.items_synced_since(&connection.id, "2026-09-28T10:00:00Z").unwrap().len(), 1);
+        assert_eq!(db.items_synced_since(&connection.id, "2026-09-28T10:00:00Z", &Visible::All).unwrap().len(), 1);
         assert_eq!(db.seen().unwrap().len(), 1, "inbox state survives");
         assert_eq!(db.meta(LAST_SYNC).unwrap().as_deref(), Some("2026-09-28T10:00:00Z"));
         assert_eq!(db.sync_state(&connection.id).unwrap().full_at, None, "the first sync is a full one, which fills in labels and links");
@@ -831,6 +865,23 @@ pub(crate) mod testing {
     impl Fixture {
         pub fn item(&self, key: &str) -> ItemRef {
             Core::item(&self.scope, key)
+        }
+
+        /// Replaces the cached containers.
+        pub async fn set_containers(&self, containers: &[Container]) {
+            let id = Connection::jira_id(&self.scope);
+            self.core.with_db_for(&self.scope, |db| db.replace_containers(&id, containers, "2026-09-29T12:00:00Z")).await.unwrap();
+        }
+
+        /// Adds an item with `key` in `container` (a copy of the sample ticket) to the cache.
+        pub async fn add_in(&self, key: &str, container: &str) {
+            let connection = self.core.connection(&self.scope).unwrap();
+            let mut ticket = sample_ticket();
+            ticket.key = key.into();
+            let mut item = tracker::item_from_ticket(&connection, &ticket);
+            item.container.external_id = container.into();
+            item.title = format!("Ticket {key}");
+            self.core.with_db_for(&self.scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
         }
 
         /// Adds `CA-<n>` (a copy of the sample ticket) to the cache.
