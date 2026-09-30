@@ -230,3 +230,35 @@ describe("blocked and age", () => {
     expect(cols.flatMap((c) => c.items)).not.toContain(list[7]);
   });
 });
+
+describe("drops where the tracker reveals moves per item", () => {
+  const opaque = (sec: ReturnType<typeof section>): typeof sec => ({ ...sec, workflow: { ...sec.workflow, transitions: { kind: "graph", moves: [] } } });
+  const web = () => opaque(section("WEB"));
+  const card = () => web().columns.flatMap((c) => c.items).find((i) => i.status.category !== "done")!;
+
+  it("offers every other status until the tracker has answered, then only what it offered", () => {
+    const sec = web();
+    const i = card();
+    const others = sec.workflow.statuses.filter((x) => x.id !== i.status.id);
+    expect(targetsFor(sec.workflow, i)).toEqual(others);
+    const offered = [others[0]];
+    expect(targetsFor(sec.workflow, i, offered)).toEqual(offered);
+    expect(dropVerdict(i, sec, others[0].id, offered)).toBe("ok");
+    expect(dropVerdict(i, sec, others[1].id, offered)).toBe("invalid");
+  });
+
+  it("plans a drop as an intent carrying the status id, and refuses one the tracker didn't offer", () => {
+    const sec = web();
+    const i = card();
+    const [a, b] = sec.workflow.statuses.filter((x) => x.id !== i.status.id);
+    const ok = planDrop(i, sec, a.id, [a]);
+    expect(ok.ok && ok.intent).toEqual({ type: "transition", item: i.item, to: a.id });
+    expect(planDrop(i, sec, b.id, [a])).toMatchObject({ ok: false });
+  });
+
+  it("ignores what the tracker said when the workflow lists its moves itself", () => {
+    const i = item("CA-402");
+    const wf = section("CA").workflow;
+    expect(targetsFor(wf, i, [])).toEqual(targetsFor(wf, i));
+  });
+});

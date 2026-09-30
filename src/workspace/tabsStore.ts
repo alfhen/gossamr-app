@@ -42,6 +42,8 @@ interface TabsState {
   /** Ticks a card without losing the others: `toggle` adds or removes it, `range` ticks everything from the selected card to it in `order`. */
   mark(key: string, how: "toggle" | "range", order: readonly string[]): void;
   clearMarks(): void;
+  /** Back to one blank tab and no saved views, for when another account is shown. */
+  reset(): void;
 }
 
 const KEY = "gossamr-tabs";
@@ -153,6 +155,10 @@ export const useTabs = create<TabsState>((set, get) => ({
       return { marked, selected: marked.includes(key) ? key : (marked[marked.length - 1] ?? s.selected) };
     }),
   clearMarks: () => set({ marked: [] }),
+  reset() {
+    const tab = blankTab();
+    set({ tabs: [tab], activeId: tab.id, savedViews: [], route: "workspace", selected: null, marked: [] });
+  },
 }));
 
 useTabs.subscribe(({ tabs, activeId, savedViews }) => writeStored(KEY, { tabs, activeId, savedViews }));

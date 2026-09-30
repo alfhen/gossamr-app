@@ -1,4 +1,5 @@
 import { itemKey } from "../lib/filter";
+import type { TicketLinks } from "../components/ticketLinks";
 import type { ItemRef } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { cardId } from "./ItemCard";
@@ -26,3 +27,14 @@ export function showMe(ref: ItemRef) {
   );
   return true;
 }
+
+const cachedByKey = (key: string) => Object.values(useWorkspace.getState().items).find((i) => i.item.key === key);
+
+/** Ticket keys in Pip's replies and other rendered text open the cached item here. */
+export const workspaceTicketLinks: TicketLinks = {
+  titleOf: (key) => cachedByKey(key)?.title ?? null,
+  open(key) {
+    const item = cachedByKey(key);
+    if (item) showMe(item.item);
+  },
+};

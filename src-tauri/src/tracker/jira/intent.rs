@@ -61,19 +61,25 @@ pub(super) fn create_fields(project: &str, issue_type: &IssueType, item: &NewIte
     Value::Object(fields)
 }
 
-/// `from` blocks / relates to / duplicates `to`.
+/// `from` blocks / relates to / duplicates `to`. Jira names the ends by their link description, so the issue that
+/// does the blocking is the inward one.
 pub(super) fn link_body(from: &ItemRef, to: &ItemRef, kind: LinkKind) -> Value {
     let name = match kind {
         LinkKind::Blocks => "Blocks",
         LinkKind::Relates => "Relates",
         LinkKind::Duplicates => "Duplicate",
     };
-    json!({ "type": { "name": name }, "outwardIssue": { "key": from.external_id }, "inwardIssue": { "key": to.external_id } })
+    json!({ "type": { "name": name }, "inwardIssue": { "key": from.external_id }, "outwardIssue": { "key": to.external_id } })
 }
 
 /// The transition that leads to `status_id`. Jira may offer several; the first is taken.
 pub(super) fn transition_to<'a>(transitions: &'a [RawTransition], status_id: &str) -> Option<&'a RawTransition> {
     transitions.iter().find(|t| t.to.id == status_id)
+}
+
+/// The body of the request that performs `transition`.
+pub(super) fn transition_body(transition: &RawTransition) -> Value {
+    json!({ "transition": { "id": transition.id } })
 }
 
 #[cfg(test)]
@@ -99,6 +105,18 @@ mod tests {
         assert_eq!(transition_to(&ts, "5").map(|t| t.id.as_str()), Some("21"));
         assert_eq!(transition_to(&ts, "3").map(|t| t.id.as_str()), Some("11"));
         assert!(transition_to(&ts, "9").is_none());
+    }
+
+    #[test]
+    fn a_status_id_from_the_page_becomes_jiras_transition_id_in_the_request() {
+        let recorded = json!({ "expand": "transitions", "transitions": [
+            { "id": "11", "name": "Start Progress", "to": { "id": "3", "name": "In Progress", "statusCategory": { "id": 4, "key": "indeterminate" } }, "hasScreen": false },
+            { "id": "31", "name": "Done", "to": { "id": "10001", "name": "Done", "statusCategory": { "id": 3, "key": "done" } }, "isGlobal": true }
+        ]});
+        let available = super::super::client::parse_transitions(&recorded);
+        let chosen = transition_to(&available, "10001").unwrap();
+        assert_eq!(transition_body(chosen), json!({ "transition": { "id": "31" } }));
+        assert!(transition_to(&available, "31").is_none(), "a transition id is not a status id");
     }
 
     #[test]
@@ -152,8 +170,8 @@ mod tests {
     fn links_name_jiras_own_link_types() {
         let body = link_body(&item("CA-1"), &item("CA-2"), LinkKind::Blocks);
         assert_eq!(body["type"]["name"], "Blocks");
-        assert_eq!(body["outwardIssue"]["key"], "CA-1");
-        assert_eq!(body["inwardIssue"]["key"], "CA-2");
+        assert_eq!(body["inwardIssue"]["key"], "CA-1", "the blocker is the inward issue");
+        assert_eq!(body["outwardIssue"]["key"], "CA-2");
         assert_eq!(link_body(&item("a"), &item("b"), LinkKind::Duplicates)["type"]["name"], "Duplicate");
     }
 }

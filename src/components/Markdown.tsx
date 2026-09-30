@@ -1,7 +1,9 @@
 import { useMemo, type ReactNode } from "react";
 import { parseBlocks, parseInline, type Block, type Inline } from "../lib/markdown";
 import { projectsOf } from "../lib/views";
+import { useBackend } from "../backend/useBackend";
 import { useStore } from "../store";
+import { useTicketLinks, type TicketLinks } from "./ticketLinks";
 import { Link } from "./Adf";
 
 const HEADING = ["text-[16px]", "text-[15px]", "text-[14px]", "text-[13px]", "text-[13px]", "text-[13px]"];
@@ -127,9 +129,30 @@ function span(n: Inline, i: number): ReactNode {
 
 /** Opens a synced ticket in the app and any other one in Jira. Keys from projects the user has no tickets in stay text. */
 function TicketKey({ ticketKey }: { ticketKey: string }) {
+  const links = useTicketLinks();
+  return links ? <WorkspaceTicketKey ticketKey={ticketKey} links={links} /> : <ClassicTicketKey ticketKey={ticketKey} />;
+}
+
+/** A key the workspace has cached selects that item; any other stays text. */
+function WorkspaceTicketKey({ ticketKey, links }: { ticketKey: string; links: TicketLinks }) {
+  const title = links.titleOf(ticketKey);
+  if (title === null) return <>{ticketKey}</>;
+  return (
+    <button
+      type="button"
+      title={`${ticketKey}: ${title}`}
+      onClick={() => links.open(ticketKey)}
+      className="font-semibold text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
+    >
+      {ticketKey}
+    </button>
+  );
+}
+
+function ClassicTicketKey({ ticketKey }: { ticketKey: string }) {
   const snap = useStore((s) => s.snap);
   const goToTicket = useStore((s) => s.goToTicket);
-  const backend = useStore((s) => s.backend);
+  const backend = useBackend();
   const known = snap?.tickets[ticketKey];
   const anyTicket = snap && Object.values(snap.tickets)[0];
   if (!snap || (!known && !projectsOf(snap).includes(ticketKey.split("-")[0]))) return <>{ticketKey}</>;

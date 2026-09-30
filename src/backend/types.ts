@@ -12,7 +12,11 @@ import type {
   Snapshot,
   Transition,
   Uploaded,
+  ConnectionInfo,
+  WorkComment,
   WorkContainer,
+  WorkIdentity,
+  WorkMove,
   WorkEvent,
   WorkFilter,
   WorkItem,
@@ -52,6 +56,17 @@ export interface Backend {
   cacheWorkflow(container: ContainerRef): Promise<Workflow | null>;
   /** People the cache has seen, so views can name an assignee. */
   cachePeople(): Promise<Person[]>;
+  /** The signed-in person, so views can tell which items are theirs. */
+  cacheMe(): Promise<WorkIdentity>;
+  /**
+   * An item's comments, oldest first. Without `refresh` they come from the cache; with it, from the tracker, falling
+   * back to the cache when it can't be reached.
+   */
+  cacheComments(ref: ItemRef, refresh: boolean): Promise<WorkComment[]>;
+  /** The moves open to one item right now. A tracker that reveals workflows per item is the only place to ask. */
+  cacheTransitions(ref: ItemRef): Promise<WorkMove[]>;
+  /** The signed-in connections with their sync state. */
+  connectionsList(): Promise<ConnectionInfo[]>;
   /** Events recorded for an item, newest first. */
   cacheEvents(ref: ItemRef): Promise<WorkEvent[]>;
   /** Called when a sync or a write changed the cache, so views over it can re-read. Returns an unsubscribe function. */

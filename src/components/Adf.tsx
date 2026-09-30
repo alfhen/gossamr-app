@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { AdfMark, AdfNode } from "../types";
-import { useStore } from "../store";
+import { useBackend } from "../backend/useBackend";
 
 const SAFE_URL = /^(https?:|mailto:)/i;
 
@@ -283,7 +283,7 @@ function Text({ text, marks }: { text: string; marks: AdfMark[] }) {
 }
 
 export function Link({ href, children }: { href: string; children: ReactNode }) {
-  const backend = useStore((s) => s.backend);
+  const backend = useBackend();
   if (!SAFE_URL.test(href)) return <>{children}</>;
   return (
     <a

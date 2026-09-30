@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, SecondsFormat, Utc};
@@ -9,11 +10,11 @@ use crate::auth::{Account, Auth, AuthStatus, Scope, Site};
 use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, my_actions, NewEvent};
-use crate::domain::{Container, ContainerRef, Event, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, WorkItem, Workflow};
+use crate::domain::{Comment, Container, ContainerRef, Event, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, WorkItem, Workflow};
 use crate::model::{Attachment, CachedTicket, CreatedSubtasks, MentionRef, Person, Snapshot, Status, Ticket, Transition, Uploaded};
 use crate::proposals;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
-use crate::tracker::{self, Connection, Registry, WorkTracker};
+use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
 mod drafts;
 
@@ -90,6 +91,22 @@ fn backfill_cache(db: &Db, connection: &Connection) -> Result<()> {
     db.set_meta(CACHE_BACKFILLED, &now_iso())
 }
 
+/// A signed-in connection as Settings shows it.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionInfo {
+    pub id: String,
+    pub kind: tracker::ConnectionKind,
+    /// The site or organisation.
+    pub workspace: String,
+    pub url: String,
+    /// The person's name on it.
+    pub account: String,
+    pub last_sync_at: Option<String>,
+    pub syncing: bool,
+    pub error: Option<String>,
+}
+
 pub struct Core {
     pub auth: Arc<Auth>,
     registry: Registry,
@@ -98,6 +115,7 @@ pub struct Core {
     /// people signing in to the same site on one Mac never see each other's tickets or inbox.
     db: Mutex<Option<(String, Db)>>,
     last_error: Mutex<Option<String>>,
+    syncing: AtomicBool,
     schedules: Mutex<HashMap<String, Schedule>>,
     /// Ask for a sync now, whatever the schedule says.
     pub wake: Notify,
@@ -123,6 +141,7 @@ impl Core {
             data_dir,
             db: Mutex::new(None),
             last_error: Mutex::new(None),
+            syncing: AtomicBool::new(false),
             schedules: Mutex::new(HashMap::new()),
             wake: Notify::new(),
             focus: Notify::new(),
@@ -214,7 +233,9 @@ impl Core {
         if !due {
             return None;
         }
+        self.syncing.store(true, Ordering::SeqCst);
         let result = self.sync().await;
+        self.syncing.store(false, Ordering::SeqCst);
         self.schedules.lock().expect("schedule lock poisoned").entry(id).or_default().finished(Utc::now(), result.is_ok());
         Some(result)
     }
@@ -524,6 +545,72 @@ impl Core {
         self.with_db_for(scope, |db| db.workflow(container)).await
     }
 
+    /// The signed-in person, across connections.
+    pub async fn cache_me(&self) -> Result<Identity> {
+        let (site, me) = self.identity().await?;
+        Ok(identity_of(&Connection::jira_id(&Scope::of(&site, &me)), &me))
+    }
+
+    /// People named on cached tickets, so views can show a name for an account id.
+    pub async fn cache_people(&self) -> Result<Vec<Person>> {
+        let scope = self.scope().await?;
+        let mut seen: HashMap<String, Person> = HashMap::new();
+        for item in self.search_cached(&scope, &Filter::And { filters: vec![] }).await? {
+            let t = ticket_of(&item)?;
+            let authors = t.comments.iter().map(|c| &c.author);
+            for p in t.assignee.iter().chain(t.reporter.iter()).chain(t.creator.iter()).chain(authors) {
+                seen.entry(p.account_id.clone()).or_insert_with(|| p.clone());
+            }
+        }
+        Ok(seen.into_values().collect())
+    }
+
+    /// An item's comments, oldest first. From the cache unless `refresh`, which reads them from the tracker and
+    /// falls back to the cached ones when it can't be reached.
+    pub async fn cache_comments(&self, item: &ItemRef, refresh: bool) -> Result<Vec<Comment>> {
+        let scope = self.scope().await?;
+        let connection = self.connection(&scope)?;
+        if item.connection_id != connection.id {
+            return Err(Error::SiteChanged);
+        }
+        if refresh {
+            if let Ok(live) = self.tracker(&scope)?.comments(item).await {
+                return Ok(live);
+            }
+        }
+        match self.with_db_for(&scope, |db| db.item(item)).await? {
+            Some(cached) => Ok(tracker::comments_from_ticket(&connection, &ticket_of(&cached)?)),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The moves open to an item right now; Jira reveals them per item.
+    pub async fn cache_transitions(&self, item: &ItemRef) -> Result<Vec<Move>> {
+        let scope = self.scope().await?;
+        if item.connection_id != Connection::jira_id(&scope) {
+            return Err(Error::SiteChanged);
+        }
+        self.tracker(&scope)?.transitions(item).await
+    }
+
+    /// The signed-in connection with how its sync is going.
+    pub async fn connections(&self) -> Result<Vec<ConnectionInfo>> {
+        let Some((site, me)) = self.auth.identity().await else { return Ok(Vec::new()) };
+        let scope = Scope::of(&site, &me);
+        let connection = self.connection(&scope)?;
+        let last_sync_at = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
+        Ok(vec![ConnectionInfo {
+            id: connection.id,
+            kind: connection.kind,
+            workspace: site.name,
+            url: site.url,
+            account: me.name,
+            last_sync_at,
+            syncing: self.syncing.load(Ordering::SeqCst),
+            error: self.last_error.lock().expect("error lock poisoned").clone(),
+        }])
+    }
+
     pub async fn cache_events(&self, item: &ItemRef, limit: usize) -> Result<Vec<Event>> {
         let scope = self.scope().await?;
         self.with_db_for(&scope, |db| db.events_for_item(item, limit)).await
@@ -572,6 +659,62 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::Doc;
+
+    #[tokio::test]
+    async fn the_signed_in_person_is_known_without_the_legacy_snapshot() {
+        let fx = super::testing::fixture().await;
+        let me = fx.core.cache_me().await.unwrap();
+        assert_eq!(me.display_name, "Me");
+        assert_eq!(me.accounts, vec![PersonRef { connection_id: "jira:site:me".into(), account_id: "me".into() }]);
+    }
+
+    #[tokio::test]
+    async fn people_come_from_the_cached_tickets() {
+        let fx = super::testing::fixture().await;
+        let names: Vec<String> = fx.core.cache_people().await.unwrap().into_iter().map(|p| p.name).collect();
+        assert!(names.contains(&"Me Myself".to_string()) && names.contains(&"Sam".to_string()), "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn comments_come_from_the_tracker_and_fall_back_to_the_cache_when_it_is_unreachable() {
+        let fx = super::testing::fixture().await;
+        let item = fx.item("CA-1");
+        let cached = fx.core.cache_comments(&item, false).await.unwrap();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].author.account_id, "sam");
+
+        let live = crate::domain::Comment {
+            id: "77".into(),
+            author: PersonRef { connection_id: item.connection_id.clone(), account_id: "kim".into() },
+            body: Doc::paragraph("fresh"),
+            created: chrono::Utc::now(),
+            mentions: vec![],
+        };
+        *fx.tracker.comments.lock().unwrap() = Some(vec![live.clone()]);
+        assert_eq!(fx.core.cache_comments(&item, true).await.unwrap(), vec![live]);
+        assert_eq!(fx.core.cache_comments(&item, false).await.unwrap().len(), 1, "without refresh the cache answers");
+
+        *fx.tracker.comments.lock().unwrap() = None;
+        assert_eq!(fx.core.cache_comments(&item, true).await.unwrap(), cached);
+    }
+
+    #[tokio::test]
+    async fn another_connections_items_are_refused() {
+        let fx = super::testing::fixture().await;
+        let mut foreign = fx.item("CA-1");
+        foreign.connection_id = "jira:other:me".into();
+        assert!(fx.core.cache_comments(&foreign, true).await.is_err());
+        assert!(fx.core.cache_transitions(&foreign).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_connection_row_names_the_site_and_the_last_sync() {
+        let fx = super::testing::fixture().await;
+        let rows = fx.core.connections().await.unwrap();
+        assert_eq!((rows[0].workspace.as_str(), rows[0].account.as_str(), rows[0].syncing), ("Acme", "Me", false));
+        assert_eq!(rows[0].last_sync_at, None);
+    }
 
     #[test]
     fn unread_cutoff_allows_for_clock_skew_and_defaults_to_a_day() {

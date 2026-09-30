@@ -36,6 +36,29 @@ Gossamr looks for the client in this order, and the setup screen is skipped when
 - the `GOSSAMR_ATLASSIAN_CLIENT_ID` and `GOSSAMR_ATLASSIAN_CLIENT_SECRET` environment variables when the app starts
 - the same two variables set when the app is built, which compile the client into the binary
 
+## The workspace
+
+The app opens in the workspace, a board, list and age view over everything synced from Jira, with a rail of projects and saved views, tabs, a command palette (`⌘K`), a peek sheet for one ticket and Pip, the assistant, docked on the right (`⌘J`). Everything is read from the local cache, so it starts with the last data when offline. The assistant only proposes: dropping a card on a column, a comment written in the peek sheet and Pip's suggestions all become drafts, and nothing is written to Jira until you approve one.
+
+- **Board:** one section per project with that project's own statuses. Jira only reveals the moves open to a ticket one ticket at a time, so when you pick a card up the app asks Jira where it can go and dims the other columns.
+- **Settings:** the Jira site and account, when it last synced, **Sync now**, and **Sign out**. The classic inbox is still reachable from there for now, and back again from its sidebar.
+- **Errors** that don't block anything (a failed sync, a move that couldn't be checked) appear as a toast in the corner.
+
+### Mock mode
+
+`pnpm dev` runs the workspace in a browser on built-in sample data: four projects with different workflows, drafts, and a scripted Pip that answers a few requests and drafts a move or comment. No Jira and no Claude are involved, and the classic inbox isn't available there.
+
+### Not yet verified against a live Jira site
+
+The Jira adapter was written against the REST v3 documentation and tested with response bodies shaped like the documented ones. It has not been exercised on a real site, so these are the places to look first if something misbehaves:
+
+- Creating an issue, updating fields, linking issues and creating sub-tasks (`issue/createmeta/{project}/issuetypes`, `issueLink`). Link direction follows Atlassian's own convention (the blocking issue is the inward one).
+- Reading a project's statuses (`project/{key}/statuses`) and the project list (`project/search`) for board columns.
+- Approving a move: the status id on the card is matched to Jira's transition id at approval time, and Jira may refuse it if the workflow has required fields.
+- Reading comments from the API (`issue/{key}/comment`) for the peek sheet, and rendering their formatting; media and some panels show as plain text.
+- Pip narrowing the view (`pip-view`, `set_view_filter`) and the nudge bubble.
+- Bulk moves offer every status and rely on Jira refusing the ones a ticket can't reach.
+
 ## Ask Claude
 
 Press `⌘J` on a ticket to ask Claude about it. The app runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription and loads your CLAUDE.md, memory and skills. You can continue this ticket's last session, continue any recent CLI or desktop session, or start a new one in a recent folder. It runs Sonnet at medium effort, whatever your Claude Code default is.

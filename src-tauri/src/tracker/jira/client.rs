@@ -93,10 +93,10 @@ impl Jira {
                 None => req,
             })
             .await?;
-        if res.status() == StatusCode::NO_CONTENT {
-            return Ok(serde_json::from_value(Value::Null)?);
+        if !res.status().is_success() {
+            return json_or_error(res).await;
         }
-        json_or_error(res).await
+        decode(&res.bytes().await?)
     }
 
     /// Runs a JQL search and returns up to `limit` matching issues. With `history_since`, each issue carries its
@@ -173,9 +173,8 @@ impl Jira {
         Ok(parse_transitions(&raw))
     }
 
-    pub(super) async fn transition(&self, scope: &Scope, key: &str, transition_id: &str) -> Result<()> {
-        let body = json!({ "transition": { "id": transition_id } });
-        self.call::<Value>(scope, Method::POST, &format!("issue/{key}/transitions"), Some(&body)).await?;
+    pub(super) async fn transition(&self, scope: &Scope, key: &str, body: &Value) -> Result<()> {
+        self.call::<Value>(scope, Method::POST, &format!("issue/{key}/transitions"), Some(body)).await?;
         Ok(())
     }
 
@@ -315,9 +314,10 @@ impl Jira {
         let mut out = Vec::new();
         while out.len() < limit {
             let page: Value = self.call(scope, Method::GET, &format!("project/search?startAt={}&maxResults={PROJECT_PAGE}", out.len()), None).await?;
-            let values = page["values"].as_array().map(Vec::as_slice).unwrap_or_default();
-            out.extend(values.iter().filter_map(|p| Some((p["key"].as_str()?.to_string(), p["name"].as_str()?.to_string()))));
-            if values.is_empty() || page["isLast"] == true {
+            let found = parse_projects(&page);
+            let empty = page["values"].as_array().is_none_or(|v| v.is_empty());
+            out.extend(found);
+            if empty || page["isLast"] == true {
                 break;
             }
         }
@@ -332,13 +332,7 @@ impl Jira {
 
     pub(super) async fn issue_types(&self, scope: &Scope, project: &str) -> Result<Vec<IssueType>> {
         let raw: Value = self.call(scope, Method::GET, &format!("issue/createmeta/{project}/issuetypes"), None).await?;
-        Ok(raw["issueTypes"]
-            .as_array()
-            .or_else(|| raw["values"].as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|t| Some(IssueType { id: t["id"].as_str()?.into(), name: t["name"].as_str()?.into(), subtask: t["subtask"] == true }))
-            .collect())
+        Ok(parse_issue_types(&raw))
     }
 
     /// Creates an issue from a `fields` object and returns its key.
@@ -356,6 +350,15 @@ impl Jira {
         self.call::<Value>(scope, Method::POST, "issueLink", Some(body)).await?;
         Ok(())
     }
+}
+
+/// A success body as `T`. Several Jira writes answer 201 or 204 with nothing (`issueLink`, transitions, updates),
+/// which reads as `null`.
+fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return Ok(serde_json::from_value(Value::Null)?);
+    }
+    Ok(serde_json::from_slice(bytes)?)
 }
 
 /// Jira timestamps look like `2026-09-28T10:00:00.000+0200`; normalise to UTC RFC 3339 so they sort as strings.
@@ -438,6 +441,26 @@ fn parse_comment(c: &Value) -> Option<Comment> {
         mentioned: adf::mentioned(&c["body"]),
         doc: doc(&c["body"]),
     })
+}
+
+fn parse_projects(page: &Value) -> Vec<(String, String)> {
+    page["values"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| Some((p["key"].as_str()?.to_string(), p["name"].as_str()?.to_string())))
+        .collect()
+}
+
+/// Jira has answered with `issueTypes` and with `values` for this endpoint; either is read.
+fn parse_issue_types(raw: &Value) -> Vec<IssueType> {
+    raw["issueTypes"]
+        .as_array()
+        .or_else(|| raw["values"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|t| Some(IssueType { id: t["id"].as_str()?.into(), name: t["name"].as_str()?.into(), subtask: t["subtask"] == true }))
+        .collect()
 }
 
 pub(super) fn parse_transitions(raw: &Value) -> Vec<RawTransition> {
@@ -598,6 +621,14 @@ pub(in crate::tracker) mod tests {
     }
 
     #[test]
+    fn an_empty_success_body_reads_as_null() {
+        assert_eq!(decode::<Value>(b"").unwrap(), Value::Null);
+        assert_eq!(decode::<Value>(b"\n").unwrap(), Value::Null);
+        assert_eq!(decode::<Value>(br#"{"key":"CA-2"}"#).unwrap()["key"], "CA-2");
+        assert!(decode::<Value>(b"<html>").is_err());
+    }
+
+    #[test]
     fn parses_an_issue_with_comments_history_and_subtasks() {
         let t = parse_issue(&sample_issue()).unwrap();
         assert_eq!(t.key, "CA-1");
@@ -673,6 +704,35 @@ pub(in crate::tracker) mod tests {
         assert_eq!(ts.len(), 2);
         assert_eq!((ts[0].id.as_str(), ts[0].to.id.as_str()), ("11", "3"));
         assert_eq!(ts[1].to.category, crate::domain::Category::Done);
+    }
+
+    #[test]
+    fn reads_documented_project_and_issue_type_pages() {
+        let projects = json!({ "self": "x", "maxResults": 50, "startAt": 0, "total": 2, "isLast": true, "values": [
+            { "expand": "description", "id": "10000", "key": "EX", "name": "Example", "projectTypeKey": "software" },
+            { "id": "10001", "key": "ABC", "name": "Alphabetical" }
+        ]});
+        assert_eq!(parse_projects(&projects), [("EX".to_string(), "Example".to_string()), ("ABC".to_string(), "Alphabetical".to_string())]);
+        let types = json!({ "issueTypes": [
+            { "id": "10000", "name": "Task", "subtask": false, "hierarchyLevel": 0 },
+            { "id": "10002", "name": "Sub-task", "subtask": true, "hierarchyLevel": -1 }
+        ], "maxResults": 50, "startAt": 0, "total": 2 });
+        let parsed = parse_issue_types(&types);
+        assert_eq!(parsed.iter().map(|t| (t.id.as_str(), t.subtask)).collect::<Vec<_>>(), [("10000", false), ("10002", true)]);
+        assert_eq!(parse_issue_types(&json!({ "values": [{ "id": "1", "name": "Bug" }] })).len(), 1);
+    }
+
+    #[test]
+    fn reads_a_documented_comment_page() {
+        let page = json!({ "startAt": 0, "maxResults": 100, "total": 1, "comments": [{
+            "id": "10000", "self": "x",
+            "author": { "accountId": "5b10a2844c20165700ede21g", "displayName": "Mia Krystof", "active": true, "avatarUrls": { "48x48": "https://a/48" } },
+            "body": { "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Lorem ipsum" }] }] },
+            "created": "2021-01-17T12:34:00.000+0000", "updated": "2021-01-18T23:45:00.000+0000"
+        }]});
+        let comments: Vec<Comment> = page["comments"].as_array().unwrap().iter().filter_map(parse_comment).collect();
+        assert_eq!((comments[0].body.as_str(), comments[0].created.as_str()), ("Lorem ipsum", "2021-01-17T12:34:00Z"));
+        assert_eq!(comments[0].author.avatar_url.as_deref(), Some("https://a/48"));
     }
 
     #[test]

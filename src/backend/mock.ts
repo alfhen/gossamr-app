@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   AdfNode,
   CacheChanged,
+  ConnectionInfo,
   Comment,
   ContainerRef,
   Intent,
@@ -23,7 +24,7 @@ import type {
 } from "../types";
 import { fold, type Mention } from "../lib/mentions";
 import { docText } from "../lib/docs";
-import { MockConnector } from "./mockConnector";
+import { MOCK_CONNECTION, MockConnector, PEOPLE } from "./mockConnector";
 import { targetOf } from "../lib/proposals";
 import { MockProposals } from "./mockProposals";
 import { seedDrafts } from "./mockDrafts";
@@ -469,6 +470,24 @@ export class MockBackend implements Backend {
 
   async cachePeople() {
     return this.connector.people;
+  }
+
+  async cacheMe() {
+    return this.connector.identity();
+  }
+
+  async cacheComments(ref: ItemRef) {
+    return this.connector.comments(ref);
+  }
+
+  async cacheTransitions(ref: ItemRef) {
+    return this.connector.moves(ref);
+  }
+
+  async connectionsList(): Promise<ConnectionInfo[]> {
+    return [
+      { id: MOCK_CONNECTION, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null },
+    ];
   }
 
   onCacheChanged(listener: (c: CacheChanged) => void) {

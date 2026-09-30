@@ -27,6 +27,11 @@ pub(super) fn item_from_ticket(connection_id: &str, t: &CachedTicket) -> WorkIte
     convert::work_item(connection_id, t)
 }
 
+/// The comments a stored ticket carries, for when Jira can't be reached.
+pub(super) fn comments_from_ticket(connection_id: &str, t: &CachedTicket) -> Vec<Comment> {
+    t.comments.iter().map(|c| convert::comment(connection_id, c)).collect()
+}
+
 const CONTAINER_LIMIT: usize = 100;
 
 pub(super) struct JiraTracker {
@@ -152,7 +157,7 @@ impl WorkTracker for JiraTracker {
                     status: 400,
                     message: format!("{} can't move to that status from where it is", item.key),
                 })?;
-                self.client.transition(scope, &item.external_id, &t.id).await?;
+                self.client.transition(scope, &item.external_id, &intent::transition_body(t)).await?;
                 Ok(Applied::default())
             }
             Intent::Update { item, patch } => {

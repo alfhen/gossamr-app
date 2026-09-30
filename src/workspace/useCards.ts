@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { itemKey } from "../lib/filter";
 import { targetOf } from "../lib/proposals";
 import type { StatusDef, WorkItem, Workflow } from "../types";
-import { draftCounts, nameOf, workflowOfItem, useWorkspace } from "../workspaceStore";
-import { approvableTransitions, blockedKeys, bulkMoves, bulkTargets, draftStatus, pendingMoves, targetsFor, witherOf } from "./boardLogic";
+import { draftCounts, knownMoves, nameOf, workflowOfItem, useWorkspace } from "../workspaceStore";
+import { approvableTransitions, blockedKeys, bulkMoves, bulkTargets, draftStatus, movesAreOpaque, pendingMoves, targetsFor, witherOf } from "./boardLogic";
 import type { ItemCardProps } from "./ItemCard";
 import { useTabs } from "./tabsStore";
 
@@ -19,6 +19,7 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
   const allItems = useWorkspace((s) => s.items);
   const containers = useWorkspace((s) => s.containers);
   const proposals = useWorkspace((s) => s.proposals);
+  const moves = useWorkspace((s) => s.moves);
   const names = useWorkspace((s) => s.names);
   const selected = useTabs((s) => s.selected);
   const ticked = useTabs((s) => s.marked);
@@ -76,9 +77,12 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
       selected: selected === key,
       marked: marked.includes(key),
       menuOpen: menuFor === key,
-      moveTargets: wf ? targetsFor(wf, item) : [],
+      moveTargets: wf ? targetsFor(wf, item, knownMoves({ moves }, item)) : [],
       onSelect: (how) => (how === "one" ? useTabs.getState().select(key) : useTabs.getState().mark(key, how, order)),
-      onMenu: (open) => setMenuFor(open ? key : null),
+      onMenu: (open) => {
+        setMenuFor(open ? key : null);
+        if (open && wf && movesAreOpaque(wf)) void useWorkspace.getState().loadMoves(item);
+      },
       onMove: (s) => void move(item, s),
       onApprove: (id) => void decide(id, "approve"),
       onSkip: (id) => void decide(id, "skip"),

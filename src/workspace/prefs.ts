@@ -10,6 +10,8 @@ export type UiMode = "classic" | "workspace";
 
 interface Prefs {
   ui: UiMode;
+  /** Whether the person picked `ui` themselves, as opposed to it being the default. */
+  uiChosen: boolean;
   theme: ThemeMode;
   pipOpen: boolean;
   paletteOpen: boolean;
@@ -21,27 +23,31 @@ interface Prefs {
 
 const KEY = "gossamr-prefs";
 
-function load(): Pick<Prefs, "ui" | "theme" | "pipOpen"> {
+export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
-    ui: raw?.ui === "workspace" ? "workspace" : "classic",
+    // Installs from before the workspace was the default stored "classic" without anyone choosing it.
+    ui: raw?.uiChosen === true && raw.ui === "classic" ? "classic" : "workspace",
+    uiChosen: raw?.uiChosen === true,
     theme: THEMES.find((t) => t === raw?.theme) ?? "auto",
     pipOpen: raw?.pipOpen === true,
   };
 }
 
 export const usePrefs = create<Prefs>((set) => ({
-  ...load(),
+  ...loadPrefs(),
   paletteOpen: false,
-  setUi: (ui) => set({ ui }),
+  setUi: (ui) => set({ ui, uiChosen: true }),
   setTheme: (theme) => set({ theme }),
   setPipOpen: (pipOpen) => set({ pipOpen }),
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
 }));
 
-usePrefs.subscribe(({ ui, theme, pipOpen }) => writeStored(KEY, { ui, theme, pipOpen }));
+usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen }) => writeStored(KEY, { ui, uiChosen, theme, pipOpen }));
 
 /** The browser build has no classic inbox to fall back to, so it always shows the workspace. */
+export const isWorkspaceUi = () => !isTauri() || usePrefs.getState().ui === "workspace";
+
 export const useWorkspaceUi = () => usePrefs((s) => !isTauri() || s.ui === "workspace");
 
 export function applyTheme(theme: ThemeMode, root: HTMLElement = document.documentElement) {

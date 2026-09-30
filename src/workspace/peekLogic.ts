@@ -1,5 +1,5 @@
 import { itemKey } from "../lib/filter";
-import type { ItemRef, WorkEvent, WorkItem } from "../types";
+import type { ItemRef, WorkDoc, WorkEvent, WorkItem } from "../types";
 
 export type LinkKind = "blocks" | "blockedBy" | "relates" | "duplicates" | "duplicatedBy";
 
@@ -46,6 +46,8 @@ export interface Note {
   at: string;
   who: string;
   text: string;
+  /** The structured body, when there is one; `text` is its plain reading. */
+  doc?: WorkDoc;
 }
 
 const textOf = (payload: unknown): string => {

@@ -15,7 +15,11 @@ import type {
   Snapshot,
   Transition,
   Uploaded,
+  ConnectionInfo,
+  WorkComment,
   WorkContainer,
+  WorkIdentity,
+  WorkMove,
   WorkEvent,
   WorkFilter,
   WorkItem,
@@ -123,13 +127,24 @@ export class JiraBackend implements Backend {
     return invoke<Workflow | null>("cache_workflow", { container });
   }
 
-  async cachePeople() {
-    const snap = await this.load();
-    const seen = new Map<string, Person>();
-    for (const t of Object.values(snap.tickets)) {
-      for (const p of [t.assignee, t.reporter, ...t.comments.map((c) => c.author)]) if (p) seen.set(p.accountId, p);
-    }
-    return [...seen.values()];
+  cachePeople() {
+    return invoke<Person[]>("cache_people");
+  }
+
+  cacheMe() {
+    return invoke<WorkIdentity>("cache_me");
+  }
+
+  cacheComments(item: ItemRef, refresh: boolean) {
+    return invoke<WorkComment[]>("cache_comments", { item, refresh });
+  }
+
+  cacheTransitions(item: ItemRef) {
+    return invoke<WorkMove[]>("cache_transitions", { item });
+  }
+
+  connectionsList() {
+    return invoke<ConnectionInfo[]>("connections_list");
   }
 
   cacheEvents(item: ItemRef) {

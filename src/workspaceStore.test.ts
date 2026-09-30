@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { MockBackend } from "./backend/mock";
 import { itemRef, statusId } from "./backend/mockConnector";
 import { parseQuery, describeFilter } from "./lib/filter";
+import { useToasts } from "./workspace/toasts";
 import {
   allContainers,
   childrenOf,
@@ -12,6 +13,7 @@ import {
   itemByRef,
   itemsByFilter,
   itemsInContainer,
+  knownMoves,
   nameOf,
   needsMeItems,
   pendingDrafts,
@@ -138,17 +140,59 @@ describe("workspace store refresh", () => {
     expect(eventsFor(s(), itemRef("DEVOPS-471"))).toEqual([]);
   });
 
-  it("derives me from the current containers on every refresh", async () => {
-    const wider = new MockBackend();
-    const listContainers = wider.connector.listContainers.bind(wider.connector);
-    await s().init(wider);
-    expect(s().me).toHaveLength(1);
-    wider.connector.listContainers = () => [
-      ...listContainers(),
-      { ...listContainers()[0], ref: { connectionId: "other", externalId: "X" } },
-    ];
-    await s().refresh();
-    expect(s().me.map((m) => m.connectionId).sort()).toEqual(["mock", "other"]);
+  it("takes the signed-in person from the backend, not from a snapshot", async () => {
+    const other = new MockBackend();
+    other.load = () => Promise.reject(new Error("the legacy snapshot must not be needed"));
+    other.cacheMe = async () => ({ displayName: "Kim", accounts: [{ connectionId: "jira:site:kim", accountId: "kim" }] });
+    await s().init(other);
+    expect(s().me).toEqual([{ connectionId: "jira:site:kim", accountId: "kim" }]);
+    expect(nameOf(s(), s().me[0])).toBe("Kim");
+  });
+
+  it("loads comments from the cache first and keeps them current when the count changes", async () => {
+    const ref = itemRef("CA-409");
+    expect(s().comments["mock:CA-409"]).toBeUndefined();
+    await s().loadComments(ref);
+    const before = s().comments["mock:CA-409"].length;
+    expect(before).toBeGreaterThan(0);
+    backend.connector.comment(ref, "one more");
+    await flush();
+    await flush();
+    expect(s().comments["mock:CA-409"].length).toBe(before + 1);
+  });
+
+  it("asks where an item can move once per status and again after it moves", async () => {
+    const item = s().items["mock:CA-402"];
+    let asked = 0;
+    const ask = backend.cacheTransitions.bind(backend);
+    backend.cacheTransitions = (ref) => (asked++, ask(ref));
+    const first = await s().loadMoves(item);
+    expect(first?.length).toBeGreaterThan(0);
+    await s().loadMoves(item);
+    expect(asked).toBe(1);
+    expect(knownMoves(s(), item)).toEqual(first);
+    const moved = { ...item, status: first![0] };
+    expect(knownMoves(s(), moved)).toBeNull();
+    await s().loadMoves(moved);
+    expect(asked).toBe(2);
+  });
+
+  it("answers null and shows a toast when the tracker can't say where an item can move", async () => {
+    useToasts.getState().clear();
+    backend.cacheTransitions = () => Promise.reject(new Error("offline"));
+    expect(await s().loadMoves(s().items["mock:CA-402"])).toBeNull();
+    expect(useToasts.getState().toasts[0].text).toMatch(/CA-402.*offline/);
+  });
+
+  it("holds the connection rows and reports a new sync failure once", async () => {
+    useToasts.getState().clear();
+    await flush();
+    expect(s().connections[0].workspace).toBe("Sample data");
+    const failing = { ...s().connections[0], error: "HTTP 503" };
+    backend.connectionsList = async () => [failing];
+    await s().refreshConnections();
+    await s().refreshConnections();
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Couldn't sync: HTTP 503"]);
   });
 
   it("drops a decision that lands after the workspace moved to another backend", async () => {
