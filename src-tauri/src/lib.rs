@@ -342,7 +342,7 @@ async fn code_commits(
     let since = since
         .map(|s| chrono::DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&chrono::Utc)).map_err(|_| Error::Api { status: 400, message: format!("not a valid time: {s}") }))
         .transpose()?;
-    core.code_commits(&connection_id, &CommitQuery { repo, reference, since, text: query, limit: limit.unwrap_or(0) }).await
+    core.code_commits(&connection_id, &CommitQuery { repo, reference, since, path: None, text: query, limit: limit.unwrap_or(0) }).await
 }
 
 /// GitHub code search, limited to watched repositories (all of them when `repos` is left out).

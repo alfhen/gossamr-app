@@ -2,6 +2,7 @@
 //! neutral events; `AgentService` prepares each run's prompt and screen context and routes events to the page.
 
 pub mod context;
+mod github;
 pub mod mcp;
 
 #[cfg(test)]
@@ -138,6 +139,10 @@ impl AgentService {
             Some(r) => Some(mcp::describe(&self.core.ticket(&scope, &r.key).await?)),
             None => None,
         };
+        let links = match &context.item {
+            Some(r) => self.core.dev_links(r).unwrap_or_default(),
+            None => Vec::new(),
+        };
         let open = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
         let drafts = self.core.proposals_in(&scope, &open).await?;
         let cwd = req
@@ -152,7 +157,7 @@ impl AgentService {
         let agent_req = AgentRequest {
             run_id: run_id.clone(),
             system: context::system_prompt(provider.capabilities().reads_code),
-            prompt: context::compose(&context, item.as_deref(), &drafts, &req.prompt),
+            prompt: context::compose(&context, item.as_deref(), &links, &drafts, &req.prompt),
             mcp: self.mcp.endpoint(&run_id),
             cwd: cwd.clone(),
             session: req.session_id.filter(|_| provider.capabilities().resume),
