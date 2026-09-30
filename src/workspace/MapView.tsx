@@ -167,7 +167,8 @@ export function MapView({ items }: CanvasProps) {
   const selected = useTabs((s) => s.selected);
   const [viewport, setViewport] = useState<Viewport>(FIT);
   const [hovered, setHovered] = useState<string | null>(null);
-  const [focused, setFocused] = useState<string | null>(null);
+  const [focusKey, setFocused] = useState<string | null>(null);
+  const focused = shownKey(layout.nodes, focusKey);
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
@@ -280,7 +281,7 @@ export function MapView({ items }: CanvasProps) {
         aria-activedescendant={focused ? nodeId(focused) : undefined}
         aria-label="Map of tickets. Arrow keys move between tickets, Enter opens one, plus and minus zoom, zero fits the view."
         onKeyDown={onKeyDown}
-        onFocus={() => setFocused((f) => f ?? selected ?? layout.nodes[0]?.key ?? null)}
+        onFocus={() => setFocused(focused ?? selected ?? layout.nodes[0]?.key ?? null)}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
