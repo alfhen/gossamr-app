@@ -7,6 +7,7 @@ import { Workspace } from "./workspace/Workspace";
 import { auth, type AuthStatus } from "./backend/auth";
 import { JiraBackend } from "./backend/jira";
 import { MockBackend } from "./backend/mock";
+import { mockOptionsFromUrl } from "./backend/mockWatch";
 import { announceSignedOut, onSignedOut } from "./accountEvents";
 import { resetAccountState } from "./accountState";
 import type { Backend } from "./backend/types";
@@ -38,7 +39,7 @@ export function Root() {
     starting.current = true;
     useStore.setState({ account });
     starting.current = false;
-    const backend: Backend = account ? new JiraBackend({ cloudId: account.site.cloudId, accountId: account.me.accountId }) : new MockBackend();
+    const backend: Backend = account ? new JiraBackend({ cloudId: account.site.cloudId, accountId: account.me.accountId }) : new MockBackend(mockOptionsFromUrl());
     current.current = { status, backend };
     if (account) void askForNotifications();
     if (isWorkspaceUi()) return setPhase({ name: "app", backend });

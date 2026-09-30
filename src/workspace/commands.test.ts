@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { buildCommands, newTicketIntent, projectChoices, rankCommands, ticketCommands, withAskPip, type CommandActions } from "./commands";
+import { buildCommands, keyCommand, newTicketIntent, projectChoices, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
 import { BUILT_IN_VIEWS } from "./filters";
 
 const containers = await new MockBackend().cacheContainers();
@@ -9,7 +9,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "jumpToItem", "askPip"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "jumpToItem", "askPip"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -138,5 +138,53 @@ describe("palette extras", () => {
       fields: { title: "Rotate keys", body: { blocks: [] }, kind: "task", assignee: null, parent: null, priority: null, labels: [] },
       link: null,
     });
+  });
+});
+
+describe("watch commands", () => {
+  const a = actions();
+  const target = { ref: containerRef("SUP"), key: "SUP", name: "Support" };
+
+  it("lists Manage projects in the Projects group and runs it", () => {
+    const manage = buildCommands(containers, BUILT_IN_VIEWS, a).find((c) => c.label === "Manage projects")!;
+    expect(manage.group).toBe("Projects");
+    manage.run();
+    expect(a.manageProjects).toHaveBeenCalled();
+    expect(rankCommands(buildCommands(containers, BUILT_IN_VIEWS, a), "watch").map((c) => c.label)).toContain("Manage projects");
+  });
+
+  it("offers to watch a project the person doesn't, and to unwatch one they do when they ask to stop", () => {
+    const [watch] = watchCommands([target], a);
+    expect(watch).toMatchObject({ label: "Watch Support", group: "Projects", hint: "SUP · not watched" });
+    watch.run();
+    expect(a.watch).toHaveBeenCalledWith(target, true);
+
+    const un = rankCommands(unwatchCommands(containers, "unwatch web", a), "unwatch web");
+    expect(un.map((c) => c.label)).toEqual(["Unwatch Webshop"]);
+    un[0].run();
+    expect(a.watch).toHaveBeenLastCalledWith(containers.find((c) => c.key === "WEB"), false);
+  });
+
+  it("keeps Unwatch out of ordinary searches", () => {
+    expect(unwatchCommands(containers, "web", a)).toEqual([]);
+    expect(unwatchCommands(containers, "", a)).toEqual([]);
+  });
+
+  it("caps the watch suggestions", () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ ref: containerRef(`P${i}`), key: `P${i}`, name: `Project ${i}` }));
+    expect(watchCommands(many, a)).toHaveLength(5);
+  });
+
+  it("opens any ticket key that isn't among the synced items", () => {
+    const [open] = keyCommand("sup-99", items, a.openTicket);
+    expect(open).toMatchObject({ label: "Open SUP-99", group: "Tickets" });
+    open.run();
+    expect(a.openTicket).toHaveBeenCalledWith("SUP-99");
+  });
+
+  it("leaves a synced key to the ticket results, and words alone", () => {
+    const key = items[0].item.key;
+    expect(keyCommand(key.toLowerCase(), items, a.openTicket)).toEqual([]);
+    expect(keyCommand("swatch", items, a.openTicket)).toEqual([]);
   });
 });

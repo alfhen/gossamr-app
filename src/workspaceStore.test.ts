@@ -318,3 +318,140 @@ describe("the store and what is watched", () => {
     expect(await s().peekItem(itemRef("NOPE-1"))).toBeNull();
   });
 });
+
+describe("choosing what to watch", () => {
+  const big = async () => {
+    const b = new MockBackend({ catalogSize: 14 });
+    await s().init(b);
+    return b;
+  };
+
+  it("leaves the forced choice once the containers and the mode are saved, in that order", async () => {
+    const b = await big();
+    const order: string[] = [];
+    const setMode = b.watchSetMode.bind(b);
+    const setContainers = b.watchSetContainers.bind(b);
+    b.watchSetMode = async (...a) => (order.push("mode"), setMode(...a));
+    b.watchSetContainers = async (...a) => (order.push("containers"), setContainers(...a));
+    expect(needsWatchChoice(s())).toBe(true);
+
+    await s().chooseWatch("mock", [{ containerId: "CA", watched: true, pinned: true, source: "footprint" }]);
+
+    expect(order).toEqual(["containers", "mode"]);
+    expect(needsWatchChoice(s())).toBe(false);
+    expect(allContainers(s()).map((c) => c.key)).toEqual(["CA"]);
+    expect(s().watch[0].watches[0]).toMatchObject({ key: "CA", pinned: true, source: "footprint", depth: "involved" });
+  });
+
+  it("does not leave the choice when saving fails", async () => {
+    const b = await big();
+    b.watchSetContainers = async () => {
+      throw new Error("offline");
+    };
+    await expect(s().chooseWatch("mock", [{ containerId: "CA", watched: true }])).rejects.toThrow("offline");
+    expect(needsWatchChoice(s())).toBe(true);
+  });
+
+  it("can choose to watch everything", async () => {
+    await big();
+    await s().watchMode("mock", "everything");
+    expect(needsWatchChoice(s())).toBe(false);
+    expect(Object.keys(s().containers)).toHaveLength(14);
+  });
+
+  it("unwatches softly, keeps the row for its grace period, and watches it again", async () => {
+    await big();
+    await s().chooseWatch("mock", [
+      { containerId: "CA", watched: true },
+      { containerId: "WEB", watched: true },
+    ]);
+    await s().watchContainers("mock", [{ containerId: "WEB", watched: false }]);
+    expect(allContainers(s()).map((c) => c.key)).toEqual(["CA"]);
+    const row = s().watch[0].watches.find((w) => w.key === "WEB")!;
+    expect(row.unwatchedAt).not.toBeNull();
+
+    await s().watchContainers("mock", [{ containerId: "WEB", watched: true }]);
+    expect(allContainers(s()).map((c) => c.key)).toEqual(["CA", "WEB"]);
+    expect(s().watch[0].watches.find((w) => w.key === "WEB")!.unwatchedAt).toBeNull();
+  });
+
+  it("changes depth and pin without starting to watch", async () => {
+    await big();
+    await s().chooseWatch("mock", [{ containerId: "CA", watched: true }]);
+    await s().watchContainers("mock", [
+      { containerId: "CA", depth: "whole", pinned: true },
+      { containerId: "WEB", depth: "whole", pinned: true },
+    ]);
+    expect(s().watch[0].watches.map((w) => [w.key, w.depth, w.pinned])).toEqual([["CA", "whole", true]]);
+    expect(allContainers(s()).map((c) => c.key)).toEqual(["CA"]);
+  });
+});
+
+describe("items assigned in projects that aren't watched", () => {
+  const watchOnlyCa = async () => {
+    const b = new MockBackend();
+    await s().init(b);
+    await s().chooseWatch("mock", [{ containerId: "CA", watched: true }]);
+    return b;
+  };
+
+  it("finds them, and stops listing a project once it is watched", async () => {
+    await watchOnlyCa();
+    await s().refreshStrays();
+    const strays = s().strays;
+    expect(strays.length).toBeGreaterThan(0);
+    expect(strays.every((x) => x.keys.length > 0 && x.container.externalId !== "CA")).toBe(true);
+
+    await s().watchContainers("mock", [{ containerId: strays[0].container.externalId, watched: true }]);
+    await flush();
+    expect(s().strays.find((x) => x.container.externalId === strays[0].container.externalId)).toBeUndefined();
+  });
+
+  it("dismisses one without watching it", async () => {
+    const b = await watchOnlyCa();
+    await s().refreshStrays();
+    const first = s().strays[0];
+    await s().dismissStray(first);
+    expect(s().strays).not.toContain(first);
+    expect((await b.watchUnwatchedAssigned()).map((x) => x.container.externalId)).not.toContain(first.container.externalId);
+    expect(allContainers(s()).map((c) => c.key)).toEqual(["CA"]);
+  });
+
+  it("raises a notice, with a way to review, when they are found at start", async () => {
+    useToasts.getState().clear();
+    await watchOnlyCa();
+    useToasts.setState({ toasts: [] });
+    useWorkspace.setState({ strays: [] });
+    await s().refreshStrays(true);
+    const [toast] = useToasts.getState().toasts;
+    expect(toast.text).toContain("which you're not watching");
+    expect(toast.tone).toBe("info");
+    expect(toast.action?.label).toBe("Review");
+  });
+
+  it("raises one when the backend announces new ones", async () => {
+    const b = await watchOnlyCa();
+    useToasts.setState({ toasts: [] });
+    const listeners: ((f: { connectionId: string; strays: never[] }) => void)[] = [];
+    b.onAssignedElsewhere = (l) => (listeners.push(l as never), () => {});
+    await s().init(b);
+    const stray = { container: { connectionId: "mock", externalId: "SUP" }, containerName: "Support", keys: ["SUP-12"] };
+    listeners.forEach((l) => l({ connectionId: "mock", strays: [stray] as never }));
+    expect(s().strays).toContainEqual(stray);
+    expect(useToasts.getState().toasts[0].text).toContain("SUP-12 in Support");
+  });
+});
+
+describe("the read-only peek", () => {
+  it("holds one peeked ticket apart from the synced ones and clears it", async () => {
+    const b = new MockBackend();
+    await s().init(b);
+    await s().chooseWatch("mock", [{ containerId: "CA", watched: true }]);
+    const item = (await s().peekItem(itemRef("WEB-101")))!;
+    s().showPeeked({ item, containerName: "Webshop" });
+    expect(s().peeked["mock:WEB-101"]).toMatchObject({ containerName: "Webshop" });
+    expect(itemByRef(s(), itemRef("WEB-101"))).toBeUndefined();
+    s().clearPeeked();
+    expect(s().peeked).toEqual({});
+  });
+});

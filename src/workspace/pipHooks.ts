@@ -8,6 +8,8 @@ import { itemScene, type ItemScene } from "./pipScene";
 import { buildScreenContext, type Screen } from "./screenContext";
 import { activeTab, useTabs } from "./tabsStore";
 
+const peekedItems = (p: ReturnType<typeof useWorkspace.getState>["peeked"]) => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.item]));
+
 /** The screen as it is right now, read when a question is asked so it is about what is on screen then. */
 export function readScreen(): Screen {
   const tabs = useTabs.getState();
@@ -19,6 +21,7 @@ export function readScreen(): Screen {
     tab,
     shown: itemsByFilter(ws, tab.filter),
     items: ws.items,
+    peeked: peekedItems(ws.peeked),
     containers: ws.containers,
     selected: tabs.selected,
     marked: tabs.marked,
@@ -35,11 +38,13 @@ export function useScreen(): Screen {
   const shown = useItemsByFilter(tab.filter);
   const items = useWorkspace((s) => s.items);
   const containers = useWorkspace((s) => s.containers);
+  const peekedState = useWorkspace((s) => s.peeked);
+  const peeked = useMemo(() => peekedItems(peekedState), [peekedState]);
   const selected = useTabs((s) => s.selected);
   const marked = useTabs((s) => s.marked);
   const chip = useActivity((s) => s.chip);
   const container = useActivity((s) => s.container);
-  return useMemo(() => ({ route, tab, shown, items, containers, selected, marked, activity: { chip, container } }), [route, tab, shown, items, containers, selected, marked, chip, container]);
+  return useMemo(() => ({ route, tab, shown, items, peeked, containers, selected, marked, activity: { chip, container } }), [route, tab, shown, items, peeked, containers, selected, marked, chip, container]);
 }
 
 /** What Pip can tell about the open ticket, or null when none is open on a screen that has a peek. */

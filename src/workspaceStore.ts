@@ -4,6 +4,8 @@ import type { Backend } from "./backend/types";
 import { ALL, compileFilter, containerKey, itemKey, type FilterContext, type QueryLookup } from "./lib/filter";
 import { targetOf } from "./lib/proposals";
 import { movesAreOpaque } from "./workspace/boardLogic";
+import { newStrays, strayText } from "./workspace/watchLogic";
+import { useTabs } from "./workspace/tabsStore";
 import { messageOf, useToasts } from "./workspace/toasts";
 import type {
   ConnectionInfo,
@@ -13,6 +15,9 @@ import type {
   Proposal,
   ProposalStateKind,
   StatusDef,
+  Stray,
+  WatchChange,
+  WatchMode,
   WatchState,
   WorkComment,
   WorkContainer,
@@ -44,6 +49,10 @@ interface WorkspaceState {
   connections: ConnectionInfo[];
   /** What each connection follows. Items, containers, counts and Pip's view are already limited to it. */
   watch: WatchState[];
+  /** Open items assigned to the person in containers they don't watch, until watched or dismissed. */
+  strays: Stray[];
+  /** The one ticket read live for the peek, never part of `items`. */
+  peeked: Record<string, PeekedItem>;
   /** The user's accounts across connections. */
   me: PersonRef[];
   /** Display names by account id. */
@@ -55,6 +64,16 @@ interface WorkspaceState {
   refreshNeedsMe(): Promise<void>;
   refreshProposals(): Promise<void>;
   refreshWatch(): Promise<void>;
+  /** Changes what is watched, then re-reads everything the watch set scopes. */
+  watchContainers(connectionId: string, changes: WatchChange[]): Promise<void>;
+  watchMode(connectionId: string, mode: WatchMode): Promise<void>;
+  /** Starts watching `changes` and switches the connection to selected mode. The containers go first so a failure leaves the choice still to make. */
+  chooseWatch(connectionId: string, changes: WatchChange[]): Promise<void>;
+  /** Re-reads the strays of every connection; `announce` also raises a notice for them, as when the app starts. */
+  refreshStrays(announce?: boolean): Promise<void>;
+  dismissStray(stray: Stray): Promise<void>;
+  showPeeked(peeked: PeekedItem): void;
+  clearPeeked(): void;
   /** Reads an item live without storing it, flagged `unwatched` when its project isn't watched. Null when it can't be seen. */
   peekItem(ref: ItemRef): Promise<WorkItem | null>;
   loadEvents(ref: ItemRef): Promise<void>;
@@ -73,6 +92,12 @@ interface WorkspaceState {
   dispose(): void;
 }
 
+export interface PeekedItem {
+  item: WorkItem;
+  /** The container's name when the catalog knows it. */
+  containerName: string | null;
+}
+
 const empty = {
   backend: null,
   status: "idle" as const,
@@ -86,6 +111,8 @@ const empty = {
   moves: {},
   connections: [],
   watch: [],
+  strays: [],
+  peeked: {},
   me: [],
   names: {},
 };
@@ -99,6 +126,7 @@ const SYNC_FLAG_MS = 20_000;
 let proposalSeq = 0;
 let watchSeq = 0;
 let needsMeSeq = 0;
+let straySeq = 0;
 const commentSeq = new Map<string, number>();
 const moving = new Map<string, Promise<StatusDef[] | null>>();
 let lastSyncError: string | null = null;
@@ -123,8 +151,18 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     });
     // A change the person makes also emits a cache change, which re-reads what the watch set scopes; this only
     // needs to refresh the settings themselves, including when the app chose for a small catalog.
-    const offWatch = backend.onWatchChanged(() => get().refreshWatch().catch((e) => get().report("Couldn't load what you watch", e)));
+    const offWatch = backend.onWatchChanged(() => {
+      get().refreshWatch().catch((e) => get().report("Couldn't load what you watch", e));
+      void get().refreshStrays();
+    });
+    const offStrays = backend.onAssignedElsewhere((found) => {
+      const before = get().strays;
+      const after = [...before.filter((s) => s.container.connectionId !== found.connectionId), ...found.strays];
+      set({ strays: after });
+      announceStrays(newStrays(before, after));
+    });
     stop = () => {
+      offStrays();
       offCache();
       offProposals();
       offSnapshot();
@@ -136,6 +174,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const names = Object.fromEntries(identity.accounts.map((a) => [a.accountId, identity.displayName]));
       set((s) => ({ me: identity.accounts, names: { ...s.names, ...names }, status: "ready" }));
       void get().refreshConnections();
+      void get().refreshStrays(true);
     } catch (e) {
       if (mine === generation) set({ status: "error", error: String(e) });
       throw e;
@@ -194,6 +233,57 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const watch = await backend.watchGet();
     if (backend === get().backend && mine === watchSeq) set({ watch });
   },
+
+  async watchContainers(connectionId, changes) {
+    const backend = get().backend;
+    if (!backend || !changes.length) return;
+    await backend.watchSetContainers(connectionId, changes);
+    await Promise.all([get().refreshWatch(), get().refresh()]);
+  },
+
+  async watchMode(connectionId, mode) {
+    const backend = get().backend;
+    if (!backend) return;
+    await backend.watchSetMode(connectionId, mode);
+    await Promise.all([get().refreshWatch(), get().refresh()]);
+  },
+
+  async chooseWatch(connectionId, changes) {
+    const backend = get().backend;
+    if (!backend) return;
+    await backend.watchSetContainers(connectionId, changes);
+    await backend.watchSetMode(connectionId, "selected");
+    await Promise.all([get().refreshWatch(), get().refresh()]);
+  },
+
+  async refreshStrays(announce = false) {
+    const backend = get().backend;
+    if (!backend) return;
+    const mine = ++straySeq;
+    const connections = get().watch.map((w) => w.connectionId);
+    const found = await Promise.all(connections.map((id) => backend.watchUnwatchedAssigned(id).catch(() => [] as Stray[])));
+    if (backend !== get().backend || mine !== straySeq) return;
+    const before = get().strays;
+    const strays = found.flat();
+    set({ strays });
+    if (announce) announceStrays(newStrays(before, strays));
+  },
+
+  async dismissStray(stray) {
+    const backend = get().backend;
+    if (!backend) return;
+    set((s) => ({ strays: s.strays.filter((x) => x !== stray) }));
+    try {
+      await backend.watchDismissAssigned(stray.container.connectionId, stray.container.externalId);
+    } catch (e) {
+      get().report("Couldn't dismiss that", e);
+      void get().refreshStrays();
+    }
+  },
+
+  showPeeked: (peeked) => set({ peeked: { [itemKey(peeked.item.item)]: peeked } }),
+
+  clearPeeked: () => set((s) => (Object.keys(s.peeked).length ? { peeked: {} } : s)),
 
   peekItem(ref) {
     return get().backend?.peekItem(ref) ?? Promise.resolve(null);
@@ -330,6 +420,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ ...empty });
   },
 }));
+
+function announceStrays(strays: Stray[]) {
+  const first = strays[0];
+  if (!first) return;
+  const text = strays.length > 1 ? `${strayText(first)}, and in ${strays.length - 1} more.` : `${strayText(first)}.`;
+  useToasts.getState().push(text, "info", { label: "Review", run: () => useTabs.getState().setRoute("activity") });
+}
 
 function clearSyncing() {
   useWorkspace.setState((s) => ({ connections: s.connections.map((c) => ({ ...c, syncing: false })) }));

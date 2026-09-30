@@ -81,3 +81,10 @@ export class MockWatch {
     };
   }
 }
+
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists. */
+export function mockOptionsFromUrl(): MockOptions {
+  if (!import.meta.env.DEV || typeof location === "undefined") return {};
+  const n = Number(new URLSearchParams(location.search).get("mockProjects"));
+  return Number.isInteger(n) && n > 0 ? { catalogSize: n } : {};
+}

@@ -2,6 +2,7 @@ import { itemKey } from "../lib/filter";
 import type { ContainerRef, Intent, WorkContainer, WorkFilter, WorkItem } from "../types";
 import type { SavedView } from "./filters";
 import { THEMES, THEME_LABEL, type ThemeMode } from "./prefs";
+import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
 
 export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "Ask Pip";
@@ -27,6 +28,10 @@ export interface CommandActions {
   clearFilters(): void;
   setTheme(theme: ThemeMode): void;
   openSettings(): void;
+  manageProjects(): void;
+  watch(target: { ref: ContainerRef; name: string }, watched: boolean): void;
+  /** Opens a ticket by key in any project, reading it live when it isn't synced. */
+  openTicket(key: string): void;
   openActivity(): void;
   openDrafts(): void;
   newTab(): void;
@@ -72,6 +77,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
         run: () => a.goToProject(c.ref),
       }),
     ),
+    { id: "project:manage", group: "Projects", icon: "⚙", label: "Manage projects", keywords: "watch unwatch watching choose which projects sync pin", run: a.manageProjects },
     ...savedViews.map((v): Command => ({ id: `view:${v.id}`, group: "Views", icon: "◎", label: v.name, keywords: "saved view show", run: () => a.openSavedView(v) })),
     ...VIEW_MODES.map(
       (v): Command => ({ id: `mode:${v}`, group: "Layout", icon: "▦", label: `Show ${VIEW_LABEL[v]}`, hint: ctx.view === v ? "current" : undefined, keywords: "switch view layout", run: () => a.setView(v) }),
@@ -123,6 +129,28 @@ export function ticketCommands(items: readonly WorkItem[], query: string, jump: 
     .sort((a, b) => a.rank - b.rank || b.item.updated.localeCompare(a.item.updated))
     .slice(0, limit)
     .map(({ item }): Command => ({ id: `ticket:${itemKey(item.item)}`, group: "Tickets", icon: "·", label: item.title, hint: item.item.key, run: () => jump(item) }));
+}
+
+/** Projects the person doesn't watch that match the search, each a way to start watching it. */
+export function watchCommands(unwatched: readonly { ref: ContainerRef; key: string; name: string }[], a: Pick<CommandActions, "watch">, limit = 5): Command[] {
+  return unwatched.slice(0, limit).map(
+    (c): Command => ({ id: `watch:${c.ref.externalId}`, group: "Projects", icon: "＋", label: `Watch ${c.name}`, hint: `${c.key} · not watched`, keywords: `watch ${c.key} ${c.name}`, run: () => a.watch(c, true) }),
+  );
+}
+
+/** One "Unwatch" per watched project, for a query that asks to stop watching. */
+export function unwatchCommands(containers: readonly WorkContainer[], query: string, a: Pick<CommandActions, "watch">): Command[] {
+  if (!/^\s*(unwatch|stop watching)/i.test(query)) return [];
+  return containers.map(
+    (c): Command => ({ id: `unwatch:${c.key}`, group: "Projects", icon: "－", label: `Unwatch ${c.name}`, hint: c.key, keywords: `${c.key} stop watching remove`, run: () => a.watch(c, false) }),
+  );
+}
+
+/** For a query that is a ticket key not in the synced items: opens it in any project, read live. */
+export function keyCommand(query: string, items: readonly WorkItem[], open: (key: string) => void): Command[] {
+  const key = ticketKeyOf(query);
+  if (!key || items.some((i) => i.item.key.toUpperCase() === key)) return [];
+  return [{ id: `key:${key}`, group: "Tickets", icon: "↗", label: `Open ${key}`, hint: "look up live", keywords: key, run: () => open(key) }];
 }
 
 /** The command that hands the typed words to Pip; last, for any non-empty query. */

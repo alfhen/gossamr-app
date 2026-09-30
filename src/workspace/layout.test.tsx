@@ -142,15 +142,16 @@ describe("header and rail", () => {
     expect(out).toContain("data-tauri-drag-region");
   });
 
-  it("keeps the bottom cluster outside the scrolling project list however many projects there are", () => {
+  it("keeps the bottom cluster outside the scrolling badge list however many projects there are", () => {
     const base = Object.values(useWorkspace.getState().containers)[0];
     const many = Object.fromEntries(Array.from({ length: 46 }, (_, i) => [`mock:P${i}`, { ...base, key: `P${i}`, name: `Project ${i}`, ref: { connectionId: "mock", externalId: `P${i}` } }]));
     useWorkspace.getInitialState().containers = many;
     const out = renderToStaticMarkup(<Rail />);
-    expect(out.match(/aria-label="Project \d+"/g)).toHaveLength(46);
+    expect(out.match(/aria-label="Project \d+"/g)).toHaveLength(8);
+    expect(out).toContain('aria-label="More projects"');
     const list = out.indexOf('aria-label="Projects"');
     expect(out.slice(out.lastIndexOf("<div", list), list)).toContain("overflow-y-auto");
-    expect(out.indexOf('aria-label="Activity"')).toBeGreaterThan(out.indexOf('aria-label="Project 45"'));
+    expect(out.indexOf('aria-label="Activity"')).toBeGreaterThan(out.indexOf('aria-label="Project 7"'));
     expect(out).toMatch(/<div class="flex shrink-0[^"]*border-t[^"]*"><span class="relative"><button[^>]*aria-label="Activity"/);
   });
 
