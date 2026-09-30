@@ -1,9 +1,12 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import type { Backend } from "./backend/types";
-import { ALL, compileFilter, containerKey, itemKey, type FilterContext, type QueryLookup } from "./lib/filter";
+import { ALL, compileFilter, containerKey, itemKey, usesCode, type FilterContext, type QueryLookup } from "./lib/filter";
 import { targetOf } from "./lib/proposals";
 import { movesAreOpaque } from "./workspace/boardLogic";
+import { workContainers } from "./workspace/domains";
+import { useDev } from "./workspace/devStore";
+import type { CodeSummary } from "./lib/devLinks";
 import { newStrays, strayText } from "./workspace/watchLogic";
 import { useTabs } from "./workspace/tabsStore";
 import { messageOf, useToasts } from "./workspace/toasts";
@@ -446,14 +449,15 @@ export const knownMoves = (s: Pick<State, "moves">, item: WorkItem): StatusDef[]
   return known?.statusId === item.status.id ? known.to : null;
 };
 
-export const filterContext = (s: Pick<State, "me" | "needsMe">, now = Date.now()): FilterContext => ({
+export const filterContext = (s: Pick<State, "me" | "needsMe"> & { code?: ReadonlyMap<string, CodeSummary> }, now = Date.now()): FilterContext => ({
   me: s.me,
   now,
   needsMe: s.needsMe,
+  code: s.code,
 });
 
 /** Items matching a filter, newest update first. */
-export function itemsByFilter(s: Pick<State, "items" | "needsMe" | "me">, filter: WorkFilter, now = Date.now()): WorkItem[] {
+export function itemsByFilter(s: Pick<State, "items" | "needsMe" | "me"> & { code?: ReadonlyMap<string, CodeSummary> }, filter: WorkFilter, now = Date.now()): WorkItem[] {
   const all = Object.values(s.items);
   return all.filter(compileFilter(filter, all, filterContext(s, now))).sort((a, b) => b.updated.localeCompare(a.updated));
 }
@@ -467,8 +471,9 @@ export function containerWorkflow(s: Pick<State, "containers">, ref: ContainerRe
 /** The workflow that governs an item, which is its container's. */
 export const workflowOfItem = (s: Pick<State, "containers">, item: WorkItem) => containerWorkflow(s, item.container);
 
+/** Work containers only: a repository is never a project. */
 export const allContainers = (s: Pick<State, "containers">): WorkContainer[] =>
-  Object.values(s.containers).sort((a, b) => a.key.localeCompare(b.key));
+  workContainers(Object.values(s.containers)).sort((a, b) => a.key.localeCompare(b.key));
 
 export const itemsInContainer = (s: Pick<State, "items" | "needsMe" | "me">, ref: ContainerRef) => itemsByFilter(s, { type: "container", container: ref });
 
@@ -529,6 +534,8 @@ export function useItemsByFilter(filter: WorkFilter): WorkItem[] {
   const items = useWorkspace((s) => s.items);
   const needsMe = useWorkspace((s) => s.needsMe);
   const me = useWorkspace((s) => s.me);
+  const wantsCode = usesCode(filter);
+  const code = useDev((d) => (wantsCode ? d.index : undefined));
   const key = JSON.stringify(filter);
-  return useMemo(() => itemsByFilter({ items, needsMe, me }, filter), [items, needsMe, me, key]);
+  return useMemo(() => itemsByFilter({ items, needsMe, me, code }, filter), [items, needsMe, me, code, key]);
 }

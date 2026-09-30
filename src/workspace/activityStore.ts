@@ -1,11 +1,28 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
-import type { ContainerRef, FeedCursor, FeedEntry } from "../types";
-import { queryFor, withRead, type ActivityChip } from "./activityLogic";
+import type { ContainerRef, FeedCursor, FeedEntry, WorkEvent } from "../types";
+import { codeEventUnread, isCodeUnread, queryFor, withRead, type ActivityChip, type ActivitySource } from "./activityLogic";
+import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
+
+const READ_KEY = "gossamr-code-read";
+const READ_KEPT = 500;
+const CODE_EVENTS = 100;
+
+const loadRead = (): Set<string> => {
+  const raw = readStored(READ_KEY);
+  return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : []);
+};
 
 interface ActivityState {
   chip: ActivityChip;
+  source: ActivitySource;
+  /** GitHub events, newest first; the feed merges them with `entries`. */
+  codeEvents: WorkEvent[];
+  /** Ids of GitHub events the person has opened or marked read. */
+  codeRead: ReadonlySet<string>;
+  /** GitHub events that want attention and haven't been dealt with. */
+  codeUnread: number;
   container: ContainerRef | null;
   entries: FeedEntry[];
   next: FeedCursor | null;
@@ -18,6 +35,8 @@ interface ActivityState {
   init(backend: Backend): void;
   dispose(): void;
   setChip(chip: ActivityChip): void;
+  setSource(source: ActivitySource): void;
+  markCodeRead(ids: string[]): void;
   /** Loads the feed for a project, or keeps what is shown when it is the one already loaded. */
   showProject(container: ContainerRef | null): void;
   reload(): Promise<void>;
@@ -25,10 +44,10 @@ interface ActivityState {
   /** Marks unread entries read. Resolves false when the backend refused. */
   markRead(ids: string[]): Promise<boolean>;
   /** Marks everything unread in the current project read, not only the entries loaded so far. */
-  markAllRead(): Promise<void>;
+  markAllRead(codeIds?: string[]): Promise<void>;
 }
 
-const idle = { entries: [], next: null, status: "idle" as const, loadingMore: false, error: null, unread: 0 };
+const idle = { entries: [], codeEvents: [] as WorkEvent[], codeUnread: 0, next: null, status: "idle" as const, loadingMore: false, error: null, unread: 0 };
 
 let stop: (() => void) | null = null;
 let seq = 0;
@@ -38,8 +57,10 @@ const sameContainer = (a: ContainerRef | null, b: ContainerRef | null) => (a && 
 
 export const useActivity = create<ActivityState>((set, get) => ({
   chip: "all",
+  source: "all",
   container: null,
   backend: null,
+  codeRead: loadRead(),
   ...idle,
 
   init(backend) {
@@ -67,6 +88,21 @@ export const useActivity = create<ActivityState>((set, get) => ({
     void get().reload();
   },
 
+  setSource(source) {
+    if (source === get().source) return;
+    set({ source });
+    void get().reload();
+  },
+
+  markCodeRead(ids) {
+    const fresh = ids.filter((id) => !get().codeRead.has(id));
+    if (!fresh.length) return;
+    const read = new Set([...get().codeRead, ...fresh]);
+    const kept = new Set([...read].slice(-READ_KEPT));
+    writeStored(READ_KEY, [...kept]);
+    set((s) => ({ codeRead: kept, codeUnread: codeEventUnread(s.codeEvents, kept, Date.now()) }));
+  },
+
   showProject(container) {
     if (sameContainer(container, get().container) && get().status !== "idle") return;
     set({ container });
@@ -74,21 +110,25 @@ export const useActivity = create<ActivityState>((set, get) => ({
   },
 
   async reload() {
-    const { backend, chip, container } = get();
+    const { backend, chip, container, source } = get();
     if (!backend || chip === "drafts") return;
     const mine = ++seq;
-    set((s) => ({ status: s.entries.length ? s.status : "loading", error: null, loadingMore: false }));
+    set((s) => ({ status: s.entries.length || s.codeEvents.length ? s.status : "loading", error: null, loadingMore: false }));
     try {
-      const page = await backend.cacheFeed(queryFor(chip, container));
-      if (mine === seq) set({ entries: page.entries, next: page.next, status: "ready" });
+      const [page, code] = await Promise.all([
+        source === "github" ? Promise.resolve({ entries: [], next: null }) : backend.cacheFeed(queryFor(chip, container)),
+        // A host that can't be reached doesn't stop the tracker's feed from showing.
+        backend.codeEvents(CODE_EVENTS).catch((e) => (source === "github" ? Promise.reject(e) : [])),
+      ]);
+      if (mine === seq) set((s) => ({ entries: page.entries, next: page.next, codeEvents: code, codeUnread: codeEventUnread(code, s.codeRead, Date.now()), status: "ready" }));
     } catch (e) {
       if (mine === seq) set({ status: "error", error: messageOf(e) });
     }
   },
 
   async loadMore() {
-    const { backend, chip, container, next, loadingMore } = get();
-    if (!backend || !next || loadingMore || chip === "drafts") return;
+    const { backend, chip, container, next, loadingMore, source } = get();
+    if (!backend || !next || loadingMore || chip === "drafts" || source === "github") return;
     const mine = seq;
     set({ loadingMore: true });
     try {
@@ -116,9 +156,13 @@ export const useActivity = create<ActivityState>((set, get) => ({
     }
   },
 
-  async markAllRead() {
-    const { backend, container } = get();
+  async markAllRead(codeIds?: string[]) {
+    const { backend, container, codeEvents, codeRead, source } = get();
     if (!backend) return;
+    // GitHub events only know their project through their ticket, which the page resolves; without a project they are all in scope.
+    const scoped = codeIds ?? (container ? [] : codeEvents.filter((e) => isCodeUnread(e, codeRead, Date.now())).map((e) => e.id));
+    if (source !== "jira") get().markCodeRead(scoped);
+    if (source === "github") return;
     let page;
     try {
       page = await backend.cacheFeed({ container, unreadOnly: true, limit: MARK_ALL_LIMIT });
@@ -126,6 +170,6 @@ export const useActivity = create<ActivityState>((set, get) => ({
       useToasts.getState().push(`Couldn't mark read: ${messageOf(e)}`);
       return;
     }
-    if (await get().markRead(page.entries.map((e) => e.id)) && page.next) await get().markAllRead();
+    if (await get().markRead(page.entries.map((e) => e.id)) && page.next) await get().markAllRead([]);
   },
 }));

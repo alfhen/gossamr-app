@@ -1,7 +1,8 @@
 import { useMemo } from "react";
-import type { QueryLookup } from "../lib/filter";
+import { usesCode, type QueryLookup } from "../lib/filter";
 import type { WorkFilter } from "../types";
 import { itemsByFilter, queryLookup, useWorkspace } from "../workspaceStore";
+import { useDev } from "./devStore";
 import { activeTab, useTabs, type Tab } from "./tabsStore";
 
 export function useActiveTab(): Tab {
@@ -21,6 +22,8 @@ export function useFilterCounts(filters: readonly WorkFilter[]): number[] {
   const items = useWorkspace((s) => s.items);
   const needsMe = useWorkspace((s) => s.needsMe);
   const me = useWorkspace((s) => s.me);
+  const wantsCode = filters.some(usesCode);
+  const code = useDev((d) => (wantsCode ? d.index : undefined));
   const key = JSON.stringify(filters);
-  return useMemo(() => filters.map((f) => itemsByFilter({ items, needsMe, me }, f).length), [items, needsMe, me, key]);
+  return useMemo(() => filters.map((f) => itemsByFilter({ items, needsMe, me, code }, f).length), [items, needsMe, me, code, key]);
 }

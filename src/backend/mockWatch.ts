@@ -5,6 +5,8 @@ export interface MockOptions {
   catalogSize?: number;
   /** When set, a GitHub connection is already signed in with this many repositories (at least the five sample ones). Without it the sign-in commands connect one with 14. */
   githubRepos?: number;
+  /** How the device flow ends once the sample waits for it: authorised after `delayMs`, or refused or expired. */
+  device?: { delayMs: number; outcome: "authorised" | "denied" | "expired" };
 }
 
 interface Stored {
@@ -84,7 +86,7 @@ export class MockWatch {
   }
 }
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -97,5 +99,7 @@ export function mockOptionsFromUrl(): MockOptions {
   const repos = count("mockRepos");
   if (projects) options.catalogSize = projects;
   if (repos) options.githubRepos = repos;
+  const outcome = params.get("mockDevice");
+  if (outcome === "denied" || outcome === "expired" || outcome === "slow") options.device = { delayMs: 4000, outcome: outcome === "slow" ? "authorised" : outcome };
   return options;
 }

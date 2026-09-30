@@ -1,3 +1,4 @@
+import { codeFilterMatches, CODE_FILTER_LABEL, type CodeSummary } from "./devLinks";
 import type {
   ContainerRef,
   ItemRef,
@@ -19,6 +20,8 @@ export interface FilterContext {
   now: number;
   /** Keys (see `itemKey`) of items waiting on the user. */
   needsMe: ReadonlySet<string>;
+  /** What the linked code of each item adds up to, by `itemKey`; items not read yet are missing. */
+  code?: ReadonlyMap<string, CodeSummary>;
 }
 
 export const itemKey = (r: { connectionId: string; externalId: string }) => `${r.connectionId}:${r.externalId}`;
@@ -133,6 +136,8 @@ export function compileFilter(f: WorkFilter, all: readonly WorkItem[], ctx: Filt
         const keys = new Set(f.items.map(itemKey));
         return (i) => keys.has(itemKey(i.item));
       }
+      case "code":
+        return (i) => codeFilterMatches(f.check, ctx.code?.get(itemKey(i.item)));
       case "and": {
         const parts = f.filters.map(go);
         return (i) => parts.every((p) => p(i));
@@ -150,6 +155,12 @@ export function matchesFilter(f: WorkFilter, item: WorkItem, all: readonly WorkI
 export function selectItems(f: WorkFilter, items: readonly WorkItem[], ctx: FilterContext): WorkItem[] {
   return items.filter(compileFilter(f, items, ctx));
 }
+
+/** Whether any part of the filter looks at linked code, which has to be read before the filter can answer. */
+export const usesCode = (f: WorkFilter): boolean => filterChips(f).some((c) => c.type === "code");
+
+/** The filter without its client-only parts, which is all the backend can read. */
+export const withoutCode = (f: WorkFilter): WorkFilter => and(...filterChips(f).filter((c) => c.type !== "code"));
 
 export const ALL: WorkFilter = { type: "and", filters: [] };
 
@@ -228,6 +239,8 @@ function term(token: string, lookup: QueryLookup): WorkFilter {
         return { type: "needsMe" };
       case "done":
         return { type: "category", category: "done" };
+      case "pr":
+        return { type: "code", check: "has" };
       default:
         return text;
     }
@@ -264,6 +277,14 @@ function term(token: string, lookup: QueryLookup): WorkFilter {
     }
     case "needs":
       return v === "me" ? { type: "needsMe" } : text;
+    case "has":
+      return v === "pr" ? { type: "code", check: "has" } : text;
+    case "no":
+      return v === "pr" ? { type: "code", check: "none" } : text;
+    case "pr":
+      return v === "open" || v === "merged" ? { type: "code", check: v } : text;
+    case "checks":
+      return v === "failing" ? { type: "code", check: "failing" } : text;
     default:
       return text;
   }
@@ -310,6 +331,8 @@ export function describeFilter(f: WorkFilter, lookup: Pick<QueryLookup, "contain
       return `“${f.text}”`;
     case "items":
       return `${f.items.length} picked`;
+    case "code":
+      return CODE_FILTER_LABEL[f.check];
     case "and":
       return f.filters.length ? f.filters.map((g) => describeFilter(g, lookup)).join(", ") : "Everything";
   }

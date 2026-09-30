@@ -6,6 +6,7 @@ import { WorkDocView } from "./WorkDocView";
 const ICON: Record<PeekSectionId, ReactNode> = {
   description: <path d="M3 4h10M3 8h10M3 12h6" />,
   links: <path d="M6.5 9.5l3-3M5 7L3.8 8.2a2.4 2.4 0 003.4 3.4L8.4 10.4M11 9l1.2-1.2a2.4 2.4 0 00-3.4-3.4L7.6 5.6" />,
+  development: <path d="M5 3.5v9M11 6.5c0 3-3 2.5-6 4.5M5 3.5a1.3 1.3 0 100 .01M5 12.5a1.3 1.3 0 100 .01M11 5.2a1.3 1.3 0 100 .01" />,
   comments: <path d="M3 3.5h10v7H8.2L5.5 13v-2.5H3z" />,
   history: <path d="M8 3.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9zM8 5.8V8l1.6 1" />,
 };

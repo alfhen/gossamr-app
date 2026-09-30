@@ -174,6 +174,8 @@ const ROWS: Row[] = [
   row("CA-407", "task", "Send-time test", "Sent", "maya", 11),
   row("CA-408", "story", "Winback flow", "Backlog", undefined, 14),
   row("CA-409", "task", "Unsubscribe page copy", "Copy", "me", 8, { labels: ["copy"] }),
+  row("CA-208", "task", "Route checkout through the gateway", "QA", "me", 1, { labels: ["payments"], body: "Moves the checkout calls onto the gateway; the rollout is tracked in DEVOPS-471." }),
+  row("CA-209", "task", "Warm the category cache", "Backlog", "me", 2),
   row("WEB-100", "epic", "Product page speed", "In Progress", "sam", 2),
   row("WEB-101", "task", "Lazy-load swatch images", "Code review", "me", 1, { parent: "WEB-100", labels: ["frontend"] }),
   row("WEB-102", "story", "Back-in-stock sign-up form", "In Progress", "priya", 3, { labels: ["frontend"] }),
