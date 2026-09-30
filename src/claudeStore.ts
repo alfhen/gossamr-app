@@ -114,6 +114,11 @@ export function listenToClaude() {
 
 let stopWatching: (() => void) | null = null;
 
+export function stopWatchingProposals() {
+  stopWatching?.();
+  stopWatching = null;
+}
+
 /** Loads the backend's drafts now and again whenever they change, replacing any earlier watch. */
 export function watchProposals(backend: Backend) {
   stopWatching?.();

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAccountState } from "./accountState";
 import { MockBackend } from "./backend/mock";
-import { useClaude } from "./claudeStore";
+import { useClaude, watchProposals } from "./claudeStore";
 import { loadPrefs } from "./workspace/prefs";
 import { usePip } from "./workspace/pipStore";
 import { syncLine } from "./workspace/Settings";
@@ -38,6 +38,19 @@ describe("per-account state", () => {
     expect(useToasts.getState().toasts).toEqual([]);
     expect(usePip.getState().dismissed).toEqual(["large-list"]);
     expect(useTabs.getState().tabs.length).toBeGreaterThan(1);
+  });
+
+  it("stops the proposals watch so a stale account cannot write drafts into the store", async () => {
+    const backend = new MockBackend();
+    let stopped = false;
+    const off = backend.onProposalsChanged.bind(backend);
+    backend.onProposalsChanged = (l) => {
+      const un = off(l);
+      return () => ((stopped = true), un());
+    };
+    watchProposals(backend);
+    resetAccountState("jira:site:me");
+    expect(stopped).toBe(true);
   });
 
   it("forgets everything about another account or a sign-out", () => {
