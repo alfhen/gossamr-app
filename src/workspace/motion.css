@@ -34,3 +34,32 @@
     animation: none;
   }
 }
+
+.ws-resize-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0 3px;
+  background: transparent;
+  transition: background-color 0.12s;
+}
+.ws-resize-handle:hover::after,
+.ws-resize-handle:focus-visible::after,
+.ws-resize-handle[data-dragging]::after {
+  background: var(--color-ws-accent);
+}
+.ws-resize-handle[data-dragging]::after {
+  inset: 0 2px;
+}
+body.ws-resizing,
+body.ws-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+body.ws-resizing .ws-sized {
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws-resize-handle::after {
+    transition: none;
+  }
+}

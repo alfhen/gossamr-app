@@ -106,3 +106,8 @@
 .ws-toasts {
   --spacing: 4px;
 }
+
+/* A bare `grid` gets an auto column, which grows to its widest unbreakable child and pushes content past the pane. */
+.ws-root .grid:not([class*="cols"]):not([class*="grid-flow"]):not([class*="grid-template"]) {
+  grid-template-columns: minmax(0, 1fr);
+}

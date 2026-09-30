@@ -8,8 +8,10 @@ import { relativeTime } from "../lib/views";
 import type { ItemRef, StatusDef, WorkEvent, WorkItem } from "../types";
 import { draftsForItem, knownMoves, nameOf, useItemsByFilter, useWorkspace, workflowOfItem } from "../workspaceStore";
 import { draftStatus, movesAreOpaque, targetsFor } from "./boardLogic";
+import { PeekResizer, usePaneWidths } from "./PaneResizers";
 import { LiveDraftCard } from "./DraftCard";
 import { canvasElement, showMe } from "./jump";
+import { PEEK_DEFAULT } from "./paneSizes";
 import { usePrefs } from "./prefs";
 import { commentNotes, historyNotes, linkRows, parentCrumb, subtasksOf, type Crumb, type LinkRow, type Note, type Subtasks } from "./peekLogic";
 import { useTabs } from "./tabsStore";
@@ -73,6 +75,8 @@ export interface PeekViewProps {
   /** Where a pending draft would move the item. */
   proposedMove?: string | null;
   wide?: boolean;
+  /** Width in px while not expanded. */
+  width?: number;
   /** How the sheet arrives or leaves; `none` while browsing from one item to the next. */
   motion?: "in" | "out" | "none";
   onWide?(): void;
@@ -90,13 +94,15 @@ export function PeekView(p: PeekViewProps) {
       id="peek-sheet"
       aria-label={`Details for ${item.item.key}`}
       onAnimationEnd={(ev) => ev.target === ev.currentTarget && p.onMotionEnd?.()}
-      className={`selectable ws-legacy absolute inset-y-0 right-0 z-20 flex flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] motion-safe:transition-[width] motion-safe:duration-200 ${
-        p.wide ? "w-full" : "w-[min(520px,94%)]"
+      className={`selectable ws-legacy absolute inset-y-0 right-0 z-20 flex flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] max-w-full motion-safe:transition-[width] motion-safe:duration-200 ws-sized ${
+        p.wide ? "w-full" : ""
       } ${MOTION[p.motion ?? "none"]}`}
+      style={p.wide ? undefined : { width: p.width ?? PEEK_DEFAULT }}
     >
+      {!p.wide && p.onWide && <PeekResizer />}
       <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-3.5 py-2">
-        <span className="font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
-        <span className="text-xs text-ws-ink3">
+        <span className="shrink-0 font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
+        <span className="min-w-0 truncate text-xs text-ws-ink3">
           peek · <kbd className="font-sans">j</kbd> <kbd className="font-sans">k</kbd> browse · <kbd className="font-sans">esc</kbd> close
         </span>
         {p.onWide && (
@@ -404,6 +410,7 @@ interface Motion {
 function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem } & Motion) {
   const ref = item.item;
   const key = itemKey(ref);
+  const width = usePaneWidths().peek;
   const backend = useBackend();
   const all = useWorkspace((s) => s.items);
   const readOnly = !all[key];
@@ -489,6 +496,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       proposedMove={proposedMove}
       motion={motion}
       wide={wide}
+      width={width}
       onWide={onWide}
       onMotionEnd={onMotionEnd}
       comments={comments}

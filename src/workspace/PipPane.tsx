@@ -6,6 +6,7 @@ import { useClaude, type Turn } from "../claudeStore";
 import type { ItemRef, Proposal, ScreenContext } from "../types";
 import { LiveDraftPreview } from "./DraftPreview";
 import { useLookup } from "./hooks";
+import { PipResizer } from "./PaneResizers";
 import { PipAvatar } from "./PipAvatar";
 import { chipCount, currentContext, unassignedIn, useItemScene, useScreen } from "./pipHooks";
 import { appliedState, usePip, type AppliedState } from "./pipStore";
@@ -255,7 +256,8 @@ export function PipPane({ onClose }: { onClose(): void }) {
   };
 
   return (
-    <aside aria-label="Pip" className="ws-legacy flex min-h-0 flex-col border-l border-ws-sep bg-ws-win">
+    <aside aria-label="Pip" className="ws-legacy relative flex min-h-0 flex-col border-l border-ws-sep bg-ws-win">
+      <PipResizer />
       <header data-tauri-drag-region className="grid gap-1.5 border-b border-ws-sep bg-ws-bar px-3 pt-[14px] pb-2.5">
         <div className="flex items-center gap-2">
           <PipAvatar size={26} thinking={running} />

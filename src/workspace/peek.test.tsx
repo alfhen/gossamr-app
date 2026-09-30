@@ -151,11 +151,13 @@ describe("PeekView", () => {
     expect(view()).not.toContain("Expand details");
     const narrow = view({ onWide: vi.fn(), wide: false, motion: "in" });
     expect(narrow).toContain('aria-label="Expand details"');
-    expect(narrow).toContain("w-[min(520px,94%)]");
+    expect(narrow).toContain("width:520px");
+    expect(narrow).toContain('role="separator"');
     expect(narrow).toContain("ws-peek-in");
     const wide = view({ onWide: vi.fn(), wide: true, motion: "out" });
     expect(wide).toContain('aria-label="Shrink details"');
     expect(wide).toContain("w-full");
+    expect(wide).not.toContain('role="separator"');
     expect(wide).toContain("ws-peek-out");
     expect(view({ motion: "none" })).not.toContain("ws-peek");
   });
