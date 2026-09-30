@@ -28,8 +28,6 @@ const FILE_TEXT_LIMIT: usize = 60_000;
 /// Repositories whose branches are scanned for a key in one search.
 const BRANCH_SCAN_REPOS: usize = 20;
 const BRANCH_MATCHES: usize = 10;
-/// A search query may be 256 characters; the repositories share what the terms leave.
-const REPO_QUALIFIERS_MAX: usize = 190;
 const TEXT_MATCH: &str = "application/vnd.github.text-match+json";
 
 pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
@@ -69,20 +67,19 @@ fn contents_path(repo: &str, path: &str, reference: Option<&str>) -> String {
     out
 }
 
-/// Groups repositories into `repo:` qualifiers that fit a search query.
+/// One `repo:` qualifier per repository. Space-separated qualifiers may be read as "and", so each repository gets
+/// a search of its own and the results are merged.
 fn qualifier_groups(repos: &[String]) -> Vec<String> {
-    let mut groups: Vec<String> = Vec::new();
-    for r in repos {
-        let q = format!("repo:{r}");
-        match groups.last_mut() {
-            Some(g) if g.len() + q.len() < REPO_QUALIFIERS_MAX => {
-                g.push(' ');
-                g.push_str(&q);
-            }
-            _ => groups.push(q),
-        }
+    repos.iter().map(|r| format!("repo:{r}")).collect()
+}
+
+/// The page of a branch, with each segment of its name escaped and the slashes kept.
+fn branch_url(repo: &str, branch: &str) -> String {
+    let mut url = Url::parse("https://github.com/").expect("static url");
+    if let Ok(mut segments) = url.path_segments_mut() {
+        segments.clear().extend(repo.split('/')).extend(["tree"]).extend(branch.split('/'));
     }
-    groups
+    url.to_string()
 }
 
 /// Whether `text` is a work item key such as `CA-208`.
@@ -197,7 +194,7 @@ impl GithubHost {
                 kind: CodeChangeKind::Branch,
                 repo: repo.into(),
                 number: None,
-                url: format!("https://github.com/{repo}/tree/{}", b.name),
+                url: branch_url(repo, &b.name),
                 head_ref: b.name.clone(),
                 title: b.name,
                 base_ref: None,
@@ -406,12 +403,16 @@ mod tests {
     }
 
     #[test]
-    fn repositories_are_grouped_to_fit_a_search_query() {
-        let repos: Vec<String> = (0..40).map(|i| format!("acme/repository-{i}")).collect();
-        let groups = qualifier_groups(&repos);
-        assert!(groups.len() > 1 && groups.iter().all(|g| g.len() < 256 - 60));
-        assert_eq!(groups.iter().map(|g| g.matches("repo:").count()).sum::<usize>(), 40);
+    fn each_repository_is_searched_on_its_own() {
+        let repos = ["acme/webshop".to_string(), "acme/gateway".to_string()];
+        assert_eq!(qualifier_groups(&repos), ["repo:acme/webshop", "repo:acme/gateway"]);
         assert!(qualifier_groups(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_branch_link_escapes_each_segment_of_the_name() {
+        assert_eq!(branch_url("acme/webshop", "feature/CA-209_x"), "https://github.com/acme/webshop/tree/feature/CA-209_x");
+        assert_eq!(branch_url("acme/webshop", "fix/a#b?c%d e"), "https://github.com/acme/webshop/tree/fix/a%23b%3Fc%25d%20e");
     }
 
     #[test]

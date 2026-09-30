@@ -109,7 +109,7 @@ describe("Claude-driven filters", () => {
 
   it("ignores a filter from a run this pane didn't ask for", () => {
     const turn = { requestId: "mine", prompt: "", steps: [], text: "", status: "running" as const, error: null };
-    useClaude.setState({ byTicket: { workspace: { turns: [turn], sessionId: null, cwd: null } } });
+    useClaude.setState({ byTicket: { workspace: { turns: [turn], sessionId: null } } });
     handlePipView({ requestId: "drawer", filter: { type: "blocked" }, note: "x" });
     expect(activeTab(useTabs.getState()).filter).toEqual(ALL);
     handlePipView({ requestId: "mine", filter: { type: "blocked" }, note: "x" });
@@ -219,7 +219,7 @@ describe("scripted Pip", () => {
     const events: ClaudeEvent[] = [];
     const views: unknown[] = [];
     const off = [mockPipEvents.on((_, e) => events.push(e)), mockPipEvents.onView((_, f, n) => views.push([f, n]))];
-    const req = (prompt: string): AskRequest => ({ requestId: prompt, prompt, sessionId: null, cwd: null, context: { ...blank, item } });
+    const req = (prompt: string): AskRequest => ({ requestId: prompt, prompt, sessionId: null, context: { ...blank, item } });
 
     await mockAsk(req("draft a comment"), backend, 0);
     const drafts = await backend.proposalsList();

@@ -421,9 +421,11 @@ async fn a_directory_lists_folders_first_and_a_file_is_not_a_directory() {
 async fn code_search_asks_for_text_matches_and_stays_inside_the_given_repositories() {
     let server = serve(vec![("/search/code", vec![Reply::ok(CODE)])]).await;
     let hits = host(&server).search_code("checkout route", &["acme/webshop".to_string(), "acme/gateway".to_string()]).await.unwrap();
-    assert_eq!(hits.len(), 2);
+    assert_eq!(hits.len(), 4, "one search per repository, merged");
     assert_eq!((hits[0].repo.as_str(), hits[0].path.as_str(), hits[0].fragments.len()), ("acme/webshop", "src/gateway/routes.ts", 1));
     assert!(hits[1].fragments.is_empty());
     assert_eq!(server.header_of(0, "accept").as_deref(), Some("application/vnd.github.text-match+json"));
-    assert!(server.targets()[0].contains("repo%3Aacme%2Fwebshop+repo%3Aacme%2Fgateway"), "{:?}", server.targets());
+    let targets = server.targets();
+    assert!(targets[0].contains("repo%3Aacme%2Fwebshop") && !targets[0].contains("gateway"), "{targets:?}");
+    assert!(targets[1].contains("repo%3Aacme%2Fgateway") && !targets[1].contains("webshop"), "{targets:?}");
 }

@@ -76,7 +76,13 @@ pub fn keys_in(text: &str) -> Vec<String> {
 }
 
 pub fn system_prompt(reads_code: bool) -> String {
-    let code = if reads_code { " You can read files in the working folder and run read-only git commands." } else { "" };
+    let code = if reads_code {
+        " You have only the gossamr tools and cannot run commands or browse the web; code is readable only through them."
+    } else {
+        " You have only the gossamr tools: you cannot read local files, run commands or browse the web. When asked what \
+         has been built or whether something is done in the code, use the GitHub tools described below; if no GitHub \
+         account is connected they find nothing, so say you can't check the code yet and ask for links to the pull requests."
+    };
     format!(
         "You are Pip, the assistant inside Gossamr, a desktop work aide for issue trackers. \
          Read work with the gossamr tools: search_items, get_item, list_containers, get_workflow, list_next_statuses \
@@ -92,7 +98,7 @@ pub fn system_prompt(reads_code: bool) -> String {
          their request, never one you found yourself. propose_create works in any project; find_containers looks them up. \
          You can also look up what has been done on a ticket in code: ticket_changes lists the pull requests, branches and \
          commits that name it with their state, checks, reviews and changed files; get_pull_request, list_pull_requests, \
-         read_repo_file, list_repo_files, list_commits and search_code read the repositories the user watches, and \
+         read_repo_file, list_repo_files, list_commits and search_code read the user's watched repositories, and \
          list_watched_repos names them. They only read, and only in watched repositories: when one is refused, ask the user \
          to watch that repository rather than guessing. When you say what was done on a ticket, link the pull requests you \
          found, by their URL, and say when a result was cut short."
@@ -199,6 +205,19 @@ mod tests {
             created: vec![],
             error: None,
         }
+    }
+
+    #[test]
+    fn the_prompt_says_pip_has_only_the_gossamr_tools_and_points_code_questions_at_the_connector() {
+        let p = system_prompt(false);
+        assert!(p.contains("only the gossamr tools"));
+        assert!(p.contains("cannot read local files, run commands or browse the web"));
+        assert!(p.contains("use the GitHub tools described below"));
+        assert!(p.contains("can't check the code yet") && p.contains("links to the pull requests"));
+        for stale in ["working folder", "git commands", "read-only git", "the repo"] {
+            assert!(!p.contains(stale), "{stale}");
+        }
+        assert!(!system_prompt(true).contains("cannot read local files"));
     }
 
     #[test]

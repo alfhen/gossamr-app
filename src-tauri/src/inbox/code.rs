@@ -360,6 +360,11 @@ fn refused(repo: &str) -> Error {
     Error::CodeHost { status: 403, message: format!("{repo} isn't one of the repositories you watch, so it isn't read.") }
 }
 
+/// Repository names are not case sensitive on GitHub, and a watch may have been typed with other capitals.
+fn is_watched_repo(repos: &[String], repo: &str) -> bool {
+    repos.iter().any(|r| r.eq_ignore_ascii_case(repo))
+}
+
 fn me_of(change: &CodeChange, me: &str) -> bool {
     change.author.as_ref().is_some_and(|a| a.account_id.eq_ignore_ascii_case(me))
 }
@@ -386,7 +391,7 @@ impl Core {
     }
 
     fn require_watched(&self, id: &str, repo: &str) -> Result<()> {
-        if self.watched_repos(id)?.iter().any(|r| r.eq_ignore_ascii_case(repo)) {
+        if is_watched_repo(&self.watched_repos(id)?, repo) {
             Ok(())
         } else {
             Err(refused(repo))
@@ -406,7 +411,7 @@ impl Core {
         let repos = self.watched_repos(id)?;
         self.with_code_db(id, |db| {
             let before = db.link_signature(id)?;
-            let originals: Vec<CodeChange> = db.code_changes(id)?.into_iter().filter(|c| repos.contains(&c.repo)).collect();
+            let originals: Vec<CodeChange> = db.code_changes(id)?.into_iter().filter(|c| is_watched_repo(&repos, &c.repo)).collect();
             let mut changes = originals.clone();
             let links = discover(&mut changes, known);
             let moved: Vec<CodeChange> = changes.iter().zip(&originals).filter(|(a, b)| a.linked_keys != b.linked_keys).map(|(a, _)| a.clone()).collect();
@@ -467,7 +472,7 @@ impl Core {
         let events: Vec<Event> = if read.unchanged {
             Vec::new()
         } else {
-            read.notices.iter().filter(|n| repos.contains(&n.repo)).filter_map(|n| from_notice(id, n)).collect()
+            read.notices.iter().filter(|n| is_watched_repo(repos, &n.repo)).filter_map(|n| from_notice(id, n)).collect()
         };
         self.with_code_db(id, |db| {
             db.set_meta(NOTIFICATIONS_NEXT, &stamp(Utc::now() + Duration::seconds(wait)))?;
@@ -559,7 +564,7 @@ impl Core {
         let mut out = Vec::new();
         for id in self.code.connection_ids() {
             let repos = self.watched_repos(&id)?;
-            out.extend(self.with_code_db(&id, |db| db.dev_links(item))?.into_iter().filter(|l| repos.contains(&l.change.repo)));
+            out.extend(self.with_code_db(&id, |db| db.dev_links(item))?.into_iter().filter(|l| is_watched_repo(&repos, &l.change.repo)));
         }
         newest_first(&mut out);
         Ok(out)
@@ -580,8 +585,10 @@ impl Core {
             if repos.is_empty() {
                 continue;
             }
-            let found = self.code_host(&id).await?.search(&item.key, &repos).await?;
-            let found: Vec<CodeChange> = found.into_iter().filter(|c| repos.contains(&c.repo)).collect();
+            // One account that is refused or limited must not hide what the others, and the cache, have.
+            let Ok(host) = self.code_host(&id).await else { continue };
+            let Ok(found) = host.search(&item.key, &repos).await else { continue };
+            let found: Vec<CodeChange> = found.into_iter().filter(|c| is_watched_repo(&repos, &c.repo)).collect();
             self.with_code_db(&id, |db| {
                 // What a sync already read in full is better than what a search saw of it.
                 let fresh: Vec<CodeChange> = found.into_iter().filter(|c| db.code_change(&id, &c.external_id).ok().flatten().is_none()).collect();
@@ -684,7 +691,7 @@ impl Core {
         let watched = self.watched_repos(connection_id)?;
         let asked: Vec<String> = match repos {
             Some(r) => {
-                if let Some(bad) = r.iter().find(|r| !watched.iter().any(|w| w.eq_ignore_ascii_case(r))) {
+                if let Some(bad) = r.iter().find(|r| !is_watched_repo(&watched, r)) {
                     return Err(refused(bad));
                 }
                 r.to_vec()
@@ -1008,6 +1015,25 @@ pub(crate) mod tests {
         assert_eq!(lx.core().dev_links(&lx.fx.item("CA-208")).unwrap().len(), 1);
         lx.core().watch_set_containers("github:ann", &[WatchChange { container_id: "acme/webshop".into(), watched: Some(false), ..Default::default() }]).await.unwrap();
         assert!(lx.core().dev_links(&lx.fx.item("CA-208")).unwrap().is_empty(), "unwatching hides what was cached at once");
+    }
+
+    #[tokio::test]
+    async fn a_watch_typed_with_other_capitals_still_shows_the_links_of_that_repository() {
+        let lx = linked(vec![], Some("repo")).await;
+        lx.sync().await;
+        lx.core().watch_set_mode("github:ann", WatchMode::Selected).await.unwrap();
+        lx.core().watch_set_containers("github:ann", &[WatchChange { container_id: "ACME/WEBSHOP".into(), watched: Some(true), ..Default::default() }]).await.unwrap();
+        assert_eq!(lx.core().dev_links(&lx.fx.item("CA-208")).unwrap().len(), 1);
+        assert!(lx.core().code_file("github:ann", "Acme/Webshop", "src/main.rs", None).await.is_err(), "allowed, then a plain not-found from the scripted server");
+        assert!(!matches!(lx.core().code_file("github:ann", "Acme/Webshop", "src/main.rs", None).await, Err(Error::CodeHost { status: 403, .. })));
+    }
+
+    #[tokio::test]
+    async fn a_failed_live_search_still_returns_what_is_cached() {
+        let lx = linked(vec![("/search/issues".into(), vec![Reply::status(500, "{}")]), ("/search/commits".into(), vec![Reply::status(500, "{}")])], Some("repo")).await;
+        lx.sync().await;
+        let (links, changed) = lx.core().dev_links_live(&lx.fx.item("CA-208")).await.unwrap();
+        assert_eq!((links.len(), changed.len()), (1, 0));
     }
 
     #[tokio::test]
