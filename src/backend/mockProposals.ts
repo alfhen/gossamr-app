@@ -19,7 +19,10 @@ export class MockProposals {
 
   /** Stores a draft the person made by hand. */
   create(intent: Intent, label: string | null = null): Promise<Proposal> {
-    if (!targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
+    if (intent.type === "create") {
+      if (!intent.fields.title.trim()) return Promise.reject(new Error("a new item needs a title"));
+      if (intent.container.connectionId !== CONNECTION) return Promise.reject(new Error("that item belongs to another connection"));
+    } else if (!targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
     if (intent.type === "transition" && !intent.to.trim()) return Promise.reject(new Error("a transition needs a target status"));
     return Promise.resolve(this.store(intent, label, { type: "board" }, "user"));
   }

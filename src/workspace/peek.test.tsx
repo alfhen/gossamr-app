@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { docFromText } from "../lib/docs";
-import type { Proposal } from "../types";
+import type { Proposal, StatusDef } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftCard, draftSummary, draftTitle, type DraftCardProps } from "./DraftCard";
 import { PeekView, type PeekViewProps } from "./PeekSheet";
@@ -107,6 +107,7 @@ describe("PeekView", () => {
         onMenu={vi.fn()}
         onMove={vi.fn()}
         onLink={vi.fn()}
+        onOpen={vi.fn()}
         onClose={vi.fn()}
         {...over}
       />,
@@ -120,6 +121,48 @@ describe("PeekView", () => {
     expect(out).toContain("Jonas Berg");
     expect(out).toContain("Body text");
     expect(out).toContain("No comments yet.");
+  });
+
+  it("shows the epic above the title, what a draft would move it to, and who blocks it", () => {
+    const parent = ws().items["mock:DEVOPS-480"];
+    const blocker = { kind: "blockedBy" as const, label: "Blocked by", ref: ws().items["mock:DEVOPS-471"].item, title: null };
+    const out = view({ crumb: { ref: parent.item, title: parent.title }, proposedMove: "Done", links: [blocker] });
+    expect(out).toMatch(/DEVOPS-480<\/button> \/ (<!-- -->)?DEVOPS-473/);
+    expect(out).toContain("→ Done (proposed)");
+    expect(out).toContain("Blocked by");
+    expect(view()).not.toContain("(proposed)");
+  });
+
+  it("lists subtasks with their status and how many are done", () => {
+    const done = { id: "d", name: "Done", category: "done" as const };
+    const todo = { id: "t", name: "To Do", category: "todo" as const };
+    const row = (key: string, status: StatusDef) => ({ ref: { connectionId: "mock", externalId: key, key }, title: `Task ${key}`, status, done: status.category === "done" });
+    const out = view({ subtasks: { rows: [row("A-1", done), row("A-2", todo)], done: 1 } });
+    expect(out).toContain("Subtasks");
+    expect(out).toContain("1/2 done");
+    expect(out).toContain('aria-valuenow="1"');
+    expect(out).toContain("Task A-2");
+    expect(out.match(/type="checkbox"/g)).toHaveLength(2);
+    expect(view({ subtasks: { rows: [], done: 0 } })).not.toContain("Subtasks");
+  });
+
+  it("offers an expand toggle that widens the sheet, and animates only when told to", () => {
+    expect(view()).not.toContain("Expand details");
+    const narrow = view({ onWide: vi.fn(), wide: false, motion: "in" });
+    expect(narrow).toContain('aria-label="Expand details"');
+    expect(narrow).toContain("w-[min(520px,94%)]");
+    expect(narrow).toContain("ws-peek-in");
+    const wide = view({ onWide: vi.fn(), wide: true, motion: "out" });
+    expect(wide).toContain('aria-label="Shrink details"');
+    expect(wide).toContain("w-full");
+    expect(wide).toContain("ws-peek-out");
+    expect(view({ motion: "none" })).not.toContain("ws-peek");
+  });
+
+  it("tells the person how to browse", () => {
+    const out = view();
+    expect(out).toContain("browse");
+    expect(out).toContain(">esc<");
   });
 
   it("offers the valid moves in a menu, as drafts", () => {

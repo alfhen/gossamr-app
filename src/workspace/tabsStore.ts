@@ -91,6 +91,9 @@ export function nextMarked(marked: readonly string[], selected: string | null, k
   return next.length === 1 && next[0] === selected ? [] : next;
 }
 
+/** Leaving a route closes the peek: its item belongs to the screen it was opened on. */
+const routeTo = (s: Pick<TabsState, "route">, route: Route) => (route === s.route ? {} : { route, selected: null, marked: [] });
+
 const patchActive = (s: TabsState, patch: Partial<Tab>) => ({ tabs: s.tabs.map((t) => (t.id === s.activeId ? { ...t, ...patch } : t)) });
 
 export const useTabs = create<TabsState>((set, get) => ({
@@ -101,7 +104,7 @@ export const useTabs = create<TabsState>((set, get) => ({
 
   openTab(init = {}) {
     const tab = { ...blankTab(), ...init };
-    set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id, route: "workspace" }));
+    set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id, ...routeTo(s, "workspace") }));
     return tab.id;
   },
 
@@ -116,7 +119,7 @@ export const useTabs = create<TabsState>((set, get) => ({
     });
   },
 
-  activate: (id) => set((s) => (s.tabs.some((t) => t.id === id) ? { activeId: id, route: "workspace" } : s)),
+  activate: (id) => set((s) => (s.tabs.some((t) => t.id === id) ? { activeId: id, ...routeTo(s, "workspace") } : s)),
   // Any hand-made filter change drops the name a saved view or project gave the tab.
   setFilter: (filter) => set((s) => patchActive(s, { filter, title: null })),
   addFilter(filter) {
@@ -124,17 +127,17 @@ export const useTabs = create<TabsState>((set, get) => ({
     const have = new Set(filterChips(tab.filter).map((c) => JSON.stringify(c)));
     if (!have.has(JSON.stringify(filter))) get().setFilter(and(tab.filter, filter));
   },
-  setView: (view) => set((s) => ({ ...patchActive(s, { view }), route: "workspace" })),
+  setView: (view) => set((s) => ({ ...patchActive(s, { view }), ...routeTo(s, "workspace") })),
 
   setProject(project) {
     const tab = get().tabs.find((t) => t.id === get().activeId)!;
-    set((s) => ({ ...patchActive(s, { filter: withProject(tab.filter, project), title: null }), route: "workspace" }));
+    set((s) => ({ ...patchActive(s, { filter: withProject(tab.filter, project), title: null }), ...routeTo(s, "workspace") }));
   },
 
   openSavedView(view) {
     const active = get().tabs.find((t) => t.id === get().activeId)!;
     if (active.filter.type === "and" && !active.filter.filters.length && active.title === null) {
-      set((s) => ({ ...patchActive(s, { filter: view.filter, title: view.name }), route: "workspace" }));
+      set((s) => ({ ...patchActive(s, { filter: view.filter, title: view.name }), ...routeTo(s, "workspace") }));
     } else {
       get().openTab({ filter: view.filter, title: view.name, view: active.view });
     }
@@ -147,7 +150,7 @@ export const useTabs = create<TabsState>((set, get) => ({
   },
 
   removeSavedView: (id) => set((s) => ({ savedViews: s.savedViews.filter((v) => v.id !== id) })),
-  setRoute: (route) => set({ route }),
+  setRoute: (route) => set((s) => routeTo(s, route)),
   select: (selected) => set({ selected, marked: [] }),
   mark: (key, how, order) =>
     set((s) => {
