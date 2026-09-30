@@ -568,16 +568,23 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                 publish(&app, &core).await;
             }
             for (connection_id, result) in core.sync_code_if_due(trigger).await {
-                // A GitHub failure shows on its own connection row; it must not hide the Jira state.
-                if let Ok(synced) = result {
-                    if synced.changed {
-                        cache_changed(&app, &connection_id);
+                // A failure shows on the connection's own row. It can follow repositories that were stored, so what
+                // the page reads from the cache is refreshed either way.
+                match result {
+                    Ok(synced) => {
+                        if synced.changed {
+                            cache_changed(&app, &connection_id);
+                        }
+                        if synced.links_changed {
+                            dev_links_changed(&app, &connection_id);
+                        }
                     }
-                    if synced.links_changed {
+                    Err(_) => {
+                        cache_changed(&app, &connection_id);
                         dev_links_changed(&app, &connection_id);
                     }
-                    publish(&app, &core).await;
                 }
+                publish(&app, &core).await;
             }
             // A failed check is tried again at the next interval; nothing depends on it.
             if let Ok(Some((connection_id, strays))) = core.radar_if_due().await {
