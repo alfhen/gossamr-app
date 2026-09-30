@@ -14,11 +14,13 @@ impl From<rusqlite::Error> for Error {
 }
 
 mod cache;
+mod code;
 mod proposals;
 mod schema;
 mod watch;
 
 pub use cache::{stamp, SyncState, Upserted};
+pub use code::CachedHttp;
 
 pub struct Db {
     conn: Connection,

@@ -1,6 +1,7 @@
 mod agent;
 mod auth;
 mod claude;
+mod codehost;
 mod config;
 mod db;
 mod domain;
@@ -22,7 +23,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
-use auth::{Auth, AuthStatus, OAuthApp, Scope};
+use auth::{Auth, AuthStatus, DeviceStart, OAuthApp, Scope};
 use agent::{AgentService, AskRequest};
 use claude::ClaudeCodeProvider;
 use tracker::{Connection, Move};
@@ -237,6 +238,49 @@ async fn cache_transitions(core: State<'_, CoreState>, item: ItemRef) -> Result<
 #[tauri::command]
 async fn connections_list(core: State<'_, CoreState>) -> Result<Vec<ConnectionInfo>> {
     core.connections().await
+}
+
+/// The account a pasted token belongs to is connected, and its repositories become watchable.
+#[tauri::command]
+async fn github_connect_token(app: AppHandle, core: State<'_, CoreState>, token: String) -> Result<ConnectionInfo> {
+    let connected = core.github_connect_token(&token).await?;
+    watch_changed(&app, &connected.id);
+    Ok(connected)
+}
+
+/// Runs `gh auth token` now, because the person asked, and connects with what it prints.
+#[tauri::command]
+async fn github_import_gh_token(app: AppHandle, core: State<'_, CoreState>) -> Result<ConnectionInfo> {
+    let connected = core.github_import_gh_token().await?;
+    watch_changed(&app, &connected.id);
+    Ok(connected)
+}
+
+/// Which ways of connecting GitHub work here: the device flow needs a client id, `gh` must be installed.
+#[tauri::command]
+fn github_sign_in_options(core: State<'_, CoreState>) -> auth::SignInOptions {
+    core.code_sign_in_options()
+}
+
+/// Starts the device flow: show `userCode` and open `verificationUri`, then call `github_device_poll`.
+#[tauri::command]
+async fn github_device_start(core: State<'_, CoreState>) -> Result<DeviceStart> {
+    core.github_device_start().await
+}
+
+/// Resolves when the code was authorised (or fails when it expired or was denied).
+#[tauri::command]
+async fn github_device_poll(app: AppHandle, core: State<'_, CoreState>) -> Result<ConnectionInfo> {
+    let connected = core.github_device_poll().await?;
+    watch_changed(&app, &connected.id);
+    Ok(connected)
+}
+
+#[tauri::command]
+async fn github_disconnect(app: AppHandle, core: State<'_, CoreState>, connection_id: String) -> Result<()> {
+    core.github_disconnect(&connection_id).await?;
+    watch_changed(&app, &connection_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -506,12 +550,13 @@ pub fn run() {
                 .timeout(Duration::from_secs(30))
                 .build()?;
             let auth = Arc::new(Auth::load(http.clone()));
-            let registry = tracker::Registry::jira(http, auth.clone());
+            let registry = tracker::Registry::jira(http.clone(), auth.clone());
             let data_dir = app.path().app_data_dir()?;
             if let Err(e) = legacy::adopt_legacy_data(&data_dir) {
                 eprintln!("couldn't move data from the previous app name, starting fresh: {e}");
             }
-            let core: CoreState = Arc::new(Core::new(auth, registry, data_dir));
+            let code = inbox::CodeService::new(http.clone(), inbox::CodeService::default_store());
+            let core: CoreState = Arc::new(Core::new(auth, registry, data_dir).with_code(code));
             tauri::async_runtime::block_on(core.restore());
             app.manage(core.clone());
 
@@ -556,6 +601,12 @@ pub fn run() {
             cache_comments,
             cache_transitions,
             connections_list,
+            github_connect_token,
+            github_import_gh_token,
+            github_sign_in_options,
+            github_device_start,
+            github_device_poll,
+            github_disconnect,
             proposals_list,
             proposals_get,
             proposals_create,

@@ -1,0 +1,5 @@
+[
+ {"id":1,"name":"webshop","full_name":"acme/webshop","private":true,"owner":{"login":"acme"},"fork":false,"archived":false,"default_branch":"main","pushed_at":"2026-09-29T10:00:00Z","permissions":{"admin":false,"maintain":false,"push":true,"triage":true,"pull":true}},
+ {"id":2,"name":"gateway","full_name":"acme/gateway","private":true,"owner":{"login":"acme"},"fork":false,"archived":false,"default_branch":"main","pushed_at":"2026-09-20T10:00:00Z","permissions":{"admin":true,"maintain":true,"push":true,"triage":true,"pull":true}},
+ {"id":3,"name":"legacy-admin","full_name":"acme/legacy-admin","private":false,"owner":{"login":"acme"},"fork":false,"archived":true,"default_branch":"master","pushed_at":"2024-01-02T10:00:00Z","permissions":{"admin":false,"push":false,"pull":true}}
+]

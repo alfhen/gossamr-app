@@ -433,8 +433,8 @@ export interface WorkMove {
 /** A signed-in connection and how its sync is going. */
 export interface ConnectionInfo {
   id: string;
-  kind: "jira" | "mock";
-  /** The site or organisation. */
+  kind: "jira" | "github" | "mock";
+  /** The site or organisation; for GitHub, the account's login. */
   workspace: string;
   url: string | null;
   /** The person's name on it. */
@@ -493,7 +493,10 @@ export interface WatchChange {
   source?: WatchSource;
 }
 
-/** A container in the catalog. */
+/**
+ * A container in the catalog. For a GitHub repository the key is `owner/name`, the name is the repository's own
+ * name and `kind` is the person's permission on it (`admin`, `maintain`, `push`, `triage` or `pull`).
+ */
 export interface ContainerSummary {
   ref: ContainerRef;
   key: string;
@@ -544,4 +547,22 @@ export interface WatchChanged {
 export interface AssignedElsewhere {
   connectionId: string;
   strays: Stray[];
+}
+
+/** Which ways of connecting GitHub work in this build and on this Mac. */
+export interface GithubSignInOptions {
+  /** A client id is configured, so the browser device flow can be used. */
+  deviceFlow: boolean;
+  /** The GitHub CLI is installed, so its token can be imported when the person asks. */
+  ghCli: boolean;
+  /** A pasted personal access token always works. */
+  token: boolean;
+}
+
+/** The code the person enters at `verificationUri` to authorise the app. The token never reaches the page. */
+export interface DeviceStart {
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
 }

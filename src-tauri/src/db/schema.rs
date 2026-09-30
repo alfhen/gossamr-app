@@ -143,7 +143,34 @@ CREATE TABLE container_catalog (
   PRIMARY KEY (connection_id, external_id)
 ) WITHOUT ROWID;";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH];
+/// What a code host connection caches. `data` holds the whole `CodeChange`. `http_cache` keeps the last answer to each
+/// GET with its validators, so polling sends conditional requests and a 304 is answered from here.
+const CODE: &str = "
+CREATE TABLE code_changes (
+  connection_id TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  number INTEGER,
+  state TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  data TEXT NOT NULL,
+  synced_at TEXT NOT NULL,
+  PRIMARY KEY (connection_id, external_id)
+) WITHOUT ROWID;
+CREATE INDEX code_changes_repo ON code_changes(connection_id, repo, kind, updated_at);
+CREATE TABLE http_cache (
+  connection_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  link_next TEXT,
+  body TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (connection_id, url)
+) WITHOUT ROWID;";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -170,7 +197,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
-        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog"] {
+        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
@@ -229,7 +256,28 @@ mod tests {
         for t in ["watch_settings", "watched_containers", "container_catalog"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 4);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        for t in ["code_changes", "http_cache"] {
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
+        }
+    }
+
+    #[test]
+    fn a_cache_from_before_code_hosts_keeps_its_rows_and_gains_the_tables() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in [INBOX, CACHE, PROPOSALS, WATCH] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 4).unwrap();
+        conn.execute("INSERT INTO watch_settings (connection_id, mode, updated_at) VALUES ('c', 'selected', 't')", []).unwrap();
+        conn.execute("INSERT INTO container_catalog (connection_id, external_id, key, name, seen_at) VALUES ('c', 'CA', 'CA', 'Cats', 't')", []).unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        assert!(tables(&conn).contains(&"code_changes".to_string()));
+        assert_eq!(conn.query_row("SELECT count(*) FROM watch_settings", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("SELECT count(*) FROM container_catalog", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
     }
 
     #[test]

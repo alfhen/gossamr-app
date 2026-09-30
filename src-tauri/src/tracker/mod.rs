@@ -26,6 +26,7 @@ use crate::model::Uploaded;
 #[serde(rename_all = "camelCase")]
 pub enum ConnectionKind {
     Jira,
+    Github,
 }
 
 /// One signed-in account on one workspace (a Jira site, a Linear organisation).
@@ -52,6 +53,15 @@ impl Connection {
             account: scope.account_id.clone(),
             display_name: display_name.into(),
         }
+    }
+
+    /// A GitHub account or organisation the person signed in to. `login` is the account the token belongs to.
+    pub fn github(login: &str, display_name: &str) -> Self {
+        Self { id: Self::github_id(login), kind: ConnectionKind::Github, workspace: login.into(), account: login.into(), display_name: display_name.into() }
+    }
+
+    pub fn github_id(login: &str) -> String {
+        format!("github:{}", login.to_ascii_lowercase())
     }
 
     pub fn item(&self, key: &str) -> ItemRef {
@@ -236,6 +246,7 @@ impl Registry {
 pub fn item_from_ticket(connection: &Connection, t: &crate::model::CachedTicket) -> WorkItem {
     match connection.kind {
         ConnectionKind::Jira => jira::item_from_ticket(&connection.id, t),
+        ConnectionKind::Github => unreachable!("GitHub connections have no stored tickets"),
     }
 }
 
@@ -243,6 +254,7 @@ pub fn item_from_ticket(connection: &Connection, t: &crate::model::CachedTicket)
 pub fn comments_from_ticket(connection: &Connection, t: &crate::model::CachedTicket) -> Vec<Comment> {
     match connection.kind {
         ConnectionKind::Jira => jira::comments_from_ticket(&connection.id, t),
+        ConnectionKind::Github => unreachable!("GitHub connections have no stored tickets"),
     }
 }
 

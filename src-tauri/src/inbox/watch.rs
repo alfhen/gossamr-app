@@ -105,6 +105,12 @@ impl Core {
     }
 
     pub async fn watch_state(&self) -> Result<Vec<WatchState>> {
+        let mut states = self.jira_watch_state().await?;
+        states.extend(self.code_watch_states().await?);
+        Ok(states)
+    }
+
+    async fn jira_watch_state(&self) -> Result<Vec<WatchState>> {
         let Some((site, me)) = self.auth.identity().await else { return Ok(Vec::new()) };
         let scope = Scope::of(&site, &me);
         let id = self.connection(&scope)?.id;
@@ -163,12 +169,18 @@ impl Core {
     }
 
     pub async fn watch_set_mode(&self, connection_id: &str, mode: WatchMode) -> Result<()> {
+        if super::code::is_code_connection(connection_id) {
+            return self.code_watch_set_mode(connection_id, mode).await;
+        }
         let scope = self.scope().await?;
         self.own_connection(&scope, connection_id)?;
         self.changed_watch(&scope, connection_id, |db| db.set_watch_mode(connection_id, mode, &now_iso())).await
     }
 
     pub async fn watch_set_containers(&self, connection_id: &str, changes: &[WatchChange]) -> Result<()> {
+        if super::code::is_code_connection(connection_id) {
+            return self.code_watch_set_containers(connection_id, changes).await;
+        }
         let scope = self.scope().await?;
         self.own_connection(&scope, connection_id)?;
         self.changed_watch(&scope, connection_id, |db| db.apply_watch_changes(connection_id, changes, &now_iso())).await
@@ -177,6 +189,9 @@ impl Core {
     /// One page of the catalog matching `query`, straight from the tracker, remembering what it lists. Without a
     /// connection to the tracker it searches what was listed before.
     pub async fn watch_catalog(&self, connection_id: &str, query: &str, cursor: Option<String>) -> Result<CatalogPage> {
+        if super::code::is_code_connection(connection_id) {
+            return self.code_watch_catalog(connection_id, query, cursor).await;
+        }
         let scope = self.scope().await?;
         self.own_connection(&scope, connection_id)?;
         let set = self.watch_set_of(&scope).await?;
@@ -233,6 +248,9 @@ impl Core {
     /// Where the person has been involved lately, for choosing what to watch. Kept for a few hours, since answering
     /// costs several searches.
     pub async fn watch_suggestions(&self, connection_id: &str, refresh: bool) -> Result<Vec<Footprint>> {
+        if super::code::is_code_connection(connection_id) {
+            return self.code_watch_suggestions(connection_id, refresh).await;
+        }
         let scope = self.scope().await?;
         self.own_connection(&scope, connection_id)?;
         let cached: Option<CachedFootprint> = self.with_db_for(&scope, |db| meta_json(db, FOOTPRINT)).await?;
@@ -247,6 +265,9 @@ impl Core {
 
     /// Open items assigned to the person in containers they don't watch, as the last check found them.
     pub async fn watch_unwatched_assigned(&self, connection_id: &str, refresh: bool) -> Result<Vec<Stray>> {
+        if super::code::is_code_connection(connection_id) {
+            return Ok(Vec::new());
+        }
         let scope = self.scope().await?;
         self.own_connection(&scope, connection_id)?;
         if refresh {
@@ -257,6 +278,9 @@ impl Core {
 
     /// Hides the suggestion for a container until the person is next assigned something in a different one.
     pub async fn watch_dismiss_assigned(&self, connection_id: &str, container_id: &str) -> Result<()> {
+        if super::code::is_code_connection(connection_id) {
+            return Ok(());
+        }
         let scope = self.scope().await?;
         self.own_connection(&scope, connection_id)?;
         self.with_db_for(&scope, |db| {

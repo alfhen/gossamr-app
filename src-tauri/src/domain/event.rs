@@ -6,43 +6,6 @@ use super::{ContainerRef, ItemRef, PersonRef};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum CodeChangeState {
-    Draft,
-    Open,
-    Merged,
-    Closed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum CheckState {
-    None,
-    Pending,
-    Passing,
-    Failing,
-}
-
-/// A pull request.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodeChange {
-    pub connection_id: String,
-    pub repo: String,
-    pub number: u64,
-    pub title: String,
-    pub branch: String,
-    pub state: CodeChangeState,
-    pub author: PersonRef,
-    #[serde(default)]
-    pub reviewers: Vec<PersonRef>,
-    pub checks: CheckState,
-    /// Item keys found in the title and branch.
-    #[serde(default)]
-    pub linked_keys: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub enum EventKind {
     CommentAdded,
     StatusChanged,
@@ -52,6 +15,11 @@ pub enum EventKind {
     PrMerged,
     CheckFailed,
     ReviewRequested,
+    PrClosed,
+    PrReadyForReview,
+    ReviewSubmitted,
+    /// The person was mentioned on a pull request or issue.
+    PrMentioned,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

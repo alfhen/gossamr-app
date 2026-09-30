@@ -3,6 +3,8 @@ import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type WatchChange, type Wa
 export interface MockOptions {
   /** How many projects the catalog lists, at least the four that hold sample items. Above 12 the choice of what to watch starts unset. */
   catalogSize?: number;
+  /** When set, a GitHub connection is already signed in with this many repositories (at least the five sample ones). Without it the sign-in commands connect one with 14. */
+  githubRepos?: number;
 }
 
 interface Stored {
@@ -82,9 +84,18 @@ export class MockWatch {
   }
 }
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
-  const n = Number(new URLSearchParams(location.search).get("mockProjects"));
-  return Number.isInteger(n) && n > 0 ? { catalogSize: n } : {};
+  const params = new URLSearchParams(location.search);
+  const count = (name: string) => {
+    const n = Number(params.get(name));
+    return Number.isInteger(n) && n > 0 ? n : undefined;
+  };
+  const options: MockOptions = {};
+  const projects = count("mockProjects");
+  const repos = count("mockRepos");
+  if (projects) options.catalogSize = projects;
+  if (repos) options.githubRepos = repos;
+  return options;
 }

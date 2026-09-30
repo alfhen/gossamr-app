@@ -18,9 +18,11 @@ use crate::proposals;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
 use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
+mod code;
 mod drafts;
 mod watch;
 
+pub use code::CodeService;
 pub use drafts::Edit;
 pub use watch::{CatalogPage, WatchState};
 
@@ -127,6 +129,7 @@ pub struct ConnectionInfo {
 pub struct Core {
     pub auth: Arc<Auth>,
     registry: Registry,
+    code: CodeService,
     data_dir: PathBuf,
     /// One database per connection, opened for whichever is signed in. A connection is a site and an account, so two
     /// people signing in to the same site on one Mac never see each other's tickets or inbox.
@@ -159,6 +162,7 @@ impl Core {
         Self {
             auth,
             registry,
+            code: CodeService::new(reqwest::Client::new(), CodeService::default_store()),
             data_dir,
             db: Mutex::new(None),
             last_error: Mutex::new(None),
@@ -168,6 +172,12 @@ impl Core {
             wake: Notify::new(),
             focus: Notify::new(),
         }
+    }
+
+    /// Replaces the GitHub service, for an app that shares one HTTP client, or a test that scripts GitHub.
+    pub fn with_code(mut self, code: CodeService) -> Self {
+        self.code = code;
+        self
     }
 
     /// The registered connection for `scope`. Callers still hold a `Scope`, so this is the adapter between the two;
@@ -200,6 +210,7 @@ impl Core {
         if let Some(connection) = self.auth.connection().await {
             self.registry.register(connection);
         }
+        self.restore_code().await;
     }
 
     pub async fn sign_out(&self) -> Result<()> {
@@ -637,20 +648,24 @@ impl Core {
 
     /// The signed-in connection with how its sync is going.
     pub async fn connections(&self) -> Result<Vec<ConnectionInfo>> {
-        let Some((site, me)) = self.auth.identity().await else { return Ok(Vec::new()) };
-        let scope = Scope::of(&site, &me);
-        let connection = self.connection(&scope)?;
-        let last_sync_at = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
-        Ok(vec![ConnectionInfo {
-            id: connection.id,
-            kind: connection.kind,
-            workspace: site.name,
-            url: site.url,
-            account: me.name,
-            last_sync_at,
-            syncing: self.syncing.load(Ordering::SeqCst),
-            error: self.last_error.lock().expect("error lock poisoned").clone(),
-        }])
+        let mut out = Vec::new();
+        if let Some((site, me)) = self.auth.identity().await {
+            let scope = Scope::of(&site, &me);
+            let connection = self.connection(&scope)?;
+            let last_sync_at = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
+            out.push(ConnectionInfo {
+                id: connection.id,
+                kind: connection.kind,
+                workspace: site.name,
+                url: site.url,
+                account: me.name,
+                last_sync_at,
+                syncing: self.syncing.load(Ordering::SeqCst),
+                error: self.last_error.lock().expect("error lock poisoned").clone(),
+            });
+        }
+        out.extend(self.code_connections());
+        Ok(out)
     }
 
     pub async fn cache_events(&self, item: &ItemRef, limit: usize) -> Result<Vec<Event>> {
