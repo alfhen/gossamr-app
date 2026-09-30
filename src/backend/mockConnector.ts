@@ -311,7 +311,7 @@ export class MockConnector {
     return { me: [this.me], now: this.now, needsMe: this.needsMe() };
   }
 
-  /** Mentions, and comments on my own items, that I haven't answered on open items; the backend also counts unread events. */
+  /** Unread events, plus mentions and comments on my own items that I haven't answered on open items. */
   private needsMe(): Set<string> {
     const mine = this.me.accountId;
     const out = new Set<string>();
@@ -319,6 +319,11 @@ export class MockConnector {
       const item = this.items.get(key);
       if (!item) continue;
       const byOthers = events.filter((e) => e.actor && e.actor.accountId !== mine);
+      const unread = byOthers.some((e) => this.now - new Date(e.at).getTime() < UNREAD_WINDOW_MINUTES * 60_000 && !this.markedRead.has(e.id));
+      if (unread) {
+        out.add(itemKey(item.item));
+        continue;
+      }
       if (item.status.category === "done") continue;
       const latest = (keep: (e: WorkEvent) => boolean) => events.filter((e) => e.actor?.accountId === mine && keep(e)).reduce((at, e) => (e.at > at ? e.at : at), "");
       const replied = latest((e) => e.kind === "commentAdded");
