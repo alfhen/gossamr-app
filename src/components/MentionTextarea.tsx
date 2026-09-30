@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { filesIn } from "../lib/attachments";
 import { activeQuery, insertMention, rankPeople, segments, type ActiveQuery, type Mention } from "../lib/mentions";
-import { useStore } from "../store";
+import { useBackend } from "../backend/useBackend";
 import type { Person } from "../types";
 import { Avatar } from "./primitives";
 
@@ -40,7 +40,7 @@ export function MentionTextarea({
   disabled?: boolean;
   className?: string;
 }) {
-  const backend = useStore((s) => s.backend);
+  const backend = useBackend();
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLSpanElement>(null);

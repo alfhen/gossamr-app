@@ -68,3 +68,8 @@ export function nudgeFor(count: number, chips: number, dismissed: readonly strin
   if (count >= LARGE_LIST) return pick("large-list", "I can help you filter tasks in this view. Just tell me what to show.");
   return null;
 }
+
+/** Forgets what belonged to the previous account: a filter Pip put on a tab, and, when `nudges`, the suggestions closed for good. */
+export function resetPip(nudges: boolean) {
+  usePip.setState(nudges ? { filtered: null, dismissed: [] } : { filtered: null });
+}

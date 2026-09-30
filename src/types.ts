@@ -366,3 +366,38 @@ export type ProposalEdit =
 export interface ProposalsChanged {
   connectionId: string;
 }
+
+/** A comment on a work item, mirroring the domain model. */
+export interface WorkComment {
+  id: string;
+  author: PersonRef;
+  body: WorkDoc;
+  created: string;
+  mentions: PersonRef[];
+}
+
+/** The signed-in person across connections. */
+export interface WorkIdentity {
+  displayName: string;
+  accounts: PersonRef[];
+}
+
+/** A move open to one item right now, as the tracker offers it. */
+export interface WorkMove {
+  name: string;
+  to: StatusDef;
+}
+
+/** A signed-in connection and how its sync is going. */
+export interface ConnectionInfo {
+  id: string;
+  kind: "jira" | "mock";
+  /** The site or organisation. */
+  workspace: string;
+  url: string | null;
+  /** The person's name on it. */
+  account: string;
+  lastSyncAt: string | null;
+  syncing: boolean;
+  error: string | null;
+}

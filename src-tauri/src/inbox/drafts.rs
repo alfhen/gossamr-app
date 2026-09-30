@@ -187,6 +187,33 @@ mod tests {
         assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn approving_a_dropped_card_applies_the_status_id_through_the_tracker() {
+        let fx = crate::inbox::testing::fixture().await;
+        fx.tracker.moves.lock().unwrap().push(tracker::Move {
+            name: "Finish".into(),
+            to: crate::domain::StatusDef { id: "10001".into(), name: "Done".into(), category: crate::domain::Category::Done },
+        });
+        let offered = fx.core.cache_transitions(&fx.item("CA-1")).await.unwrap();
+        assert_eq!(offered[0].to.id, "10001");
+
+        let drafted = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-1"), to: offered[0].to.id.clone() }, Some("Done".into())).await.unwrap();
+        assert!(fx.tracker.intents().is_empty(), "a draft writes nothing");
+        let done = fx.core.approve_proposal(&drafted.id).await.unwrap();
+        assert_eq!(done.state, ProposalState::Applied);
+        assert_eq!(fx.tracker.intents(), vec![Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_approval_returns_the_draft_to_pending_with_the_reason() {
+        let fx = crate::inbox::testing::fixture().await;
+        let drafted = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }, None).await.unwrap();
+        fx.tracker.will(Err(Error::Api { status: 400, message: "can't move there".into() }));
+        let back = fx.core.approve_proposal(&drafted.id).await.unwrap();
+        assert_eq!(back.state, ProposalState::Pending);
+        assert!(back.error.as_deref().is_some_and(|e| e.contains("can't move there")));
+    }
+
     #[test]
     fn a_comment_edit_links_the_mentions_it_names() {
         let current = Intent::Comment { item: item_ref("1"), body: Doc::paragraph("old") };

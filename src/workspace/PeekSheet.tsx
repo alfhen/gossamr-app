@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Adf } from "../components/Adf";
+import { useBackend } from "../backend/useBackend";
 import { MentionTextarea } from "../components/MentionTextarea";
-import { docFromText } from "../lib/docs";
+import { docFromText, docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import { liveMentions, type Mention } from "../lib/mentions";
 import { relativeTime } from "../lib/views";
-import { useStore } from "../store";
 import type { StatusDef, WorkEvent, WorkItem } from "../types";
-import { draftsForItem, nameOf, useWorkspace, workflowOfItem } from "../workspaceStore";
-import { daysQuiet, targetsFor } from "./boardLogic";
+import { draftsForItem, knownMoves, nameOf, useWorkspace, workflowOfItem } from "../workspaceStore";
+import { daysQuiet, movesAreOpaque, targetsFor } from "./boardLogic";
 import { LiveDraftCard } from "./DraftCard";
 import { canvasElement, showMe } from "./jump";
 import { usePrefs } from "./prefs";
@@ -44,11 +43,14 @@ export interface PeekViewProps {
   now: Date;
   /** Statuses the item can move to; empty when the workflow isn't known yet. */
   moves: StatusDef[];
+  /** Still asking the tracker where the item can move. */
+  checking?: boolean;
   menuOpen: boolean;
   links: LinkRow[];
   comments: Note[];
+  commentsLoading?: boolean;
   history: Note[];
-  /** The description, already rendered from whichever source is richer. */
+  /** The description, already rendered. */
   description: ReactNode;
   drafts: ReactNode;
   composer: ReactNode;
@@ -86,7 +88,7 @@ export function PeekView(p: PeekViewProps) {
                 type="button"
                 aria-haspopup="menu"
                 aria-expanded={p.menuOpen}
-                disabled={!p.moves.length}
+                disabled={!p.moves.length && !p.checking}
                 onClick={() => p.onMenu(!p.menuOpen)}
                 className={`${chip} ${CATEGORY_TONE[item.status.category]} disabled:cursor-default`}
               >
@@ -95,7 +97,7 @@ export function PeekView(p: PeekViewProps) {
               </button>
               {p.menuOpen && (
                 <ul role="menu" aria-label={`Draft a move for ${item.item.key}`} className="absolute top-full left-0 z-30 m-0 mt-1 grid min-w-44 list-none gap-px rounded-lg border border-ws-sep2 bg-ws-win p-1 shadow-ws-pop">
-                  <li className="px-2 py-1 text-xs text-ws-ink3">Draft a move to</li>
+                  <li className="px-2 py-1 text-xs text-ws-ink3">{p.checking ? "Checking where it can move…" : "Draft a move to"}</li>
                   {p.moves.map((s) => (
                     <li key={s.id} role="none">
                       <button type="button" role="menuitem" onClick={() => p.onMove(s)} className="w-full rounded px-2 py-1 text-left hover:bg-ws-hover">
@@ -145,14 +147,20 @@ export function PeekView(p: PeekViewProps) {
         )}
 
         <Section title="Comments" count={item.commentCount}>
-          {p.comments.length === 0 && <p className="m-0 text-ws-ink3">No comments yet.</p>}
+          {p.comments.length === 0 && <p className="m-0 text-ws-ink3">{p.commentsLoading ? "Loading comments…" : "No comments yet."}</p>}
           <ul className="m-0 grid list-none gap-3 p-0">
             {p.comments.map((c) => (
               <li key={c.id} className="grid gap-0.5">
                 <div className="text-sm text-ws-ink3">
                   <b className="text-ws-ink2">{c.who}</b> · {relativeTime(c.at, p.now)}
                 </div>
-                <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{c.text}</p>
+                {c.doc ? (
+                  <div className="[overflow-wrap:anywhere]">
+                    <WorkDocView doc={c.doc} />
+                  </div>
+                ) : (
+                  <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{c.text}</p>
+                )}
               </li>
             ))}
           </ul>
@@ -176,7 +184,7 @@ export function PeekView(p: PeekViewProps) {
 }
 
 function Composer({ item, disabled }: { item: WorkItem; disabled: boolean }) {
-  const backend = useStore((s) => s.backend);
+  const backend = useBackend();
   const names = useWorkspace((s) => s.names);
   const people = useMemo(() => Object.entries(names).map(([accountId, name]) => ({ accountId, name })), [names]);
   const [text, setText] = useState("");
@@ -253,11 +261,13 @@ export function PeekSheet() {
 function OpenPeek({ item }: { item: WorkItem }) {
   const ref = item.item;
   const key = itemKey(ref);
-  const backend = useStore((s) => s.backend);
-  const ticket = useStore((s) => s.snap?.tickets[ref.key]);
+  const backend = useBackend();
   const all = useWorkspace((s) => s.items);
   const containers = useWorkspace((s) => s.containers);
   const loaded = useWorkspace((s) => s.events[key]);
+  const loadedComments = useWorkspace((s) => s.comments[key]);
+  const known = useWorkspace((s) => knownMoves(s, item));
+  const [movesFailed, setMovesFailed] = useState(false);
   const events = loaded ?? NO_EVENTS;
   const names = useWorkspace((s) => s.names);
   const proposals = useWorkspace((s) => s.proposals);
@@ -267,8 +277,16 @@ function OpenPeek({ item }: { item: WorkItem }) {
 
   useEffect(() => {
     void useWorkspace.getState().loadEvents(ref);
+    void useWorkspace.getState().loadComments(ref);
     canvasElement(ref)?.scrollIntoView({ block: "nearest", inline: "center" });
   }, [key]);
+
+  const wf = workflowOfItem({ containers }, item);
+  const opaque = !!wf && movesAreOpaque(wf);
+  useEffect(() => {
+    setMovesFailed(false);
+    if (opaque) void useWorkspace.getState().loadMoves(item).then((to) => setMovesFailed(to === null));
+  }, [key, item.status.id, opaque]);
 
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
@@ -284,23 +302,15 @@ function OpenPeek({ item }: { item: WorkItem }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [key, menuOpen]);
 
-  const wf = workflowOfItem({ containers }, item);
   const who = (accountId: string | null) => nameOf({ names }, accountId ? { connectionId: ref.connectionId, accountId } : null);
   const drafts = draftsForItem({ proposals }, ref).reverse();
-  const moves = wf ? targetsFor(wf, item) : [];
+  const checking = opaque && known === null && !movesFailed;
+  const moves = known && opaque ? known : wf && !checking ? targetsFor(wf, item) : [];
 
-  const comments: Note[] = ticket?.comments.length
-    ? ticket.comments.map((c) => ({ id: c.id, at: c.created, who: c.author.name, text: c.body }))
+  const comments: Note[] = loadedComments
+    ? loadedComments.map((c) => ({ id: c.id, at: c.created, who: who(c.author.accountId), text: docText(c.body), doc: c.body }))
     : commentNotes(events, who);
-  const description = ticket?.descriptionDoc ? (
-    <Adf doc={ticket.descriptionDoc} />
-  ) : item.body.blocks.length ? (
-    <WorkDocView doc={item.body} />
-  ) : ticket?.description ? (
-    <p className="m-0 whitespace-pre-wrap">{ticket.description}</p>
-  ) : (
-    <p className="m-0 text-ws-ink3">No description.</p>
-  );
+  const description = item.body.blocks.length ? <WorkDocView doc={item.body} /> : <p className="m-0 text-ws-ink3">No description.</p>;
 
   const move = async (to: StatusDef) => {
     setMenuOpen(false);
@@ -318,9 +328,11 @@ function OpenPeek({ item }: { item: WorkItem }) {
       assignee={who(item.assignee?.accountId ?? null)}
       now={now}
       moves={moves}
+      checking={checking}
       menuOpen={menuOpen}
       links={linkRows(item, all)}
       comments={comments}
+      commentsLoading={!loadedComments}
       history={historyNotes(events, who)}
       description={description}
       drafts={

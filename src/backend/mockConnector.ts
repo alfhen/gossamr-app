@@ -1,6 +1,6 @@
 import { docFromText } from "../lib/docs";
 import { compileFilter, itemKey, type FilterContext } from "../lib/filter";
-import { canMove, statusOf } from "../lib/workflow";
+import { canMove, nextStatuses, statusOf } from "../lib/workflow";
 import type {
   ContainerRef,
   ItemRef,
@@ -8,12 +8,15 @@ import type {
   PersonRef,
   StatusDef,
   WorkCategory,
+  WorkComment,
   WorkContainer,
   WorkEvent,
   WorkFilter,
+  WorkIdentity,
   WorkItem,
   WorkItemKind,
   WorkLink,
+  WorkMove,
   WorkPriority,
   Workflow,
 } from "../types";
@@ -295,6 +298,31 @@ export class MockConnector {
 
   workflow(c: ContainerRef): Workflow | null {
     return this.containers.find((x) => x.ref.externalId === c.externalId && c.connectionId === MOCK_CONNECTION)?.workflow ?? null;
+  }
+
+  identity(): WorkIdentity {
+    return { displayName: PEOPLE.me, accounts: [this.me] };
+  }
+
+  /** Comments recorded as events, oldest first. */
+  comments(ref: ItemRef): WorkComment[] {
+    return this.eventsFor(ref)
+      .filter((e) => e.kind === "commentAdded")
+      .map((e) => ({
+        id: e.id,
+        author: e.actor ?? this.me,
+        body: docFromText(String((e.payload as { text?: unknown } | null)?.text ?? "")),
+        created: e.at,
+        mentions: [],
+      }))
+      .reverse();
+  }
+
+  /** The statuses the item's workflow lets it move to, named the way a tracker would offer them. */
+  moves(ref: ItemRef): WorkMove[] {
+    const item = this.item(ref);
+    const wf = item && this.workflow(item.container);
+    return item && wf ? nextStatuses(wf, item.status.id).map((to) => ({ name: to.name, to })) : [];
   }
 
   eventsFor(ref: ItemRef): WorkEvent[] {

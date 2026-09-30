@@ -2,9 +2,9 @@ import { useMemo, useState, type DragEvent } from "react";
 import { itemKey } from "../lib/filter";
 import { targetOf } from "../lib/proposals";
 import type { WorkItem } from "../types";
-import { useWorkspace } from "../workspaceStore";
+import { knownMoves, useWorkspace } from "../workspaceStore";
 import { BulkBar } from "./BulkBar";
-import { boardSections, draftStatus, dropVerdict, planDrop, type BoardColumn, type BoardSection } from "./boardLogic";
+import { boardSections, draftStatus, dropVerdict, movesAreOpaque, planDrop, type BoardColumn, type BoardSection } from "./boardLogic";
 import type { CanvasProps } from "./canvases";
 import { projectOf } from "./filters";
 import { GhostCard, ItemCard } from "./ItemCard";
@@ -16,6 +16,7 @@ const DOT = { todo: "bg-ws-ink3", active: "bg-ws-accent", done: "bg-ws-done" } a
 
 export function BoardView({ tab, items }: CanvasProps) {
   const containers = useWorkspace((s) => s.containers);
+  const moves = useWorkspace((s) => s.moves);
   const include = projectOf(tab.filter);
   const sections = useMemo(() => boardSections(items, containers, include), [items, containers, include?.connectionId, include?.externalId]);
   const order = useMemo(() => sections.flatMap((s) => s.columns.flatMap((c) => c.items.map((i) => itemKey(i.item)))), [sections]);
@@ -28,11 +29,12 @@ export function BoardView({ tab, items }: CanvasProps) {
     setOver(null);
   };
 
-  const drop = (section: BoardSection, column: BoardColumn) => {
+  const drop = async (section: BoardSection, column: BoardColumn) => {
     const item = dragging;
     endDrag();
     if (!item) return;
-    const plan = planDrop(item, section, column.status.id);
+    const known = movesAreOpaque(section.workflow) ? await useWorkspace.getState().loadMoves(item) : null;
+    const plan = planDrop(item, section, column.status.id, known);
     if (!plan.ok) {
       if (plan.reason) cards.say(plan.reason, "error");
       return;
@@ -70,7 +72,7 @@ export function BoardView({ tab, items }: CanvasProps) {
             <div className="grid min-h-40 auto-cols-[minmax(210px,1fr)] grid-flow-col gap-2.5">
               {section.columns.map((column) => {
                 const id = `${section.key}|${column.status.id}`;
-                const verdict = dragging ? dropVerdict(dragging, section, column.status.id) : null;
+                const verdict = dragging ? dropVerdict(dragging, section, column.status.id, knownMoves({ moves }, dragging)) : null;
                 const ghosts = ghostsIn(section, column);
                 return (
                   <div
@@ -86,7 +88,7 @@ export function BoardView({ tab, items }: CanvasProps) {
                     onDragLeave={() => setOver((o) => (o === id ? null : o))}
                     onDrop={(ev) => {
                       ev.preventDefault();
-                      drop(section, column);
+                      void drop(section, column);
                     }}
                     className={`flex flex-col gap-2 rounded-xl border-2 p-2 transition-colors ${
                       verdict === "ok" ? `border-dashed border-ws-pip ${over === id ? "bg-ws-pip-soft" : "bg-ws-bar"}` : "border-transparent bg-ws-bar"
@@ -108,6 +110,7 @@ export function BoardView({ tab, items }: CanvasProps) {
                           ev.dataTransfer.setData("text/plain", itemKey(item.item));
                           ev.dataTransfer.effectAllowed = "move";
                           setDragging(item);
+                          if (movesAreOpaque(section.workflow)) void useWorkspace.getState().loadMoves(item);
                         }}
                         onDragEnd={endDrag}
                       />

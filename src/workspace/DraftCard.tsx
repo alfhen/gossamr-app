@@ -3,7 +3,7 @@ import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, type Mention } from "../lib/mentions";
 import { targetOf } from "../lib/proposals";
-import { useStore } from "../store";
+import { useBackend } from "../backend/useBackend";
 import type { Person, Proposal, ProposalEdit } from "../types";
 import { draftStatus } from "./boardLogic";
 import { showMe } from "./jump";
@@ -214,7 +214,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
 
 /** A draft card wired to the workspace: approving or skipping goes through the store, and edits are saved first. */
 export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal; jump?: boolean }) {
-  const backend = useStore((s) => s.backend);
+  const backend = useBackend();
   const names = useWorkspace((s) => s.names);
   const containers = useWorkspace((s) => s.containers);
   const target = targetOf(p.intent);

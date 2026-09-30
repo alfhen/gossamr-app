@@ -25,10 +25,10 @@ use tauri_plugin_opener::OpenerExt;
 use auth::{Auth, AuthStatus, OAuthApp, Scope};
 use agent::{AgentService, AskRequest};
 use claude::ClaudeCodeProvider;
-use tracker::Connection;
-use inbox::{Core, Edit};
+use tracker::{Connection, Move};
+use inbox::{ConnectionInfo, Core, Edit};
 use error::{Error, Result};
-use domain::{Container, ContainerRef, Event, Filter, Intent, ItemRef, Proposal, ProposalQuery, WorkItem, Workflow};
+use domain::{Comment, Container, ContainerRef, Event, Filter, Identity, Intent, ItemRef, Proposal, ProposalQuery, WorkItem, Workflow};
 use model::{Snapshot, Transition};
 use sync::Trigger;
 
@@ -137,6 +137,31 @@ async fn cache_workflow(core: State<'_, CoreState>, container: ContainerRef) -> 
 #[tauri::command]
 async fn cache_events(core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<Event>> {
     core.cache_events(&item, EVENT_LIMIT).await
+}
+
+#[tauri::command]
+async fn cache_me(core: State<'_, CoreState>) -> Result<Identity> {
+    core.cache_me().await
+}
+
+#[tauri::command]
+async fn cache_people(core: State<'_, CoreState>) -> Result<Vec<model::Person>> {
+    core.cache_people().await
+}
+
+#[tauri::command]
+async fn cache_comments(core: State<'_, CoreState>, item: ItemRef, refresh: bool) -> Result<Vec<Comment>> {
+    core.cache_comments(&item, refresh).await
+}
+
+#[tauri::command]
+async fn cache_transitions(core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<Move>> {
+    core.cache_transitions(&item).await
+}
+
+#[tauri::command]
+async fn connections_list(core: State<'_, CoreState>) -> Result<Vec<ConnectionInfo>> {
+    core.connections().await
 }
 
 #[tauri::command]
@@ -434,6 +459,11 @@ pub fn run() {
             cache_containers,
             cache_workflow,
             cache_events,
+            cache_me,
+            cache_people,
+            cache_comments,
+            cache_transitions,
+            connections_list,
             proposals_list,
             proposals_get,
             proposals_create,

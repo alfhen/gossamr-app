@@ -51,25 +51,29 @@ export function boardSections(items: readonly WorkItem[], containers: Record<str
 /** A tracker that reveals moves per item leaves the graph empty; there the backend is the one to refuse a move. */
 export const movesAreOpaque = (wf: Workflow) => wf.transitions.kind === "graph" && wf.transitions.moves.length === 0;
 
-/** The statuses an item may be dropped on. */
-export function targetsFor(wf: Workflow, item: WorkItem): StatusDef[] {
-  return movesAreOpaque(wf) ? wf.statuses.filter((s) => s.id !== item.status.id) : nextStatuses(wf, item.status.id);
+/**
+ * The statuses an item may be dropped on. Where moves are opaque, `known` (what the tracker said for this item) is
+ * the answer; until it arrives every other status is offered and the tracker refuses a move it can't make.
+ */
+export function targetsFor(wf: Workflow, item: WorkItem, known: readonly StatusDef[] | null = null): StatusDef[] {
+  if (!movesAreOpaque(wf)) return nextStatuses(wf, item.status.id);
+  return known ? [...known] : wf.statuses.filter((s) => s.id !== item.status.id);
 }
 
 export type DropVerdict = "same" | "ok" | "invalid";
 
 /** Whether `item` may be dropped on the column for `statusId` in `section`. A card never leaves its own project. */
-export function dropVerdict(item: WorkItem, section: BoardSection, statusId: string): DropVerdict {
+export function dropVerdict(item: WorkItem, section: BoardSection, statusId: string, known: readonly StatusDef[] | null = null): DropVerdict {
   if (containerKey(item.container) !== section.key) return "invalid";
   if (item.status.id === statusId) return "same";
-  return targetsFor(section.workflow, item).some((s) => s.id === statusId) ? "ok" : "invalid";
+  return targetsFor(section.workflow, item, known).some((s) => s.id === statusId) ? "ok" : "invalid";
 }
 
 export type DropPlan = { ok: true; to: StatusDef; intent: Intent } | { ok: false; reason: string | null };
 
-export function planDrop(item: WorkItem, section: BoardSection, statusId: string): DropPlan {
+export function planDrop(item: WorkItem, section: BoardSection, statusId: string, known: readonly StatusDef[] | null = null): DropPlan {
   const to = section.workflow.statuses.find((s) => s.id === statusId);
-  const verdict = to ? dropVerdict(item, section, statusId) : "invalid";
+  const verdict = to ? dropVerdict(item, section, statusId, known) : "invalid";
   if (!to || verdict === "invalid") {
     const name = to?.name ?? "that column";
     return { ok: false, reason: `${section.name} doesn't allow ${item.status.name} → ${name}` };

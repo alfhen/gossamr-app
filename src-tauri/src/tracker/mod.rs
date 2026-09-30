@@ -99,7 +99,7 @@ pub struct SearchOptions {
 }
 
 /// A way to move an item, as offered to the person.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Move {
     pub name: String,
     pub to: StatusDef,
@@ -209,6 +209,13 @@ pub fn item_from_ticket(connection: &Connection, t: &crate::model::CachedTicket)
     }
 }
 
+/// The comments a stored ticket carries, oldest first.
+pub fn comments_from_ticket(connection: &Connection, t: &crate::model::CachedTicket) -> Vec<Comment> {
+    match connection.kind {
+        ConnectionKind::Jira => jira::comments_from_ticket(&connection.id, t),
+    }
+}
+
 /// A plain-text comment as a document: blank lines separate paragraphs and `@Name` for each of `mentions` becomes a
 /// mention.
 pub fn comment_doc(text: &str, mentions: &[(crate::domain::PersonRef, String)]) -> Doc {
@@ -231,6 +238,8 @@ pub(crate) mod testing {
         pub applied: Mutex<Vec<Intent>>,
         pub script: Mutex<VecDeque<Result<Applied>>>,
         pub moves: Mutex<Vec<Move>>,
+        /// What `comments` returns; `None` fails the request, as an offline tracker would.
+        pub comments: Mutex<Option<Vec<Comment>>>,
     }
 
     impl Recorder {
@@ -260,8 +269,11 @@ pub(crate) mod testing {
         async fn children(&self, _: &[ItemRef], _: &SearchOptions) -> Result<Vec<WorkItem>> {
             unimplemented!()
         }
-        async fn item(&self, _: &ItemRef, _: &str) -> Result<WorkItem> {
-            unimplemented!()
+        async fn item(&self, item: &ItemRef, _: &str) -> Result<WorkItem> {
+            let connection = Connection { id: item.connection_id.clone(), kind: ConnectionKind::Jira, workspace: "site".into(), account: "me".into(), display_name: "Site".into() };
+            let mut fresh = item_from_ticket(&connection, &sample_ticket());
+            fresh.item = item.clone();
+            Ok(fresh)
         }
         async fn containers(&self) -> Result<Vec<Container>> {
             unimplemented!()
@@ -270,7 +282,7 @@ pub(crate) mod testing {
             unimplemented!()
         }
         async fn comments(&self, _: &ItemRef) -> Result<Vec<Comment>> {
-            unimplemented!()
+            self.comments.lock().unwrap().clone().ok_or(crate::error::Error::Api { status: 503, message: "offline".into() })
         }
         async fn transitions(&self, _: &ItemRef) -> Result<Vec<Move>> {
             Ok(self.moves.lock().unwrap().clone())
