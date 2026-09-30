@@ -75,6 +75,7 @@ mod tests {
             actor: Person { account_id: "s".into(), name: "Sam Holt".into(), avatar_url: None },
             at: "2026-09-28T10:00:00Z".into(),
             text: "text".into(),
+            field: None,
         }
     }
 

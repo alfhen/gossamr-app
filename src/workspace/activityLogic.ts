@@ -83,6 +83,14 @@ export function verb(e: Pick<FeedEntry, "kind" | "mention">): string {
       return "had a failing check on";
     case "reviewRequested":
       return "asked you to review";
+    case "prClosed":
+      return "closed a pull request for";
+    case "prReadyForReview":
+      return "marked a pull request ready for";
+    case "reviewSubmitted":
+      return "reviewed a pull request for";
+    case "prMentioned":
+      return "mentioned you on a pull request for";
     case "fieldChanged":
       return "updated";
   }

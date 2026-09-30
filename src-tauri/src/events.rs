@@ -21,11 +21,12 @@ fn label(field: &str) -> Option<&'static str> {
     FIELDS.iter().find(|(f, _)| f.eq_ignore_ascii_case(field)).map(|(_, l)| *l)
 }
 
-/// A field event's text as its parts: the field's label, and the values it moved from and to (`None` when empty).
-pub fn split_field_text(text: &str) -> Option<(&'static str, Option<&str>, Option<&str>)> {
-    let (label, rest) = FIELDS.iter().map(|(_, l)| *l).find_map(|l| Some((l, text.strip_prefix(l)?.strip_prefix(' ')?)))?;
-    let (from, to) = rest.split_once(" → ")?;
-    Some((label, (from != "None").then_some(from), (to != "None").then_some(to)))
+/// The field a change event is about, with the values exactly as Jira recorded them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldEdit {
+    pub label: &'static str,
+    pub from: Option<String>,
+    pub to: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +38,8 @@ pub struct NewEvent {
     pub actor: Person,
     pub at: String,
     pub text: String,
+    /// Set on field changes, so consumers don't have to read the values back out of `text`.
+    pub field: Option<FieldEdit>,
 }
 
 const EXCERPT_CHARS: usize = 280;
@@ -62,6 +65,7 @@ pub fn derive(t: &CachedTicket, me: &str) -> Vec<NewEvent> {
                 "Assignee" if item.to_id.as_deref() == Some(me) => (EventKind::Assigned, "Assigned to you".to_string()),
                 _ => (EventKind::Field, format!("{label} {from} → {to}")),
             };
+            let field = (kind == EventKind::Field).then(|| FieldEdit { label, from: item.from.clone(), to: item.to.clone() });
             out.push(NewEvent {
                 id: format!("h:{}:{}", h.id, item.field),
                 kind,
@@ -69,6 +73,7 @@ pub fn derive(t: &CachedTicket, me: &str) -> Vec<NewEvent> {
                 actor: h.author.clone(),
                 at: h.at.clone(),
                 text,
+                field,
             });
         }
     }
@@ -81,6 +86,7 @@ pub fn derive(t: &CachedTicket, me: &str) -> Vec<NewEvent> {
             actor: c.author.clone(),
             at: c.created.clone(),
             text: excerpt(&c.body),
+            field: None,
         });
     }
     out
@@ -158,12 +164,26 @@ mod tests {
     }
 
     #[test]
-    fn a_field_text_splits_back_into_label_and_values() {
-        assert_eq!(split_field_text("Priority High → Low"), Some(("Priority", Some("High"), Some("Low"))));
-        assert_eq!(split_field_text("Due date None → 2026-10-01"), Some(("Due date", None, Some("2026-10-01"))));
-        assert_eq!(split_field_text("Fix version 1.2 → None"), Some(("Fix version", Some("1.2"), None)));
-        assert_eq!(split_field_text("Something else A → B"), None);
-        assert_eq!(split_field_text("Priority High"), None);
+    fn a_field_event_carries_the_values_jira_recorded() {
+        let mut t = ticket();
+        t.history = vec![History {
+            id: "8".into(),
+            author: sam(),
+            at: "2026-09-28T10:00:00Z".into(),
+            items: vec![
+                HistoryItem { field: "summary".into(), from: Some("A".into()), to: Some("B → C".into()), to_id: None },
+                HistoryItem { field: "labels".into(), from: Some("None".into()), to: None, to_id: None },
+                HistoryItem { field: "duedate".into(), from: None, to: Some("2026-10-01".into()), to_id: None },
+            ],
+        }];
+        t.comments.clear();
+        let edits: Vec<FieldEdit> = derive(&t, "me").into_iter().filter_map(|e| e.field).collect();
+        let edit = |label, from: Option<&str>, to: Option<&str>| FieldEdit { label, from: from.map(Into::into), to: to.map(Into::into) };
+        assert_eq!(
+            edits,
+            [edit("Summary", Some("A"), Some("B → C")), edit("Labels", Some("None"), None), edit("Due date", None, Some("2026-10-01"))],
+            "an arrow inside a value stays inside it, and a literal \"None\" is a value, not an absence"
+        );
     }
 
     #[test]

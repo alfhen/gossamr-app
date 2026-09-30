@@ -36,6 +36,9 @@
       {"type": "paragraph", "content": [{"type": "text", "text": "inside a node nobody knows"}]}
     ]},
     {"type": "unsupportedBlock", "attrs": {"originalValue": {"type": "paragraph", "content": [{"type": "text", "text": "kept from an unsupported block"}]}}},
+    {"type": "blockCard", "attrs": {"url": "https://example.com/card"}},
+    {"type": "embedCard", "attrs": {"url": "https://example.com/embed", "layout": "wide"}},
+    {"type": "paragraph", "content": [{"type": "text", "text": "Hello"}, {"type": "futureInline", "content": [{"type": "text", "text": " world"}]}]},
     {"type": "paragraph", "content": [{"type": "futureInline", "content": [{"type": "text", "text": "odd inline"}]}]},
     {"type": "paragraph"}
   ]

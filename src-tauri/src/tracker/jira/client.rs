@@ -494,12 +494,22 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
 /// How long Jira wants us to wait, when the response is a rate limit: a 429, or a 503 that carries `Retry-After`.
 /// Without the header the wait doubles per attempt, as Atlassian advises.
 fn rate_limit_wait(res: &reqwest::Response, attempt: u32) -> Option<u64> {
-    let asked = res.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
+    let asked = res.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).and_then(|v| retry_after_secs(v, Utc::now()));
     match res.status() {
         StatusCode::TOO_MANY_REQUESTS => Some(asked.unwrap_or(2u64 << attempt.min(6))),
         StatusCode::SERVICE_UNAVAILABLE => asked,
         _ => None,
     }
+}
+
+/// A `Retry-After` value: a number of seconds, or an HTTP date (a past one meaning now).
+fn retry_after_secs(value: &str, now: DateTime<Utc>) -> Option<u64> {
+    let value = value.trim();
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(secs);
+    }
+    let at = DateTime::parse_from_rfc2822(value).ok()?;
+    Some((at.with_timezone(&Utc) - now).num_seconds().max(0) as u64)
 }
 
 /// Jira timestamps look like `2026-09-28T10:00:00.000+0200`; normalise to UTC RFC 3339 so they sort as strings.
@@ -882,6 +892,16 @@ pub(in crate::tracker) mod tests {
         assert_eq!(media_id_from_location(&loc).as_deref(), Some(id));
         assert_eq!(media_id_from_location("https://example.com/secure/attachment/10001/a.png"), None);
         assert_eq!(media_id_from_location("https://api.media.atlassian.com/file/not-an-id/binary"), None);
+    }
+
+    #[test]
+    fn retry_after_is_seconds_or_an_http_date() {
+        let now = DateTime::parse_from_rfc3339("2026-09-30T12:00:00Z").unwrap().with_timezone(&Utc);
+        assert_eq!(retry_after_secs("30", now), Some(30));
+        assert_eq!(retry_after_secs(" 0 ", now), Some(0));
+        assert_eq!(retry_after_secs("Wed, 30 Sep 2026 12:01:30 GMT", now), Some(90));
+        assert_eq!(retry_after_secs("Wed, 30 Sep 2026 11:00:00 GMT", now), Some(0), "a date in the past means now");
+        assert_eq!(retry_after_secs("soon", now), None);
     }
 
     #[test]

@@ -170,7 +170,23 @@ CREATE TABLE http_cache (
   PRIMARY KEY (connection_id, url)
 ) WITHOUT ROWID;";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE];
+/// Which work items a code change carries out. Derived from the cached changes and rebuilt whenever they or the known
+/// project keys change, so a row is never authoritative; `provenance` is where the key was found.
+const LINKS: &str = "
+CREATE TABLE item_links (
+  item_connection_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  code_id TEXT NOT NULL,
+  provenance TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  found_at TEXT NOT NULL,
+  PRIMARY KEY (item_connection_id, item_id, connection_id, code_id)
+) WITHOUT ROWID;
+CREATE INDEX item_links_code ON item_links(connection_id, code_id);";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -197,7 +213,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
-        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache"] {
+        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
@@ -277,6 +293,30 @@ mod tests {
         assert!(tables(&conn).contains(&"code_changes".to_string()));
         assert_eq!(conn.query_row("SELECT count(*) FROM watch_settings", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT count(*) FROM container_catalog", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+    }
+
+    #[test]
+    fn a_code_cache_from_before_links_keeps_its_changes_and_gains_the_table() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in [INBOX, CACHE, PROPOSALS, WATCH, CODE] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 5).unwrap();
+        conn.execute(
+            "INSERT INTO code_changes (connection_id, external_id, repo, kind, number, state, updated_at, data, synced_at)
+             VALUES ('github:ann', 'pr:acme/webshop#1', 'acme/webshop', 'pullRequest', 1, 'open', 't', '{}', 't')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO http_cache (connection_id, url, body, fetched_at) VALUES ('github:ann', 'u', '[]', 't')", []).unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        assert!(tables(&conn).contains(&"item_links".to_string()));
+        for t in ["code_changes", "http_cache"] {
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
+        }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
     }
 

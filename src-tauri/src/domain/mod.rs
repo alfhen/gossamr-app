@@ -16,7 +16,7 @@ mod workflow;
 
 pub use doc::{Block, Doc, Inline, Mark};
 pub use code::{
-    clip, ChangedFile, CheckState, CodeChange, CodeChangeKind, CodeChangeState, CommitInfo, DevLink, LinkSource, PullRequestDetail, ReviewInfo, ReviewState, BODY_LIMIT,
+    clip, ChangedFile, CheckState, CodeChange, CodeChangeKind, CodeChangeState, CodeFile, CodeHit, CommitInfo, CommitQuery, Notice, TreeEntry, TreeEntryKind, DevLink, LinkSource, PullRequestDetail, ReviewInfo, ReviewState, BODY_LIMIT,
 };
 pub use event::{Event, EventKind, FeedCursor, FeedEntry, FeedPage, FeedQuery, Subject};
 pub use filter::{Filter, FilterContext};

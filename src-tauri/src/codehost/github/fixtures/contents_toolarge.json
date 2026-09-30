@@ -1,0 +1,9 @@
+{
+ "type": "file",
+ "encoding": "none",
+ "size": 5000000,
+ "name": "dump.sql",
+ "path": "dump.sql",
+ "sha": "s3",
+ "content": ""
+}

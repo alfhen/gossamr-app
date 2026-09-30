@@ -19,7 +19,7 @@ pub fn stamp(t: DateTime<Utc>) -> String {
 }
 
 /// A unit-variant enum's serialised name, which is how the schema stores kinds and categories.
-fn name_of<T: Serialize>(v: &T) -> String {
+pub(super) fn name_of<T: Serialize>(v: &T) -> String {
     serde_json::to_value(v).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default()
 }
 

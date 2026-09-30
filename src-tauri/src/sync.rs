@@ -210,8 +210,8 @@ fn payload_of(e: &NewEvent) -> serde_json::Value {
             Some((from, to)) => serde_json::json!({ "text": e.text, "from": from, "to": to }),
             None => serde_json::json!({ "text": e.text }),
         },
-        InboxKind::Field => match crate::events::split_field_text(&e.text) {
-            Some((field, from, to)) => serde_json::json!({ "text": e.text, "field": field, "from": from, "to": to }),
+        InboxKind::Field => match &e.field {
+            Some(f) => serde_json::json!({ "text": e.text, "field": f.label, "from": f.from, "to": f.to }),
             None => serde_json::json!({ "text": e.text }),
         },
         _ => serde_json::json!({ "text": e.text }),
@@ -248,12 +248,9 @@ impl Schedule {
         self.last_attempt.is_none_or(|at| now - at >= gap)
     }
 
-    /// Records an attempt that the tracker turned away with a rate limit: the next scheduled one waits at least as long
-    /// as it asked, and never less than an ordinary failure would.
-    pub fn rate_limited(&mut self, now: DateTime<Utc>, retry_after: Duration) {
-        self.finished(now, false);
-        let asked = now + retry_after;
-        self.retry_at = self.retry_at.map_or(Some(asked), |at| Some(at.max(asked)));
+    /// Holds off the next scheduled attempt until `until`, as when the host says when a limit resets.
+    pub fn defer(&mut self, until: DateTime<Utc>) {
+        self.retry_at = Some(self.retry_at.map_or(until, |at| at.max(until)));
     }
 
     /// Records an attempt. After a failure the next scheduled one waits twice as long as after the one before, up
@@ -266,7 +263,9 @@ impl Schedule {
         } else {
             self.failures = self.failures.saturating_add(1);
             let doubled = BACKOFF_BASE * 2_i32.saturating_pow(self.failures.min(16));
-            self.retry_at = Some(now + doubled.min(MAX_BACKOFF));
+            let backoff = now + doubled.min(MAX_BACKOFF);
+            // A retry the person forced must not shorten a deadline the tracker set.
+            self.retry_at = Some(self.retry_at.map_or(backoff, |at| at.max(backoff)));
         }
     }
 }
@@ -617,6 +616,19 @@ mod tests {
     }
 
     #[test]
+    fn a_field_payload_keeps_the_values_as_recorded() {
+        let mut t = sample_ticket();
+        t.history[0].items = vec![
+            crate::model::HistoryItem { field: "summary".into(), from: Some("A".into()), to: Some("B → C".into()), to_id: None },
+            crate::model::HistoryItem { field: "labels".into(), from: Some("None".into()), to: None, to_id: None },
+        ];
+        t.comments.clear();
+        let payloads: Vec<serde_json::Value> = derive(&t, "me").iter().filter_map(|e| domain_event(CONNECTION, e)).map(|e| e.payload).collect();
+        assert_eq!((payloads[0]["from"].as_str(), payloads[0]["to"].as_str()), (Some("A"), Some("B → C")));
+        assert_eq!((payloads[1]["from"].as_str(), payloads[1]["to"].as_str()), (Some("None"), None));
+    }
+
+    #[test]
     fn field_events_reach_the_item_history_and_the_feed() {
         let db = Db::in_memory().unwrap();
         let mut t = sample_ticket();
@@ -684,16 +696,32 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_forced_retry_keeps_the_longer_deadline() {
+        let mut s = Schedule::default();
+        let t0 = at(NOW);
+        s.finished(t0, false);
+        s.defer(t0 + Duration::minutes(40));
+        let later = t0 + Duration::minutes(5);
+        s.finished(later, false);
+        assert!(!s.due(t0 + Duration::minutes(39), Trigger::Timer), "the 40 minute deadline survives a failed manual retry");
+        assert!(s.due(t0 + Duration::minutes(40), Trigger::Timer));
+        s.finished(t0 + Duration::minutes(41), true);
+        assert!(s.due(t0 + Duration::minutes(42), Trigger::Timer), "success clears it");
+    }
+
+    #[test]
     fn a_rate_limit_holds_off_for_as_long_as_the_tracker_asked() {
         let mut s = Schedule::default();
         let t0 = at(NOW);
-        s.rate_limited(t0, Duration::minutes(40));
+        s.finished(t0, false);
+        s.defer(t0 + Duration::minutes(40));
         assert!(!s.due(t0 + Duration::minutes(39), Trigger::Timer));
         assert!(!s.due(t0 + Duration::minutes(39), Trigger::Focus));
         assert!(s.due(t0 + Duration::minutes(40), Trigger::Timer));
         assert!(s.due(t0 + Duration::seconds(1), Trigger::Now), "the person asking still goes through");
         let mut s = Schedule::default();
-        s.rate_limited(t0, Duration::seconds(1));
+        s.finished(t0, false);
+        s.defer(t0 + Duration::seconds(1));
         assert!(!s.due(t0 + Duration::seconds(59), Trigger::Timer), "never sooner than an ordinary failure");
     }
 

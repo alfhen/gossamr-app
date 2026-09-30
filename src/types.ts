@@ -207,7 +207,7 @@ export interface WorkLink {
   /** `from` blocks, relates to or duplicates `to`. */
   from: ItemRef;
   to: ItemRef;
-  kind: "blocks" | "relates" | "duplicates";
+  kind: "blocks" | "relates" | "duplicates" | "implementedBy";
 }
 
 /** A cached item. The tracker's raw payload stays in the backend, so it is always null here. */
@@ -272,6 +272,10 @@ export interface WorkEvent {
     | "prMerged"
     | "checkFailed"
     | "reviewRequested"
+    | "prClosed"
+    | "prReadyForReview"
+    | "reviewSubmitted"
+    | "prMentioned"
     | "fieldChanged";
   subject: { type: "item"; item: ItemRef } | { type: "codeChange"; repo: string; number: number };
   actor: PersonRef | null;
@@ -566,4 +570,142 @@ export interface DeviceStart {
   verificationUri: string;
   expiresIn: number;
   interval: number;
+}
+
+// ---- Code hosting (GitHub), mirroring src-tauri/src/domain/code.rs ----
+
+export type CodeChangeKind = "pullRequest" | "branch" | "commit";
+
+/** Only pull requests move through every state. A branch is `open` while it exists; a commit on the default branch is `merged`. */
+export type CodeChangeState = "draft" | "open" | "merged" | "closed";
+
+export type CheckState = "none" | "pending" | "passing" | "failing";
+
+export type ReviewState = "none" | "requested" | "approved" | "changesRequested" | "commented";
+
+/** A pull request, a branch or a commit. */
+export interface CodeChange {
+  connectionId: string;
+  /** `pr:acme/webshop#12`, `branch:acme/webshop:ca-208-gateway` or `commit:acme/webshop@<sha>`. */
+  externalId: string;
+  kind: CodeChangeKind;
+  /** `owner/name`. */
+  repo: string;
+  number: number | null;
+  /** A pull request's title, a branch's name, or a commit's first line. */
+  title: string;
+  /** The head branch of a pull request, the name of a branch, or the branch a commit was read from. */
+  headRef: string;
+  baseRef: string | null;
+  state: CodeChangeState;
+  mergedAt: string | null;
+  createdAt: string | null;
+  updatedAt: string;
+  author: PersonRef | null;
+  reviewers: PersonRef[];
+  checks: CheckState;
+  review: ReviewState;
+  url: string;
+  sha: string | null;
+  additions: number | null;
+  deletions: number | null;
+  changedFiles: number | null;
+  /** A pull request's description or the rest of a commit message, cut at 2000 characters. */
+  body: string;
+  /** Work item keys found in the branch, title, body or message. */
+  linkedKeys: string[];
+}
+
+/** Where in a change a work item's key was found. */
+export type LinkSource = "branch" | "title" | "commit" | "body";
+
+/** A work item and the code change that carries it out. Strongest (`confidence`) first. */
+export interface DevLink {
+  item: ItemRef;
+  change: CodeChange;
+  provenance: LinkSource;
+  /** 0.95 branch, 0.9 title, 0.85 commit message, 0.6 description. */
+  confidence: number;
+}
+
+export interface ChangedFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  /** Cut short at 4000 characters; absent for binary files and very large diffs. */
+  patch: string | null;
+}
+
+export interface CommitInfo {
+  sha: string;
+  message: string;
+  author: string | null;
+  at: string;
+  url: string;
+}
+
+export interface ReviewInfo {
+  id: string;
+  reviewer: PersonRef;
+  state: ReviewState;
+  at: string | null;
+}
+
+export interface PullRequestDetail {
+  change: CodeChange;
+  files: ChangedFile[];
+  /** More files changed than were listed. */
+  filesTruncated: boolean;
+  /** The latest 30, oldest first. */
+  commits: CommitInfo[];
+  reviews: ReviewInfo[];
+}
+
+/** Names a pull request to read in full. */
+export interface CodeRef {
+  connectionId: string;
+  repo: string;
+  number: number;
+}
+
+export interface CodeFile {
+  repo: string;
+  path: string;
+  /** The ref asked for; empty for the default branch. */
+  reference: string;
+  text: string;
+  /** Bytes of the whole file, which may be more than `text` holds. */
+  size: number;
+  /** `text` is cut at 60,000 characters. */
+  truncated: boolean;
+}
+
+export interface TreeEntry {
+  name: string;
+  path: string;
+  kind: "file" | "dir" | "symlink" | "submodule";
+  size: number;
+}
+
+export interface CodeHit {
+  repo: string;
+  path: string;
+  url: string;
+  fragments: string[];
+}
+
+export interface CodeCommitQuery {
+  /** A branch, tag or commit; the default branch when absent. */
+  reference?: string | null;
+  /** RFC 3339. */
+  since?: string | null;
+  /** Only commits whose message contains this, ignoring case, such as a ticket key. */
+  query?: string | null;
+  limit?: number;
+}
+
+/** Emitted as `dev-links-changed` when a sync or a live search changed which work items are linked to code. */
+export interface DevLinksChanged {
+  connectionId: string;
 }

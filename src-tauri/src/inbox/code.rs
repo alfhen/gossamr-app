@@ -1,18 +1,25 @@
 //! Core's code host service: GitHub connections, each with its own database, and the watch set over repositories.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 
 use super::watch::{CatalogEntry, CatalogPage, WatchRow, WatchState};
 use super::{now_iso, Core};
+use crate::auth::Scope;
 use crate::auth::{DeviceStart, GithubAuth, GithubSession, KeychainStore, TokenStore};
+use crate::codehost::events::{derive, from_notice, recent};
 use crate::codehost::github::{GithubHost, API_BASE};
-use crate::codehost::CodeHost;
-use crate::db::Db;
-use crate::domain::{ContainerQuery, ContainerSummary, Footprint, WatchChange, WatchMode, WatchSet, AUTO_EVERYTHING_MAX};
+use crate::codehost::links::{discover, KnownKeys};
+use crate::codehost::{CodeHost, PullList};
+use crate::db::{stamp, Db};
+use crate::domain::{
+    CheckState, CodeChange, CodeChangeState, CodeFile, CodeHit, CommitQuery, ContainerQuery, ContainerSummary, DevLink, Event, Footprint, ItemRef,
+    PullRequestDetail, TreeEntry, WatchChange, WatchMode, WatchSet, AUTO_EVERYTHING_MAX,
+};
 use crate::error::{Error, Result};
+use crate::sync::Trigger;
 use crate::tracker::{Connection, ConnectionKind};
 
 const CATALOG_SIZE: &str = "watch_catalog_size";
@@ -22,6 +29,12 @@ const PROBE_EVERY: Duration = Duration::hours(12);
 const FOOTPRINT_TTL: Duration = Duration::hours(6);
 const FOOTPRINT_DAYS: u32 = 90;
 const CATALOG_PAGE: usize = 50;
+/// Pull requests are followed while they are open and for this long after they last changed.
+const PR_WINDOW_DAYS: i64 = 30;
+/// Changes of repositories that are no longer watched are kept this long, so watching again needs no refetch.
+const UNWATCH_GRACE_DAYS: i64 = 14;
+const NOTIFICATIONS_NEXT: &str = "notifications_next_at";
+const MIN_POLL_SECS: i64 = 60;
 /// Answers not refreshed for this long are dropped from the conditional-request cache.
 const HTTP_CACHE_DAYS: i64 = 14;
 pub const LAST_SYNC: &str = "last_sync_at";
@@ -45,6 +58,8 @@ pub struct CodeService {
     dbs: Mutex<HashMap<String, Arc<Mutex<Db>>>>,
     hosts: Mutex<HashMap<String, Arc<dyn CodeHost>>>,
     device: tokio::sync::Mutex<Option<crate::auth::DeviceChallenge>>,
+    errors: Mutex<HashMap<String, String>>,
+    syncing: Mutex<HashSet<String>>,
 }
 
 impl CodeService {
@@ -64,6 +79,8 @@ impl CodeService {
             dbs: Mutex::new(HashMap::new()),
             hosts: Mutex::new(HashMap::new()),
             device: tokio::sync::Mutex::new(None),
+            errors: Mutex::new(HashMap::new()),
+            syncing: Mutex::new(HashSet::new()),
         }
     }
 
@@ -158,7 +175,9 @@ impl Core {
 
     async fn connected(&self, session: GithubSession) -> Result<super::ConnectionInfo> {
         let connection = self.code.remember(session.clone());
-        self.registry.register(connection);
+        self.registry.register(connection.clone());
+        // So the catalog is known before the first sync, which a search of the watched repositories depends on.
+        let _ = self.probe_code_catalog(&connection.id).await;
         self.wake.notify_one();
         Ok(info(&session, None, None))
     }
@@ -210,7 +229,9 @@ impl Core {
             .iter()
             .filter_map(|id| {
                 let last = self.with_code_db(id, |db| db.meta(LAST_SYNC)).ok().flatten();
-                sessions.get(id).map(|s| info(s, last, None))
+                let error = self.code.errors.lock().expect("error lock poisoned").get(id).cloned();
+                let syncing = self.code.syncing.lock().expect("sync lock poisoned").contains(id);
+                sessions.get(id).map(|s| super::ConnectionInfo { syncing, ..info(s, last, error) })
             })
             .collect()
     }
@@ -315,6 +336,320 @@ impl Core {
         let stored = serde_json::to_string(&Cached { at: now_iso(), rows: rows.clone() })?;
         self.with_code_db(id, |db| db.set_meta(FOOTPRINT, &stored))?;
         Ok(rows)
+    }
+}
+
+/// What a sync of a GitHub connection left behind.
+pub struct CodeSynced {
+    /// Whether any cached change or event is new or different.
+    pub changed: bool,
+    /// Whether the set of work items linked to code changed.
+    pub links_changed: bool,
+}
+
+/// A pull request to read in full.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeRef {
+    pub connection_id: String,
+    pub repo: String,
+    pub number: u64,
+}
+
+fn refused(repo: &str) -> Error {
+    Error::CodeHost { status: 403, message: format!("{repo} isn't one of the repositories you watch, so it isn't read.") }
+}
+
+/// Repository names are not case sensitive on GitHub, and a watch may have been typed with other capitals.
+fn is_watched_repo(repos: &[String], repo: &str) -> bool {
+    repos.iter().any(|r| r.eq_ignore_ascii_case(repo))
+}
+
+fn me_of(change: &CodeChange, me: &str) -> bool {
+    change.author.as_ref().is_some_and(|a| a.account_id.eq_ignore_ascii_case(me))
+}
+
+fn newest_first(links: &mut [DevLink]) {
+    links.sort_by(|a, b| b.confidence.total_cmp(&a.confidence).then(b.change.updated_at.cmp(&a.change.updated_at)).then(a.change.external_id.cmp(&b.change.external_id)));
+}
+
+impl Core {
+    /// The repositories a connection follows: the ones chosen, or every repository of a catalog small enough to watch
+    /// whole. A large catalog nobody has chosen from yields none, and archived repositories are left out of a whole-catalog watch.
+    pub fn watched_repos(&self, id: &str) -> Result<Vec<String>> {
+        self.with_code_db(id, |db| {
+            let set = db.watch_set(id)?;
+            let catalog = || -> Result<Vec<String>> { Ok(db.catalog_search(id, "", usize::MAX >> 1)?.into_iter().filter(|c| !c.archived).map(|c| c.container_ref.external_id).collect()) };
+            let size: Option<usize> = db.meta(CATALOG_SIZE)?.and_then(|s| s.parse().ok());
+            Ok(match set.mode {
+                WatchMode::Selected => set.watches.iter().filter(|w| w.unwatched_at.is_none() && !w.inaccessible).map(|w| w.container.external_id.clone()).collect(),
+                WatchMode::Everything => catalog()?,
+                WatchMode::Unset if size.is_some_and(|n| n <= AUTO_EVERYTHING_MAX) => catalog()?,
+                WatchMode::Unset => Vec::new(),
+            })
+        })
+    }
+
+    fn require_watched(&self, id: &str, repo: &str) -> Result<()> {
+        if is_watched_repo(&self.watched_repos(id)?, repo) {
+            Ok(())
+        } else {
+            Err(refused(repo))
+        }
+    }
+
+    /// The project keys of the signed-in tracker, which are what a key in a branch or title may name.
+    async fn known_keys(&self) -> KnownKeys {
+        let Some((site, me)) = self.auth.identity().await else { return KnownKeys::default() };
+        let connection = Connection::jira_id(&Scope::of(&site, &me));
+        let keys = self.with_db(|db| db.project_keys(&connection)).await.unwrap_or_default();
+        KnownKeys::new(keys.iter().map(|k| (k.as_str(), connection.as_str())))
+    }
+
+    /// Rebuilds the links of a connection from its cached changes. Returns whether they changed.
+    fn rediscover(&self, id: &str, known: &KnownKeys) -> Result<bool> {
+        let repos = self.watched_repos(id)?;
+        self.with_code_db(id, |db| {
+            let before = db.link_signature(id)?;
+            let originals: Vec<CodeChange> = db.code_changes(id)?.into_iter().filter(|c| is_watched_repo(&repos, &c.repo)).collect();
+            let mut changes = originals.clone();
+            let links = discover(&mut changes, known);
+            let moved: Vec<CodeChange> = changes.iter().zip(&originals).filter(|(a, b)| a.linked_keys != b.linked_keys).map(|(a, _)| a.clone()).collect();
+            let at = stamp(Utc::now());
+            db.upsert_code_changes(&moved, &at)?;
+            db.replace_item_links(id, &links, &at)?;
+            Ok(db.link_signature(id)? != before)
+        })
+    }
+
+    async fn sync_repo(&self, host: &dyn CodeHost, id: &str, me: &str, repo: &str, since: DateTime<Utc>) -> Result<bool> {
+        let PullList { changes: listed, .. } = host.pull_requests(repo, since).await?;
+        let previous: HashMap<String, CodeChange> = self.with_code_db(id, |db| Ok(db.code_changes(id)?.into_iter().filter(|c| c.repo == repo).map(|c| (c.external_id.clone(), c)).collect()))?;
+        let mut stored = Vec::new();
+        let mut events: Vec<Event> = Vec::new();
+        for listed in listed {
+            let prev = previous.get(&listed.external_id);
+            let open = matches!(listed.state, CodeChangeState::Open | CodeChangeState::Draft);
+            let stale = prev.is_none_or(|p| p.updated_at != listed.updated_at || p.sha != listed.sha);
+            // Checks finish without the pull request changing, so the person's own and unfinished ones are looked at again.
+            let recheck = open && prev.is_some_and(|p| me_of(p, me) || p.checks == CheckState::Pending);
+            let (now, reviews) = if stale || recheck {
+                let read = host.refresh_pull_request(&listed, open).await?;
+                (read.change, read.reviews)
+            } else {
+                let p = prev.expect("not stale implies cached");
+                (CodeChange { checks: p.checks, review: p.review, additions: p.additions, deletions: p.deletions, changed_files: p.changed_files, linked_keys: p.linked_keys.clone(), ..listed }, Vec::new())
+            };
+            events.extend(recent(derive(me, prev, &now, &reviews), since));
+            if prev != Some(&now) {
+                stored.push(now);
+            }
+        }
+        let changed = !stored.is_empty();
+        self.with_code_db(id, |db| {
+            db.upsert_code_changes(&stored, &stamp(Utc::now()))?;
+            Ok(db.insert_cache_events(&events)? > 0 || changed)
+        })
+    }
+
+    /// Reads the notification threads aimed at the person, when the token may and GitHub's poll interval allows.
+    async fn sync_notifications(&self, host: &dyn CodeHost, id: &str, repos: &[String]) -> Result<bool> {
+        let session = self.code.session(id)?;
+        if !session.can_read_notifications() {
+            return Ok(false);
+        }
+        let due = self.with_code_db(id, |db| Ok(db.meta(NOTIFICATIONS_NEXT)?.and_then(|s| parse_time(&s)).is_none_or(|at| Utc::now() >= at)))?;
+        if !due {
+            return Ok(false);
+        }
+        let read = match host.notifications().await {
+            Ok(r) => r,
+            // A token that can't read them just doesn't feed Activity with them.
+            Err(Error::CodeHost { .. }) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let wait = read.poll_interval.map_or(MIN_POLL_SECS, |s| s as i64).max(MIN_POLL_SECS);
+        let events: Vec<Event> = if read.unchanged {
+            Vec::new()
+        } else {
+            read.notices.iter().filter(|n| is_watched_repo(repos, &n.repo)).filter_map(|n| from_notice(id, n)).collect()
+        };
+        self.with_code_db(id, |db| {
+            db.set_meta(NOTIFICATIONS_NEXT, &stamp(Utc::now() + Duration::seconds(wait)))?;
+            Ok(db.insert_cache_events(&events)? > 0)
+        })
+    }
+
+    /// Reads the watched repositories' pull requests, derives events, rebuilds links and polls notifications.
+    pub async fn sync_code(&self, id: &str) -> Result<CodeSynced> {
+        self.sync_code_at(id, Utc::now()).await
+    }
+
+    async fn sync_code_at(&self, id: &str, started: DateTime<Utc>) -> Result<CodeSynced> {
+        let me = self.code.session(id)?.login;
+        let host = self.code_host(id).await?;
+        self.probe_code_catalog(id).await?;
+        let repos = self.watched_repos(id)?;
+        let since = started - Duration::days(PR_WINDOW_DAYS);
+        let (mut changed, mut stop) = (false, None);
+        for repo in &repos {
+            match self.sync_repo(host.as_ref(), id, &me, repo, since).await {
+                Ok(c) => changed |= c,
+                Err(Error::CodeHost { status: 403 | 404, .. }) => self.with_code_db(id, |db| db.set_inaccessible(id, std::slice::from_ref(repo), true))?,
+                Err(e @ Error::RateLimited { .. }) => {
+                    stop = Some(e);
+                    break;
+                }
+                Err(e) => {
+                    stop.get_or_insert(e);
+                }
+            }
+        }
+        if stop.is_none() {
+            changed |= self.sync_notifications(host.as_ref(), id, &repos).await.unwrap_or(false);
+        }
+        let links_changed = self.rediscover(id, &self.known_keys().await)?;
+        self.with_code_db(id, |db| {
+            db.prune_code_changes(id, &repos, &stamp(started - Duration::days(UNWATCH_GRACE_DAYS)))?;
+            db.set_meta(LAST_SYNC, &stamp(started))
+        })?;
+        match stop {
+            Some(e) => Err(e),
+            None => Ok(CodeSynced { changed, links_changed }),
+        }
+    }
+
+    /// Syncs each GitHub connection that is due. Each has its own schedule, so one that is rate limited waits alone.
+    pub async fn sync_code_if_due(&self, trigger: Trigger) -> Vec<(String, Result<CodeSynced>)> {
+        let mut out = Vec::new();
+        for id in self.code.connection_ids() {
+            let due = self.schedules.lock().expect("schedule lock poisoned").entry(id.clone()).or_default().due(Utc::now(), trigger);
+            if !due {
+                continue;
+            }
+            self.code.syncing.lock().expect("sync lock poisoned").insert(id.clone());
+            let result = self.sync_code(&id).await;
+            self.code.syncing.lock().expect("sync lock poisoned").remove(&id);
+            {
+                let mut schedules = self.schedules.lock().expect("schedule lock poisoned");
+                let schedule = schedules.entry(id.clone()).or_default();
+                schedule.finished(Utc::now(), result.is_ok());
+                if let Err(Error::RateLimited { retry_after_secs, .. }) = &result {
+                    schedule.defer(Utc::now() + Duration::seconds(*retry_after_secs as i64));
+                }
+            }
+            let error = result.as_ref().err().map(|e| e.to_string());
+            match error {
+                Some(e) => self.code.errors.lock().expect("error lock poisoned").insert(id.clone(), e),
+                None => self.code.errors.lock().expect("error lock poisoned").remove(&id),
+            };
+            out.push((id, result));
+        }
+        out
+    }
+
+    /// Pull request and notification events across the GitHub connections, newest first.
+    pub fn code_events(&self, limit: usize) -> Result<Vec<Event>> {
+        let mut out = Vec::new();
+        for id in self.code.connection_ids() {
+            out.extend(self.with_code_db(&id, |db| db.code_events(&id, limit))?);
+        }
+        out.sort_by(|a, b| b.at.cmp(&a.at).then(a.id.cmp(&b.id)));
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    /// The code changes cached for a work item, from every GitHub connection, in repositories that are watched.
+    pub fn dev_links(&self, item: &ItemRef) -> Result<Vec<DevLink>> {
+        let mut out = Vec::new();
+        for id in self.code.connection_ids() {
+            let repos = self.watched_repos(&id)?;
+            out.extend(self.with_code_db(&id, |db| db.dev_links(item))?.into_iter().filter(|l| is_watched_repo(&repos, &l.change.repo)));
+        }
+        newest_first(&mut out);
+        Ok(out)
+    }
+
+    /// Searches the watched repositories for the item's key, caches what it finds and returns the links. The bool is
+    /// the connections whose links changed.
+    pub async fn dev_links_live(&self, item: &ItemRef) -> Result<(Vec<DevLink>, Vec<String>)> {
+        let mut changed = Vec::new();
+        let mut known = self.known_keys().await;
+        if known.item(&item.key).is_none() {
+            if let Some((prefix, _)) = item.key.rsplit_once('-') {
+                known = KnownKeys::new([(prefix, item.connection_id.as_str())]);
+            }
+        }
+        for id in self.code.connection_ids() {
+            let repos = self.watched_repos(&id)?;
+            if repos.is_empty() {
+                continue;
+            }
+            // One account that is refused or limited must not hide what the others, and the cache, have.
+            let Ok(host) = self.code_host(&id).await else { continue };
+            let Ok(found) = host.search(&item.key, &repos).await else { continue };
+            let found: Vec<CodeChange> = found.into_iter().filter(|c| is_watched_repo(&repos, &c.repo)).collect();
+            self.with_code_db(&id, |db| {
+                // What a sync already read in full is better than what a search saw of it.
+                let fresh: Vec<CodeChange> = found.into_iter().filter(|c| db.code_change(&id, &c.external_id).ok().flatten().is_none()).collect();
+                db.upsert_code_changes(&fresh, &stamp(Utc::now()))
+            })?;
+            if self.rediscover(&id, &known)? {
+                changed.push(id.clone());
+            }
+        }
+        Ok((self.dev_links(item)?, changed))
+    }
+
+    pub async fn code_pull_request(&self, r: &CodeRef) -> Result<PullRequestDetail> {
+        self.require_watched(&r.connection_id, &r.repo)?;
+        self.code_host(&r.connection_id).await?.pull_request(&r.repo, r.number).await
+    }
+
+    /// Pull requests, branches and commits in the watched repositories that match `query`, newest first.
+    pub async fn code_search(&self, query: &str) -> Result<Vec<CodeChange>> {
+        let mut out = Vec::new();
+        for id in self.code.connection_ids() {
+            let repos = self.watched_repos(&id)?;
+            if !repos.is_empty() {
+                out.extend(self.code_host(&id).await?.search(query, &repos).await?);
+            }
+        }
+        out.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
+        Ok(out)
+    }
+
+    pub async fn code_file(&self, connection_id: &str, repo: &str, path: &str, reference: Option<&str>) -> Result<CodeFile> {
+        self.require_watched(connection_id, repo)?;
+        self.code_host(connection_id).await?.file(repo, path, reference).await
+    }
+
+    pub async fn code_tree(&self, connection_id: &str, repo: &str, path: &str, reference: Option<&str>) -> Result<Vec<TreeEntry>> {
+        self.require_watched(connection_id, repo)?;
+        self.code_host(connection_id).await?.tree(repo, path, reference).await
+    }
+
+    pub async fn code_commits(&self, connection_id: &str, q: &CommitQuery) -> Result<Vec<CodeChange>> {
+        self.require_watched(connection_id, &q.repo)?;
+        self.code_host(connection_id).await?.commits(q).await
+    }
+
+    /// Code search across `repos` (every watched repository when none are named), never outside what is watched.
+    pub async fn code_search_code(&self, connection_id: &str, query: &str, repos: Option<&[String]>) -> Result<Vec<CodeHit>> {
+        let watched = self.watched_repos(connection_id)?;
+        let asked: Vec<String> = match repos {
+            Some(r) => {
+                if let Some(bad) = r.iter().find(|r| !is_watched_repo(&watched, r)) {
+                    return Err(refused(bad));
+                }
+                r.to_vec()
+            }
+            None => watched,
+        };
+        if asked.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.code_host(connection_id).await?.search_code(query, &asked).await
     }
 }
 
@@ -469,5 +804,289 @@ mod tests {
         let fx = fixture(REPOS).await;
         assert!(fx.core.github_device_start().await.is_err());
         assert!(fx.core.github_device_poll().await.is_err());
+    }
+
+    // ---- sync, links and reads, with a Jira connection that knows the project `CA` ----
+
+    use crate::domain::{EventKind, Subject};
+    use crate::inbox::testing::{fixture_with, Fixture};
+
+    const PULLS_OPEN: &str = include_str!("../codehost/github/fixtures/pulls_open.json");
+    const PULLS_ALL: &str = include_str!("../codehost/github/fixtures/pulls_all.json");
+    const REVIEWS: &str = include_str!("../codehost/github/fixtures/reviews_208.json");
+    const RUNS_FAILING: &str = include_str!("../codehost/github/fixtures/check_runs_failing.json");
+    const RUNS_PASSING: &str = include_str!("../codehost/github/fixtures/check_runs_passing.json");
+    const NOTIFICATIONS: &str = include_str!("../codehost/github/fixtures/notifications.json");
+    const ISSUES_KEY: &str = include_str!("../codehost/github/fixtures/search_issues_key.json");
+    const BRANCHES: &str = include_str!("../codehost/github/fixtures/branches.json");
+    const FILE: &str = include_str!("../codehost/github/fixtures/contents_file.json");
+    const CODE: &str = include_str!("../codehost/github/fixtures/search_code.json");
+    const NOW: &str = "2026-09-30T12:00:00Z";
+
+    struct Linked {
+        fx: Fixture,
+        server: Server,
+    }
+
+    fn now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(NOW).unwrap().with_timezone(&Utc)
+    }
+
+    fn pull(number: u64) -> String {
+        let all: Vec<serde_json::Value> = serde_json::from_str(PULLS_ALL).unwrap();
+        let open: Vec<serde_json::Value> = serde_json::from_str(PULLS_OPEN).unwrap();
+        all.into_iter().chain(open).find(|p| p["number"] == number).unwrap().to_string()
+    }
+
+    fn repo_routes(repo: &str, list_open: &str, list_all: &str) -> Vec<(String, Vec<Reply>)> {
+        let mut routes = vec![(format!("/repos/{repo}/pulls"), vec![Reply::ok(list_open), Reply::ok(list_all)])];
+        if repo == "acme/webshop" {
+            for n in [208, 205, 201, 150] {
+                routes.push((format!("/repos/{repo}/pulls/{n}"), vec![Reply::ok(&pull(n))]));
+                routes.push((format!("/repos/{repo}/pulls/{n}/reviews"), vec![Reply::ok(if n == 208 { REVIEWS } else { "[]" })]));
+            }
+            routes.push((format!("/repos/{repo}/commits/aaa1111/check-runs"), vec![Reply::ok(RUNS_FAILING)]));
+            routes.push((format!("/repos/{repo}/commits/ccc3333/check-runs"), vec![Reply::ok(RUNS_PASSING)]));
+        }
+        routes
+    }
+
+    async fn linked(extra: Vec<(String, Vec<Reply>)>, scopes: Option<&str>) -> Linked {
+        let repos = "[{\"full_name\":\"acme/webshop\",\"name\":\"webshop\",\"pushed_at\":\"2026-09-29T10:00:00Z\"},{\"full_name\":\"acme/gateway\",\"name\":\"gateway\",\"pushed_at\":\"2026-09-20T10:00:00Z\"}]";
+        let user = match scopes {
+            Some(s) => Reply::ok(USER).header("x-oauth-scopes", s),
+            None => Reply::ok(USER),
+        };
+        let mut routes: Vec<(String, Vec<Reply>)> = vec![("/user".into(), vec![user]), ("/user/repos".into(), vec![Reply::ok(repos)])];
+        routes.extend(repo_routes("acme/webshop", PULLS_OPEN, PULLS_ALL));
+        routes.extend(repo_routes("acme/gateway", "[]", "[]"));
+        routes.extend(extra);
+        // Later entries win for a repeated target, so callers can override any default.
+        routes.reverse();
+        let server = serve(routes.iter().map(|(t, r)| (t.as_str(), r.clone())).collect()).await;
+        let store = Arc::new(MemoryStore::default());
+        let http = reqwest::Client::new();
+        let (base, factory_http) = (server.base.clone(), http.clone());
+        let auth = GithubAuth::for_test(http, store, &server.base, None, vec![]);
+        let code = CodeService::with_factory(auth, Box::new(move |s, db| Arc::new(GithubHost::new(factory_http.clone(), &base, &s.token, &Connection::github_id(&s.login), &s.login, db))));
+        let fx = fixture_with(Some(code)).await;
+        fx.core.github_connect_token("ghp_x").await.unwrap();
+        Linked { fx, server }
+    }
+
+    impl Linked {
+        fn core(&self) -> &Core {
+            &self.fx.core
+        }
+
+        fn requests_to(&self, part: &str) -> usize {
+            self.server.targets().iter().filter(|t| t.contains(part)).count()
+        }
+
+        /// Requests to exactly this path, query aside.
+        fn requests_for(&self, path: &str) -> usize {
+            self.server.targets().iter().filter(|t| t.split('?').next() == Some(path)).count()
+        }
+
+        async fn sync(&self) -> CodeSynced {
+            self.core().sync_code_at("github:ann", now()).await.unwrap()
+        }
+
+        fn events(&self) -> Vec<Event> {
+            self.core().code_events(100).unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sync_stores_pull_requests_in_full_and_links_them_to_the_tickets_their_branch_or_title_names() {
+        let lx = linked(vec![], Some("repo")).await;
+        let synced = lx.sync().await;
+        assert!(synced.changed && synced.links_changed);
+
+        let ca208 = lx.fx.item("CA-208");
+        let links = lx.core().dev_links(&ca208).unwrap();
+        assert_eq!(links.len(), 1);
+        let pr = &links[0].change;
+        assert_eq!((pr.number, pr.state, pr.checks, pr.review), (Some(208), CodeChangeState::Draft, CheckState::Failing, crate::domain::ReviewState::ChangesRequested));
+        assert_eq!((pr.additions, pr.changed_files), (None, None), "the fixture's detail has no stats; the list values stand");
+        assert_eq!((links[0].provenance, pr.linked_keys.clone()), (crate::domain::LinkSource::Branch, vec!["CA-208".to_string()]));
+
+        let merged = lx.core().dev_links(&lx.fx.item("CA-190")).unwrap();
+        assert_eq!((merged.len(), merged[0].change.state, merged[0].provenance), (1, CodeChangeState::Merged, crate::domain::LinkSource::Branch));
+        assert!(lx.core().dev_links(&lx.fx.item("DEVOPS-471")).unwrap().is_empty(), "DEVOPS isn't a project this workspace has");
+        assert_eq!(lx.core().with_code_db("github:ann", |db| Ok(db.code_changes("github:ann")?.len())).unwrap(), 4, "the pull request from March is outside the window");
+        assert!(lx.core().connections().await.unwrap().iter().any(|c| c.id == "github:ann" && c.last_sync_at.is_some()));
+    }
+
+    #[tokio::test]
+    async fn a_sync_writes_the_events_the_activity_feed_will_show_once_each() {
+        let lx = linked(vec![], Some("repo")).await;
+        lx.sync().await;
+        let events = lx.events();
+        let summary = |k: EventKind| events.iter().filter(|e| e.kind == k).count();
+        assert_eq!((summary(EventKind::PrOpened), summary(EventKind::PrMerged), summary(EventKind::PrClosed)), (3, 1, 1), "the pull request from June is older than the window");
+        assert_eq!(summary(EventKind::ReviewSubmitted), 3, "reviews of the person's own pull request");
+        assert_eq!(summary(EventKind::CheckFailed), 1);
+        assert!(events.iter().any(|e| e.subject == Subject::CodeChange { repo: "acme/webshop".into(), number: 208 }));
+        assert!(events.iter().all(|e| e.connection_id == "github:ann"));
+        let before = events.len();
+        lx.sync().await;
+        assert_eq!(lx.events().len(), before, "the same things are not stored again");
+    }
+
+    #[tokio::test]
+    async fn a_second_sync_sends_conditional_requests_and_reads_only_what_may_have_changed() {
+        let lx = linked(vec![], Some("repo")).await;
+        lx.sync().await;
+        let detail_reads = || lx.requests_for("/repos/acme/webshop/pulls/205") + lx.requests_for("/repos/acme/webshop/pulls/201");
+        let first = detail_reads();
+        let second = lx.sync().await;
+        assert!(!second.changed && !second.links_changed);
+        assert_eq!(detail_reads(), first, "closed pull requests that didn't change are not read again");
+        assert!(lx.requests_for("/repos/acme/webshop/pulls/208") > 1, "the person's own open pull request is looked at again for its checks");
+        assert!(lx.requests_for("/repos/acme/webshop/pulls/150") == 1, "someone else's open pull request with finished checks is not");
+    }
+
+    #[tokio::test]
+    async fn only_watched_repositories_are_ever_fetched() {
+        let lx = linked(vec![], Some("repo")).await;
+        lx.core().watch_set_mode("github:ann", WatchMode::Selected).await.unwrap();
+        lx.core().watch_set_containers("github:ann", &[WatchChange { container_id: "acme/gateway".into(), watched: Some(true), ..Default::default() }]).await.unwrap();
+        lx.sync().await;
+        assert_eq!(lx.requests_to("/repos/acme/webshop"), 0, "unwatched");
+        assert!(lx.requests_to("/repos/acme/gateway/pulls") > 0);
+        assert_eq!(lx.core().watched_repos("github:ann").unwrap(), ["acme/gateway"]);
+
+        lx.core().watch_set_containers("github:ann", &[WatchChange { container_id: "acme/webshop".into(), watched: Some(true), ..Default::default() }]).await.unwrap();
+        lx.sync().await;
+        assert!(lx.requests_to("/repos/acme/webshop/pulls") > 0);
+        assert_eq!(lx.core().dev_links(&lx.fx.item("CA-208")).unwrap().len(), 1);
+        lx.core().watch_set_containers("github:ann", &[WatchChange { container_id: "acme/webshop".into(), watched: Some(false), ..Default::default() }]).await.unwrap();
+        assert!(lx.core().dev_links(&lx.fx.item("CA-208")).unwrap().is_empty(), "unwatching hides what was cached at once");
+    }
+
+    #[tokio::test]
+    async fn a_watch_typed_with_other_capitals_still_shows_the_links_of_that_repository() {
+        let lx = linked(vec![], Some("repo")).await;
+        lx.sync().await;
+        lx.core().watch_set_mode("github:ann", WatchMode::Selected).await.unwrap();
+        lx.core().watch_set_containers("github:ann", &[WatchChange { container_id: "ACME/WEBSHOP".into(), watched: Some(true), ..Default::default() }]).await.unwrap();
+        assert_eq!(lx.core().dev_links(&lx.fx.item("CA-208")).unwrap().len(), 1);
+        assert!(lx.core().code_file("github:ann", "Acme/Webshop", "src/main.rs", None).await.is_err(), "allowed, then a plain not-found from the scripted server");
+        assert!(!matches!(lx.core().code_file("github:ann", "Acme/Webshop", "src/main.rs", None).await, Err(Error::CodeHost { status: 403, .. })));
+    }
+
+    #[tokio::test]
+    async fn a_failed_live_search_still_returns_what_is_cached() {
+        let lx = linked(vec![("/search/issues".into(), vec![Reply::status(500, "{}")]), ("/search/commits".into(), vec![Reply::status(500, "{}")])], Some("repo")).await;
+        lx.sync().await;
+        let (links, changed) = lx.core().dev_links_live(&lx.fx.item("CA-208")).await.unwrap();
+        assert_eq!((links.len(), changed.len()), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn a_catalog_nobody_has_chosen_from_syncs_nothing() {
+        let lx = linked(vec![("/user/repos".into(), vec![Reply::ok(&many(13))])], Some("repo")).await;
+        lx.sync().await;
+        assert_eq!(lx.requests_to("/pulls"), 0);
+        assert!(lx.core().watched_repos("github:ann").unwrap().is_empty());
+        lx.core().watch_set_mode("github:ann", WatchMode::Everything).await.unwrap();
+        assert_eq!(lx.core().watched_repos("github:ann").unwrap().len(), 13);
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_stops_the_sync_with_a_friendly_error_and_holds_the_schedule_off() {
+        let limited = Reply::status(403, "{\"message\":\"API rate limit exceeded\"}").header("x-ratelimit-remaining", "0").header("x-ratelimit-reset", "4102444800");
+        let lx = linked(vec![("/repos/acme/webshop/pulls".into(), vec![limited])], Some("repo")).await;
+        let err = lx.core().sync_code_at("github:ann", now()).await.err().expect("limited");
+        assert!(matches!(err, Error::RateLimited { .. }) && err.to_string().contains("limiting requests"), "{err}");
+        let results = lx.core().sync_code_if_due(Trigger::Now).await;
+        assert!(matches!(results[0].1, Err(Error::RateLimited { .. })));
+        assert!(lx.core().connections().await.unwrap().iter().any(|c| c.id == "github:ann" && c.error.as_deref().is_some_and(|e| e.contains("limit"))));
+        assert!(lx.core().sync_code_if_due(Trigger::Timer).await.is_empty(), "not due again before the limit resets");
+    }
+
+    #[tokio::test]
+    async fn an_inaccessible_repository_is_marked_and_does_not_fail_the_sync() {
+        let lx = linked(vec![("/repos/acme/gateway/pulls".into(), vec![Reply::status(404, "{}")])], Some("repo")).await;
+        lx.core().watch_set_mode("github:ann", WatchMode::Selected).await.unwrap();
+        let changes = ["acme/gateway", "acme/webshop"].map(|r| WatchChange { container_id: r.into(), watched: Some(true), ..Default::default() });
+        lx.core().watch_set_containers("github:ann", &changes).await.unwrap();
+        lx.sync().await;
+        assert_eq!(lx.core().dev_links(&lx.fx.item("CA-208")).unwrap().len(), 1);
+        let set = lx.core().with_code_db("github:ann", |db| db.watch_set("github:ann")).unwrap();
+        assert!(set.watch("acme/gateway").unwrap().inaccessible);
+    }
+
+    #[tokio::test]
+    async fn notifications_feed_activity_only_with_the_scope_and_only_for_watched_repositories() {
+        let classic = linked(vec![("/notifications".into(), vec![Reply::ok(NOTIFICATIONS).header("last-modified", "Tue, 29 Sep 2026 10:00:00 GMT").header("x-poll-interval", "60")])], Some("notifications, repo")).await;
+        classic.sync().await;
+        let kinds: Vec<EventKind> = classic.events().into_iter().filter(|e| e.id.starts_with("notif:")).map(|e| e.kind).collect();
+        assert_eq!(kinds.len(), 2, "review request and CI, not the chatter or the repository that isn't watched: {kinds:?}");
+        assert!(kinds.contains(&EventKind::ReviewRequested) && kinds.contains(&EventKind::CheckFailed));
+        classic.sync().await;
+        assert_eq!(classic.requests_to("/notifications"), 1, "not asked again inside the poll interval");
+
+        let fine_grained = linked(vec![("/notifications".into(), vec![Reply::ok(NOTIFICATIONS)])], None).await;
+        fine_grained.sync().await;
+        assert_eq!(fine_grained.requests_to("/notifications"), 0, "a token that doesn't list notification scopes isn't asked");
+    }
+
+    #[tokio::test]
+    async fn a_live_search_finds_and_caches_what_a_sync_has_not_seen_and_says_what_changed() {
+        let lx = linked(
+            vec![
+                ("/repos/acme/webshop/branches".into(), vec![Reply::ok(BRANCHES)]),
+                ("/repos/acme/webshop/pulls".into(), vec![Reply::ok("[]")]),
+                ("/repos/acme/webshop/commits/ccc3333".into(), vec![Reply::ok("{\"sha\":\"ccc3333\",\"html_url\":\"u\",\"commit\":{\"message\":\"m\",\"committer\":{\"date\":\"2026-09-26T09:10:00Z\"}},\"author\":{\"login\":\"bob\"}}")]),
+                ("/search/issues".into(), vec![Reply::ok(ISSUES_KEY)]),
+                ("/search/commits".into(), vec![Reply::ok("{\"items\":[]}")]),
+            ],
+            Some("repo"),
+        )
+        .await;
+        lx.core().watch_set_mode("github:ann", WatchMode::Everything).await.unwrap();
+        assert!(lx.core().dev_links(&lx.fx.item("CA-209")).unwrap().is_empty(), "nothing is cached before a sync or a search");
+        let (links, changed) = lx.core().dev_links_live(&lx.fx.item("CA-209")).await.unwrap();
+        assert_eq!(changed, ["github:ann"]);
+        assert_eq!((links.len(), links[0].change.kind, links[0].provenance), (1, crate::domain::CodeChangeKind::Branch, crate::domain::LinkSource::Branch));
+        assert_eq!(lx.core().dev_links(&lx.fx.item("CA-209")).unwrap().len(), 1, "now from the cache");
+        let (_, changed_again) = lx.core().dev_links_live(&lx.fx.item("CA-209")).await.unwrap();
+        assert!(changed_again.is_empty(), "nothing new the second time");
+    }
+
+    #[tokio::test]
+    async fn reads_of_files_trees_commits_pull_requests_and_code_are_refused_outside_what_is_watched() {
+        let lx = linked(
+            vec![
+                ("/repos/acme/webshop/contents/src/main.rs".into(), vec![Reply::ok(FILE)]),
+                ("/search/code".into(), vec![Reply::ok(CODE)]),
+                ("/repos/acme/webshop/pulls/208/files".into(), vec![Reply::ok("[]")]),
+                ("/repos/acme/webshop/pulls/208/commits".into(), vec![Reply::ok("[]")]),
+            ],
+            Some("repo"),
+        )
+        .await;
+        lx.core().watch_set_mode("github:ann", WatchMode::Selected).await.unwrap();
+        lx.core().watch_set_containers("github:ann", &[WatchChange { container_id: "acme/webshop".into(), watched: Some(true), ..Default::default() }]).await.unwrap();
+        let id = "github:ann";
+        assert_eq!(lx.core().code_file(id, "acme/webshop", "src/main.rs", None).await.unwrap().size, 39);
+        assert!(lx.core().code_pull_request(&CodeRef { connection_id: id.into(), repo: "acme/webshop".into(), number: 208 }).await.is_ok());
+        for result in [
+            lx.core().code_file(id, "acme/gateway", "README.md", None).await.map(|_| ()),
+            lx.core().code_tree(id, "acme/gateway", "", None).await.map(|_| ()),
+            lx.core().code_commits(id, &CommitQuery { repo: "acme/gateway".into(), ..Default::default() }).await.map(|_| ()),
+            lx.core().code_pull_request(&CodeRef { connection_id: id.into(), repo: "acme/gateway".into(), number: 1 }).await.map(|_| ()),
+            lx.core().code_search_code(id, "x", Some(&["acme/gateway".to_string()])).await.map(|_| ()),
+        ] {
+            let err = result.unwrap_err();
+            assert!(matches!(err, Error::CodeHost { status: 403, .. }) && err.to_string().contains("isn't one of the repositories you watch"), "{err}");
+        }
+        assert_eq!(lx.requests_to("/repos/acme/gateway/contents") + lx.requests_to("/repos/acme/gateway/commits"), 0, "refused before anything was sent");
+        let hits = lx.core().code_search_code(id, "checkout", None).await.unwrap();
+        assert_eq!(hits.len(), 2);
+        let searched = &lx.server.targets().into_iter().find(|t| t.starts_with("/search/code")).unwrap();
+        assert!(searched.contains("repo%3Aacme%2Fwebshop") && !searched.contains("gateway"), "{searched}");
     }
 }

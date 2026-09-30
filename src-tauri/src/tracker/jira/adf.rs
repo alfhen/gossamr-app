@@ -40,7 +40,11 @@ fn walk(node: &Value, out: &mut String, depth: usize) {
         "emoji" => out.push_str(attr(node, "text").or_else(|| attr(node, "shortName")).unwrap_or_default()),
         "status" | "placeholder" => out.push_str(attr(node, "text").unwrap_or_default()),
         "date" => out.push_str(&date_text(node)),
-        "inlineCard" | "blockCard" | "embedCard" => out.push_str(attr(node, "url").unwrap_or_default()),
+        "inlineCard" => out.push_str(attr(node, "url").unwrap_or_default()),
+        "blockCard" | "embedCard" => {
+            out.push_str(attr(node, "url").unwrap_or_default());
+            ensure_blank_line(out);
+        }
         "media" | "mediaInline" => out.push_str(attr(node, "alt").unwrap_or_default()),
         "hardBreak" => out.push('\n'),
         "listItem" => item(node, "• ", out, depth),
@@ -290,8 +294,18 @@ fn push_block(node: &Value, conn: &str, out: &mut Vec<Block>, depth: usize) {
                 out.push(Block::Paragraph { content: vec![plain(format!("📎 {alt}"))] });
             }
         }
+        "blockCard" | "embedCard" => {
+            if let Some(url) = attr(node, "url").filter(|u| !u.is_empty()) {
+                out.push(Block::Paragraph { content: vec![Inline::Link { href: url.into(), text: url.into() }] });
+            }
+        }
         _ => {
             let has_inline = node.get("content").and_then(Value::as_array).is_some_and(|c| c.iter().any(is_inline));
+            if !INLINE_NODES.contains(&kind) {
+                if let Some(text) = attr(node, "text").filter(|t| !t.is_empty()) {
+                    out.push(Block::Paragraph { content: vec![plain(text.into())] });
+                }
+            }
             if INLINE_NODES.contains(&kind) {
                 let mut content = Vec::new();
                 push_inline(node, conn, &mut content, depth);
@@ -346,7 +360,8 @@ fn push_inline(node: &Value, conn: &str, out: &mut Vec<Inline>, depth: usize) {
         }
         "date" => out.push(plain(date_text(node))),
         _ => {
-            let text = to_text(node);
+            let mut text = String::new();
+            walk(node, &mut text, depth);
             if !text.is_empty() {
                 out.push(plain(text));
             }
@@ -569,6 +584,9 @@ mod tests {
                 "from the future",
                 "inside a node nobody knows",
                 "kept from an unsupported block",
+                "https://example.com/card",
+                "https://example.com/embed",
+                "Hello world",
                 "odd inline",
             ]
         );
@@ -580,10 +598,18 @@ mod tests {
         let adf: Value = serde_json::from_str(EDGE_CASES).unwrap();
         let doc = to_doc(&adf, "c");
         let text = doc.plain_text();
-        for needle in ["Careful here", "Env | Owner", "prod | @Ida", "📎 screenshot.png", "IN REVIEW", "2026-09-30", "☑ ship it", "☐ tell people", "Logs", "stack trace", "inside a node nobody knows", "kept from an unsupported block", "odd inline"] {
+        for needle in ["Careful here", "Env | Owner", "prod | @Ida", "📎 screenshot.png", "IN REVIEW", "2026-09-30", "☑ ship it", "☐ tell people", "Logs", "stack trace", "inside a node nobody knows", "kept from an unsupported block", "from the future", "https://example.com/card", "https://example.com/embed", "Hello world", "odd inline"] {
             assert!(text.contains(needle), "missing {needle:?} in {text:?}");
         }
         assert!(matches!(doc.blocks[0], Block::Quote { .. }), "a panel reads as a quote");
+        let links: Vec<&str> = doc.blocks.iter().filter_map(|b| match b {
+            Block::Paragraph { content } => match content.as_slice() {
+                [Inline::Link { href, .. }] => Some(href.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }).collect();
+        assert_eq!(links, ["https://example.com/card", "https://example.com/embed"], "block cards stay links");
     }
 
     #[test]

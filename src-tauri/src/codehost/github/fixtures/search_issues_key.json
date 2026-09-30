@@ -1,0 +1,57 @@
+{
+ "total_count": 3,
+ "incomplete_results": false,
+ "items": [
+  {
+   "number": 205,
+   "title": "Fix cart rounding",
+   "body": "Fixes CA-208 follow-up",
+   "state": "closed",
+   "draft": false,
+   "user": {
+    "login": "bob"
+   },
+   "html_url": "https://github.com/acme/webshop/pull/205",
+   "created_at": "2026-09-20T08:00:00Z",
+   "updated_at": "2026-09-26T09:30:00Z",
+   "repository_url": "https://api.github.com/repos/acme/webshop",
+   "pull_request": {
+    "merged_at": "2026-09-26T09:30:00Z"
+   }
+  },
+  {
+   "number": 77,
+   "title": "Unrelated CA and 208 tokens",
+   "body": "The search tokenises the key into two words: ca 208, which is why hits are checked.",
+   "state": "open",
+   "draft": false,
+   "user": {
+    "login": "cy"
+   },
+   "html_url": "https://github.com/acme/webshop/pull/77",
+   "created_at": "2026-09-20T08:00:00Z",
+   "updated_at": "2026-09-21T09:30:00Z",
+   "repository_url": "https://api.github.com/repos/acme/webshop",
+   "pull_request": {
+    "merged_at": null
+   }
+  },
+  {
+   "number": 78,
+   "title": "CA-2081 is another ticket",
+   "body": null,
+   "state": "open",
+   "draft": false,
+   "user": {
+    "login": "cy"
+   },
+   "html_url": "https://github.com/acme/webshop/pull/78",
+   "created_at": "2026-09-20T08:00:00Z",
+   "updated_at": "2026-09-21T09:30:00Z",
+   "repository_url": "https://api.github.com/repos/acme/webshop",
+   "pull_request": {
+    "merged_at": null
+   }
+  }
+ ]
+}

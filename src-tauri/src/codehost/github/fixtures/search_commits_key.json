@@ -1,0 +1,48 @@
+{
+ "total_count": 2,
+ "incomplete_results": false,
+ "items": [
+  {
+   "sha": "9999999ccccccc",
+   "html_url": "https://github.com/acme/webshop/commit/9999999ccccccc",
+   "commit": {
+    "message": "CA-208 hotfix for gateway timeout",
+    "author": {
+     "name": "Ann",
+     "date": "2026-09-28T09:00:00Z"
+    },
+    "committer": {
+     "name": "Ann",
+     "date": "2026-09-28T09:10:00Z"
+    }
+   },
+   "author": {
+    "login": "ann"
+   },
+   "repository": {
+    "full_name": "acme/webshop"
+   }
+  },
+  {
+   "sha": "8888888ddddddd",
+   "html_url": "https://github.com/acme/webshop/commit/8888888ddddddd",
+   "commit": {
+    "message": "ca 208 tokens only",
+    "author": {
+     "name": "Ann",
+     "date": "2026-09-28T09:00:00Z"
+    },
+    "committer": {
+     "name": "Ann",
+     "date": "2026-09-28T09:10:00Z"
+    }
+   },
+   "author": {
+    "login": "ann"
+   },
+   "repository": {
+    "full_name": "acme/webshop"
+   }
+  }
+ ]
+}

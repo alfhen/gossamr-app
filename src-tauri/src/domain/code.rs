@@ -223,3 +223,75 @@ pub fn clip(text: &str, limit: usize) -> String {
         None => text.to_string(),
     }
 }
+
+/// A file's text at a ref.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeFile {
+    pub repo: String,
+    pub path: String,
+    /// The branch, tag or commit asked for; empty for the default branch.
+    pub reference: String,
+    pub text: String,
+    /// Bytes of the whole file, which may be more than `text` holds.
+    pub size: u64,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TreeEntryKind {
+    File,
+    Dir,
+    Symlink,
+    Submodule,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: TreeEntryKind,
+    pub size: u64,
+}
+
+/// A match of a code search.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeHit {
+    pub repo: String,
+    pub path: String,
+    pub url: String,
+    /// The lines that matched, as the host shows them.
+    pub fragments: Vec<String>,
+}
+
+/// Which commits to list.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CommitQuery {
+    pub repo: String,
+    /// A branch, tag or commit; the default branch when absent.
+    pub reference: Option<String>,
+    pub since: Option<DateTime<Utc>>,
+    /// Only commits whose message contains this, ignoring case (a ticket key, say).
+    pub text: Option<String>,
+    pub limit: usize,
+}
+
+/// A notification thread, as far as the feed needs it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notice {
+    pub id: String,
+    /// `review_requested`, `mention`, `assign`, `ci_activity` and the like.
+    pub reason: String,
+    pub repo: String,
+    pub title: String,
+    /// `PullRequest`, `Issue`, `CheckSuite`, ...
+    pub subject: String,
+    pub number: Option<u64>,
+    pub url: String,
+    pub updated_at: DateTime<Utc>,
+    pub unread: bool,
+}

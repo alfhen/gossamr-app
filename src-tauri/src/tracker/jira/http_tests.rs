@@ -247,3 +247,14 @@ async fn a_search_naming_a_project_the_person_cannot_see_drops_it_and_reports_it
     let second = &bodies(&server)[1]["jql"];
     assert!(!second.as_str().unwrap().contains("SECRET"));
 }
+
+#[tokio::test]
+async fn a_retry_after_given_as_a_past_date_retries_at_once() {
+    let server = serve(vec![(
+        "/ex/jira/site/rest/api/3/issue/CA-1/comment",
+        vec![Reply::status(429, "{}").header("Retry-After", "Wed, 21 Oct 2015 07:28:00 GMT"), Reply::ok(COMMENTS)],
+    )])
+    .await;
+    assert_eq!(client(&server).comments(&scope(), "CA-1").await.unwrap().len(), 3);
+    assert_eq!(server.targets().len(), 2);
+}

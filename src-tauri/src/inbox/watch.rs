@@ -480,6 +480,7 @@ mod tests {
             actor: actor.clone(),
             at: crate::inbox::now_iso(),
             text: "hi".into(),
+            field: None,
         };
         fx.core.with_db_for(&fx.scope, |db| db.insert_events(&[event("a", "CA-1"), event("b", "OTH-1")], "2000-01-01T00:00:00Z").map(|_| ())).await.unwrap();
         let before = fx.core.snapshot().await.unwrap();

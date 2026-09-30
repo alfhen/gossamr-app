@@ -5,6 +5,9 @@ import type {
   AssignedElsewhere,
   CacheChanged,
   CatalogPage,
+  CodeCommitQuery,
+  CodeRef,
+  DevLinksChanged,
   FeedQuery,
   Footprint,
   Stray,
@@ -566,6 +569,46 @@ export class MockBackend implements Backend {
   async connectionsList(): Promise<ConnectionInfo[]> {
     const sample: ConnectionInfo = { id: MOCK_CONNECTION, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null };
     return this.github.connected ? [sample, this.github.info()] : [sample];
+  }
+
+  async devLinks(item: ItemRef) {
+    return this.github.code.devLinks(item);
+  }
+
+  async devLinksLive(item: ItemRef) {
+    return this.github.code.devLinksLive(item);
+  }
+
+  onDevLinksChanged(listener: (c: DevLinksChanged) => void) {
+    return this.github.code.onDevLinksChanged(listener);
+  }
+
+  async codePullRequest(ref: CodeRef) {
+    return this.github.code.pullRequest(ref);
+  }
+
+  async codeSearch(query: string) {
+    return this.github.code.search(query);
+  }
+
+  async codeEvents(limit?: number) {
+    return this.github.code.events(limit);
+  }
+
+  async codeFile(_connectionId: string, repo: string, path: string, reference: string | null = null) {
+    return this.github.code.file(repo, path, reference);
+  }
+
+  async codeTree(_connectionId: string, repo: string, path: string) {
+    return this.github.code.tree(repo, path);
+  }
+
+  async codeCommits(_connectionId: string, repo: string, opts: CodeCommitQuery = {}) {
+    return this.github.code.commits(repo, opts);
+  }
+
+  async codeSearchCode(_connectionId: string, query: string, repos?: string[]) {
+    return this.github.code.searchCode(query, repos);
   }
 
   async githubSignInOptions() {

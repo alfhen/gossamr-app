@@ -1,6 +1,7 @@
 //! GitHub as a `CodeHost`, over its REST API. Everything here only reads.
 
 pub(crate) mod http;
+mod read;
 #[cfg(test)]
 pub(crate) mod testserver;
 mod wire;
@@ -14,9 +15,11 @@ use url::form_urlencoded;
 
 use self::http::Api;
 use self::wire::{IssueSearch, Owner, Pull, Repo, RepoSearch, User, UserEvent};
-use super::{CodeAccount, CodeHost, PullList};
+use super::{CodeAccount, CodeHost, Notices, PullList, Refreshed};
 use crate::db::Db;
-use crate::domain::{CodeChange, ContainerPage, ContainerQuery, ContainerRef, Footprint};
+use crate::domain::{
+    CodeChange, CodeFile, CodeHit, CommitQuery, ContainerPage, ContainerQuery, ContainerRef, Footprint, PullRequestDetail, TreeEntry,
+};
 use crate::error::Result;
 
 pub use self::http::error_message;
@@ -28,7 +31,7 @@ const PULL_PAGES: usize = 6;
 const SEARCH_OWNERS: usize = 10;
 const SEARCH_PER_OWNER: usize = 30;
 
-fn encode(q: &str) -> String {
+pub(super) fn encode(q: &str) -> String {
     form_urlencoded::byte_serialize(q.as_bytes()).collect()
 }
 
@@ -186,6 +189,42 @@ impl CodeHost for GithubHost {
         let mut changes: Vec<CodeChange> = open.into_iter().chain(recent).filter(|c| seen.insert(c.number.unwrap_or_default())).collect();
         changes.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
         Ok(PullList { changes, unchanged: open_unchanged && recent_unchanged })
+    }
+
+    async fn refresh_pull_request(&self, change: &CodeChange, with_checks: bool) -> Result<Refreshed> {
+        self.refresh(change, with_checks).await
+    }
+
+    async fn pull_request(&self, repo: &str, number: u64) -> Result<PullRequestDetail> {
+        self.detail(repo, number).await
+    }
+
+    async fn branches(&self, repo: &str) -> Result<Vec<CodeChange>> {
+        self.list_branches(repo).await
+    }
+
+    async fn commits(&self, q: &CommitQuery) -> Result<Vec<CodeChange>> {
+        self.list_commits(q).await
+    }
+
+    async fn search(&self, query: &str, repos: &[String]) -> Result<Vec<CodeChange>> {
+        self.search_changes(query, repos).await
+    }
+
+    async fn notifications(&self) -> Result<Notices> {
+        self.poll_notifications().await
+    }
+
+    async fn file(&self, repo: &str, path: &str, reference: Option<&str>) -> Result<CodeFile> {
+        self.read_file(repo, path, reference).await
+    }
+
+    async fn tree(&self, repo: &str, path: &str, reference: Option<&str>) -> Result<Vec<TreeEntry>> {
+        self.list_tree(repo, path, reference).await
+    }
+
+    async fn search_code(&self, query: &str, repos: &[String]) -> Result<Vec<CodeHit>> {
+        self.code_search(query, repos).await
     }
 }
 

@@ -1,0 +1,27 @@
+{
+ "total_count": 2,
+ "items": [
+  {
+   "name": "routes.ts",
+   "path": "src/gateway/routes.ts",
+   "html_url": "https://github.com/acme/webshop/blob/main/src/gateway/routes.ts",
+   "repository": {
+    "full_name": "acme/webshop"
+   },
+   "text_matches": [
+    {
+     "fragment": "export const checkout = route('/checkout')"
+    }
+   ]
+  },
+  {
+   "name": "readme",
+   "path": "README.md",
+   "html_url": "https://github.com/acme/gateway/blob/main/README.md",
+   "repository": {
+    "full_name": "acme/gateway"
+   },
+   "text_matches": []
+  }
+ ]
+}

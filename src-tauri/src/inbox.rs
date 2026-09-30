@@ -22,7 +22,7 @@ mod code;
 mod drafts;
 mod watch;
 
-pub use code::CodeService;
+pub use code::{CodeRef, CodeService};
 pub use drafts::Edit;
 pub use watch::{CatalogPage, WatchState};
 
@@ -99,8 +99,9 @@ fn backfill_cache(db: &Db, connection: &Connection) -> Result<()> {
         let stored: Vec<Event> = db
             .events("")?
             .into_iter()
+            .filter(|e| e.kind != crate::model::EventKind::Field)
             .filter_map(|e| {
-                let e = NewEvent { id: e.id, kind: e.kind, ticket_key: e.ticket_key, actor: e.actor, at: e.at, text: e.text };
+                let e = NewEvent { id: e.id, kind: e.kind, ticket_key: e.ticket_key, actor: e.actor, at: e.at, text: e.text, field: None };
                 sync::domain_event(&connection.id, &e)
             })
             .collect();
@@ -271,9 +272,9 @@ impl Core {
         self.syncing.store(false, Ordering::SeqCst);
         let mut schedules = self.schedules.lock().expect("schedule lock poisoned");
         let schedule = schedules.entry(id).or_default();
-        match &result {
-            Err(Error::RateLimited { retry_after_secs, .. }) => schedule.rate_limited(Utc::now(), Duration::seconds(i64::try_from(*retry_after_secs).unwrap_or(i64::MAX / 1000))),
-            _ => schedule.finished(Utc::now(), result.is_ok()),
+        schedule.finished(Utc::now(), result.is_ok());
+        if let Err(Error::RateLimited { retry_after_secs, .. }) = &result {
+            schedule.defer(Utc::now() + Duration::seconds(i64::try_from(*retry_after_secs).unwrap_or(i64::MAX / 1000)));
         }
         drop(schedules);
         Some(result)
@@ -978,6 +979,11 @@ pub(crate) mod testing {
     }
 
     pub async fn fixture() -> Fixture {
+        fixture_with(None).await
+    }
+
+    /// The fixture with a scripted GitHub service in place of the real one.
+    pub async fn fixture_with(code: Option<CodeService>) -> Fixture {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
@@ -988,7 +994,11 @@ pub(crate) mod testing {
         let tracker = Arc::new(Recorder::default());
         let shared = tracker.clone();
         let registry = Registry::new(move |_| shared.clone());
-        let core = Arc::new(Core::new(Arc::new(Auth::signed_in(http, creds.clone())), registry, dir.clone()));
+        let mut core = Core::new(Arc::new(Auth::signed_in(http, creds.clone())), registry, dir.clone());
+        if let Some(code) = code {
+            core = core.with_code(code);
+        }
+        let core = Arc::new(core);
         core.registry.register(creds.connection());
 
         let fx = Fixture { core, scope, tracker, dir };

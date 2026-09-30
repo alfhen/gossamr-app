@@ -297,7 +297,7 @@ mod tests {
         }
 
         fn event(id: &str, key: &str, kind: EventKind, at: &str) -> NewEvent {
-            NewEvent { id: id.into(), kind, ticket_key: key.into(), actor: sam(), at: at.into(), text: String::new() }
+            NewEvent { id: id.into(), kind, ticket_key: key.into(), actor: sam(), at: at.into(), text: String::new(), field: None }
         }
 
         fn my_comment(id: &str, key: &str, at: &str) -> (String, MyAction) {
