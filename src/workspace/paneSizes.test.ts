@@ -37,6 +37,12 @@ describe("fitPanes", () => {
     expect(f.pip).toBe(1000 - RAIL_WIDTH - CANVAS_MIN);
     expect(f.peek).toBe(320);
   });
+  it("leaves room for the peek minimum when it is open", () => {
+    const f = fitPanes(1280, 520, 640, true, true);
+    expect(f.pip).toBe(1280 - RAIL_WIDTH - CANVAS_MIN - 320);
+    expect(f.peek).toBe(f.peekLimits.max);
+    expect(1280 - RAIL_WIDTH - f.pip - f.peek).toBeGreaterThanOrEqual(CANVAS_MIN);
+  });
   it("ignores Pip width when the pane is closed", () => {
     expect(fitPanes(1000, 900, 600, false).peek).toBe(1000 - RAIL_WIDTH - CANVAS_MIN);
   });
@@ -56,7 +62,7 @@ describe("keyboardWidth", () => {
     expect(keyboardWidth("Home", false, 500, L, 520)).toBe(320);
     expect(keyboardWidth("End", false, 500, L, 520)).toBe(800);
     expect(keyboardWidth("Enter", false, 500, L, 520)).toBe(520);
-    expect(keyboardWidth("Enter", false, 500, { min: 320, max: 450 }, 520)).toBe(450);
+    expect(keyboardWidth("Enter", false, 500, { min: 320, max: 450 }, 520)).toBe(520);
   });
   it("ignores other keys", () => {
     expect(keyboardWidth("a", false, 500, L, 520)).toBeNull();

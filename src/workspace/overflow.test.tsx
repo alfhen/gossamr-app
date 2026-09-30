@@ -3,7 +3,6 @@ import { CANVAS_MIN, RAIL_WIDTH, fitPanes } from "./paneSizes";
 import boardView from "./BoardView.tsx?raw";
 import itemCard from "./ItemCard.tsx?raw";
 
-
 describe("nothing is wider than its pane", () => {
   it("wraps long words in card titles and lets board columns shrink", () => {
     expect(itemCard).toContain('className="my-1 font-medium [overflow-wrap:anywhere]"');

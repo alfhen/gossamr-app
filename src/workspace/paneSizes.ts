@@ -19,8 +19,9 @@ export function clampWidth(value: number, { min, max }: Limits): number {
   return Math.round(Math.min(Math.max(value, min), Math.max(min, max)));
 }
 
-export function pipLimits(windowWidth: number): Limits {
-  return { min: PIP_MIN, max: Math.min(PIP_MAX, windowWidth - RAIL_WIDTH - CANVAS_MIN) };
+/** With the peek open Pip also leaves room for the peek's minimum. Below that the minimums win, since neither pane can shrink further. */
+export function pipLimits(windowWidth: number, peekOpen = false): Limits {
+  return { min: PIP_MIN, max: Math.min(PIP_MAX, windowWidth - RAIL_WIDTH - CANVAS_MIN - (peekOpen ? PEEK_MIN : 0)) };
 }
 
 /** The peek overlays the canvas, so it is bounded by what is left after the rail and the Pip pane. */
@@ -35,8 +36,8 @@ export interface PaneWidths {
   pipLimits: Limits;
 }
 
-export function fitPanes(windowWidth: number, peek: number, pip: number, pipOpen: boolean): PaneWidths {
-  const pl = pipLimits(windowWidth);
+export function fitPanes(windowWidth: number, peek: number, pip: number, pipOpen: boolean, peekOpen = false): PaneWidths {
+  const pl = pipLimits(windowWidth, peekOpen);
   const fittedPip = pipOpen ? clampWidth(pip, pl) : 0;
   const kl = peekLimits(windowWidth, fittedPip);
   return { peek: clampWidth(peek, kl), pip: clampWidth(pip, pl), peekLimits: kl, pipLimits: pl };
@@ -55,7 +56,7 @@ export function keyboardWidth(key: string, shift: boolean, current: number, limi
     case "End":
       return clampWidth(limits.max, limits);
     case "Enter":
-      return clampWidth(fallback, limits);
+      return fallback;
     default:
       return null;
   }

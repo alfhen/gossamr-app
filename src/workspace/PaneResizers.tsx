@@ -1,3 +1,4 @@
+import { useTabs } from "./tabsStore";
 import { PEEK_DEFAULT, PIP_DEFAULT, fitPanes } from "./paneSizes";
 import { usePrefs } from "./prefs";
 import { ResizeHandle, useResize, useWindowWidth } from "./ResizeHandle";
@@ -7,7 +8,8 @@ export function usePaneWidths() {
   const peek = usePrefs((s) => s.peekWidth);
   const pip = usePrefs((s) => s.pipWidth);
   const pipOpen = usePrefs((s) => s.pipOpen);
-  return fitPanes(windowWidth, peek, pip, pipOpen);
+  const peekOpen = useTabs((s) => !!s.selected && s.marked.length <= 1);
+  return fitPanes(windowWidth, peek, pip, pipOpen, peekOpen);
 }
 
 export function PeekResizer() {
