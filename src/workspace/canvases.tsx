@@ -3,8 +3,8 @@ import type { WorkItem } from "../types";
 import { AgeView } from "./AgeView";
 import { BoardView } from "./BoardView";
 import { ListView } from "./ListView";
+import { MapView } from "./MapView";
 import type { Tab, ViewMode } from "./tabsStore";
-import { VIEW_LABEL } from "./tabsStore";
 
 export interface CanvasProps {
   tab: Tab;
@@ -12,18 +12,10 @@ export interface CanvasProps {
   items: WorkItem[];
 }
 
-function Soon({ view }: { view: ViewMode }) {
-  return (
-    <div className="grid h-full place-items-center p-10 text-center text-ws-ink3">
-      <p>The {VIEW_LABEL[view]} view is on its way. The filter and selection carry over when it arrives.</p>
-    </div>
-  );
-}
-
-/** One canvas per view mode; a later step replaces its entry to fill in the view. */
+/** One canvas per view mode. */
 export const CANVASES: Record<ViewMode, ComponentType<CanvasProps>> = {
   list: ListView,
   board: BoardView,
-  map: () => <Soon view="map" />,
+  map: MapView,
   age: AgeView,
 };
