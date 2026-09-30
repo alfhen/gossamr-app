@@ -113,25 +113,6 @@ describe("layoutMap", () => {
 });
 
 describe("cluster labels and packing", () => {
-  const long = "Harden the incognito-app against reload-storm traffic bursts (2026-09-21 incident follow-up)";
-  const stress = () => {
-    const base = s().items["mock:DEVOPS-473"];
-    const sizes = [1, 12, 2, 1, 7, 3, 1, 9, 2, 5, 1, 4, 1, 1, 6, 2];
-    const all: Record<string, WorkItem> = {};
-    const items: WorkItem[] = [];
-    let n = 0;
-    sizes.forEach((size, c) => {
-      const parent = { connectionId: "mock", externalId: `E-${c}`, key: `E-${c}` };
-      all[`mock:E-${c}`] = { ...base, item: parent, kind: "epic", title: c % 3 === 0 ? long : c % 3 === 1 ? `Epic ${c}` : "Customer Experience", parent: null, links: [] };
-      for (let k = 0; k < size; k++) {
-        const item = { connectionId: "mock", externalId: `T-${n}`, key: `T-${n}` };
-        items.push({ ...base, item, parent, links: [], title: `Ticket ${n}` });
-        n++;
-      }
-    });
-    return layoutMap(items, all, {});
-  };
-
   const clear = (l: MapLayout) => {
     const rects = labelRects(l);
     for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) expect(rectsOverlap(rects[i], rects[j])).toBe(false);
@@ -258,6 +239,25 @@ describe("viewport and keyboard", () => {
   });
 });
 
+  const long = "Harden the incognito-app against reload-storm traffic bursts (2026-09-21 incident follow-up)";
+const stress = () => {
+  const base = s().items["mock:DEVOPS-473"];
+  const sizes = [1, 12, 2, 1, 7, 3, 1, 9, 2, 5, 1, 4, 1, 1, 6, 2];
+  const all: Record<string, WorkItem> = {};
+  const items: WorkItem[] = [];
+  let n = 0;
+  sizes.forEach((size, c) => {
+    const parent = { connectionId: "mock", externalId: `E-${c}`, key: `E-${c}` };
+    all[`mock:E-${c}`] = { ...base, item: parent, kind: "epic", title: c % 3 === 0 ? long : c % 3 === 1 ? `Epic ${c}` : "Customer Experience", parent: null, links: [] };
+    for (let k = 0; k < size; k++) {
+      const item = { connectionId: "mock", externalId: `T-${n}`, key: `T-${n}` };
+      items.push({ ...base, item, parent, links: [], title: `Ticket ${n}` });
+      n++;
+    }
+  });
+  return layoutMap(items, all, {});
+};
+
 const props = (over: Partial<MapSvgProps> = {}): MapSvgProps => ({
   layout: layout(),
   viewport: FIT,
@@ -338,9 +338,10 @@ describe("MapSvg", () => {
 
   it("shows the full title of a hovered ticket and of a hovered truncated cluster", () => {
     expect(render(props({ hovered: "mock:DEVOPS-473" }))).toContain("data-tip");
-    const l = layout();
+    const l = stress();
     const cut = l.clusters.find((c) => c.box.truncated);
-    if (cut) expect(render(props({ hoveredCluster: cut.key }))).toContain("data-cluster-tip");
+    expect(cut).toBeDefined();
+    expect(render(props({ layout: l, hoveredCluster: cut!.key }))).toContain("data-cluster-tip");
   });
 
   it("says when the cap hides tickets", () => {
