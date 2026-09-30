@@ -70,8 +70,8 @@ export function PaletteView({
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-start justify-center bg-black/30 pt-[12vh]" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown} className="ws-pop w-[580px] max-w-[92vw] overflow-hidden rounded-[14px] border border-ws-sep2 bg-ws-win shadow-ws-pop">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[12vh]" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
+      <div role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown} className="ws-pop w-[min(560px,92vw)] overflow-hidden rounded-[14px] border border-ws-sep2 bg-ws-win shadow-ws-pop">
         <input
           ref={inputRef}
           role="combobox"
