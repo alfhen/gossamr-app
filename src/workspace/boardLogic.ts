@@ -213,3 +213,27 @@ export function ageColumns(items: readonly WorkItem[], now: Date): { bucket: Age
     return { bucket, items: inside.sort((a, b) => a.updated.localeCompare(b.updated)) };
   });
 }
+
+export interface AgeBar {
+  item: WorkItem;
+  days: number;
+  /** Bar length as a percentage of the quietest item, never below a sliver so a fresh ticket still shows. */
+  width: number;
+}
+
+/** Open items, the longest quiet first, each with its bar scaled to the longest. */
+export function ageBars(items: readonly WorkItem[], now: Date): AgeBar[] {
+  const open = items.filter((i) => i.status.category !== "done").map((item) => ({ item, days: daysQuiet(item, now) }));
+  const longest = Math.max(1, ...open.map((o) => o.days));
+  return open
+    .sort((a, b) => b.days - a.days || a.item.item.key.localeCompare(b.item.item.key, undefined, { numeric: true }))
+    .map((o) => ({ ...o, width: Math.max(3, (o.days / longest) * 100) }));
+}
+
+/** What moving from `status` allows, for the workflow line's hover; unknown where the tracker reveals moves per item. */
+export function moveHint(wf: Workflow, status: StatusDef): string | undefined {
+  if (movesAreOpaque(wf)) return undefined;
+  if (wf.transitions.kind === "any") return "Can move to any status";
+  const next = nextStatuses(wf, status.id);
+  return next.length ? `Can move to ${next.map((n) => n.name).join(", ")}` : "No moves from here";
+}

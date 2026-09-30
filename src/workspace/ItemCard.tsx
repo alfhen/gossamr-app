@@ -3,6 +3,8 @@ import { Cobweb } from "../components/Cobweb";
 import type { WitherLevel } from "../lib/views";
 import type { StatusDef, WorkItem, WorkPriority } from "../types";
 import { daysQuiet } from "./boardLogic";
+import { AgeChip, AttentionDot, Avatar, StatusPill } from "./CanvasBits";
+import { selectHow, showsAge } from "./canvasShared";
 
 export interface CardDraft {
   id: string;
@@ -16,6 +18,8 @@ export interface ItemCardProps {
   now: Date;
   wither: WitherLevel;
   blocked: boolean;
+  needsMe: boolean;
+  unread: boolean;
   draft: CardDraft | null;
   /** Other pending drafts on the item, such as comments, that aren't shown here. */
   moreDrafts: number;
@@ -34,22 +38,12 @@ export interface ItemCardProps {
   onDragEnd?(): void;
 }
 
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0].toUpperCase())
-    .join("") || "?";
-
 const PRIORITY: Partial<Record<WorkPriority, { glyph: string; label: string; tone: string }>> = {
   highest: { glyph: "▲▲", label: "Highest priority", tone: "text-ws-blocked" },
   high: { glyph: "▲", label: "High priority", tone: "text-ws-blocked" },
   low: { glyph: "▽", label: "Low priority", tone: "text-ws-ink3" },
   lowest: { glyph: "▽▽", label: "Lowest priority", tone: "text-ws-ink3" },
 };
-
-const chipTone = (level: WitherLevel) => (level >= 4 ? "text-ws-blocked" : level === 3 ? "text-[#d2701f]" : level === 2 ? "text-ws-warn" : "text-ws-ink3");
 
 export const cardId = (key: string) => `card-${key}`;
 
@@ -71,13 +65,13 @@ export function ItemCard(p: ItemCardProps) {
     return () => document.removeEventListener("mousedown", away);
   }, [p.menuOpen]);
 
-  const click = (ev: MouseEvent) => p.onSelect(ev.shiftKey ? "range" : ev.metaKey || ev.ctrlKey ? "toggle" : "one");
+  const click = (ev: MouseEvent) => p.onSelect(selectHow(ev));
 
   const key = (ev: KeyboardEvent) => {
     if (ev.target !== ev.currentTarget) return;
     if (ev.key === "Enter" || ev.key === " ") {
       ev.preventDefault();
-      p.onSelect(ev.shiftKey ? "range" : ev.metaKey || ev.ctrlKey ? "toggle" : "one");
+      p.onSelect(selectHow(ev));
     } else if (ev.key === "m" || ev.key === "ContextMenu") {
       ev.preventDefault();
       p.onMenu(true);
@@ -121,6 +115,7 @@ export function ItemCard(p: ItemCardProps) {
     >
       <Cobweb level={p.wither} />
       <div className="flex items-center gap-1.5">
+        <AttentionDot needsMe={p.needsMe} unread={p.unread} />
         <span className="font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
         {item.kind === "bug" && <span title="Bug" aria-label="Bug" className="text-[9px] text-ws-blocked">●</span>}
         {priority && (
@@ -154,21 +149,15 @@ export function ItemCard(p: ItemCardProps) {
         </ul>
       )}
       <div className="flex items-center gap-1.5">
-        <span title={p.assignee} className="grid size-[22px] flex-none place-items-center rounded-full bg-ws-sel text-[10px] font-bold text-ws-ink2">
-          {initials(p.assignee)}
-        </span>
-        {p.showStatus && <span className="truncate rounded-full bg-ws-sel px-2 text-xs font-semibold text-ws-ink2">{item.status.name}</span>}
+        <Avatar name={p.assignee} />
+        {p.showStatus && <StatusPill status={item.status} />}
         {p.blocked && <span className="text-xs text-ws-blocked">⛓ blocked</span>}
         {p.moreDrafts > 0 && (
           <span className="text-xs text-ws-pip" title="Drafts waiting on this ticket">
             ✦ {p.moreDrafts}
           </span>
         )}
-        {item.status.category !== "done" && days >= 2 && (
-          <span className={`ws-age ml-auto text-xs font-semibold ${chipTone(p.wither)}`} title={`No update for ${days} days`}>
-            {days}d
-          </span>
-        )}
+        {showsAge(item, days) && <AgeChip days={days} className="ml-auto" />}
       </div>
       {p.draft && <DraftLine draft={p.draft} onApprove={p.onApprove} onSkip={p.onSkip} />}
       {p.marked && <span className="sr-only">Ticked for a bulk action</span>}

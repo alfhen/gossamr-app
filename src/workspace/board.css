@@ -132,3 +132,25 @@
   --color-blocked: var(--color-ws-blocked);
   --color-done: var(--color-ws-done);
 }
+
+.ws-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ws-ring 2s ease-out infinite;
+}
+@keyframes ws-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws-ring {
+    animation: none;
+    opacity: 0.7;
+  }
+}

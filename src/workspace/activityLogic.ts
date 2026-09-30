@@ -86,13 +86,7 @@ export function verb(e: Pick<FeedEntry, "kind" | "mention">): string {
   }
 }
 
-export const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0].toUpperCase())
-    .join("") || "?";
+export { initials } from "./canvasShared";
 
 /** The entries whose id is in `ids` with `unread` set, the others untouched. */
 export function withRead(entries: readonly FeedEntry[], ids: ReadonlySet<string>, unread: boolean): FeedEntry[] {
