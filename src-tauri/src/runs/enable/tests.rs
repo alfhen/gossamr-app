@@ -80,7 +80,7 @@ async fn turning_off_leaves_running_agents_alone_and_says_so() {
     let run = rig.launched(1).await;
     let off = rig.svc.set_enabled(false).await.unwrap();
     assert_eq!(off.keep_running, 1);
-    assert!(off.note.as_deref().is_some_and(|n| n.contains("1 agent is still running")), "{:?}", off.note);
+    assert!(off.note.as_deref().is_some_and(|n| n.contains("1 agent is still running and was not stopped")), "{:?}", off.note);
     assert_eq!(rig.get(&run).await.state, RunState::Launching);
     assert_eq!(rig.svc.keep_running(), 1);
     assert!(rig.cli.0.lock().unwrap().stops.is_empty());
@@ -91,4 +91,14 @@ async fn turning_off_leaves_running_agents_alone_and_says_so() {
 async fn nothing_to_say_when_nothing_is_running() {
     let rig = ready().await;
     assert_eq!(rig.svc.set_enabled(false).await.unwrap().note, None);
+}
+
+#[tokio::test]
+async fn the_note_agrees_with_the_count() {
+    let rig = ready().await;
+    rig.launched(1).await;
+    rig.launched(2).await;
+    let note = rig.svc.set_enabled(false).await.unwrap().note.unwrap();
+    assert!(note.starts_with("2 agents are still running and were not stopped"), "{note}");
+    assert!(note.contains("follow them") && note.contains("they keep running"), "{note}");
 }

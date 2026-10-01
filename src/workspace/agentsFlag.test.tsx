@@ -66,7 +66,7 @@ describe("the flag store", () => {
     expect(s.enabled).toBe(false);
     expect(await backend.runsEnabled()).toBe(false);
     expect(s.pending).toBeNull();
-    expect(s.note).toMatch(/still running and was not stopped/);
+    expect(s.note).toMatch(/agents are still running and were not stopped/);
   });
 
   it("keeps it off and keeps the reason when the backend refuses", async () => {

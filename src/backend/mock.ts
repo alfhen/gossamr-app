@@ -430,7 +430,12 @@ export class MockBackend implements Backend {
     if (enabled && !this.agentsOn && this.enableFailure) throw new Error(this.enableFailure);
     this.agentsOn = enabled;
     const keepRunning = this.runs.keepRunning();
-    const note = !enabled && keepRunning > 0 ? `${keepRunning} ${keepRunning === 1 ? "agent is" : "agents are"} still running and was not stopped. Gossamr won't start new ones or follow these until you turn Agents back on; they keep running in Claude.` : null;
+    const note =
+      enabled || keepRunning === 0
+        ? null
+        : keepRunning === 1
+          ? "1 agent is still running and was not stopped. Gossamr won't start new ones or follow it until you turn Agents back on; it keeps running in Claude."
+          : `${keepRunning} agents are still running and were not stopped. Gossamr won't start new ones or follow them until you turn Agents back on; they keep running in Claude.`;
     return { enabled, keepRunning, note };
   }
 

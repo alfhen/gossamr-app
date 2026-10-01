@@ -29,9 +29,9 @@ impl RunService {
     fn change(&self) -> EnabledChange {
         let keep_running = self.keep_running();
         let enabled = self.is_enabled();
-        let note = (!enabled && keep_running > 0).then(|| {
-            let (count, verb) = if keep_running == 1 { ("1 agent is".to_string(), "keeps") } else { (format!("{keep_running} agents are"), "keep") };
-            format!("{count} still running and was not stopped. Gossamr won't start new ones or follow these until you turn Agents back on; they {verb} running in Claude.")
+        let note = (!enabled && keep_running > 0).then(|| match keep_running {
+            1 => "1 agent is still running and was not stopped. Gossamr won't start new ones or follow it until you turn Agents back on; it keeps running in Claude.".to_string(),
+            n => format!("{n} agents are still running and were not stopped. Gossamr won't start new ones or follow them until you turn Agents back on; they keep running in Claude."),
         });
         EnabledChange { enabled, keep_running, note }
     }
