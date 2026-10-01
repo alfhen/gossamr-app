@@ -5,7 +5,7 @@ import { docText, quoteAfterFirst } from "../lib/docs";
 import type { WorkDoc } from "../types";
 import { itemRef } from "../backend/mockConnector";
 import { CommentCard, SectionCard } from "./PeekParts";
-import { EXCERPT_LENGTH, excerpt, ownText, replyDraft, withReplies, type Note } from "./peekLogic";
+import { EXCERPT_LENGTH, excerpt, newestFirst, ownText, replyDraft, withReplies, type Note } from "./peekLogic";
 
 const NOW = new Date("2026-09-01T12:00:00Z");
 const P = (text: string) => ({ type: "paragraph" as const, content: [{ type: "text" as const, text, marks: [] }] });
@@ -200,5 +200,16 @@ describe("the sample ticket", () => {
     const draft = await b.proposalsCreate({ type: "comment", item: itemRef("DEVOPS-471"), body: { blocks: [P("@Sam")] } });
     const edited = await b.proposalsEdit(draft.id, { type: "comment", body: "@Sam\n\nThanks", mentions: [], quote: "Ready for another look" });
     expect(edited.intent.type === "comment" && edited.intent.body.blocks.map((x) => x.type)).toEqual(["paragraph", "quote", "paragraph"]);
+  });
+});
+
+describe("newestFirst", () => {
+  it("lists the latest comment first, after replies have been matched to what they answer", () => {
+    const first = plain("a", "Sam Holt", "Ready for another look, retries now cap at five.", 1);
+    const reply = replyNote("r", "Ida", { blocks: [mention("Sam Holt"), Q("Ready for another look, retries now cap at five."), P("On it.")] }, 2);
+    const last = plain("c", "Kim", "Merged.", 3);
+    const shown = newestFirst(withReplies([first, reply, last]));
+    expect(shown.map((n) => n.id)).toEqual(["c", "r", "a"]);
+    expect(shown[1].reply?.targetId).toBe("a");
   });
 });

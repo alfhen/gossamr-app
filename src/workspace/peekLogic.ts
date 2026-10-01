@@ -136,6 +136,9 @@ export function withReplies(notes: readonly Note[]): Note[] {
   });
 }
 
+/** The order comments are shown in. Replies are matched to what they answer in the order they were written, so this comes after `withReplies`. */
+export const newestFirst = (notes: readonly Note[]): Note[] => [...notes].reverse();
+
 export interface ReplyDraft {
   /** The comment being answered. */
   to: { id: string; who: string };

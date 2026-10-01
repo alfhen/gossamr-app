@@ -16,7 +16,7 @@ import { canvasElement, showMe } from "./jump";
 import { PEEK_DEFAULT } from "./paneSizes";
 import { usePrefs } from "./prefs";
 import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
-import { commentNotes, displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, subtasksOf, withReplies, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
+import { commentNotes, displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, subtasksOf, newestFirst, withReplies, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
 import { Development } from "./DevelopmentSection";
 import { useTabs } from "./tabsStore";
 import { PeekNotice } from "./WatchNotices";
@@ -548,12 +548,14 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
 
   const comments: Note[] = useMemo(
     () =>
-      withReplies(
+      newestFirst(
+        withReplies(
         loadedComments
           ? loadedComments
               .map((c) => ({ id: c.id, at: c.created, who: displayName(names, c.author.accountId), text: docText(c.body), doc: c.body, mine: isMine(c.author.accountId), accountId: c.author.accountId }))
               .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
           : commentNotes(events, (id) => displayName(names, id), isMine),
+        ),
       ),
     [loadedComments, events, names, me],
   );
