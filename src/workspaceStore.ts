@@ -350,7 +350,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const connections = await backend.connectionsList();
       if (backend !== get().backend) return;
       set({ connections });
-      const error = connections.find((c) => c.error)?.error ?? null;
+      const error = connections.find((c) => c.error && !c.transient)?.error ?? null;
       if (error && error !== lastSyncError) useToasts.getState().push(`Couldn't sync: ${error}`);
       lastSyncError = error;
     } catch {

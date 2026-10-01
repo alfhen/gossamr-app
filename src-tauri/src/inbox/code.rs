@@ -34,6 +34,8 @@ const PR_WINDOW_DAYS: i64 = 30;
 /// Changes of repositories that are no longer watched are kept this long, so watching again needs no refetch.
 const UNWATCH_GRACE_DAYS: i64 = 14;
 const NOTIFICATIONS_NEXT: &str = "notifications_next_at";
+/// Pull requests whose reviews or checks couldn't be read, one external id per line, read again at the next sync.
+const INCOMPLETE: &str = "incomplete_details";
 const MIN_POLL_SECS: i64 = 60;
 /// Answers not refreshed for this long are dropped from the conditional-request cache.
 const HTTP_CACHE_DAYS: i64 = 14;
@@ -58,7 +60,8 @@ pub struct CodeService {
     dbs: Mutex<HashMap<String, Arc<Mutex<Db>>>>,
     hosts: Mutex<HashMap<String, Arc<dyn CodeHost>>>,
     device: tokio::sync::Mutex<Option<crate::auth::DeviceChallenge>>,
-    errors: Mutex<HashMap<String, String>>,
+    /// The last failed sync per connection, and whether it was transient.
+    errors: Mutex<HashMap<String, (String, bool)>>,
     syncing: Mutex<HashSet<String>>,
 }
 
@@ -111,7 +114,11 @@ impl CodeService {
 }
 
 /// A connection as Settings shows it.
-fn info(session: &GithubSession, last_sync_at: Option<String>, error: Option<String>) -> super::ConnectionInfo {
+fn info(session: &GithubSession, last_sync_at: Option<String>, error: Option<(String, bool)>) -> super::ConnectionInfo {
+    let (error, transient) = match error {
+        Some((message, transient)) => (Some(message), transient),
+        None => (None, false),
+    };
     super::ConnectionInfo {
         id: session.connection().id,
         kind: ConnectionKind::Github,
@@ -121,6 +128,7 @@ fn info(session: &GithubSession, last_sync_at: Option<String>, error: Option<Str
         last_sync_at,
         syncing: false,
         error,
+        transient,
     }
 }
 
@@ -424,7 +432,12 @@ impl Core {
 
     async fn sync_repo(&self, host: &dyn CodeHost, id: &str, me: &str, repo: &str, since: DateTime<Utc>) -> Result<bool> {
         let PullList { changes: listed, .. } = host.pull_requests(repo, since).await?;
-        let previous: HashMap<String, CodeChange> = self.with_code_db(id, |db| Ok(db.code_changes(id)?.into_iter().filter(|c| c.repo == repo).map(|c| (c.external_id.clone(), c)).collect()))?;
+        let (previous, owed): (HashMap<String, CodeChange>, HashSet<String>) = self.with_code_db(id, |db| {
+            let previous = db.code_changes(id)?.into_iter().filter(|c| c.repo == repo).map(|c| (c.external_id.clone(), c)).collect();
+            let owed = db.meta(INCOMPLETE)?.unwrap_or_default().lines().map(str::to_string).collect();
+            Ok((previous, owed))
+        })?;
+        let mut owed_after = owed.clone();
         let mut stored = Vec::new();
         let mut events: Vec<Event> = Vec::new();
         for listed in listed {
@@ -433,12 +446,37 @@ impl Core {
             let stale = prev.is_none_or(|p| p.updated_at != listed.updated_at || p.sha != listed.sha);
             // Checks finish without the pull request changing, so the person's own and unfinished ones are looked at again.
             let recheck = open && prev.is_some_and(|p| me_of(p, me) || p.checks == CheckState::Pending);
-            let (now, reviews) = if stale || recheck {
-                let read = host.refresh_pull_request(&listed, open).await?;
-                (read.change, read.reviews)
+            let key = listed.external_id.clone();
+            let carried = |listed: CodeChange| match prev {
+                Some(p) => CodeChange {
+                    checks: if p.sha == listed.sha { p.checks } else { CheckState::None },
+                    review: p.review,
+                    additions: p.additions,
+                    deletions: p.deletions,
+                    changed_files: p.changed_files,
+                    linked_keys: p.linked_keys.clone(),
+                    ..listed
+                },
+                None => listed,
+            };
+            let (now, reviews) = if stale || recheck || owed.contains(&key) {
+                match host.refresh_pull_request(&listed, open).await {
+                    Ok(read) => {
+                        if read.incomplete {
+                            owed_after.insert(key);
+                        } else {
+                            owed_after.remove(&key);
+                        }
+                        (read.change, read.reviews)
+                    }
+                    Err(e) if e.is_transient() => {
+                        owed_after.insert(key);
+                        (carried(listed), Vec::new())
+                    }
+                    Err(e) => return Err(e),
+                }
             } else {
-                let p = prev.expect("not stale implies cached");
-                (CodeChange { checks: p.checks, review: p.review, additions: p.additions, deletions: p.deletions, changed_files: p.changed_files, linked_keys: p.linked_keys.clone(), ..listed }, Vec::new())
+                (carried(listed), Vec::new())
             };
             events.extend(recent(derive(me, prev, &now, &reviews), since));
             if prev != Some(&now) {
@@ -448,6 +486,9 @@ impl Core {
         let changed = !stored.is_empty();
         self.with_code_db(id, |db| {
             db.upsert_code_changes(&stored, &stamp(Utc::now()))?;
+            if owed_after != owed {
+                db.set_meta(INCOMPLETE, &owed_after.iter().cloned().collect::<Vec<_>>().join("\n"))?;
+            }
             Ok(db.insert_cache_events(&events)? > 0 || changed)
         })
     }
@@ -538,7 +579,7 @@ impl Core {
                     schedule.defer(Utc::now() + Duration::seconds(*retry_after_secs as i64));
                 }
             }
-            let error = result.as_ref().err().map(|e| e.to_string());
+            let error = result.as_ref().err().map(|e| (e.to_string(), e.is_transient()));
             match error {
                 Some(e) => self.code.errors.lock().expect("error lock poisoned").insert(id.clone(), e),
                 None => self.code.errors.lock().expect("error lock poisoned").remove(&id),
@@ -1056,6 +1097,48 @@ pub(crate) mod tests {
         assert!(matches!(results[0].1, Err(Error::RateLimited { .. })));
         assert!(lx.core().connections().await.unwrap().iter().any(|c| c.id == "github:ann" && c.error.as_deref().is_some_and(|e| e.contains("limit"))));
         assert!(lx.core().sync_code_if_due(Trigger::Timer).await.is_empty(), "not due again before the limit resets");
+    }
+
+    fn webshop_pulls(lx: &Linked) -> HashMap<u64, CodeChange> {
+        let changes = lx.core().with_code_db("github:ann", |db| db.code_changes("github:ann")).unwrap();
+        changes.into_iter().filter(|c| c.repo == "acme/webshop").map(|c| (c.number.unwrap(), c)).collect()
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_whose_reviews_cannot_be_read_is_kept_and_filled_in_by_the_next_sync() {
+        let lists = vec![Reply::ok(PULLS_OPEN), Reply::ok(PULLS_ALL), Reply::ok(PULLS_OPEN), Reply::ok(PULLS_ALL)];
+        let reviews = vec![Reply::hang_up(), Reply::hang_up(), Reply::hang_up(), Reply::ok(REVIEWS)];
+        let lx = linked(vec![("/repos/acme/webshop/pulls".into(), lists), ("/repos/acme/webshop/pulls/208/reviews".into(), reviews)], Some("repo")).await;
+        lx.core().watch_set_mode("github:ann", WatchMode::Everything).await.unwrap();
+
+        lx.sync().await;
+        let first = webshop_pulls(&lx);
+        assert_eq!(first.len(), 4, "the other pull requests were stored too");
+        assert_ne!(first[&208].review, crate::domain::ReviewState::ChangesRequested, "the reviews weren't read");
+        assert!(lx.core().with_code_db("github:ann", |db| db.meta(LAST_SYNC)).unwrap().is_some());
+        assert_eq!(lx.requests_for("/repos/acme/webshop/pulls/208/reviews"), 3);
+
+        lx.sync().await;
+        assert_eq!(webshop_pulls(&lx)[&208].review, crate::domain::ReviewState::ChangesRequested, "read on the next sync");
+        assert_eq!(lx.requests_for("/repos/acme/webshop/pulls/208/reviews"), 4);
+        let owed = lx.core().with_code_db("github:ann", |db| db.meta(INCOMPLETE)).unwrap().unwrap_or_default();
+        assert!(owed.is_empty(), "nothing is owed once it is read: {owed:?}");
+    }
+
+    #[tokio::test]
+    async fn a_transient_failure_of_the_list_is_recorded_on_the_connection_as_transient_and_a_rate_limit_is_not() {
+        let lx = linked(vec![("/repos/acme/webshop/pulls".into(), vec![Reply::hang_up()])], Some("repo")).await;
+        lx.core().watch_set_mode("github:ann", WatchMode::Everything).await.unwrap();
+        let results = lx.core().sync_code_if_due(Trigger::Now).await;
+        assert!(results[0].1.as_ref().is_err_and(Error::is_transient));
+        let row = lx.core().connections().await.unwrap().into_iter().find(|c| c.id == "github:ann").unwrap();
+        assert!(row.transient && row.error.is_some_and(|e| e.starts_with("Network error: ")));
+
+        let limited = Reply::status(403, "{\"message\":\"API rate limit exceeded\"}").header("x-ratelimit-remaining", "0").header("x-ratelimit-reset", "4102444800");
+        let lx = linked(vec![("/repos/acme/webshop/pulls".into(), vec![limited])], Some("repo")).await;
+        lx.core().sync_code_if_due(Trigger::Now).await;
+        let row = lx.core().connections().await.unwrap().into_iter().find(|c| c.id == "github:ann").unwrap();
+        assert!(row.error.is_some() && !row.transient);
     }
 
     #[tokio::test]

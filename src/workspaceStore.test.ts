@@ -255,6 +255,16 @@ describe("workspace store refresh", () => {
     expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Couldn't sync: HTTP 503"]);
   });
 
+  it("keeps a transient sync failure on the row without a toast", async () => {
+    useToasts.getState().clear();
+    await flush();
+    const failing = { ...s().connections[0], error: "Network error: timed out", transient: true };
+    backend.connectionsList = async () => [failing];
+    await s().refreshConnections();
+    expect(s().connections[0].error).toBe("Network error: timed out");
+    expect(useToasts.getState().toasts).toEqual([]);
+  });
+
   it("drops a decision that lands after the workspace moved to another backend", async () => {
     const draft = draftsForItem(s(), itemRef("SUP-12"))[0];
     const pending = s().approve(draft.id);

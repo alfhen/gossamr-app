@@ -125,6 +125,8 @@ pub struct ConnectionInfo {
     pub last_sync_at: Option<String>,
     pub syncing: bool,
     pub error: Option<String>,
+    /// The error is a network failure that the next sync tries again, so it isn't worth interrupting anyone with.
+    pub transient: bool,
 }
 
 pub struct Core {
@@ -165,7 +167,7 @@ impl Core {
         Self {
             auth,
             registry,
-            code: CodeService::new(reqwest::Client::new(), CodeService::default_store()),
+            code: CodeService::new(crate::net::client(), CodeService::default_store()),
             data_dir,
             home: dirs::home_dir().and_then(|h| h.canonicalize().ok()),
             db: Mutex::new(None),
@@ -688,6 +690,7 @@ impl Core {
                 last_sync_at,
                 syncing: self.syncing.load(Ordering::SeqCst),
                 error: self.last_error.lock().expect("error lock poisoned").clone(),
+                transient: false,
             });
         }
         out.extend(self.code_connections());

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use reqwest::header::{HeaderMap, ACCEPT, IF_MODIFIED_SINCE, IF_NONE_MATCH};
@@ -9,7 +10,7 @@ use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 
 use crate::db::{stamp, CachedHttp, Db};
-use crate::error::{Error, Result};
+use crate::error::{is_transport_failure, Error, Result};
 
 const API_VERSION: &str = "2022-11-28";
 const JSON: &str = "application/vnd.github+json";
@@ -18,6 +19,12 @@ const CORE_RESERVE: u64 = 5;
 const SEARCH_RESERVE: u64 = 1;
 /// A limit with no retry hint is waited out this long at least.
 const MIN_WAIT_SECS: u64 = 60;
+
+/// Waits before the second and third attempts at a request that failed in transit.
+#[cfg(not(test))]
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(300), Duration::from_secs(1)];
+#[cfg(test)]
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(1), Duration::from_millis(1)];
 
 #[derive(Clone, Copy, Debug)]
 struct Limit {
@@ -46,6 +53,21 @@ pub struct Api {
     connection_id: String,
     db: Arc<Mutex<Db>>,
     limits: Mutex<HashMap<String, Limit>>,
+}
+
+/// `base` spread by up to a quarter either way, so clients that failed together don't retry together.
+fn jittered(base: Duration, random: u8) -> Duration {
+    base.mul_f64(0.75 + f64::from(random) / 510.0)
+}
+
+fn retry_pause(base: Duration) -> Duration {
+    let mut byte = [128u8];
+    let _ = getrandom::fill(&mut byte);
+    jittered(base, byte[0])
+}
+
+fn retryable_status(status: StatusCode) -> bool {
+    matches!(status.as_u16(), 502..=504)
 }
 
 fn header(h: &HeaderMap, name: &str) -> Option<String> {
@@ -109,6 +131,27 @@ impl Api {
         Self { http, base: base.trim_end_matches('/').into(), token: token.into(), connection_id: connection_id.into(), db, limits: Mutex::new(HashMap::new()) }
     }
 
+    /// Sends the request, trying again after a failure in transit or a 502, 503 or 504. Only reads are sent through
+    /// here, so repeating one is safe. The body is read inside the loop because it can fail in transit too.
+    async fn fetch(&self, request: impl Fn() -> reqwest::RequestBuilder) -> Result<(StatusCode, HeaderMap, String)> {
+        let mut retries = RETRY_DELAYS.iter();
+        loop {
+            let attempt = async {
+                let res = request().send().await?;
+                let (status, headers) = (res.status(), res.headers().clone());
+                Ok::<_, reqwest::Error>((status, headers, res.text().await?))
+            }
+            .await;
+            let delay = match &attempt {
+                Ok((status, ..)) if retryable_status(*status) => retries.next(),
+                Err(e) if is_transport_failure(e) => retries.next(),
+                _ => None,
+            };
+            let Some(delay) = delay else { return Ok(attempt?) };
+            tokio::time::sleep(retry_pause(*delay)).await;
+        }
+    }
+
     fn url(&self, target: &str) -> String {
         if target.starts_with("http://") || target.starts_with("https://") {
             target.into()
@@ -154,23 +197,20 @@ impl Api {
         // The same URL answers differently per media type, so each is cached apart.
         let key = if accept == JSON { url.clone() } else { format!("{url}#{accept}") };
         let cached = self.cached(&key);
-        let mut req = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .header(ACCEPT, accept)
-            .header("X-GitHub-Api-Version", API_VERSION);
-        if let Some(c) = &cached {
-            if let Some(etag) = &c.etag {
-                req = req.header(IF_NONE_MATCH, etag);
-            } else if let Some(since) = &c.last_modified {
-                req = req.header(IF_MODIFIED_SINCE, since);
-            }
-        }
-        let res = req.send().await?;
-        self.note_limits(res.headers());
-        let status = res.status();
-        let h = res.headers().clone();
+        let (status, h, body) = self
+            .fetch(|| {
+                let mut req = self.http.get(&url).bearer_auth(&self.token).header(ACCEPT, accept).header("X-GitHub-Api-Version", API_VERSION);
+                if let Some(c) = &cached {
+                    if let Some(etag) = &c.etag {
+                        req = req.header(IF_NONE_MATCH, etag);
+                    } else if let Some(since) = &c.last_modified {
+                        req = req.header(IF_MODIFIED_SINCE, since);
+                    }
+                }
+                req
+            })
+            .await?;
+        self.note_limits(&h);
         let poll_interval = header(&h, "x-poll-interval").and_then(|v| v.parse().ok());
         let scopes = header(&h, "x-oauth-scopes").map(|s| s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
         if status == StatusCode::NOT_MODIFIED {
@@ -179,7 +219,6 @@ impl Api {
             let _ = self.db.lock().expect("db lock poisoned").http_cache_touch(&self.connection_id, &key, &stamp(Utc::now()));
             return Ok(Page { body: c.body, unchanged: true, next: c.next, last_modified: c.last_modified, poll_interval, scopes });
         }
-        let body = res.text().await?;
         if !status.is_success() {
             return Err(error_for(status.as_u16(), &h, &body, Utc::now().timestamp()));
         }
@@ -348,5 +387,74 @@ mod tests {
         let server = serve(vec![("/bad", vec![Reply::status(401, "{\"message\":\"Bad credentials\"}")])]).await;
         let err = api(&server.base).get("/bad").await.unwrap_err();
         assert!(err.to_string().contains("didn't accept the token"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_request_that_fails_in_transit_once_is_tried_again() {
+        let server = serve(vec![("/a", vec![Reply::hang_up(), Reply::ok("[7]")])]).await;
+        let (got, _): (Vec<u32>, Page) = api(&server.base).json("/a").await.unwrap();
+        assert_eq!(got, vec![7]);
+        assert_eq!(server.targets().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn three_failures_in_transit_give_up_and_name_the_cause() {
+        let server = serve(vec![("/a?per_page=100", vec![Reply::hang_up()])]).await;
+        let err = api(&server.base).get("/a?per_page=100").await.unwrap_err();
+        assert_eq!(server.targets().len(), 3);
+        assert!(err.is_transient());
+        let text = err.to_string();
+        assert!(text.starts_with("Network error: error sending request for url ("), "{text}");
+        assert!(text.contains("/a)") && !text.contains("per_page"), "the query is dropped: {text}");
+        assert!(text.matches(": ").count() >= 2, "the causes follow: {text}");
+        assert!(!text.to_ascii_lowercase().contains("tok"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_gateway_error_is_tried_again_and_other_failures_are_not() {
+        let server = serve(vec![
+            ("/flaky", vec![Reply::status(503, "{\"message\":\"busy\"}"), Reply::status(502, ""), Reply::ok("1")]),
+            ("/down", vec![Reply::status(504, "{\"message\":\"gone\"}")]),
+            ("/missing", vec![Reply::status(404, "{}")]),
+            ("/mine", vec![Reply::status(500, "{}")]),
+        ])
+        .await;
+        let api = api(&server.base);
+        assert_eq!(api.get("/flaky").await.unwrap().body, "1");
+        let err = api.get("/down").await.unwrap_err();
+        assert!(matches!(err, Error::CodeHost { status: 504, .. }) && err.is_transient(), "{err}");
+        assert_eq!(server.targets().iter().filter(|t| *t == "/down").count(), 3);
+        assert!(matches!(api.get("/missing").await, Err(Error::CodeHost { status: 404, .. })));
+        assert!(matches!(api.get("/mine").await, Err(Error::CodeHost { status: 500, .. })));
+        assert_eq!(server.targets().iter().filter(|t| *t == "/missing" || *t == "/mine").count(), 2, "neither was repeated");
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_is_reported_at_once() {
+        let server = serve(vec![("/a", vec![Reply::status(429, "{}").header("retry-after", "30"), Reply::ok("{}")])]).await;
+        let err = api(&server.base).get("/a").await.unwrap_err();
+        assert!(matches!(err, Error::RateLimited { retry_after_secs: 30, .. }), "{err}");
+        assert!(!err.is_transient());
+        assert_eq!(server.targets().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_retry_stays_conditional() {
+        let server = serve(vec![("/a", vec![Reply::ok("[1]").header("etag", "\"v1\""), Reply::hang_up(), Reply::status(304, "")])]).await;
+        let api = api(&server.base);
+        api.get("/a").await.unwrap();
+        let page = api.get("/a").await.unwrap();
+        assert!(page.unchanged);
+        assert_eq!(server.targets().len(), 3);
+        assert_eq!(server.header_of(1, "if-none-match").as_deref(), Some("\"v1\""));
+        assert_eq!(server.header_of(2, "if-none-match").as_deref(), Some("\"v1\""));
+    }
+
+    #[test]
+    fn the_wait_before_a_retry_varies_by_a_quarter_either_way() {
+        let base = Duration::from_millis(1000);
+        assert_eq!(jittered(base, 0), Duration::from_millis(750));
+        assert_eq!(jittered(base, 255), Duration::from_millis(1250));
+        assert!(jittered(base, 128) > jittered(base, 127));
     }
 }

@@ -21,9 +21,10 @@ export function connectionsOf(containers: { ref: { connectionId: string } }[]): 
 }
 
 /** What the connection row says about the sync. */
-export function syncLine(c: Pick<ConnectionInfo, "syncing" | "lastSyncAt" | "error">, now: Date): { text: string; tone: "ok" | "busy" | "error" } {
+export function syncLine(c: Pick<ConnectionInfo, "syncing" | "lastSyncAt" | "error"> & { transient?: boolean }, now: Date): { text: string; tone: "ok" | "busy" | "error" } {
   if (c.syncing) return { text: "Syncing…", tone: "busy" };
   const last = c.lastSyncAt ? `Last synced ${agoText(c.lastSyncAt, now)}` : "Not synced yet";
+  if (c.error && c.transient) return { text: `${last}. Network trouble, trying again soon: ${c.error}`, tone: "busy" };
   return c.error ? { text: `${last}. Couldn't sync: ${c.error}`, tone: "error" } : { text: last, tone: "ok" };
 }
 
