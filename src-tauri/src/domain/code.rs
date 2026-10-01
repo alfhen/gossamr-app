@@ -62,6 +62,9 @@ pub struct CodeChange {
     /// Where it was found: the head branch of a pull request, the name of a branch, or the branch a commit was read from.
     pub head_ref: String,
     pub base_ref: Option<String>,
+    /// The repository a pull request's head branch is in, `owner/name`. Unknown for anything read without it.
+    #[serde(default)]
+    pub head_repo: Option<String>,
     pub state: CodeChangeState,
     pub merged_at: Option<DateTime<Utc>>,
     pub created_at: Option<DateTime<Utc>>,
@@ -105,6 +108,11 @@ impl CodeChange {
             (CodeChangeKind::Commit, _) => format!("{}@{}", self.repo, self.sha.as_deref().unwrap_or("").chars().take(7).collect::<String>()),
             _ => format!("{}:{}", self.repo, self.title),
         }
+    }
+
+    /// A pull request whose head is in the repository it targets. Unknown counts as no.
+    pub fn is_same_repo(&self) -> bool {
+        self.kind == CodeChangeKind::PullRequest && self.head_repo.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(&self.repo))
     }
 
     /// This change as the far end of a `Link`.

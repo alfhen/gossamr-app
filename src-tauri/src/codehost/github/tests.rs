@@ -429,3 +429,36 @@ async fn code_search_asks_for_text_matches_and_stays_inside_the_given_repositori
     assert_eq!(targets.len(), 1, "{targets:?}");
     assert!(targets[0].contains("repo%3Aacme%2Fwebshop") && targets[0].contains("repo%3Aacme%2Fgateway"), "{targets:?}");
 }
+
+fn pull_with_head_repo(head_repo: &str) -> String {
+    format!(
+        "{{\"number\":12,\"state\":\"open\",\"draft\":false,\"title\":\"Fix the cart\",\"body\":null,\"created_at\":\"2026-09-25T08:00:00Z\",\"updated_at\":\"2026-09-29T09:30:00Z\",\"merged_at\":null,\"html_url\":\"https://github.com/acme/webshop/pull/12\",\"user\":{{\"login\":\"ann\"}},\"head\":{{\"ref\":\"fix-cart\",\"sha\":\"aaa\"{head_repo}}},\"base\":{{\"ref\":\"main\",\"sha\":\"bbb\",\"repo\":{{\"full_name\":\"acme/webshop\"}}}}}}"
+    )
+}
+
+#[tokio::test]
+async fn a_pull_request_says_which_repository_its_head_branch_is_in() {
+    let cases = [
+        (",\"repo\":{\"full_name\":\"acme/webshop\"}", Some("acme/webshop"), true),
+        (",\"repo\":{\"full_name\":\"Acme/WebShop\"}", Some("Acme/WebShop"), true),
+        (",\"repo\":{\"full_name\":\"mallory/webshop\"}", Some("mallory/webshop"), false),
+        (",\"repo\":null", None, false),
+        ("", None, false),
+    ];
+    for (head_repo, expected, same) in cases {
+        let server = serve(vec![("/repos/acme/webshop/pulls/12", vec![Reply::ok(&pull_with_head_repo(head_repo))])]).await;
+        let change = host(&server).pull_request_change("acme/webshop", 12).await.unwrap();
+        assert_eq!((change.head_repo.as_deref(), change.is_same_repo()), (expected, same), "{head_repo}");
+        assert_eq!((change.number, change.base_ref.as_deref(), change.state), (Some(12), Some("main"), CodeChangeState::Open));
+        assert_eq!(server.targets(), ["/repos/acme/webshop/pulls/12"], "one request");
+    }
+}
+
+#[tokio::test]
+async fn listed_pull_requests_carry_their_head_repository_too() {
+    let list = format!("[{}]", pull_with_head_repo(",\"repo\":{\"full_name\":\"mallory/webshop\"}"));
+    let server = serve(vec![("/repos/acme/webshop/pulls", vec![Reply::ok(&list)])]).await;
+    let since = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
+    let found = host(&server).pull_requests("acme/webshop", since).await.unwrap();
+    assert_eq!(found.changes[0].head_repo.as_deref(), Some("mallory/webshop"));
+}

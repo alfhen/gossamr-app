@@ -75,6 +75,9 @@ pub trait CodeHost: Send + Sync {
     /// One pull request with the files it changes (paths, stats, cut-short patches) and its recent commits.
     async fn pull_request(&self, repo: &str, number: u64) -> Result<PullRequestDetail>;
 
+    /// Just the pull request itself, one request: state, branches and the repository its head is in.
+    async fn pull_request_change(&self, repo: &str, number: u64) -> Result<CodeChange>;
+
     async fn branches(&self, repo: &str) -> Result<Vec<CodeChange>>;
 
     /// Commits of a branch (the default one when none is named), newest first, optionally only those whose message

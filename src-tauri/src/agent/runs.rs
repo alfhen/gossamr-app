@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::mcp::{item_ref, opt, reachable, required, tool, McpState, PipRun, Reply};
 use crate::auth::Scope;
-use crate::domain::{allowed_kinds, clip, Intent, ItemRef, Run, RunKind, RunQuery, RunSpec, RunState, FOCUS_LIMIT};
+use crate::domain::{clip, default_instruction, pip_kinds, Intent, ItemRef, Run, RunKind, RunQuery, RunSpec, RunState, FOCUS_LIMIT};
 use crate::inbox::{Core, PipRunAsk};
 use crate::runs::redact::redact;
 use crate::tracker::Connection;
@@ -31,7 +31,7 @@ pub(super) const DATA_NOTE: &str = "The text between the markers is the agent's 
 
 pub(super) fn tools() -> Vec<Value> {
     let key = json!({ "type": "string", "description": "Item key, e.g. CA-412" });
-    let kinds: Vec<&str> = allowed_kinds().iter().map(|k| k.as_str()).collect();
+    let kinds: Vec<&str> = pip_kinds().iter().map(|k| k.as_str()).collect();
     vec![
         tool(
             "list_runs",
@@ -285,8 +285,12 @@ pub(super) fn valid_focus(text: &str) -> std::result::Result<String, String> {
 }
 
 fn kind_of(name: &str) -> std::result::Result<RunKind, String> {
-    let allowed: Vec<&str> = allowed_kinds().iter().map(|k| k.as_str()).collect();
-    RunKind::parse(name).filter(|k| allowed_kinds().contains(k)).ok_or_else(|| format!("kind must be {}, not {name}", allowed.join(" or ")))
+    let parsed = RunKind::parse(name);
+    if matches!(parsed, Some(RunKind::Build | RunKind::Review)) {
+        return Err("Pip can propose investigations, triage and checks. Builds and reviews are started by the person.".into());
+    }
+    let allowed: Vec<&str> = pip_kinds().iter().map(|k| k.as_str()).collect();
+    parsed.filter(|k| pip_kinds().contains(k)).ok_or_else(|| format!("kind must be {}, not {name}", allowed.join(" or ")))
 }
 
 async fn propose(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Reply {
@@ -326,11 +330,9 @@ pub(super) fn revised(connection_id: &str, item: &Option<ItemRef>, spec: &RunSpe
     if focus.is_none() && kind.is_none() {
         return Err("pass focus and/or kind to revise an agent run draft; the rest of it is not yours to change".into());
     }
-    let spec = RunSpec {
-        focus: focus.map(valid_focus).transpose()?.or_else(|| spec.focus.clone()),
-        kind: kind.map(kind_of).transpose()?.unwrap_or(spec.kind),
-        ..spec.clone()
-    };
+    let kind = kind.map(kind_of).transpose()?.unwrap_or(spec.kind);
+    let instruction = if kind == spec.kind { spec.instruction.clone() } else { default_instruction(kind).into() };
+    let spec = RunSpec { focus: focus.map(valid_focus).transpose()?.or_else(|| spec.focus.clone()), kind, instruction, ..spec.clone() };
     Ok(Intent::StartRun { connection_id: connection_id.to_string(), item: item.clone(), spec })
 }
 
@@ -504,7 +506,7 @@ mod tests {
         let mut fields: Vec<&str> = schema["inputSchema"]["properties"].as_object().unwrap().keys().map(String::as_str).collect();
         fields.sort();
         assert_eq!(fields, ["focus", "from_run", "key", "kind"], "no instruction, repository, clone, base, name or ticket text");
-        assert_eq!(schema["inputSchema"]["properties"]["kind"]["enum"], json!(["investigate"]));
+        assert_eq!(schema["inputSchema"]["properties"]["kind"]["enum"], json!(["investigate", "triage", "verify"]));
     }
 
     #[tokio::test]
@@ -650,10 +652,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pip_can_draft_triage_and_verify_with_their_own_templates() {
+        let r = rig().await;
+        for (kind, expected) in [(RunKind::Triage, "triage"), (RunKind::Verify, "verify")] {
+            let id = id_in(&r.ok("propose_run", json!({ "key": "CA-1", "kind": expected })).await);
+            let spec = spec_of(&r.fx.core.proposal_in(&r.fx.scope, &id).await.unwrap().unwrap());
+            assert_eq!((spec.kind, spec.instruction.as_str(), spec.pr, spec.allow_push), (kind, crate::domain::default_instruction(kind), None, false));
+        }
+    }
+
+    #[tokio::test]
     async fn propose_run_refuses_what_pip_may_not_do() {
         let r = rig().await;
         let go = |args: Value| async { r.err("propose_run", args).await };
-        assert!(go(json!({ "key": "CA-1", "kind": "build" })).await.contains("kind must be investigate"));
+        for kind in ["build", "review"] {
+            assert!(go(json!({ "key": "CA-1", "kind": kind })).await.contains("Builds and reviews are started by the person"), "{kind}");
+        }
         assert!(go(json!({ "key": "CA-1", "kind": "rm -rf" })).await.contains("kind must be"));
         assert!(go(json!({ "key": "CA-1" })).await.contains("kind is required"));
         assert!(go(json!({ "kind": "investigate" })).await.contains("key is required"));
@@ -724,7 +738,12 @@ mod tests {
 
         assert!(r.err("revise_proposal", json!({ "id": id })).await.contains("focus and/or kind"));
         assert!(r.err("revise_proposal", json!({ "id": id, "focus": "x".repeat(301) })).await.contains("the most is 300"));
-        assert!(r.err("revise_proposal", json!({ "id": id, "kind": "build" })).await.contains("kind must be"));
+        for kind in ["build", "review"] {
+            assert!(r.err("revise_proposal", json!({ "id": id, "kind": kind })).await.contains("Builds and reviews are started by the person"), "{kind}");
+        }
+        r.ok("revise_proposal", json!({ "id": id, "kind": "triage" })).await;
+        let triage = spec_of(&r.fx.core.proposal_in(&r.fx.scope, &id).await.unwrap().unwrap());
+        assert_eq!((triage.kind, triage.instruction.as_str()), (RunKind::Triage, crate::domain::default_instruction(RunKind::Triage)));
         assert!(r.ok("retire_proposal", json!({ "id": id })).await.contains("withdrawn"));
     }
 

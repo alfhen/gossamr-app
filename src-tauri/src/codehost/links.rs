@@ -91,6 +91,7 @@ pub(crate) mod tests {
             changed_files: None,
             body: body.into(),
             linked_keys: vec![],
+            head_repo: None,
         }
     }
 

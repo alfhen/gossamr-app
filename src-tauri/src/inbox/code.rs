@@ -647,6 +647,12 @@ impl Core {
         self.code_host(&r.connection_id).await?.pull_request(&r.repo, r.number).await
     }
 
+    /// The pull request as GitHub has it now, in a watched repository.
+    pub async fn code_pull_change(&self, repo: &str, number: u64) -> Result<CodeChange> {
+        let (id, repo) = self.code_connection_for(repo)?;
+        self.code_host(&id).await?.pull_request_change(&repo, number).await
+    }
+
     /// Pull requests, branches and commits in the watched repositories that match `query`, newest first.
     pub async fn code_search(&self, query: &str) -> Result<Vec<CodeChange>> {
         let mut out = Vec::new();

@@ -4,7 +4,8 @@ use std::sync::Mutex;
 use super::*;
 use crate::domain::fixtures::run_spec;
 use crate::domain::RunFailure;
-use crate::inbox::testing::{fixture_watching, Fixture};
+use crate::codehost::github::testserver::{pull_reply, Reply};
+use crate::inbox::testing::{fixture_watching, fixture_watching_with, Fixture};
 use crate::runs::cli::{ClaudeCli, SystemCli};
 use crate::runs::env::RunEnv;
 use crate::runs::repo::testing::{clone_with_origin, install_fake_git};
@@ -28,7 +29,11 @@ fn fake_env(dir: &Path) -> Arc<RunEnv> {
 }
 
 async fn build(tools: Option<ToolchainError>, tune: impl FnOnce(RunService) -> RunService) -> Rig {
-    let fx = fixture_watching(&["acme/webshop"]).await;
+    build_with(Vec::new(), tools, tune).await
+}
+
+async fn build_with(routes: Vec<(&str, Vec<Reply>)>, tools: Option<ToolchainError>, tune: impl FnOnce(RunService) -> RunService) -> Rig {
+    let fx = fixture_watching_with(&["acme/webshop"], routes).await;
     let clone = fx.home.join("webshop");
     clone_with_origin(&clone, ORIGIN);
     let cli = Arc::new(FakeCli::new());
@@ -828,5 +833,75 @@ mod through_the_real_spawner {
     #[test]
     fn the_fake_script_is_executable() {
         assert!(std::fs::metadata(FAKE).unwrap().permissions().mode() & 0o111 != 0);
+    }
+}
+
+mod kinds {
+    use super::*;
+    use crate::runs::preflight::Level;
+
+    const PULL: &str = "/repos/acme/webshop/pulls/12";
+
+    fn of(rig: &Rig, kind: RunKind, n: u32) -> RunSpec {
+        let pr = (kind == RunKind::Review).then_some(12);
+        RunSpec { kind, pr, instruction: String::new(), ..rig.spec(n) }
+    }
+
+    async fn approved(rig: &Rig, spec: RunSpec) -> Run {
+        let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
+        let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
+        rig.fx.core.runs_approve(&p.id, &digest).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn every_kind_launches_through_the_cli_with_the_prompt_that_was_approved() {
+        let same = || pull_reply(12, "open", Some("acme/webshop"), "main");
+        let rig = build_with(vec![(PULL, vec![same()])], None, |s| s.with_cap(10)).await;
+        for (n, kind) in [RunKind::Triage, RunKind::Verify, RunKind::Build, RunKind::Review].into_iter().enumerate() {
+            let run = approved(&rig, of(&rig, kind, n as u32 + 1)).await;
+            rig.svc.launch(&run.id).await.unwrap();
+            let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
+            assert_eq!(req.name, format!("CA-1 {}", kind.as_str()));
+            assert_eq!(req.prompt, render_prompt(&run.spec));
+            assert_eq!(rig.get(&run).await.state, RunState::Launching, "{kind:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_review_is_checked_again_just_before_launch_and_never_spawns_for_a_fork() {
+        let same = pull_reply(12, "open", Some("acme/webshop"), "main");
+        let fork = pull_reply(12, "open", Some("mallory/webshop"), "main");
+        let rig = build_with(vec![(PULL, vec![same.clone(), same.clone(), same, fork])], None, |s| s).await;
+        let run = approved(&rig, of(&rig, RunKind::Review, 1)).await;
+        rig.svc.launch(&run.id).await.unwrap();
+        let after = rig.get(&run).await;
+        assert_eq!(after.state, RunState::Failed);
+        assert!(after.error.unwrap().contains("comes from a fork"));
+        assert_eq!(rig.cli.launches(), 0);
+    }
+
+    #[tokio::test]
+    async fn preflight_says_what_a_push_allows_and_whom_a_review_reads() {
+        let rig = build_with(vec![(PULL, vec![pull_reply(12, "open", Some("acme/webshop"), "main")])], None, |s| s).await;
+        let config = rig.fx.dir.join("claude-config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("settings.json"), r#"{"permissions":{"defaultMode":"auto"}}"#).unwrap();
+        let has = |p: &Preflight, level: Level, text: &str| p.rows.iter().any(|r| r.level == level && r.text.contains(text));
+
+        let quiet = rig.svc.preflight(Some(of(&rig, RunKind::Build, 1))).await.unwrap();
+        assert!(!quiet.rows.iter().any(|r| r.text.contains("push")), "no push row without the tick");
+        let build = RunSpec { allow_push: true, ..of(&rig, RunKind::Build, 1) };
+        let p = rig.svc.preflight(Some(build)).await.unwrap();
+        assert!(has(&p, Level::Amber, "may push a branch and open a pull request if your Claude settings allow it. Your permission mode is auto: with auto mode"), "{p:?}");
+
+        let p = rig.svc.preflight(Some(of(&rig, RunKind::Review, 2))).await.unwrap();
+        assert!(has(&p, Level::Green, "Reviews pull request #12 in acme/webshop. Its branch is in acme/webshop"), "{p:?}");
+    }
+
+    #[tokio::test]
+    async fn preflight_blocks_a_review_of_a_fork() {
+        let rig = build_with(vec![(PULL, vec![pull_reply(12, "open", Some("mallory/webshop"), "main")])], None, |s| s).await;
+        let p = rig.svc.preflight(Some(of(&rig, RunKind::Review, 1))).await.unwrap();
+        assert!(p.blocking && p.rows.iter().any(|r| r.level == Level::Red && r.text.contains("comes from a fork")), "{p:?}");
     }
 }

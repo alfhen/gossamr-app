@@ -56,6 +56,9 @@ fn check(intent: &Intent) -> Result<()> {
             if item.as_ref().is_some_and(|i| i.connection_id != *connection_id) {
                 return Err(refuse("the ticket belongs to another connection"));
             }
+            if item.is_none() && spec.kind == crate::domain::RunKind::Build {
+                return Err(refuse("Build needs a ticket"));
+            }
             spec.validate()
         }
         _ => Ok(()),
