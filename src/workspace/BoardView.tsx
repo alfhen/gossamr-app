@@ -53,10 +53,12 @@ export function BoardView({ tab, items }: CanvasProps) {
   const include = projectOf(tab.filter);
   const columnOrder = usePrefs((s) => s.columnOrder);
   const projectSections = useMemo(() => boardSections(items, containers, include, columnOrder), [items, containers, include?.connectionId, include?.externalId, columnOrder]);
+  // Moves are planned against the workflow's own order, so a reordered board never changes which status a category drop picks.
+  const plannedSections = useMemo(() => boardSections(items, containers, include), [items, containers, include?.connectionId, include?.externalId]);
   // Without a project the workflows differ, so the board falls back to the three status categories.
   const byCategory = !include;
   const sections = useMemo(() => (byCategory ? (items.length ? [categorySection(items)] : []) : projectSections), [byCategory, items, projectSections]);
-  const ownSection = (item: WorkItem) => projectSections.find((p) => p.key === containerKey(item.container));
+  const ownSection = (item: WorkItem) => plannedSections.find((p) => p.key === containerKey(item.container));
   const order = useMemo(() => sections.flatMap((s) => s.columns.flatMap((c) => c.items.map((i) => itemKey(i.item)))), [sections]);
   const cards = useCards(items, order);
   const [dragging, setDragging] = useState<WorkItem | null>(null);
