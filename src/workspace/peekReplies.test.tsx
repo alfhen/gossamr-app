@@ -2,10 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { docText, quoteAfterFirst } from "../lib/docs";
-import type { WorkDoc } from "../types";
+import type { WorkComment, WorkDoc, WorkEvent } from "../types";
 import { itemRef } from "../backend/mockConnector";
 import { CommentCard, SectionCard } from "./PeekParts";
-import { EXCERPT_LENGTH, excerpt, newestFirst, ownText, replyDraft, withReplies, type Note } from "./peekLogic";
+import { EXCERPT_LENGTH, excerpt, newestFirst, ownText, replyDraft, shownComments, withReplies, type Note } from "./peekLogic";
 
 const NOW = new Date("2026-09-01T12:00:00Z");
 const P = (text: string) => ({ type: "paragraph" as const, content: [{ type: "text" as const, text, marks: [] }] });
@@ -211,5 +211,30 @@ describe("newestFirst", () => {
     const shown = newestFirst(withReplies([first, reply, last]));
     expect(shown.map((n) => n.id)).toEqual(["c", "r", "a"]);
     expect(shown[1].reply?.targetId).toBe("a");
+  });
+});
+
+describe("shownComments", () => {
+  const person = { connectionId: "c", accountId: "sam" };
+  const loaded = (id: string, text: string, min: number): WorkComment => ({ id, author: person, body: { blocks: [P(text)] }, created: `2026-09-01T10:${String(min).padStart(2, "0")}:00Z`, mentions: [] });
+  const event = (id: string, text: string, min: number): WorkEvent => ({
+    id,
+    connectionId: "c",
+    at: `2026-09-01T10:${String(min).padStart(2, "0")}:00Z`,
+    kind: "commentAdded",
+    subject: { type: "item", item: itemRef("DEVOPS-471") },
+    actor: person,
+    payload: { text },
+  });
+  const nameOf = (id: string | null) => id ?? "Someone";
+
+  it("lists loaded comments newest first, whatever order they arrive in", () => {
+    const shown = shownComments([loaded("b", "second", 2), loaded("a", "first", 1), loaded("c", "third", 3)], [], nameOf, () => false);
+    expect(shown.map((n) => n.id)).toEqual(["c", "b", "a"]);
+  });
+
+  it("lists the comments the events recorded newest first while the loaded ones are not there yet", () => {
+    const shown = shownComments(undefined, [event("e1", "first", 1), event("e2", "second", 2)], nameOf, () => false);
+    expect(shown.map((n) => n.text)).toEqual(["second", "first"]);
   });
 });
