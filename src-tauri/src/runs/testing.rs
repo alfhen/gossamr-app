@@ -28,6 +28,8 @@ pub enum Resume {
     Copies,
     Exits,
     Garbled,
+    /// Never answers, as when the app quits during the wake.
+    Hangs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,12 +188,19 @@ impl ClaudeCli for FakeCli {
     }
 
     async fn resume(&self, session_id: &str, message: &str, cwd: Option<&Path>) -> CliResult<Launched> {
+        let hangs = {
+            let mut s = self.0.lock().unwrap();
+            s.resumes.push(ResumeCall { session_id: session_id.into(), message: message.into(), cwd: cwd.map(Path::to_path_buf) });
+            s.resume == Resume::Hangs
+        };
+        if hangs {
+            std::future::pending::<()>().await;
+        }
         let mut s = self.0.lock().unwrap();
-        s.resumes.push(ResumeCall { session_id: session_id.into(), message: message.into(), cwd: cwd.map(Path::to_path_buf) });
         match s.resume {
             Resume::Exits => return Err(CliError::Failed { code: Some(1), stderr: "something broke".into() }),
             Resume::Garbled => return Err(CliError::Unparseable { stdout: "whatever".into() }),
-            Resume::Wakes | Resume::Copies => {}
+            Resume::Wakes | Resume::Copies | Resume::Hangs => {}
         }
         let Some(at) = s.sessions.iter().position(|e| e.session_id.as_deref() == Some(session_id)) else {
             return Err(CliError::Failed { code: Some(1), stderr: format!("No session {session_id}") });

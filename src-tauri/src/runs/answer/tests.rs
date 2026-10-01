@@ -119,6 +119,18 @@ async fn a_failed_resume_leaves_the_run_stopped_with_the_answer_kept() {
 }
 
 #[tokio::test]
+async fn an_app_that_quits_between_the_stop_and_the_wake_keeps_the_answer() {
+    let (rig, run) = asking().await;
+    rig.cli.with(|s| s.resume = Resume::Hangs);
+    let quit = tokio::time::timeout(Duration::from_millis(300), rig.svc.answer(&run.id, "Use staging")).await;
+    assert!(quit.is_err(), "the wake was still waiting");
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.unsent_answer.as_deref()), (RunState::Stopped, Some("Use staging")));
+    rig.cli.with(|s| s.resume = Resume::Wakes);
+    assert_eq!(rig.svc.answer(&run.id, "Use staging").await.unwrap().state, RunState::Working);
+}
+
+#[tokio::test]
 async fn an_answer_that_was_stopped_on_its_way_can_be_sent_again() {
     let (rig, run) = asking().await;
     rig.cli.with(|s| s.resume = Resume::Exits);

@@ -70,6 +70,9 @@ impl RunService {
                 eprintln!("couldn't update the run index: {e}");
             }
             self.misses.lock().expect("misses lock poisoned").remove(&run.id);
+            // Saved before the wake, so an app that quits between the two still has the answer to send again.
+            run.unsent_answer = Some(text.to_owned());
+            self.store(&run).await?;
         }
 
         let failure = self.wake(&tc, &run, &id, &session, text, !again).await;
