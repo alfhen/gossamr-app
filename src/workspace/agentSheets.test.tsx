@@ -181,6 +181,8 @@ const setup = (over: Partial<SetupViewProps> = {}) => {
     kind: "investigate",
     repo: "acme/storefront",
     repos: ["acme/storefront", "acme/payments"],
+    shortage: null,
+    reposError: null,
     repoEditable: true,
     choice: { clones: [{ path: "/Users/sample/Code/storefront", branch: "main", dirty: false, defaultBranch: "main" }], picked: null },
     review,
@@ -196,7 +198,7 @@ const setup = (over: Partial<SetupViewProps> = {}) => {
     onBase: vi.fn(),
     wide: false,
     onWide: vi.fn(),
-    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn() },
+    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn() },
     ...over,
   };
   return renderToStaticMarkup(<RunSetupView {...props} />);

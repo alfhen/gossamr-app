@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { renderPrompt } from "../backend/mockRuns";
-import type { Preflight, Proposal, Run, RunReview, RunSpec, RunState } from "../types";
-import { MAY_TOUCH, defaultRepo, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, repoChoices, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
+import type { CodeChange, Preflight, Proposal, Run, RunReview, RunSpec, RunState } from "../types";
+import { MAY_TOUCH, defaultRepo, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, linkedRepo, repoChoices, repoShortage, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
 
 const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
   kind: "investigate",
@@ -194,6 +194,48 @@ describe("which repository to start in", () => {
     expect(defaultRepo(options, itemRef("CA-2"), runs, "a/one")).toBe("a/one");
     expect(defaultRepo(options, itemRef("CA-2"), runs, "gone/away")).toBeNull();
     expect(defaultRepo(["a/only"], null, [], null)).toBe("a/only");
+  });
+});
+
+const linkTo = (repo: string, updatedAt: string) => ({ change: { repo, updatedAt } as CodeChange });
+
+describe("the repository of a ticket's linked changes", () => {
+  const watched = ["Acme/gateway", "acme/webshop"];
+
+  it("is that of the most recently updated change, spelled as it is watched", () => {
+    const links = [linkTo("acme/webshop", "2026-09-01T00:00:00Z"), linkTo("acme/gateway", "2026-09-03T00:00:00Z")];
+    expect(linkedRepo(links, watched)).toBe("Acme/gateway");
+  });
+
+  it("skips changes in repositories that are not watched, and is null when none are", () => {
+    const links = [linkTo("acme/webshop", "2026-09-01T00:00:00Z"), linkTo("acme/elsewhere", "2026-09-05T00:00:00Z")];
+    expect(linkedRepo(links, watched)).toBe("acme/webshop");
+    expect(linkedRepo(links, ["acme/other"])).toBeNull();
+    expect(linkedRepo([], watched)).toBeNull();
+  });
+
+  it("is preferred over the last used repository but not over the ticket's own last run", () => {
+    const options = ["a/one", "a/two", "a/three"];
+    expect(defaultRepo(options, itemRef("CA-2"), [], "a/one", "a/two")).toBe("a/two");
+    expect(defaultRepo(options, itemRef("CA-2"), [], "a/one", "gone/away")).toBe("a/one");
+    expect(defaultRepo(options, itemRef("CA-1"), [ranRun("CA-1", "a/three", "2026-09-02T00:00:00Z")], "a/one", "a/two")).toBe("a/three");
+  });
+});
+
+describe("why there is no repository to choose", () => {
+  const base = { repos: [] as string[], loading: false, failed: false, githubConnected: true };
+
+  it("tells apart not connected, nothing watched, loading and failed", () => {
+    expect(repoShortage({ ...base, githubConnected: false })).toBe("connect");
+    expect(repoShortage(base)).toBe("watch");
+    expect(repoShortage({ ...base, loading: true })).toBe("loading");
+    expect(repoShortage({ ...base, failed: true })).toBe("failed");
+  });
+
+  it("says nothing while there is a choice, except that loading it failed", () => {
+    expect(repoShortage({ ...base, repos: ["a/b"] })).toBeNull();
+    expect(repoShortage({ ...base, repos: ["a/b"], loading: true })).toBeNull();
+    expect(repoShortage({ ...base, repos: ["a/b"], failed: true })).toBe("failed");
   });
 });
 

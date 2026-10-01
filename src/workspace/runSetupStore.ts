@@ -2,9 +2,8 @@ import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { itemKey } from "../lib/filter";
 import type { CloneChoice, ItemRef, Preflight, Proposal, Run, RunKind, RunReview, RunSpec } from "../types";
-import { isWorkConnection } from "./domains";
 import { useWorkspace } from "../workspaceStore";
-import { defaultRepo, findRunDraft, repoChoices } from "./runSheetLogic";
+import { defaultRepo, findRunDraft, linkedRepo, repoChoices } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { readStored, writeStored } from "./storage";
 import { useTabs } from "./tabsStore";
@@ -24,6 +23,8 @@ interface SetupState {
   title: string | null;
   repo: string | null;
   repos: string[];
+  reposStatus: "loading" | "ready" | "failed";
+  reposError: string | null;
   choice: CloneChoice | null;
   proposalId: string | null;
   /** The draft was made by this sheet, so it may be discarded and re-made when the repository changes. */
@@ -39,6 +40,7 @@ interface SetupState {
   changed: boolean;
   /** The instruction as first drafted, for resetting. */
   initialInstruction: string | null;
+  reloadRepos(): Promise<void>;
   begin(opts: { item?: ItemRef | null; proposalId?: string; kind?: RunKind }): Promise<void>;
   chooseRepo(repo: string): Promise<void>;
   chooseClone(path: string): Promise<void>;
@@ -56,6 +58,8 @@ const closed = {
   title: null,
   repo: null,
   repos: [] as string[],
+  reposStatus: "loading" as "loading" | "ready" | "failed",
+  reposError: null,
   choice: null,
   proposalId: null,
   ownDraft: false,
@@ -71,11 +75,6 @@ const closed = {
 
 let run = 0;
 
-const watchedRepos = (): string[] =>
-  Object.values(useWorkspace.getState().containers)
-    .filter((c) => !isWorkConnection(c.ref.connectionId))
-    .map((c) => c.key);
-
 const lastRepo = () => {
   const stored = readStored(LAST_REPO_KEY);
   return typeof stored === "string" ? stored : null;
@@ -83,6 +82,21 @@ const lastRepo = () => {
 
 export const useRunSetup = create<SetupState>((set, get) => {
   const current = (mine: number) => mine === run && get().open;
+  let stopWatching: (() => void) | null = null;
+
+  const loadRepos = async (mine: number, quiet = false): Promise<string[]> => {
+    const { backend } = get();
+    if (!backend) return [];
+    if (!quiet) set({ reposStatus: "loading", reposError: null });
+    try {
+      const watched = await backend.runsRepos();
+      if (current(mine)) set({ repos: repoChoices(watched, useRuns.getState().runs), reposStatus: "ready", reposError: null });
+      return watched;
+    } catch (e) {
+      if (current(mine)) set({ repos: repoChoices([], useRuns.getState().runs), reposStatus: "failed", reposError: messageOf(e) });
+      return [];
+    }
+  };
 
   const refresh = async (mine: number) => {
     const { backend, proposalId } = get();
@@ -131,8 +145,12 @@ export const useRunSetup = create<SetupState>((set, get) => {
       const mine = ++run;
       useRuns.getState().closeSheet();
       set({ ...closed, open: true, backend, kind, item, phase: "preparing" });
+      stopWatching?.();
+      stopWatching = backend.onWatchChanged(() => void loadRepos(run, true));
       const workspace = useWorkspace.getState();
       try {
+        const watched = await loadRepos(mine);
+        if (!current(mine)) return;
         const id = proposalId ?? findRunDraft(workspace.proposals, item, kind)?.id;
         if (id) {
           const draft: Proposal | null = await backend.proposalsGet(id);
@@ -140,20 +158,26 @@ export const useRunSetup = create<SetupState>((set, get) => {
           if (draft?.intent.type !== "startRun" || draft.state.type !== "pending") throw new Error("that draft can't be started any more");
           const { spec, item: of } = draft.intent;
           const ticket = of ? workspace.items[itemKey(of)] : undefined;
-          set({ item: of, kind: spec.kind, title: ticket?.title ?? null, repo: spec.repo, repos: repoChoices(watchedRepos(), useRuns.getState().runs), proposalId: id, ownDraft: false, fromPip: draft.createdBy === "pip", choice: await backend.runsClones(spec.repo) });
+          set({ item: of, kind: spec.kind, title: ticket?.title ?? null, repo: spec.repo, repos: repoChoices(watched, useRuns.getState().runs), proposalId: id, ownDraft: false, fromPip: draft.createdBy === "pip", choice: await backend.runsClones(spec.repo) });
           await refresh(mine);
           if (current(mine)) set({ phase: "ready", initialInstruction: get().review?.instruction ?? null });
           return;
         }
-        const repos = repoChoices(watchedRepos(), useRuns.getState().runs);
+        const repos = repoChoices(watched, useRuns.getState().runs);
         const title = item ? (workspace.items[itemKey(item)]?.title ?? null) : null;
-        const repo = defaultRepo(repos, item, useRuns.getState().runs, lastRepo());
+        const links = item ? await backend.devLinks(item).catch(() => []) : [];
+        if (!current(mine)) return;
+        const repo = defaultRepo(repos, item, useRuns.getState().runs, lastRepo(), linkedRepo(links, watched));
         set({ title, repos, repo });
         if (repo) await prepare(mine);
         else set({ phase: "ready", preflight: await backend.runsPreflight(null).catch(() => null) });
       } catch (e) {
         if (current(mine)) set({ phase: "ready", error: messageOf(e) });
       }
+    },
+
+    async reloadRepos() {
+      await loadRepos(run);
     },
 
     async chooseRepo(repo) {
@@ -236,6 +260,8 @@ export const useRunSetup = create<SetupState>((set, get) => {
 
     close() {
       run++;
+      stopWatching?.();
+      stopWatching = null;
       set({ ...closed });
     },
   };

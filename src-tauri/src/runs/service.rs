@@ -446,6 +446,12 @@ impl RunService {
         Ok(find_clones(&self.git().await?, repo, &self.roots).await)
     }
 
+    /// The repositories a run can be set up in: every one watched on any GitHub connection.
+    pub fn repos(&self) -> Result<Vec<String>> {
+        self.ensure_enabled()?;
+        self.core.watched_repo_names()
+    }
+
     /// Local clones of a watched repository, from a scan cached for ten minutes. The one the person chose, if it is
     /// still a clone, comes first.
     pub async fn clones(&self, repo: &str) -> Result<CloneChoice> {

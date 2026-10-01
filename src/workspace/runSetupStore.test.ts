@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { useWorkspace } from "../workspaceStore";
-import { startBlock } from "./runSheetLogic";
+import { repoShortage, startBlock } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -225,5 +225,88 @@ describe("a run Pip proposed", () => {
     await s().begin({ proposalId: id });
     expect(s().error).toMatch(/can't be started/);
     expect(s().review).toBeNull();
+  });
+});
+
+describe("the repositories to choose from", () => {
+  const GITHUB = "github:ada";
+  const github = async (mode: "everything" | "selected" = "everything", watch: string[] = []) => {
+    await setup({ githubRepos: 14, runs: { seed: "empty" } });
+    await backend.watchSetMode(GITHUB, mode);
+    if (watch.length) await backend.watchSetContainers(GITHUB, watch.map((containerId) => ({ containerId, watched: true })));
+  };
+
+  it("come from the backend's watched repositories, not from the work containers", async () => {
+    await github("selected", ["acme/webshop", "acme/gateway"]);
+    const containers = Object.values(useWorkspace.getState().containers);
+    expect(containers.length).toBeGreaterThan(0);
+    expect(containers.every((c) => c.ref.connectionId === "mock")).toBe(true);
+    await s().begin({ item: CA });
+    expect(s().repos).toEqual(["acme/gateway", "acme/webshop"]);
+    expect(s().reposStatus).toBe("ready");
+  });
+
+  it("leave out what is not watched and add the repositories earlier runs used", async () => {
+    await setup({ githubRepos: 14 });
+    await backend.watchSetMode(GITHUB, "selected");
+    await backend.watchSetContainers(GITHUB, [{ containerId: "acme/infra", watched: true }]);
+    await s().begin({ item: CA });
+    expect(s().repos).toEqual(["acme/infra", "acme/payments", "acme/storefront"]);
+  });
+
+  it("are loaded again when the watch set changes while the sheet is open", async () => {
+    await github("selected", ["acme/webshop"]);
+    await s().begin({ item: CA });
+    expect(s().repos).toEqual(["acme/webshop"]);
+    await backend.watchSetContainers(GITHUB, [{ containerId: "acme/gateway", watched: true }]);
+    await settle();
+    expect(s().repos).toEqual(["acme/gateway", "acme/webshop"]);
+    s().close();
+    const spy = vi.spyOn(backend, "runsRepos");
+    await backend.watchSetContainers(GITHUB, [{ containerId: "acme/infra", watched: true }]);
+    await settle();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("start in the repository of the newest linked change when it is watched", async () => {
+    await github("everything");
+    await s().begin({ item: itemRef("CA-402") });
+    expect(s().repo).toBe("acme/webshop");
+    expect(s().review?.spec.repo).toBe("acme/webshop");
+  });
+
+  it("report that GitHub is not connected", async () => {
+    await setup({ runs: { seed: "empty" } });
+    await s().begin({ item: CA });
+    const { repos, reposStatus } = s();
+    expect([repos, reposStatus]).toEqual([[], "ready"]);
+    expect(repoShortage({ repos, loading: false, failed: false, githubConnected: useWorkspace.getState().connections.some((c) => c.kind === "github") })).toBe("connect");
+  });
+
+  it("report that GitHub is connected with nothing watched", async () => {
+    await github("selected");
+    await s().begin({ item: CA });
+    expect(s().repos).toEqual([]);
+    const connected = useWorkspace.getState().connections.some((c) => c.kind === "github");
+    expect(repoShortage({ repos: s().repos, loading: false, failed: false, githubConnected: connected })).toBe("watch");
+  });
+
+  it("report a failure to load, keep the sheet usable, and recover on retry", async () => {
+    await github("everything");
+    const fail = vi.spyOn(backend, "runsRepos").mockRejectedValueOnce(new Error("the database is locked"));
+    await s().begin({ item: CA });
+    expect(s()).toMatchObject({ open: true, repos: [], reposStatus: "failed", reposError: "the database is locked" });
+    await s().reloadRepos();
+    expect(fail).toHaveBeenCalledTimes(2);
+    expect(s().reposStatus).toBe("ready");
+    expect(s().repos).toContain("acme/webshop");
+  });
+
+  it("show a ticket's own repositories even when loading the watched ones failed", async () => {
+    await setup();
+    vi.spyOn(backend, "runsRepos").mockRejectedValue(new Error("offline"));
+    await s().begin({ item: CA });
+    expect(s().reposStatus).toBe("failed");
+    expect(s().repos).toEqual(["acme/payments", "acme/storefront"]);
   });
 });

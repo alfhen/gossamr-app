@@ -475,6 +475,10 @@ export class MockBackend implements Backend {
     return this.runs.draft(spec, item);
   }
 
+  async runsRepos() {
+    return this.github.watchedRepos();
+  }
+
   async runsClones(repo: string) {
     return this.runs.clones(repo);
   }

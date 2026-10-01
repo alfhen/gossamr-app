@@ -646,6 +646,14 @@ impl Core {
         Ok(out)
     }
 
+    /// The watched repositories of every connection as owner/name, once each (names are not case sensitive), sorted.
+    pub fn watched_repo_names(&self) -> Result<Vec<String>> {
+        let mut names: Vec<String> = self.watched_code_repos()?.into_iter().map(|(_, r)| r).collect();
+        names.sort_by_cached_key(|r| (r.to_ascii_lowercase(), r.clone()));
+        names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        Ok(names)
+    }
+
     /// Open pull requests of a watched repository and those updated in the last month, newest first. A pull request a
     /// sync has already read in full comes with its review outcome and checks.
     pub async fn code_pull_requests(
@@ -1034,6 +1042,21 @@ pub(crate) mod tests {
         lx.sync().await;
         let (links, changed) = lx.core().dev_links_live(&lx.fx.item("CA-208")).await.unwrap();
         assert_eq!((links.len(), changed.len()), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn watched_repo_names_follow_the_watch_mode_and_leave_out_unwatched_and_inaccessible_ones() {
+        let lx = linked(vec![], Some("repo")).await;
+        assert_eq!(lx.core().watched_repo_names().unwrap(), ["acme/gateway", "acme/webshop"], "a small catalog nobody has chosen from is watched whole");
+        lx.core().watch_set_mode("github:ann", WatchMode::Selected).await.unwrap();
+        assert!(lx.core().watched_repo_names().unwrap().is_empty());
+        lx.core().watch_set_containers("github:ann", &[WatchChange { container_id: "acme/webshop".into(), watched: Some(true), ..Default::default() }]).await.unwrap();
+        assert_eq!(lx.core().watched_repo_names().unwrap(), ["acme/webshop"]);
+        lx.core().watch_set_containers("github:ann", &[WatchChange { container_id: "acme/gateway".into(), watched: Some(true), ..Default::default() }]).await.unwrap();
+        lx.core().with_code_db("github:ann", |db| db.set_inaccessible("github:ann", &["acme/gateway".to_string()], true)).unwrap();
+        assert_eq!(lx.core().watched_repo_names().unwrap(), ["acme/webshop"], "an inaccessible repository is left out");
+        lx.core().watch_set_mode("github:ann", WatchMode::Everything).await.unwrap();
+        assert_eq!(lx.core().watched_repo_names().unwrap(), ["acme/gateway", "acme/webshop"]);
     }
 
     #[tokio::test]
