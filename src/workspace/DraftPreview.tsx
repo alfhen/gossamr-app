@@ -90,7 +90,7 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
   const item = useWorkspace((s) => (target ? s.items[itemKey(target)] : undefined));
   const statusName = item && p.intent.type === "transition" ? (draftStatus(p, workflowOfItem({ containers }, item))?.name ?? null) : null;
   const open = () => {
-    if (target) showMe(target);
+    if (target) showMe(target, { peek: true });
     else if (p.state.type === "pending" || p.state.type === "applying") showDraft(p.id);
     else if (p.created[0]) showMe(p.created[0]);
   };
