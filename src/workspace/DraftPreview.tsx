@@ -91,7 +91,7 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
   const statusName = item && p.intent.type === "transition" ? (draftStatus(p, workflowOfItem({ containers }, item))?.name ?? null) : null;
   return (
     <div className="grid gap-1.5">
-      <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} onOpen={() => (target ? showMe(target) : setUnfolded(!unfolded))} />
+      <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} onOpen={() => (target ? showMe(target, { peek: true }) : setUnfolded(!unfolded))} />
       {unfolded && <LiveDraftCard proposal={p} />}
     </div>
   );
