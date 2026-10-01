@@ -80,6 +80,21 @@ impl Db {
         Ok(out)
     }
 
+    /// Pull requests and branches of `repo` (compared without regard to case) whose head is one of `head_refs`.
+    pub fn code_changes_for_branch(&self, connection_id: &str, repo: &str, head_refs: &[String]) -> Result<Vec<CodeChange>> {
+        let mut stmt = self.conn.prepare("SELECT data FROM code_changes WHERE connection_id = ?1 AND repo = ?2 COLLATE NOCASE AND kind IN ('pullRequest', 'branch')")?;
+        let rows = stmt.query_map(params![connection_id, repo], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            if let Ok(c) = serde_json::from_str::<CodeChange>(&row?) {
+                if head_refs.contains(&c.head_ref) {
+                    out.push(c);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Deletes changes of repositories outside `keep` that weren't refreshed since `cutoff`, with their links.
     pub fn prune_code_changes(&self, connection_id: &str, keep: &[String], cutoff: &str) -> Result<usize> {
         let clause = super::watch::in_list("repo", keep.len());
@@ -215,6 +230,26 @@ mod tests {
         assert_eq!(db.code_change("github:ann", &b.external_id).unwrap(), Some(b));
         assert_eq!(db.code_change("github:ann", "nope").unwrap(), None);
         assert_eq!(db.code_change_counts("github:ann").unwrap()["acme/webshop"], 2);
+    }
+
+    #[test]
+    fn changes_are_found_by_repository_and_head_branch_only() {
+        let db = Db::in_memory().unwrap();
+        let mut branch = change(3, "acme/webshop", "2026-09-26T00:00:00Z");
+        branch.kind = crate::domain::CodeChangeKind::Branch;
+        branch.external_id = CodeChange::branch_id("acme/webshop", "worktree-x");
+        branch.head_ref = "worktree-x".into();
+        let (mut a, mut b, other) = (change(1, "acme/webshop", "2026-09-20T00:00:00Z"), change(2, "Acme/WebShop", "2026-09-25T00:00:00Z"), change(4, "acme/gateway", "2026-09-25T00:00:00Z"));
+        a.head_ref = "worktree-x".into();
+        b.head_ref = "worktree-x".into();
+        let mut elsewhere = other.clone();
+        elsewhere.head_ref = "worktree-x".into();
+        db.upsert_code_changes(&[a, b, branch, elsewhere, other], "t").unwrap();
+        let mut found: Vec<u64> = db.code_changes_for_branch("github:ann", "acme/webshop", &["worktree-x".into()]).unwrap().iter().map(|c| c.number.unwrap()).collect();
+        found.sort();
+        assert_eq!(found, [1, 2, 3], "the branch counts; the other repository is left out");
+        assert!(db.code_changes_for_branch("github:ann", "acme/webshop", &["nope".into()]).unwrap().is_empty());
+        assert!(db.code_changes_for_branch("github:other", "acme/webshop", &["worktree-x".into()]).unwrap().is_empty());
     }
 
     #[test]

@@ -20,12 +20,14 @@ use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
 pub(crate) mod code;
 mod drafts;
+mod run_results;
 mod pip_runs;
 pub use pip_runs::PipRunAsk;
 mod watch;
 
 pub use code::{CodeRef, CodeService};
 pub use drafts::Edit;
+pub use run_results::RunOutcome;
 pub use watch::{CatalogPage, WatchState};
 
 /// Events this old drop out of the inbox unless they are still unread.

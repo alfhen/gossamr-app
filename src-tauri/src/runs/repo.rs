@@ -242,7 +242,20 @@ esac
         let path = bin.join("git");
         std::fs::write(&path, FAKE_GIT).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        wait_until_executable(&path);
         bin
+    }
+
+    /// A thread that forks while the script is open for writing keeps that handle until it execs, and running the
+    /// script meanwhile fails with ETXTBSY. Try it until it runs.
+    fn wait_until_executable(path: &Path) {
+        for _ in 0..500 {
+            match std::process::Command::new(path).arg("--version").output() {
+                Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                _ => return,
+            }
+        }
+        panic!("{} is still busy for writing after 5 s", path.display());
     }
 
     pub fn fake_git(dir: &Path) -> Git {

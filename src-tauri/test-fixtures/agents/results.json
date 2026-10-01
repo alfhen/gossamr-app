@@ -1,0 +1,80 @@
+[
+  {
+    "name": "well formed, heading on its own line",
+    "input": "The lag comes from one consumer.\n\nFor Jira:\nAdd a backoff to the consumer and close the alert.",
+    "text": "Add a backoff to the consumer and close the alert.",
+    "fromMarker": true
+  },
+  {
+    "name": "inline text after the heading",
+    "input": "It is the cart rounding.\nFor Jira: close as duplicate.",
+    "text": "close as duplicate.",
+    "fromMarker": true
+  },
+  {
+    "name": "bold heading with the colon inside or outside",
+    "input": "Done.\n\n**For Jira:**\nDefect 1 is merged.\n\n**For Jira**: ignored second",
+    "text": "Defect 1 is merged.",
+    "fromMarker": true
+  },
+  {
+    "name": "markdown heading ends at the next heading",
+    "input": "## Findings\nWrong rounding.\n\n### For Jira\n- Defect 1 merged in #515\n- Defect 2 pending\n\n## Next steps\nDo more.",
+    "text": "- Defect 1 merged in #515\n- Defect 2 pending",
+    "fromMarker": true
+  },
+  {
+    "name": "section in the middle ends at a label line",
+    "input": "Summary line.\nFor Jira: needs a config change.\nSecond line of the note.\nNext steps:\nRun the migration.",
+    "text": "needs a config change.\nSecond line of the note.",
+    "fromMarker": true
+  },
+  {
+    "name": "case does not matter",
+    "input": "for jira: lower case works",
+    "text": "lower case works",
+    "fromMarker": true
+  },
+  {
+    "name": "no section falls back to the whole answer",
+    "input": "  The ACL policy is still pending.\n\n\n\nNothing else.  ",
+    "text": "The ACL policy is still pending.\n\nNothing else.",
+    "fromMarker": false
+  },
+  {
+    "name": "empty result",
+    "input": "",
+    "text": "",
+    "fromMarker": false
+  },
+  {
+    "name": "markup is removed and code is kept",
+    "input": "For Jira:\n<p>Set <b>retry</b> to 3</p><br>in <code>queue.toml</code>. Type is List<String>.\n**Important** bit",
+    "text": "Set retry to 3\n\nin queue.toml. Type is List<String>.\nImportant bit",
+    "fromMarker": true
+  },
+  {
+    "name": "terminal escapes and control characters",
+    "input": "For Jira: \u001b[31mred\u001b[0m text\u0000 with\u0007 a bell\r\nand a second line",
+    "text": "red text with a bell\nand a second line",
+    "fromMarker": true
+  },
+  {
+    "name": "secrets are masked",
+    "input": "For Jira: Authorization: Bearer abc.def.ghi",
+    "text": "Authorization: [redacted]",
+    "fromMarker": true
+  },
+  {
+    "name": "text that is not ascii",
+    "input": "For Jira: Søren fandt fejlen i håndteringen — 日本語のテキスト 🚀",
+    "text": "Søren fandt fejlen i håndteringen — 日本語のテキスト 🚀",
+    "fromMarker": true
+  },
+  {
+    "name": "a rule ends the section",
+    "input": "For Jira: keep this\n---\nnot this",
+    "text": "keep this",
+    "fromMarker": true
+  }
+]
