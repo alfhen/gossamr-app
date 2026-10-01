@@ -11,7 +11,6 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 
-#[cfg(not(test))]
 const SERVICE: &str = "dk.alfhen.gossamr";
 const VAULT_ACCOUNT: &str = "vault";
 
@@ -104,7 +103,11 @@ impl Vault {
 
     fn read_vault(&self) -> Result<Doc> {
         match self.backend.read(VAULT_ACCOUNT)? {
-            Some(json) => Ok(serde_json::from_str(&json)?),
+            Some(json) => serde_json::from_str(&json).map_err(|_| {
+                Error::KeychainUnavailable(format!(
+                    "the saved vault is damaged and was left untouched; to start over, delete the \"{VAULT_ACCOUNT}\" item for {SERVICE} in Keychain Access and restart"
+                ))
+            }),
             None => Ok(Doc::default()),
         }
     }
@@ -502,7 +505,8 @@ mod tests {
         let fake = Fake::default();
         fake.put(VAULT_ACCOUNT, "not json");
         let v = vault(&fake);
-        assert!(v.load::<String>("a").is_err());
+        let message = v.load::<String>("a").unwrap_err().to_string();
+        assert!(message.contains("Keychain Access"));
         assert!(v.save("a", &"x").is_err());
         assert_eq!(fake.get(VAULT_ACCOUNT).as_deref(), Some("not json"));
     }
