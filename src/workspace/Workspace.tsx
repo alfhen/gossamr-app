@@ -116,7 +116,10 @@ export function Workspace({ backend }: { backend: Backend }) {
   }, [backend]);
 
   useEffect(() => {
-    if (!agentsEnabled) return;
+    if (!agentsEnabled) {
+      if (useTabs.getState().route === "agents") useTabs.getState().setRoute("workspace");
+      return;
+    }
     useRuns.getState().init(backend);
     return () => useRuns.getState().dispose();
   }, [backend, agentsEnabled]);
