@@ -21,7 +21,7 @@ export function AgentRowHeader() {
   );
 }
 
-export function AgentRow({ run, now, selected, position, total, ticketTitle, onSelect, onOpen }: AgentItemProps) {
+export function AgentRow({ run, now, selected, position, total, ticketTitle, onOpen }: AgentItemProps) {
   const view = stateView(run, now);
   const title = runTitle(run, ticketTitle);
   const tokens = formatTokens(run.tokens);
@@ -35,7 +35,7 @@ export function AgentRow({ run, now, selected, position, total, ticketTitle, onS
       aria-posinset={position}
       aria-setsize={total}
       aria-current={selected ? "true" : undefined}
-      onClick={onSelect}
+      onClick={onOpen}
       onKeyDown={onActivate(onOpen)}
       style={selected ? { boxShadow: "inset 3px 0 0 var(--color-ws-accent)" } : undefined}
       className={`${ROW_GRID} cursor-pointer border-b border-ws-sep py-2 outline-offset-[-2px] last:border-b-0 hover:bg-ws-hover ${selected ? "bg-ws-sel" : "bg-ws-win"}`}
