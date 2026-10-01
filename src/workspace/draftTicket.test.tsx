@@ -5,7 +5,7 @@ import { docFromText } from "../lib/docs";
 import type { ContainerRef, Proposal, WorkContainer } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftPeekView, type DraftPeekViewProps } from "./DraftPeek";
-import { createdItemKey, draftIdOf, draftItem, draftKey, draftSections, editFor, fieldsOf, showsAsDraftTicket } from "./draftTicket";
+import { createdItemKey, docMentions, draftIdOf, draftItem, draftKey, draftSections, editFor, fieldsOf, showsAsDraftTicket } from "./draftTicket";
 import { useTabs } from "./tabsStore";
 
 const container = (id: string): ContainerRef => ({ connectionId: "mock", externalId: id });
@@ -96,6 +96,17 @@ describe("the edit a change becomes", () => {
     const sam = { accountId: "sam", name: "Sam" };
     const edit = editFor(p, { ...same, body: "Ask @Sam first", mentions: [sam, { accountId: "gone", name: "Gone" }] });
     expect(edit).toEqual({ type: "create", body: "Ask @Sam first", mentions: [sam] });
+  });
+
+  it("keeps the mentions already in the description when its text is edited", () => {
+    const sam = { type: "mention" as const, person: { connectionId: "mock", accountId: "sam" }, name: "Sam" };
+    const body = { blocks: [{ type: "paragraph" as const, content: [sam, { type: "text" as const, text: " please look", marks: [] }] }, { type: "quote" as const, content: [{ type: "paragraph" as const, content: [sam] }] }] };
+    expect(docMentions(body)).toEqual([{ accountId: "sam", name: "Sam" }]);
+    const withMention = create();
+    withMention.intent.fields.body = body;
+    const f = fieldsOf(withMention);
+    expect(f.body).toBe("@Sam please look\n\n@Sam");
+    expect(editFor(withMention, { ...f, body: "@Sam please look soon" })).toEqual({ type: "create", body: "@Sam please look soon", mentions: [{ accountId: "sam", name: "Sam" }] });
   });
 
   it("reads the real ticket of an applied draft by its key", () => {

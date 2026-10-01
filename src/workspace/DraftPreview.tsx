@@ -92,7 +92,7 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
   const open = () => {
     if (target) showMe(target, { peek: true });
     else if (p.state.type === "pending" || p.state.type === "applying") showDraft(p.id);
-    else if (p.created[0]) showMe(p.created[0]);
+    else if (p.created[0] && !showMe(p.created[0])) showDraft(p.id);
   };
   return <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} onOpen={open} />;
 }
