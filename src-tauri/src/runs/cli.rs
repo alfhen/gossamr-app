@@ -267,6 +267,10 @@ pub fn parse_job(state_json: &str, timeline: &str) -> JobInfo {
     job
 }
 
+pub fn is_uuid(s: &str) -> bool {
+    s.len() == 36 && s.bytes().enumerate().all(|(i, b)| if matches!(i, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() })
+}
+
 /// `2.1.286 (Claude Code)` gives `(2, 1, 286)`.
 pub fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
     let mut parts = s.split_whitespace().next()?.split('.').map(|p| p.parse::<u32>().ok());
@@ -280,6 +284,8 @@ pub trait ClaudeCli: Send + Sync {
     async fn supports_bg(&self) -> CliResult<bool>;
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched>;
     async fn agents(&self, all: bool) -> CliResult<Vec<AgentEntry>>;
+    /// Wakes a stopped session with `message`. Carries no other flag: any flag makes `claude` start a copy.
+    async fn resume(&self, session_id: &str, message: &str, cwd: Option<&Path>) -> CliResult<Launched>;
     async fn stop(&self, id: &ShortId) -> CliResult<()>;
     async fn rm(&self, id: &ShortId) -> CliResult<()>;
     async fn job(&self, config_dir: &Path, id: &ShortId) -> CliResult<Option<JobInfo>>;
@@ -380,6 +386,17 @@ impl ClaudeCli for SystemCli {
     async fn agents(&self, all: bool) -> CliResult<Vec<AgentEntry>> {
         let args: &[&str] = if all { &["agents", "--json", "--all"] } else { &["agents", "--json"] };
         parse_agents(&self.succeed(args).await?.stdout)
+    }
+
+    async fn resume(&self, session_id: &str, message: &str, cwd: Option<&Path>) -> CliResult<Launched> {
+        if !is_uuid(session_id) {
+            return Err(CliError::Output(format!("not a session id: {session_id}")));
+        }
+        let out = self.run(&["--bg", "--resume", session_id, "--", message], cwd, LAUNCH).await?;
+        if !out.ok {
+            return Err(out.failure());
+        }
+        parse_launch(&out.stdout).ok_or_else(|| CliError::Unparseable { stdout: cut(&out.stdout, STDOUT_KEPT) })
     }
 
     async fn stop(&self, id: &ShortId) -> CliResult<()> {

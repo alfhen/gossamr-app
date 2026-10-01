@@ -156,6 +156,10 @@ impl ClaudeCli for FakeCli {
         Ok(s.sessions.clone())
     }
 
+    async fn resume(&self, _session_id: &str, _message: &str, _cwd: Option<&Path>) -> CliResult<Launched> {
+        Err(CliError::Output("todo".into()))
+    }
+
     async fn stop(&self, id: &ShortId) -> CliResult<()> {
         let mut s = self.0.lock().unwrap();
         s.stops.push(id.to_string());

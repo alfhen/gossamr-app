@@ -252,6 +252,10 @@ impl ClaudeCli for SignedIn {
         self.0.agents(all).await
     }
 
+    async fn resume(&self, session_id: &str, message: &str, cwd: Option<&Path>) -> CliResult<Launched> {
+        self.0.resume(session_id, message, cwd).await
+    }
+
     async fn stop(&self, id: &ShortId) -> CliResult<()> {
         self.0.stop(id).await
     }
@@ -393,4 +397,94 @@ async fn started_listing(cli: &SignedIn, id: &ShortId, worktree: &Path) -> bool 
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     false
+}
+
+fn claude_in(env: &RunEnv, binary: &Path, cwd: &Path, args: &[&str]) -> (bool, String) {
+    let mut cmd = Command::new(binary);
+    cmd.args(args).current_dir(cwd).stdin(std::process::Stdio::null());
+    env.apply(&mut cmd);
+    let out = cmd.output().expect("claude runs");
+    (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+struct Cleanup {
+    binary: PathBuf,
+    env: RunEnv,
+    cwd: PathBuf,
+    name: String,
+}
+
+impl Cleanup {
+    fn listed(&self) -> Vec<String> {
+        let (_, json) = claude_in(&self.env, &self.binary, &self.cwd, &["agents", "--json", "--all"]);
+        super::cli::parse_agents(&json).unwrap_or_default().into_iter().filter(|e| e.name.as_deref() == Some(self.name.as_str())).filter_map(|e| e.id).collect()
+    }
+}
+
+/// Stops and removes every session the test named, including a copy a faulty resume would have started.
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        for id in self.listed() {
+            claude_in(&self.env, &self.binary, &self.cwd, &["stop", &id]);
+            for _ in 0..15 {
+                if claude_in(&self.env, &self.binary, &self.cwd, &["rm", &id]).0 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+        let left = self.listed();
+        assert!(left.is_empty(), "the test's sessions were not removed: {left:?}");
+    }
+}
+
+/// Uses the person's real, signed-in config and a trusted folder (`~/Code`), so it does model work with one short
+/// prompt that uses no tools. Everything it starts is stopped and removed.
+#[tokio::test]
+#[ignore = "runs the real claude with the real config and does model work"]
+async fn real_stop_then_resume_continues_same_session() {
+    let home = dirs::home_dir().expect("home");
+    let cwd = home.join("Code");
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let env = capture(&shell).await.expect("shell environment");
+    let binary = super::binary::find_claude().expect("claude is installed");
+    let cli = SystemCli::new(binary.clone(), Arc::new(env.clone()));
+    let config = cli.auth_status().await.unwrap().config_directory.expect("config directory");
+    let name = format!("gossamr-spike-{}", std::process::id());
+    let _cleanup = Cleanup { binary: binary.clone(), env: env.clone(), cwd: cwd.clone(), name: name.clone() };
+    let prompt = "Do not use any tools. Reply with exactly one yes/no question: Shall I continue? Then wait for my answer.";
+    let (ok, out) = claude_in(&env, &binary, &cwd, &["--bg", "--name", &name, "--", prompt]);
+    assert!(ok, "launch: {out}");
+    let id = super::cli::parse_launch_stdout(&out).unwrap_or_else(|| panic!("no session id in: {out}"));
+
+    let wait = |what: &'static str, want: &'static str| {
+        let (cli, id) = (&cli, &id);
+        async move {
+            let deadline = Instant::now() + Duration::from_secs(120);
+            loop {
+                let rows = cli.agents(true).await.unwrap();
+                if let Some(e) = rows.into_iter().find(|e| e.id.as_deref() == Some(id.as_str()) && e.state.as_deref() == Some(want)) {
+                    return e;
+                }
+                assert!(Instant::now() < deadline, "timed out waiting for {what}");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    };
+    let asked = wait("the question", "blocked").await;
+    let session = asked.session_id.clone().expect("session id");
+    cli.stop(&id).await.unwrap();
+    assert_eq!(wait("stopped", "stopped").await.pid, None);
+    tokio::time::sleep(super::service::Timing::default().stop_settle).await;
+
+    let said = cli.resume(&session, "Yes. Reply with the single word OK and nothing else.", Some(&cwd)).await.expect("resume");
+    assert_eq!(said.short_id, id, "resume answered with another session: a copy was started");
+    let rows = cli.agents(true).await.unwrap();
+    let ours: Vec<_> = rows.iter().filter(|e| e.name.as_deref() == Some(name.as_str())).collect();
+    assert_eq!(ours.len(), 1, "a copy was started: {ours:?}");
+    assert_eq!((ours[0].id.as_deref(), ours[0].session_id.as_deref()), (Some(id.as_str()), Some(session.as_str())));
+    wait("done", "done").await;
+    let timeline = std::fs::read_to_string(config.join("jobs").join(id.as_str()).join("timeline.jsonl")).unwrap();
+    assert!(timeline.contains("Reply with the single word OK"), "the answer is in the timeline:\n{timeline}");
+    let job = cli.job(&config, &id).await.unwrap().expect("job");
+    assert!(job.result.as_deref().is_some_and(|r| r.contains("OK")), "result: {:?}", job.result);
 }

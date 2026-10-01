@@ -11,7 +11,7 @@ use crate::runs::repo::testing::{clone_with_origin, install_fake_git};
 use crate::runs::testing::{FakeCli, Outcome};
 use crate::runs::toolchain::{FixedToolchain, ToolchainError};
 
-const FAST: Timing = Timing { recover_window: Duration::from_millis(300), worktree_grace: Duration::from_millis(300), poll: Duration::from_millis(20) };
+const FAST: Timing = Timing { recover_window: Duration::from_millis(300), worktree_grace: Duration::from_millis(300), poll: Duration::from_millis(20), stop_wait: Duration::from_millis(200), stop_settle: Duration::ZERO };
 const ORIGIN: &str = "https://github.com/acme/webshop.git";
 
 struct Rig {
