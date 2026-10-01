@@ -205,7 +205,7 @@ function OpenDraft({ proposal: p, ...motion }: { proposal: Create } & Motion) {
     setFields((f) => ({
       title: f.title === was.title ? now.title : f.title,
       body: f.body === was.body ? now.body : f.body,
-      mentions: f.body === was.body ? [] : f.mentions,
+      mentions: f.body === was.body ? now.mentions : f.mentions,
       kind: f.kind === was.kind ? now.kind : f.kind,
       container: containerKey(f.container) === containerKey(was.container) ? now.container : f.container,
     }));
