@@ -1,6 +1,7 @@
 import type { CloneChoice, FreshCopy, CodeChange, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
 import { itemRef } from "./mockConnector";
 import { commentText, jiraNote, ticketKeys } from "./mockRunResult";
+import { answerProblem } from "../lib/answer";
 import { docFromText, docText } from "../lib/docs";
 import type { MockProposals } from "./mockProposals";
 
@@ -425,7 +426,8 @@ export class MockRuns {
     if (!run) throw new Error("that run no longer exists");
     const again = run.state === "stopped" && !!run.unsentAnswer;
     if (run.state !== "needsAnswer" && !again) throw new Error(run.state === "needsPermission" ? "A permission prompt can only be answered in Terminal." : `This run is ${run.state}, so it isn't waiting for an answer.`);
-    if (!text.trim() || text.length > 4000) throw new Error("Write an answer first.");
+    const problem = answerProblem(text);
+    if (problem) throw new Error(problem);
     const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now() });
     this.changed();
     return next;
