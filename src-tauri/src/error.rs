@@ -4,6 +4,8 @@ use serde::{Serialize, Serializer};
 pub enum Error {
     #[error("Keychain error: {0}")]
     Keychain(#[from] keyring::Error),
+    #[error("Couldn't read the Keychain ({0}). Gossamr won't ask again until it is restarted")]
+    KeychainUnavailable(String),
     #[error("Network error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("Unexpected response: {0}")]
