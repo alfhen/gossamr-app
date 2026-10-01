@@ -30,7 +30,7 @@ pub use proposal::{
     Revised, Revision, StateKind, Verdict,
 };
 pub use run::{
-    render_prompt, ticket_snapshot, Run, RunEvent, RunFailure, RunKind, RunQuery, RunReview, RunSpec, RunState, FOCUS_LIMIT, GUARD, GUARD_VERSION, INVESTIGATE_INSTRUCTION,
+    allowed_kinds, render_prompt, ticket_snapshot, ClonePlan, Run, RunEvent, RunFailure, RunKind, RunQuery, RunReview, RunSpec, RunState, FOCUS_LIMIT, GUARD, GUARD_VERSION, INVESTIGATE_INSTRUCTION,
     TICKET_BLOCK_LIMIT,
 };
 pub use watch::{
