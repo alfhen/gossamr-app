@@ -94,6 +94,17 @@ export class MockProposals {
       if (!edit.summaries.length || edit.summaries.some((s) => !s.trim())) throw new Error("list at least one subtask");
       return this.set(id, { intent: { ...intent, summaries: edit.summaries }, error: null });
     }
+    if (edit.type === "create" && intent.type === "create") {
+      if (edit.title !== undefined && !edit.title.trim()) throw new Error("a new item needs a title");
+      if (edit.container && edit.container.connectionId !== CONNECTION) throw new Error("a new item can't move to another connection");
+      const fields = {
+        ...intent.fields,
+        ...(edit.title !== undefined ? { title: edit.title.trim() } : {}),
+        ...(edit.body !== undefined ? { body: docFromText(edit.body) } : {}),
+        ...(edit.kind ? { kind: edit.kind } : {}),
+      };
+      return this.set(id, { intent: { ...intent, container: edit.container ?? intent.container, fields }, error: null });
+    }
     throw new Error("that edit doesn't fit this draft");
   }
 

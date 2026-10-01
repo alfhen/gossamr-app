@@ -394,6 +394,8 @@ export class MockBackend implements Backend {
         const { created } = await this.createSubtasks(intent.parent.key, rest);
         return created.map((key) => ({ connectionId: "mock", externalId: key, key }));
       }
+      case "create":
+        return [this.connector.createItem(intent.container, intent.fields)];
       default:
         throw new Error("the sample data can't apply that");
     }

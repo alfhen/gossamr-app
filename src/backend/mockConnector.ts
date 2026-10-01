@@ -3,6 +3,7 @@ import { compileFilter, itemKey, type FilterContext } from "../lib/filter";
 import { canMove, nextStatuses, statusOf } from "../lib/workflow";
 import { MockWatch, type MockOptions } from "./mockWatch";
 import type {
+  NewWorkItem,
   CatalogPage,
   ContainerRef,
   FeedEntry,
@@ -603,6 +604,37 @@ export class MockConnector {
     this.items.set(ref.externalId, { ...item, commentCount: item.commentCount + 1, lastCommenter: this.me, updated: at });
     this.record(ref.externalId, "commentAdded", "me", at, doc ? { text, doc } : { text });
     this.onChange({ connectionId: MOCK_CONNECTION });
+  }
+
+  /** Creates an item in the first status of `container`'s workflow. */
+  createItem(container: ContainerRef, fields: NewWorkItem): ItemRef {
+    const wf = this.workflow(container);
+    if (!wf) throw new Error(`${container.externalId} isn't in the sample data`);
+    this.nextNumber[container.externalId] ??= 1;
+    const key = `${container.externalId}-${this.nextNumber[container.externalId]++}`;
+    const at = new Date().toISOString();
+    this.items.set(key, {
+      item: itemRef(key),
+      container,
+      kind: fields.kind,
+      title: fields.title,
+      body: fields.body,
+      status: wf.statuses[0],
+      assignee: fields.assignee,
+      reporter: this.me,
+      priority: fields.priority,
+      parent: fields.parent,
+      labels: fields.labels,
+      created: at,
+      updated: at,
+      links: [],
+      commentCount: 0,
+      lastCommenter: null,
+      extra: null,
+    });
+    this.record(key, "itemCreated", "me", at, null);
+    this.onChange({ connectionId: MOCK_CONNECTION });
+    return itemRef(key);
   }
 
   /** Creates tasks under `parent`, in the first status of its project. */

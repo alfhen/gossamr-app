@@ -1,11 +1,11 @@
-import { useState } from "react";
 import { docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import { targetOf } from "../lib/proposals";
 import type { Proposal } from "../types";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { draftStatus } from "./boardLogic";
-import { draftTitle, LiveDraftCard } from "./DraftCard";
+import { draftTitle } from "./DraftCard";
+import { showDraft } from "./draftTicket";
 import { showMe } from "./jump";
 
 const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", link: "✦" };
@@ -53,7 +53,8 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, onOpen }: P
   const target = targetOf(p.intent);
   const pending = state === "pending" || state === "applying";
   const revision = p.revisions[p.revisions.length - 1];
-  const go = pending ? (target ? `Review on ${target.key} →` : "Review draft →") : target ? `Open ${target.key} →` : "";
+  const made = p.intent.type === "create" && state === "applied" ? p.created[0] : undefined;
+  const go = pending ? (target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
   return (
     <button
       type="button"
@@ -82,17 +83,16 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, onOpen }: P
   );
 }
 
-/** The preview wired to the workspace: opening it shows the ticket, or unfolds the full card for a ticket that doesn't exist yet. */
+/** The preview wired to the workspace: opening it shows the ticket, or the draft of a ticket that doesn't exist yet. */
 export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
   const containers = useWorkspace((s) => s.containers);
   const target = targetOf(p.intent);
   const item = useWorkspace((s) => (target ? s.items[itemKey(target)] : undefined));
-  const [unfolded, setUnfolded] = useState(false);
   const statusName = item && p.intent.type === "transition" ? (draftStatus(p, workflowOfItem({ containers }, item))?.name ?? null) : null;
-  return (
-    <div className="grid gap-1.5">
-      <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} onOpen={() => (target ? showMe(target, { peek: true }) : setUnfolded(!unfolded))} />
-      {unfolded && <LiveDraftCard proposal={p} />}
-    </div>
-  );
+  const open = () => {
+    if (target) showMe(target, { peek: true });
+    else if (p.state.type === "pending" || p.state.type === "applying") showDraft(p.id);
+    else if (p.created[0]) showMe(p.created[0]);
+  };
+  return <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} onOpen={open} />;
 }
