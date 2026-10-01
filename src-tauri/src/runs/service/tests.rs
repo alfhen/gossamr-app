@@ -261,6 +261,7 @@ async fn nothing_launches_when_agents_are_off() {
     assert!(rig.svc.retry_launch(&run.id).await.is_err());
     assert!(rig.svc.preflight(None).await.is_err());
     assert!(rig.svc.clones("acme/webshop").await.is_err());
+    assert!(rig.svc.repos().is_err());
     assert_eq!(rig.get(&run).await.state, RunState::Queued);
     assert_eq!(rig.cli.launches(), 0);
 }
@@ -523,6 +524,12 @@ async fn clones_of_a_watched_repository_are_found_and_the_chosen_one_comes_first
     std::fs::remove_dir_all(&other).unwrap();
     rig.svc.clones.clear();
     assert_eq!(rig.svc.clones("acme/webshop").await.unwrap().picked, None, "a choice that is no longer a clone is ignored");
+}
+
+#[tokio::test]
+async fn the_repositories_to_run_in_are_the_watched_ones() {
+    let rig = ready().await;
+    assert_eq!(rig.svc.repos().unwrap(), ["acme/webshop"]);
 }
 
 #[tokio::test]

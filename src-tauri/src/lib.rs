@@ -526,6 +526,12 @@ async fn runs_retry_launch(runs: State<'_, RunsState>, id: String) -> Result<Run
     runs.retry_launch(&id).await
 }
 
+/// Every watched GitHub repository as owner/name.
+#[tauri::command]
+async fn runs_repos(runs: State<'_, RunsState>) -> Result<Vec<String>> {
+    runs.repos()
+}
+
 /// Local clones of a watched repository.
 #[tauri::command]
 async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneChoice> {
@@ -931,6 +937,7 @@ pub fn run() {
             runs_preflight,
             runs_start_now,
             runs_retry_launch,
+            runs_repos,
             runs_clones,
             runs_pick_clone,
             runs_suggest_name,

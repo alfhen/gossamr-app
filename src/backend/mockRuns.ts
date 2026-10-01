@@ -155,6 +155,8 @@ const CLONES: Record<string, LocalClone[]> = {
     { path: "/Users/sample/Developer/payments", branch: "main", dirty: false, defaultBranch: "main" },
   ],
   "acme/ops": [],
+  "acme/webshop": [{ path: "/Users/sample/Code/webshop", branch: "main", dirty: false, defaultBranch: "main" }],
+  "acme/gateway": [{ path: "/Users/sample/Code/gateway", branch: "main", dirty: false, defaultBranch: "main" }],
 };
 
 const LIVE: RunState[] = ["queued", "launching", "working", "needsAnswer", "needsPermission", "systemBlocked"];

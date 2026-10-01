@@ -337,6 +337,10 @@ export class JiraBackend implements Backend {
     return invoke<Proposal>("runs_draft", { spec, item });
   }
 
+  runsRepos() {
+    return invoke<string[]>("runs_repos");
+  }
+
   runsClones(repo: string) {
     return invoke<CloneChoice>("runs_clones", { repo });
   }

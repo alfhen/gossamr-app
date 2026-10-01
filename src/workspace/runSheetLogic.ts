@@ -1,5 +1,5 @@
 import { itemKey } from "../lib/filter";
-import type { ItemRef, Preflight, Proposal, Run, RunKind, RunReview, RunSpec } from "../types";
+import type { DevLink, ItemRef, Preflight, Proposal, Run, RunKind, RunReview, RunSpec } from "../types";
 import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
@@ -214,13 +214,37 @@ export function repoChoices(watched: readonly string[], runs: readonly Pick<Run,
   return [...new Set([...watched, ...runs.map((r) => r.spec.repo)])].sort((a, b) => a.localeCompare(b));
 }
 
-/** The repository to start from without asking: the one this ticket's last run used, else the one used last, else the only one. */
-export function defaultRepo(options: readonly string[], item: ItemRef | null, runs: readonly Pick<Run, "item" | "spec" | "queuedAt">[], lastUsed: string | null): string | null {
+/** The watched repository of the most recently updated change linked to a ticket, spelled as it is watched. */
+export function linkedRepo(links: readonly Pick<DevLink, "change">[], watched: readonly string[]): string | null {
+  const newest = [...links].sort((a, b) => b.change.updatedAt.localeCompare(a.change.updatedAt));
+  for (const { change } of newest) {
+    const found = watched.find((w) => w.toLowerCase() === change.repo.toLowerCase());
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * The repository to start from without asking: the one this ticket's last run used, else the one its newest linked
+ * change is in, else the one used last, else the only one.
+ */
+export function defaultRepo(options: readonly string[], item: ItemRef | null, runs: readonly Pick<Run, "item" | "spec" | "queuedAt">[], lastUsed: string | null, linked: string | null = null): string | null {
   const known = (repo: string | null | undefined): repo is string => !!repo && options.includes(repo);
   const own = item ? runs.filter((r) => r.item && itemKey(r.item) === itemKey(item)).sort((a, b) => b.queuedAt.localeCompare(a.queuedAt))[0]?.spec.repo : null;
   if (known(own)) return own;
+  if (known(linked)) return linked;
   if (known(lastUsed)) return lastUsed;
   return options.length === 1 ? options[0] : null;
+}
+
+export type RepoShortage = "loading" | "failed" | "connect" | "watch";
+
+/** Why the repository list is empty, and so what to do next; null while there is something to choose. */
+export function repoShortage(p: { repos: readonly string[]; loading: boolean; failed: boolean; githubConnected: boolean }): RepoShortage | null {
+  if (p.loading) return p.repos.length > 0 ? null : "loading";
+  if (p.failed) return "failed";
+  if (p.repos.length > 0) return null;
+  return p.githubConnected ? "watch" : "connect";
 }
 
 export const worktreeBranch = (name: string) => `worktree-${name}`;

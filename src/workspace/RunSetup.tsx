@@ -5,8 +5,10 @@ import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } fro
 import { KIND_LABEL } from "./agentsLogic";
 import { PromptParts } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
-import { COPY, START_STEPS, launchCommand, savedAsTyped, startBlock, worktreeBranch } from "./runSheetLogic";
+import { COPY, START_STEPS, launchCommand, repoShortage, savedAsTyped, startBlock, worktreeBranch, type RepoShortage } from "./runSheetLogic";
 import { useRunSetup, type SetupPhase } from "./runSetupStore";
+import { useTabs } from "./tabsStore";
+import { useWorkspace } from "../workspaceStore";
 
 const KINDS: { kind: RunKind; note: string }[] = [
   { kind: "investigate", note: "Read the code and logs, change nothing, report" },
@@ -24,6 +26,8 @@ export interface SetupActions {
   start(): void;
   chooseRepo(repo: string): void;
   chooseClone(path: string): void;
+  retryRepos(): void;
+  openSettings(): void;
   dismissChanged(): void;
   /** Saves what is in the instruction box or the base field, when it differs from the draft. */
   commit(): void;
@@ -35,6 +39,9 @@ export interface SetupViewProps {
   kind: RunKind;
   repo: string | null;
   repos: readonly string[];
+  /** Why there is nothing to choose, or that the list could not be loaded; null when there is a choice. */
+  shortage: RepoShortage | null;
+  reposError: string | null;
   /** The repository can be changed here only when this sheet made the draft. */
   repoEditable: boolean;
   choice: CloneChoice | null;
@@ -53,6 +60,29 @@ export interface SetupViewProps {
   wide: boolean;
   onWide(): void;
   on: SetupActions;
+}
+
+const SHORTAGE_COPY: Record<Exclude<RepoShortage, "loading" | "failed">, string> = {
+  connect: "GitHub isn't connected. Connect it in Settings and watch the repository the agent should work in.",
+  watch: "GitHub is connected, but no repository is watched yet. Choose the repositories to watch in Settings.",
+};
+
+function RepoShortageNote({ shortage, error, on }: { shortage: RepoShortage; error: string | null; on: SetupActions }) {
+  if (shortage === "loading") return <p className="m-0 text-ws-ink2">Loading your repositories…</p>;
+  if (shortage === "failed") {
+    return (
+      <div role="alert" className="flex flex-wrap items-center gap-2 text-ws-ink2">
+        <span>Couldn't load the watched repositories{error ? `: ${error}` : "."}</span>
+        <Btn onClick={on.retryRepos}>Retry</Btn>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-ws-ink2">
+      <span>{SHORTAGE_COPY[shortage]}</span>
+      <Btn onClick={on.openSettings}>Open Settings</Btn>
+    </div>
+  );
 }
 
 function Where({ p }: { p: SetupViewProps }) {
@@ -79,7 +109,7 @@ function Where({ p }: { p: SetupViewProps }) {
             <span className="font-mono text-ws-ink">{p.repo}</span>
           )}
         </label>
-        {p.repos.length === 0 && <p className="m-0 text-ws-ink2">No repository is watched yet. Connect GitHub and watch the repository in Settings, then come back.</p>}
+        {p.shortage && <RepoShortageNote shortage={p.shortage} error={p.reposError} on={p.on} />}
         {none && (
           <Box tone="warn" label="No clone found">
             <BoxTitle icon="alert" tone="warn">
@@ -335,12 +365,15 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     if (s.review && base.trim() && base.trim() !== savedBase) edit.base = base;
     if (Object.keys(edit).length) await useRunSetup.getState().saveEdit(edit);
   };
+  const githubConnected = useWorkspace((w) => w.connections.some((c) => c.kind === "github"));
   const view: SetupViewProps = {
     item: s.item,
     ticketTitle: ticketTitle ?? s.title,
     kind: s.kind,
     repo: s.repo,
     repos: s.repos,
+    shortage: repoShortage({ repos: s.repos, loading: s.reposStatus === "loading", failed: s.reposStatus === "failed", githubConnected }),
+    reposError: s.reposError,
     repoEditable: s.ownDraft || !s.proposalId,
     choice: s.choice,
     review: s.review,
@@ -363,6 +396,11 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
       start: () => void start(),
       chooseRepo: (repo) => void useRunSetup.getState().chooseRepo(repo),
       chooseClone: (path) => void useRunSetup.getState().chooseClone(path),
+      retryRepos: () => void useRunSetup.getState().reloadRepos(),
+      openSettings: () => {
+        useRunSetup.getState().close();
+        useTabs.getState().openSettings("watching");
+      },
       dismissChanged: () => useRunSetup.getState().dismissChanged(),
       commit: () => void commit(),
     },

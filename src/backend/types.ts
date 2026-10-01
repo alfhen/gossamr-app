@@ -186,6 +186,8 @@ export interface Backend {
   runsPreflight(spec: RunSpec | null): Promise<Preflight>;
   /** Drafts a run by hand. The backend fills in the ticket text; nothing starts until `runsApprove`. */
   runsDraft(spec: RunSpec, item: ItemRef | null): Promise<Proposal>;
+  /** Every repository watched on any GitHub connection as owner/name, sorted. */
+  runsRepos(): Promise<string[]>;
   /** Local clones of a watched repository, the one the person chose first. */
   runsClones(repo: string): Promise<CloneChoice>;
   runsPickClone(repo: string, path: string): Promise<void>;
