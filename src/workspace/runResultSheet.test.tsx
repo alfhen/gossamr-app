@@ -8,6 +8,8 @@ import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
 import { DraftCard } from "./DraftCard";
 import { DraftPreview } from "./DraftPreview";
+import { scriptPip } from "../backend/mockPip";
+import { commentWithPipPrompt } from "./runSheetLogic";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -15,7 +17,7 @@ const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOStr
 const seeded = () => new MockBackend().runs.list();
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 1000, result: "Found it.\n\nFor Jira: add a backoff.", error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: iso(2), ...over });
 
-const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn() });
+const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), draftWithPip: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn() });
 
 const outcome = (over: Partial<RunOutcome> = {}): RunOutcome => ({ note: { text: "add a backoff.", fromMarker: true }, keys: ["WEB-9", "CA-2"], change: null, ...over });
 
@@ -106,6 +108,34 @@ describe("What it found", () => {
     expect(disabled(html, "Draft a Jira comment from this")).toBe(true);
     expect(disabled(html, "Draft a blocker")).toBe(false);
     expect(html).toContain("so there is nothing to post");
+  });
+
+  it("offers Draft with Pip under the same rules as the plain draft", () => {
+    expect(disabled(sheet(run("done")), "Draft with Pip")).toBe(false);
+    const noTicket = sheet(run("done", { item: null }));
+    expect(disabled(noTicket, "Draft with Pip")).toBe(true);
+    expect(button(noTicket, "Draft with Pip")).toContain("title=");
+    expect(disabled(sheet(run("done", { result: null }), { outcome: outcome({ note: null, keys: [] }) }), "Draft with Pip")).toBe(true);
+    expect(disabled(sheet(run("done"), { drafting: true }), "Draft with Pip")).toBe(true);
+    for (const state of ["working", "failed"] as const) expect(sheet(run(state, { result: null }))).not.toContain("Draft with Pip");
+  });
+
+  it("names the run and its ticket in the prompt for Pip, and tells it not to claim anything is posted", () => {
+    const r = run("done");
+    const prompt = commentWithPipPrompt(r);
+    expect(prompt).toContain(`run ${r.id}`);
+    expect(prompt).toContain("get_run");
+    expect(prompt).toContain(r.item!.key);
+    expect(prompt).not.toContain(r.result!);
+    expect(prompt).toContain("don't say anything has been posted");
+  });
+
+  it("has the sample Pip answer that prompt with a comment draft on the run's ticket", () => {
+    const r = run("done");
+    const script = scriptPip(commentWithPipPrompt(r), { view: null, item: null, filter: null, selection: [] }, [], [r]);
+    expect(script.draft?.intent).toMatchObject({ type: "comment", item: r.item });
+    expect(script.text).toContain("isn't posted");
+    expect(script.runDraft ?? null).toBeNull();
   });
 
   it("waits while a draft is being made", () => {
