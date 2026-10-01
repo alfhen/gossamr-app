@@ -141,6 +141,10 @@ fn intent_summary(p: &Proposal) -> String {
         }
         Intent::Update { item, .. } => format!("triage update on {}", item.key),
         Intent::Link { from, to, .. } => format!("link {} to {}", from.key, to.key),
+        Intent::StartRun { item, spec, .. } => match item {
+            Some(item) => format!("start an agent on {} in {}", item.key, spec.repo),
+            None => format!("start an agent in {}", spec.repo),
+        },
     }
 }
 
@@ -204,6 +208,7 @@ mod tests {
             revisions: vec![],
             created: vec![],
             error: None,
+            run: None,
         }
     }
 

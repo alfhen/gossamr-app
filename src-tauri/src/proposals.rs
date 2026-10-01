@@ -36,7 +36,7 @@ fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
 
-fn new_id() -> Result<String> {
+pub(crate) fn new_id() -> Result<String> {
     let mut bytes = [0u8; 12];
     getrandom::fill(&mut bytes).map_err(|e| refuse(format!("no randomness available: {e}")))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
@@ -52,11 +52,22 @@ fn check(intent: &Intent) -> Result<()> {
         }
         Intent::Update { patch, .. } if patch.is_empty() => Err(refuse("an update has to change something")),
         Intent::Create { fields, .. } if blank(&fields.title) => Err(refuse("a new item needs a title")),
+        Intent::StartRun { connection_id, item, spec } => {
+            if item.as_ref().is_some_and(|i| i.connection_id != *connection_id) {
+                return Err(refuse("the ticket belongs to another connection"));
+            }
+            spec.validate()
+        }
         _ => Ok(()),
     }
 }
 
 pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
+    // Every draft is stored here, so this is the one place that can keep autopilot from starting an agent.
+    let by_autopilot = matches!(draft.origin, Origin::Autopilot { .. }) || draft.created_by == CreatedBy::Autopilot;
+    if by_autopilot && matches!(draft.intent, Intent::StartRun { .. }) {
+        return Err(refuse("autopilot can't start an agent"));
+    }
     check(&draft.intent)?;
     let p = Proposal {
         id: new_id()?,
@@ -71,6 +82,7 @@ pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
         revisions: vec![],
         created: vec![],
         error: None,
+        run: None,
     };
     db.insert_proposal(&p)?;
     Ok(p)
@@ -80,7 +92,7 @@ fn load(db: &Db, id: &str) -> Result<Proposal> {
     db.proposal(id)?.ok_or_else(|| refuse("that draft no longer exists"))
 }
 
-fn not_pending(p: &Proposal) -> Error {
+pub(crate) fn not_pending(p: &Proposal) -> Error {
     refuse(match &p.state {
         ProposalState::Pending => "that draft is pending",
         ProposalState::Applying => "that draft is being applied right now",
@@ -105,6 +117,9 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
         return Err(refuse("an edit can't change what the draft is about"));
     }
     check(&intent)?;
+    if matches!((&p.intent, &intent), (Intent::StartRun { connection_id: a, .. }, Intent::StartRun { connection_id: b, .. }) if a != b) {
+        return Err(refuse("an edit can't change what the draft is about"));
+    }
     if let (Intent::Subtasks { summaries: old, .. }, Intent::Subtasks { summaries: new, .. }) = (&p.intent, &intent) {
         let made = p.created.len().min(old.len());
         if new.len() < made || new[..made] != old[..made] {
@@ -508,5 +523,68 @@ mod tests {
         skip(&db, &p.id, now()).unwrap();
         assert_eq!(reconcile_pending(&db, &me(), now()).unwrap(), 0);
         assert_eq!(db.proposal(&p.id).unwrap().unwrap().state, ProposalState::Skipped);
+    }
+
+    fn start_run_intent() -> Intent {
+        Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: crate::domain::fixtures::run_spec() }
+    }
+
+    fn run_draft(origin: Origin, by: CreatedBy) -> Draft {
+        Draft { origin, created_by: by, intent: start_run_intent(), label: None, basis: None }
+    }
+
+    #[test]
+    fn autopilot_cannot_create_a_run_draft_but_the_board_and_chat_can() {
+        let db = Db::in_memory().unwrap();
+        let by_autopilot = create(&db, run_draft(Origin::Autopilot { event_id: "e".into() }, CreatedBy::Autopilot), now());
+        assert!(by_autopilot.unwrap_err().to_string().contains("autopilot can't start an agent"));
+        let mislabelled = create(&db, run_draft(Origin::Board, CreatedBy::Autopilot), now());
+        assert!(mislabelled.is_err());
+        assert!(db.proposals(&ProposalQuery::default()).unwrap().is_empty());
+
+        assert!(create(&db, run_draft(Origin::Board, CreatedBy::User), now()).is_ok());
+        assert!(create(&db, run_draft(Origin::Chat { request_id: "r".into() }, CreatedBy::Pip), now()).is_ok());
+        let still_fine = Draft { origin: Origin::Autopilot { event_id: "e".into() }, created_by: CreatedBy::Autopilot, ..comment_draft("1") };
+        assert!(create(&db, still_fine, now()).is_ok(), "autopilot's other drafts are unaffected");
+    }
+
+    #[test]
+    fn a_run_draft_must_have_a_valid_spec_and_stay_in_its_connection() {
+        let db = Db::in_memory().unwrap();
+        let Intent::StartRun { connection_id, item, spec } = start_run_intent() else { panic!() };
+        let with = |spec: crate::domain::RunSpec| Draft { intent: Intent::StartRun { connection_id: connection_id.clone(), item: item.clone(), spec }, ..run_draft(Origin::Board, CreatedBy::User) };
+        assert!(create(&db, with(crate::domain::RunSpec { repo: "a/b/c".into(), ..spec.clone() }), now()).is_err());
+        assert!(create(&db, with(crate::domain::RunSpec { instruction: " ".into(), ..spec.clone() }), now()).is_err());
+        let foreign = Draft { intent: Intent::StartRun { connection_id: "other".into(), item, spec }, ..run_draft(Origin::Board, CreatedBy::User) };
+        assert!(create(&db, foreign, now()).unwrap_err().to_string().contains("another connection"));
+    }
+
+    #[test]
+    fn the_generic_approval_refuses_a_run_draft_and_leaves_it_pending() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, run_draft(Origin::Board, CreatedBy::User));
+        let err = begin(&db, &p.id, now()).unwrap_err().to_string();
+        assert!(err.contains("own button"), "{err}");
+        assert_eq!(db.proposal(&p.id).unwrap().unwrap().state, ProposalState::Pending);
+    }
+
+    #[test]
+    fn an_edit_cannot_move_a_run_draft_to_another_connection() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, run_draft(Origin::Board, CreatedBy::User));
+        let Intent::StartRun { item, spec, .. } = start_run_intent() else { panic!() };
+        let elsewhere = Intent::StartRun { connection_id: "other".into(), item: None, spec: spec.clone() };
+        assert!(edit(&db, &p.id, elsewhere, now()).is_err());
+        let same = Intent::StartRun { connection_id: "c".into(), item, spec: crate::domain::RunSpec { base: "develop".into(), ..spec } };
+        assert_eq!(edit(&db, &p.id, same, now()).unwrap().revisions.len(), 1);
+    }
+
+    #[test]
+    fn a_proposal_stored_before_runs_existed_reads_with_no_run() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, comment_draft("1"));
+        let mut json = serde_json::to_value(&p).unwrap();
+        json.as_object_mut().unwrap().remove("run");
+        assert_eq!(serde_json::from_value::<Proposal>(json).unwrap().run, None);
     }
 }

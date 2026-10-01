@@ -318,6 +318,7 @@ impl WorkTracker for JiraTracker {
                 self.client.link_issues(scope, &body).await?;
                 Ok(Applied::default())
             }
+            Intent::StartRun { .. } => Err(Error::Proposal("a run is approved with its own button, not applied to Jira".into())),
             Intent::Subtasks { parent, summaries } => {
                 let (keys, error) = self.client.create_subtasks(scope, &parent.external_id, summaries).await?;
                 let connection = self.connection_id.as_str();
