@@ -15,7 +15,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::images::ImageInput;
-use crate::agent::{AgentCaps, AgentEvent, AgentProvider, AgentRequest, EventStream, McpEndpoint};
+use crate::agent::{AgentCaps, AgentEvent, AgentProvider, AgentRequest, EventStream};
 use crate::error::{Error, Result};
 use crate::runs::binary::find_claude;
 use stream::parse_line;
@@ -34,10 +34,14 @@ pub struct ClaudeCodeProvider {
     running: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
 }
 
-fn mcp_config(mcp: &McpEndpoint) -> String {
+/// The token is named, not included: Claude expands `${...}` in header values from its own environment, and argv is
+/// readable by every process of the same user through `ps`.
+const TOKEN_ENV: &str = "GOSSAMR_MCP_TOKEN";
+
+fn mcp_config(url: &str) -> String {
     json!({
         "mcpServers": {
-            "gossamr": { "type": "http", "url": mcp.url, "headers": { "Authorization": format!("Bearer {}", mcp.token) } }
+            "gossamr": { "type": "http", "url": url, "headers": { "Authorization": format!("Bearer ${{{TOKEN_ENV}}}") } }
         }
     })
     .to_string()
@@ -58,7 +62,7 @@ fn args(req: &AgentRequest) -> Vec<String> {
         .chain(["--strict-mcp-config", "--mcp-config"])
         .map(String::from)
         .collect();
-    a.extend([mcp_config(&req.mcp), "--append-system-prompt".into(), req.system.clone()]);
+    a.extend([mcp_config(&req.mcp.url), "--append-system-prompt".into(), req.system.clone()]);
     if let Some(id) = &req.session {
         a.extend(["--resume".into(), id.clone()]);
     }
@@ -79,6 +83,7 @@ fn command(binary: PathBuf, req: &AgentRequest) -> Command {
         .current_dir(req.sandbox.path())
         // Launched from inside a Claude Code session, the child would otherwise think it's nested.
         .env_remove("CLAUDECODE")
+        .env(TOKEN_ENV, &req.mcp.token)
         // `--setting-sources` doesn't cover auto memory, which Claude would otherwise put in its prompt.
         .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
     cmd
@@ -182,6 +187,7 @@ impl AgentProvider for ClaudeCodeProvider {
 mod tests {
     use super::*;
     use crate::agent::conformance::{self, Harness};
+    use crate::agent::McpEndpoint;
     use crate::agent::sandbox::Sandbox;
 
     fn request(session: Option<&str>) -> AgentRequest {
@@ -217,7 +223,20 @@ mod tests {
         }
         let servers: serde_json::Value = serde_json::from_str(&after("--mcp-config")).unwrap();
         assert_eq!(servers["mcpServers"].as_object().unwrap().keys().collect::<Vec<_>>(), ["gossamr"]);
-        assert_eq!(servers["mcpServers"]["gossamr"]["headers"]["Authorization"], "Bearer tok");
+        assert_eq!(servers["mcpServers"]["gossamr"]["headers"]["Authorization"], "Bearer ${GOSSAMR_MCP_TOKEN}");
+    }
+
+    #[test]
+    fn the_token_is_in_the_childs_environment_and_nowhere_in_its_arguments() {
+        let mut req = request(Some("s-1"));
+        req.mcp.token = "tok-7f3a91c2".into();
+        req.images = vec![crate::agent::images::tests::png()];
+        let cmd = command(PathBuf::from("claude"), &req);
+        let cmd = cmd.as_std();
+        let argv: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(!argv.iter().any(|a| a.contains("tok-7f3a91c2")), "the token must not reach ps");
+        assert!(cmd.get_envs().any(|(k, v)| k == TOKEN_ENV && v == Some("tok-7f3a91c2".as_ref())));
+        assert!(argv.iter().any(|a| a.contains("${GOSSAMR_MCP_TOKEN}")), "the config names the variable Claude expands");
     }
 
     #[test]
@@ -318,6 +337,38 @@ mod tests {
             hang: "Call list_proposals ten times in a row, one after another, then reply with just: done.".into(),
         };
         conformance::check_all(&provider, &h, &probes).await.unwrap();
+    }
+
+    /// The real CLI expands `${GOSSAMR_MCP_TOKEN}` from its environment into the Authorization header. Runs under a
+    /// fresh, logged-out config dir, so nothing of the person's is used; the CLI connects to the MCP server and then
+    /// stops at the missing login. `cargo test -- --ignored claude_code_sends_the_token_from_its_environment`.
+    #[tokio::test]
+    #[ignore]
+    async fn claude_code_sends_the_token_from_its_environment() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(Mutex::new(String::new()));
+        let sink = seen.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 8192];
+                let n = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await.unwrap_or(0);
+                sink.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]).to_lowercase());
+                let _ = sock.write_all(b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").await;
+            }
+        });
+        let mut req = request(None);
+        req.mcp = McpEndpoint { url: format!("http://127.0.0.1:{port}/mcp/r"), token: "tok-probe-5d1e".into() };
+        let config = std::env::temp_dir().join(format!("gossamr-claude-token-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&config).unwrap();
+        let mut cmd = command(find_claude().expect("claude installed"), &req);
+        let mut child = cmd.env("CLAUDE_CONFIG_DIR", &config).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(b"hi").await.unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(60), child.wait()).await;
+        let _ = child.kill().await;
+        server.abort();
+        let _ = std::fs::remove_dir_all(&config);
+        assert!(seen.lock().unwrap().contains("authorization: bearer tok-probe-5d1e"));
     }
 
     /// A real run with a screenshot attached, sent the way the app sends it. Same prerequisites as above.

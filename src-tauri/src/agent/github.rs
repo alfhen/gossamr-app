@@ -665,7 +665,7 @@ mod tests {
             .insert("run-1".into(), Run::new(lx.fx.scope.clone()));
         let st = McpState {
             core: lx.fx.core.clone(),
-            token: "t".into(),
+            tokens: Default::default(),
             sink: Arc::new(|_| {}),
             view: Arc::new(|_, _, _| {}),
             runs,
