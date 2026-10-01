@@ -249,12 +249,14 @@ const setup = (over: Partial<SetupViewProps> = {}) => {
     shortage: null,
     reposError: null,
     repoEditable: true,
-    choice: { clones: [{ path: "/Users/sample/Code/storefront", branch: "main", dirty: false, defaultBranch: "main" }], picked: null },
+    choice: { clones: [{ path: "/Users/sample/Code/storefront", branch: "main", dirty: false, defaultBranch: "main" }], picked: null, fresh: null },
     review,
     preflight: ok,
     phase: "ready",
     busy: false,
     error: null,
+    cloning: false,
+    cloneError: null,
     changed: false,
     fromPip: false,
     instruction: review?.instruction ?? "",
@@ -263,7 +265,7 @@ const setup = (over: Partial<SetupViewProps> = {}) => {
     onBase: vi.fn(),
     wide: false,
     onWide: vi.fn(),
-    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn() },
+    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn() },
     ...over,
   };
   return renderToStaticMarkup(<RunSetupView {...props} />);
@@ -310,10 +312,46 @@ describe("the setup sheet", () => {
   });
 
   it("says plainly when there is no clone, and turns Start off", () => {
-    const html = setup({ choice: { clones: [], picked: null }, review: null, preflight: null });
+    const html = setup({ choice: { clones: [], picked: null, fresh: null }, review: null, preflight: null });
     expect(html).toContain("No clone of acme/storefront found");
     expect(html).toContain("~/Code, ~/Developer and ~/src");
     expect(disabled(html, "Start agent")).toBe(true);
+  });
+
+  describe("with no clone, the fresh copy", () => {
+    const fresh = { path: "/Users/sample/Gossamr/agents/acme/storefront", command: "git clone https://github.com/acme/storefront.git /Users/sample/Gossamr/agents/acme/storefront", ghFallback: true, occupied: false };
+    const none = (over: Partial<SetupViewProps> = {}, f = fresh) => setup({ choice: { clones: [], picked: null, fresh: f }, review: null, preflight: null, ...over });
+
+    it("shows the folder and the exact command before anything is cloned", () => {
+      const html = none();
+      expect(html).toContain("Or use a fresh copy in ~/Gossamr/agents/acme/storefront");
+      expect(html).toContain('data-copy="git clone https://github.com/acme/storefront.git /Users/sample/Gossamr/agents/acme/storefront"');
+      expect(html).toContain("the repository&#x27;s own hooks don&#x27;t run");
+      expect(html).toContain("gh repo clone");
+      expect(html).toContain("trust the folder once, in Terminal");
+      expect(disabled(html, "Clone into ~/Gossamr/agents/acme/storefront")).toBe(false);
+      expect(disabled(html, "Start agent")).toBe(true);
+    });
+
+    it("leaves out the gh sentence when gh isn't there, and the whole offer when there is none", () => {
+      expect(none({}, { ...fresh, ghFallback: false })).not.toContain("gh repo clone");
+      expect(setup({ choice: { clones: [], picked: null, fresh: null }, review: null, preflight: null })).not.toContain("fresh copy");
+    });
+
+    it("says so when something else is in the way, and offers no clone", () => {
+      const html = none({}, { ...fresh, occupied: true });
+      expect(html).toContain("isn&#x27;t a clone of acme/storefront");
+      expect(html).not.toContain("git clone https");
+      expect(disabled(html, "Clone into ~/Gossamr/agents/acme/storefront")).toBe(true);
+    });
+
+    it("shows progress and, on failure, the reason and the command that usually fixes sign-in", () => {
+      expect(disabled(none({ cloning: true }), "Cloning…")).toBe(true);
+      const html = none({ cloneError: "Git couldn't sign in to GitHub: terminal prompts disabled" });
+      expect(html).toContain('role="alert"');
+      expect(html).toContain("terminal prompts disabled");
+      expect(html).toContain('data-copy="gh auth setup-git"');
+    });
   });
 
   it("asks which repository when none is chosen", () => {

@@ -47,6 +47,34 @@ impl Git {
     pub async fn origin(&self, dir: &Path) -> Option<String> {
         self.out(dir, &["remote", "get-url", "origin"]).await
     }
+
+    pub(super) fn git_program(&self) -> &Path {
+        &self.program
+    }
+
+    /// A program on the captured PATH, such as `gh`.
+    pub(super) fn tool(&self, name: &str) -> Option<PathBuf> {
+        find_in_path(&self.env, name)
+    }
+
+    /// Runs `program` with the captured environment plus `extra` (for this process only) and a time limit. The error
+    /// is the last line of stderr.
+    pub(super) async fn run(&self, program: &Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>, extra: &[(&str, &str)], limit: Duration) -> Result<(), String> {
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        self.env.apply(cmd.as_std_mut());
+        cmd.envs(extra.iter().copied());
+        let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).spawn().map_err(|e| e.to_string())?;
+        let out = tokio::time::timeout(limit, child.wait_with_output())
+            .await
+            .map_err(|_| format!("took longer than {} seconds", limit.as_secs()))?
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Err(stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("it exited without a message").to_owned())
+    }
 }
 
 fn find_in_path(env: &RunEnv, program: &str) -> Option<PathBuf> {
@@ -222,6 +250,11 @@ pub(crate) mod testing {
     pub const FAKE_GIT: &str = r#"#!/bin/sh
 [ -n "$FAKE_GIT_LOG" ] && echo "$*" >> "$FAKE_GIT_LOG"
 [ "$1" = -c ] && shift 2
+if [ "$1" = clone ]; then
+  for last; do :; done
+  mkdir -p "$last/.git" && echo "$3" > "$last/.fake-origin"
+  exit 0
+fi
 dir=.
 [ "$1" = -C ] && { dir=$2; shift 2; }
 [ "$1" = --no-optional-locks ] && shift
@@ -230,6 +263,7 @@ case "$*" in
   "rev-parse --abbrev-ref HEAD") cat "$dir/.fake-branch" 2>/dev/null || echo main ;;
   "status --porcelain") cat "$dir/.fake-dirty" 2>/dev/null ;;
   "symbolic-ref --short refs/remotes/origin/HEAD") echo origin/main ;;
+  "fetch --quiet origin") ;;
   "worktree list --porcelain") cat "$dir/.fake-worktrees" 2>/dev/null ;;
   "branch --list worktree-* --format=%(refname:short)") cat "$dir/.fake-branches" 2>/dev/null ;;
   *) echo "unexpected git call: $*" >&2; exit 99 ;;
@@ -248,7 +282,7 @@ esac
 
     /// A thread that forks while the script is open for writing keeps that handle until it execs, and running the
     /// script meanwhile fails with ETXTBSY. Try it until it runs.
-    fn wait_until_executable(path: &Path) {
+    pub(crate) fn wait_until_executable(path: &Path) {
         for _ in 0..500 {
             match std::process::Command::new(path).arg("--version").output() {
                 Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(std::time::Duration::from_millis(10)),
