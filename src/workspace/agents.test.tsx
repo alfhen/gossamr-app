@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunState } from "../types";
 import { AgentCard, onActivate } from "./AgentCard";
+import { AgentRow } from "./AgentRow";
 import { AgentsBanners } from "./AgentsBanners";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
@@ -64,7 +65,7 @@ const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...eight()[0],
 const buttonsOf = (html: string) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
 
 const card = (r: Run, opened = false) =>
-  renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onSelect={vi.fn()} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+  renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
@@ -421,5 +422,18 @@ describe("motion", () => {
     const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
     expect(reduced).toMatch(/\.ws-pulse::after\s*{\s*display:\s*none/);
     expect(reduced).toMatch(/\.ws-agent-card:hover\s*{\s*transform:\s*none/);
+  });
+});
+
+describe("opening a run", () => {
+  const props = (onOpen: () => void) => ({ run: run("done"), now: NOW, selected: false, position: 1, total: 1, ticketTitle: null, onOpen, onAttach: vi.fn(), failure: { opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } } });
+
+  it("opens the run when a card or a row is clicked, not only when Enter is pressed", () => {
+    const open = vi.fn();
+    const card = AgentCard(props(open)) as { props: { onClick: () => void } };
+    card.props.onClick();
+    const row = AgentRow(props(open)) as { props: { onClick: () => void } };
+    row.props.onClick();
+    expect(open).toHaveBeenCalledTimes(2);
   });
 });
