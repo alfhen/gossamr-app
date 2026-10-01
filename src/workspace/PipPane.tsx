@@ -13,12 +13,16 @@ import { LiveDraftPreview } from "./DraftPreview";
 import { useLookup } from "./hooks";
 import { PipResizer } from "./PaneResizers";
 import { PipAvatar } from "./PipAvatar";
+import { PipRunStrip } from "./PipRunCard";
 import { AttachButton, AttachedThumbs, TurnImages, lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { chipCount, currentContext, unassignedIn, useItemScene, useScreen } from "./pipHooks";
 import { appliedState, usePip, type AppliedState } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { buildScreenContext, contextLabel, contextLines } from "./screenContext";
 import { suggestionsFor } from "./suggestions";
+import { useAgentsEnabled } from "./agentsFlag";
+import { describeRun, runSummaryPrompt } from "./pipRuns";
+import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { draftsForItem, pendingDrafts, useWorkspace } from "../workspaceStore";
 
@@ -207,13 +211,18 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const live = useMemo(() => buildScreenContext(screen), [screen]);
   const context: ScreenContext = pinned ?? live;
   const code = useDev((s) => s.index);
+  const runs = useRuns((s) => s.runs);
   const words = useMemo(
     () => ({
       titleOf: (ref: ItemRef) => screen.items[itemKey(ref)]?.title ?? null,
       describeFilter: (f: Parameters<typeof describeFilter>[0]) => describeFilter(f, lookup),
       developmentOf: (ref: ItemRef) => developmentLine(code.get(itemKey(ref))),
+      runOf: (id: string) => {
+        const run = runs.find((r) => r.id === id);
+        return run ? describeRun(run, run.item ? screen.items[itemKey(run.item)]?.title : null, Date.now()) : null;
+      },
     }),
-    [screen.items, lookup, code],
+    [screen.items, lookup, code, runs],
   );
   const openRef = context.item;
   useEffect(() => {
@@ -221,7 +230,9 @@ export function PipPane({ onClose }: { onClose(): void }) {
   }, [openRef?.connectionId, openRef?.externalId]);
   const { kind, label } = contextLabel(context, quote, words.titleOf);
   const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
-  const chips = suggestionsFor({
+  const agentsOn = useAgentsEnabled();
+  const hasRuns = runs.length > 0;
+  const base = suggestionsFor({
     route: screen.route,
     quote: quote !== null,
     marked: screen.marked.length,
@@ -232,6 +243,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
     shown: screen.shown.length,
     filtered: chipCount(screen) > 0,
   });
+  const chips = agentsOn && hasRuns && screen.route !== "settings" && !quote ? [...base, runSummaryPrompt()] : base;
 
   useEffect(() => {
     document.getElementById(PIP_INPUT_ID)?.focus();
@@ -292,6 +304,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
         {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
       </header>
       <div ref={bodyRef} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 py-3">
+        <PipRunStrip />
         <EarlierDrafts proposals={proposalList} turns={turns} />
         {turns.length === 0 && (
           <p className="m-0 text-ws-ink2">I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing changes until you approve.</p>
