@@ -81,6 +81,11 @@ describe("the edit a change becomes", () => {
     expect(editFor(p, { ...same, title: "  Rotate the keys ", body: "Do it before Friday.\n" })).toBeNull();
   });
 
+  it("keeps the current title while the field is blank mid-edit, since a blank one is refused", () => {
+    expect(editFor(p, { ...same, title: "  " })).toBeNull();
+    expect(editFor(p, { ...same, title: "", kind: "bug" })).toEqual({ type: "create", kind: "bug" });
+  });
+
   it("names only what changed", () => {
     expect(editFor(p, { ...same, title: "Rotate the API keys" })).toEqual({ type: "create", title: "Rotate the API keys" });
     expect(editFor(p, { ...same, kind: "bug" })).toEqual({ type: "create", kind: "bug" });

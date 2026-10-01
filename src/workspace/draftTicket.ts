@@ -75,7 +75,8 @@ export function fieldsOf(p: Proposal & { intent: Created }): DraftFields {
 export function editFor(p: Proposal & { intent: Created }, next: DraftFields): ProposalEdit | null {
   const was = fieldsOf(p);
   const edit: Extract<ProposalEdit, { type: "create" }> = { type: "create" };
-  if (next.title.trim() !== was.title.trim()) edit.title = next.title;
+  const title = next.title.trim();
+  if (title && title !== was.title.trim()) edit.title = next.title;
   if (next.body.trim() !== was.body.trim()) {
     edit.body = next.body;
     edit.mentions = liveMentions(next.body, next.mentions);
