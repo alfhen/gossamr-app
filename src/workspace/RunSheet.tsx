@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useBackend } from "../backend/useBackend";
 import { itemKey } from "../lib/filter";
-import type { Run, RunEvent, RunReview } from "../types";
+import type { Run, RunEvent, RunOutcome, RunReview } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Icon, KIND_ICON } from "./AgentIcons";
-import { Box, BoxTitle, Btn, CodeBox, CopyButton, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
+import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
 import { StateChip } from "./AgentParts";
 import { KIND_LABEL, ageText, formatTokens, groupRuns, navOrder, permissionRequest, progressText, quietMinutes, quietText, repoName, runTitle, stateView } from "./agentsLogic";
 import { openTicketByKey } from "./jump";
@@ -14,9 +14,11 @@ import { PromptParts } from "./RunPrompt";
 import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { MAY_TOUCH, canStartNow, stopControl } from "./runSheetLogic";
+import { Changes, Found, type ResultActions } from "./RunResult";
+import { openOnGithub } from "./githubUi";
 import { useRuns } from "./runsStore";
 
-export interface RunSheetActions {
+export interface RunSheetActions extends ResultActions {
   close(): void;
   attach(): void;
   askStop(): void;
@@ -43,6 +45,11 @@ export interface RunSheetViewProps {
   disk: number | null | "unknown";
   brief: RunReview | "loading" | "unavailable" | null;
   confirmStop: boolean;
+  outcome: RunOutcome | null;
+  /** Cached tickets the blocker picker searches. */
+  tickets: readonly { key: string; title: string }[];
+  pickBlocker: boolean;
+  drafting: boolean;
   /** Terminal was opened for this failed run, or its command copied. */
   opened: boolean;
   on: RunSheetActions;
@@ -210,21 +217,6 @@ function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTit
   );
 }
 
-function Result({ run }: { run: Run }) {
-  const text = run.result?.trim();
-  return (
-    <Sec title="What it found">
-      <Box>
-        {text ? <p className="selectable m-0 whitespace-pre-wrap text-[13.5px] [overflow-wrap:anywhere]">{text}</p> : <p className="m-0 text-ws-ink3">It finished without a written answer.</p>}
-        <div className="flex flex-wrap items-center gap-2">
-          {text && <CopyButton text={text} label="Copy" what="the result" />}
-          <span className="text-xs text-ws-ink3">Anything for Jira is yours to post. Nothing was sent.</span>
-        </div>
-      </Box>
-    </Sec>
-  );
-}
-
 function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode {
   if (brief === null || brief === "loading") return <p className="m-0 text-ws-ink3">Loading…</p>;
   if (brief === "unavailable") return <p className="m-0 text-ws-ink3">The brief couldn&apos;t be read.</p>;
@@ -239,7 +231,7 @@ function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode 
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, opened, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, drafting, opened, on }: RunSheetViewProps) {
   const view = stateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -311,7 +303,8 @@ export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, event
       </div>
 
       {attention && <Attention run={run} opened={opened} on={on} />}
-      {run.state === "done" && <Result run={run} />}
+      {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} drafting={drafting} on={on} />}
+      {outcome?.change && <Changes change={outcome.change} on={on} />}
 
       <Sec title="What it did" count={events ? `${events.length} ${events.length === 1 ? "entry" : "entries"}` : undefined}>
         <RunTimeline events={events} live={live} />
@@ -352,6 +345,10 @@ export function RunSheet({ id }: { id: string }) {
   const [events, setEvents] = useState<RunEvent[] | null>(null);
   const [brief, setBrief] = useState<RunSheetViewProps["brief"]>(null);
   const [confirmStop, setConfirmStop] = useState(false);
+  const [outcome, setOutcome] = useState<RunOutcome | null>(null);
+  const [pickBlocker, setPickBlocker] = useState(false);
+  const items = useWorkspace((s) => s.items);
+  const drafting = useRuns((s) => s.drafting !== null);
   const [now, setNow] = useState(() => Date.now());
   const disk = useDisk(backend, id);
   const opened = useRuns((s) => s.terminalOpened.has(id));
@@ -365,7 +362,25 @@ export function RunSheet({ id }: { id: string }) {
     setConfirmStop(false);
     setBrief(null);
     setEvents(null);
+    setOutcome(null);
+    setPickBlocker(false);
   }, [id]);
+
+  const finished = run?.state === "done" || !!run?.branch;
+  const ticketRef = run?.item ?? null;
+  useEffect(() => {
+    if (!backend || !finished) return;
+    let live = true;
+    const read = () => backend.runsOutcome(id).then((o) => live && setOutcome(o), () => {});
+    void read();
+    const off = backend.onDevLinksChanged(() => void read());
+    // The pull request may not have been seen by a sync yet; asking GitHub about the ticket caches it, as the ticket peek does.
+    if (ticketRef) void backend.devLinksLive(ticketRef).catch(() => {});
+    return () => {
+      live = false;
+      off();
+    };
+  }, [backend, id, finished, ticketRef?.externalId]);
 
   const progress = run ? `${run.state}:${run.lastProgressAt}:${run.lastDetail ?? ""}` : "";
   useEffect(() => {
@@ -385,6 +400,7 @@ export function RunSheet({ id }: { id: string }) {
     return at < 0 ? null : { index: at + 1, total: order.length };
   }, [runs, filters, earlierOpen, id, now]);
 
+  const tickets = useMemo(() => Object.values(items).map((i) => ({ key: i.item.key, title: i.title })), [items]);
   if (!run) return null;
   const store = useRuns.getState();
   const on: RunSheetActions = {
@@ -403,12 +419,17 @@ export function RunSheet({ id }: { id: string }) {
       void openTicketByKey(run.item.key);
     },
     reveal: (path) => void backend?.revealPath(path).catch(() => {}),
+    draftComment: () => void store.draftComment(id),
+    pickBlocker: () => setPickBlocker(true),
+    cancelBlocker: () => setPickBlocker(false),
+    draftBlocker: (key) => void store.draftBlocker(id, key),
+    openChange: (url) => void openOnGithub(url),
     loadBrief: () => {
       if (brief !== null || !backend) return;
       setBrief("loading");
       backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
     },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} opened={opened} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} drafting={drafting} opened={opened} on={on} />;
 }
 

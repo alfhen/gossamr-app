@@ -1,5 +1,7 @@
-import type { CloneChoice, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
+import type { CloneChoice, CodeChange, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
 import { itemRef } from "./mockConnector";
+import { commentText, jiraNote, ticketKeys } from "./mockRunResult";
+import { docFromText, docText } from "../lib/docs";
 import type { MockProposals } from "./mockProposals";
 
 const CONNECTION = "mock";
@@ -97,6 +99,38 @@ const FAILURE_SEEDS: Seed[] = [
   { key: "WEB-121", name: "web-121-banner-flicker-7a8b", state: "failed", minutesAgo: 74, over: { error: FAILED_TEXT.capReached, failure: { type: "capReached" } } },
   { key: "CA-416", name: "ca-416-export-csv-9c0d", state: "failed", minutesAgo: 85, over: { error: FAILED_TEXT.other, failure: { type: "other" } } },
 ];
+
+/** The pull request or branch a sample run produced, by the run's worktree name. */
+function sampleChange(spec: RunSpec, kind: "pullRequest" | "branch", over: Partial<CodeChange> = {}): CodeChange {
+  const head = `worktree-${spec.name}`;
+  const pr = kind === "pullRequest";
+  return {
+    connectionId: "github:mock",
+    externalId: pr ? `pr:${spec.repo}#518` : `branch:${spec.repo}:${head}`,
+    kind,
+    repo: spec.repo,
+    number: pr ? 518 : null,
+    title: pr ? "Back off when the consumer retries" : head,
+    headRef: head,
+    baseRef: pr ? "main" : null,
+    state: "open",
+    mergedAt: null,
+    createdAt: null,
+    updatedAt: "2026-09-30T10:30:00Z",
+    author: null,
+    reviewers: [],
+    checks: pr ? "passing" : "none",
+    review: "none",
+    url: pr ? `https://github.com/${spec.repo}/pull/518` : `https://github.com/${spec.repo}/tree/${head}`,
+    sha: null,
+    additions: pr ? 84 : null,
+    deletions: pr ? 12 : null,
+    changedFiles: pr ? 5 : null,
+    body: "",
+    linkedKeys: [],
+    ...over,
+  };
+}
 
 const REPOS = ["acme/storefront", "acme/payments", "acme/ops"];
 
@@ -200,6 +234,8 @@ export class MockRuns {
   private readonly cap: number;
   readonly pipRun: boolean;
   private picked = new Map<string, string>();
+  /** Pull requests and branches by run id, standing in for what a sync would have cached. */
+  private changes = new Map<string, CodeChange>();
   /** Clone folders the person has trusted through `trustFolder`; a retry in one of them goes through. */
   private trusted = new Set<string>();
   private signedIn = false;
@@ -219,6 +255,10 @@ export class MockRuns {
     this.pipRun = !!o.pipRun;
     const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
+    for (const r of this.runs) {
+      if (r.state === "done" && r.branch && r.item?.key === "DEVOPS-455") this.changes.set(r.id, sampleChange(r.spec, "pullRequest"));
+      else if (r.state === "done" && r.branch) this.changes.set(r.id, sampleChange(r.spec, "branch"));
+    }
   }
 
   private now(): string {
@@ -543,6 +583,46 @@ export class MockRuns {
     if (run.state === "done") lines.push(["done", "Wrote up what it found", run.result]);
     if (run.state === "stopped") lines.push(["stop", "Stopped", null]);
     return lines.map(([kind, text, detail], i) => ({ runId: id, seq: i + 1, at: at(i * 2), kind, text, detail }));
+  }
+
+  outcome(id: string): RunOutcome {
+    const run = this.get(id);
+    if (!run) throw new Error("that run no longer exists");
+    const result = run.result?.trim();
+    const own = run.item?.key.toUpperCase();
+    return { note: result ? jiraNote(result) : null, keys: result ? ticketKeys(result).filter((k) => k !== own) : [], change: this.changes.get(id) ?? null };
+  }
+
+  private finished(id: string): { run: Run; item: ItemRef } {
+    const run = this.get(id);
+    if (!run) throw new Error("that run no longer exists");
+    if (run.state !== "done") throw new Error("that run hasn't finished");
+    if (!run.item) throw new Error("that run isn't about a ticket");
+    return { run, item: run.item };
+  }
+
+  private fromRun(run: Run) {
+    return { type: "run", runId: run.id, shortId: run.shortId } as const;
+  }
+
+  /** Drafts the comment the way the backend does, and nothing is posted. */
+  async draftComment(id: string): Promise<Proposal> {
+    const { run, item } = this.finished(id);
+    const { note } = this.outcome(id);
+    if (!note?.text) throw new Error("the run finished without a written answer, so there is nothing to draft");
+    const body = commentText(note, this.changes.get(id) ?? null);
+    const same = this.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "comment" && p.intent.item.externalId === item.externalId && docText(p.intent.body) === body);
+    if (same) throw new Error(`that comment is already waiting as a draft on ${item.key} (draft ${same.id})`);
+    return this.proposals.fromRun({ type: "comment", item, body: docFromText(body) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
+  }
+
+  async draftBlocker(id: string, blockerKey: string): Promise<Proposal> {
+    const { run, item } = this.finished(id);
+    const key = blockerKey.trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9_]*-\d+$/.test(key)) throw new Error(`"${blockerKey.trim()}" doesn't look like a ticket key`);
+    if (key === item.key.toUpperCase()) throw new Error("a ticket can't block itself");
+    if (this.ticketText(itemRef(key)) === null) throw new Error(`${key} wasn't found in Jira, so it can't be linked`);
+    return this.proposals.fromRun({ type: "link", from: itemRef(key), to: item, kind: "blocks" }, `Blocked by ${key}`, this.fromRun(run));
   }
 
   disk(id: string): number {

@@ -1,5 +1,5 @@
 import { itemKey } from "../lib/filter";
-import type { DevLink, ItemRef, Preflight, Proposal, Run, RunKind, RunReview, RunSpec } from "../types";
+import type { CodeChange, DevLink, ItemRef, Preflight, Proposal, Run, RunKind, RunReview, RunSpec } from "../types";
 import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
@@ -257,4 +257,67 @@ export function sheetKey(key: string, ctx: { typing: boolean; modifier: boolean;
   if (key === "Escape") return ctx.pickerOpen ? null : "close";
   if (!ctx.browsing) return null;
   return key === "j" ? "next" : key === "k" ? "previous" : null;
+}
+
+export interface DraftControl {
+  enabled: boolean;
+  /** Why it can't be used, shown beside the button. */
+  reason: string | null;
+}
+
+/** Drafting a comment needs a ticket to post on and something the agent wrote. */
+export function commentControl(run: Pick<Run, "item" | "result">): DraftControl {
+  if (!run.item) return { enabled: false, reason: "This run isn't about a ticket, so there is nothing to comment on." };
+  if (!run.result?.trim()) return { enabled: false, reason: "It finished without a written answer, so there is nothing to post." };
+  return { enabled: true, reason: null };
+}
+
+export function blockerControl(run: Pick<Run, "item">): DraftControl {
+  return run.item ? { enabled: true, reason: null } : { enabled: false, reason: "This run isn't about a ticket, so there is nothing for a blocker to hold up." };
+}
+
+export interface BlockerChoice {
+  key: string;
+  title: string | null;
+  /** The result named this ticket. */
+  found: boolean;
+}
+
+const KEY_SHAPE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+const CHOICES = 6;
+
+/**
+ * The tickets to offer as the one that blocks: those the result names first, then cached tickets that match what is
+ * typed. A typed key that isn't cached is offered too, unless it is the start of one that is, since the backend can
+ * read any ticket the person can see.
+ */
+export function blockerChoices(tickets: Iterable<{ key: string; title: string }>, named: readonly string[], own: string | null, query: string): BlockerChoice[] {
+  const q = query.trim().toLowerCase();
+  const byKey = new Map<string, string>();
+  for (const t of tickets) byKey.set(t.key.toUpperCase(), t.title);
+  const skip = own?.toUpperCase();
+  const out: BlockerChoice[] = [];
+  const add = (key: string, found: boolean) => {
+    if (key === skip || out.some((c) => c.key === key)) return;
+    out.push({ key, title: byKey.get(key) ?? null, found });
+  };
+  for (const key of named.map((k) => k.toUpperCase())) if (byKey.has(key) && (!q || key.toLowerCase().includes(q) || (byKey.get(key) ?? "").toLowerCase().includes(q))) add(key, true);
+  if (q) for (const [key, title] of byKey) if (key.toLowerCase().includes(q) || title.toLowerCase().includes(q)) add(key, named.some((n) => n.toUpperCase() === key));
+  const typed = query.trim().toUpperCase();
+  if (KEY_SHAPE.test(typed) && typed !== skip && !out.some((c) => c.key.startsWith(typed))) out.unshift({ key: typed, title: null, found: false });
+  return out.slice(0, CHOICES);
+}
+
+/** One line for the changes block: a pull request's size, or that only the branch exists. */
+export function changeSummary(change: Pick<CodeChange, "kind" | "changedFiles" | "additions" | "deletions" | "state" | "checks" | "review">): string[] {
+  if (change.kind !== "pullRequest") return ["Branch only, no pull request yet"];
+  const out: string[] = [change.state === "merged" ? "Merged" : change.state === "closed" ? "Closed" : change.state === "draft" ? "Draft" : "Open"];
+  if (change.changedFiles !== null) out.push(`${change.changedFiles} ${change.changedFiles === 1 ? "file" : "files"} changed`);
+  if (change.additions !== null && change.deletions !== null) out.push(`+${change.additions} \u2212${change.deletions}`);
+  if (change.checks === "passing") out.push("Checks passing");
+  else if (change.checks === "failing") out.push("Checks failing");
+  else if (change.checks === "pending") out.push("Checks running");
+  if (change.review === "approved") out.push("Approved");
+  else if (change.review === "changesRequested") out.push("Changes requested");
+  return out;
 }

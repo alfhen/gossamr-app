@@ -16,6 +16,8 @@ export interface AgentItemProps {
   ticketTitle: string | null;
   onOpen(): void;
   onAttach(): void;
+  /** Present on a finished run that has something to post. */
+  onDraftComment?(): void;
   failure: FailureState;
 }
 
@@ -29,7 +31,7 @@ export function onActivate(open: () => void) {
   };
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, failure }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -68,6 +70,19 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
         </span>
       </p>
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
+      {onDraftComment && (
+        <div>
+          <button
+            type="button"
+            onClick={(ev) => (ev.stopPropagation(), onDraftComment())}
+            onKeyDown={(ev) => ev.stopPropagation()}
+            title="Makes a draft you read and edit. Nothing is posted."
+            className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
+          >
+            Draft comment
+          </button>
+        </div>
+      )}
       <div className="flex items-center gap-3 text-sm text-ws-ink3 tabular-nums">
         {tokens && <span>{tokens}</span>}
         <time dateTime={ageSince(run)} className="ml-auto" title={run.endedAt ? "Ended" : "Started"}>

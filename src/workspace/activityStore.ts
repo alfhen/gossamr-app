@@ -6,11 +6,12 @@ import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 
 const READ_KEY = "gossamr-code-read";
+const RUN_READ_KEY = "gossamr-runs-activity-read";
 const READ_KEPT = 500;
 const CODE_EVENTS = 100;
 
-const loadRead = (): Set<string> => {
-  const raw = readStored(READ_KEY);
+const loadRead = (key = READ_KEY): Set<string> => {
+  const raw = readStored(key);
   return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : []);
 };
 
@@ -21,6 +22,8 @@ interface ActivityState {
   codeEvents: WorkEvent[];
   /** Ids of GitHub events the person has opened or marked read. */
   codeRead: ReadonlySet<string>;
+  /** Ids of agent entries (`run:<id>:<what>`) the person has opened or marked read. */
+  runRead: ReadonlySet<string>;
   /** GitHub events that want attention and haven't been dealt with. */
   codeUnread: number;
   container: ContainerRef | null;
@@ -37,6 +40,7 @@ interface ActivityState {
   setChip(chip: ActivityChip): void;
   setSource(source: ActivitySource): void;
   markCodeRead(ids: string[]): void;
+  markRunRead(ids: string[]): void;
   /** Loads the feed for a project, or keeps what is shown when it is the one already loaded. */
   showProject(container: ContainerRef | null): void;
   reload(): Promise<void>;
@@ -61,6 +65,7 @@ export const useActivity = create<ActivityState>((set, get) => ({
   container: null,
   backend: null,
   codeRead: loadRead(),
+  runRead: loadRead(RUN_READ_KEY),
   ...idle,
 
   init(backend) {
@@ -103,6 +108,14 @@ export const useActivity = create<ActivityState>((set, get) => ({
     set((s) => ({ codeRead: kept, codeUnread: codeEventUnread(s.codeEvents, kept, Date.now()) }));
   },
 
+  markRunRead(ids) {
+    const fresh = ids.filter((id) => !get().runRead.has(id));
+    if (!fresh.length) return;
+    const kept = new Set([...get().runRead, ...fresh].slice(-READ_KEPT));
+    writeStored(RUN_READ_KEY, [...kept]);
+    set({ runRead: kept });
+  },
+
   showProject(container) {
     if (sameContainer(container, get().container) && get().status !== "idle") return;
     set({ container });
@@ -116,9 +129,9 @@ export const useActivity = create<ActivityState>((set, get) => ({
     set((s) => ({ status: s.entries.length || s.codeEvents.length ? s.status : "loading", error: null, loadingMore: false }));
     try {
       const [page, code] = await Promise.all([
-        source === "github" ? Promise.resolve({ entries: [], next: null }) : backend.cacheFeed(queryFor(chip, container)),
+        source === "github" || source === "agents" ? Promise.resolve({ entries: [], next: null }) : backend.cacheFeed(queryFor(chip, container)),
         // A host that can't be reached doesn't stop the tracker's feed from showing.
-        backend.codeEvents(CODE_EVENTS).catch((e) => (source === "github" ? Promise.reject(e) : [])),
+        source === "agents" ? Promise.resolve([]) : backend.codeEvents(CODE_EVENTS).catch((e) => (source === "github" ? Promise.reject(e) : [])),
       ]);
       if (mine === seq) set((s) => ({ entries: page.entries, next: page.next, codeEvents: code, codeUnread: codeEventUnread(code, s.codeRead, Date.now()), status: "ready" }));
     } catch (e) {
@@ -128,7 +141,7 @@ export const useActivity = create<ActivityState>((set, get) => ({
 
   async loadMore() {
     const { backend, chip, container, next, loadingMore, source } = get();
-    if (!backend || !next || loadingMore || chip === "drafts" || source === "github") return;
+    if (!backend || !next || loadingMore || chip === "drafts" || source === "github" || source === "agents") return;
     const mine = seq;
     set({ loadingMore: true });
     try {
@@ -161,8 +174,8 @@ export const useActivity = create<ActivityState>((set, get) => ({
     if (!backend) return;
     // GitHub events only know their project through their ticket, which the page resolves; without a project they are all in scope.
     const scoped = codeIds ?? (container ? [] : codeEvents.filter((e) => isCodeUnread(e, codeRead, Date.now())).map((e) => e.id));
-    if (source !== "jira") get().markCodeRead(scoped);
-    if (source === "github") return;
+    if (source === "all" || source === "github") get().markCodeRead(scoped);
+    if (source === "github" || source === "agents") return;
     let page;
     try {
       page = await backend.cacheFeed({ container, unreadOnly: true, limit: MARK_ALL_LIMIT });

@@ -21,6 +21,7 @@ import type {
   RunQuery,
   RunReview,
   RunSpec,
+  RunOutcome,
   RunsChanged,
   RunsEnabledChange,
   Snapshot,
@@ -359,6 +360,18 @@ export class JiraBackend implements Backend {
 
   runsSuggestName(clonePath: string, key: string, title: string) {
     return invoke<string>("runs_suggest_name", { clonePath, key, title });
+  }
+
+  runsOutcome(id: string) {
+    return invoke<RunOutcome>("runs_outcome", { id });
+  }
+
+  runsDraftComment(id: string) {
+    return invoke<Proposal>("runs_draft_comment", { id });
+  }
+
+  runsDraftBlocker(id: string, blockerKey: string) {
+    return invoke<Proposal>("runs_draft_blocker", { id, blockerKey });
   }
 
   runsEvents(id: string) {

@@ -499,6 +499,18 @@ export class MockBackend implements Backend {
     return this.runs.suggestName(key, title);
   }
 
+  async runsOutcome(id: string) {
+    return this.runs.outcome(id);
+  }
+
+  async runsDraftComment(id: string) {
+    return this.runs.draftComment(id);
+  }
+
+  async runsDraftBlocker(id: string, blockerKey: string) {
+    return this.runs.draftBlocker(id, blockerKey);
+  }
+
   async runsEvents(id: string) {
     return this.runs.events(id);
   }
@@ -613,6 +625,9 @@ export class MockBackend implements Backend {
         return true;
       case "subtasks":
         this.appliedToConnector = this.connector.createSubtasks(intent.parent, intent.summaries.slice(already.length));
+        return true;
+      case "link":
+        this.connector.link(intent.from, intent.to, intent.kind);
         return true;
       case "startRun":
         throw new Error("A run is approved with its own button");

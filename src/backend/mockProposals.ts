@@ -27,6 +27,11 @@ export class MockProposals {
     return Promise.resolve(this.store(intent, label, { type: "board" }, "user"));
   }
 
+  /** Stores a draft the person made from an agent run's result. */
+  fromRun(intent: Intent, label: string | null, origin: Extract<ProposalOrigin, { type: "run" }>): Proposal {
+    return this.store(intent, label, origin, "user");
+  }
+
   private store(intent: Intent, label: string | null, origin: ProposalOrigin, createdBy: Proposal["createdBy"]): Proposal {
     const now = new Date().toISOString();
     const p: Proposal = {

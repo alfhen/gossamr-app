@@ -9,6 +9,7 @@ import { draftStatus } from "./boardLogic";
 import { showMe } from "./jump";
 import { KIND_LABEL } from "./agentsLogic";
 import { useRunSetup } from "./runSetupStore";
+import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { itemKey } from "../lib/filter";
 
@@ -19,6 +20,11 @@ const BADGE: Record<Proposal["state"]["type"], string> = {
   skipped: "Skipped",
   retired: "Out of date",
 };
+
+const LINK_VERB: Record<Extract<Proposal["intent"], { type: "link" }>["kind"], string> = { blocks: "blocks", relates: "relates to", duplicates: "duplicates", implementedBy: "is implemented by" };
+
+/** What a link draft says, such as `CA-2 blocks CA-1`. */
+export const linkSentence = (i: Extract<Proposal["intent"], { type: "link" }>) => `${i.from.key} ${LINK_VERB[i.kind]} ${i.to.key}`;
 
 export function draftTitle(p: Proposal): string {
   const i = p.intent;
@@ -57,7 +63,7 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
     case "update":
       return "Change fields";
     case "link":
-      return `${i.kind} ${i.to.key}`;
+      return linkSentence(i);
     case "startRun":
       return `${i.spec.kind} in ${i.spec.repo}`;
     default:
@@ -78,11 +84,13 @@ export interface DraftCardProps {
   onReview?(): void;
   /** Present when the draft's item may be off screen. */
   onShow?(): void;
+  /** Opens the agent run a draft was made from. */
+  onOpenRun?(runId: string): void;
 }
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
 
-export function DraftCard({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow }: DraftCardProps) {
+export function DraftCard({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun }: DraftCardProps) {
   const intent = p.intent;
   const key = targetOf(intent)?.key ?? "";
   const stored = intent.type === "comment" ? docText(intent.body) : "";
@@ -127,7 +135,9 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
           ? `Create ${intent.fields.kind}`
           : intent.type === "subtasks"
             ? `Create ${remaining} subtask${remaining === 1 ? "" : "s"}`
-            : "Apply";
+            : intent.type === "link"
+              ? "Create link"
+              : "Apply";
 
   return (
     <article
@@ -170,6 +180,11 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
             {docText(intent.fields.body) && <div className="whitespace-pre-wrap text-ws-ink2">{docText(intent.fields.body)}</div>}
           </div>
         )}
+        {intent.type === "link" && (
+          <p className="m-0">
+            <b className="font-mono">{intent.from.key}</b> {LINK_VERB[intent.kind]} <b className="font-mono">{intent.to.key}</b>
+          </p>
+        )}
         {intent.type === "subtasks" &&
           summaries.map((s, i) => (
             <label key={i} className="flex items-start gap-2">
@@ -198,6 +213,19 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
             )}
             <p className="m-0 text-sm text-ws-ink3">Runs as you, with your Claude settings, in a new worktree of {intent.spec.clonePath}. Read the exact prompt and checks, then start it. Nothing runs before that.</p>
           </div>
+        )}
+        {p.origin.type === "run" && (
+          <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
+            From agent run{" "}
+            {onOpenRun ? (
+              <button type="button" onClick={() => onOpenRun((p.origin as { runId: string }).runId)} className="font-mono font-semibold text-ws-pip hover:underline">
+                {p.origin.shortId ?? "(no session id)"}
+              </button>
+            ) : (
+              <b className="font-mono">{p.origin.shortId ?? "(no session id)"}</b>
+            )}
+            . The words are the agent&apos;s. Read and edit them before you approve.
+          </p>
         )}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}
         {open && revision && !shownError && <p className="m-0 text-sm text-ws-ink3">{revision.note}</p>}
@@ -281,6 +309,7 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
       error={error}
       onShow={jump && target && item ? () => showMe(target) : undefined}
       onSkip={() => void run(() => useWorkspace.getState().skip(p.id))}
+      onOpenRun={(id) => useRuns.getState().openRun(id)}
       onReview={p.intent.type === "startRun" ? () => void useRunSetup.getState().begin({ proposalId: p.id }) : undefined}
       onApprove={(edit) =>
         void run(async () => {
