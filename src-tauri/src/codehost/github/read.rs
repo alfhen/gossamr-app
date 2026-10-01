@@ -444,7 +444,8 @@ mod tests {
         let groups = qualifier_groups(&many);
         assert!(groups.len() >= 2 && groups.len() <= 5, "{} searches for 15 repositories", groups.len());
         assert!(groups.iter().all(|g| g.len() <= QUALIFIER_BUDGET));
-        assert_eq!(groups.iter().map(|g| g.split(' ').count()).sum::<usize>(), 15, "every repository is searched");
+        let searched: Vec<&str> = groups.iter().flat_map(|g| g.split_whitespace().map(|q| q.strip_prefix("repo:").expect("repository qualifier"))).collect();
+        assert_eq!(searched, many.iter().map(String::as_str).collect::<Vec<_>>(), "every repository is searched exactly once");
     }
 
     #[test]
