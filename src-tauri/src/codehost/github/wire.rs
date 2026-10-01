@@ -49,6 +49,14 @@ pub struct Branch {
     #[serde(rename = "ref")]
     pub name: String,
     pub sha: String,
+    /// Null when the repository the branch lived in has been deleted.
+    #[serde(default)]
+    pub repo: Option<BranchRepo>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BranchRepo {
+    pub full_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,6 +168,7 @@ impl Pull {
             changed_files: self.changed_files,
             body: clip(self.body.as_deref().unwrap_or_default(), BODY_LIMIT),
             linked_keys: Vec::new(),
+            head_repo: self.head.repo.as_ref().map(|r| r.full_name.clone()),
         }
     }
 }
@@ -424,6 +433,7 @@ impl PullHit {
             changed_files: None,
             body: clip(self.body.as_deref().unwrap_or_default(), BODY_LIMIT),
             linked_keys: Vec::new(),
+            head_repo: None,
         })
     }
 }
@@ -457,6 +467,7 @@ impl Commit {
             changed_files: None,
             body: clip(rest.trim(), BODY_LIMIT),
             linked_keys: Vec::new(),
+            head_repo: None,
         }
     }
 }

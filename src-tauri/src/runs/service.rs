@@ -24,7 +24,7 @@ use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
-use crate::domain::{render_prompt, Run, RunQuery, RunSpec, RunState, GUARD};
+use crate::domain::{render_prompt, Run, RunKind, RunQuery, RunSpec, RunState, GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 
@@ -286,6 +286,9 @@ impl RunService {
     async fn check(&self, run: &Run, tc: &Toolchain) -> std::result::Result<(), Failure> {
         let spec = &run.spec;
         spec.validate().map_err(|e| Failure::Invalid(e.to_string()))?;
+        if spec.kind == RunKind::Review {
+            self.core.review_current(spec).await.map_err(|e| Failure::Invalid(e.to_string()))?;
+        }
         let live = self.live_elsewhere(run);
         if live >= self.cap() {
             return Err(Failure::CapReached(live));
@@ -465,7 +468,11 @@ impl RunService {
 
     pub async fn preflight(&self, spec: Option<RunSpec>) -> Result<Preflight> {
         self.ensure_enabled()?;
-        Ok(preflight(spec.as_ref(), &*self.tools, &self.index, self.cap()).await)
+        let pr = match spec.as_ref().filter(|s| s.kind == RunKind::Review) {
+            Some(s) => Some(self.core.review_target(s).await.map_err(|e| e.to_string())),
+            None => None,
+        };
+        Ok(preflight(spec.as_ref(), &*self.tools, &self.index, self.cap(), pr).await)
     }
 
     async fn git(&self) -> Result<Git> {

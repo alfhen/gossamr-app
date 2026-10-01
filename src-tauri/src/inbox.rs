@@ -1002,6 +1002,11 @@ pub(crate) mod testing {
 
     /// The fixture with a GitHub connection that watches `repos` (`owner/name`), for what only watched repositories may do.
     pub async fn fixture_watching(repos: &[&str]) -> Fixture {
+        fixture_watching_with(repos, Vec::new()).await
+    }
+
+    /// `fixture_watching` with more GitHub routes scripted: replies come in order and the last repeats.
+    pub async fn fixture_watching_with(repos: &[&str], extra: Vec<(&str, Vec<crate::codehost::github::testserver::Reply>)>) -> Fixture {
         use crate::auth::{GithubAuth, MemoryStore};
         use crate::codehost::github::testserver::{serve, Reply};
         use crate::codehost::github::GithubHost;
@@ -1013,11 +1018,12 @@ pub(crate) mod testing {
                 format!("{{\"id\":1,\"name\":\"{name}\",\"full_name\":\"{r}\",\"private\":true,\"owner\":{{\"login\":\"{owner}\"}},\"fork\":false,\"archived\":false,\"default_branch\":\"main\",\"pushed_at\":\"2026-09-29T10:00:00Z\",\"permissions\":{{\"push\":true,\"pull\":true}}}}")
             })
             .collect();
-        let server = serve(vec![
+        let mut routes = vec![
             ("/user", vec![Reply::ok(include_str!("codehost/github/fixtures/user.json"))]),
             ("/user/repos", vec![Reply::ok(&format!("[{}]", rows.join(",")))]),
-        ])
-        .await;
+        ];
+        routes.extend(extra);
+        let server = serve(routes).await;
         let http = reqwest::Client::new();
         let (base, factory_http) = (server.base.clone(), http.clone());
         let auth = GithubAuth::for_test(http, Arc::new(MemoryStore::default()), &server.base, None, vec![]);

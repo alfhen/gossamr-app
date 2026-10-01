@@ -199,6 +199,11 @@ impl CodeHost for GithubHost {
         self.detail(repo, number).await
     }
 
+    async fn pull_request_change(&self, repo: &str, number: u64) -> Result<CodeChange> {
+        let (pull, _): (Pull, _) = self.api.json(&format!("/repos/{repo}/pulls/{number}")).await?;
+        Ok(pull.change(&self.connection_id, repo))
+    }
+
     async fn branches(&self, repo: &str) -> Result<Vec<CodeChange>> {
         self.list_branches(repo).await
     }

@@ -332,6 +332,7 @@ mod tests {
             changed_files: None,
             body: String::new(),
             linked_keys: vec![],
+            head_repo: None,
         };
         DevLink {
             item: item_ref("1"),

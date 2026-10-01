@@ -9,7 +9,7 @@ use super::failure::Failure;
 use super::index::RunIndex;
 use super::repo::{inspect, Git};
 use super::toolchain::ToolchainSource;
-use crate::domain::RunSpec;
+use crate::domain::{CodeChange, RunKind, RunSpec};
 
 const PATH_SHOWN: usize = 300;
 
@@ -54,8 +54,25 @@ fn default_mode(config_dir: &Path) -> Option<String> {
     mode.as_str().map(str::to_owned)
 }
 
+fn push_explanation(mode: Option<&str>) -> String {
+    match mode {
+        Some("auto") => "with auto mode, anything Claude's classifier approves runs without asking".into(),
+        Some("bypassPermissions") => "nothing asks before it runs".into(),
+        Some(_) | None => "your allow rules decide whether a push asks first".into(),
+    }
+}
+
+fn review_row(rows: &mut Rows, spec: &RunSpec, found: &Result<CodeChange, String>) {
+    let number = spec.pr.unwrap_or_default();
+    match found {
+        Ok(c) => rows.add(Level::Green, format!("Reviews pull request #{number} in {}. Its branch is in {}, the same repository.", spec.repo, c.head_repo.as_deref().unwrap_or(&spec.repo))),
+        Err(why) => rows.add(Level::Red, why.clone()),
+    }
+}
+
 /// Checks, in the order the person would fix them. Without a `spec` only the environment and capacity are checked.
-pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, index: &RunIndex, cap: usize) -> Preflight {
+/// `pr` is what GitHub says about a review's pull request.
+pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, index: &RunIndex, cap: usize, pr: Option<Result<CodeChange, String>>) -> Preflight {
     let mut rows = Rows(Vec::new());
     let live = index.live().len();
     match tools.get().await {
@@ -84,13 +101,24 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
             if let Some(spec) = spec {
                 clone_row(&mut rows, &Git::new(tc.env.clone()), spec).await;
             }
-            if let Some(mode) = config_dir.as_deref().and_then(default_mode) {
+            let mode = config_dir.as_deref().and_then(default_mode);
+            if let Some(mode) = &mode {
                 let level = if mode == "bypassPermissions" { Level::Amber } else { Level::Green };
                 rows.add(level, format!("Agents run as you, in your permission mode: {mode}"));
             } else if config_dir.is_some() {
                 rows.add(Level::Green, "Agents run as you, with your Claude settings (no default permission mode is set)");
             }
+            if spec.is_some_and(|s| s.kind == RunKind::Build && s.allow_push) {
+                let shown = mode.as_deref().unwrap_or("not set");
+                rows.add(
+                    Level::Amber,
+                    format!("This agent may push a branch and open a pull request if your Claude settings allow it. Your permission mode is {shown}: {}.", push_explanation(mode.as_deref())),
+                );
+            }
         }
+    }
+    if let (Some(spec), Some(found)) = (spec, &pr) {
+        review_row(&mut rows, spec, found);
     }
     if live >= cap {
         rows.red(&Failure::CapReached(live));

@@ -6,8 +6,8 @@ use chrono::Utc;
 use super::Core;
 use crate::auth::Scope;
 use crate::domain::{
-    allowed_kinds, ticket_snapshot, Basis, ClonePlan, CodeChangeKind, Intent, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery,
-    RunSpec, StateKind, INVESTIGATE_INSTRUCTION,
+    default_instruction, pip_kinds, ticket_snapshot, Basis, ClonePlan, CodeChangeKind, Intent, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery,
+    RunSpec, StateKind,
 };
 use crate::error::{Error, Result};
 use crate::proposals::{self, Draft};
@@ -82,10 +82,10 @@ impl Core {
     pub async fn draft_run_as_pip(&self, scope: &Scope, request_id: &str, ask: PipRunAsk, repo: String, plan: ClonePlan) -> Result<Proposal> {
         let PipRunAsk { key, kind, focus, from_run } = ask;
         let key = key.as_str();
-        let instruction = match kind {
-            RunKind::Investigate if allowed_kinds().contains(&kind) => INVESTIGATE_INSTRUCTION,
-            _ => return Err(refuse("only investigate runs are available yet")),
-        };
+        if !pip_kinds().contains(&kind) {
+            return Err(refuse("Pip can only propose investigations, triage and checks"));
+        }
+        let instruction = default_instruction(kind);
         self.require_watched_repo(&repo)?;
         let clone_path = self.resolve_clone(&plan.path)?;
         let item = Self::item(scope, key);
@@ -103,6 +103,9 @@ impl Core {
                 focus,
                 focus_from_run: from_run,
                 ticket_block: Some(ticket_snapshot(&work)),
+                pr: None,
+                pr_sha: None,
+                allow_push: false,
             };
             let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), item: Some(item.clone()), ..Default::default() };
             let same = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::StartRun { spec: s, .. } if same_ask(s, &spec)));

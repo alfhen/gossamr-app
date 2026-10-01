@@ -10,8 +10,8 @@ use super::{db_file, identity_of, Core};
 use crate::auth::Scope;
 use crate::db::Db;
 use crate::domain::{
-    ticket_snapshot, Basis, ContainerRef, CreatedBy, Doc, Intent, ItemKind, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind,
-    RunEvent, RunQuery, RunReview, RunSpec, INVESTIGATE_INSTRUCTION,
+    default_instruction, ticket_snapshot, Basis, CodeChange, CodeChangeState, ContainerRef, CreatedBy, Doc, Intent, ItemKind, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind,
+    RunEvent, RunQuery, RunReview, RunSpec,
 };
 use crate::error::{Error, Result};
 use crate::model::MentionRef;
@@ -59,6 +59,10 @@ pub enum Edit {
         kind: Option<RunKind>,
         #[serde(default)]
         name: Option<String>,
+        #[serde(default)]
+        pr: Option<u64>,
+        #[serde(default)]
+        allow_push: Option<bool>,
     },
 }
 
@@ -102,8 +106,16 @@ impl Edit {
                 }
                 Ok(Intent::Create { container, fields, link: link.clone() })
             }
-            (Edit::Run { instruction, base, clone_path, kind, name }, Intent::StartRun { connection_id, item, spec }) => {
+            (Edit::Run { instruction, base, clone_path, kind, name, pr, allow_push }, Intent::StartRun { connection_id, item, spec }) => {
                 let mut spec = spec.clone();
+                if let Some(v) = kind.filter(|k| *k != spec.kind) {
+                    if instruction.is_none() && spec.instruction.trim() == default_instruction(spec.kind) {
+                        spec.instruction = default_instruction(v).into();
+                    }
+                    spec.pr = None;
+                    spec.pr_sha = None;
+                    spec.allow_push = false;
+                }
                 if let Some(v) = instruction {
                     spec.instruction = v.clone();
                 }
@@ -119,12 +131,21 @@ impl Edit {
                 if let Some(v) = name {
                     spec.name = v.trim().to_string();
                 }
+                if let Some(v) = pr {
+                    spec.pr = Some(*v);
+                    spec.pr_sha = None;
+                }
+                if let Some(v) = allow_push {
+                    spec.allow_push = *v;
+                }
                 Ok(Intent::StartRun { connection_id: connection_id.clone(), item: item.clone(), spec })
             }
             _ => Err(Error::Proposal("that edit doesn't fit this draft".into())),
         }
     }
 }
+
+const FORK_REFUSAL: &str = "That pull request comes from a fork. Reviewing it would run its code with your settings; Gossamr doesn't allow that yet.";
 
 fn not_a_run() -> Error {
     Error::Proposal("that draft doesn't start a run".into())
@@ -249,6 +270,34 @@ impl Core {
         }
     }
 
+    /// The pull request a review would read, as GitHub has it now. A review runs the branch's code with the person's
+    /// own settings, so only an open pull request whose branch is in the same repository qualifies.
+    pub(crate) async fn review_target(&self, spec: &RunSpec) -> Result<CodeChange> {
+        let number = spec.pr.ok_or_else(|| Error::Proposal("a review needs a pull request".into()))?;
+        let change = self.code_pull_change(&spec.repo, number).await?;
+        if change.state != CodeChangeState::Open {
+            return Err(Error::Proposal(format!("Pull request #{number} isn't open.")));
+        }
+        match change.head_repo.as_deref() {
+            None => Err(Error::Proposal(format!("GitHub didn't say where the branch of pull request #{number} lives (a deleted fork looks like this), so Gossamr can't tell it is safe to review."))),
+            Some(_) if !change.is_same_repo() => Err(Error::Proposal(FORK_REFUSAL.into())),
+            Some(_) => Ok(change),
+        }
+    }
+
+    /// `review_target`, and the draft's base branch and commit still the ones the pull request has. What the person
+    /// approved is the commit they were shown, not whatever the branch holds later.
+    pub(crate) async fn review_current(&self, spec: &RunSpec) -> Result<CodeChange> {
+        let change = self.review_target(spec).await?;
+        if change.base_ref.as_deref() != Some(spec.base.as_str()) {
+            return Err(Error::Proposal("The pull request's base branch changed. Review the draft again.".into()));
+        }
+        if change.sha.is_none() || change.sha != spec.pr_sha {
+            return Err(Error::Proposal("The pull request has new commits since you read the draft. Review it again.".into()));
+        }
+        Ok(change)
+    }
+
     /// A run the person drafted by hand. The ticket text is taken from the cache here, never from the caller. Nothing
     /// starts until `runs_approve`.
     pub async fn draft_run(&self, mut spec: RunSpec, item: Option<ItemRef>) -> Result<Proposal> {
@@ -260,7 +309,12 @@ impl Core {
         self.require_watched_repo(&spec.repo)?;
         spec.clone_path = self.resolve_clone(&spec.clone_path)?;
         if spec.instruction.trim().is_empty() {
-            spec.instruction = INVESTIGATE_INSTRUCTION.into();
+            spec.instruction = default_instruction(spec.kind).into();
+        }
+        if spec.kind == RunKind::Review {
+            let change = self.review_target(&spec).await?;
+            spec.base = change.base_ref.unwrap_or(spec.base);
+            spec.pr_sha = change.sha;
         }
         let intent = self
             .with_db_for(&scope, |db| {
@@ -275,23 +329,43 @@ impl Core {
     /// What would run if the draft were approved now. While the draft is pending, the ticket text is re-read from
     /// the cache and a change is stored as a revision, so the digest returned is of the text shown.
     pub async fn runs_review(&self, id: &str) -> Result<RunReview> {
+        let current = self.proposal(id).await?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
+        let (_, _, now) = run_of(&current)?;
+        // A refusal is shown; GitHub being unreachable only leaves the title out, and approving looks again.
+        let pr = if current.state == ProposalState::Pending && now.kind == RunKind::Review {
+            match self.review_target(now).await {
+                Err(e @ Error::Proposal(_)) => return Err(e),
+                found => found.ok(),
+            }
+        } else {
+            None
+        };
         self.with_proposals(|db| {
             let mut p = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
             let (connection_id, item, spec) = run_of(&p)?;
             if p.state == ProposalState::Pending {
+                let mut fresh = spec.clone();
                 if let Some(work) = item.as_ref().map(|i| db.item(i)).transpose()?.flatten() {
-                    let fresh = Some(ticket_snapshot(&work));
-                    if fresh != spec.ticket_block {
-                        let intent = Intent::StartRun {
-                            connection_id: connection_id.clone(),
-                            item: item.clone(),
-                            spec: RunSpec { ticket_block: fresh, ..spec.clone() },
-                        };
-                        p = proposals::edit_noted(db, id, intent, "Ticket text updated", Utc::now())?;
-                    }
+                    fresh.ticket_block = Some(ticket_snapshot(&work));
+                }
+                if let Some(change) = &pr {
+                    fresh.base = change.base_ref.clone().unwrap_or(fresh.base);
+                    fresh.pr_sha = change.sha.clone();
+                }
+                if fresh != *spec {
+                    let note = match () {
+                        _ if fresh.base != spec.base => "Base branch updated",
+                        _ if fresh.pr_sha != spec.pr_sha => "Pull request commit updated",
+                        _ => "Ticket text updated",
+                    };
+                    let intent = Intent::StartRun { connection_id: connection_id.clone(), item: item.clone(), spec: fresh };
+                    p = proposals::edit_noted(db, id, intent, note, Utc::now())?;
                 }
             }
-            Ok(RunReview::of(run_of(&p)?.2))
+            let mut review = RunReview::of(run_of(&p)?.2);
+            review.pr_title = pr.as_ref().map(|c| c.title.clone());
+            review.pr_url = pr.map(|c| c.url);
+            Ok(review)
         })
         .await
     }
@@ -300,6 +374,12 @@ impl Core {
     /// what the person read in `runs_review`; a draft that changed since is refused. Starting the run is the
     /// caller's next step.
     pub async fn runs_approve(&self, id: &str, digest: &str) -> Result<Run> {
+        if let Some(p) = self.proposal(id).await?.filter(|p| p.state == ProposalState::Pending) {
+            let spec = run_of(&p)?.2;
+            if spec.kind == RunKind::Review {
+                self.review_current(spec).await?;
+            }
+        }
         let scope = self.scope().await?;
         let file = db_file(&self.connection(&scope)?);
         self.with_db_for(&scope, |db| {
@@ -549,7 +629,7 @@ mod tests {
         assert_eq!((p.created_by, p.origin.clone(), p.state.clone()), (CreatedBy::User, Origin::Board, ProposalState::Pending));
         let spec = spec_of(&p);
         assert!(spec.ticket_block.as_deref().unwrap().starts_with("CA-1: Ticket 1"));
-        assert_eq!(spec.instruction, INVESTIGATE_INSTRUCTION);
+        assert_eq!(spec.instruction, crate::domain::INVESTIGATE_INSTRUCTION);
         assert_eq!(spec.clone_path, clone.canonicalize().unwrap());
         assert!(fx.tracker.intents().is_empty());
         assert!(fx.core.runs_list(&RunQuery::default()).await.unwrap().is_empty());
@@ -642,7 +722,7 @@ mod tests {
         let p = drafted_run(&fx).await;
         let read = fx.core.runs_review(&p.id).await.unwrap();
 
-        let edit = Edit::Run { instruction: Some("Also read the billing code.".into()), base: Some(" develop ".into()), clone_path: None, kind: None, name: None };
+        let edit = Edit::Run { instruction: Some("Also read the billing code.".into()), base: Some(" develop ".into()), clone_path: None, kind: None, name: None, pr: None, allow_push: None };
         let edited = fx.core.edit_proposal(&p.id, &edit).await.unwrap();
         let spec = spec_of(&edited);
         assert_eq!((spec.base.as_str(), spec.instruction.as_str()), ("develop", "Also read the billing code."));
@@ -714,7 +794,7 @@ mod tests {
         let Intent::StartRun { spec, .. } = edit.apply_to(&current).unwrap() else { panic!() };
         assert_eq!((spec.instruction.as_str(), spec.name.as_str(), spec.base.as_str(), spec.repo.as_str()), ("Look at logs", "new-name", "main", "acme/webshop"));
         assert_eq!(spec.clone_path, PathBuf::from("/Users/me/Code/other"));
-        assert!(Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
+        assert!(Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
     }
 
     #[tokio::test]
@@ -741,5 +821,146 @@ mod tests {
         let digest = fx.core.runs_review(&canonical.id).await.unwrap().digest;
         let run = fx.core.runs_approve(&canonical.id, &digest).await.unwrap();
         assert_eq!(run.spec.clone_path, real.canonicalize().unwrap());
+    }
+
+    mod kinds {
+        use super::*;
+        use crate::codehost::github::testserver::{pull_reply, pull_reply_at, Reply};
+        use crate::inbox::testing::{fixture_watching_with, Fixture};
+
+        const PULL: &str = "/repos/acme/webshop/pulls/12";
+
+        async fn watching(replies: Vec<Reply>) -> Fixture {
+            fixture_watching_with(&["acme/webshop"], vec![(PULL, replies)]).await
+        }
+
+        fn review_of(fx: &Fixture) -> RunSpec {
+            let clone = clone_in(fx, "webshop");
+            RunSpec { kind: RunKind::Review, pr: Some(12), instruction: String::new(), ..spec_in(&clone) }
+        }
+
+        fn same_repo(state: &str, base: &str) -> Reply {
+            pull_reply(12, state, Some("acme/webshop"), base)
+        }
+
+        #[tokio::test]
+        async fn each_kind_drafts_with_its_own_template_and_a_digest_that_follows_the_kind() {
+            let fx = watching(vec![same_repo("open", "main")]).await;
+            let mut digests = Vec::new();
+            let kinds = [(RunKind::Investigate, None), (RunKind::Triage, None), (RunKind::Verify, None), (RunKind::Build, None), (RunKind::Review, Some(12))];
+            for (n, (kind, pr)) in kinds.into_iter().enumerate() {
+                let clone = clone_in(&fx, "webshop");
+                let spec = RunSpec { kind, pr, instruction: String::new(), name: format!("ca-1-x-{n}"), ..spec_in(&clone) };
+                let p = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
+                let review = fx.core.runs_review(&p.id).await.unwrap();
+                assert_eq!(review.instruction, default_instruction(kind), "{kind:?}");
+                assert!(review.prompt.contains(default_instruction(kind)));
+                digests.push(review.digest);
+            }
+            digests.sort();
+            digests.dedup();
+            assert_eq!(digests.len(), 5);
+        }
+
+        #[tokio::test]
+        async fn a_review_of_a_same_repository_pull_request_shows_it_takes_its_base_and_is_approved() {
+            let fx = watching(vec![same_repo("open", "develop")]).await;
+            let p = fx.core.draft_run(review_of(&fx), Some(fx.item("CA-1"))).await.unwrap();
+            assert_eq!(spec_of(&p).base, "develop", "the pull request's base replaces the draft's");
+            let review = fx.core.runs_review(&p.id).await.unwrap();
+            assert_eq!((review.pr_title.as_deref(), review.pr_url.as_deref()), (Some("Fix the cart"), Some("https://github.com/acme/webshop/pull/12")));
+            assert!(review.prompt.contains("Review pull request #12 in acme/webshop at commit a1b2c3d4e5f6."));
+            let run = fx.core.runs_approve(&p.id, &review.digest).await.unwrap();
+            assert_eq!((run.spec.kind, run.spec.pr), (RunKind::Review, Some(12)));
+        }
+
+        #[tokio::test]
+        async fn a_review_is_refused_for_a_fork_a_deleted_fork_a_closed_pull_request_and_one_that_is_missing() {
+            let cases = [
+                (pull_reply(12, "open", Some("mallory/webshop"), "main"), "comes from a fork"),
+                (pull_reply(12, "open", None, "main"), "can't tell it is safe"),
+                (same_repo("closed", "main"), "isn't open"),
+                (Reply::status(404, "{}"), ""),
+            ];
+            for (reply, why) in cases {
+                let fx = watching(vec![reply]).await;
+                let err = fx.core.draft_run(review_of(&fx), Some(fx.item("CA-1"))).await.unwrap_err().to_string();
+                assert!(err.contains(why), "{err}");
+                assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().is_empty());
+            }
+            let fx = watching(vec![]).await;
+            let unwatched = RunSpec { repo: "acme/other".into(), ..review_of(&fx) };
+            assert!(fx.core.draft_run(unwatched, None).await.is_err());
+        }
+
+        #[tokio::test]
+        async fn approving_looks_at_the_pull_request_again() {
+            let fork = pull_reply(12, "open", Some("mallory/webshop"), "main");
+            let fx = watching(vec![same_repo("open", "main"), same_repo("open", "main"), fork]).await;
+            let p = fx.core.draft_run(review_of(&fx), Some(fx.item("CA-1"))).await.unwrap();
+            let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
+            let err = fx.core.runs_approve(&p.id, &digest).await.unwrap_err().to_string();
+            assert!(err.contains("comes from a fork"), "{err}");
+            assert!(fx.core.runs_list(&RunQuery::default()).await.unwrap().is_empty());
+
+            let fx = watching(vec![same_repo("open", "main"), same_repo("open", "main"), same_repo("closed", "main")]).await;
+            let p = fx.core.draft_run(review_of(&fx), Some(fx.item("CA-1"))).await.unwrap();
+            let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
+            assert!(fx.core.runs_approve(&p.id, &digest).await.unwrap_err().to_string().contains("isn't open"));
+        }
+
+        #[tokio::test]
+        async fn a_base_branch_that_moved_is_picked_up_by_review_and_refused_by_approve_until_then() {
+            let fx = watching(vec![same_repo("open", "main"), same_repo("open", "develop")]).await;
+            let p = fx.core.draft_run(review_of(&fx), Some(fx.item("CA-1"))).await.unwrap();
+            let stale = RunReview::of(&spec_of(&p)).digest;
+            let err = fx.core.runs_approve(&p.id, &stale).await.unwrap_err().to_string();
+            assert!(err.contains("base branch changed"), "{err}");
+            let fresh = fx.core.runs_review(&p.id).await.unwrap();
+            assert_eq!(fresh.spec.base, "develop");
+            assert!(fx.core.runs_approve(&p.id, &fresh.digest).await.is_ok());
+        }
+
+        #[tokio::test]
+        async fn a_review_is_pinned_to_the_commit_the_person_was_shown() {
+            let moved = pull_reply_at(12, "open", Some("acme/webshop"), "main", "ffff0000ffff");
+            let fx = watching(vec![same_repo("open", "main"), same_repo("open", "main"), moved]).await;
+            let p = fx.core.draft_run(review_of(&fx), Some(fx.item("CA-1"))).await.unwrap();
+            assert_eq!(spec_of(&p).pr_sha.as_deref(), Some("a1b2c3d4e5f6"));
+            let read = fx.core.runs_review(&p.id).await.unwrap();
+            assert!(read.prompt.contains("Review pull request #12 in acme/webshop at commit a1b2c3d4e5f6."));
+            let err = fx.core.runs_approve(&p.id, &read.digest).await.unwrap_err().to_string();
+            assert!(err.contains("new commits since you read the draft"), "{err}");
+            let again = fx.core.runs_review(&p.id).await.unwrap();
+            assert!(again.prompt.contains("at commit ffff0000ffff") && again.digest != read.digest);
+            assert_eq!(fx.core.runs_approve(&p.id, &again.digest).await.unwrap().spec.pr_sha.as_deref(), Some("ffff0000ffff"));
+        }
+
+        #[tokio::test]
+        async fn a_build_needs_a_ticket_and_only_a_build_may_push() {
+            let fx = watching(vec![]).await;
+            let clone = clone_in(&fx, "webshop");
+            let build = RunSpec { kind: RunKind::Build, instruction: String::new(), ..spec_in(&clone) };
+            let err = fx.core.draft_run(build.clone(), None).await.unwrap_err().to_string();
+            assert!(err.contains("Build needs a ticket"), "{err}");
+            let ok = fx.core.draft_run(RunSpec { allow_push: true, ..build }, Some(fx.item("CA-1"))).await.unwrap();
+            assert!(spec_of(&ok).allow_push && spec_of(&ok).instruction == default_instruction(RunKind::Build));
+            let investigate = RunSpec { allow_push: true, ..spec_in(&clone) };
+            assert!(fx.core.draft_run(investigate, Some(fx.item("CA-1"))).await.unwrap_err().to_string().contains("only a build can push"));
+        }
+
+        #[tokio::test]
+        async fn editing_the_kind_swaps_an_untouched_template_and_drops_what_belonged_to_the_old_kind() {
+            let fx = watching(vec![]).await;
+            let clone = clone_in(&fx, "webshop");
+            let build = RunSpec { kind: RunKind::Build, allow_push: true, instruction: String::new(), ..spec_in(&clone) };
+            let p = fx.core.draft_run(build, Some(fx.item("CA-1"))).await.unwrap();
+            let edit = Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(RunKind::Triage), name: None, pr: None, allow_push: None };
+            let edited = spec_of(&fx.core.edit_proposal(&p.id, &edit).await.unwrap());
+            assert_eq!((edited.kind, edited.allow_push, edited.instruction.as_str()), (RunKind::Triage, false, default_instruction(RunKind::Triage)));
+
+            let typed = Edit::Run { instruction: Some("My own words, long enough.".into()), base: None, clone_path: None, kind: Some(RunKind::Verify), name: None, pr: None, allow_push: None };
+            assert_eq!(spec_of(&fx.core.edit_proposal(&p.id, &typed).await.unwrap()).instruction, "My own words, long enough.");
+        }
     }
 }

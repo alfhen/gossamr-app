@@ -248,6 +248,7 @@ impl GithubHost {
                 changed_files: None,
                 body: String::new(),
                 linked_keys: Vec::new(),
+                head_repo: None,
             })
             .collect())
     }
