@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import type { Run, RunsEnvironment } from "../types";
+import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, attentionCount, groupRuns, navOrder, stepRun, type AgentFilters } from "./agentsLogic";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
@@ -27,6 +28,8 @@ interface RunsState {
   selectedId: string | null;
   /** Ids of failed runs the person has had on screen; the rail badge counts the others. */
   seenFailed: ReadonlySet<string>;
+  /** Ids of failed runs the person has taken the step in Terminal for, or copied its command; Retry waits for this. */
+  terminalOpened: ReadonlySet<string>;
   /** Null until the person opens or closes the explainer, when it shows for a first visit with no runs. */
   introOpen: boolean | null;
   earlierOpen: boolean;
@@ -51,6 +54,10 @@ interface RunsState {
   stop(id: string): Promise<void>;
   startNow(id: string): Promise<void>;
   retryLaunch(id: string): Promise<void>;
+  /** The step a failed launch needs the person for: Terminal to trust the folder or sign in, or the install page. */
+  fix(id: string, act: Extract<FailureAct, "terminal" | "install">): Promise<void>;
+  /** Notes that the person copied the command to run it themselves, which is as good as opening Terminal. */
+  noteCopied(id: string): void;
   markSeen(): void;
   attach(id: string): Promise<void>;
   stopAll(): Promise<void>;
@@ -60,6 +67,15 @@ interface RunsState {
 
 const idle = { runs: [] as Run[], status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, picking: false };
 
+/** A run that was failed and is not any more starts over: if it fails again, the rail badge counts it again. */
+function forgetRecovered(seen: ReadonlySet<string>, runs: readonly Run[]): ReadonlySet<string> {
+  const recovered = runs.filter((r) => r.state !== "failed" && seen.has(r.id));
+  if (!recovered.length) return seen;
+  const kept = new Set([...seen].filter((id) => !recovered.some((r) => r.id === id)));
+  writeStored(SEEN_KEY, [...kept]);
+  return kept;
+}
+
 let stop: (() => void) | null = null;
 let seq = 0;
 
@@ -67,6 +83,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   backend: null,
   filters: NO_FILTERS,
   seenFailed: loadSeen(),
+  terminalOpened: new Set<string>(),
   introOpen: null,
   earlierOpen: false,
   stopping: false,
@@ -95,7 +112,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     const mine = ++seq;
     try {
       const runs = await backend.runsList();
-      if (mine === seq) set({ runs, status: "ready", error: null });
+      if (mine === seq) set({ runs, status: "ready", error: null, seenFailed: forgetRecovered(get().seenFailed, runs) });
     } catch (e) {
       if (mine === seq) set({ status: "error", error: messageOf(e) });
     }
@@ -156,11 +173,39 @@ export const useRuns = create<RunsState>((set, get) => ({
     const { backend } = get();
     if (!backend) return;
     try {
-      await backend.runsRetryLaunch(id);
+      const before = get().runs.find((r) => r.id === id);
+      const after = await backend.runsRetryLaunch(id);
+      const help = after.state === "failed" ? failureHelp(after) : null;
+      const again = !!help?.retryNeedsTerminal && help.kind === before?.failure?.type;
+      if (!again && get().terminalOpened.has(id)) {
+        const opened = new Set(get().terminalOpened);
+        opened.delete(id);
+        set({ terminalOpened: opened });
+      }
+      if (after.state === "failed") {
+        useToasts.getState().push(again ? `Still blocked: ${help.summary} Finish the step in Terminal, then retry.` : `It failed again: ${after.error ?? "no reason was given"}`);
+      }
     } catch (e) {
       useToasts.getState().push(`Couldn't retry the launch: ${messageOf(e)}`);
     }
     void get().reload();
+  },
+
+  async fix(id, act) {
+    const { backend } = get();
+    if (!backend) return;
+    try {
+      if (act === "install") return await backend.openUrl(INSTALL_URL);
+      const kind = get().runs.find((r) => r.id === id)?.failure?.type;
+      await (kind === "notSignedIn" ? backend.runsSignIn(id) : backend.runsTrustFolder(id));
+      get().noteCopied(id);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't open ${act === "install" ? "the install page" : "Terminal"}: ${messageOf(e)}`);
+    }
+  },
+
+  noteCopied(id) {
+    if (!get().terminalOpened.has(id)) set({ terminalOpened: new Set([...get().terminalOpened, id]) });
   },
 
   markSeen() {

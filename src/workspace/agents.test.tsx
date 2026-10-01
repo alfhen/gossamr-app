@@ -28,6 +28,9 @@ const on = (): AgentsActions => ({
   dismissIntro: vi.fn(),
   checkEnvironment: vi.fn(),
   retry: vi.fn(),
+  fix: vi.fn(),
+  retryLaunch: vi.fn(),
+  copied: vi.fn(),
   stopAll: vi.fn(),
   startAgent: vi.fn(),
   openSafety: vi.fn(),
@@ -46,6 +49,7 @@ const screen = (over: Partial<AgentsScreenProps> = {}) =>
       introShown={false}
       view="cards"
       stopping={false}
+      opened={new Set()}
       now={NOW}
       ticketTitle={() => null}
       on={on()}
@@ -57,11 +61,65 @@ const articles = (html: string) => html.match(/<article[\s\S]*?<\/article>/g) ??
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...eight()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: null, result: null, error: null, lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
 
-const card = (r: Run) =>
-  renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onSelect={vi.fn()} onOpen={vi.fn()} onAttach={vi.fn()} />);
+const buttonsOf = (html: string) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
+
+const card = (r: Run, opened = false) =>
+  renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onSelect={vi.fn()} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+});
+
+const failures = () => new MockBackend({ runs: { seed: "failures" } }).runs.list();
+const failed = (type: string) => failures().find((r) => r.failure?.type === type)!;
+
+describe("a failed launch on a card", () => {
+  it("explains an untrusted folder in a line and offers Trust, with Retry waiting until Terminal was used", () => {
+    const out = card(failed("untrustedFolder"));
+    expect(out).toContain("Claude asks you once per folder before it will work there.");
+    expect(buttonsOf(out)).toEqual(["Trust this folder in Terminal", "Retry"]);
+    expect(out).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Retry/);
+    expect(out).not.toContain("accept the trust prompt");
+  });
+
+  it("enables Retry once Terminal was opened, and makes it the next step", () => {
+    const out = card(failed("untrustedFolder"), true);
+    expect(out).not.toMatch(/<button[^>]*disabled=""/);
+    const retry = out.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Retry<\/button>/)![0];
+    const trust = out.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Trust this folder in Terminal<\/button>/)![0];
+    expect(retry).toContain("bg-ws-pip");
+    expect(trust).not.toContain("bg-ws-pip");
+  });
+
+  it.each([
+    ["notSignedIn", "Claude isn't signed in.", ["Open Terminal to sign in", "Retry"], true],
+    ["claudeMissing", "Claude Code isn't installed, or Gossamr can't find it.", ["Open the install page", "Retry"], false],
+    ["noClone", "The clone this run was set up for can't be used any more.", ["Start it again and choose a clone", "Retry"], false],
+    ["capReached", "Too many agents are running at once.", ["Retry"], false],
+  ])("gives %s its own line and next step", (type, line, expected, gated) => {
+    const out = card(failed(type));
+    expect(out).toContain(line.replace(/'/g, "&#x27;"));
+    expect(buttonsOf(out)).toEqual(expected);
+    expect(/<button[^>]*disabled=""/.test(out)).toBe(gated);
+  });
+
+  it("keeps the recorded text for a failure with no kind, and offers a plain Retry", () => {
+    const out = card(failed("other"));
+    expect(out).toContain("Claude couldn&#x27;t start the agent: the session service didn&#x27;t answer");
+    expect(buttonsOf(out)).toEqual([]);
+    expect(card(run("failed", { shortId: null, error: "Launch was interrupted" }))).toContain("Launch was interrupted");
+  });
+
+  it("offers nothing for a failure after the session began", () => {
+    const out = card({ ...failed("untrustedFolder"), shortId: "1000a000" });
+    expect(buttonsOf(out)).toEqual([]);
+  });
+
+  it("shows the short line in the list row too", () => {
+    const out = screen({ runs: failures(), view: "list" });
+    expect(out).toContain("Claude asks you once per folder before it will work there.");
+    expect(out).toContain("Too many agents are running at once.");
+  });
 });
 
 describe("the lanes", () => {

@@ -9,6 +9,8 @@ import { AgentsBanners } from "./AgentsBanners";
 import { AgentsEmpty, AgentsIntro, NoMatch } from "./AgentsEmpty";
 import { ALL, LANES, LANE_IDS, filterOptions, groupRuns, isFiltered, laneIsFolded, navOrder, stepRun, stoppable, summaryLine, type AgentFilters, type LaneGroup, type LaneId } from "./agentsLogic";
 import { useFooterHeight } from "./CanvasFooter";
+import { failureAction } from "./failureActions";
+import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
@@ -101,6 +103,10 @@ export interface AgentsActions {
   dismissIntro(): void;
   checkEnvironment(): void;
   retry(): void;
+  /** The step a failed launch needs: Terminal, or the install page. */
+  fix(id: string, act: FailureAct): void;
+  retryLaunch(id: string): void;
+  copied(id: string): void;
   stopAll(): void;
   startAgent(): void;
   openSafety(): void;
@@ -171,13 +177,15 @@ export interface AgentsScreenProps {
   introShown: boolean;
   view: AgentsViewMode;
   stopping: boolean;
+  /** Failed runs the person has taken the Terminal step for. */
+  opened: ReadonlySet<string>;
   now: number;
   ticketTitle(run: Run): string | null;
   on: AgentsActions;
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, now, ticketTitle, on }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, opened, now, ticketTitle, on }: AgentsScreenProps) {
   const footer = useFooterHeight();
   const groups = useMemo(() => groupRuns(runs, filters, now), [runs, filters, now]);
   const order = useMemo(() => navOrder(groups, earlierOpen, filters), [groups, earlierOpen, filters]);
@@ -194,6 +202,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     onSelect: () => on.select(run.id),
     onOpen: () => on.open(run.id),
     onAttach: () => on.attach(run.id),
+    failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
   });
 
   let position = 0;
@@ -281,6 +290,9 @@ const actions: AgentsActions = {
   },
   checkEnvironment: () => void useRuns.getState().checkEnvironment(),
   retry: () => void useRuns.getState().reload(),
+  fix: failureAction,
+  retryLaunch: (id) => void useRuns.getState().retryLaunch(id),
+  copied: (id) => useRuns.getState().noteCopied(id),
   stopAll: () => void useRuns.getState().stopAll(),
   startAgent: () => useRuns.getState().setPicking(true),
   openSafety: () => useRuns.getState().openSafety(),
@@ -296,6 +308,7 @@ export function AgentsView() {
   const earlierOpen = useRuns((s) => s.earlierOpen);
   const introOpen = useRuns((s) => s.introOpen);
   const stopping = useRuns((s) => s.stopping);
+  const opened = useRuns((s) => s.terminalOpened);
   const view = usePrefs((s) => s.agentsView);
   const introSeen = usePrefs((s) => s.agentsIntroSeen);
   const items = useWorkspace((s) => s.items);
@@ -347,6 +360,7 @@ export function AgentsView() {
       introShown={introOpen ?? (!introSeen && runs.length === 0)}
       view={view}
       stopping={stopping}
+      opened={opened}
       now={now}
       ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
       on={actions}

@@ -329,6 +329,14 @@ export class JiraBackend implements Backend {
     return invoke<void>("runs_attach", { id });
   }
 
+  runsTrustFolder(id: string) {
+    return invoke<void>("runs_trust_folder", { id });
+  }
+
+  runsSignIn(id: string) {
+    return invoke<void>("runs_sign_in", { id });
+  }
+
   runsPreflight(spec: RunSpec | null) {
     return invoke<Preflight>("runs_preflight", { spec });
   }

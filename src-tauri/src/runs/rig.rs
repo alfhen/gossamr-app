@@ -68,7 +68,8 @@ pub async fn ready() -> Rig {
     )
     .enabled(true)
     .with_notifier(notices.clone())
-    .with_terminal(opened.clone());
+    .with_terminal(opened.clone())
+    .with_home(fx.home.canonicalize().unwrap());
     Rig { fx, svc: Arc::new(svc), cli, clone, notices, opened, changes }
 }
 

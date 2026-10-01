@@ -1,5 +1,6 @@
 import type { Run } from "../types";
 import { Icon, STATE_ICON } from "./AgentIcons";
+import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, stateView, type Tone } from "./agentsLogic";
 
 export const TONE: Record<Tone, { text: string; soft: string; color: string }> = {
@@ -44,10 +45,53 @@ export function OpenInTerminal({ run, onOpen, filled = true }: { run: Run; onOpe
   );
 }
 
+/** What the cards and the sheet can do about a failed launch. */
+export interface FailureActions {
+  act(act: FailureAct): void;
+  retry(): void;
+  /** The person copied the command to run it in their own terminal. */
+  copied(): void;
+}
+
+export interface FailureState {
+  /** Terminal was opened for this run, or its command copied. */
+  opened: boolean;
+  on: FailureActions;
+}
+
+const RETRY_WAITS = "Do the step above first, then retry";
+
+function FailureNext({ run, failure }: { run: Run; failure: FailureState }) {
+  const help = failureHelp(run);
+  if (!help) return null;
+  const ready = retryEnabled(help, failure.opened);
+  const next = help.primary && !(help.retryNeedsTerminal && failure.opened);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {help.primary && (
+        <button type="button" onClick={(ev) => (ev.stopPropagation(), failure.on.act(help.primary!.act))} className={`${BUTTON} ${next ? "border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:brightness-110" : "border-ws-sep2 text-ws-ink hover:bg-ws-hover"}`}>
+          <Icon name={help.primary.act === "terminal" ? "term" : help.primary.act === "install" ? "ext" : "play"} />
+          {help.primary.label}
+        </button>
+      )}
+      <button
+        type="button"
+        disabled={!ready}
+        title={ready ? undefined : RETRY_WAITS}
+        onClick={(ev) => (ev.stopPropagation(), failure.on.retry())}
+        className={`${BUTTON} ${ready && !next ? "border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:brightness-110" : "border-ws-sep2 text-ws-ink hover:bg-ws-hover"}`}
+      >
+        <Icon name="retry" />
+        Retry
+      </button>
+    </div>
+  );
+}
+
 const clamp = (lines: 2 | 3) => (lines === 2 ? "line-clamp-2" : "line-clamp-3");
 
 /** What a card or row says about the run's state, in the order the person needs it. */
-export function RunBody({ run, now, onAttach }: { run: Run; now: number; onAttach(): void }) {
+export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number; onAttach(): void; failure: FailureState }) {
   const quiet = quietMinutes(run, now);
   switch (run.state) {
     case "needsPermission": {
@@ -97,13 +141,18 @@ export function RunBody({ run, now, onAttach }: { run: Run; now: number; onAttac
           </div>
         </div>
       );
-    case "failed":
+    case "failed": {
+      const help = failureHelp(run);
       return (
-        <p className="m-0 flex items-start gap-1.5 text-ws-blocked">
-          <Icon name="alert" className="mt-0.5 size-3.5" />
-          <span className={`${clamp(3)} min-w-0 [overflow-wrap:anywhere]`}>{run.error?.trim() || "It didn't start"}</span>
-        </p>
+        <div className="grid gap-2">
+          <p className="m-0 flex items-start gap-1.5 text-ws-blocked">
+            <Icon name="alert" className="mt-0.5 size-3.5" />
+            <span className={`${clamp(3)} min-w-0 [overflow-wrap:anywhere]`}>{help?.summary ?? (run.error?.trim() || "It didn't start")}</span>
+          </p>
+          {help && <FailureNext run={run} failure={failure} />}
+        </div>
       );
+    }
     case "done":
       return (
         <p className="m-0 flex items-start gap-2 text-ws-ink2">
@@ -156,7 +205,7 @@ export function rowText(run: Run, now: number): string {
     case "unknown":
       return "Open in Terminal to look";
     case "failed":
-      return run.error?.trim() || "It didn't start";
+      return failureHelp(run)?.summary ?? (run.error?.trim() || "It didn't start");
     case "done":
       return resultHeadline(run.result) ?? "Finished";
     case "stopped":

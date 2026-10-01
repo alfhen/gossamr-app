@@ -1,4 +1,4 @@
-import type { CloneChoice, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunQuery, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
+import type { CloneChoice, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
 import { itemRef } from "./mockConnector";
 import type { MockProposals } from "./mockProposals";
 
@@ -73,7 +73,29 @@ const SEEDS: Seed[] = [
   { key: "DEVOPS-455", name: "devops-455-queue-lag-92a3", state: "done", minutesAgo: 95, over: { result: "The lag comes from one consumer that retries without backoff.\n\nFor Jira: add a backoff to the consumer and close the alert.", tokens: 340_000, branch: "worktree-devops-455-queue-lag-92a3" } },
   { key: "WEB-97", name: "web-97-image-crop-b4c5", state: "done", minutesAgo: 180, over: { result: "Cropping happens twice, once in the CDN rule and once in the component.", tokens: 121_000, branch: "worktree-web-97-image-crop-b4c5" } },
   { key: "CA-377", name: "ca-377-stock-sync-d6e7", state: "working", minutesAgo: 70, quietMinutes: 40, over: { lastDetail: "Running the integration tests", tokens: 802_000 } },
-  { key: "SUP-9", name: "sup-9-export-timeout-f8a9", state: "failed", minutesAgo: 30, over: { error: "Workspace not trusted: open a Terminal in this folder, accept the trust prompt, then retry." } },
+  { key: "SUP-9", name: "sup-9-export-timeout-f8a9", state: "failed", minutesAgo: 30, over: untrusted("/Users/sample/Code/storefront") },
+];
+
+const FAILED_TEXT = {
+  notSignedIn: "Claude isn't signed in. Run `claude` in Terminal and sign in, then retry.",
+  claudeMissing: "Claude Code isn't installed, or Gossamr can't find it.",
+  noClone: "/Users/sample/Code/storefront isn't a git clone any more",
+  capReached: "3 agents are already running. Stop one or wait for one to finish, then retry.",
+  other: "Claude couldn't start the agent: the session service didn't answer",
+} as const;
+
+function untrusted(path: string): Partial<Run> {
+  return { error: `Claude doesn't trust ${path} yet. Open Terminal in that folder, run \`claude\`, accept the trust prompt, then retry.`, failure: { type: "untrustedFolder", path } };
+}
+
+/** One failed launch of each kind the person can act on, for trying the guided steps. */
+const FAILURE_SEEDS: Seed[] = [
+  { key: "SUP-9", name: "sup-9-export-timeout-f8a9", state: "failed", minutesAgo: 30, over: untrusted("/Users/sample/Code/storefront") },
+  { key: "WEB-120", name: "web-120-login-redirect-1a2b", state: "failed", minutesAgo: 41, over: { error: FAILED_TEXT.notSignedIn, failure: { type: "notSignedIn" } } },
+  { key: "CA-415", name: "ca-415-vat-rounding-3c4d", state: "failed", minutesAgo: 52, over: { error: FAILED_TEXT.claudeMissing, failure: { type: "claudeMissing" } } },
+  { key: "DEVOPS-480", name: "devops-480-cert-expiry-5e6f", state: "failed", minutesAgo: 63, over: { error: FAILED_TEXT.noClone, failure: { type: "noClone" } } },
+  { key: "WEB-121", name: "web-121-banner-flicker-7a8b", state: "failed", minutesAgo: 74, over: { error: FAILED_TEXT.capReached, failure: { type: "capReached" } } },
+  { key: "CA-416", name: "ca-416-export-csv-9c0d", state: "failed", minutesAgo: 85, over: { error: FAILED_TEXT.other, failure: { type: "other" } } },
 ];
 
 const REPOS = ["acme/storefront", "acme/payments", "acme/ops"];
@@ -136,8 +158,8 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
 }
 
 export interface MockRunsOptions {
-  /** `busy` is the eight scripted runs; `many` is twenty-four. */
-  seed?: "busy" | "empty" | "many";
+  /** `busy` is the eight scripted runs; `many` is twenty-four; `failures` is one failed launch of each kind. */
+  seed?: "busy" | "empty" | "many" | "failures";
   /** The moment the scripted ages count back from. Fixed by default so tests stay deterministic. */
   epoch?: number;
   environment?: RunsEnvironment["claude"];
@@ -178,6 +200,11 @@ export class MockRuns {
   private readonly cap: number;
   readonly pipRun: boolean;
   private picked = new Map<string, string>();
+  /** Clone folders the person has trusted through `trustFolder`; a retry in one of them goes through. */
+  private trusted = new Set<string>();
+  private signedIn = false;
+  /** Run ids Terminal was opened for, by `trustFolder` or `signIn`, for tests. */
+  readonly terminals: string[] = [];
   /** The ticket text a draft is snapshotted from; set by the backend that owns the tickets. */
   ticketText: (item: ItemRef) => string | null = () => null;
 
@@ -190,7 +217,7 @@ export class MockRuns {
     this.claude = o.environment ?? "ok";
     this.cap = o.cap ?? 6;
     this.pipRun = !!o.pipRun;
-    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : SEEDS;
+    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
   }
 
@@ -198,8 +225,14 @@ export class MockRuns {
     return new Date(this.epoch + ++this.tick * MINUTE).toISOString();
   }
 
+  /** Signing in through `signIn` ends a signed-out Claude. */
+  private claudeNow(): RunsEnvironment["claude"] {
+    return this.claude === "signedOut" && this.signedIn ? "ok" : this.claude;
+  }
+
   environment(): RunsEnvironment {
-    return { claude: this.claude, version: this.claude === "ok" || this.claude === "signedOut" ? "2.1.286" : null };
+    const claude = this.claudeNow();
+    return { claude, version: claude === "ok" || claude === "signedOut" ? "2.1.286" : null };
   }
 
   private changed() {
@@ -349,10 +382,49 @@ export class MockRuns {
     this.attached.push(id);
   }
 
+  private failed(id: string, want: RunFailure["type"], refusal: string): Run {
+    const run = this.get(id);
+    if (!run) throw new Error("that run no longer exists");
+    if (run.state !== "failed" || run.failure?.type !== want) throw new Error(refusal);
+    return run;
+  }
+
+  /** Stands in for opening Terminal to accept Claude's trust question: the folder counts as trusted from here. */
+  trustFolder(id: string) {
+    const run = this.failed(id, "untrustedFolder", "Terminal can be opened to trust a folder only for a run that failed because Claude doesn't trust it.");
+    this.trusted.add(run.spec.clonePath);
+    this.terminals.push(id);
+  }
+
+  signIn(id: string) {
+    this.failed(id, "notSignedIn", "Terminal can be opened to sign in only for a run that failed because Claude isn't signed in.");
+    this.signedIn = true;
+    this.terminals.push(id);
+  }
+
+  /** Whether launching `run` would fail the way it did before. */
+  private stillBlocked(run: Run): boolean {
+    switch (run.failure?.type) {
+      case "untrustedFolder":
+        return !this.trusted.has(run.spec.clonePath);
+      case "notSignedIn":
+        return !this.signedIn;
+      case "claudeMissing":
+        return this.claude === "missing";
+      case "noClone":
+        return !(CLONES[run.spec.repo] ?? []).some((c) => c.path === run.spec.clonePath);
+      default:
+        return false;
+    }
+  }
+
   retryLaunch(id: string): Run {
     const run = this.get(id);
     if (run?.state !== "failed") throw new Error("only a run that failed can be retried");
-    const next = this.update(id, { state: "queued", error: null, endedAt: null, lastProgressAt: this.now() });
+    const at = this.now();
+    const next = this.stillBlocked(run)
+      ? this.update(id, { lastProgressAt: at, endedAt: at })
+      : this.update(id, { state: "queued", error: null, failure: null, endedAt: null, lastProgressAt: at });
     this.changed();
     return next;
   }
@@ -360,10 +432,11 @@ export class MockRuns {
   preflight(spec: RunSpec | null): Preflight {
     const rows: PreflightRow[] = [];
     const add = (level: PreflightRow["level"], text: string) => rows.push({ level, text });
-    if (this.claude === "missing") add("red", "Claude Code isn't installed");
+    const claude = this.claudeNow();
+    if (claude === "missing") add("red", "Claude Code isn't installed");
     else {
       add("green", "Claude Code 2.1.286");
-      if (this.claude === "signedOut") add("red", "Not signed in to Claude. Sign in in Terminal, then check again.");
+      if (claude === "signedOut") add("red", "Not signed in to Claude. Sign in in Terminal, then check again.");
       else add("green", "Signed in to Claude");
       add("green", "Background agents are supported");
       add("green", "Shell environment read (72 variables). Agents get this PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
@@ -375,7 +448,7 @@ export class MockRuns {
       else if (clone.branch !== spec.base) add("amber", `Clone: ${clone.path} on ${clone.branch}. It is on ${clone.branch}, not ${spec.base}. The agent's worktree starts from your current HEAD and is told to switch to ${spec.base}.`);
       else add("green", `Clone: ${clone.path} on ${clone.branch}.`);
     }
-    if (this.claude !== "missing") add("green", "Agents run as you, in your permission mode: auto");
+    if (claude !== "missing") add("green", "Agents run as you, in your permission mode: auto");
     const live = this.runs.filter((r) => LIVE.includes(r.state)).length;
     if (live >= this.cap) add("red", `${live} agents are running, the most Gossamr starts at once (${this.cap}). Stop one or wait for one to finish.`);
     else add("green", `${live} of ${this.cap} agents running`);

@@ -125,7 +125,7 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-export function CopyButton({ text, label = "Copy", what }: { text: string; label?: string; what?: string }) {
+export function CopyButton({ text, label = "Copy", what, onCopied }: { text: string; label?: string; what?: string; onCopied?(): void }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
@@ -135,7 +135,9 @@ export function CopyButton({ text, label = "Copy", what }: { text: string; label
       data-copy={text}
       aria-label={what ? `Copy ${what}` : label}
       onClick={async () => {
-        setState((await copyText(text)) ? "copied" : "failed");
+        const copied = await copyText(text);
+        setState(copied ? "copied" : "failed");
+        if (copied) onCopied?.();
         if (timer.current) clearTimeout(timer.current);
         timer.current = setTimeout(() => setState("idle"), 1600);
       }}
@@ -147,13 +149,13 @@ export function CopyButton({ text, label = "Copy", what }: { text: string; label
   );
 }
 
-export function CodeBox({ text, what, wrap = false }: { text: string; what: string; wrap?: boolean }) {
+export function CodeBox({ text, what, wrap = false, onCopied }: { text: string; what: string; wrap?: boolean; onCopied?(): void }) {
   return (
     <div className="flex items-start gap-2 rounded-md border border-ws-sep bg-ws-bar py-1 pr-1 pl-2.5">
       <code className={`selectable min-w-0 flex-1 py-0.5 font-mono text-sm text-ws-ink ${wrap ? "break-words whitespace-pre-wrap" : "truncate"}`} title={wrap ? undefined : text}>
         {text}
       </code>
-      <CopyButton text={text} what={what} />
+      <CopyButton text={text} what={what} onCopied={onCopied} />
     </div>
   );
 }

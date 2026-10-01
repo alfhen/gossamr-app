@@ -569,6 +569,20 @@ async fn runs_attach(runs: State<'_, RunsState>, id: String) -> Result<()> {
     runs.attach(&id).await
 }
 
+/// Opens Terminal in the run's clone running `claude`, so the person can accept Claude's trust question there. Only for
+/// a run that failed because the folder isn't trusted; the folder is the one stored with the run.
+#[tauri::command]
+async fn runs_trust_folder(runs: State<'_, RunsState>, id: String) -> Result<()> {
+    runs.open_claude(&id, runs::control::Purpose::Trust).await
+}
+
+/// Opens Terminal in the run's clone running `claude`, so the person can sign in. Only for a run that failed because
+/// Claude isn't signed in.
+#[tauri::command]
+async fn runs_sign_in(runs: State<'_, RunsState>, id: String) -> Result<()> {
+    runs.open_claude(&id, runs::control::Purpose::SignIn).await
+}
+
 /// Bytes the run's session folder uses; a lower bound if counting took too long.
 #[tauri::command]
 async fn runs_disk(runs: State<'_, RunsState>, id: String) -> Result<u64> {
@@ -944,6 +958,8 @@ pub fn run() {
             runs_stop,
             runs_stop_all,
             runs_attach,
+            runs_trust_folder,
+            runs_sign_in,
             runs_disk,
             runs_events,
             runs_open_pending,
