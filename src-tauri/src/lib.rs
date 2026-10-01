@@ -12,6 +12,7 @@ mod legacy;
 mod model;
 mod notify;
 mod proposals;
+mod runs;
 mod secrets;
 mod sync;
 mod tracker;

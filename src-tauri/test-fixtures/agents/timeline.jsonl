@@ -1,0 +1,6 @@
+{"at":"2026-09-30T10:00:00.000Z","state":"working","detail":"Reading the ticket","text":"Started"}
+{"at":"2026-09-30T10:02:10.000Z","state":"working","detail":"Searching the export code","text":"grep -rn export src"}
+not json at all
+{"at":1790000500000,"state":"working","detail":"Reading a file"}
+{"state":"blocked","text":"Needs a decision"}
+[1,2,3]
