@@ -31,7 +31,7 @@ use tracker::{Connection, Move};
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState};
 use error::{Error, Result};
 use domain::{
-    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, ContainerRef, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Stray,
+    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, ContainerRef, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunQuery, RunReview, Stray,
     TreeEntry, WatchChange, WatchMode, WorkItem, Workflow,
 };
 use model::{Snapshot, Transition};
@@ -43,6 +43,7 @@ const EVENT_LIMIT: usize = 100;
 
 type CoreState = Arc<Core>;
 type AgentState = Arc<AgentService>;
+type LauncherState = Arc<dyn runs::launcher::RunLauncher>;
 
 /// Sends the latest snapshot to the window and updates the Dock badge. Failures only mean there is nothing to
 /// show yet (e.g. signed out).
@@ -58,6 +59,11 @@ async fn publish(app: &AppHandle, core: &Core) {
 /// Tells the page the cache changed, so views over it can re-read.
 fn cache_changed(app: &AppHandle, connection_id: &str) {
     let _ = app.emit("cache-changed", serde_json::json!({ "connectionId": connection_id }));
+}
+
+/// Tells the page a run was created or changed.
+fn runs_changed(app: &AppHandle, connection_id: &str) {
+    let _ = app.emit("runs-changed", serde_json::json!({ "connectionId": connection_id }));
 }
 
 /// Tells the page which work items' code links changed, so it can re-read them.
@@ -396,6 +402,35 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: Strin
     result
 }
 
+/// The prompt a run draft would send and the digest to approve it with.
+#[tauri::command]
+async fn runs_review(core: State<'_, CoreState>, proposal_id: String) -> Result<RunReview> {
+    core.runs_review(&proposal_id).await
+}
+
+/// Approves a run draft the person has read (`digest` is from `runs_review`) and hands the queued run to the launcher.
+#[tauri::command]
+async fn runs_approve(app: AppHandle, core: State<'_, CoreState>, launcher: State<'_, LauncherState>, proposal_id: String, digest: String) -> Result<Run> {
+    let run = core.runs_approve(&proposal_id, &digest).await?;
+    proposals_changed(&app, &run.connection_id);
+    runs_changed(&app, &run.connection_id);
+    let (launcher, run_id) = (launcher.inner().clone(), run.id.clone());
+    tauri::async_runtime::spawn(async move {
+        let _ = launcher.launch(&run_id).await;
+    });
+    Ok(run)
+}
+
+#[tauri::command]
+async fn runs_list(core: State<'_, CoreState>, query: Option<RunQuery>) -> Result<Vec<Run>> {
+    core.runs_list(&query.unwrap_or_default()).await
+}
+
+#[tauri::command]
+async fn runs_get(core: State<'_, CoreState>, id: String) -> Result<Option<Run>> {
+    core.run(&id).await
+}
+
 #[tauri::command]
 fn sync_now(core: State<'_, CoreState>) {
     core.wake.notify_one();
@@ -651,6 +686,7 @@ pub fn run() {
                 Arc::new(move |request_id, filter, note| pip_view(&view_handle, request_id, filter, note)),
             ))?;
             let config = config::AppConfig::load(&core.data_dir());
+            app.manage::<LauncherState>(Arc::new(runs::launcher::NoopLauncher));
             app.manage::<AgentState>(Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config)));
 
             spawn_sync_loop(app.handle().clone(), core);
@@ -703,6 +739,10 @@ pub fn run() {
             proposals_edit,
             proposals_skip,
             proposals_approve,
+            runs_review,
+            runs_approve,
+            runs_list,
+            runs_get,
             sync_now,
             mark_seen,
             set_unread,

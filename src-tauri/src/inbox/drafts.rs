@@ -1,13 +1,18 @@
 //! Core's proposals service: stores drafts in the signed-in connection's database and is the only caller of
 //! `WorkTracker::apply` on behalf of an approval.
 
+use std::path::{Path, PathBuf};
+
 use chrono::Utc;
 use serde::Deserialize;
 
-use super::{identity_of, Core};
+use super::{db_file, identity_of, Core};
 use crate::auth::Scope;
 use crate::db::Db;
-use crate::domain::{Basis, ContainerRef, CreatedBy, Doc, Intent, ItemKind, Origin, Proposal, ProposalQuery, ProposalState};
+use crate::domain::{
+    ticket_snapshot, Basis, ContainerRef, CreatedBy, Doc, Intent, ItemKind, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind,
+    RunQuery, RunReview, RunSpec, INVESTIGATE_INSTRUCTION,
+};
 use crate::error::{Error, Result};
 use crate::model::MentionRef;
 use crate::proposals::{self, Draft};
@@ -40,6 +45,20 @@ pub enum Edit {
         kind: Option<ItemKind>,
         #[serde(default)]
         container: Option<ContainerRef>,
+    },
+    /// A run's settings; the ones left out stay as they are. Only the person edits these.
+    #[serde(rename_all = "camelCase")]
+    Run {
+        #[serde(default)]
+        instruction: Option<String>,
+        #[serde(default)]
+        base: Option<String>,
+        #[serde(default)]
+        clone_path: Option<PathBuf>,
+        #[serde(default)]
+        kind: Option<RunKind>,
+        #[serde(default)]
+        name: Option<String>,
     },
 }
 
@@ -83,8 +102,38 @@ impl Edit {
                 }
                 Ok(Intent::Create { container, fields, link: link.clone() })
             }
+            (Edit::Run { instruction, base, clone_path, kind, name }, Intent::StartRun { connection_id, item, spec }) => {
+                let mut spec = spec.clone();
+                if let Some(v) = instruction {
+                    spec.instruction = v.clone();
+                }
+                if let Some(v) = base {
+                    spec.base = v.trim().to_string();
+                }
+                if let Some(v) = clone_path {
+                    spec.clone_path = v.clone();
+                }
+                if let Some(v) = kind {
+                    spec.kind = *v;
+                }
+                if let Some(v) = name {
+                    spec.name = v.trim().to_string();
+                }
+                Ok(Intent::StartRun { connection_id: connection_id.clone(), item: item.clone(), spec })
+            }
             _ => Err(Error::Proposal("that edit doesn't fit this draft".into())),
         }
+    }
+}
+
+fn not_a_run() -> Error {
+    Error::Proposal("that draft doesn't start a run".into())
+}
+
+fn run_of(p: &Proposal) -> Result<(&String, &Option<ItemRef>, &RunSpec)> {
+    match &p.intent {
+        Intent::StartRun { connection_id, item, spec } => Ok((connection_id, item, spec)),
+        _ => Err(not_a_run()),
     }
 }
 
@@ -108,6 +157,9 @@ impl Core {
     pub async fn draft_as_user(&self, intent: Intent, label: Option<String>) -> Result<Proposal> {
         let scope = self.scope().await?;
         let connection_id = tracker::Connection::jira_id(&scope);
+        if matches!(intent, Intent::StartRun { .. }) {
+            return Err(Error::Proposal("a run is drafted with its own command".into()));
+        }
         let drafted_in = match &intent {
             Intent::Create { container, .. } => &container.connection_id,
             other => &other.target().ok_or_else(|| Error::Proposal("a draft made by hand has to be about an existing item".into()))?.connection_id,
@@ -162,13 +214,103 @@ impl Core {
     pub async fn edit_proposal(&self, id: &str, edit: &Edit) -> Result<Proposal> {
         self.with_proposals(|db| {
             let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
-            proposals::edit(db, id, edit.apply_to(&current.intent)?, Utc::now())
+            let mut intent = edit.apply_to(&current.intent)?;
+            if let (Edit::Run { clone_path: Some(_), .. }, Intent::StartRun { spec, .. }) = (edit, &mut intent) {
+                spec.clone_path = self.resolve_clone(&spec.clone_path)?;
+            }
+            proposals::edit(db, id, intent, Utc::now())
         })
         .await
     }
 
     pub async fn skip_proposal(&self, id: &str) -> Result<Proposal> {
         self.with_proposals(|db| proposals::skip(db, id, Utc::now())).await
+    }
+
+    /// The clone as the run will use it: an existing folder with a `.git`, under the person's home, by its real path.
+    fn resolve_clone(&self, path: &Path) -> Result<PathBuf> {
+        let refused = |why: &str| Error::Proposal(format!("{} {why}", path.display()));
+        let real = path.canonicalize().map_err(|_| refused("isn't a folder that exists"))?;
+        if !real.is_dir() || !real.join(".git").exists() {
+            return Err(refused("isn't a git clone"));
+        }
+        match &self.home {
+            Some(home) if real.starts_with(home) && real != *home => Ok(real),
+            _ => Err(refused("isn't inside your home folder")),
+        }
+    }
+
+    /// A run the person drafted by hand. The ticket text is taken from the cache here, never from the caller. Nothing
+    /// starts until `runs_approve`.
+    // The run sheet (PR 7) is its caller.
+    #[allow(dead_code)]
+    pub async fn draft_run(&self, mut spec: RunSpec, item: Option<ItemRef>) -> Result<Proposal> {
+        let scope = self.scope().await?;
+        let connection_id = tracker::Connection::jira_id(&scope);
+        if item.as_ref().is_some_and(|i| i.connection_id != connection_id) {
+            return Err(Error::Proposal("that item belongs to another connection".into()));
+        }
+        spec.clone_path = self.resolve_clone(&spec.clone_path)?;
+        if spec.instruction.trim().is_empty() {
+            spec.instruction = INVESTIGATE_INSTRUCTION.into();
+        }
+        let intent = self
+            .with_db_for(&scope, |db| {
+                spec.ticket_block = item.as_ref().map(|i| db.item(i)).transpose()?.flatten().map(|w| ticket_snapshot(&w));
+                Ok(Intent::StartRun { connection_id: connection_id.clone(), item: item.clone(), spec })
+            })
+            .await?;
+        let draft = Draft { origin: Origin::Board, created_by: CreatedBy::User, intent, label: None, basis: None };
+        self.propose(&scope, draft).await
+    }
+
+    /// What would run if the draft were approved now. While the draft is pending, the ticket text is re-read from
+    /// the cache and a change is stored as a revision, so the digest returned is of the text shown.
+    pub async fn runs_review(&self, id: &str) -> Result<RunReview> {
+        self.with_proposals(|db| {
+            let mut p = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
+            let (connection_id, item, spec) = run_of(&p)?;
+            if p.state == ProposalState::Pending {
+                if let Some(work) = item.as_ref().map(|i| db.item(i)).transpose()?.flatten() {
+                    let fresh = Some(ticket_snapshot(&work));
+                    if fresh != spec.ticket_block {
+                        let intent = Intent::StartRun {
+                            connection_id: connection_id.clone(),
+                            item: item.clone(),
+                            spec: RunSpec { ticket_block: fresh, ..spec.clone() },
+                        };
+                        p = proposals::edit_noted(db, id, intent, "Ticket text updated", Utc::now())?;
+                    }
+                }
+            }
+            Ok(RunReview::of(run_of(&p)?.2))
+        })
+        .await
+    }
+
+    /// Approves a run draft: the proposal becomes applied and a queued run exists, in one transaction. `digest` is
+    /// what the person read in `runs_review`; a draft that changed since is refused. Starting the run is the
+    /// caller's next step.
+    pub async fn runs_approve(&self, id: &str, digest: &str) -> Result<Run> {
+        let scope = self.scope().await?;
+        let file = db_file(&self.connection(&scope)?);
+        self.with_db_for(&scope, |db| {
+            let p = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
+            let (connection_id, item, spec) = run_of(&p)?;
+            self.resolve_clone(&spec.clone_path)?;
+            let (connection_id, item, spec) = (connection_id.clone(), item.clone(), spec.clone());
+            let run_id = proposals::new_id()?;
+            db.approve_start_run(id, digest, |p| Run::queued(run_id, p.id.clone(), connection_id, item, spec, file, Utc::now()))
+        })
+        .await
+    }
+
+    pub async fn runs_list(&self, query: &RunQuery) -> Result<Vec<Run>> {
+        self.with_proposals(|db| db.runs(query)).await
+    }
+
+    pub async fn run(&self, id: &str) -> Result<Option<Run>> {
+        self.with_proposals(|db| db.run(id)).await
     }
 
     /// Applies a pending proposal through its connection's tracker. Whatever the tracker did is recorded: a failed
@@ -340,5 +482,207 @@ mod tests {
         let edit: Edit = serde_json::from_str(r#"{"type":"comment","body":"hi","mentions":[{"accountId":"a","name":"A"}]}"#).unwrap();
         assert!(matches!(edit, Edit::Comment { mentions, .. } if mentions.len() == 1));
         assert!(matches!(serde_json::from_str::<Edit>(r#"{"type":"subtasks","summaries":["x"]}"#).unwrap(), Edit::Subtasks { .. }));
+    }
+
+    fn clone_in(fx: &crate::inbox::testing::Fixture, name: &str) -> PathBuf {
+        let path = fx.home.join(name);
+        std::fs::create_dir_all(path.join(".git")).unwrap();
+        path
+    }
+
+    fn spec_in(clone: &Path) -> RunSpec {
+        RunSpec { clone_path: clone.to_path_buf(), ..crate::domain::fixtures::run_spec() }
+    }
+
+    async fn drafted_run(fx: &crate::inbox::testing::Fixture) -> Proposal {
+        let clone = clone_in(fx, "webshop");
+        fx.core.draft_run(spec_in(&clone), Some(fx.item("CA-1"))).await.unwrap()
+    }
+
+    fn spec_of(p: &Proposal) -> RunSpec {
+        match &p.intent {
+            Intent::StartRun { spec, .. } => spec.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_draft_is_pending_by_the_user_takes_its_ticket_text_from_the_cache_and_starts_nothing() {
+        let fx = crate::inbox::testing::fixture().await;
+        let clone = clone_in(&fx, "webshop");
+        let mut spec = spec_in(&clone);
+        spec.ticket_block = Some("forged by the caller".into());
+        spec.instruction = " ".into();
+        let p = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
+
+        assert_eq!((p.created_by, p.origin.clone(), p.state.clone()), (CreatedBy::User, Origin::Board, ProposalState::Pending));
+        let spec = spec_of(&p);
+        assert!(spec.ticket_block.as_deref().unwrap().starts_with("CA-1: Ticket 1"));
+        assert_eq!(spec.instruction, INVESTIGATE_INSTRUCTION);
+        assert_eq!(spec.clone_path, clone.canonicalize().unwrap());
+        assert!(fx.tracker.intents().is_empty());
+        assert!(fx.core.runs_list(&RunQuery::default()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_run_draft_needs_a_real_clone_inside_home_and_an_item_of_this_connection() {
+        let fx = crate::inbox::testing::fixture().await;
+        let no_git = fx.home.join("plain");
+        std::fs::create_dir_all(&no_git).unwrap();
+        let outside = std::env::temp_dir().join(format!("gossamr-outside-{}", std::process::id()));
+        std::fs::create_dir_all(outside.join(".git")).unwrap();
+        let clone = clone_in(&fx, "webshop");
+
+        for bad in [fx.home.join("missing"), no_git, outside.clone(), fx.home.clone()] {
+            assert!(fx.core.draft_run(spec_in(&bad), None).await.is_err(), "{bad:?}");
+        }
+        let mut foreign = fx.item("CA-1");
+        foreign.connection_id = "elsewhere".into();
+        let err = fx.core.draft_run(spec_in(&clone), Some(foreign)).await.unwrap_err();
+        assert!(err.to_string().contains("another connection"), "{err}");
+        assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().is_empty());
+        std::fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_symlink_out_of_home_does_not_pass_as_a_clone_in_it() {
+        let fx = crate::inbox::testing::fixture().await;
+        let outside = std::env::temp_dir().join(format!("gossamr-link-{}", std::process::id()));
+        std::fs::create_dir_all(outside.join(".git")).unwrap();
+        let link = fx.home.join("link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(fx.core.draft_run(spec_in(&link), None).await.is_err());
+        std::fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_page_cannot_draft_a_run_through_the_generic_command() {
+        let fx = crate::inbox::testing::fixture().await;
+        let intent = Intent::StartRun { connection_id: fx.item("CA-1").connection_id, item: Some(fx.item("CA-1")), spec: crate::domain::fixtures::run_spec() };
+        let err = fx.core.draft_as_user(intent, None).await.unwrap_err();
+        assert!(err.to_string().contains("own command"), "{err}");
+        assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_generic_approval_refuses_a_run_draft_without_calling_the_tracker() {
+        let fx = crate::inbox::testing::fixture().await;
+        let p = drafted_run(&fx).await;
+        let err = fx.core.approve_proposal(&p.id).await.unwrap_err();
+        assert!(err.to_string().contains("own button"), "{err}");
+        assert!(fx.tracker.intents().is_empty());
+        assert_eq!(fx.core.proposal(&p.id).await.unwrap().unwrap().state, ProposalState::Pending);
+        assert!(fx.core.runs_list(&RunQuery::default()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn review_shows_the_prompt_and_its_digest_and_approving_with_that_digest_queues_one_run() {
+        let fx = crate::inbox::testing::fixture().await;
+        let p = drafted_run(&fx).await;
+        let review = fx.core.runs_review(&p.id).await.unwrap();
+        assert_eq!(review.prompt, crate::domain::render_prompt(&review.spec));
+        assert_eq!(review.digest, review.spec.digest());
+        assert!(review.prompt.contains("CA-1: Ticket 1"));
+
+        let run = fx.core.runs_approve(&p.id, &review.digest).await.unwrap();
+        assert_eq!((run.state, run.connection_id.clone()), (crate::domain::RunState::Queued, fx.item("CA-1").connection_id));
+        assert_eq!(run.item, Some(fx.item("CA-1")));
+        assert!(run.db_file.starts_with("inbox-") && run.db_file.ends_with(".sqlite"));
+        let stored = fx.core.proposal(&p.id).await.unwrap().unwrap();
+        assert_eq!((stored.state, stored.run), (ProposalState::Applied, Some(run.id.clone())));
+        assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap(), run);
+        assert_eq!(fx.core.runs_list(&RunQuery { item: Some(fx.item("CA-1")), ..Default::default() }).await.unwrap().len(), 1);
+        assert!(fx.tracker.intents().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_second_approval_of_the_same_draft_fails_and_makes_no_second_run() {
+        let fx = crate::inbox::testing::fixture().await;
+        let p = drafted_run(&fx).await;
+        let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
+        let (a, b) = tokio::join!(fx.core.runs_approve(&p.id, &digest), fx.core.runs_approve(&p.id, &digest));
+        assert_eq!([a.is_ok(), b.is_ok()].iter().filter(|ok| **ok).count(), 1);
+        assert_eq!(fx.core.runs_list(&RunQuery::default()).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_edit_after_reading_changes_the_digest_and_the_old_one_is_refused() {
+        let fx = crate::inbox::testing::fixture().await;
+        let p = drafted_run(&fx).await;
+        let read = fx.core.runs_review(&p.id).await.unwrap();
+
+        let edit = Edit::Run { instruction: Some("Also read the billing code.".into()), base: Some(" develop ".into()), clone_path: None, kind: None, name: None };
+        let edited = fx.core.edit_proposal(&p.id, &edit).await.unwrap();
+        let spec = spec_of(&edited);
+        assert_eq!((spec.base.as_str(), spec.instruction.as_str()), ("develop", "Also read the billing code."));
+
+        let err = fx.core.runs_approve(&p.id, &read.digest).await.unwrap_err();
+        assert!(err.to_string().contains("changed after you read it"), "{err}");
+        let fresh = fx.core.runs_review(&p.id).await.unwrap();
+        assert_ne!(fresh.digest, read.digest);
+        assert!(fx.core.runs_approve(&p.id, &fresh.digest).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_pip_revision_after_reading_is_refused_at_approval() {
+        let fx = crate::inbox::testing::fixture().await;
+        let clone = clone_in(&fx, "webshop");
+        let by_pip = Draft::from_pip("r", Intent::StartRun { connection_id: fx.item("CA-1").connection_id, item: Some(fx.item("CA-1")), spec: spec_in(&clone) }, None);
+        let p = fx.core.propose(&fx.scope, by_pip).await.unwrap();
+        let read = fx.core.runs_review(&p.id).await.unwrap();
+
+        let revised = Intent::StartRun {
+            connection_id: fx.item("CA-1").connection_id,
+            item: Some(fx.item("CA-1")),
+            spec: RunSpec { focus: Some("look somewhere else".into()), ..read.spec.clone() },
+        };
+        fx.core.revise_as_pip(&fx.scope, &p.id, revised).await.unwrap();
+
+        let err = fx.core.runs_approve(&p.id, &read.digest).await.unwrap_err();
+        assert!(err.to_string().contains("changed after you read it"), "{err}");
+        assert!(fx.core.runs_list(&RunQuery::default()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn review_refreshes_the_ticket_text_and_notes_a_revision_when_the_cache_changed() {
+        let fx = crate::inbox::testing::fixture().await;
+        let p = drafted_run(&fx).await;
+        let first = fx.core.runs_review(&p.id).await.unwrap();
+        assert_eq!(fx.core.proposal(&p.id).await.unwrap().unwrap().revisions.len(), 0, "an unchanged ticket adds no revision");
+
+        let mut item = fx.core.cache_item(&fx.item("CA-1")).await.unwrap().unwrap();
+        item.title = "Cart total is wrong again".into();
+        fx.core.with_db_for(&fx.scope, |db| db.upsert_items(&[item], "2026-09-29T13:00:00Z").map(|_| ())).await.unwrap();
+
+        let second = fx.core.runs_review(&p.id).await.unwrap();
+        assert!(second.ticket_block.as_deref().unwrap().contains("Cart total is wrong again"));
+        assert_ne!(second.digest, first.digest);
+        let stored = fx.core.proposal(&p.id).await.unwrap().unwrap();
+        assert_eq!((stored.revisions.len(), stored.revisions[0].note.as_str()), (1, "Ticket text updated"));
+        assert_eq!(fx.core.runs_review(&p.id).await.unwrap().digest, second.digest);
+    }
+
+    #[tokio::test]
+    async fn approval_is_refused_when_the_clone_has_gone_and_review_of_another_kind_of_draft_is_refused() {
+        let fx = crate::inbox::testing::fixture().await;
+        let p = drafted_run(&fx).await;
+        let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
+        std::fs::remove_dir_all(fx.home.join("webshop")).unwrap();
+        assert!(fx.core.runs_approve(&p.id, &digest).await.is_err());
+        assert_eq!(fx.core.proposal(&p.id).await.unwrap().unwrap().state, ProposalState::Pending);
+
+        let comment = fx.core.draft_as_user(Intent::Comment { item: fx.item("CA-1"), body: Doc::paragraph("hi") }, None).await.unwrap();
+        assert!(fx.core.runs_review(&comment.id).await.is_err());
+        assert!(fx.core.runs_approve(&comment.id, "x").await.is_err());
+    }
+
+    #[test]
+    fn a_run_edit_changes_only_the_fields_it_names_and_reads_the_way_the_page_sends_it() {
+        let current = Intent::StartRun { connection_id: "c".into(), item: None, spec: crate::domain::fixtures::run_spec() };
+        let edit: Edit = serde_json::from_str(r#"{"type":"run","instruction":"Look at logs","clonePath":"/Users/me/Code/other","kind":"investigate","name":" new-name "}"#).unwrap();
+        let Intent::StartRun { spec, .. } = edit.apply_to(&current).unwrap() else { panic!() };
+        assert_eq!((spec.instruction.as_str(), spec.name.as_str(), spec.base.as_str(), spec.repo.as_str()), ("Look at logs", "new-name", "main", "acme/webshop"));
+        assert_eq!(spec.clone_path, PathBuf::from("/Users/me/Code/other"));
+        assert!(Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
     }
 }

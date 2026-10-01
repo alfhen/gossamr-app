@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ContainerRef, Doc, Identity, ItemKind, ItemRef, Link, LinkKind, PersonRef, Priority, WorkItem,
+    ContainerRef, Doc, Identity, ItemKind, ItemRef, Link, LinkKind, PersonRef, Priority, RunSpec, WorkItem,
     Workflow,
 };
 
@@ -47,6 +47,9 @@ pub enum Intent {
     Update { item: ItemRef, patch: Patch },
     Link { from: ItemRef, to: ItemRef, kind: LinkKind },
     Subtasks { parent: ItemRef, summaries: Vec<String> },
+    /// Starts a background agent. Never applied through a tracker: it has its own approval, bound to a digest.
+    #[serde(rename_all = "camelCase")]
+    StartRun { connection_id: String, item: Option<ItemRef>, spec: RunSpec },
 }
 
 impl Intent {
@@ -56,6 +59,7 @@ impl Intent {
             Intent::Comment { item, .. } | Intent::Transition { item, .. } | Intent::Update { item, .. } => Some(item),
             Intent::Link { from, .. } => Some(from),
             Intent::Subtasks { parent, .. } => Some(parent),
+            Intent::StartRun { item, .. } => item.as_ref(),
             Intent::Create { .. } => None,
         }
     }
@@ -187,6 +191,9 @@ pub struct Proposal {
     pub created: Vec<ItemRef>,
     /// Why the last attempt to apply it failed.
     pub error: Option<String>,
+    /// The run an approved `StartRun` became.
+    #[serde(default)]
+    pub run: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -262,7 +269,7 @@ pub fn reconcile(proposal: &Proposal, items: &[WorkItem], ctx: &ReconcileContext
             let exists = current.links.iter().any(|l| l.kind == *kind && l.to == *to);
             if exists { retire("the link already exists") } else { Verdict::Keep }
         }
-        Intent::Subtasks { .. } | Intent::Create { .. } => Verdict::Keep,
+        Intent::Subtasks { .. } | Intent::Create { .. } | Intent::StartRun { .. } => Verdict::Keep,
     }
 }
 
@@ -353,6 +360,7 @@ mod tests {
             revisions: vec![],
             created: vec![],
             error: None,
+            run: None,
         }
     }
 
@@ -513,5 +521,36 @@ mod tests {
     fn serialises_intent_with_a_type_tag() {
         let json = serde_json::to_value(Intent::Subtasks { parent: item_ref("1"), summaries: vec!["a".into()] }).unwrap();
         assert_eq!(json["type"], "subtasks");
+    }
+
+    #[test]
+    fn a_run_draft_is_kept_while_its_item_exists_and_retired_when_it_is_gone_and_its_spec_never_changes() {
+        let item = work_item("1", "todo");
+        let intent = Intent::StartRun { connection_id: "c".into(), item: Some(item.item.clone()), spec: run_spec() };
+        let mut p = proposal(intent.clone(), &item);
+        assert_eq!(run(&p, std::slice::from_ref(&item)), Verdict::Keep);
+
+        let mut changed = work_item("1", "doing");
+        changed.title = "Something else entirely".into();
+        changed.comment_count = 4;
+        let verdict = run(&p, std::slice::from_ref(&changed));
+        assert_eq!(verdict, Verdict::Keep);
+        p.absorb(verdict, now());
+        assert_eq!((p.intent.clone(), p.revisions.len()), (intent, 0));
+
+        assert!(matches!(run(&p, &[]), Verdict::Retire { .. }));
+        let itemless = proposal(Intent::StartRun { connection_id: "c".into(), item: None, spec: run_spec() }, &item);
+        assert_eq!(run(&itemless, &[]), Verdict::Keep);
+    }
+
+    #[test]
+    fn a_run_draft_serialises_with_a_start_run_tag_and_camel_case_fields() {
+        let json = serde_json::to_value(Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: run_spec() }).unwrap();
+        assert_eq!(json["type"], "startRun");
+        assert_eq!(json["connectionId"], "c");
+        assert_eq!(json["item"]["externalId"], "1");
+        assert_eq!(json["spec"]["clonePath"], "/Users/me/Code/webshop");
+        let back: Intent = serde_json::from_value(json).unwrap();
+        assert_eq!(back.target(), Some(&item_ref("1")));
     }
 }

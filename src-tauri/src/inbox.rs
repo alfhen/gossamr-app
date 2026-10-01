@@ -132,6 +132,8 @@ pub struct Core {
     registry: Registry,
     code: CodeService,
     data_dir: PathBuf,
+    /// Clones a run may use have to be under this folder.
+    home: Option<PathBuf>,
     /// One database per connection, opened for whichever is signed in. A connection is a site and an account, so two
     /// people signing in to the same site on one Mac never see each other's tickets or inbox.
     db: Mutex<Option<(String, Db)>>,
@@ -165,6 +167,7 @@ impl Core {
             registry,
             code: CodeService::new(reqwest::Client::new(), CodeService::default_store()),
             data_dir,
+            home: dirs::home_dir().and_then(|h| h.canonicalize().ok()),
             db: Mutex::new(None),
             last_error: Mutex::new(None),
             syncing: AtomicBool::new(false),
@@ -173,6 +176,12 @@ impl Core {
             wake: Notify::new(),
             focus: Notify::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_home(mut self, home: PathBuf) -> Self {
+        self.home = home.canonicalize().ok();
+        self
     }
 
     /// Replaces the GitHub service, for an app that shares one HTTP client, or a test that scripts GitHub.
@@ -937,6 +946,8 @@ pub(crate) mod testing {
         pub scope: Scope,
         pub tracker: Arc<Recorder>,
         pub dir: PathBuf,
+        /// Where clones for runs may live.
+        pub home: PathBuf,
     }
 
     impl Fixture {
@@ -994,14 +1005,17 @@ pub(crate) mod testing {
         let tracker = Arc::new(Recorder::default());
         let shared = tracker.clone();
         let registry = Registry::new(move |_| shared.clone());
-        let mut core = Core::new(Arc::new(Auth::signed_in(http, creds.clone())), registry, dir.clone());
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let home = home.canonicalize().unwrap();
+        let mut core = Core::new(Arc::new(Auth::signed_in(http, creds.clone())), registry, dir.clone()).with_home(home.clone());
         if let Some(code) = code {
             core = core.with_code(code);
         }
         let core = Arc::new(core);
         core.registry.register(creds.connection());
 
-        let fx = Fixture { core, scope, tracker, dir };
+        let fx = Fixture { core, scope, tracker, dir, home };
         fx.add_item(1).await;
         let connection = fx.core.connection(&fx.scope).unwrap();
         let item = fx.core.cache_item(&connection.item("CA-1")).await.unwrap().unwrap();

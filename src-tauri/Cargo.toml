@@ -30,6 +30,7 @@ tauri-plugin-notification = "2.5.0"
 axum = "0.8.9"
 dirs = "7.0.0"
 async-trait = "0.1"
+sha2 = "0.10"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

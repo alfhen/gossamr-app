@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::process::Command;
 
@@ -63,9 +63,17 @@ fn cut(s: &str, max: usize) -> String {
 
 /// The eight hex characters `claude` uses to name a background session. Validated so it can't carry a path or
 /// shell syntax into a file name or command.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String")]
 pub struct ShortId(String);
+
+impl TryFrom<String> for ShortId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, String> {
+        Self::parse(&s).ok_or_else(|| format!("not a session id: {s}"))
+    }
+}
 
 impl ShortId {
     pub fn parse(s: &str) -> Option<Self> {

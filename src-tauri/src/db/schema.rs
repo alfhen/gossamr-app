@@ -186,7 +186,33 @@ CREATE TABLE item_links (
 ) WITHOUT ROWID;
 CREATE INDEX item_links_code ON item_links(connection_id, code_id);";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS];
+/// Background agent runs. `expected_worktree` is the join key to the CLI's session list, chosen before launch; the
+/// unique indexes are what make an approval produce at most one run.
+const RUNS: &str = "
+CREATE TABLE runs (
+  id TEXT PRIMARY KEY,
+  proposal_id TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  item_id TEXT, item_key TEXT,
+  kind TEXT NOT NULL, repo TEXT NOT NULL,
+  expected_worktree TEXT NOT NULL,
+  short_id TEXT, session_id TEXT,
+  state TEXT NOT NULL,
+  queued_at TEXT NOT NULL, last_progress_at TEXT NOT NULL, ended_at TEXT,
+  data TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX runs_proposal ON runs(proposal_id);
+CREATE UNIQUE INDEX runs_worktree ON runs(expected_worktree);
+CREATE UNIQUE INDEX runs_short ON runs(short_id) WHERE short_id IS NOT NULL;
+CREATE INDEX runs_state ON runs(state, queued_at);
+CREATE INDEX runs_item ON runs(connection_id, item_id);
+CREATE TABLE run_events (
+  run_id TEXT NOT NULL, seq INTEGER NOT NULL, at TEXT NOT NULL,
+  kind TEXT NOT NULL, text TEXT NOT NULL, detail TEXT,
+  PRIMARY KEY (run_id, seq)
+) WITHOUT ROWID;";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -213,7 +239,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
-        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links"] {
+        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links", "runs", "run_events"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
@@ -318,6 +344,39 @@ mod tests {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+    }
+
+    #[test]
+    fn a_file_from_before_agent_runs_keeps_its_rows_and_gains_the_tables() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in [INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 6).unwrap();
+        conn.execute(
+            "INSERT INTO proposals (id, connection_id, state, created_at, updated_at, data) VALUES ('p', 'c', 'pending', 't', 't', '{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO item_links (item_connection_id, item_id, item_key, connection_id, code_id, provenance, confidence, found_at) VALUES ('c', '1', 'A-1', 'g', 'x', 'branch', 1.0, 't')", []).unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        for t in ["runs", "run_events"] {
+            assert!(tables(&conn).contains(&t.to_string()), "missing {t}");
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
+        }
+        for t in ["proposals", "item_links"] {
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
+        }
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 7);
+    }
+
+    #[test]
+    fn a_fresh_file_is_at_version_seven() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 7);
     }
 
     #[test]
