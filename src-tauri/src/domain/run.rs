@@ -89,6 +89,12 @@ fn is_repo_part(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.starts_with('-') && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
+/// `owner/name`, each part made only of letters, digits, `.`, `_` and `-`, so a path built from it stays inside its folder.
+pub fn valid_repo(repo: &str) -> bool {
+    let parts: Vec<&str> = repo.split('/').collect();
+    parts.len() == 2 && parts.iter().all(|p| is_repo_part(p))
+}
+
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
@@ -103,8 +109,7 @@ impl RunSpec {
         if !allowed_kinds().contains(&self.kind) {
             return Err(refuse("only investigate runs are available yet"));
         }
-        let parts: Vec<&str> = self.repo.split('/').collect();
-        if parts.len() != 2 || !parts.iter().all(|p| is_repo_part(p)) {
+        if !valid_repo(&self.repo) {
             return Err(refuse("the repository must look like owner/name"));
         }
         let name_ok = (3..=70).contains(&self.name.len())

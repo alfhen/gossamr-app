@@ -539,6 +539,13 @@ async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneCh
     runs.clones(&repo).await
 }
 
+/// Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>`. Only for the person's own button press, after the
+/// setup sheet showed the folder and the command.
+#[tauri::command]
+async fn runs_clone_fresh(runs: State<'_, RunsState>, repo: String) -> Result<runs::repo::LocalClone> {
+    runs.clone_fresh(&repo).await
+}
+
 #[tauri::command]
 async fn runs_pick_clone(runs: State<'_, RunsState>, repo: String, path: std::path::PathBuf) -> Result<()> {
     runs.ensure_enabled()?;
@@ -984,6 +991,7 @@ pub fn run() {
             runs_retry_launch,
             runs_repos,
             runs_clones,
+            runs_clone_fresh,
             runs_pick_clone,
             runs_suggest_name,
             runs_stop,

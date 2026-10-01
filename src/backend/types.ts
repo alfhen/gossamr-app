@@ -4,6 +4,7 @@ import type {
   CacheChanged,
   CatalogPage,
   CloneChoice,
+  LocalClone,
   ContainerRef,
   Intent,
   ItemRef,
@@ -198,6 +199,8 @@ export interface Backend {
   /** Local clones of a watched repository, the one the person chose first. */
   runsClones(repo: string): Promise<CloneChoice>;
   runsPickClone(repo: string, path: string): Promise<void>;
+  /** Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>` (or fetches into the copy already there). Only after the person chose it, having seen `CloneChoice.fresh`. */
+  runsCloneFresh(repo: string): Promise<LocalClone>;
   /** A worktree name for a new run in `clonePath` that nothing there uses yet. */
   runsSuggestName(clonePath: string, key: string, title: string): Promise<string>;
   runsEvents(id: string): Promise<RunEvent[]>;

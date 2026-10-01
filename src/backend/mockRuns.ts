@@ -1,4 +1,4 @@
-import type { CloneChoice, CodeChange, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
+import type { CloneChoice, FreshCopy, CodeChange, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
 import { itemRef } from "./mockConnector";
 import { commentText, jiraNote, ticketKeys } from "./mockRunResult";
 import { docFromText, docText } from "../lib/docs";
@@ -217,6 +217,11 @@ const CLONES: Record<string, LocalClone[]> = {
   "acme/gateway": [{ path: "/Users/sample/Code/gateway", branch: "main", dirty: false, defaultBranch: "main" }],
 };
 
+const freshCopy = (repo: string): FreshCopy => {
+  const path = `/Users/sample/Gossamr/agents/${repo}`;
+  return { path, command: `git clone https://github.com/${repo}.git ${path}`, ghFallback: true, occupied: false };
+};
+
 const LIVE: RunState[] = ["queued", "launching", "working", "needsAnswer", "needsPermission", "systemBlocked"];
 
 const slugOf = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").slice(0, 3).join("-");
@@ -236,6 +241,8 @@ export class MockRuns {
   private readonly cap: number;
   readonly pipRun: boolean;
   private picked = new Map<string, string>();
+  /** Copies made in `~/Gossamr/agents` through `cloneFresh`. */
+  private fresh = new Map<string, LocalClone>();
   /** Pull requests and branches by run id, standing in for what a sync would have cached. */
   private changes = new Map<string, CodeChange>();
   /** Clone folders the person has trusted through `trustFolder`; a retry in one of them goes through. */
@@ -467,7 +474,7 @@ export class MockRuns {
       case "claudeMissing":
         return this.claude === "missing";
       case "noClone":
-        return !(CLONES[run.spec.repo] ?? []).some((c) => c.path === run.spec.clonePath);
+        return !this.known(run.spec.repo).some((c) => c.path === run.spec.clonePath);
       default:
         return false;
     }
@@ -497,7 +504,7 @@ export class MockRuns {
       add("green", "Shell environment read (72 variables). Agents get this PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
     }
     if (spec) {
-      const clone = (CLONES[spec.repo] ?? []).find((c) => c.path === spec.clonePath);
+      const clone = this.known(spec.repo).find((c) => c.path === spec.clonePath);
       if (!clone) add("red", `${spec.clonePath} isn't a git clone`);
       else if (clone.dirty) add("amber", `Clone: ${clone.path} on ${clone.branch}. It has uncommitted changes. The agent won't touch your files, but its worktree starts from your current HEAD (${clone.branch}).`);
       else if (clone.branch !== spec.base) add("amber", `Clone: ${clone.path} on ${clone.branch}. It is on ${clone.branch}, not ${spec.base}. The agent's worktree starts from your current HEAD and is told to switch to ${spec.base}.`);
@@ -513,19 +520,34 @@ export class MockRuns {
 
   /** Drafts a run the way the backend does: the ticket text comes from here, never from the caller. */
   draft(spec: RunSpec, item: ItemRef | null): Promise<Proposal> {
-    if (!(CLONES[spec.repo] ?? []).some((c) => c.path === spec.clonePath)) return Promise.reject(new Error(`${spec.clonePath} isn't a git clone`));
+    if (!this.known(spec.repo).some((c) => c.path === spec.clonePath)) return Promise.reject(new Error(`${spec.clonePath} isn't a git clone`));
     const ticketBlock = item ? this.ticketText(item) : null;
     return this.proposals.create({ type: "startRun", connectionId: CONNECTION, item, spec: { ...spec, instruction: spec.instruction.trim() || TEMPLATE, ticketBlock } }, null);
   }
 
+  private known(repo: string): LocalClone[] {
+    const copy = this.fresh.get(repo);
+    return [...(CLONES[repo] ?? []), ...(copy ? [copy] : [])];
+  }
+
   clones(repo: string): CloneChoice {
-    const found = CLONES[repo] ?? [];
+    const found = this.known(repo);
     const picked = this.picked.get(repo) ?? null;
-    return { clones: [...found].sort((a, b) => Number(b.path === picked) - Number(a.path === picked)), picked };
+    const clones = [...found].sort((a, b) => Number(b.path === picked) - Number(a.path === picked));
+    return { clones, picked, fresh: found.length ? null : freshCopy(repo) };
+  }
+
+  /** Stands in for the clone into `~/Gossamr/agents`: the copy is a clone from here on. */
+  cloneFresh(repo: string): LocalClone {
+    const offer = this.clones(repo).fresh;
+    if (!offer) return this.known(repo)[0];
+    const copy: LocalClone = { path: offer.path, branch: "main", dirty: false, defaultBranch: "main" };
+    this.fresh.set(repo, copy);
+    return copy;
   }
 
   pickClone(repo: string, path: string) {
-    if (!(CLONES[repo] ?? []).some((c) => c.path === path)) throw new Error(`${path} isn't a clone of ${repo} that Gossamr found`);
+    if (!this.known(repo).some((c) => c.path === path)) throw new Error(`${path} isn't a clone of ${repo} that Gossamr found`);
     this.picked.set(repo, path);
   }
 
