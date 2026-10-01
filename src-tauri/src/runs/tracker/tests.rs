@@ -108,6 +108,47 @@ async fn an_entry_that_disappears_makes_the_run_unknown_and_it_recovers_when_it_
 }
 
 #[tokio::test]
+async fn a_session_that_stays_unlisted_fails_after_ten_minutes_frees_its_slot_and_is_noticed() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    rig.cli.with(|s| s.sessions.clear());
+    rig.poll().await;
+    let lost = rig.get(&run).await;
+    assert_eq!(lost.state, RunState::Unknown);
+    assert!(lost.last_progress_at > Utc::now() - Span::seconds(5), "the clock starts when it first goes missing");
+    assert_eq!(rig.svc.index.live().len(), 1);
+
+    rig.set(&run, |r| r.last_progress_at = Utc::now() - Span::minutes(9)).await;
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Unknown);
+
+    rig.set(&run, |r| r.last_progress_at = Utc::now() - Span::minutes(11)).await;
+    rig.poll().await;
+    let failed = rig.get(&run).await;
+    assert_eq!((failed.state, failed.error.as_deref()), (RunState::Failed, Some(crate::runs::state::LOST)));
+    assert!(failed.ended_at.is_some());
+    assert!(rig.svc.index.live().is_empty(), "the slot is free again");
+    assert_eq!(rig.noticed(), [(Attention::Failed, RunState::Failed)]);
+}
+
+#[tokio::test]
+async fn an_odd_state_that_later_disappears_gets_its_own_ten_minutes() {
+    let (rig, run) = launched().await;
+    rig.session(&run, |e| e.state = Some("paused-by-quota".into()));
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Unknown);
+    rig.set(&run, |r| r.last_progress_at = Utc::now() - Span::hours(3)).await;
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Unknown, "still listed, so it stays unknown");
+
+    rig.cli.with(|s| s.sessions.clear());
+    rig.poll().await;
+    rig.poll().await;
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.error.as_deref()), (RunState::Unknown, Some(crate::runs::state::NOT_LISTED)));
+}
+
+#[tokio::test]
 async fn a_launch_that_never_shows_up_fails_after_90_seconds_and_is_noticed() {
     let rig = ready().await;
     let queued = rig.queued(1).await;
@@ -360,6 +401,8 @@ fn notices_say_what_the_plan_says() {
     assert_eq!((n.title.as_str(), n.body.as_str()), ("CE-806 couldn't start", "Claude isn't signed in."));
     let n = notice_text(&run(RunState::Failed, None, Some("The agent process ended unexpectedly")), Attention::Failed);
     assert_eq!(n.title, "CE-806 stopped unexpectedly");
+    let n = notice_text(&run(RunState::Failed, None, Some("This session hasn't been listed for 10 minutes")), Attention::Failed);
+    assert_eq!(n.title, "CE-806 lost its session");
 }
 
 #[test]

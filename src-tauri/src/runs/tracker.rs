@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use super::cli::{AgentEntry, JobInfo, ShortId};
 use super::redact::redact;
 use super::service::{belongs_to, RunService};
-use super::state::{map_state, parse_at, progress_at};
+use super::state::{self, map_state, parse_at, progress_at};
 use super::toolchain::Toolchain;
 use crate::domain::{Run, RunEvent, RunQuery, RunState};
 use crate::notify::Notice;
@@ -65,8 +65,11 @@ pub fn notice_text(run: &Run, why: Attention) -> Notice {
         }
         Attention::Done => Notice { title: format!("{topic} finished"), body: "Open it to see what it found".into() },
         Attention::Failed => {
-            let died = run.error.as_deref() == Some("The agent process ended unexpectedly");
-            let title = if died { format!("{topic} stopped unexpectedly") } else { format!("{topic} couldn't start") };
+            let title = match run.error.as_deref() {
+                Some(state::PROCESS_ENDED) => format!("{topic} stopped unexpectedly"),
+                Some(state::LOST) => format!("{topic} lost its session"),
+                _ => format!("{topic} couldn't start"),
+            };
             Notice { title, body: run.error.clone().unwrap_or_else(|| "Something went wrong".into()) }
         }
     }
@@ -230,7 +233,9 @@ impl RunService {
             run.last_detail = job.detail.as_deref().and_then(|d| cleaned(d, DETAIL_KEPT)).or(run.last_detail.take());
             run.branch = job.worktree_branch.clone().or(run.branch.take());
         }
-        if seen.state != before.state {
+        // An Unknown run restarts its unlisted clock when the reason changes, so a listed odd state doesn't count.
+        let reason_changed = seen.state == RunState::Unknown && seen.error != before.error;
+        if seen.state != before.state || reason_changed {
             run.state = seen.state;
             run.last_progress_at = now;
         }

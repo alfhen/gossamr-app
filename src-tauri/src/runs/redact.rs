@@ -7,7 +7,7 @@ use std::ops::Range;
 
 const MASK: &str = "[redacted]";
 const SECRET_NAMES: [&str; 8] = ["secret", "token", "password", "passwd", "api_key", "api-key", "apikey", "private"];
-const HEADERS: [&str; 2] = ["authorization:", "cookie:"];
+const HEADERS: [&str; 4] = ["authorization:", "cookie:", "x-api-key:", "x-auth-token:"];
 
 pub fn redact(text: &str) -> String {
     text.split_inclusive('\n').map(redact_line).collect()
@@ -72,6 +72,11 @@ fn word_spans(body: &str, spans: &mut Vec<Range<usize>>) {
             spans.extend(words.get(i + 1).cloned());
             continue;
         }
+        if text.starts_with('-') && !text.contains('=') && is_secret_name(text.trim_start_matches('-')) {
+            // `--token abc123`: the value is the next word, unless that is another flag.
+            spans.extend(words.get(i + 1).filter(|next| !body[(*next).clone()].starts_with("--")).cloned());
+            continue;
+        }
         match text.split_once('=') {
             Some((name, value)) if is_secret_name(name) => {
                 if value.is_empty() {
@@ -125,6 +130,7 @@ fn prefixed(word: &str, base: usize, prefix: &str, min: usize, allowed: fn(u8) -
 
 fn known_shapes(word: &str, base: usize, spans: &mut Vec<Range<usize>>) {
     let alnum = |b: u8| b.is_ascii_alphanumeric();
+    prefixed(word, base, "sk-ant-", 20, |b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'), spans);
     for prefix in ["ghp_", "gho_", "ghu_", "ghs_", "ghr_"] {
         prefixed(word, base, prefix, 20, alnum, spans);
     }
@@ -204,6 +210,35 @@ mod tests {
         assert_eq!(redact("curl 'https://x.test/a?id=1&access_token=s3cr3t&b=2'"), "curl 'https://x.test/a?id=1&access_token=[redacted]&b=2'");
         assert_eq!(redact("MY-API-KEY=k MYAPIKEY=k"), "MY-API-KEY=[redacted] MYAPIKEY=[redacted]");
         assert_eq!(redact("SECRET_SAUCE=ketchup"), "SECRET_SAUCE=[redacted]");
+    }
+
+    #[test]
+    fn anthropic_keys() {
+        gone("using sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-xyz now", "AbCdEfGhIjKlMnOp");
+        gone("ANTHROPIC_API_KEY=sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz", "AbCdEfGh");
+        assert_eq!(redact("the sk-ant- prefix and sk-ant-short"), "the sk-ant- prefix and sk-ant-short");
+    }
+
+    #[test]
+    fn a_secret_flag_loses_the_value_that_follows_it() {
+        assert_eq!(redact("curl --token abc123 https://x.test"), "curl --token [redacted] https://x.test");
+        assert_eq!(redact("mysql --password hunter2 -u root"), "mysql --password [redacted] -u root");
+        assert_eq!(redact("tool --api-key k1 --secret s2"), "tool --api-key [redacted] --secret [redacted]");
+        assert_eq!(redact("tool --token --verbose"), "tool --token --verbose", "a flag after a flag is not its value");
+        assert_eq!(redact("tool --token"), "tool --token");
+        assert_eq!(redact("tool --token=zzz --other v"), "tool --token=[redacted] --other v");
+    }
+
+    #[test]
+    fn ordinary_flag_values_are_left_alone() {
+        for text in ["git log --max-count 5 --author me", "tool --name foo --output out.txt -v", "cargo test --package gossamr -- --nocapture", "the password policy and a token budget"] {
+            assert_eq!(redact(text), text);
+        }
+    }
+
+    #[test]
+    fn more_secret_headers_are_removed_to_the_end_of_the_line() {
+        assert_eq!(redact("X-Api-Key: abc123\nx-auth-token: t0k\nProxy-Authorization: Basic eA==\nAccept: */*"), "X-Api-Key: [redacted]\nx-auth-token: [redacted]\nProxy-Authorization: [redacted]\nAccept: */*");
     }
 
     #[test]

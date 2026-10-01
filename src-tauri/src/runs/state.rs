@@ -14,8 +14,14 @@ pub const QUIET_AFTER: Duration = Duration::from_secs(30 * 60);
 /// A working session without a process on this many polls in a row has died.
 const MISSES_TO_FAIL: u32 = 2;
 
+/// A run that was listed and then isn't stays `Unknown` this long, then fails. A daemon restart or a slow listing
+/// shouldn't end a run, but a session that never comes back must not hold a slot in the concurrency cap for good.
+pub const UNLISTED_FAIL_AFTER: Duration = Duration::from_secs(10 * 60);
+
 pub const WAITING_FOR_YOU: &str = "It is waiting for you";
-const NOT_LISTED: &str = "This session isn't listed any more";
+pub const NOT_LISTED: &str = "This session isn't listed any more";
+pub const LOST: &str = "This session hasn't been listed for 10 minutes";
+pub const PROCESS_ENDED: &str = "The agent process ended unexpectedly";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Observed {
@@ -65,6 +71,9 @@ pub fn map_state(entry: Option<&AgentEntry>, job: Option<&JobInfo>, run: &Run, n
                 }
             }
             s if is_terminal(s) => Observed::new(s),
+            RunState::Unknown if run.error.as_deref() == Some(NOT_LISTED) && (now - run.last_progress_at).to_std().is_ok_and(|waited| waited >= UNLISTED_FAIL_AFTER) => {
+                Observed::because(RunState::Failed, LOST)
+            }
             _ => Observed::because(RunState::Unknown, NOT_LISTED),
         };
     };
@@ -86,7 +95,7 @@ pub fn map_state(entry: Option<&AgentEntry>, job: Option<&JobInfo>, run: &Run, n
         Some("working") => {
             let misses = prior_misses + 1;
             if misses >= MISSES_TO_FAIL {
-                Observed::because(RunState::Failed, "The agent process ended unexpectedly")
+                Observed::because(RunState::Failed, PROCESS_ENDED)
             } else {
                 Observed { pid_misses: misses, ..Observed::new(RunState::Working) }
             }
@@ -237,7 +246,7 @@ mod tests {
         let first = map_state(Some(&gone), None, &run(RunState::Working), now(), 0);
         assert_eq!((first.state, first.pid_misses), (RunState::Working, 1));
         let second = map_state(Some(&gone), None, &run(RunState::Working), now(), first.pid_misses);
-        assert_eq!((second.state, second.error.as_deref()), (RunState::Failed, Some("The agent process ended unexpectedly")));
+        assert_eq!((second.state, second.error.as_deref()), (RunState::Failed, Some(PROCESS_ENDED)));
         assert_eq!(map_state(Some(&alive), None, &run(RunState::Working), now(), 1).pid_misses, 0, "a process resets the count");
     }
 
@@ -275,6 +284,51 @@ mod tests {
         for state in [RunState::Done, RunState::Failed, RunState::Stopped] {
             assert_eq!(observe(None, None, &run(state)).state, state);
         }
+    }
+
+    #[test]
+    fn row_10_an_unlisted_session_fails_after_ten_minutes_but_not_before() {
+        let mut r = run(RunState::Unknown);
+        r.error = Some(NOT_LISTED.into());
+        r.last_progress_at = now() - UNLISTED_FAIL_AFTER + Span::seconds(1);
+        let waiting = observe(None, None, &r);
+        assert_eq!((waiting.state, waiting.error.as_deref()), (RunState::Unknown, Some(NOT_LISTED)));
+        r.last_progress_at = now() - UNLISTED_FAIL_AFTER;
+        let lost = observe(None, None, &r);
+        assert_eq!((lost.state, lost.error.as_deref()), (RunState::Failed, Some(LOST)));
+        r.last_progress_at = now() - Span::days(2);
+        assert_eq!(observe(None, None, &r).state, RunState::Failed);
+    }
+
+    #[test]
+    fn a_session_that_is_listed_never_fails_for_being_unknown_however_long_it_has_been() {
+        let mut r = run(RunState::Unknown);
+        r.error = Some(NOT_LISTED.into());
+        r.last_progress_at = now() - Span::days(2);
+        let listed = entry("paused-by-quota", None, None, Some(1));
+        assert_eq!(map_state(Some(&listed), None, &r, now(), 0).state, RunState::Unknown);
+        assert_eq!(map_state(Some(&entry("working", Some("busy"), None, Some(1))), None, &r, now(), 0).state, RunState::Working, "and it recovers when it is listed again");
+    }
+
+    #[test]
+    fn an_unknown_run_that_was_not_unlisted_yet_gets_the_full_wait() {
+        // Listed under an odd state for a long time, then it disappears: the tracker restarts the clock when the
+        // reason changes, and until then map_state keeps it Unknown.
+        let mut r = run(RunState::Unknown);
+        r.error = Some("Claude reported the state \"x\". Open in Terminal to look.".into());
+        r.last_progress_at = now() - Span::days(2);
+        assert_eq!(observe(None, None, &r).state, RunState::Unknown);
+    }
+
+    #[test]
+    fn a_launching_or_working_run_missing_from_the_listing_is_not_failed_by_the_unlisted_wait() {
+        let mut r = run(RunState::Working);
+        r.last_progress_at = now() - Span::days(2);
+        assert_eq!(observe(None, None, &r).state, RunState::Unknown);
+        let mut r = run(RunState::Launching);
+        r.launched_at = Some(now() - Span::seconds(10));
+        r.last_progress_at = now() - Span::days(2);
+        assert_eq!(observe(None, None, &r).state, RunState::Launching);
     }
 
     #[test]
