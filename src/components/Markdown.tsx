@@ -5,6 +5,7 @@ import { useBackend } from "../backend/useBackend";
 import { useStore } from "../store";
 import { useTicketLinks, type TicketLinks } from "./ticketLinks";
 import { Link } from "./Adf";
+import { CodeBlock } from "./CodeBlock";
 
 const HEADING = ["text-[16px]", "text-[15px]", "text-[14px]", "text-[13px]", "text-[13px]", "text-[13px]"];
 const ALIGN = { left: "text-left", center: "text-center", right: "text-right" } as const;
@@ -32,11 +33,7 @@ function block(b: Block, i: number): ReactNode {
         </p>
       );
     case "code":
-      return (
-        <pre key={i} className="overflow-x-auto rounded-md border border-sep bg-code px-3 py-2 font-mono text-[12px] leading-[1.5] [overflow-wrap:normal]">
-          <code>{b.text}</code>
-        </pre>
-      );
+      return <CodeBlock key={i} text={b.text} lang={b.lang || undefined} />;
     case "list": {
       const items = b.items.map((item, j) => (
         <li key={j} className="pl-0.5">

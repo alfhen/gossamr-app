@@ -55,6 +55,14 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       draft: null,
     };
   }
+  if (/prompt|paste|snippet/.test(q)) {
+    return {
+      steps: [],
+      text: "Here is a prompt you can paste elsewhere:\n\n```\nSummarise the open tickets for this sprint.\nGroup them by assignee and flag anything blocked.\n```\n\nAnd a shell one-liner:\n\n```sh\ngit log --since=\"1 week ago\" --oneline\n```",
+      filter: null,
+      draft: null,
+    };
+  }
   const where = context.view ?? "the workspace";
   const open = context.item ? ` and **${context.item.key}** is open` : "";
   return {
