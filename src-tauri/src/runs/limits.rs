@@ -62,8 +62,9 @@ impl RunService {
     /// Clamps, saves and applies the settings. The saved file is written first, so a failed save changes nothing.
     pub fn set_settings(&self, settings: AgentSettings) -> Result<AgentSettings> {
         let settings = settings.clamped();
+        let mut live = self.settings.lock().expect("settings lock poisoned");
         self.update_config(|config| config.agents = settings)?;
-        *self.settings.lock().expect("settings lock poisoned") = settings;
+        *live = settings;
         Ok(settings)
     }
 }

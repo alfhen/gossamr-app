@@ -406,6 +406,13 @@ describe("safety and settings", () => {
     expect(html).toContain("a run can pass its limit by a poll and a turn before it stops");
   });
 
+  it("holds the fields while a save is under way so a second one can't send stale values", () => {
+    const view = (settingsSaving: boolean) => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} settingsSaving={settingsSaving} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    const fields = (html: string) => [...html.matchAll(/<(?:input|select)[^>]*aria-label="(?:Stop a run|Agents running|Terminal app)[^>]*>/g)].map((m) => /disabled/.test(m[0]));
+    expect(fields(view(false))).toEqual([false, false, false, false]);
+    expect(fields(view(true))).toEqual([true, true, true, true]);
+  });
+
   it("waits for the backend's answer before showing fields", () => {
     const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={null} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(html).not.toContain("Agents running at once");

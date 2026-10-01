@@ -38,8 +38,19 @@ function Settings() {
       live = false;
     };
   }, [backend]);
+  const saving = useRef(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
   const save = (next: AgentSettings) => {
-    backend?.runsSetSettings(next).then(setSettings, (e) => useToasts.getState().push(`Couldn't save the limits: ${messageOf(e)}`));
+    if (!backend || saving.current) return;
+    saving.current = true;
+    setSettingsSaving(true);
+    backend
+      .runsSetSettings(next)
+      .then(setSettings, (e) => useToasts.getState().push(`Couldn't save the limits: ${messageOf(e)}`))
+      .finally(() => {
+        saving.current = false;
+        setSettingsSaving(false);
+      });
   };
 
   const finished = useMemo(() => runs.filter(cleanable), [runs]);
@@ -66,7 +77,7 @@ function Settings() {
     setReport(cleanupReport(removed, refused));
   };
   const cleanup = offer ? { count: offer.runs.length, reason: offer.reason, report, busy: cleaning } : report ? { count: 0, reason: "", report, busy: false } : null;
-  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} cleanup={cleanup} onSettings={save} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
+  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} settingsSaving={settingsSaving} cleanup={cleanup} onSettings={save} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
 }
 
 /** Asks which ticket to start an agent on. Picking opens the setup sheet; nothing is drafted before that. */

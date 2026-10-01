@@ -57,6 +57,19 @@ async fn unpushed_work_is_refused_verbatim_and_not_retried() {
 }
 
 #[tokio::test]
+async fn a_second_request_for_a_run_being_cleaned_up_is_refused_and_rm_runs_once() {
+    let (rig, run) = stopped().await;
+    rig.cli.with(|s| s.rm_refusals = vec![LOCKED.into()]);
+    let (first, second) = tokio::join!(rig.svc.cleanup(&run.id), rig.svc.cleanup(&run.id));
+    assert_eq!(first.unwrap(), Cleanup::Removed);
+    assert!(second.unwrap_err().to_string().contains("already being cleaned up"));
+    assert_eq!(rig.cli.0.lock().unwrap().rms.len(), 2, "the refused try and the retry, both from the first request");
+    assert!(rig.svc.cleaning.lock().unwrap().is_empty(), "the mark is gone after every way out");
+    assert!(rig.svc.cleanup(&run.id).await.is_err());
+    assert!(rig.svc.cleaning.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn only_finished_runs_with_a_session_can_be_cleaned_up() {
     let rig = ready().await;
     let working = rig.launched(1).await;

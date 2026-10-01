@@ -20,6 +20,8 @@ export interface SettingsViewProps {
   keepRunning: number | null;
   /** Null until the backend has answered. */
   settings: AgentSettings | null;
+  /** A save is under way; the fields wait so a second one can't send values from before the first. */
+  settingsSaving?: boolean;
   cleanup: CleanupOffer | null;
   onSettings(next: AgentSettings): void;
   onCleanup(): void;
@@ -28,7 +30,7 @@ export interface SettingsViewProps {
 }
 
 /** Safety and settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
-export function AgentsSettingsView({ runs, stopping, keepRunning, settings, cleanup, onSettings, onCleanup, onStopAll, onClose }: SettingsViewProps) {
+export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose }: SettingsViewProps) {
   const [asking, setAsking] = useState(false);
   const active = stoppable(runs);
   return (
@@ -109,7 +111,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, clea
 
       <Sec title="Limits">
         <Box>
-          {settings ? <LimitsForm key={JSON.stringify(settings)} settings={settings} onSave={onSettings} /> : <p className="m-0 text-ws-ink3">Loading…</p>}
+          {settings ? <LimitsForm key={JSON.stringify(settings)} settings={settings} disabled={settingsSaving} onSave={onSettings} /> : <p className="m-0 text-ws-ink3">Loading…</p>}
           <p className="m-0 text-sm text-ws-ink2">Time counts from launch. Tokens are read every few seconds, so a run can pass its limit by a poll and a turn before it stops. Gossamr stops it the same way Stop does, and what it wrote stays in its worktree.</p>
           <p className="m-0 text-sm text-ws-ink2">A run that has been quiet for 30 minutes shows a chip. It is not stopped, and it does not count toward the number on the sidebar.</p>
         </Box>
@@ -149,7 +151,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, clea
 const FIELD = "w-20 rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm text-ws-ink";
 
 /** Numbers are saved when the field is left or Enter is pressed, never per keystroke. */
-function LimitsForm({ settings, onSave }: { settings: AgentSettings; onSave(next: AgentSettings): void }) {
+function LimitsForm({ settings, disabled, onSave }: { settings: AgentSettings; disabled: boolean; onSave(next: AgentSettings): void }) {
   const [minutes, setMinutes] = useState(String(settings.wallClockMinutes));
   const [millions, setMillions] = useState(String(settings.tokenCap / 1_000_000));
   const whole = (text: string, fallback: number) => (Number.isFinite(Number(text)) && text.trim() !== "" ? Math.max(0, Number(text)) : fallback);
@@ -162,7 +164,7 @@ function LimitsForm({ settings, onSave }: { settings: AgentSettings; onSave(next
     <div className="grid gap-2">
       <label className="flex flex-wrap items-center gap-2">
         <span className="min-w-[210px]">Agents running at once</span>
-        <select aria-label="Agents running at once" value={settings.maxRuns} onChange={(e) => onSave({ ...settings, maxRuns: Number(e.target.value) })} className={FIELD}>
+        <select disabled={disabled} aria-label="Agents running at once" value={settings.maxRuns} onChange={(e) => onSave({ ...settings, maxRuns: Number(e.target.value) })} className={FIELD}>
           {[1, 2, 3, 4, 5, 6].map((n) => (
             <option key={n} value={n}>
               {n}
@@ -173,17 +175,17 @@ function LimitsForm({ settings, onSave }: { settings: AgentSettings; onSave(next
       </label>
       <label className="flex flex-wrap items-center gap-2">
         <span className="min-w-[210px]">Stop a run after (minutes)</span>
-        <input aria-label="Stop a run after this many minutes" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} onBlur={save} onKeyDown={enter} className={FIELD} />
+        <input disabled={disabled} aria-label="Stop a run after this many minutes" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} onBlur={save} onKeyDown={enter} className={FIELD} />
         <span className="text-sm text-ws-ink3">0 is never</span>
       </label>
       <label className="flex flex-wrap items-center gap-2">
         <span className="min-w-[210px]">Stop a run after (million tokens)</span>
-        <input aria-label="Stop a run after this many million tokens" inputMode="decimal" value={millions} onChange={(e) => setMillions(e.target.value)} onBlur={save} onKeyDown={enter} className={FIELD} />
+        <input disabled={disabled} aria-label="Stop a run after this many million tokens" inputMode="decimal" value={millions} onChange={(e) => setMillions(e.target.value)} onBlur={save} onKeyDown={enter} className={FIELD} />
         <span className="text-sm text-ws-ink3">0 is never</span>
       </label>
       <label className="flex flex-wrap items-center gap-2">
         <span className="min-w-[210px]">Open sessions in</span>
-        <select aria-label="Terminal app" value={settings.terminal} onChange={(e) => onSave({ ...settings, terminal: e.target.value as AgentSettings["terminal"] })} className={FIELD.replace("w-20", "w-32")}>
+        <select disabled={disabled} aria-label="Terminal app" value={settings.terminal} onChange={(e) => onSave({ ...settings, terminal: e.target.value as AgentSettings["terminal"] })} className={FIELD.replace("w-20", "w-32")}>
           <option value="terminal">Terminal</option>
           <option value="iTerm">iTerm</option>
         </select>

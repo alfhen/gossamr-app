@@ -34,10 +34,23 @@ fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
 
+/// Marks a run as being cleaned up until dropped, on every way out of `cleanup`.
+struct Cleaning<'a>(&'a RunService, String);
+
+impl Drop for Cleaning<'_> {
+    fn drop(&mut self) {
+        self.0.cleaning.lock().expect("cleaning lock poisoned").remove(&self.1);
+    }
+}
+
 impl RunService {
     /// Removes the run's worktree and branch. Never forces: unpushed work stays, and Claude says so.
     pub async fn cleanup(&self, run_id: &str) -> Result<Cleanup> {
         self.ensure_enabled()?;
+        if !self.cleaning.lock().expect("cleaning lock poisoned").insert(run_id.to_owned()) {
+            return Err(refuse("This run is already being cleaned up."));
+        }
+        let _one_at_a_time = Cleaning(self, run_id.to_owned());
         let run = self.load(run_id).await?;
         if run.worktree_removed_at.is_some() {
             return Err(refuse("This run's worktree is already removed."));

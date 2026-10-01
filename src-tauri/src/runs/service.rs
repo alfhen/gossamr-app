@@ -67,6 +67,8 @@ pub struct RunService {
     /// poll while one is running.
     pub(super) recovery: tokio::sync::Mutex<()>,
     in_flight: Mutex<HashSet<String>>,
+    /// Runs whose worktree is being removed, so two requests can't both call `claude rm` for one.
+    pub(super) cleaning: Mutex<HashSet<String>>,
     clones: CloneCache,
     roots: Vec<PathBuf>,
     pub(super) changed: Arc<dyn Fn(&str) + Send + Sync>,
@@ -137,6 +139,7 @@ impl RunService {
             launching: tokio::sync::Mutex::new(()),
             recovery: tokio::sync::Mutex::new(()),
             in_flight: Mutex::new(HashSet::new()),
+            cleaning: Mutex::new(HashSet::new()),
             clones: CloneCache::default(),
             roots,
             changed,
