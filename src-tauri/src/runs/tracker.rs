@@ -141,10 +141,6 @@ pub struct Polled {
 }
 
 impl RunService {
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
-    }
-
     pub async fn poll(&self) -> Polled {
         self.poll_at(Utc::now()).await
     }
@@ -152,7 +148,7 @@ impl RunService {
     /// One look at `claude agents` for every unfinished run of the signed-in account.
     pub async fn poll_at(&self, now: DateTime<Utc>) -> Polled {
         let idle = Polled { busy: false };
-        if !self.enabled {
+        if !self.is_enabled() {
             return idle;
         }
         let Ok(_not_recovering) = self.recovery.try_lock() else { return Polled { busy: true } };

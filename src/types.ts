@@ -525,6 +525,13 @@ export interface RunsChanged {
   connectionId: string;
 }
 
+/** What `runs_set_enabled` did. `note` says what turning Agents off left alone. */
+export interface RunsEnabledChange {
+  enabled: boolean;
+  keepRunning: number;
+  note: string | null;
+}
+
 /** One line of a pre-flight check. */
 export interface PreflightRow {
   level: "green" | "amber" | "red";

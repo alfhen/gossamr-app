@@ -19,6 +19,7 @@ import type {
   RunReview,
   RunSpec,
   RunsChanged,
+  RunsEnabledChange,
   RunsEnvironment,
   Snapshot,
   Transition,
@@ -162,6 +163,10 @@ export interface Backend {
   /** Called when drafts changed, including by a sync revising or retiring them. Returns an unsubscribe function. */
   onProposalsChanged(listener: (change: ProposalsChanged) => void): () => void;
   /** Background agent runs, newest first. */
+  /** Whether Agents are on. The backend owns this; the page only asks. */
+  runsEnabled(): Promise<boolean>;
+  /** Turns Agents on or off and saves it. Turning on rejects, leaving it off, when Claude can't be set up; turning off stops nothing. */
+  runsSetEnabled(enabled: boolean): Promise<RunsEnabledChange>;
   runsList(query?: RunQuery): Promise<Run[]>;
   runsGet(id: string): Promise<Run | null>;
   /** The exact prompt a `startRun` draft would send, and the digest that approves it. */

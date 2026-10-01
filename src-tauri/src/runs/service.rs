@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -69,7 +70,11 @@ pub struct RunService {
     pub(super) changed: Arc<dyn Fn(&str) + Send + Sync>,
     pub(super) notifier: Arc<dyn RunNotifier>,
     pub(super) terminal: Arc<dyn Terminal>,
-    pub(super) enabled: bool,
+    enabled: AtomicBool,
+    /// Held across a read-modify-write of `config.json`, so the enable switch and a picked clone can't undo each other.
+    pub(super) config_lock: Mutex<()>,
+    /// One switch at a time: turning on reads the environment, which can take a while.
+    pub(super) switching: tokio::sync::Mutex<()>,
     cap: usize,
     timing: Timing,
     pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
@@ -134,7 +139,9 @@ impl RunService {
             changed,
             notifier: Arc::new(NoNotices),
             terminal: Arc::new(MacTerminal),
-            enabled: false,
+            enabled: AtomicBool::new(false),
+            config_lock: Mutex::new(()),
+            switching: tokio::sync::Mutex::new(()),
             cap: MAX_CONCURRENT,
             timing: Timing::default(),
             misses: Mutex::new(std::collections::HashMap::new()),
@@ -158,9 +165,17 @@ impl RunService {
         dirs::home_dir().map(|h| default_roots(&h)).unwrap_or_default()
     }
 
-    pub fn enabled(mut self, on: bool) -> Self {
-        self.enabled = on;
+    pub fn enabled(self, on: bool) -> Self {
+        self.enabled.store(on, Ordering::SeqCst);
         self
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn set_flag(&self, on: bool) {
+        self.enabled.store(on, Ordering::SeqCst);
     }
 
     #[cfg(test)]
@@ -181,10 +196,10 @@ impl RunService {
     }
 
     pub fn ensure_enabled(&self) -> Result<()> {
-        if self.enabled {
+        if self.is_enabled() {
             Ok(())
         } else {
-            Err(Error::Claude("Agents are turned off. Set agentsEnabled in config.json to use them.".into()))
+            Err(Error::Claude("Agents are turned off. Turn them on in Settings.".into()))
         }
     }
 
@@ -332,6 +347,8 @@ impl RunService {
     async fn start(&self, run_id: &str, retry: bool) -> Result<(Run, bool)> {
         self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
+        // Turning Agents off takes this lock too, so a start that waited for it can't launch after the switch went off.
+        self.ensure_enabled()?;
         let mut run = self.load(run_id).await?;
         let eligible = if retry { run.state == RunState::Failed && run.short_id.is_none() } else { run.state == RunState::Queued };
         if !eligible {
@@ -373,7 +390,7 @@ impl RunService {
     /// After a restart: runs that were launching are matched to their sessions for up to the recovery window, adopted
     /// if found and failed if not. Queued runs stay queued. Live runs missing from the index are put back.
     pub async fn recover(&self) {
-        if !self.enabled {
+        if !self.is_enabled() {
             return;
         }
         let _only_pass = self.recovery.lock().await;
@@ -458,10 +475,9 @@ impl RunService {
         if !scanned.iter().any(|c| c.path == path) {
             return Err(Error::Proposal(format!("{} isn't a clone of {repo} that Gossamr found", path.display())));
         }
-        let dir = self.core.data_dir();
-        let mut config = AppConfig::load(&dir);
-        config.picked_clones.insert(repo.to_ascii_lowercase(), path);
-        config.save(&dir)
+        self.update_config(|config| {
+            config.picked_clones.insert(repo.to_ascii_lowercase(), path);
+        })
     }
 
     /// A worktree name for a new run in `clone`, not used by any worktree or leftover branch there.

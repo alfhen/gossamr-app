@@ -130,7 +130,8 @@ impl runs::tracker::RunNotifier for RunNotices {
 }
 
 /// Looks at `claude agents` every few seconds while a run is under way and the window is in front, and every half
-/// minute otherwise; the window gaining focus brings the next look forward.
+/// minute otherwise; the window gaining focus brings the next look forward. It runs for the life of the app and does
+/// nothing while Agents are off, so turning them on needs no restart.
 fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -451,6 +452,24 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: Strin
 #[tauri::command]
 async fn runs_review(core: State<'_, CoreState>, proposal_id: String) -> Result<RunReview> {
     core.runs_review(&proposal_id).await
+}
+
+/// Whether Agents are on. This is the only place the answer lives.
+#[tauri::command]
+fn runs_enabled(runs: State<'_, RunsState>) -> bool {
+    runs.is_enabled()
+}
+
+/// Turns Agents on or off and saves the choice. Turning on reads the shell environment first and fails, leaving
+/// Agents off, if it can't; turning off stops nothing that is running.
+#[tauri::command]
+async fn runs_set_enabled(runs: State<'_, RunsState>, enabled: bool) -> Result<runs::enable::EnabledChange> {
+    let change = runs.set_enabled(enabled).await?;
+    if change.enabled {
+        let runs = runs.inner().clone();
+        tauri::async_runtime::spawn(async move { runs.recover().await });
+    }
+    Ok(change)
 }
 
 /// Drafts a run by hand. It stays a draft until `runs_approve`.
@@ -846,13 +865,12 @@ pub fn run() {
             );
             app.manage::<LauncherState>(service.clone());
             app.manage::<RunsState>(service.clone());
+            spawn_run_tracker(app.handle().clone(), service.clone());
             if config.agents_enabled {
                 service.clean_attach_files();
-                let (app_handle, tracked) = (app.handle().clone(), service.clone());
                 tauri::async_runtime::spawn(async move {
                     service.warm().await;
                     service.recover().await;
-                    spawn_run_tracker(app_handle, tracked);
                 });
             }
             app.manage::<AgentState>(Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config)));
@@ -907,6 +925,8 @@ pub fn run() {
             proposals_edit,
             proposals_skip,
             proposals_approve,
+            runs_enabled,
+            runs_set_enabled,
             runs_review,
             runs_draft,
             runs_approve,
