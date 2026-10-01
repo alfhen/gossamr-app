@@ -309,4 +309,40 @@ describe("the repositories to choose from", () => {
     expect(s().reposStatus).toBe("failed");
     expect(s().repos).toEqual(["acme/payments", "acme/storefront"]);
   });
+
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void;
+    let reject!: (e: Error) => void;
+    const promise = new Promise<T>((res, rej) => ((resolve = res), (reject = rej)));
+    return { promise, resolve, reject };
+  };
+
+  it("keep the newest answer when watch refreshes finish out of order", async () => {
+    await github("selected", ["acme/webshop"]);
+    await s().begin({ item: CA });
+    const older = deferred<string[]>();
+    const newer = deferred<string[]>();
+    vi.spyOn(backend, "runsRepos").mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    await backend.watchSetContainers(GITHUB, [{ containerId: "acme/gateway", watched: true }]);
+    await backend.watchSetContainers(GITHUB, [{ containerId: "acme/infra", watched: true }]);
+    newer.resolve(["acme/gateway", "acme/infra", "acme/webshop"]);
+    await settle();
+    older.reject(new Error("too late"));
+    await settle();
+    expect(s()).toMatchObject({ repos: ["acme/gateway", "acme/infra", "acme/webshop"], reposStatus: "ready", reposError: null });
+  });
+
+  it("use a refresh that lands while the sheet is still choosing its default", async () => {
+    await github("selected", ["acme/webshop"]);
+    const links = deferred<never[]>();
+    vi.spyOn(backend, "devLinks").mockReturnValueOnce(links.promise);
+    const opening = s().begin({ item: CA });
+    await settle();
+    vi.spyOn(backend, "runsRepos").mockResolvedValueOnce(["acme/gateway"]);
+    await backend.watchSetContainers(GITHUB, [{ containerId: "acme/gateway", watched: true }]);
+    await settle();
+    links.resolve([]);
+    await opening;
+    expect(s().repos).toEqual(["acme/gateway"]);
+  });
 });

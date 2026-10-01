@@ -83,19 +83,28 @@ const lastRepo = () => {
 export const useRunSetup = create<SetupState>((set, get) => {
   const current = (mine: number) => mine === run && get().open;
   let stopWatching: (() => void) | null = null;
+  let repoRequest = 0;
+  let latestWatched: string[] = [];
 
   const loadRepos = async (mine: number, quiet = false): Promise<string[]> => {
     const { backend } = get();
     if (!backend) return [];
+    const request = ++repoRequest;
+    const latest = () => request === repoRequest && current(mine);
     if (!quiet) set({ reposStatus: "loading", reposError: null });
     try {
       const watched = await backend.runsRepos();
-      if (current(mine)) set({ repos: repoChoices(watched, useRuns.getState().runs), reposStatus: "ready", reposError: null });
-      return watched;
+      if (latest()) {
+        latestWatched = watched;
+        set({ repos: repoChoices(watched, useRuns.getState().runs), reposStatus: "ready", reposError: null });
+      }
     } catch (e) {
-      if (current(mine)) set({ repos: repoChoices([], useRuns.getState().runs), reposStatus: "failed", reposError: messageOf(e) });
-      return [];
+      if (latest()) {
+        latestWatched = [];
+        set({ repos: repoChoices([], useRuns.getState().runs), reposStatus: "failed", reposError: messageOf(e) });
+      }
     }
+    return latestWatched;
   };
 
   const refresh = async (mine: number) => {
@@ -145,11 +154,12 @@ export const useRunSetup = create<SetupState>((set, get) => {
       const mine = ++run;
       useRuns.getState().closeSheet();
       set({ ...closed, open: true, backend, kind, item, phase: "preparing" });
+      latestWatched = [];
       stopWatching?.();
       stopWatching = backend.onWatchChanged(() => void loadRepos(run, true));
       const workspace = useWorkspace.getState();
       try {
-        const watched = await loadRepos(mine);
+        await loadRepos(mine);
         if (!current(mine)) return;
         const id = proposalId ?? findRunDraft(workspace.proposals, item, kind)?.id;
         if (id) {
@@ -158,15 +168,16 @@ export const useRunSetup = create<SetupState>((set, get) => {
           if (draft?.intent.type !== "startRun" || draft.state.type !== "pending") throw new Error("that draft can't be started any more");
           const { spec, item: of } = draft.intent;
           const ticket = of ? workspace.items[itemKey(of)] : undefined;
-          set({ item: of, kind: spec.kind, title: ticket?.title ?? null, repo: spec.repo, repos: repoChoices(watched, useRuns.getState().runs), proposalId: id, ownDraft: false, fromPip: draft.createdBy === "pip", choice: await backend.runsClones(spec.repo) });
+          set({ item: of, kind: spec.kind, title: ticket?.title ?? null, repo: spec.repo, repos: repoChoices(latestWatched, useRuns.getState().runs), proposalId: id, ownDraft: false, fromPip: draft.createdBy === "pip", choice: await backend.runsClones(spec.repo) });
           await refresh(mine);
           if (current(mine)) set({ phase: "ready", initialInstruction: get().review?.instruction ?? null });
           return;
         }
-        const repos = repoChoices(watched, useRuns.getState().runs);
         const title = item ? (workspace.items[itemKey(item)]?.title ?? null) : null;
         const links = item ? await backend.devLinks(item).catch(() => []) : [];
         if (!current(mine)) return;
+        const watched = latestWatched;
+        const repos = repoChoices(watched, useRuns.getState().runs);
         const repo = defaultRepo(repos, item, useRuns.getState().runs, lastRepo(), linkedRepo(links, watched));
         set({ title, repos, repo });
         if (repo) await prepare(mine);
