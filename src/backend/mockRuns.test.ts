@@ -144,4 +144,18 @@ describe("mock runs", () => {
     await backend.runsAttach(working.id);
     expect(backend.runs.attached).toEqual([working.id]);
   });
+
+  it("can start empty, with many runs, or with Claude missing, and counts ages back from a chosen moment", async () => {
+    expect(await new MockBackend({ runs: { seed: "empty" } }).runsList()).toEqual([]);
+    const many = await new MockBackend({ runs: { seed: "many" } }).runsList();
+    expect(many).toHaveLength(24);
+    expect(new Set(many.map((r) => r.id)).size).toBe(24);
+    expect(new Set(many.map((r) => r.expectedWorktree)).size).toBe(24);
+    expect(many.some((r) => r.state === "stopped")).toBe(true);
+    expect(await new MockBackend({ runs: { environment: "missing" } }).runsEnvironment()).toEqual({ claude: "missing", version: null });
+    expect(await new MockBackend().runsEnvironment()).toEqual({ claude: "ok", version: "2.1.286" });
+    const epoch = Date.parse("2026-10-01T09:00:00Z");
+    const [newest] = await new MockBackend({ runs: { epoch } }).runsList();
+    expect(epoch - Date.parse(newest.queuedAt)).toBeLessThan(60 * 60_000);
+  });
 });

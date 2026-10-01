@@ -1,4 +1,4 @@
-import type { Preflight, Run, RunQuery, RunReview, RunSpec, RunsChanged, RunState } from "../types";
+import type { Preflight, Run, RunQuery, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
 import { itemRef } from "./mockConnector";
 import type { MockProposals } from "./mockProposals";
 
@@ -76,10 +76,36 @@ const SEEDS: Seed[] = [
   { key: "SUP-9", name: "sup-9-export-timeout-f8a9", state: "failed", minutesAgo: 30, over: { error: "Workspace not trusted: open a Terminal in this folder, accept the trust prompt, then retry." } },
 ];
 
-function seeded(i: number, seed: Seed): Run {
-  const queued = EPOCH - seed.minutesAgo * MINUTE;
+const REPOS = ["acme/storefront", "acme/payments", "acme/ops"];
+
+/** Twenty-four runs spread over three repos and every state, for the long-list layouts. */
+function manySeeds(): Seed[] {
+  const states: RunState[] = ["working", "needsPermission", "done", "working", "needsAnswer", "done", "stopped", "failed", "working", "done", "stopped", "unknown"];
+  return Array.from({ length: 24 }, (_, i) => {
+    const key = `${["WEB", "CA", "SUP", "DEVOPS"][i % 4]}-${100 + i}`;
+    const name = `${key.toLowerCase()}-sample-${i.toString(16).padStart(4, "0")}`;
+    const state = states[i % states.length];
+    return {
+      key,
+      name,
+      state,
+      minutesAgo: 5 + i * 41,
+      over: {
+        spec: specFor(key, name, REPOS[i % REPOS.length]),
+        needs: state === "needsPermission" ? "approve Bash: pnpm test" : state === "needsAnswer" ? "Which of the two caches should it keep?" : null,
+        lastDetail: state === "working" ? "Reading the module that builds the cart" : null,
+        result: state === "done" ? "Found the cause and wrote down what to do next." : null,
+        error: state === "failed" ? "Launch was interrupted" : null,
+        tokens: 20_000 + i * 31_000,
+      },
+    };
+  });
+}
+
+function seeded(i: number, seed: Seed, epoch: number): Run {
+  const queued = epoch - seed.minutesAgo * MINUTE;
   const spec = specFor(seed.key, seed.name);
-  const last = EPOCH - (seed.quietMinutes ?? Math.min(seed.minutesAgo, 2)) * MINUTE;
+  const last = epoch - (seed.quietMinutes ?? Math.min(seed.minutesAgo, 2)) * MINUTE;
   const ended = TERMINAL.includes(seed.state);
   const failed = seed.state === "failed";
   const run: Run = {
@@ -109,6 +135,14 @@ function seeded(i: number, seed: Seed): Run {
   return run;
 }
 
+export interface MockRunsOptions {
+  /** `busy` is the eight scripted runs; `many` is twenty-four. */
+  seed?: "busy" | "empty" | "many";
+  /** The moment the scripted ages count back from. Fixed by default so tests stay deterministic. */
+  epoch?: number;
+  environment?: RunsEnvironment["claude"];
+}
+
 /** Runs held in memory for the sample-data backend. Nothing moves on its own: `advance` is the clock. */
 export class MockRuns {
   private runs: Run[];
@@ -119,15 +153,26 @@ export class MockRuns {
   /** Run ids passed to `attach`, for tests. */
   readonly attached: string[] = [];
 
+  private readonly epoch: number;
+  private readonly claude: RunsEnvironment["claude"];
+
   constructor(
     private readonly proposals: MockProposals,
-    seed = true,
+    options: MockRunsOptions | boolean = {},
   ) {
-    this.runs = seed ? SEEDS.map((s, i) => seeded(i, s)) : [];
+    const o = typeof options === "boolean" ? { seed: options ? ("busy" as const) : ("empty" as const) } : options;
+    this.epoch = o.epoch ?? EPOCH;
+    this.claude = o.environment ?? "ok";
+    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : SEEDS;
+    this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
   }
 
   private now(): string {
-    return new Date(EPOCH + ++this.tick * MINUTE).toISOString();
+    return new Date(this.epoch + ++this.tick * MINUTE).toISOString();
+  }
+
+  environment(): RunsEnvironment {
+    return { claude: this.claude, version: this.claude === "ok" || this.claude === "signedOut" ? "2.1.286" : null };
   }
 
   private changed() {

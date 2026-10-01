@@ -5,6 +5,7 @@ import { TicketLinksContext } from "../components/ticketLinks";
 import type { WorkFilter } from "../types";
 import { useItemsByFilter, useWorkspace } from "../workspaceStore";
 import { ActivityView } from "./ActivityView";
+import { AgentsView } from "./AgentsView";
 import { useActivity } from "./activityStore";
 import { CANVASES } from "./canvases";
 import { useStepKeys } from "./browse";
@@ -18,7 +19,8 @@ import { PeekSheet } from "./PeekSheet";
 import { FilterNote, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
-import { applyTheme, usePrefs } from "./prefs";
+import { applyTheme, useAgentsEnabled, usePrefs } from "./prefs";
+import { useRuns } from "./runsStore";
 import { Rail } from "./Rail";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
@@ -86,6 +88,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   const choice = useWorkspace((s) => s.watch.find((w) => w.needsChoice));
   const choiceConnection = useWorkspace((s) => s.connections.find((c) => c.id === choice?.connectionId));
   const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
+  const agentsEnabled = useAgentsEnabled();
   useGlobalKeys();
   usePipView();
 
@@ -111,6 +114,15 @@ export function Workspace({ backend }: { backend: Backend }) {
       useWorkspace.getState().dispose();
     };
   }, [backend]);
+
+  useEffect(() => {
+    if (!agentsEnabled) {
+      if (useTabs.getState().route === "agents") useTabs.getState().setRoute("workspace");
+      return;
+    }
+    useRuns.getState().init(backend);
+    return () => useRuns.getState().dispose();
+  }, [backend, agentsEnabled]);
 
   useEffect(() => {
     useDev.getState().setEnabled(hasGithub);
@@ -159,6 +171,7 @@ export function Workspace({ backend }: { backend: Backend }) {
           <div className="min-h-0 flex-1">
             {route === "workspace" && <Canvas />}
             {route === "activity" && <ActivityView />}
+            {route === "agents" && agentsEnabled && <AgentsView />}
             {route === "settings" && <Settings />}
           </div>
           <PeekSheet />

@@ -8,7 +8,9 @@ import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
 import { workConnections, workContainers } from "./domains";
 import { usePopover } from "./Popover";
 import { projectColour, projectInitials } from "./projects";
-import { usePrefs } from "./prefs";
+import { useAgentsEnabled, usePrefs } from "./prefs";
+import { useAttention } from "./runsStore";
+import { Icon } from "./AgentIcons";
 import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
 import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watchLogic";
@@ -211,6 +213,8 @@ export function Rail() {
   const watch = useWorkspace((s) => s.watch);
   const kind = useWorkspace((s) => workConnections(s.connections)[0]?.kind);
   const unread = useActivity((s) => s.unread + s.codeUnread);
+  const agentsEnabled = useAgentsEnabled();
+  const attention = useAttention();
   const pipOpen = usePrefs((s) => s.pipOpen);
   const setPipOpen = usePrefs((s) => s.setPipOpen);
   const setPaletteOpen = usePrefs((s) => s.setPaletteOpen);
@@ -263,6 +267,16 @@ export function Rail() {
             </span>
           )}
         </RailButton>
+        {agentsEnabled && (
+          <RailButton label={attention > 0 ? `Agents, ${attention} ${attention === 1 ? "needs" : "need"} you` : "Agents"} current={route === "agents"} onClick={() => setRoute("agents")} className={`text-lg ${plain(route === "agents")}`}>
+            <Icon name="term" className="size-[19px]" />
+            {attention > 0 && (
+              <span aria-label={`${attention} ${attention === 1 ? "needs" : "need"} you`} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
+                {attention > 99 ? "99+" : attention}
+              </span>
+            )}
+          </RailButton>
+        )}
         <RailButton label="Settings" current={route === "settings"} onClick={() => setRoute("settings")} className={`text-lg ${plain(route === "settings")}`}>
           <span aria-hidden>⚙</span>
         </RailButton>

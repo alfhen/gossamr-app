@@ -52,6 +52,7 @@ import type {
   WorkItem,
   Workflow,
 } from "../types";
+import { readEnvironment } from "./runsEnvironment";
 import type { Backend, ReadScope } from "./types";
 
 /** The Jira site and account this backend acts for. */
@@ -325,6 +326,10 @@ export class JiraBackend implements Backend {
 
   runsPreflight(_spec: RunSpec) {
     return notYet<Preflight>("runs_preflight");
+  }
+
+  runsEnvironment() {
+    return readEnvironment(() => notYet<Preflight>("runs_preflight"));
   }
 
   runsDisk(_id: string) {
