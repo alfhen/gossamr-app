@@ -9,8 +9,14 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::cli::{ClaudeCli, LaunchRequest, ShortId, SystemCli};
+use async_trait::async_trait;
+
+use super::cli::{AgentEntry, AuthStatus, ClaudeCli, CliResult, JobInfo, LaunchRequest, Launched, ShortId, SystemCli};
 use super::env::{capture, RunEnv};
+use super::index::RunIndex;
+use super::service::RunService;
+use super::toolchain::{FixedToolchain, Toolchain};
+use crate::domain::{RunSpec, RunState};
 
 struct Scratch {
     root: PathBuf,
@@ -218,4 +224,103 @@ async fn real_daemon_gets_the_captured_environment_and_nothing_added_after_the_c
     eprintln!("test process PATH: {own_path}\ncaptured PATH:     {captured_path}\ndaemon PATH:       {daemon_path}");
     assert_eq!(daemon_path, captured_path);
     assert!(env_value(&line, "GOSSAMR_LATE_VARIABLE").is_none(), "a variable set after the capture reached the daemon");
+}
+
+/// The scratch config is signed out, which the service refuses before launching. This reports it as signed in so the
+/// launch plumbing (worktree path, short id, adoption) runs against the real CLI; the session itself does no model work.
+struct SignedIn(SystemCli);
+
+#[async_trait]
+impl ClaudeCli for SignedIn {
+    async fn version(&self) -> CliResult<String> {
+        self.0.version().await
+    }
+
+    async fn auth_status(&self) -> CliResult<AuthStatus> {
+        Ok(AuthStatus { logged_in: true, ..self.0.auth_status().await? })
+    }
+
+    async fn supports_bg(&self) -> CliResult<bool> {
+        self.0.supports_bg().await
+    }
+
+    async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched> {
+        self.0.launch(req).await
+    }
+
+    async fn agents(&self, all: bool) -> CliResult<Vec<AgentEntry>> {
+        self.0.agents(all).await
+    }
+
+    async fn stop(&self, id: &ShortId) -> CliResult<()> {
+        self.0.stop(id).await
+    }
+
+    async fn rm(&self, id: &ShortId) -> CliResult<()> {
+        self.0.rm(id).await
+    }
+
+    async fn job(&self, config_dir: &Path, id: &ShortId) -> CliResult<Option<JobInfo>> {
+        self.0.job(config_dir, id).await
+    }
+}
+
+#[tokio::test]
+#[ignore = "runs the real claude in a scratch config"]
+async fn real_approved_run_launches_into_its_worktree_is_adopted_by_retry_then_stops_and_removes() {
+    let mut s = Scratch::new("service").await;
+    let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+    let clone = fx.home.join("webshop");
+    git(&fx.home, &["clone", "-q", "--local", &s.repo.to_string_lossy(), "webshop"]);
+    git(&clone, &["remote", "set-url", "origin", "https://github.com/acme/webshop.git"]);
+    let trust = serde_json::json!({ "projects": { s.repo.to_string_lossy(): { "hasTrustDialogAccepted": true }, clone.to_string_lossy(): { "hasTrustDialogAccepted": true } } });
+    std::fs::write(s.config.join(".claude.json"), trust.to_string()).unwrap();
+
+    let cli = Arc::new(SignedIn(SystemCli::new(s.cli.binary().to_path_buf(), s.env.clone())));
+    let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env: s.env.clone() }));
+    let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {})).enabled(true);
+
+    let spec = RunSpec { clone_path: clone.canonicalize().unwrap(), name: "ce-4-spike-0a1b".into(), base: "feature".into(), ..crate::domain::fixtures::run_spec() };
+    let draft = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
+    let digest = fx.core.runs_review(&draft.id).await.unwrap().digest;
+    let run = fx.core.runs_approve(&draft.id, &digest).await.unwrap();
+    svc.start_now(&run.id).await.unwrap();
+
+    let mut run = fx.core.run(&run.id).await.unwrap().unwrap();
+    assert_eq!(run.state, RunState::Launching, "{:?}", run.error);
+    let id = run.short_id.clone().expect("a short id from launch");
+    s.launched.push(id.clone());
+
+    let listed_at_worktree = started_listing(&cli, &id, &run.expected_worktree).await;
+    assert!(listed_at_worktree, "the session never moved to its worktree");
+
+    run.state = RunState::Failed;
+    run.short_id = None;
+    run.error = Some("answer lost".into());
+    fx.core.save_run(&run).await.unwrap();
+    let adopted = svc.retry_launch(&run.id).await.unwrap();
+    assert_eq!((adopted.state, adopted.short_id.clone()), (RunState::Launching, Some(id.clone())));
+    let sessions = cli.agents(true).await.unwrap();
+    assert_eq!(sessions.iter().filter(|e| e.cwd.as_deref().map(Path::new) == Some(run.expected_worktree.as_path())).count(), 1, "retry started no second session");
+
+    cli.stop(&id).await.unwrap();
+    let removed = Instant::now();
+    while let Err(e) = cli.rm(&id).await {
+        eprintln!("rm refused after {:?}: {e}", removed.elapsed());
+        assert!(removed.elapsed() < Duration::from_secs(30), "rm never succeeded");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(!cli.agents(true).await.unwrap().iter().any(|e| e.id.as_deref() == Some(id.as_str())));
+}
+
+async fn started_listing(cli: &SignedIn, id: &ShortId, worktree: &Path) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        let listed = cli.agents(false).await.unwrap();
+        if listed.iter().any(|e| e.id.as_deref() == Some(id.as_str()) && e.cwd.as_deref().map(Path::new) == Some(worktree)) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    false
 }

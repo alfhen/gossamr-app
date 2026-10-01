@@ -993,6 +993,36 @@ pub(crate) mod testing {
         fixture_with(None).await
     }
 
+    /// The fixture with a GitHub connection that watches `repos` (`owner/name`), for what only watched repositories may do.
+    pub async fn fixture_watching(repos: &[&str]) -> Fixture {
+        use crate::auth::{GithubAuth, MemoryStore};
+        use crate::codehost::github::testserver::{serve, Reply};
+        use crate::codehost::github::GithubHost;
+
+        let rows: Vec<String> = repos
+            .iter()
+            .map(|r| {
+                let (owner, name) = r.split_once('/').expect("owner/name");
+                format!("{{\"id\":1,\"name\":\"{name}\",\"full_name\":\"{r}\",\"private\":true,\"owner\":{{\"login\":\"{owner}\"}},\"fork\":false,\"archived\":false,\"default_branch\":\"main\",\"pushed_at\":\"2026-09-29T10:00:00Z\",\"permissions\":{{\"push\":true,\"pull\":true}}}}")
+            })
+            .collect();
+        let server = serve(vec![
+            ("/user", vec![Reply::ok(include_str!("codehost/github/fixtures/user.json"))]),
+            ("/user/repos", vec![Reply::ok(&format!("[{}]", rows.join(",")))]),
+        ])
+        .await;
+        let http = reqwest::Client::new();
+        let (base, factory_http) = (server.base.clone(), http.clone());
+        let auth = GithubAuth::for_test(http, Arc::new(MemoryStore::default()), &server.base, None, vec![]);
+        let code = CodeService::with_factory(
+            auth,
+            Box::new(move |s, db| Arc::new(GithubHost::new(factory_http.clone(), &base, &s.token, &Connection::github_id(&s.login), &s.login, db))),
+        );
+        let fx = fixture_with(Some(code)).await;
+        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx
+    }
+
     /// The fixture with a scripted GitHub service in place of the real one.
     pub async fn fixture_with(code: Option<CodeService>) -> Fixture {
         static N: AtomicUsize = AtomicUsize::new(0);

@@ -8,13 +8,3 @@ use crate::error::Result;
 pub trait RunLauncher: Send + Sync {
     async fn launch(&self, run_id: &str) -> Result<()>;
 }
-
-/// Leaves the run queued.
-pub struct NoopLauncher;
-
-#[async_trait]
-impl RunLauncher for NoopLauncher {
-    async fn launch(&self, _run_id: &str) -> Result<()> {
-        Ok(())
-    }
-}
