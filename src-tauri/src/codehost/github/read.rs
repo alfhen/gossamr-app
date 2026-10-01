@@ -301,7 +301,7 @@ impl GithubHost {
         let mut failed = None;
         'groups: for group in qualifier_groups(repos) {
             let q = encode(&format!("is:pr {query} in:title,body {group}"));
-            let hits: PullHits = match self.api.json(&format!("/search/issues?q={q}&per_page=30")).await {
+            let hits: PullHits = match self.api.json(&format!("/search/issues?q={q}&per_page=100")).await {
                 Ok((hits, _)) => hits,
                 Err(e) => {
                     failed = Some(e);
@@ -314,7 +314,7 @@ impl GithubHost {
                 }
             }
             let q = encode(&format!("{query} {group}"));
-            let hits: CommitSearch = match self.api.json(&format!("/search/commits?q={q}&per_page=30")).await {
+            let hits: CommitSearch = match self.api.json(&format!("/search/commits?q={q}&per_page=100")).await {
                 Ok((hits, _)) => hits,
                 Err(e) => {
                     failed = Some(e);
