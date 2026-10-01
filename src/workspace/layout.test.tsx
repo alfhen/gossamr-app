@@ -134,6 +134,13 @@ describe("header and rail", () => {
     expect(out).toContain("data-tauri-drag-region");
   });
 
+  it("shows Activity as a bell, not a lightning bolt", () => {
+    const out = renderToStaticMarkup(<Rail />);
+    const activity = /<button[^>]*aria-label="Activity"[^>]*>(.*?)<\/button>/s.exec(out)![1];
+    expect(activity).toContain("<svg");
+    expect(activity).not.toContain("⚡");
+  });
+
   it("renders a 58px icon rail with labelled buttons and the activity, settings and Pip cluster", () => {
     const out = renderToStaticMarkup(<Rail />);
     for (const label of ["Search and jump", "All projects", "Views", "Activity", "Settings", "Pip"]) expect(out).toContain(`aria-label="${label}"`);

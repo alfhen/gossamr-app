@@ -194,6 +194,15 @@ function ProjectsMenuButton({ rest, colourOf, noun }: Pick<ProjectsMenuPanelProp
   );
 }
 
+function BellIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="size-[19px] fill-none stroke-current" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15z" />
+      <path d="M10 20.5a2 2 0 0 0 4 0" />
+    </svg>
+  );
+}
+
 export function Rail() {
   const tab = useActiveTab();
   const route = useTabs((s) => s.route);
@@ -247,7 +256,7 @@ export function Rail() {
       </nav>
       <div className="flex shrink-0 flex-col items-center gap-2 border-t border-ws-sep pt-2.5">
         <RailButton label="Activity" current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
-          <span aria-hidden>⚡</span>
+          <BellIcon />
           {unread > 0 && (
             <span aria-label={`${unread} unread`} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
               {unread > 99 ? "99+" : unread}
