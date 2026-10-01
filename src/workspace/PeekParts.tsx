@@ -26,7 +26,7 @@ export function CountBadge({ count, accent = false }: { count: number; accent?: 
 }
 
 export interface SectionCardProps {
-  id: PeekSectionId | "subtasks" | "drafts";
+  id: PeekSectionId | "subtasks" | "drafts" | "agents";
   title: string;
   count?: number;
   /** Omit on sections that can't be folded. */

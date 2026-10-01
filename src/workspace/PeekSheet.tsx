@@ -14,10 +14,12 @@ import { draftIdOf, draftItem, showsAsDraftTicket } from "./draftTicket";
 import { LiveDraftPeek } from "./DraftPeek";
 import { canvasElement, showMe } from "./jump";
 import { PEEK_DEFAULT } from "./paneSizes";
-import { usePrefs } from "./prefs";
+import { useAgentsEnabled, usePrefs } from "./prefs";
 import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
 import { displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, shownComments, subtasksOf, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
+import { AgentMenu, TicketAgents, runsOfTicket } from "./AgentMenu";
 import { Development } from "./DevelopmentSection";
+import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
@@ -63,6 +65,10 @@ export interface PeekViewProps {
   /** The description, already rendered. */
   description: ReactNode;
   drafts: ReactNode;
+  /** The menu for starting an agent on the item; left out when Agents is off or the item is read-only. */
+  agentMenu?: ReactNode;
+  /** The agents already working on the item. */
+  agents?: ReactNode;
   composer: ReactNode;
   notice: string | null;
   onMenu(open: boolean): void;
@@ -233,9 +239,11 @@ export function PeekView(p: PeekViewProps) {
               ))}
             </p>
           )}
+          {!draft && p.agentMenu}
         </div>
 
         {p.drafts}
+        {!draft && p.agents}
 
         <SectionCard id="description" title="Description" {...section("description")}>
           <div className="min-w-0 [overflow-wrap:anywhere]">{draft ? draft.description : p.description}</div>
@@ -500,6 +508,8 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
   const [menuOpen, setMenuOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const now = useMemo(() => new Date(), [item]);
+  const agentsOn = useAgentsEnabled();
+  const agentRuns = useRuns((s) => (agentsOn ? runsOfTicket(s.runs, ref).length : 0));
 
   useEffect(() => {
     void useWorkspace.getState().loadEvents(ref);
@@ -604,6 +614,14 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
             ))}
           </SectionCard>
         ) : null
+      }
+      agentMenu={agentsOn && !readOnly ? <AgentMenu item={ref} /> : undefined}
+      agents={
+        agentRuns > 0 ? (
+          <SectionCard id="agents" title="Agents on this ticket" count={agentRuns}>
+            <TicketAgents item={ref} title={item.title} />
+          </SectionCard>
+        ) : undefined
       }
       composer={readOnly ? null : <Composer item={item} disabled={!backend} reply={replyTo} onCancelReply={() => setReplyTo(null)} />}
       notice={notice}

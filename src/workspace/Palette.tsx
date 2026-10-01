@@ -5,10 +5,13 @@ import { itemsByFilter, pendingDrafts, useWorkspace } from "../workspaceStore";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { buildCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
+import { buildCommands, investigateCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
-import { usePrefs } from "./prefs";
+import { useAgentsEnabled, usePrefs } from "./prefs";
+import { NO_FILTERS } from "./agentsLogic";
+import { useRunSetup } from "./runSetupStore";
+import { useAttention, useRuns } from "./runsStore";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
 import { openTicketByKey } from "./jump";
 import { useGithubUi } from "./githubUi";
@@ -166,6 +169,16 @@ export function appActions(): CommandActions {
     newTab: () => void tabs.openTab(),
     newTicket: () => {},
     togglePip: () => prefs.setPipOpen(!usePrefs.getState().pipOpen),
+    startAgent: () => useRuns.getState().setPicking(true),
+    investigate: (item) => void useRunSetup.getState().begin({ item: item.item }),
+    showAgentsNeedingMe: () => {
+      useRuns.setState({ filters: { ...NO_FILTERS, lane: "needs" }, sheet: null });
+      tabs.setRoute("agents");
+    },
+    openAgentSafety: () => {
+      tabs.setRoute("agents");
+      useRuns.getState().openSafety();
+    },
     jumpToItem,
     askPip,
   };
@@ -222,6 +235,8 @@ export function Palette() {
   const proposals = useWorkspace((s) => s.proposals);
   const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const unread = useActivity((s) => s.unread + s.codeUnread);
+  const agents = useAgentsEnabled();
+  const needingMe = useAttention();
   const savedViews = useTabs((s) => s.savedViews);
   const tab = useTabs((s) => activeTab(s));
   const [query, setQuery] = useState("");
@@ -244,18 +259,19 @@ export function Palette() {
       return title ? [{ id: "new:create", group: "Create" as const, icon: "＋", label: `Draft “${title}” in ${container.name}`, hint: "↵", run: () => void draftTicket(container, title) }] : [];
     }
     const actions = { ...appActions(), newTicket: () => go({ type: "project" }) };
-    const ctx: CommandContext = { project: projectOf(tab.filter) ?? null, view: tab.view, unreadActivity: unread, pendingDrafts: pendingDrafts({ proposals }).length, github };
+    const ctx: CommandContext = { project: projectOf(tab.filter) ?? null, view: tab.view, unreadActivity: unread, pendingDrafts: pendingDrafts({ proposals }).length, github, agents, agentsNeedingMe: needingMe };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);
     const found = [
       ...ticketCommands(all, query, actions.jumpToItem),
       ...keyCommand(query, all, actions.openTicket),
       ...pullCommand(query, actions.openPull),
+      ...(agents ? investigateCommands(all, query, actions.investigate) : []),
       ...rankCommands([...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query),
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, unread, savedViews, tab.filter, tab.view, query, step, unwatched]);
+  }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched]);
 
   const prompting = step.type !== "search";
   return (

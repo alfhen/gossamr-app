@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Mention } from "../lib/mentions";
 import type {
   AssignedElsewhere,
@@ -15,7 +15,9 @@ import type {
   ProposalEdit,
   ProposalQuery,
   ProposalsChanged,
+  CloneChoice,
   Run,
+  RunEvent,
   RunQuery,
   RunReview,
   RunSpec,
@@ -65,7 +67,7 @@ export interface Scope {
  * Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change.
  * Writes carry `scope`, so a write started for one account is refused if someone else has signed in meanwhile.
  */
-const UNAVAILABLE_RUN_COMMANDS = ["runs_stop", "runs_stop_all", "runs_attach", "runs_preflight", "runs_disk", "runs_retry_launch"] as const;
+const UNAVAILABLE_RUN_COMMANDS = ["runs_stop", "runs_stop_all", "runs_attach", "runs_preflight", "runs_disk", "runs_retry_launch", "runs_draft", "runs_clones", "runs_pick_clone", "runs_suggest_name", "runs_events", "runs_start_now", "runs_keep_running"] as const;
 
 function notYet<T>(command: (typeof UNAVAILABLE_RUN_COMMANDS)[number]): Promise<T> {
   return Promise.reject(new Error(`${command} is not available yet`));
@@ -324,8 +326,40 @@ export class JiraBackend implements Backend {
     return notYet<void>("runs_attach");
   }
 
-  runsPreflight(_spec: RunSpec) {
+  runsPreflight(_spec: RunSpec | null) {
     return notYet<Preflight>("runs_preflight");
+  }
+
+  runsDraft(_spec: RunSpec, _item: ItemRef | null) {
+    return notYet<Proposal>("runs_draft");
+  }
+
+  runsClones(_repo: string) {
+    return notYet<CloneChoice>("runs_clones");
+  }
+
+  runsPickClone(_repo: string, _path: string) {
+    return notYet<void>("runs_pick_clone");
+  }
+
+  runsSuggestName(_clonePath: string, _key: string, _title: string) {
+    return notYet<string>("runs_suggest_name");
+  }
+
+  runsEvents(_id: string) {
+    return notYet<RunEvent[]>("runs_events");
+  }
+
+  runsStartNow(_id: string) {
+    return notYet<Run>("runs_start_now");
+  }
+
+  runsKeepRunning() {
+    return notYet<number>("runs_keep_running");
+  }
+
+  revealPath(path: string) {
+    return revealItemInDir(path);
   }
 
   runsEnvironment() {

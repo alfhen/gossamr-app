@@ -3,6 +3,7 @@ import type {
   AssignedElsewhere,
   CacheChanged,
   CatalogPage,
+  CloneChoice,
   ContainerRef,
   Intent,
   ItemRef,
@@ -13,6 +14,7 @@ import type {
   ProposalQuery,
   ProposalsChanged,
   Run,
+  RunEvent,
   RunQuery,
   RunReview,
   RunSpec,
@@ -175,7 +177,24 @@ export interface Backend {
   runsStopAll(): Promise<{ stopped: number; failed: number }>;
   /** Opens Terminal attached to the run's session. */
   runsAttach(id: string): Promise<void>;
-  runsPreflight(spec: RunSpec): Promise<Preflight>;
+  /** What a run would need and run as; with no spec, only the environment and capacity. */
+  runsPreflight(spec: RunSpec | null): Promise<Preflight>;
+  /** Drafts a run by hand. The backend fills in the ticket text; nothing starts until `runsApprove`. */
+  runsDraft(spec: RunSpec, item: ItemRef | null): Promise<Proposal>;
+  /** Local clones of a watched repository, the one the person chose first. */
+  runsClones(repo: string): Promise<CloneChoice>;
+  /** Remembers which clone to use for a repository. */
+  runsPickClone(repo: string, path: string): Promise<void>;
+  /** A worktree name for a new run in `clonePath` that nothing there uses yet. */
+  runsSuggestName(clonePath: string, key: string, title: string): Promise<string>;
+  /** What the agent did, oldest first. */
+  runsEvents(id: string): Promise<RunEvent[]>;
+  /** Starts a run that is still queued, as after a restart. */
+  runsStartNow(id: string): Promise<Run>;
+  /** How many agents carry on if the app quits or the person signs out. */
+  runsKeepRunning(): Promise<number>;
+  /** Shows a folder in Finder. */
+  revealPath(path: string): Promise<void>;
   /** Whether Claude Code is installed and signed in, for the banners on the Agents view. Never rejects. */
   runsEnvironment(): Promise<RunsEnvironment>;
   /** Bytes the run's session files take up. */

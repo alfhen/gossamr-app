@@ -133,3 +133,78 @@ describe("the runs store", () => {
     expect(s().stopping).toBe(false);
   });
 });
+
+describe("the run sheet", () => {
+  it("opens on the Agents view with the run selected, and closes", async () => {
+    await settle();
+    s().openRun("run-seed-3");
+    expect(s().sheet).toEqual({ type: "run", id: "run-seed-3" });
+    expect(s().selectedId).toBe("run-seed-3");
+    expect(useTabs.getState().route).toBe("agents");
+    s().closeSheet();
+    expect(s().sheet).toBeNull();
+  });
+
+  it("stays on the board when opened from a ticket, keeping the filters", async () => {
+    await settle();
+    s().setFilter({ repo: "acme/payments" });
+    s().openRun("run-seed-3", { stay: true });
+    expect(useTabs.getState().route).toBe("workspace");
+    expect(s().filters.repo).toBe("acme/payments");
+    useTabs.getState().setRoute("settings");
+    s().openRun("run-seed-3", { stay: true });
+    expect(useTabs.getState().route).toBe("agents");
+  });
+
+  it("browses with j and k in the order the view lists the runs, and stops at the ends", async () => {
+    await settle();
+    const first = s().runs.find((r) => r.state === "needsPermission")!;
+    s().openRun(first.id);
+    s().browse(-1);
+    expect(s().sheet).toEqual({ type: "run", id: first.id });
+    s().browse(1);
+    const second = (s().sheet as { id: string }).id;
+    expect(second).not.toBe(first.id);
+    expect(s().selectedId).toBe(second);
+    s().browse(-1);
+    expect(s().sheet).toEqual({ type: "run", id: first.id });
+  });
+
+  it("does not browse from the safety sheet", async () => {
+    await settle();
+    s().openSafety();
+    s().browse(1);
+    expect(s().sheet).toEqual({ type: "safety" });
+  });
+
+  it("stops one run through the backend and says when it cannot", async () => {
+    await settle();
+    const working = s().runs.find((r) => r.state === "working")!;
+    await s().stop(working.id);
+    await settle();
+    expect(s().runs.find((r) => r.id === working.id)?.state).toBe("stopped");
+    const done = s().runs.find((r) => r.state === "done")!;
+    await s().stop(done.id);
+    expect(useToasts.getState().toasts[0].text).toMatch(/^Couldn't stop it: /);
+  });
+
+  it("starts a queued run and retries a failed launch", async () => {
+    await settle();
+    const failed = s().runs.find((r) => r.state === "failed")!;
+    await s().retryLaunch(failed.id);
+    await settle();
+    expect(s().runs.find((r) => r.id === failed.id)?.state).toBe("queued");
+    await s().startNow(failed.id);
+    await settle();
+    expect(s().runs.find((r) => r.id === failed.id)?.state).toBe("launching");
+    await s().startNow(failed.id);
+    expect(useToasts.getState().toasts[0].text).toMatch(/^Couldn't start it: /);
+  });
+
+  it("opens the sheet when a notification asks for a run", async () => {
+    await settle();
+    backend.runs.open("run-seed-2");
+    expect(s().sheet).toEqual({ type: "run", id: "run-seed-2" });
+  });
+});
+
