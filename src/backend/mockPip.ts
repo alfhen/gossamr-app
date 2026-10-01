@@ -58,7 +58,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       steps: ["Read the run", `Drafted a comment on ${item.key}`],
       text: `I drafted a short comment on **${item.key}** from what the run found. It isn't posted; approve, edit or skip it below.`,
       filter: null,
-      draft: { intent: { type: "comment", item, body: docFromText(`An agent looked into this (it only read code; nothing was changed).\n\n${note || "It finished without a written answer."}`) }, label: "From an agent run" },
+      draft: { intent: { type: "comment", item, body: docFromText(note || "It finished without a written answer.") }, label: "From an agent run" },
     };
   }
   if (asksAboutAgents.test(q) && !asksForAgent.test(q)) {

@@ -135,6 +135,8 @@ describe("What it found", () => {
     const script = scriptPip(commentWithPipPrompt(r), { view: null, item: null, filter: null, selection: [] }, [], [r]);
     expect(script.draft?.intent).toMatchObject({ type: "comment", item: r.item });
     expect(script.text).toContain("isn't posted");
+    expect(JSON.stringify(script.draft?.intent)).toContain("add a backoff.");
+    expect(JSON.stringify(script.draft?.intent)).not.toContain("only read code");
     expect(script.runDraft ?? null).toBeNull();
   });
 
