@@ -1,0 +1,127 @@
+//! A signed-in account with a clone, a scripted `claude` and a recording notifier, for the tracker and control tests.
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use chrono::Utc;
+
+use super::cli::{AgentEntry, JobInfo, ShortId, TimelineLine};
+use super::control::Terminal;
+use super::env::RunEnv;
+use super::index::RunIndex;
+use super::repo::testing::{clone_with_origin, install_fake_git};
+use super::service::RunService;
+use super::testing::FakeCli;
+use super::toolchain::{FixedToolchain, Toolchain};
+use super::tracker::{Attention, RunNotifier};
+use crate::domain::fixtures::run_spec;
+use crate::domain::{Run, RunSpec, RunState};
+use crate::inbox::testing::{fixture_watching, Fixture};
+
+#[derive(Default)]
+pub struct Notices(pub Mutex<Vec<(String, Attention, RunState)>>);
+
+impl RunNotifier for Notices {
+    fn notify(&self, run: &Run, why: Attention) {
+        self.0.lock().unwrap().push((run.id.clone(), why, run.state));
+    }
+}
+
+#[derive(Default)]
+pub struct Opened(pub Mutex<Vec<PathBuf>>);
+
+impl Terminal for Opened {
+    fn open(&self, file: &Path) -> std::io::Result<()> {
+        self.0.lock().unwrap().push(file.to_path_buf());
+        Ok(())
+    }
+}
+
+pub struct Rig {
+    pub fx: Fixture,
+    pub svc: Arc<RunService>,
+    pub cli: Arc<FakeCli>,
+    pub clone: PathBuf,
+    pub notices: Arc<Notices>,
+    pub opened: Arc<Opened>,
+    pub changes: Arc<Mutex<Vec<String>>>,
+}
+
+pub async fn ready() -> Rig {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let clone = fx.home.join("webshop");
+    clone_with_origin(&clone, "https://github.com/acme/webshop.git");
+    let clone = clone.canonicalize().unwrap();
+    let cli = Arc::new(FakeCli::new());
+    cli.with(|s| s.config_dir = fx.dir.join("claude-config"));
+    let bin = install_fake_git(&fx.dir);
+    let env = Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display()))]));
+    let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
+    let (notices, opened, changes) = (Arc::new(Notices::default()), Arc::new(Opened::default()), Arc::new(Mutex::new(Vec::new())));
+    let seen = changes.clone();
+    let svc = RunService::new(
+        fx.core.clone(),
+        Arc::new(tools),
+        RunIndex::load(&fx.dir.join("index")),
+        vec![fx.home.clone()],
+        Arc::new(move |id| seen.lock().unwrap().push(id.to_string())),
+    )
+    .enabled(true)
+    .with_notifier(notices.clone())
+    .with_terminal(opened.clone());
+    Rig { fx, svc: Arc::new(svc), cli, clone, notices, opened, changes }
+}
+
+pub fn line(at: &str, state: &str, text: &str) -> TimelineLine {
+    TimelineLine { at: Some(at.into()), state: Some(state.into()), detail: None, text: Some(text.into()) }
+}
+
+impl Rig {
+    pub fn spec(&self, n: u32) -> RunSpec {
+        RunSpec { clone_path: self.clone.clone(), name: format!("eng-1-fix-cart-{n:04x}"), ..run_spec() }
+    }
+
+    /// Approved and launched through the scripted CLI: `Launching`, with a short id and a listed session.
+    pub async fn launched(&self, n: u32) -> Run {
+        let p = self.fx.core.draft_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap();
+        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
+        let queued = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        self.svc.start_now(&queued.id).await.unwrap()
+    }
+
+    pub async fn queued(&self, n: u32) -> Run {
+        let p = self.fx.core.draft_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap();
+        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
+        self.fx.core.runs_approve(&p.id, &digest).await.unwrap()
+    }
+
+    pub async fn get(&self, run: &Run) -> Run {
+        self.fx.core.run(&run.id).await.unwrap().unwrap()
+    }
+
+    pub async fn set(&self, run: &Run, f: impl FnOnce(&mut Run)) -> Run {
+        let mut run = self.get(run).await;
+        f(&mut run);
+        self.fx.core.save_run(&run).await.unwrap();
+        run
+    }
+
+    /// Changes the listed session of `run`.
+    pub fn session(&self, run: &Run, f: impl FnOnce(&mut AgentEntry)) {
+        let id = run.short_id.as_ref().expect("launched");
+        self.cli.with(|s| f(s.sessions.iter_mut().find(|e| e.id.as_deref() == Some(id.as_str())).expect("listed")));
+    }
+
+    /// What the session's `state.json` and timeline say.
+    pub fn job(&self, id: &ShortId, f: impl FnOnce(&mut JobInfo)) {
+        self.cli.with(|s| f(s.jobs.entry(id.to_string()).or_default()));
+    }
+
+    pub fn noticed(&self) -> Vec<(Attention, RunState)> {
+        self.notices.0.lock().unwrap().iter().map(|(_, why, state)| (*why, *state)).collect()
+    }
+
+    pub async fn poll(&self) {
+        self.svc.poll_at(Utc::now()).await;
+    }
+}

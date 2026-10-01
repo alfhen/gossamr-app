@@ -11,7 +11,7 @@ use crate::auth::Scope;
 use crate::db::Db;
 use crate::domain::{
     ticket_snapshot, Basis, ContainerRef, CreatedBy, Doc, Intent, ItemKind, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind,
-    RunQuery, RunReview, RunSpec, INVESTIGATE_INSTRUCTION,
+    RunEvent, RunQuery, RunReview, RunSpec, INVESTIGATE_INSTRUCTION,
 };
 use crate::error::{Error, Result};
 use crate::model::MentionRef;
@@ -323,6 +323,15 @@ impl Core {
 
     pub async fn run(&self, id: &str) -> Result<Option<Run>> {
         self.with_proposals(|db| db.run(id)).await
+    }
+
+    pub async fn run_events(&self, run_id: &str) -> Result<Vec<RunEvent>> {
+        self.with_proposals(|db| db.run_events(run_id)).await
+    }
+
+    /// Adds events after the run's last one; at most 500 are kept per run. Returns how many were stored.
+    pub async fn append_run_events(&self, run_id: &str, events: &[RunEvent]) -> Result<usize> {
+        self.with_proposals(|db| db.append_events(run_id, events)).await
     }
 
     /// Stores a run's new state. Only the run service writes runs after approval.

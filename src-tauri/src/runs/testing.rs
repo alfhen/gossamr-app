@@ -1,6 +1,7 @@
 //! An in-memory `ClaudeCli` for tests that need to script what `claude` does without running a process.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -31,6 +32,10 @@ pub struct Scripted {
     pub lag: bool,
     pub list_fails: bool,
     pub sessions: Vec<AgentEntry>,
+    /// What each session's `state.json` and timeline say, by short id.
+    pub jobs: HashMap<String, JobInfo>,
+    /// Every id `claude stop` was run with.
+    pub stops: Vec<String>,
     pub launches: Vec<LaunchRequest>,
     pub in_flight: usize,
     pub most_in_flight: usize,
@@ -53,6 +58,8 @@ impl FakeCli {
             lag: false,
             list_fails: false,
             sessions: vec![],
+            jobs: HashMap::new(),
+            stops: vec![],
             launches: vec![],
             in_flight: 0,
             most_in_flight: 0,
@@ -149,7 +156,13 @@ impl ClaudeCli for FakeCli {
         Ok(s.sessions.clone())
     }
 
-    async fn stop(&self, _id: &ShortId) -> CliResult<()> {
+    async fn stop(&self, id: &ShortId) -> CliResult<()> {
+        let mut s = self.0.lock().unwrap();
+        s.stops.push(id.to_string());
+        if let Some(e) = s.sessions.iter_mut().find(|e| e.id.as_deref() == Some(id.as_str())) {
+            e.state = Some("stopped".into());
+            e.pid = None;
+        }
         Ok(())
     }
 
@@ -157,7 +170,11 @@ impl ClaudeCli for FakeCli {
         Ok(())
     }
 
-    async fn job(&self, _config_dir: &Path, _id: &ShortId) -> CliResult<Option<JobInfo>> {
-        Ok(None)
+    async fn job(&self, _config_dir: &Path, id: &ShortId) -> CliResult<Option<JobInfo>> {
+        Ok(self.0.lock().unwrap().jobs.get(id.as_str()).cloned())
+    }
+
+    fn binary(&self) -> Option<PathBuf> {
+        Some(PathBuf::from("/opt/fake/bin/claude"))
     }
 }

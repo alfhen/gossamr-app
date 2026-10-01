@@ -31,7 +31,7 @@ use tracker::{Connection, Move};
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState};
 use error::{Error, Result};
 use domain::{
-    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, ContainerRef, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunQuery, RunReview, RunSpec, Stray,
+    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, ContainerRef, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, RunReview, RunSpec, Stray,
     TreeEntry, WatchChange, WatchMode, WorkItem, Workflow,
 };
 use model::{Snapshot, Transition};
@@ -103,6 +103,46 @@ fn announce(app: &AppHandle, events: &[events::NewEvent]) {
     for n in notify::notices(events) {
         let _ = app.notification().builder().title(n.title).body(n.body).show();
     }
+}
+
+/// A needs-state, a finished run or a failed one, as a system notification unless the window is already in front.
+/// Focusing the window soon after opens the run (`open-run`), since the notification has no click handler.
+fn announce_run(app: &AppHandle, open: &runs::tracker::OpenOnFocus, run: &Run, why: runs::tracker::Attention) {
+    let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+    if focused {
+        return;
+    }
+    let notice = runs::tracker::notice_text(run, why);
+    if app.notification().builder().title(notice.title).body(notice.body).show().is_ok() {
+        open.record(&run.id, std::time::Instant::now());
+    }
+}
+
+struct RunNotices {
+    app: AppHandle,
+    open: Arc<runs::tracker::OpenOnFocus>,
+}
+
+impl runs::tracker::RunNotifier for RunNotices {
+    fn notify(&self, run: &Run, why: runs::tracker::Attention) {
+        announce_run(&self.app, &self.open, run, why);
+    }
+}
+
+/// Looks at `claude agents` every few seconds while a run is under way and the window is in front, and every half
+/// minute otherwise; the window gaining focus brings the next look forward.
+fn spawn_run_tracker(app: AppHandle, service: RunsState) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let polled = service.poll().await;
+            let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+            let wait = if polled.busy && focused { runs::tracker::POLL_BUSY } else { runs::tracker::POLL_IDLE };
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                _ = service.focus.notified() => {}
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -485,6 +525,47 @@ async fn runs_suggest_name(runs: State<'_, RunsState>, clone_path: std::path::Pa
     runs.suggest_name(&clone_path, &key, &title).await
 }
 
+/// Stops a run that is working or waiting on the person. Its conversation and worktree are kept.
+#[tauri::command]
+async fn runs_stop(runs: State<'_, RunsState>, id: String) -> Result<Run> {
+    runs.stop(&id).await
+}
+
+/// Stops every run Gossamr started, in any account, and nothing else.
+#[tauri::command]
+async fn runs_stop_all(runs: State<'_, RunsState>) -> Result<runs::control::StopAll> {
+    runs.stop_all().await
+}
+
+/// Opens Terminal in the run's worktree, attached to its session.
+#[tauri::command]
+async fn runs_attach(runs: State<'_, RunsState>, id: String) -> Result<()> {
+    runs.attach(&id).await
+}
+
+/// Bytes the run's session folder uses; a lower bound if counting took too long.
+#[tauri::command]
+async fn runs_disk(runs: State<'_, RunsState>, id: String) -> Result<u64> {
+    runs.disk(&id).await
+}
+
+#[tauri::command]
+async fn runs_events(runs: State<'_, RunsState>, id: String) -> Result<Vec<RunEvent>> {
+    runs.events(&id).await
+}
+
+/// The run a recent notification was about, once, for a page that missed the `open-run` event.
+#[tauri::command]
+fn runs_open_pending(open: State<'_, Arc<runs::tracker::OpenOnFocus>>) -> Option<String> {
+    open.take(std::time::Instant::now())
+}
+
+/// How many agents are still running in any account, for the sign-out and quit messages.
+#[tauri::command]
+fn runs_keep_running(runs: State<'_, RunsState>) -> usize {
+    runs.keep_running()
+}
+
 #[tauri::command]
 async fn runs_list(core: State<'_, CoreState>, query: Option<RunQuery>) -> Result<Vec<Run>> {
     core.runs_list(&query.unwrap_or_default()).await
@@ -719,8 +800,15 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Focused(true) = event {
-                if let Some(core) = window.app_handle().try_state::<CoreState>() {
+                let app = window.app_handle();
+                if let Some(core) = app.try_state::<CoreState>() {
                     core.focus.notify_one();
+                }
+                if let Some(runs) = app.try_state::<RunsState>() {
+                    runs.focus.notify_one();
+                }
+                if let Some(run_id) = app.try_state::<Arc<runs::tracker::OpenOnFocus>>().and_then(|open| open.take(std::time::Instant::now())) {
+                    let _ = app.emit("open-run", serde_json::json!({ "runId": run_id }));
                 }
             }
         })
@@ -751,6 +839,8 @@ pub fn run() {
             ))?;
             let config = config::AppConfig::load(&core.data_dir());
             let runs_handle = app.handle().clone();
+            let open_on_focus = Arc::new(runs::tracker::OpenOnFocus::default());
+            app.manage(open_on_focus.clone());
             let service = Arc::new(
                 runs::service::RunService::new(
                     core.clone(),
@@ -759,14 +849,18 @@ pub fn run() {
                     runs::service::RunService::default_roots(),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
+                .with_notifier(Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus }))
                 .enabled(config.agents_enabled),
             );
             app.manage::<LauncherState>(service.clone());
             app.manage::<RunsState>(service.clone());
             if config.agents_enabled {
+                service.clean_attach_files();
+                let (app_handle, tracked) = (app.handle().clone(), service.clone());
                 tauri::async_runtime::spawn(async move {
                     service.warm().await;
                     service.recover().await;
+                    spawn_run_tracker(app_handle, tracked);
                 });
             }
             app.manage::<AgentState>(Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config)));
@@ -830,6 +924,13 @@ pub fn run() {
             runs_clones,
             runs_pick_clone,
             runs_suggest_name,
+            runs_stop,
+            runs_stop_all,
+            runs_attach,
+            runs_disk,
+            runs_events,
+            runs_open_pending,
+            runs_keep_running,
             runs_list,
             runs_get,
             sync_now,

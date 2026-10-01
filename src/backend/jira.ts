@@ -67,12 +67,6 @@ export interface Scope {
  * Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change.
  * Writes carry `scope`, so a write started for one account is refused if someone else has signed in meanwhile.
  */
-const UNAVAILABLE_RUN_COMMANDS = ["runs_stop", "runs_stop_all", "runs_attach", "runs_disk", "runs_events", "runs_keep_running"] as const;
-
-function notYet<T>(command: (typeof UNAVAILABLE_RUN_COMMANDS)[number]): Promise<T> {
-  return Promise.reject(new Error(`${command} is not available yet`));
-}
-
 export class JiraBackend implements Backend {
   readonly kind = "jira" as const;
 
@@ -314,16 +308,16 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_approve", { proposalId, digest });
   }
 
-  runsStop(_id: string) {
-    return notYet<Run>("runs_stop");
+  runsStop(id: string) {
+    return invoke<Run>("runs_stop", { id });
   }
 
   runsStopAll() {
-    return notYet<{ stopped: number; failed: number }>("runs_stop_all");
+    return invoke<{ stopped: number; failed: number }>("runs_stop_all");
   }
 
-  runsAttach(_id: string) {
-    return notYet<void>("runs_attach");
+  runsAttach(id: string) {
+    return invoke<void>("runs_attach", { id });
   }
 
   runsPreflight(spec: RunSpec | null) {
@@ -346,8 +340,8 @@ export class JiraBackend implements Backend {
     return invoke<string>("runs_suggest_name", { clonePath, key, title });
   }
 
-  runsEvents(_id: string) {
-    return notYet<RunEvent[]>("runs_events");
+  runsEvents(id: string) {
+    return invoke<RunEvent[]>("runs_events", { id });
   }
 
   runsStartNow(id: string) {
@@ -355,7 +349,7 @@ export class JiraBackend implements Backend {
   }
 
   runsKeepRunning() {
-    return notYet<number>("runs_keep_running");
+    return invoke<number>("runs_keep_running");
   }
 
   revealPath(path: string) {
@@ -366,8 +360,8 @@ export class JiraBackend implements Backend {
     return readEnvironment(() => this.runsPreflight(null));
   }
 
-  runsDisk(_id: string) {
-    return notYet<number>("runs_disk");
+  runsDisk(id: string) {
+    return invoke<number>("runs_disk", { id });
   }
 
   runsRetryLaunch(id: string) {

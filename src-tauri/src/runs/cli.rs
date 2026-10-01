@@ -283,6 +283,10 @@ pub trait ClaudeCli: Send + Sync {
     async fn stop(&self, id: &ShortId) -> CliResult<()>;
     async fn rm(&self, id: &ShortId) -> CliResult<()>;
     async fn job(&self, config_dir: &Path, id: &ShortId) -> CliResult<Option<JobInfo>>;
+    /// The `claude` this runs, for a command that has to start the same one in a terminal.
+    fn binary(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 pub struct SystemCli {
@@ -391,6 +395,10 @@ impl ClaudeCli for SystemCli {
         tokio::task::spawn_blocking(move || read_job(&dir))
             .await
             .map_err(|e| CliError::Spawn(std::io::Error::other(e)))?
+    }
+
+    fn binary(&self) -> Option<PathBuf> {
+        Some(self.binary.clone())
     }
 }
 

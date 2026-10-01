@@ -263,6 +263,10 @@ impl ClaudeCli for SignedIn {
     async fn job(&self, config_dir: &Path, id: &ShortId) -> CliResult<Option<JobInfo>> {
         self.0.job(config_dir, id).await
     }
+
+    fn binary(&self) -> Option<PathBuf> {
+        Some(self.0.binary().to_path_buf())
+    }
 }
 
 #[tokio::test]
@@ -311,6 +315,72 @@ async fn real_approved_run_launches_into_its_worktree_is_adopted_by_retry_then_s
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     assert!(!cli.agents(true).await.unwrap().iter().any(|e| e.id.as_deref() == Some(id.as_str())));
+}
+
+#[tokio::test]
+#[ignore = "runs the real claude in a scratch config"]
+async fn real_signed_out_session_is_tracked_as_a_system_block_then_stops_and_a_foreign_session_is_left_alone() {
+    let mut s = Scratch::new("tracker").await;
+    let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+    let clone = fx.home.join("webshop");
+    git(&fx.home, &["clone", "-q", "--local", &s.repo.to_string_lossy(), "webshop"]);
+    git(&clone, &["remote", "set-url", "origin", "https://github.com/acme/webshop.git"]);
+    let trust = serde_json::json!({ "projects": { s.repo.to_string_lossy(): { "hasTrustDialogAccepted": true }, clone.to_string_lossy(): { "hasTrustDialogAccepted": true } } });
+    std::fs::write(s.config.join(".claude.json"), trust.to_string()).unwrap();
+
+    let cli = Arc::new(SignedIn(SystemCli::new(s.cli.binary().to_path_buf(), s.env.clone())));
+    let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env: s.env.clone() }));
+    let opened = Arc::new(super::rig::Opened::default());
+    let notices = Arc::new(super::rig::Notices::default());
+    let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {}))
+        .enabled(true)
+        .with_terminal(opened.clone())
+        .with_notifier(notices.clone());
+
+    let foreign = s.launch("foreign-0a1b").await;
+    let spec = RunSpec { clone_path: clone.canonicalize().unwrap(), name: "ce-5-track-0a1b".into(), base: "feature".into(), ..crate::domain::fixtures::run_spec() };
+    let draft = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
+    let digest = fx.core.runs_review(&draft.id).await.unwrap().digest;
+    let run = fx.core.runs_approve(&draft.id, &digest).await.unwrap();
+    svc.start_now(&run.id).await.unwrap();
+    let id = fx.core.run(&run.id).await.unwrap().unwrap().short_id.expect("a short id");
+    s.launched.push(id.clone());
+
+    let mut seen = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let tracked = loop {
+        svc.poll().await;
+        let now = fx.core.run(&run.id).await.unwrap().unwrap();
+        if seen.last() != Some(&now.state) {
+            seen.push(now.state);
+        }
+        if now.state == RunState::SystemBlocked {
+            break now;
+        }
+        assert!(Instant::now() < deadline, "never reached SystemBlocked: {seen:?} {:?}", now.error);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+    eprintln!("states seen: {seen:?}; needs: {:?}; detail: {:?}", tracked.needs, tracked.last_detail);
+    assert!(tracked.needs.as_deref().is_some_and(|n| n.contains("login required")), "{:?}", tracked.needs);
+    assert_eq!(tracked.session_id.as_deref().map(|s| &s[..8]), Some(id.as_str()));
+    assert!(notices.0.lock().unwrap().iter().any(|(_, _, state)| *state == RunState::SystemBlocked));
+    eprintln!("events: {:?}", fx.core.run_events(&run.id).await.unwrap().iter().map(|e| (&e.kind, &e.text)).collect::<Vec<_>>());
+    eprintln!("disk bytes: {:?}", svc.disk(&run.id).await);
+
+    svc.attach(&run.id).await.unwrap();
+    let file = opened.0.lock().unwrap()[0].clone();
+    let script = std::fs::read_to_string(&file).unwrap();
+    assert!(script.ends_with(&format!("attach {id}\n")) && script.contains(&tracked.expected_worktree.to_string_lossy().into_owned()), "{script}");
+
+    let stopped = svc.stop(&run.id).await.unwrap();
+    assert_eq!(stopped.state, RunState::Stopped);
+    let listing = cli.agents(true).await.unwrap();
+    let state_of = |id: &ShortId| listing.iter().find(|e| e.id.as_deref() == Some(id.as_str())).and_then(|e| e.state.clone());
+    assert_eq!(state_of(&id).as_deref(), Some("stopped"));
+    assert_ne!(state_of(&foreign).as_deref(), Some("stopped"), "a session Gossamr didn't start was left alone");
+    svc.poll().await;
+    assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap().state, RunState::Stopped);
+    let _ = std::fs::remove_file(file);
 }
 
 async fn started_listing(cli: &SignedIn, id: &ShortId, worktree: &Path) -> bool {
