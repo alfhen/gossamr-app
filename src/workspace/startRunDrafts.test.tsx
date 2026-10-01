@@ -54,6 +54,18 @@ describe("a startRun draft", () => {
     expect(out).toContain("Look at the retry loop.");
   });
 
+  it("says Pip proposed it and which run its focus came from, and still has no approve button", () => {
+    const spec2 = { ...spec, focus: "Look at the retry loop.", focusFromRun: "run-7" };
+    const byPip = runDraft({ intent: { type: "startRun", connectionId: "mock", item: itemRef("CA-412"), spec: spec2 }, createdBy: "pip" });
+    const props = { proposal: byPip, statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn(), onReview: vi.fn() };
+    const out = renderToStaticMarkup(<DraftCard {...props} />);
+    expect(out).toContain("Proposed by Pip");
+    expect(out).toContain("Focus from Pip, after reading run run-7:");
+    expect(out).toContain("Review and start");
+    for (const label of ["Apply", "Approve", "Start agent"]) expect(out).not.toContain(label);
+    expect(renderToStaticMarkup(<DraftCard {...props} proposal={runDraft()} />)).not.toContain("Proposed by Pip");
+  });
+
   it("previews as a plain line in the conversation", () => {
     expect(draftPreviewBody(runDraft(), null)).toContain("Start an agent: CA-412");
     const out = renderToStaticMarkup(<DraftPreview proposal={runDraft()} statusName={null} targetTitle="Fix the thing" onOpen={vi.fn()} />);

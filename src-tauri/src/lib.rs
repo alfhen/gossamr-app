@@ -883,13 +883,6 @@ pub fn run() {
             tauri::async_runtime::block_on(core.restore());
             app.manage(core.clone());
 
-            let handle = app.handle().clone();
-            let view_handle = handle.clone();
-            let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(
-                core.clone(),
-                Arc::new(move |connection_id| proposals_changed(&handle, connection_id)),
-                Arc::new(move |request_id, filter, note| pip_view(&view_handle, request_id, filter, note)),
-            ))?;
             let config = config::AppConfig::load(&core.data_dir());
             let runs_handle = app.handle().clone();
             let open_on_focus = Arc::new(runs::tracker::OpenOnFocus::default());
@@ -905,6 +898,14 @@ pub fn run() {
                 .with_notifier(Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus }))
                 .enabled(config.agents_enabled),
             );
+            let handle = app.handle().clone();
+            let view_handle = handle.clone();
+            let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(
+                core.clone(),
+                service.clone(),
+                Arc::new(move |connection_id| proposals_changed(&handle, connection_id)),
+                Arc::new(move |request_id, filter, note| pip_view(&view_handle, request_id, filter, note)),
+            ))?;
             app.manage::<LauncherState>(service.clone());
             app.manage::<RunsState>(service.clone());
             spawn_run_tracker(app.handle().clone(), service.clone());

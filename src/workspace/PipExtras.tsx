@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { claude, type PipView } from "../backend/claude";
 import { useClaude } from "../claudeStore";
+import { itemKey } from "../lib/filter";
 import { pendingDrafts, useWorkspace } from "../workspaceStore";
+import { useAgentsEnabled } from "./agentsFlag";
 import { useActiveTab } from "./hooks";
 import { nudgeCandidates, nudgeDelay, NUDGE_SHOWN_MS, pickNudge, type Nudge, type NudgeScene } from "./nudges";
 import { WORKSPACE_CONVERSATION } from "./PipPane";
@@ -9,8 +11,10 @@ import { PipAvatar } from "./PipAvatar";
 import { lookAt } from "./pipGaze";
 import { chipCount, unassignedIn, useItemScene, useScreen } from "./pipHooks";
 import { usePaneWidths } from "./PaneResizers";
+import { runNudges, runStatesNow } from "./pipRuns";
 import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
+import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 
 /** The line under the filter bar after Pip narrowed the view; hidden once the person edits the filter themselves. */
@@ -114,6 +118,9 @@ function act(n: Nudge) {
     case "open":
       usePrefs.getState().setPipOpen(true);
       break;
+    case "open-run":
+      useRuns.getState().openRun(n.action.id);
+      break;
   }
 }
 
@@ -134,13 +141,27 @@ export function fireNudge(candidates: readonly Nudge[], now: number, hidden: boo
   if (next) pip.showNudge(next, now);
 }
 
+/** Suggestions about runs that changed state while the app was open; what was already there at the first read is not news. */
+function useRunNudges(): Nudge[] {
+  const enabled = useAgentsEnabled();
+  const ready = useRuns((s) => s.status === "ready");
+  const runs = useRuns((s) => s.runs);
+  const items = useWorkspace((s) => s.items);
+  const [baseline, setBaseline] = useState<ReadonlySet<string> | null>(null);
+  useEffect(() => {
+    if (enabled && ready && baseline === null) setBaseline(new Set(runStatesNow(runs)));
+  }, [enabled, ready, baseline, runs]);
+  return useMemo(() => (enabled && baseline ? runNudges(runs, baseline, (r) => (r.item ? items[itemKey(r.item)]?.title : null)) : []), [enabled, baseline, runs, items]);
+}
+
 /** Picks suggestions for what is on screen: once the person has stayed put a moment, never one they closed, each only once a session and not too soon after the last. */
 function useNudges() {
   const screen = useScreen();
   const item = useItemScene(screen);
+  const runs = useRunNudges();
   const scene: NudgeScene = useMemo(
-    () => ({ route: screen.route, filter: screen.tab.filter, count: screen.shown.length, chips: chipCount(screen), item, unassignedInView: unassignedIn(screen.shown) }),
-    [screen, item],
+    () => ({ route: screen.route, filter: screen.tab.filter, count: screen.shown.length, chips: chipCount(screen), item, unassignedInView: unassignedIn(screen.shown), runs }),
+    [screen, item, runs],
   );
   const candidates = useMemo(() => nudgeCandidates(scene), [scene]);
   const key = candidates.map((c) => c.id).join("|");

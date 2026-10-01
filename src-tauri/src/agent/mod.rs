@@ -5,6 +5,7 @@ pub mod context;
 mod github;
 pub mod images;
 pub mod mcp;
+mod runs;
 pub mod sandbox;
 
 #[cfg(test)]
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::config::AppConfig;
-use crate::domain::{ProposalQuery, StateKind};
+use crate::domain::{ClonePlan, ProposalQuery, StateKind};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 use context::ScreenContext;
@@ -74,6 +75,17 @@ pub struct AgentCaps {
     pub read_only_sandbox: bool,
     /// The agent takes images inline with the prompt.
     pub vision: bool,
+}
+
+/// What Pip's run tools need from the agent-run service, and nothing that starts, stops or answers a run.
+#[async_trait]
+pub trait RunPlanner: Send + Sync {
+    /// Whether agents are turned on; the run tools say so instead of answering when they are not.
+    fn enabled(&self) -> bool;
+
+    /// Where a run in `repo` would be set up: the clone to use, its default branch and a fresh worktree name for
+    /// ticket `key` titled `title`. The error is in words Pip can pass on.
+    async fn plan(&self, repo: &str, key: &str, title: &str) -> std::result::Result<ClonePlan, String>;
 }
 
 pub type EventStream = mpsc::UnboundedReceiver<AgentEvent>;
@@ -171,6 +183,10 @@ impl AgentService {
         };
         let open = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
         let drafts = self.core.proposals_in(&scope, &open).await?;
+        let runs = match self.mcp.planner.enabled() {
+            true => runs::context_runs(&self.core, &scope, &handed).await,
+            false => Vec::new(),
+        };
         let sandbox = Sandbox::prepare(&self.core.data_dir())?;
         let session = match req.session_id.filter(|_| provider.capabilities().resume) {
             Some(id) if self.core.is_pip_session(&id).await? => Some(id),
@@ -181,7 +197,7 @@ impl AgentService {
         let agent_req = AgentRequest {
             run_id: run_id.clone(),
             system: context::system_prompt(provider.capabilities().reads_code),
-            prompt: context::compose(&context, item.as_deref(), &links, &drafts, &req.prompt),
+            prompt: context::compose(&context, item.as_deref(), &links, &drafts, &runs, &req.prompt),
             mcp: self.mcp.endpoint(&run_id)?,
             sandbox,
             session,
@@ -189,7 +205,7 @@ impl AgentService {
         };
 
         // Registered before the run starts, since the agent may call the tools straight away.
-        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), mcp::Run { scope, handed });
+        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), mcp::PipRun { scope, handed });
         self.running.lock().expect("lock poisoned").insert(run_id.clone(), provider.clone());
         let mut events = match provider.run(agent_req).await {
             Ok(e) => e,

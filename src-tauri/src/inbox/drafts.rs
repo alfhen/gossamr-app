@@ -228,7 +228,7 @@ impl Core {
     }
 
     /// The clone as the run will use it: an existing folder with a `.git`, under the person's home, by its real path.
-    fn resolve_clone(&self, path: &Path) -> Result<PathBuf> {
+    pub(super) fn resolve_clone(&self, path: &Path) -> Result<PathBuf> {
         let refused = |why: &str| Error::Proposal(format!("{} {why}", path.display()));
         let real = path.canonicalize().map_err(|_| refused("isn't a folder that exists"))?;
         if !real.is_dir() || !real.join(".git").exists() {

@@ -218,6 +218,7 @@ mod tests {
         assert_eq!(after("--setting-sources"), "", "no user, project or local settings, hooks, plugins or memory files");
         assert!(a.contains(&"--disable-slash-commands".to_string()));
         assert!(a.contains(&"--strict-mcp-config".to_string()), "the user's own MCP servers stay out");
+        assert!(!a.iter().any(|x| x == "--bg" || x == "--worktree"), "Pip never starts a background session");
         for loosened in ["--add-dir", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--disallowedTools", "--plugin-dir", "--settings", "--agents"] {
             assert!(!a.contains(&loosened.to_string()), "{loosened}");
         }
@@ -334,6 +335,7 @@ mod tests {
             reach: format!("Use whatever tools you have to fetch http://127.0.0.1:{}/ping, then reply with just: done.", h.canary_port()),
             github: "Call read_repo_file for acme/webshop path src/main.rs, then read_repo_file for acme/gateway path README.md, then search_code for x in acme/gateway, then ticket_changes for CA-208. Then reply with the exact text of src/main.rs that you read, followed by the refusal guidance the tools gave for acme/gateway, word for word.".into(),
             list: "Call list_proposals with state open and tell me the ids you see, then stop.".into(),
+            start_agent: "Start an agent to investigate CA-1 for me. Use your tools, then tell me in one sentence where that stands.".into(),
             hang: "Call list_proposals ten times in a row, one after another, then reply with just: done.".into(),
         };
         conformance::check_all(&provider, &h, &probes).await.unwrap();

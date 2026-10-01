@@ -552,6 +552,14 @@ export class MockBackend implements Backend {
     return this.proposals.draft(intent, label, requestId);
   }
 
+  pipRuns() {
+    return this.runs.list();
+  }
+
+  pipRunDraft(item: ItemRef, focus: string | null, requestId: string) {
+    return this.runs.pipDraft(item, focus, requestId);
+  }
+
   proposalsEdit(id: string, edit: ProposalEdit) {
     return this.proposals.edit(id, edit);
   }

@@ -1,6 +1,7 @@
 import { and } from "../lib/filter";
 import { docFromText } from "../lib/docs";
-import type { Intent, ItemRef, ScreenContext, WorkFilter } from "../types";
+import type { Intent, ItemRef, Run, ScreenContext, WorkFilter } from "../types";
+import { needsPerson, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import type { AskRequest, ClaudeEvent } from "./claude";
 
@@ -10,6 +11,8 @@ export interface PipScript {
   text: string;
   filter: { filter: WorkFilter; note: string } | null;
   draft: { intent: Intent; label: string | null } | null;
+  /** An agent run to propose on a ticket, with an optional focus note. */
+  runDraft?: { item: ItemRef; focus: string | null } | null;
 }
 
 const FILTERS: { pattern: RegExp; filter: WorkFilter; note: string }[] = [
@@ -20,10 +23,52 @@ const FILTERS: { pattern: RegExp; filter: WorkFilter; note: string }[] = [
 ];
 
 const asksToShow = /\b(show|filter|find|list|only|which)\b/;
+const asksAboutAgents = /\bmy agents\b|\bagents?\b.*\b(doing|up to|status|running)\b|\bwhat.*\bagents?\b/;
+const asksForAgent = /\b(start|launch|run|kick off)\b.*\b(agent|investigation)\b|\binvestigate\b/;
+const KEY = /\b([A-Z][A-Z0-9]+-\d+)\b/;
+
+/** What the agents are doing, one line each, from the runs the person has. */
+export function agentSummary(runs: readonly Run[], now: number): string {
+  if (!runs.length) return "You have no agent runs. Open a ticket and choose Agent to start one.";
+  const waiting = runs.filter(needsPerson);
+  const going = runs.filter((r) => r.state === "working" || r.state === "launching" || r.state === "queued");
+  const done = runs.filter((r) => r.state === "done");
+  const line = (r: Run) => `- **${r.item?.key ?? r.spec.repo}** ${stateView(r, now).label.toLowerCase()}${r.lastDetail ? `: ${r.lastDetail}` : r.needs ? `: ${r.needs}` : ""}`;
+  const part = (title: string, list: readonly Run[]) => (list.length ? `${title}\n${list.slice(0, 5).map(line).join("\n")}` : "");
+  return [
+    `You have ${runs.length} agent ${runs.length === 1 ? "run" : "runs"}: ${waiting.length} waiting on you, ${going.length} working, ${done.length} ready to review.`,
+    part("Waiting on you", waiting),
+    part("Working", going),
+    part("Ready to review", done),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
-export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = []): PipScript {
+export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now()): PipScript {
   const q = prompt.toLowerCase();
+  if (asksAboutAgents.test(q) && !asksForAgent.test(q)) {
+    return { steps: ["Looked at your agents"], text: agentSummary(runs, now), filter: null, draft: null };
+  }
+  if (asksForAgent.test(q)) {
+    const key = KEY.exec(prompt)?.[1];
+    const item: ItemRef | null = key
+      ? context.item?.key === key
+        ? context.item
+        : { connectionId: context.item?.connectionId ?? context.selection[0]?.connectionId ?? "mock", externalId: key, key }
+      : context.item;
+    if (item) {
+      const focus = /(?:focus on|look at|check)\s+(.+)$/i.exec(prompt.trim())?.[1]?.trim().slice(0, 300) ?? null;
+      return {
+        steps: [`Looked up ${item.key}`, "Drafted an agent run"],
+        text: `I drafted an investigation of **${item.key}**${focus ? ` with a focus note: “${focus}”` : ""}. It has not started. Open the draft to read the exact prompt, then start it.`,
+        filter: null,
+        draft: null,
+        runDraft: { item, focus },
+      };
+    }
+  }
   const wanted = FILTERS.find((f) => f.pattern.test(q));
   if (wanted && (asksToShow.test(q) || !context.item)) {
     const filter = context.filter ? and(context.filter, wanted.filter) : wanted.filter;
@@ -105,6 +150,10 @@ type ViewListener = (requestId: string, filter: WorkFilter, note: string) => voi
 /** The parts of a backend the scripted Pip writes to; only the sample backend has them. */
 export interface PipDrafter {
   pipDraft(intent: Intent, label: string | null, requestId: string): Promise<unknown>;
+  /** The runs Pip can read. */
+  pipRuns(): Run[];
+  /** Drafts a run the way propose_run does: Pip names the ticket and a focus note, the backend builds the rest. */
+  pipRunDraft(item: ItemRef, focus: string | null, requestId: string): Promise<unknown>;
 }
 
 const listeners = new Set<Listener>();
@@ -129,7 +178,7 @@ const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | null, pace = 25): Promise<void> {
   let stopped = false;
   running.set(req.requestId, () => (stopped = true));
-  const script = scriptPip(req.prompt, req.context, req.images);
+  const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? []);
   const session = req.sessionId ?? `mock-session-${req.requestId}`;
   emit(req.requestId, { type: "started", sessionId: session });
   try {
@@ -139,6 +188,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       emit(req.requestId, { type: "tool", label });
     }
     if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
+    if (!stopped && script.runDraft) await drafter?.pipRunDraft?.(script.runDraft.item, script.runDraft.focus, req.requestId);
     if (!stopped && script.filter) viewListeners.forEach((l) => l(req.requestId, script.filter!.filter, script.filter!.note));
     for (const word of script.text.match(/\S+\s*/g) ?? []) {
       if (stopped) break;
