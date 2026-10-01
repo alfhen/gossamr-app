@@ -56,7 +56,7 @@ impl RunEnv {
     }
 
     fn parse(raw: &[u8]) -> Option<Self> {
-        let marker = [b'\0'].into_iter().chain(MARKER.bytes()).chain([b'\0']).collect::<Vec<u8>>();
+        let marker = [b"\0".as_slice(), MARKER.as_bytes(), b"\0"].concat();
         let at = raw.windows(marker.len()).position(|w| w == marker.as_slice())?;
         let vars = raw[at + marker.len()..]
             .split(|b| *b == 0)
