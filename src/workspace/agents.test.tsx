@@ -5,6 +5,7 @@ import { MockBackend } from "../backend/mock";
 import type { Run, RunState } from "../types";
 import { AgentCard, onActivate } from "./AgentCard";
 import { AgentRow } from "./AgentRow";
+import { FailureNext, OpenInTerminal } from "./AgentParts";
 import { AgentsBanners } from "./AgentsBanners";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
@@ -435,5 +436,43 @@ describe("opening a run", () => {
     const row = AgentRow(props(open)) as { props: { onClick: () => void } };
     row.props.onClick();
     expect(open).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("controls inside a card", () => {
+  type El = { props: { onClick?: (ev: { stopPropagation(): void }) => void; children?: unknown } };
+  const buttons = (el: unknown): El[] => {
+    const found: El[] = [];
+    const walk = (n: unknown) => {
+      if (Array.isArray(n)) return n.forEach(walk);
+      const e = n as El | null;
+      if (!e || typeof e !== "object" || !("props" in e)) return;
+      if ((e as unknown as { type: unknown }).type === "button") found.push(e);
+      walk(e.props.children);
+    };
+    walk(el);
+    return found;
+  };
+  const click = (b: El) => {
+    const ev = { stopPropagation: vi.fn() };
+    b.props.onClick!(ev);
+    return ev.stopPropagation;
+  };
+
+  it("keeps a click on Open in Terminal from also opening the run", () => {
+    const onOpen = vi.fn();
+    const [b] = buttons(OpenInTerminal({ run: run("needsAnswer", { shortId: "1000a000" }), onOpen }));
+    const stop = click(b);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a click on the failure buttons from also opening the run", () => {
+    const failure = { opened: true, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } };
+    const bs = buttons(FailureNext({ run: failed("untrustedFolder"), failure }));
+    expect(bs).toHaveLength(2);
+    for (const b of bs) expect(click(b)).toHaveBeenCalledOnce();
+    expect(failure.on.act).toHaveBeenCalledOnce();
+    expect(failure.on.retry).toHaveBeenCalledOnce();
   });
 });
