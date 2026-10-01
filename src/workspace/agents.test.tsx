@@ -289,7 +289,7 @@ describe("empty, first-run and errors", () => {
   it("states the limits honestly in the explainer", () => {
     const out = renderToStaticMarkup(<AgentsIntro onDismiss={vi.fn()} />).replace(/&#x27;/g, "'");
     for (const phrase of [
-      "You approve each one first.",
+      "You approve each one first. Agents are on by default; turn them off any time in Settings.",
       "They run as you, with your own Claude settings: anything your Claude can do, they can do.",
       "They are told not to write to Jira and to send findings back to you, but that is a request, not a lock.",
       "They work in their own worktree of your clone, so your own files and branch are not touched.",

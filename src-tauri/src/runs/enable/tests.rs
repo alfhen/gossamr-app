@@ -38,6 +38,7 @@ async fn turning_on_keeps_what_else_is_in_the_config() {
 async fn a_failed_environment_capture_leaves_it_off_and_says_why() {
     let fx = fixture_watching(&["acme/webshop"]).await;
     let tools = FixedToolchain(Err(ToolchainError::NoEnvironment("the shell printed nothing".into())));
+    AppConfig { agents_enabled: false, ..AppConfig::default() }.save(&fx.core.data_dir()).unwrap();
     let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {}));
     let why = svc.set_enabled(true).await.unwrap_err().to_string();
     assert!(why.contains("the shell printed nothing"), "{why}");

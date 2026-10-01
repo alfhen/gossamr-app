@@ -156,7 +156,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
 
     async begin({ item = null, proposalId, kind = "investigate" }) {
       const backend = useWorkspace.getState().backend;
-      if (!backend) return;
+      if (!backend || !useRuns.getState().ensureAgentsIntro()) return;
       const mine = ++run;
       useRuns.getState().closeSheet();
       set({ ...closed, open: true, backend, kind, item, phase: "preparing" });
