@@ -10,10 +10,16 @@ import type {
   Intent,
   ItemRef,
   Person,
+  Preflight,
   Proposal,
   ProposalEdit,
   ProposalQuery,
   ProposalsChanged,
+  Run,
+  RunQuery,
+  RunReview,
+  RunSpec,
+  RunsChanged,
   Snapshot,
   Transition,
   Uploaded,
@@ -58,6 +64,12 @@ export interface Scope {
  * Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change.
  * Writes carry `scope`, so a write started for one account is refused if someone else has signed in meanwhile.
  */
+const UNAVAILABLE_RUN_COMMANDS = ["runs_stop", "runs_stop_all", "runs_attach", "runs_preflight", "runs_disk", "runs_retry_launch"] as const;
+
+function notYet<T>(command: (typeof UNAVAILABLE_RUN_COMMANDS)[number]): Promise<T> {
+  return Promise.reject(new Error(`${command} is not available yet`));
+}
+
 export class JiraBackend implements Backend {
   readonly kind = "jira" as const;
 
@@ -280,6 +292,56 @@ export class JiraBackend implements Backend {
 
   onProposalsChanged(listener: (change: ProposalsChanged) => void) {
     const pending = listen<ProposalsChanged>("proposals-changed", (e) => listener(e.payload));
+    return () => void pending.then((unlisten) => unlisten());
+  }
+
+  runsList(query: RunQuery = {}) {
+    return invoke<Run[]>("runs_list", { query });
+  }
+
+  runsGet(id: string) {
+    return invoke<Run | null>("runs_get", { id });
+  }
+
+  runsReview(proposalId: string) {
+    return invoke<RunReview>("runs_review", { proposalId });
+  }
+
+  runsApprove(proposalId: string, digest: string) {
+    return invoke<Run>("runs_approve", { proposalId, digest });
+  }
+
+  runsStop(_id: string) {
+    return notYet<Run>("runs_stop");
+  }
+
+  runsStopAll() {
+    return notYet<{ stopped: number; failed: number }>("runs_stop_all");
+  }
+
+  runsAttach(_id: string) {
+    return notYet<void>("runs_attach");
+  }
+
+  runsPreflight(_spec: RunSpec) {
+    return notYet<Preflight>("runs_preflight");
+  }
+
+  runsDisk(_id: string) {
+    return notYet<number>("runs_disk");
+  }
+
+  runsRetryLaunch(_id: string) {
+    return notYet<Run>("runs_retry_launch");
+  }
+
+  onRunsChanged(listener: (change: RunsChanged) => void) {
+    const pending = listen<RunsChanged>("runs-changed", (e) => listener(e.payload));
+    return () => void pending.then((unlisten) => unlisten());
+  }
+
+  onOpenRun(listener: (runId: string) => void) {
+    const pending = listen<{ runId: string }>("open-run", (e) => listener(e.payload.runId));
     return () => void pending.then((unlisten) => unlisten());
   }
 

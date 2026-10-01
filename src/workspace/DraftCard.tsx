@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, type Mention } from "../lib/mentions";
-import { targetOf } from "../lib/proposals";
+import { targetOf, unreachable } from "../lib/proposals";
 import { useBackend } from "../backend/useBackend";
 import type { Person, Proposal, ProposalEdit } from "../types";
 import { draftStatus } from "./boardLogic";
@@ -33,6 +33,10 @@ export function draftTitle(p: Proposal): string {
       return `Update ${i.item.key}`;
     case "link":
       return `Link ${i.from.key}`;
+    case "startRun":
+      return `Start an agent: ${i.item?.key ?? i.spec.repo}`;
+    default:
+      return unreachable(i);
   }
 }
 
@@ -52,6 +56,10 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
       return "Change fields";
     case "link":
       return `${i.kind} ${i.to.key}`;
+    case "startRun":
+      return `${i.spec.kind} in ${i.spec.repo}`;
+    default:
+      return unreachable(i);
   }
 }
 
@@ -105,6 +113,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
     return null;
   };
 
+  const runDraft = intent.type === "startRun";
   const action =
     intent.type === "comment"
       ? "Post comment"
@@ -171,6 +180,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
               {i < made && <span className="ml-auto font-mono text-ws-ink3">{p.created[i].key}</span>}
             </label>
           ))}
+        {intent.type === "startRun" && <p className="m-0 text-ws-ink2">Review and start from the ticket or the Agents view.</p>}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}
         {open && revision && !shownError && <p className="m-0 text-sm text-ws-ink3">{revision.note}</p>}
         {shownError && (
@@ -195,14 +205,16 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
                 <button type="button" disabled={working} onClick={onSkip} className={button}>
                   Skip
                 </button>
-                <button
-                  type="button"
-                  disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0)}
-                  onClick={() => onApprove(edit())}
-                  className="rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45"
-                >
-                  {working || state === "applying" ? "Working…" : action}
-                </button>
+                {!runDraft && (
+                  <button
+                    type="button"
+                    disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0)}
+                    onClick={() => onApprove(edit())}
+                    className="rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45"
+                  >
+                    {working || state === "applying" ? "Working…" : action}
+                  </button>
+                )}
               </>
             )}
           </div>

@@ -380,6 +380,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   async approve(id) {
     const backend = get().backend!;
     const mine = generation;
+    if (get().proposals[id]?.intent.type === "startRun") throw new Error("A run is approved with its own button, after its prompt is shown.");
     const p = await backend.proposalsApprove(id);
     if (backend !== get().backend || mine !== generation) return p;
     set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));

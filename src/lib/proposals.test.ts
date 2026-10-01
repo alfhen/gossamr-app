@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Intent, Proposal } from "../types";
-import { draftsForTurn, earlierDrafts, targetOf } from "./proposals";
+import type { Intent, Proposal, RunSpec } from "../types";
+import { draftsForTurn, earlierDrafts, targetOf, withoutRunDrafts } from "./proposals";
 
 const ref = (key: string) => ({ connectionId: "c", externalId: key, key });
 
@@ -18,6 +18,7 @@ function proposal(id: string, intent: Intent, over: Partial<Proposal> = {}): Pro
     revisions: [],
     created: [],
     error: null,
+    run: null,
     ...over,
   };
 }
@@ -50,5 +51,22 @@ describe("earlierDrafts", () => {
       link: null,
     };
     expect(targetOf(create)).toBeNull();
+  });
+});
+
+const runSpec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/x/Code/web", base: "main", name: "ca-1-fix-ab12", instruction: "Look into it." };
+const startRun = (item: ReturnType<typeof ref> | null): Intent => ({ type: "startRun", connectionId: "c", item, spec: runSpec });
+
+describe("startRun drafts", () => {
+  it("target the ticket they were started from, or nothing", () => {
+    expect(targetOf(startRun(ref("CA-1")))?.key).toBe("CA-1");
+    expect(targetOf(startRun(null))).toBeNull();
+  });
+
+  it("are left out for screens that approve with proposalsApprove", () => {
+    const all = [proposal("1", subtasks("A-1")), proposal("2", startRun(ref("A-1"))), proposal("3", startRun(null))];
+    expect(withoutRunDrafts(all).map((p) => p.id)).toEqual(["1"]);
+    expect(earlierDrafts(withoutRunDrafts(all), "A-1", []).map((p) => p.id)).toEqual(["1"]);
+    expect(draftsForTurn(withoutRunDrafts(all), "r1").map((p) => p.id)).toEqual(["1"]);
   });
 });

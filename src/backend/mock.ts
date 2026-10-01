@@ -27,6 +27,9 @@ import type {
   ProposalEdit,
   ProposalQuery,
   ProposalsChanged,
+  RunQuery,
+  RunSpec,
+  RunsChanged,
   Snapshot,
   Status,
   Ticket,
@@ -39,6 +42,7 @@ import { docText } from "../lib/docs";
 import { MOCK_CONNECTION, MockConnector, PEOPLE } from "./mockConnector";
 import { targetOf } from "../lib/proposals";
 import { MockProposals } from "./mockProposals";
+import { MockRuns } from "./mockRuns";
 import { seedDrafts } from "./mockDrafts";
 import type { MockOptions } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
@@ -396,10 +400,63 @@ export class MockBackend implements Backend {
       }
       case "create":
         return [this.connector.createItem(intent.container, intent.fields)];
+      case "startRun":
+        throw new Error("A run is approved with its own button");
       default:
         throw new Error("the sample data can't apply that");
     }
   });
+
+  /** Scripted agent runs, with `advance()` as their clock. */
+  readonly runs = new MockRuns(this.proposals);
+
+  runsList(query?: RunQuery) {
+    return Promise.resolve(this.runs.list(query));
+  }
+
+  async runsGet(id: string) {
+    return this.runs.get(id);
+  }
+
+  async runsReview(proposalId: string) {
+    return this.runs.review(proposalId);
+  }
+
+  runsApprove(proposalId: string, digest: string) {
+    return this.runs.approve(proposalId, digest);
+  }
+
+  async runsStop(id: string) {
+    return this.runs.stop(id);
+  }
+
+  async runsStopAll() {
+    return this.runs.stopAll();
+  }
+
+  async runsAttach(id: string) {
+    this.runs.attach(id);
+  }
+
+  async runsPreflight(spec: RunSpec) {
+    return this.runs.preflight(spec);
+  }
+
+  async runsDisk(id: string) {
+    return this.runs.disk(id);
+  }
+
+  async runsRetryLaunch(id: string) {
+    return this.runs.retryLaunch(id);
+  }
+
+  onRunsChanged(listener: (c: RunsChanged) => void) {
+    return this.runs.onChanged(listener);
+  }
+
+  onOpenRun(listener: (runId: string) => void) {
+    return this.runs.onOpen(listener);
+  }
 
   proposalsList(query?: ProposalQuery): Promise<Proposal[]> {
     return Promise.resolve(this.proposals.list(query));
@@ -472,6 +529,8 @@ export class MockBackend implements Backend {
       case "subtasks":
         this.appliedToConnector = this.connector.createSubtasks(intent.parent, intent.summaries.slice(already.length));
         return true;
+      case "startRun":
+        throw new Error("A run is approved with its own button");
       default:
         throw new Error("the sample data can't apply that");
     }

@@ -169,6 +169,7 @@ describe("draft previews", () => {
     revisions: [],
     created: [],
     error: null,
+    run: null,
     ...over,
   });
   const show = (p: Proposal) => renderToStaticMarkup(<DraftPreview proposal={p} statusName={null} targetTitle="Rotate keys" onOpen={vi.fn()} />);
