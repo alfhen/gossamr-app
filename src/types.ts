@@ -540,10 +540,23 @@ export interface LocalClone {
   defaultBranch: string | null;
 }
 
+/** What cloning into `~/Gossamr/agents` would do, shown before the person chooses it. */
+export interface FreshCopy {
+  path: string;
+  /** The command Gossamr runs, as a shell would read it. */
+  command: string;
+  /** `gh` is on the shell's PATH, so a sign-in failure falls back to `gh repo clone`. */
+  ghFallback: boolean;
+  /** Something that isn't a clone of this repository is already at `path`. */
+  occupied: boolean;
+}
+
 export interface CloneChoice {
   clones: LocalClone[];
   /** The clone the person chose when several matched; listed first. */
   picked: string | null;
+  /** Offered only when there is no clone to choose. */
+  fresh: FreshCopy | null;
 }
 
 /** Which runs to list. Every field that is set must match. */

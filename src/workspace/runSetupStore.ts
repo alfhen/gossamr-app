@@ -36,6 +36,9 @@ interface SetupState {
   phase: SetupPhase;
   busy: boolean;
   error: string | null;
+  /** A fresh copy is being cloned into ~/Gossamr/agents, and why the last attempt failed. */
+  cloning: boolean;
+  cloneError: string | null;
   /** The backend refused the digest: the draft changed after it was read. */
   changed: boolean;
   /** The instruction as first drafted, for resetting. */
@@ -44,6 +47,7 @@ interface SetupState {
   begin(opts: { item?: ItemRef | null; proposalId?: string; kind?: RunKind }): Promise<void>;
   chooseRepo(repo: string): Promise<void>;
   chooseClone(path: string): Promise<void>;
+  cloneFresh(): Promise<void>;
   saveEdit(edit: { instruction?: string; base?: string }): Promise<void>;
   dismissChanged(): void;
   start(): Promise<Run | null>;
@@ -69,6 +73,8 @@ const closed = {
   phase: "ready" as SetupPhase,
   busy: false,
   error: null,
+  cloning: false,
+  cloneError: null,
   changed: false,
   initialInstruction: null,
 };
@@ -120,7 +126,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
   const prepare = async (mine: number) => {
     const { backend, item, repo, kind, title, proposalId, ownDraft } = get();
     if (!backend || !repo) return;
-    set({ phase: "preparing", error: null, choice: null, review: null, preflight: null, busy: false });
+    set({ phase: "preparing", error: null, cloneError: null, choice: null, review: null, preflight: null, busy: false });
     try {
       if (proposalId && ownDraft) await backend.proposalsSkip(proposalId).catch(() => {});
       const choice = await backend.runsClones(repo);
@@ -212,6 +218,22 @@ export const useRunSetup = create<SetupState>((set, get) => {
       } finally {
         if (current(mine)) set({ busy: false });
       }
+    },
+
+    async cloneFresh() {
+      const { backend, repo, cloning } = get();
+      if (!backend || !repo || cloning) return;
+      const mine = run;
+      set({ cloning: true, cloneError: null });
+      try {
+        await backend.runsCloneFresh(repo);
+      } catch (e) {
+        if (current(mine)) set({ cloning: false, cloneError: messageOf(e) });
+        return;
+      }
+      if (!current(mine)) return;
+      set({ cloning: false });
+      await prepare(++run);
     },
 
     async saveEdit(edit) {

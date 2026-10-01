@@ -247,6 +247,9 @@ export function repoShortage(p: { repos: readonly string[]; loading: boolean; fa
   return p.githubConnected ? "watch" : "connect";
 }
 
+/** A path under the person's home with `~` for the home folder. */
+export const homeShort = (path: string) => path.replace(/^\/Users\/[^/]+/, "~");
+
 export const worktreeBranch = (name: string) => `worktree-${name}`;
 
 export type SheetKey = "close" | "next" | "previous";

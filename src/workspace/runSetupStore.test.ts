@@ -98,6 +98,39 @@ describe("starting an agent from a ticket", () => {
     expect(blockReason()).toBe("no clone");
   });
 
+  it("offers a fresh copy for a repository with no clone, and drafts in it once the person has cloned", async () => {
+    await s().begin({ item: CA });
+    await s().chooseRepo("acme/ops");
+    expect(s().choice?.fresh).toMatchObject({ path: "/Users/sample/Gossamr/agents/acme/ops", command: "git clone https://github.com/acme/ops.git /Users/sample/Gossamr/agents/acme/ops", occupied: false });
+    expect(await backend.proposalsList()).toHaveLength(0);
+
+    await s().cloneFresh();
+    expect(s()).toMatchObject({ cloning: false, cloneError: null, phase: "ready" });
+    expect(s().choice).toMatchObject({ fresh: null, clones: [{ path: "/Users/sample/Gossamr/agents/acme/ops" }] });
+    expect(s().review!.spec.clonePath).toBe("/Users/sample/Gossamr/agents/acme/ops");
+    expect(blockReason()).toBeNull();
+  });
+
+  it("keeps the offer and shows the reason when the clone fails", async () => {
+    await s().begin({ item: CA });
+    await s().chooseRepo("acme/ops");
+    vi.spyOn(backend, "runsCloneFresh").mockRejectedValueOnce(new Error("Git couldn't sign in to GitHub: terminal prompts disabled"));
+    await s().cloneFresh();
+    expect(s()).toMatchObject({ cloning: false, cloneError: "Git couldn't sign in to GitHub: terminal prompts disabled" });
+    expect(s().choice?.fresh).not.toBeNull();
+    expect(s().proposalId).toBeNull();
+    await s().cloneFresh();
+    expect(s()).toMatchObject({ cloneError: null, phase: "ready" });
+  });
+
+  it("clones once however often the button is pressed", async () => {
+    await s().begin({ item: CA });
+    await s().chooseRepo("acme/ops");
+    const clone = vi.spyOn(backend, "runsCloneFresh");
+    await Promise.all([s().cloneFresh(), s().cloneFresh()]);
+    expect(clone).toHaveBeenCalledTimes(1);
+  });
+
   it("lets the person pick another clone, which is saved on the draft and remembered", async () => {
     await s().begin({ item: CA });
     await s().chooseRepo("acme/payments");
