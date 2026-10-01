@@ -149,28 +149,50 @@ impl GithubHost {
             .collect()
     }
 
-    pub(super) async fn refresh(&self, change: &CodeChange, with_checks: bool) -> Result<Refreshed> {
+    /// With `lenient`, reviews or checks that can't be read for a transient reason are left as they were and the result
+    /// is marked `incomplete`; anything else, a rate limit or a refused token included, is still an error.
+    pub(super) async fn refresh(&self, change: &CodeChange, with_checks: bool, lenient: bool) -> Result<Refreshed> {
         let number = change.number.unwrap_or_default();
         let (pull, _): (Pull, _) = self.api.json(&format!("/repos/{}/pulls/{number}", change.repo)).await?;
         let mut fresh = pull.change(&self.connection_id, &change.repo);
-        let reviews = self.reviews(&change.repo, number).await?;
-        fresh.review = review_state(&reviews, pull.requested_reviewers.len());
-        fresh.checks = change.checks;
-        let open = matches!(fresh.state, CodeChangeState::Open | CodeChangeState::Draft);
-        if with_checks && open {
-            fresh.checks = self.checks(&change.repo, &pull.head.sha).await?;
+        let mut incomplete = false;
+        let reviews = match self.reviews(&change.repo, number).await {
+            Ok(r) => Some(r),
+            Err(e) if lenient && e.is_transient() => None,
+            Err(e) => return Err(e),
+        };
+        match &reviews {
+            Some(r) => fresh.review = review_state(r, pull.requested_reviewers.len()),
+            None => {
+                fresh.review = change.review;
+                incomplete = true;
+            }
         }
-        if fresh.sha != change.sha {
+        let open = matches!(fresh.state, CodeChangeState::Open | CodeChangeState::Draft);
+        let same_commit = fresh.sha == change.sha;
+        fresh.checks = change.checks;
+        if with_checks && open {
+            match self.checks(&change.repo, &pull.head.sha).await {
+                Ok(c) => fresh.checks = c,
+                Err(e) if lenient && e.is_transient() => {
+                    incomplete = true;
+                    if !same_commit {
+                        fresh.checks = CheckState::None;
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        } else if !same_commit {
             // The cached rollup belongs to another commit.
-            fresh.checks = if with_checks && open { fresh.checks } else { CheckState::None };
+            fresh.checks = CheckState::None;
         }
         fresh.linked_keys = change.linked_keys.clone();
-        Ok(Refreshed { reviews: self.review_infos(&reviews), change: fresh })
+        Ok(Refreshed { reviews: self.review_infos(reviews.as_deref().unwrap_or_default()), change: fresh, incomplete })
     }
 
     pub(super) async fn detail(&self, repo: &str, number: u64) -> Result<PullRequestDetail> {
         let (pull, _): (Pull, _) = self.api.json(&format!("/repos/{repo}/pulls/{number}")).await?;
-        let Refreshed { change, reviews } = self.refresh(&pull.change(&self.connection_id, repo), true).await?;
+        let Refreshed { change, reviews, .. } = self.refresh(&pull.change(&self.connection_id, repo), true, false).await?;
         let (files, _): (Vec<PullFile>, _) = self.api.paged(&format!("/repos/{repo}/pulls/{number}/files?per_page=100"), FILE_PAGES).await?;
         let (commits, _): (Vec<PullCommit>, _) = self.api.paged(&format!("/repos/{repo}/pulls/{number}/commits?per_page=100"), 1).await?;
         let listed = files.len() as u64;

@@ -22,6 +22,11 @@ impl Reply {
         Self { status, headers: vec![], body: body.into() }
     }
 
+    /// Closes the connection after reading the request, answering nothing.
+    pub fn hang_up() -> Self {
+        Self::status(0, "")
+    }
+
     pub fn header(mut self, k: &str, v: &str) -> Self {
         self.headers.push((k.into(), v.into()));
         self
@@ -108,6 +113,9 @@ pub async fn serve(routes: Vec<(&str, Vec<Reply>)>) -> Server {
                 })
             }
             .unwrap_or_else(|| Reply::status(404, "{\"message\":\"Not Found\"}"));
+            if reply.status == 0 {
+                continue;
+            }
             let mut response = format!("HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n", reply.status, reply.body.len());
             for (k, v) in &reply.headers {
                 response.push_str(&format!("{k}: {v}\r\n"));

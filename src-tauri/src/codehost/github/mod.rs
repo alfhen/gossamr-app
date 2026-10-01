@@ -192,7 +192,7 @@ impl CodeHost for GithubHost {
     }
 
     async fn refresh_pull_request(&self, change: &CodeChange, with_checks: bool) -> Result<Refreshed> {
-        self.refresh(change, with_checks).await
+        self.refresh(change, with_checks, true).await
     }
 
     async fn pull_request(&self, repo: &str, number: u64) -> Result<PullRequestDetail> {

@@ -10,6 +10,7 @@ mod events;
 mod inbox;
 mod legacy;
 mod model;
+mod net;
 mod notify;
 mod proposals;
 mod runs;
@@ -826,10 +827,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let http = reqwest::Client::builder()
-                .user_agent(concat!("gossamr/", env!("CARGO_PKG_VERSION")))
-                .timeout(Duration::from_secs(30))
-                .build()?;
+            let http = net::client();
             let auth = Arc::new(Auth::load(http.clone()));
             let registry = tracker::Registry::jira(http.clone(), auth.clone());
             let data_dir = app.path().app_data_dir()?;

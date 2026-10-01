@@ -39,6 +39,8 @@ pub struct PullList {
 pub struct Refreshed {
     pub change: CodeChange,
     pub reviews: Vec<ReviewInfo>,
+    /// Reviews or checks couldn't be read just now, so `change` keeps what was known of them before.
+    pub incomplete: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

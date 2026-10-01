@@ -105,5 +105,8 @@ describe("the connection row", () => {
     const failed = syncLine({ syncing: false, lastSyncAt: "2026-09-30T11:55:00Z", error: "HTTP 503" }, now);
     expect(failed.tone).toBe("error");
     expect(failed.text).toContain("HTTP 503");
+    const blip = syncLine({ syncing: false, lastSyncAt: "2026-09-30T11:55:00Z", error: "timed out", transient: true }, now);
+    expect(blip.tone).toBe("busy");
+    expect(blip.text).toContain("trying again");
   });
 });
