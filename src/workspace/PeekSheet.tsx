@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBackend } from "../backend/useBackend";
 import { MentionTextarea } from "../components/MentionTextarea";
-import { docFromText, docText } from "../lib/docs";
+import { docFromText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import { liveMentions, type Mention } from "../lib/mentions";
 import { relativeTime } from "../lib/views";
@@ -16,7 +16,7 @@ import { canvasElement, showMe } from "./jump";
 import { PEEK_DEFAULT } from "./paneSizes";
 import { usePrefs } from "./prefs";
 import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
-import { commentNotes, displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, subtasksOf, withReplies, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
+import { displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, shownComments, subtasksOf, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
 import { Development } from "./DevelopmentSection";
 import { useTabs } from "./tabsStore";
 import { PeekNotice } from "./WatchNotices";
@@ -547,14 +547,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
   const moves = known && opaque ? known : wf && !checking ? targetsFor(wf, item) : [];
 
   const comments: Note[] = useMemo(
-    () =>
-      withReplies(
-        loadedComments
-          ? loadedComments
-              .map((c) => ({ id: c.id, at: c.created, who: displayName(names, c.author.accountId), text: docText(c.body), doc: c.body, mine: isMine(c.author.accountId), accountId: c.author.accountId }))
-              .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-          : commentNotes(events, (id) => displayName(names, id), isMine),
-      ),
+    () => shownComments(loadedComments, events, (id) => displayName(names, id), isMine),
     [loadedComments, events, names, me],
   );
   const [devCount, setDevCount] = useState<number | undefined>(undefined);

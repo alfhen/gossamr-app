@@ -1,7 +1,7 @@
 import { docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import type { Mention } from "../lib/mentions";
-import type { ItemRef, WorkBlock, WorkDoc, WorkEvent, WorkItem } from "../types";
+import type { ItemRef, WorkBlock, WorkComment, WorkDoc, WorkEvent, WorkItem } from "../types";
 
 export type LinkKind = "blocks" | "blockedBy" | "relates" | "duplicates" | "duplicatedBy";
 
@@ -135,6 +135,24 @@ export function withReplies(notes: readonly Note[]): Note[] {
     return { ...n, reply };
   });
 }
+
+/** The comments the sheet lists, newest first: the loaded ones, or those the events recorded until they are loaded. */
+export function shownComments(
+  loaded: readonly WorkComment[] | undefined,
+  events: readonly WorkEvent[],
+  nameOf: (accountId: string | null) => string,
+  isMine: Mine,
+): Note[] {
+  const oldestFirst = loaded
+    ? loaded
+        .map((c) => ({ id: c.id, at: c.created, who: nameOf(c.author.accountId), text: docText(c.body), doc: c.body, mine: isMine(c.author.accountId), accountId: c.author.accountId }))
+        .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+    : commentNotes(events, nameOf, isMine);
+  return newestFirst(withReplies(oldestFirst));
+}
+
+/** The order comments are shown in. Replies are matched to what they answer in the order they were written, so this comes after `withReplies`. */
+export const newestFirst = (notes: readonly Note[]): Note[] => [...notes].reverse();
 
 export interface ReplyDraft {
   /** The comment being answered. */
