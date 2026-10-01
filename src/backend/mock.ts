@@ -31,6 +31,7 @@ import type {
   RunSpec,
   RunsChanged,
   RunsEnabledChange,
+  AgentSettings,
   Snapshot,
   Status,
   Ticket,
@@ -533,6 +534,18 @@ export class MockBackend implements Backend {
 
   async runsDisk(id: string) {
     return this.runs.disk(id);
+  }
+
+  async runsSettings() {
+    return this.runs.settings();
+  }
+
+  async runsSetSettings(settings: AgentSettings) {
+    return this.runs.setSettings(settings);
+  }
+
+  async runsCleanup(id: string) {
+    return this.runs.cleanup(id);
   }
 
   async runsRetryLaunch(id: string) {

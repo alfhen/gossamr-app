@@ -24,6 +24,8 @@ import type {
   RunOutcome,
   RunsChanged,
   RunsEnabledChange,
+  AgentSettings,
+  CleanupResult,
   Snapshot,
   Transition,
   Uploaded,
@@ -396,6 +398,18 @@ export class JiraBackend implements Backend {
 
   runsDisk(id: string) {
     return invoke<number>("runs_disk", { id });
+  }
+
+  runsSettings() {
+    return invoke<AgentSettings>("runs_settings");
+  }
+
+  runsSetSettings(settings: AgentSettings) {
+    return invoke<AgentSettings>("runs_set_settings", { settings });
+  }
+
+  runsCleanup(id: string) {
+    return invoke<CleanupResult>("runs_cleanup", { id });
   }
 
   runsRetryLaunch(id: string) {

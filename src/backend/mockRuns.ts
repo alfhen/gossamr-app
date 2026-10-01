@@ -1,4 +1,4 @@
-import type { CloneChoice, CodeChange, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
+import type { AgentSettings, CleanupResult, CloneChoice, CodeChange, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
 import { itemRef } from "./mockConnector";
 import { commentText, jiraNote, ticketKeys } from "./mockRunResult";
 import { docFromText, docText } from "../lib/docs";
@@ -625,9 +625,33 @@ export class MockRuns {
     return this.proposals.fromRun({ type: "link", from: itemRef(key), to: item, kind: "blocks" }, `Blocked by ${key}`, this.fromRun(run));
   }
 
+  private limits: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal" };
+  /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
+  readonly unpushed = new Set<string>();
+
+  settings(): AgentSettings {
+    return this.limits;
+  }
+
+  setSettings(settings: AgentSettings): AgentSettings {
+    const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(n) || 0));
+    this.limits = { ...settings, maxRuns: clamp(settings.maxRuns, 1, 6), wallClockMinutes: clamp(settings.wallClockMinutes, 0, 10_080), tokenCap: clamp(settings.tokenCap, 0, 1_000_000_000) };
+    return this.limits;
+  }
+
+  cleanup(id: string): CleanupResult {
+    const run = this.get(id);
+    if (!run) throw new Error("that run no longer exists");
+    if (!TERMINAL.includes(run.state)) throw new Error("This run is still going. Stop it first, then clean it up.");
+    if (this.unpushed.has(id)) return { type: "refused", message: "The worktree has unpushed commits. Push them or discard them yourself, then try again." };
+    this.update(id, { worktreeRemovedAt: this.now(), lastDetail: "Worktree removed" });
+    this.changed();
+    return { type: "removed" };
+  }
+
   disk(id: string): number {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
-    return (run.tokens ?? 0) * 1024;
+    return (run.tokens ?? 0) * 4096;
   }
 }

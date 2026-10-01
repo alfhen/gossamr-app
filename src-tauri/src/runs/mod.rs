@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 pub mod binary;
+pub mod cleanup;
 pub mod cli;
 pub mod control;
 pub mod enable;
@@ -10,6 +11,7 @@ pub mod failure;
 mod finder;
 pub mod index;
 pub mod launcher;
+pub mod limits;
 pub mod pr;
 pub mod preflight;
 pub mod redact;

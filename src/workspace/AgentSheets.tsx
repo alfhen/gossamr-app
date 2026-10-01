@@ -12,8 +12,9 @@ import { useRunSetup } from "./runSetupStore";
 import { stoppable } from "./agentsLogic";
 import { sheetKey } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
-
-const CAP = 3;
+import { bulkCleanup, cleanable, cleanupReport } from "./cleanupLogic";
+import { messageOf, useToasts } from "./toasts";
+import type { AgentSettings } from "../types";
 
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || !!t.closest("input, textarea, select, [contenteditable], [data-esc-local]"));
 
@@ -29,7 +30,43 @@ function Settings() {
       live = false;
     };
   }, [backend, runs]);
-  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} cap={CAP} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
+  const [settings, setSettings] = useState<AgentSettings | null>(null);
+  useEffect(() => {
+    let live = true;
+    backend?.runsSettings().then((s) => live && setSettings(s), () => {});
+    return () => {
+      live = false;
+    };
+  }, [backend]);
+  const save = (next: AgentSettings) => {
+    backend?.runsSetSettings(next).then(setSettings, (e) => useToasts.getState().push(`Couldn't save the limits: ${messageOf(e)}`));
+  };
+
+  const finished = useMemo(() => runs.filter(cleanable), [runs]);
+  const [sizes, setSizes] = useState<Record<string, number>>({});
+  const ids = finished.map((r) => r.id).join();
+  useEffect(() => {
+    let live = true;
+    for (const id of ids ? ids.split(",") : []) {
+      backend?.runsDisk(id).then((n) => live && setSizes((s) => ({ ...s, [id]: n })), () => {});
+    }
+    return () => {
+      live = false;
+    };
+  }, [backend, ids]);
+  const known = finished.filter((r) => r.id in sizes);
+  const offer = bulkCleanup(runs, Date.now(), known.length === finished.length ? known.reduce((sum, r) => sum + sizes[r.id], 0) : null);
+  const [cleaning, setCleaning] = useState(false);
+  const [report, setReport] = useState<string | null>(null);
+  const cleanAll = async () => {
+    if (!offer) return;
+    setCleaning(true);
+    const { removed, refused } = await useRuns.getState().cleanupAll(offer.runs.map((r) => r.id));
+    setCleaning(false);
+    setReport(cleanupReport(removed, refused));
+  };
+  const cleanup = offer ? { count: offer.runs.length, reason: offer.reason, report, busy: cleaning } : report ? { count: 0, reason: "", report, busy: false } : null;
+  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} cleanup={cleanup} onSettings={save} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
 }
 
 /** Asks which ticket to start an agent on. Picking opens the setup sheet; nothing is drafted before that. */

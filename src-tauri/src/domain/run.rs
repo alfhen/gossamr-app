@@ -292,6 +292,9 @@ pub struct Run {
     pub launched_at: Option<DateTime<Utc>>,
     pub last_progress_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
+    /// Set when `claude rm` took the worktree away; the run is kept for its result.
+    #[serde(default)]
+    pub worktree_removed_at: Option<DateTime<Utc>>,
 }
 
 impl Run {
@@ -328,6 +331,7 @@ impl Run {
             launched_at: None,
             last_progress_at: at,
             ended_at: None,
+            worktree_removed_at: None,
         }
     }
 }

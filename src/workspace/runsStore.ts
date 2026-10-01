@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { targetOf } from "../lib/proposals";
-import type { Proposal, Run, RunsEnvironment } from "../types";
+import type { CleanupResult, Proposal, Run, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, attentionCount, groupRuns, navOrder, stepRun, type AgentFilters } from "./agentsLogic";
@@ -70,6 +70,10 @@ interface RunsState {
   /** Drafts a link saying the run's ticket is blocked by `blockerKey` and takes the person to it. Nothing is posted. */
   draftBlocker(id: string, blockerKey: string): Promise<void>;
   stopAll(): Promise<void>;
+  /** Removes a finished run's worktree. Null when the call failed, which is shown as a message. */
+  cleanup(id: string): Promise<CleanupResult | null>;
+  /** Cleans up each run in turn and says how many Claude removed and what it kept. */
+  cleanupAll(ids: readonly string[]): Promise<{ removed: number; refused: string[] }>;
   setEarlierOpen(open: boolean): void;
   setIntroOpen(open: boolean | null): void;
 }
@@ -281,6 +285,29 @@ export const useRuns = create<RunsState>((set, get) => ({
       set({ stopping: false });
       void get().reload();
     }
+  },
+
+  async cleanup(id) {
+    const { backend } = get();
+    if (!backend) return null;
+    try {
+      return await backend.runsCleanup(id);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't clean it up: ${messageOf(e)}`);
+      return null;
+    } finally {
+      void get().reload();
+    }
+  },
+
+  async cleanupAll(ids) {
+    const tally = { removed: 0, refused: [] as string[] };
+    for (const id of ids) {
+      const result = await get().cleanup(id);
+      if (result?.type === "removed") tally.removed++;
+      else if (result?.type === "refused") tally.refused.push(result.message);
+    }
+    return tally;
   },
 
   setEarlierOpen: (earlierOpen) => set({ earlierOpen }),
