@@ -15,6 +15,7 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 
 use crate::auth::Scope;
+use crate::error::{Error, Result};
 use super::context::draft_line;
 use super::McpEndpoint;
 use crate::domain::{ContainerRef, Doc, Filter, Intent, ItemKind, ItemRef, NewItem, Proposal, ProposalQuery, StateKind, Transitions};
@@ -54,9 +55,12 @@ impl Run {
 /// mid-run can't hand the agent another account's tickets.
 pub type Runs = Arc<std::sync::Mutex<std::collections::HashMap<String, Run>>>;
 
+/// The bearer token of each run in progress, by run id. A token exists only between `endpoint` and `revoke`.
+type Tokens = Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>;
+
 pub(super) struct McpState {
     pub core: Arc<Core>,
-    pub token: String,
+    pub tokens: Tokens,
     pub sink: ChangeSink,
     pub view: ViewSink,
     pub runs: Runs,
@@ -64,29 +68,48 @@ pub(super) struct McpState {
 
 pub struct McpServer {
     pub port: u16,
-    pub token: String,
     pub runs: Runs,
+    tokens: Tokens,
 }
 
 impl McpServer {
-    pub async fn start(core: Arc<Core>, token: String, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
+    pub async fn start(core: Arc<Core>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
         let runs: Runs = Arc::default();
-        let state = Arc::new(McpState { core, token: token.clone(), sink, view, runs: runs.clone() });
+        let tokens = Tokens::default();
+        let state = Arc::new(McpState { core, tokens: tokens.clone(), sink, view, runs: runs.clone() });
         let router = Router::new().route("/mcp/{request_id}", post(handle)).with_state(state);
         tauri::async_runtime::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
-        Ok(Self { port, token, runs })
+        Ok(Self { port, runs, tokens })
     }
 
-    pub fn endpoint(&self, request_id: &str) -> McpEndpoint {
-        McpEndpoint { url: format!("http://127.0.0.1:{}/mcp/{request_id}", self.port), token: self.token.clone() }
+    /// Mints a fresh token for this run, valid until `revoke`. A second call for the same run replaces the first.
+    pub fn endpoint(&self, request_id: &str) -> Result<McpEndpoint> {
+        let token = random_token().map_err(|e| Error::Claude(format!("no randomness available: {e}")))?;
+        self.tokens.lock().expect("lock poisoned").insert(request_id.to_string(), token.clone());
+        Ok(McpEndpoint { url: format!("http://127.0.0.1:{}/mcp/{request_id}", self.port), token })
+    }
+
+    pub fn revoke(&self, request_id: &str) {
+        self.tokens.lock().expect("lock poisoned").remove(request_id);
     }
 }
 
-fn authorized(headers: &HeaderMap, token: &str) -> bool {
+fn random_token() -> std::result::Result<String, getrandom::Error> {
+    let mut bytes = [0u8; 24];
+    getrandom::fill(&mut bytes)?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// A request is honoured only with the token issued for the run named in its path.
+fn authorized(headers: &HeaderMap, tokens: &Tokens, request_id: &str) -> bool {
+    let Some(token) = tokens.lock().expect("lock poisoned").get(request_id).cloned() else {
+        return false;
+    };
+    let token = token.as_str();
     let given = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -102,7 +125,7 @@ async fn handle(
     headers: HeaderMap,
     Json(msg): Json<Value>,
 ) -> Response {
-    if !authorized(&headers, &st.token) {
+    if !authorized(&headers, &st.tokens, &request_id) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     // Notifications carry no id and get no body.
@@ -598,7 +621,7 @@ mod tests {
         let seen = views.clone();
         let runs: Runs = Arc::default();
         runs.lock().unwrap().insert("run-1".into(), Run::new(fx.scope.clone()));
-        let st = McpState { core: fx.core.clone(), token: "t".into(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), view: Arc::new(move |run, f, note| seen.lock().unwrap().push((run.into(), f.clone(), note.into()))), runs };
+        let st = McpState { core: fx.core.clone(), tokens: Tokens::default(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), view: Arc::new(move |run, f, note| seen.lock().unwrap().push((run.into(), f.clone(), note.into()))), runs };
         Rig { fx, st, changes, views }
     }
 
@@ -667,13 +690,16 @@ mod tests {
     }
 
     #[test]
-    fn checks_the_bearer_token() {
+    fn checks_the_bearer_token_against_the_one_issued_for_that_run() {
+        let tokens = Tokens::default();
+        tokens.lock().unwrap().insert("r1".into(), "abc".into());
         let mut h = HeaderMap::new();
-        assert!(!authorized(&h, "abc"));
+        assert!(!authorized(&h, &tokens, "r1"));
         h.insert("authorization", "Bearer abd".parse().unwrap());
-        assert!(!authorized(&h, "abc"));
+        assert!(!authorized(&h, &tokens, "r1"));
         h.insert("authorization", "Bearer abc".parse().unwrap());
-        assert!(authorized(&h, "abc"));
+        assert!(authorized(&h, &tokens, "r1"));
+        assert!(!authorized(&h, &tokens, "r2"));
     }
 
     #[test]

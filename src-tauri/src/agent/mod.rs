@@ -36,11 +36,17 @@ pub enum AgentEvent {
     Done { session_id: Option<String>, ok: bool, message: Option<String> },
 }
 
-/// Pip's local MCP server, the only tool surface a run is given.
-#[derive(Debug, Clone)]
+/// Pip's local MCP server, the only tool surface a run is given. The token is valid for this one run.
+#[derive(Clone)]
 pub struct McpEndpoint {
     pub url: String,
     pub token: String,
+}
+
+impl std::fmt::Debug for McpEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpEndpoint").field("url", &self.url).finish_non_exhaustive()
+    }
 }
 
 pub struct AgentRequest {
@@ -176,7 +182,7 @@ impl AgentService {
             run_id: run_id.clone(),
             system: context::system_prompt(provider.capabilities().reads_code),
             prompt: context::compose(&context, item.as_deref(), &links, &drafts, &req.prompt),
-            mcp: self.mcp.endpoint(&run_id),
+            mcp: self.mcp.endpoint(&run_id)?,
             sandbox,
             session,
             images: req.images,
@@ -216,6 +222,7 @@ impl AgentService {
     fn finish(&self, run_id: &str) {
         self.running.lock().expect("lock poisoned").remove(run_id);
         self.mcp.runs.lock().expect("lock poisoned").remove(run_id);
+        self.mcp.revoke(run_id);
     }
 }
 

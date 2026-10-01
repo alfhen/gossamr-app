@@ -56,7 +56,7 @@ const SECRET: &str = "s3cret-canary-7f3a91";
 impl Harness {
     pub async fn start() -> Self {
         let lx = watching_webshop(vec![]).await;
-        let server = McpServer::start(lx.fx.core.clone(), "t0ken".into(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
+        let server = McpServer::start(lx.fx.core.clone(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let canary_port = listener.local_addr().unwrap().port();
         let canary_hit = Arc::new(AtomicBool::new(false));
@@ -98,7 +98,7 @@ impl Harness {
             run_id: run_id.into(),
             system: super::context::system_prompt(false),
             prompt: prompt.into(),
-            mcp: self.server.endpoint(run_id),
+            mcp: self.server.endpoint(run_id).unwrap(),
             sandbox: self.sandbox.clone(),
             session: None,
             images: Vec::new(),
@@ -451,6 +451,44 @@ mod tests {
         assert!(!h.secret_file().starts_with(h.sandbox.path()));
         assert!(!h.shell_target().starts_with(h.sandbox.path()) && !h.git_target().starts_with(h.sandbox.path()));
         assert!(h.sandbox.path().ends_with(Sandbox::DIR));
+    }
+
+    async fn status(url: &str, token: &str) -> u16 {
+        let rpc = json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });
+        reqwest::Client::new().post(url).bearer_auth(token).json(&rpc).send().await.unwrap().status().as_u16()
+    }
+
+    #[tokio::test]
+    async fn each_run_gets_its_own_token_which_dies_with_the_run() {
+        let h = Harness::start().await;
+        let a = h.server.endpoint("run-a").unwrap();
+        let b = h.server.endpoint("run-b").unwrap();
+        assert_ne!(a.token, b.token);
+        assert_eq!(status(&a.url, &a.token).await, 200);
+        assert_eq!(status(&b.url, &b.token).await, 200);
+        assert_eq!(status(&b.url, &a.token).await, 401, "a token opens only its own run");
+        h.server.revoke("run-a");
+        assert_eq!(status(&a.url, &a.token).await, 401, "a revoked token is refused");
+        assert_eq!(status(&b.url, &b.token).await, 200, "another run is unaffected");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_token_or_run_is_refused() {
+        let h = Harness::start().await;
+        let a = h.server.endpoint("run-a").unwrap();
+        assert_eq!(status(&a.url, "not-the-token").await, 401);
+        assert_eq!(status(&a.url, "").await, 401);
+        let nobody = a.url.replace("run-a", "never-started");
+        assert_eq!(status(&nobody, &a.token).await, 401);
+    }
+
+    #[tokio::test]
+    async fn a_new_token_for_a_run_replaces_the_old_one() {
+        let h = Harness::start().await;
+        let first = h.server.endpoint("run-a").unwrap();
+        let second = h.server.endpoint("run-a").unwrap();
+        assert_eq!(status(&first.url, &first.token).await, 401);
+        assert_eq!(status(&second.url, &second.token).await, 200);
     }
 
     #[tokio::test]

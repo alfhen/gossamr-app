@@ -630,12 +630,6 @@ fn cancel_claude(agent: State<'_, AgentState>, request_id: String) {
     agent.cancel(&request_id);
 }
 
-fn random_token() -> std::result::Result<String, getrandom::Error> {
-    let mut bytes = [0u8; 24];
-    getrandom::fill(&mut bytes)?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
-}
-
 fn spawn_sync_loop(app: AppHandle, core: CoreState) {
     tauri::async_runtime::spawn(async move {
         // Launch catches up straight away, from the cursor the last run left in the cache.
@@ -742,10 +736,8 @@ pub fn run() {
 
             let handle = app.handle().clone();
             let view_handle = handle.clone();
-            let token = random_token().map_err(|e| Error::Claude(format!("no randomness available: {e}")))?;
             let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(
                 core.clone(),
-                token,
                 Arc::new(move |connection_id| proposals_changed(&handle, connection_id)),
                 Arc::new(move |request_id, filter, note| pip_view(&view_handle, request_id, filter, note)),
             ))?;
