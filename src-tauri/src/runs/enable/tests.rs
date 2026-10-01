@@ -102,3 +102,25 @@ async fn the_note_agrees_with_the_count() {
     assert!(note.starts_with("2 agents are still running and were not stopped"), "{note}");
     assert!(note.contains("follow them") && note.contains("they keep running"), "{note}");
 }
+
+#[tokio::test]
+async fn a_start_that_waited_for_its_turn_does_not_launch_after_the_switch_went_off() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let busy = rig.svc.launching.lock().await;
+    let off = tokio::spawn({
+        let svc = rig.svc.clone();
+        async move { svc.set_enabled(false).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let start = tokio::spawn({
+        let (svc, id) = (rig.svc.clone(), run.id.clone());
+        async move { svc.start_now(&id).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    drop(busy);
+    off.await.unwrap().unwrap();
+    assert!(start.await.unwrap().is_err());
+    assert_eq!(rig.cli.launches(), 0);
+    assert_eq!(rig.get(&run).await.state, RunState::Queued);
+}

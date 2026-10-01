@@ -47,6 +47,7 @@ impl RunService {
         if on {
             self.tools.get().await.map_err(|e| Error::Claude(Failure::from(e).to_string()))?;
         }
+        let _no_launch_midway = if on { None } else { Some(self.launching.lock().await) };
         self.update_config(|config| config.agents_enabled = on)?;
         self.set_flag(on);
         if on {

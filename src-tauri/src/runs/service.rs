@@ -347,6 +347,8 @@ impl RunService {
     async fn start(&self, run_id: &str, retry: bool) -> Result<(Run, bool)> {
         self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
+        // Turning Agents off takes this lock too, so a start that waited for it can't launch after the switch went off.
+        self.ensure_enabled()?;
         let mut run = self.load(run_id).await?;
         let eligible = if retry { run.state == RunState::Failed && run.short_id.is_none() } else { run.state == RunState::Queued };
         if !eligible {
