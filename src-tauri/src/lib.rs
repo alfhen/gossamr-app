@@ -31,10 +31,12 @@ use tracker::{Connection, Move};
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState};
 use error::{Error, Result};
 use domain::{
-    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, ContainerRef, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunQuery, RunReview, Stray,
+    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, ContainerRef, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunQuery, RunReview, RunSpec, Stray,
     TreeEntry, WatchChange, WatchMode, WorkItem, Workflow,
 };
 use model::{Snapshot, Transition};
+use runs::preflight::Preflight;
+use runs::service::CloneChoice;
 use sync::Trigger;
 
 /// How often the scheduler checks whether a sync is due. Waking from sleep is noticed within one tick.
@@ -44,6 +46,7 @@ const EVENT_LIMIT: usize = 100;
 type CoreState = Arc<Core>;
 type AgentState = Arc<AgentService>;
 type LauncherState = Arc<dyn runs::launcher::RunLauncher>;
+type RunsState = Arc<runs::service::RunService>;
 
 /// Sends the latest snapshot to the window and updates the Dock badge. Failures only mean there is nothing to
 /// show yet (e.g. signed out).
@@ -114,7 +117,7 @@ async fn save_oauth_app(core: State<'_, CoreState>, client_id: String, client_se
 }
 
 #[tauri::command]
-async fn sign_in(app: AppHandle, core: State<'_, CoreState>) -> Result<AuthStatus> {
+async fn sign_in(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>) -> Result<AuthStatus> {
     let status = core
         .sign_in(|url| {
             app.opener()
@@ -123,6 +126,8 @@ async fn sign_in(app: AppHandle, core: State<'_, CoreState>) -> Result<AuthStatu
         })
         .await?;
     core.wake.notify_one();
+    let runs = runs.inner().clone();
+    tauri::async_runtime::spawn(async move { runs.recover().await });
     Ok(status)
 }
 
@@ -408,17 +413,76 @@ async fn runs_review(core: State<'_, CoreState>, proposal_id: String) -> Result<
     core.runs_review(&proposal_id).await
 }
 
+/// Drafts a run by hand. It stays a draft until `runs_approve`.
+#[tauri::command]
+async fn runs_draft(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, spec: RunSpec, item: Option<ItemRef>) -> Result<Proposal> {
+    runs.ensure_enabled()?;
+    let made = core.draft_run(spec, item).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(made)
+}
+
 /// Approves a run draft the person has read (`digest` is from `runs_review`) and hands the queued run to the launcher.
 #[tauri::command]
-async fn runs_approve(app: AppHandle, core: State<'_, CoreState>, launcher: State<'_, LauncherState>, proposal_id: String, digest: String) -> Result<Run> {
+async fn runs_approve(
+    app: AppHandle,
+    core: State<'_, CoreState>,
+    launcher: State<'_, LauncherState>,
+    runs: State<'_, RunsState>,
+    proposal_id: String,
+    digest: String,
+) -> Result<Run> {
+    runs.ensure_enabled()?;
     let run = core.runs_approve(&proposal_id, &digest).await?;
     proposals_changed(&app, &run.connection_id);
     runs_changed(&app, &run.connection_id);
     let (launcher, run_id) = (launcher.inner().clone(), run.id.clone());
     tauri::async_runtime::spawn(async move {
-        let _ = launcher.launch(&run_id).await;
+        // A failed launch is recorded on the run itself; an error here means it couldn't be recorded.
+        if let Err(e) = launcher.launch(&run_id).await {
+            eprintln!("couldn't start run {run_id}: {e}");
+        }
     });
     Ok(run)
+}
+
+/// What a run would need and run as, or with no spec only the environment and capacity.
+#[tauri::command]
+async fn runs_preflight(runs: State<'_, RunsState>, spec: Option<RunSpec>) -> Result<Preflight> {
+    runs.preflight(spec).await
+}
+
+/// Starts a run that is still queued, as after a restart.
+#[tauri::command]
+async fn runs_start_now(runs: State<'_, RunsState>, id: String) -> Result<Run> {
+    runs.ensure_enabled()?;
+    runs.start_now(&id).await
+}
+
+/// Looks for the session of a run whose launch failed, and starts one only if there is none.
+#[tauri::command]
+async fn runs_retry_launch(runs: State<'_, RunsState>, id: String) -> Result<Run> {
+    runs.ensure_enabled()?;
+    runs.retry_launch(&id).await
+}
+
+/// Local clones of a watched repository.
+#[tauri::command]
+async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneChoice> {
+    runs.ensure_enabled()?;
+    runs.clones(&repo).await
+}
+
+#[tauri::command]
+async fn runs_pick_clone(runs: State<'_, RunsState>, repo: String, path: std::path::PathBuf) -> Result<()> {
+    runs.ensure_enabled()?;
+    runs.pick_clone(&repo, &path).await
+}
+
+/// A worktree name for a new run in `clone_path` that nothing there uses yet.
+#[tauri::command]
+async fn runs_suggest_name(runs: State<'_, RunsState>, clone_path: std::path::PathBuf, key: String, title: String) -> Result<String> {
+    runs.suggest_name(&clone_path, &key, &title).await
 }
 
 #[tauri::command]
@@ -686,7 +750,25 @@ pub fn run() {
                 Arc::new(move |request_id, filter, note| pip_view(&view_handle, request_id, filter, note)),
             ))?;
             let config = config::AppConfig::load(&core.data_dir());
-            app.manage::<LauncherState>(Arc::new(runs::launcher::NoopLauncher));
+            let runs_handle = app.handle().clone();
+            let service = Arc::new(
+                runs::service::RunService::new(
+                    core.clone(),
+                    Arc::new(runs::toolchain::SystemToolchain::default()),
+                    runs::index::RunIndex::load(&core.data_dir()),
+                    runs::service::RunService::default_roots(),
+                    Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
+                )
+                .enabled(config.agents_enabled),
+            );
+            app.manage::<LauncherState>(service.clone());
+            app.manage::<RunsState>(service.clone());
+            if config.agents_enabled {
+                tauri::async_runtime::spawn(async move {
+                    service.warm().await;
+                    service.recover().await;
+                });
+            }
             app.manage::<AgentState>(Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config)));
 
             spawn_sync_loop(app.handle().clone(), core);
@@ -740,7 +822,14 @@ pub fn run() {
             proposals_skip,
             proposals_approve,
             runs_review,
+            runs_draft,
             runs_approve,
+            runs_preflight,
+            runs_start_now,
+            runs_retry_launch,
+            runs_clones,
+            runs_pick_clone,
+            runs_suggest_name,
             runs_list,
             runs_get,
             sync_now,

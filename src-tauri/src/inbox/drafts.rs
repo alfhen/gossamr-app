@@ -240,16 +240,24 @@ impl Core {
         }
     }
 
+    /// Agents work only in repositories the person watches, whoever drafted the run.
+    pub(crate) fn require_watched_repo(&self, repo: &str) -> Result<()> {
+        if self.watched_code_repos()?.iter().any(|(_, r)| r.eq_ignore_ascii_case(repo)) {
+            Ok(())
+        } else {
+            Err(Error::Proposal(format!("{repo} isn't a repository you watch. Watch it in Settings first.")))
+        }
+    }
+
     /// A run the person drafted by hand. The ticket text is taken from the cache here, never from the caller. Nothing
     /// starts until `runs_approve`.
-    // The run sheet (PR 7) is its caller.
-    #[allow(dead_code)]
     pub async fn draft_run(&self, mut spec: RunSpec, item: Option<ItemRef>) -> Result<Proposal> {
         let scope = self.scope().await?;
         let connection_id = tracker::Connection::jira_id(&scope);
         if item.as_ref().is_some_and(|i| i.connection_id != connection_id) {
             return Err(Error::Proposal("that item belongs to another connection".into()));
         }
+        self.require_watched_repo(&spec.repo)?;
         spec.clone_path = self.resolve_clone(&spec.clone_path)?;
         if spec.instruction.trim().is_empty() {
             spec.instruction = INVESTIGATE_INSTRUCTION.into();
@@ -297,6 +305,7 @@ impl Core {
         self.with_db_for(&scope, |db| {
             let p = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
             let (connection_id, item, spec) = run_of(&p)?;
+            self.require_watched_repo(&spec.repo)?;
             // A draft from Pip isn't resolved when it is stored, and a path through a symlink can be repointed.
             if self.resolve_clone(&spec.clone_path)? != spec.clone_path {
                 return Err(Error::Proposal("the clone path isn't its real path; edit the draft and review it again".into()));
@@ -314,6 +323,16 @@ impl Core {
 
     pub async fn run(&self, id: &str) -> Result<Option<Run>> {
         self.with_proposals(|db| db.run(id)).await
+    }
+
+    /// Stores a run's new state. Only the run service writes runs after approval.
+    pub async fn save_run(&self, run: &Run) -> Result<()> {
+        let stored = self.with_proposals(|db| db.save_run(run)).await?;
+        if stored {
+            Ok(())
+        } else {
+            Err(Error::Proposal("that run no longer exists".into()))
+        }
     }
 
     /// Applies a pending proposal through its connection's tracker. Whatever the tracker did is recorded: a failed
@@ -511,7 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_run_draft_is_pending_by_the_user_takes_its_ticket_text_from_the_cache_and_starts_nothing() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let clone = clone_in(&fx, "webshop");
         let mut spec = spec_in(&clone);
         spec.ticket_block = Some("forged by the caller".into());
@@ -529,7 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_run_draft_needs_a_real_clone_inside_home_and_an_item_of_this_connection() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let no_git = fx.home.join("plain");
         std::fs::create_dir_all(&no_git).unwrap();
         let outside = std::env::temp_dir().join(format!("gossamr-outside-{}", std::process::id()));
@@ -549,7 +568,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_symlink_out_of_home_does_not_pass_as_a_clone_in_it() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let outside = std::env::temp_dir().join(format!("gossamr-link-{}", std::process::id()));
         std::fs::create_dir_all(outside.join(".git")).unwrap();
         let link = fx.home.join("link");
@@ -560,7 +579,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_page_cannot_draft_a_run_through_the_generic_command() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let intent = Intent::StartRun { connection_id: fx.item("CA-1").connection_id, item: Some(fx.item("CA-1")), spec: crate::domain::fixtures::run_spec() };
         let err = fx.core.draft_as_user(intent, None).await.unwrap_err();
         assert!(err.to_string().contains("own command"), "{err}");
@@ -569,7 +588,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_generic_approval_refuses_a_run_draft_without_calling_the_tracker() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let p = drafted_run(&fx).await;
         let err = fx.core.approve_proposal(&p.id).await.unwrap_err();
         assert!(err.to_string().contains("own button"), "{err}");
@@ -580,7 +599,7 @@ mod tests {
 
     #[tokio::test]
     async fn review_shows_the_prompt_and_its_digest_and_approving_with_that_digest_queues_one_run() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let p = drafted_run(&fx).await;
         let review = fx.core.runs_review(&p.id).await.unwrap();
         assert_eq!(review.prompt, crate::domain::render_prompt(&review.spec));
@@ -600,7 +619,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_approval_of_the_same_draft_fails_and_makes_no_second_run() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let p = drafted_run(&fx).await;
         let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
         let (a, b) = tokio::join!(fx.core.runs_approve(&p.id, &digest), fx.core.runs_approve(&p.id, &digest));
@@ -610,7 +629,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_edit_after_reading_changes_the_digest_and_the_old_one_is_refused() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let p = drafted_run(&fx).await;
         let read = fx.core.runs_review(&p.id).await.unwrap();
 
@@ -628,7 +647,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_pip_revision_after_reading_is_refused_at_approval() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let clone = clone_in(&fx, "webshop");
         let by_pip = Draft::from_pip("r", Intent::StartRun { connection_id: fx.item("CA-1").connection_id, item: Some(fx.item("CA-1")), spec: spec_in(&clone) }, None);
         let p = fx.core.propose(&fx.scope, by_pip).await.unwrap();
@@ -648,7 +667,7 @@ mod tests {
 
     #[tokio::test]
     async fn review_refreshes_the_ticket_text_and_notes_a_revision_when_the_cache_changed() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let p = drafted_run(&fx).await;
         let first = fx.core.runs_review(&p.id).await.unwrap();
         assert_eq!(fx.core.proposal(&p.id).await.unwrap().unwrap().revisions.len(), 0, "an unchanged ticket adds no revision");
@@ -667,7 +686,7 @@ mod tests {
 
     #[tokio::test]
     async fn approval_is_refused_when_the_clone_has_gone_and_review_of_another_kind_of_draft_is_refused() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let p = drafted_run(&fx).await;
         let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
         std::fs::remove_dir_all(fx.home.join("webshop")).unwrap();
@@ -691,7 +710,7 @@ mod tests {
 
     #[tokio::test]
     async fn approval_refuses_a_clone_path_that_is_not_its_real_path_and_accepts_the_real_one() {
-        let fx = crate::inbox::testing::fixture().await;
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let real = clone_in(&fx, "webshop");
         let link = fx.home.join("shortcut");
         std::os::unix::fs::symlink(&real, &link).unwrap();

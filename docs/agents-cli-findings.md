@@ -35,6 +35,10 @@ All of them run with stdin from `/dev/null`, because the CLI otherwise reads std
 | (d) environment | Passes (`real_daemon_gets_the_captured_environment_and_nothing_added_after_the_capture`), run as `env -i HOME=$HOME PATH=/usr/bin:/bin`. The capture from `/bin/zsh -ilc` returned the full interactive PATH, including entries that only `.zshrc` adds (Herd, LM Studio, nvm), against `/usr/bin:/bin` for the test process. The scratch daemon's environment (read with `ps eww`) had exactly the captured PATH, and a variable set in the process after the capture did not reach it. Not done: a comparison with a daemon started from Terminal, which is the same shell and the same rc files by construction. Note that the capture inherits the app's own environment as the shell's base, so anything exported in the environment Gossamr was started from is in the capture. |
 | (e) stop then `--bg --resume <sessionId> "say OK"` (U2) | Not run, for the same reason as (b): it needs a signed-in session to show whether the message is delivered. The fake CLI implements the behaviour the plan describes (a running session gets a copy; a stopped one keeps its id and takes the message as its name), and the wrapper tests cover that. U2 stays open. |
 
+## Launcher check (PR 4)
+
+`real_approved_run_launches_into_its_worktree_is_adopted_by_retry_then_stops_and_removes` runs `RunService` against the real CLI in a scratch config. The scratch config is signed out, which the service refuses before launching, so the test reports it as signed in to exercise the launch itself. It passes: the run gets a short id, the session is listed at its worktree path, `retry_launch` on a run whose answer was "lost" adopts that session without a second `--bg`, and `stop` then `rm` removes it (`rm` was refused for about 4 s after `stop`, as above). Not covered: a signed-in session doing model work.
+
 ## Running the real tests
 
 ```
