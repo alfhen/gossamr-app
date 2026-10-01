@@ -184,7 +184,7 @@ fn a_session_id_that_is_not_eight_hex_never_gets_a_file() {
 #[test]
 fn terminal_is_opened_with_the_file_as_its_own_argument() {
     let file = Path::new("/data/attach/1a2b3c4d.command");
-    assert_eq!(open_args(file), [OsString::from("-a"), "Terminal".into(), file.as_os_str().to_owned()]);
+    assert_eq!(open_args(file, TerminalChoice::Terminal), [OsString::from("-a"), "Terminal".into(), file.as_os_str().to_owned()]);
 }
 
 #[tokio::test]
@@ -439,4 +439,19 @@ async fn nothing_opens_when_agents_are_off() {
     let (rig, run) = untrusted().await;
     let off = RunService::new(rig.fx.core.clone(), Arc::new(crate::runs::toolchain::SystemToolchain::default()), crate::runs::index::RunIndex::load(&tmp("off-trust")), vec![], Arc::new(|_| {}));
     assert!(off.open_claude(&run.id, Purpose::Trust).await.is_err());
+}
+
+#[test]
+fn iterm_is_opened_the_same_way_with_its_own_name() {
+    let file = Path::new("/data/attach/1a2b3c4d.command");
+    assert_eq!(open_args(file, TerminalChoice::ITerm), [OsString::from("-a"), "iTerm".into(), file.as_os_str().to_owned()]);
+}
+
+#[tokio::test]
+async fn attach_opens_the_terminal_the_person_chose() {
+    let (rig, run) = working().await;
+    rig.svc.attach(&run.id).await.unwrap();
+    rig.svc.set_settings(crate::config::AgentSettings { terminal: TerminalChoice::ITerm, ..Default::default() }).unwrap();
+    rig.svc.attach(&run.id).await.unwrap();
+    assert_eq!(*rig.opened.1.lock().unwrap(), [TerminalChoice::Terminal, TerminalChoice::ITerm]);
 }

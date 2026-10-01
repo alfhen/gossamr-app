@@ -67,6 +67,16 @@ impl RunIndex {
         self.entries.lock().expect("run index poisoned").iter().filter(|e| !e.terminal).cloned().collect()
     }
 
+    pub fn forget(&self, run_id: &str) -> Result<()> {
+        let mut entries = self.entries.lock().expect("run index poisoned");
+        let before = entries.len();
+        entries.retain(|e| e.run_id != run_id);
+        if entries.len() != before {
+            self.write(&entries)?;
+        }
+        Ok(())
+    }
+
     pub fn contains(&self, run_id: &str) -> bool {
         self.entries.lock().expect("run index poisoned").iter().any(|e| e.run_id == run_id)
     }
