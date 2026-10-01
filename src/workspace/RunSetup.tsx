@@ -3,19 +3,20 @@ import type { CloneChoice, FreshCopy, ItemRef, Preflight, RunKind, RunReview } f
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
 import { KIND_LABEL } from "./agentsLogic";
+import { PrPicker } from "./PrPicker";
 import { PromptParts } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
-import { COPY, START_STEPS, homeShort, launchCommand, repoShortage, savedAsTyped, startBlock, worktreeBranch, type RepoShortage } from "./runSheetLogic";
-import { useRunSetup, type SetupPhase } from "./runSetupStore";
+import { COPY, START_STEPS, homeShort, kindBlock, launchCommand, permissionMode, repoShortage, savedAsTyped, startBlock, worktreeBranch, type RepoShortage } from "./runSheetLogic";
+import { useRunSetup, type PrSearch, type RunEditFields, type SetupPhase } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
 import { useWorkspace } from "../workspaceStore";
 
 const KINDS: { kind: RunKind; note: string }[] = [
   { kind: "investigate", note: "Read the code and logs, change nothing, report" },
-  { kind: "triage", note: "Size it up" },
-  { kind: "build", note: "Make the change" },
-  { kind: "review", note: "Review a pull request" },
-  { kind: "verify", note: "Check a change works" },
+  { kind: "triage", note: "Size it up, find owners and duplicates" },
+  { kind: "build", note: "Make the change on its own branch" },
+  { kind: "review", note: "Read a pull request, change nothing" },
+  { kind: "verify", note: "Check that a change works" },
 ];
 
 const FIELD = "w-full rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-ws-ink outline-offset-2 disabled:opacity-60";
@@ -32,12 +33,20 @@ export interface SetupActions {
   dismissChanged(): void;
   /** Saves what is in the instruction box or the base field, when it differs from the draft. */
   commit(): void;
+  chooseKind(kind: RunKind): void;
+  searchPrs(query: string): void;
+  choosePr(number: number): void;
+  setAllowPush(on: boolean): void;
 }
 
 export interface SetupViewProps {
   item: ItemRef | null;
   ticketTitle: string | null;
   kind: RunKind;
+  /** The kind can be changed here only when this sheet made the draft. */
+  kindEditable: boolean;
+  pr: number | null;
+  prs: PrSearch;
   repo: string | null;
   repos: readonly string[];
   /** Why there is nothing to choose, or that the list could not be loaded; null when there is a choice. */
@@ -223,29 +232,51 @@ function Heading({ p }: { p: SetupViewProps }) {
   );
 }
 
-function KindPicker({ kind }: { kind: RunKind }) {
+function KindPicker({ p }: { p: SetupViewProps }) {
+  const locked = !p.kindEditable || p.phase === "starting";
   return (
     <Sec title="Kind of work">
       <div role="group" aria-label="Kind of work" className="grid grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-1.5">
         {KINDS.map(({ kind: k, note }) => {
-          const on = k === kind;
-          const later = k !== "investigate";
+          const on = k === p.kind;
+          const needsTicket = k === "build" && !p.item;
+          const off = locked && !on;
           return (
             <button
               key={k}
               type="button"
               aria-pressed={on}
-              disabled={later}
-              title={later ? "Coming later" : undefined}
-              className={`grid content-start gap-0.5 rounded-[9px] border px-2.5 py-2 text-left disabled:cursor-not-allowed ${on ? "border-ws-accent bg-ws-accent-soft shadow-[0_0_0_1px_var(--color-ws-accent)]" : "border-ws-sep2 bg-ws-win"} ${later ? "opacity-55" : ""}`}
+              disabled={off || needsTicket}
+              title={needsTicket ? "Build needs a ticket" : undefined}
+              onClick={() => !on && p.on.chooseKind(k)}
+              className={`grid content-start gap-0.5 rounded-[9px] border px-2.5 py-2 text-left disabled:cursor-not-allowed ${on ? "border-ws-accent bg-ws-accent-soft shadow-[0_0_0_1px_var(--color-ws-accent)]" : "border-ws-sep2 bg-ws-win"} ${off || needsTicket ? "opacity-55" : ""}`}
             >
               <Icon name={KIND_ICON[k]} className={`size-[15px] ${on ? "text-ws-accent" : "text-ws-ink3"}`} />
               <b className="text-[13px] font-semibold">{KIND_LABEL[k]}</b>
-              <small className="text-xs leading-snug text-ws-ink3">{later ? "Coming later" : note}</small>
+              <small className="text-xs leading-snug text-ws-ink3">{needsTicket ? "Needs a ticket" : note}</small>
             </button>
           );
         })}
       </div>
+    </Sec>
+  );
+}
+
+function PushOption({ p }: { p: SetupViewProps }) {
+  const on = !!p.review?.spec.allowPush;
+  const mode = permissionMode(p.preflight);
+  return (
+    <Sec title="Pushing">
+      <label className="flex items-start gap-2">
+        <input type="checkbox" checked={on} disabled={!p.review || p.busy || p.phase !== "ready"} onChange={(ev) => p.on.setAllowPush(ev.target.checked)} className="mt-1" />
+        <span className="grid gap-0.5">
+          <b className="font-semibold text-ws-ink">Allow it to push and open a pull request</b>
+          <span className="text-ws-ink2">Off, the prompt tells it to commit on its own branch and not push. On, the prompt says it may push and open a pull request.</span>
+        </span>
+      </label>
+      <p className="m-0 text-xs text-ws-ink3">
+        Either way this is a request in the prompt, not a lock. Agents run with your own permission mode{mode ? ` (${mode})` : ""}, so nothing technical stops a push whether this is ticked or not.
+      </p>
     </Sec>
   );
 }
@@ -255,7 +286,7 @@ function Steps({ children }: { children: ReactNode }) {
 }
 
 /** Why Start is off for what the sheet shows, or null. The button and the ⌘↵ shortcut both ask this. */
-export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "phase" | "busy" | "changed" | "choice" | "repo" | "instruction" | "base">): string | null {
+export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "phase" | "busy" | "changed" | "choice" | "repo" | "instruction" | "base" | "kind" | "item" | "pr">): string | null {
   return startBlock({
     draft: !!p.review,
     review: p.review,
@@ -265,6 +296,7 @@ export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "pha
     changedBanner: p.changed,
     noClone: p.choice && p.choice.clones.length === 0 ? `No clone of ${p.repo} found` : null,
     repoMissing: !p.repo,
+    kindBlock: kindBlock(p.kind, p.item, p.pr),
     typed: { instruction: p.instruction, base: p.base },
   });
 }
@@ -333,7 +365,21 @@ export function RunSetupView(p: SetupViewProps) {
           <p className="m-0 text-ws-ink2">No ticket: a free-form task.</p>
         )}
       </Sec>
-      <KindPicker kind={p.kind} />
+      <KindPicker p={p} />
+      {p.kind === "build" && <PushOption p={p} />}
+      {p.kind === "review" && p.repo && (
+        <PrPicker
+          key={p.repo}
+          repo={p.repo}
+          pr={p.pr}
+          review={review}
+          prs={p.prs}
+          initialQuery={p.item?.key ?? ""}
+          disabled={!p.kindEditable || phase !== "ready" || p.busy}
+          onSearch={on.searchPrs}
+          onChoose={on.choosePr}
+        />
+      )}
       <Where p={p} />
 
       <Sec title="The prompt">
@@ -397,7 +443,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
   useEffect(() => setBase(savedBase), [savedBase]);
 
   const commit = async () => {
-    const edit: { instruction?: string; base?: string } = {};
+    const edit: RunEditFields = {};
     if (s.review && instruction !== saved && instruction.trim()) edit.instruction = instruction;
     if (s.review && base.trim() && base.trim() !== savedBase) edit.base = base;
     if (Object.keys(edit).length) await useRunSetup.getState().saveEdit(edit);
@@ -407,6 +453,9 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     item: s.item,
     ticketTitle: ticketTitle ?? s.title,
     kind: s.kind,
+    kindEditable: s.ownDraft || !s.proposalId,
+    pr: s.pr,
+    prs: s.prs,
     repo: s.repo,
     repos: s.repos,
     shortage: repoShortage({ repos: s.repos, loading: s.reposStatus === "loading", failed: s.reposStatus === "failed", githubConnected }),
@@ -443,6 +492,10 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
       },
       dismissChanged: () => useRunSetup.getState().dismissChanged(),
       commit: () => void commit(),
+      chooseKind: (kind) => void useRunSetup.getState().chooseKind(kind),
+      searchPrs: (query) => void useRunSetup.getState().searchPrs(query),
+      choosePr: (number) => void useRunSetup.getState().choosePr(number),
+      setAllowPush: (on) => void useRunSetup.getState().saveEdit({ allowPush: on }),
     },
   };
 

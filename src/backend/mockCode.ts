@@ -62,6 +62,7 @@ export class MockCode {
       repo,
       number: n,
       url: `https://github.com/${repo}/pull/${n}`,
+      headRepo: repo,
       sha: `sha${n}0000`,
       state: "open",
       title: "",
@@ -112,6 +113,19 @@ export class MockCode {
         changedFiles: 2,
         linkedKeys: ["CA-402"],
         createdAt: hoursAgo(now, 50),
+      }),
+      pr("acme/webshop", 215, {
+        title: "Fix the size-guide typo",
+        headRef: "patch-1",
+        headRepo: "dana-lee/webshop",
+        author: who("dana-lee"),
+        updatedAt: hoursAgo(now, 8),
+      }),
+      pr("acme/webshop", 190, {
+        title: "Drop the unused banner component",
+        headRef: "chore/drop-banner",
+        state: "closed",
+        updatedAt: hoursAgo(now, 90),
       }),
       {
         ...base,
@@ -190,6 +204,11 @@ export class MockCode {
   onDevLinksChanged(listener: (c: DevLinksChanged) => void) {
     this.listeners.add(listener);
     return () => void this.listeners.delete(listener);
+  }
+
+  /** The pull request as GitHub has it now; null when there is none or the repository isn't watched. */
+  change(repo: string, number: number): CodeChange | null {
+    return this.watched(repo) ? (this.changes.find((c) => c.kind === "pullRequest" && c.repo === repo && c.number === number) ?? null) : null;
   }
 
   pullRequest(ref: CodeRef): PullRequestDetail {

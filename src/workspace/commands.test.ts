@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { agentTicketChoices, buildCommands, investigateCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
+import { agentTicketChoices, buildCommands, agentCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
 import { BUILT_IN_VIEWS } from "./filters";
 
 const containers = await new MockBackend().cacheContainers();
@@ -9,7 +9,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "investigate", "showAgentsNeedingMe", "openAgentSafety", "jumpToItem", "askPip"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showAgentsNeedingMe", "openAgentSafety", "jumpToItem", "askPip"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -249,19 +249,31 @@ describe("agent commands", () => {
 
   it("offers Investigate for a ticket only when the query asks for it", () => {
     const run = vi.fn();
-    expect(investigateCommands(items, "welcome", run)).toEqual([]);
-    const some = investigateCommands(items, "investigate welcome", run);
+    expect(agentCommands(items, "welcome", run)).toEqual([]);
+    const some = agentCommands(items, "investigate welcome", run);
     expect(some.length).toBeGreaterThan(0);
     expect(some[0].label).toMatch(/^Investigate [A-Z]+-\d+ {2}/);
     some[0].run();
     expect(run).toHaveBeenCalledTimes(1);
     expect(run.mock.calls[0][0].title.toLowerCase()).toContain("welcome");
+    expect(run.mock.calls[0][1]).toBe("investigate");
+  });
+
+  it("offers the other kinds when the query starts with their word, and not for the same word in a title", () => {
+    const run = vi.fn();
+    for (const [verb, kind, label] of [["triage", "triage", "Triage"], ["build", "build", "Build"], ["review", "review", "Review the PR on"], ["verify", "verify", "Verify"]] as const) {
+      const found = agentCommands(items, `${verb} welcome`, run);
+      expect(found[0].label.startsWith(`${label} `)).toBe(true);
+      found[0].run();
+      expect(run).toHaveBeenLastCalledWith(expect.anything(), kind);
+    }
+    expect(agentCommands(items, "welcome review", run)).toEqual([]);
   });
 
   it("lists the latest tickets for a bare Investigate, and finds a key", () => {
-    expect(investigateCommands(items, "investigate", () => {}, 3)).toHaveLength(3);
+    expect(agentCommands(items, "investigate", () => {}, 3)).toHaveLength(3);
     const key = items[0].item.key;
-    expect(investigateCommands(items, `agent ${key}`, () => {})[0].label).toContain(key);
+    expect(agentCommands(items, `agent ${key}`, () => {})[0].label).toContain(key);
   });
 
   it("picks a ticket for a new agent: the matches, or the latest, and no ticket as a way out", () => {

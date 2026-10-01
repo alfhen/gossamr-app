@@ -1,9 +1,9 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { itemKey } from "../lib/filter";
-import type { CloneChoice, ItemRef, Preflight, Proposal, Run, RunKind, RunReview, RunSpec } from "../types";
+import type { CloneChoice, ItemRef, Preflight, Proposal, ProposalEdit, Run, RunKind, RunReview, RunSpec } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { defaultRepo, findRunDraft, linkedRepo, repoChoices } from "./runSheetLogic";
+import { defaultRepo, findRunDraft, kindBlock, linkedRepo, prChoices, repoChoices, type PrChoice } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { readStored, writeStored } from "./storage";
 import { useTabs } from "./tabsStore";
@@ -14,10 +14,24 @@ const CHANGED = /changed after you read it/i;
 
 export type SetupPhase = "preparing" | "ready" | "starting";
 
+export interface PrSearch {
+  status: "idle" | "loading" | "ready" | "failed";
+  query: string;
+  choices: PrChoice[];
+  error: string | null;
+}
+
+const NO_PRS: PrSearch = { status: "idle", query: "", choices: [], error: null };
+
+export type RunEditFields = Omit<Extract<ProposalEdit, { type: "run" }>, "type">;
+
 interface SetupState {
   open: boolean;
   backend: Backend | null;
   kind: RunKind;
+  /** The pull request a review reads, once chosen. */
+  pr: number | null;
+  prs: PrSearch;
   item: ItemRef | null;
   /** What the ticket is called, for naming the worktree. */
   title: string | null;
@@ -44,11 +58,15 @@ interface SetupState {
   /** The instruction as first drafted, for resetting. */
   initialInstruction: string | null;
   reloadRepos(): Promise<void>;
-  begin(opts: { item?: ItemRef | null; proposalId?: string; kind?: RunKind }): Promise<void>;
+  /** `repo` says where `pr` is, so a review opens in that repository. */
+  begin(opts: { item?: ItemRef | null; proposalId?: string; kind?: RunKind; pr?: number; repo?: string }): Promise<void>;
+  chooseKind(kind: RunKind): Promise<void>;
+  searchPrs(query: string): Promise<void>;
+  choosePr(number: number): Promise<void>;
   chooseRepo(repo: string): Promise<void>;
   chooseClone(path: string): Promise<void>;
   cloneFresh(): Promise<void>;
-  saveEdit(edit: { instruction?: string; base?: string }): Promise<void>;
+  saveEdit(edit: RunEditFields): Promise<void>;
   dismissChanged(): void;
   start(): Promise<Run | null>;
   discard(): Promise<void>;
@@ -58,6 +76,8 @@ interface SetupState {
 const closed = {
   open: false,
   kind: "investigate" as RunKind,
+  pr: null,
+  prs: NO_PRS,
   item: null,
   title: null,
   repo: null,
@@ -90,6 +110,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
   const current = (mine: number) => mine === run && get().open;
   let stopWatching: (() => void) | null = null;
   let repoRequest = 0;
+  let prRequest = 0;
   let latestWatched: string[] = [];
 
   const loadRepos = async (mine: number, quiet = false): Promise<string[]> => {
@@ -124,7 +145,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
   };
 
   const prepare = async (mine: number) => {
-    const { backend, item, repo, kind, title, proposalId, ownDraft } = get();
+    const { backend, item, repo, kind, pr, title, proposalId, ownDraft } = get();
     if (!backend || !repo) return;
     set({ phase: "preparing", error: null, cloneError: null, cloning: false, choice: null, review: null, preflight: null, busy: false });
     try {
@@ -137,8 +158,12 @@ export const useRunSetup = create<SetupState>((set, get) => {
         set({ phase: "ready", preflight: await backend.runsPreflight(null).catch(() => null) });
         return;
       }
+      if (kindBlock(kind, item, pr)) {
+        set({ phase: "ready", preflight: await backend.runsPreflight(null).catch(() => null) });
+        return;
+      }
       const name = await backend.runsSuggestName(clone.path, item?.key ?? repo.split("/").pop() ?? "task", title ?? "");
-      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null };
+      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: false };
       const draft = await backend.runsDraft(spec, item);
       if (!current(mine)) return void backend.proposalsSkip(draft.id).catch(() => {});
       set({ proposalId: draft.id, ownDraft: true });
@@ -154,12 +179,12 @@ export const useRunSetup = create<SetupState>((set, get) => {
     ...closed,
     backend: null,
 
-    async begin({ item = null, proposalId, kind = "investigate" }) {
+    async begin({ item = null, proposalId, kind = "investigate", pr, repo: wanted }) {
       const backend = useWorkspace.getState().backend;
       if (!backend || !useRuns.getState().ensureAgentsIntro()) return;
       const mine = ++run;
       useRuns.getState().closeSheet();
-      set({ ...closed, open: true, backend, kind, item, phase: "preparing" });
+      set({ ...closed, open: true, backend, kind, pr: pr ?? null, item, phase: "preparing" });
       latestWatched = [];
       stopWatching?.();
       stopWatching = backend.onWatchChanged(() => void loadRepos(run, true));
@@ -167,14 +192,14 @@ export const useRunSetup = create<SetupState>((set, get) => {
       try {
         await loadRepos(mine);
         if (!current(mine)) return;
-        const id = proposalId ?? findRunDraft(workspace.proposals, item, kind)?.id;
+        const id = proposalId ?? findRunDraft(workspace.proposals, item, kind, pr)?.id;
         if (id) {
           const draft: Proposal | null = await backend.proposalsGet(id);
           if (!current(mine)) return;
           if (draft?.intent.type !== "startRun" || draft.state.type !== "pending") throw new Error("that draft can't be started any more");
           const { spec, item: of } = draft.intent;
           const ticket = of ? workspace.items[itemKey(of)] : undefined;
-          set({ item: of, kind: spec.kind, title: ticket?.title ?? null, repo: spec.repo, repos: repoChoices(latestWatched, useRuns.getState().runs), proposalId: id, ownDraft: false, fromPip: draft.createdBy === "pip", choice: await backend.runsClones(spec.repo) });
+          set({ item: of, kind: spec.kind, pr: spec.pr ?? null, title: ticket?.title ?? null, repo: spec.repo, repos: repoChoices(latestWatched, useRuns.getState().runs), proposalId: id, ownDraft: false, fromPip: draft.createdBy === "pip", choice: await backend.runsClones(spec.repo) });
           await refresh(mine);
           if (current(mine)) set({ phase: "ready", initialInstruction: get().review?.instruction ?? null });
           return;
@@ -184,7 +209,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
         if (!current(mine)) return;
         const watched = latestWatched;
         const repos = repoChoices(watched, useRuns.getState().runs);
-        const repo = defaultRepo(repos, item, useRuns.getState().runs, lastRepo(), linkedRepo(links, watched));
+        const repo = repos.find((r) => wanted && r.toLowerCase() === wanted.toLowerCase()) ?? defaultRepo(repos, item, useRuns.getState().runs, lastRepo(), linkedRepo(links, watched));
         set({ title, repos, repo });
         if (repo) await prepare(mine);
         else set({ phase: "ready", preflight: await backend.runsPreflight(null).catch(() => null) });
@@ -200,7 +225,35 @@ export const useRunSetup = create<SetupState>((set, get) => {
     async chooseRepo(repo) {
       if (repo === get().repo) return;
       writeStored(LAST_REPO_KEY, repo);
-      set({ repo });
+      set({ repo, pr: null, prs: NO_PRS });
+      await prepare(++run);
+    },
+
+    async chooseKind(kind) {
+      const { kind: was, proposalId, ownDraft, repo } = get();
+      if (kind === was || (proposalId && !ownDraft)) return;
+      set({ kind, pr: null, prs: NO_PRS, error: null });
+      if (repo) await prepare(++run);
+    },
+
+    async searchPrs(query) {
+      const { backend, repo } = get();
+      const mine = run;
+      const text = query.trim();
+      const request = ++prRequest;
+      if (!backend || !repo || !text) return set({ prs: { ...NO_PRS, query: text } });
+      set({ prs: { ...get().prs, query: text, status: "loading", error: null } });
+      try {
+        const found = await backend.codeSearch(text);
+        if (request === prRequest && current(mine)) set({ prs: { status: "ready", query: text, choices: prChoices(found, repo), error: null } });
+      } catch (e) {
+        if (request === prRequest && current(mine)) set({ prs: { status: "failed", query: text, choices: [], error: messageOf(e) } });
+      }
+    },
+
+    async choosePr(number) {
+      if (number === get().pr) return;
+      set({ pr: number });
       await prepare(++run);
     },
 

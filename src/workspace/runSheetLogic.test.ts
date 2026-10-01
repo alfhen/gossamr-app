@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { renderPrompt } from "../backend/mockRuns";
 import type { CodeChange, Preflight, Proposal, Run, RunReview, RunSpec, RunState } from "../types";
-import { MAY_TOUCH, defaultRepo, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, linkedRepo, repoChoices, repoShortage, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
+import { MAY_TOUCH, defaultRepo, kindBlock, permissionMode, prChoices, reviewablePr, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, linkedRepo, repoChoices, repoShortage, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
 
 const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
   kind: "investigate",
@@ -276,5 +276,71 @@ describe("whether the saved draft is what is typed", () => {
   it("is not when nothing is saved, or the instruction was cleared", () => {
     expect(savedAsTyped(null, typed)).toBe(false);
     expect(savedAsTyped(saved, { ...typed, instruction: "" })).toBe(false);
+  });
+});
+
+describe("the prompt of the other kinds", () => {
+  it("cuts a review's pull request line and a build's permission into a part of their own, so the parts still make the prompt", () => {
+    const r = review({ kind: "review", instruction: "Review the pull request named below.", pr: 12, prSha: "abc", ticketBlock: "CA-1: x" });
+    const parts = splitPrompt(r);
+    expect(parts.map((p) => p.id)).toEqual(["base", "template", "extra", "ticket"]);
+    expect(parts[2].text).toBe("Review pull request #12 in acme/web at commit abc.");
+    expect(parts.map((p) => p.text).join("\n\n")).toBe(r.prompt);
+    const push = splitPrompt(review({ kind: "build", allowPush: true, instruction: "Make the change." }));
+    expect(push.find((p) => p.id === "extra")?.text).toContain("You may push");
+    expect(splitPrompt(review({ kind: "build", instruction: "Make the change." })).some((p) => p.id === "extra")).toBe(false);
+  });
+
+  it("names the kind in the launch command", () => {
+    expect(launchCommand(spec({ kind: "review" }), "CA-1", "g", "p")).toContain("--name 'CA-1 review'");
+  });
+});
+
+describe("what a kind needs before it can be drafted", () => {
+  it("needs a ticket for a build and a pull request for a review", () => {
+    expect(kindBlock("build", null, null)).toBe("Build needs a ticket");
+    expect(kindBlock("build", itemRef("CA-1"), null)).toBeNull();
+    expect(kindBlock("review", itemRef("CA-1"), null)).toBe("Choose the pull request to review");
+    expect(kindBlock("review", null, 4)).toBeNull();
+    expect(kindBlock("triage", null, null)).toBeNull();
+    expect(startBlock({ draft: false, review: null, preflight: null, busy: false, starting: false, changedBanner: false, kindBlock: "Build needs a ticket" })).toBe("Build needs a ticket");
+  });
+});
+
+describe("the pull requests a review can take", () => {
+  const pr = (n: number, over: Partial<CodeChange> = {}): CodeChange =>
+    ({ kind: "pullRequest", number: n, repo: "acme/web", state: "open", headRepo: "acme/web", updatedAt: `2026-09-0${n}T00:00:00Z`, externalId: `pr:acme/web#${n}`, title: `PR ${n}`, ...over }) as CodeChange;
+
+  it("allows an open pull request from the same repository, whatever the case of its name", () => {
+    expect(prChoices([pr(1, { headRepo: "ACME/Web" })], "acme/web")[0]).toMatchObject({ selectable: true, note: null });
+  });
+
+  it("refuses a fork, a closed, a merged and a draft pull request, each with its reason", () => {
+    const notes = prChoices([pr(1, { headRepo: "x/web" }), pr(2, { state: "closed" }), pr(3, { state: "merged" }), pr(4, { state: "draft" })], "acme/web");
+    expect(notes.map((c) => [c.change.number, c.selectable, c.note]).sort()).toEqual([[1, false, "From a fork"], [2, false, "Closed"], [3, false, "Merged"], [4, false, "Still a draft"]]);
+  });
+
+  it("lets one with an unknown head repository be chosen, to be checked on GitHub", () => {
+    expect(prChoices([pr(1, { headRepo: null })], "acme/web")[0]).toMatchObject({ selectable: true, note: "Checked on GitHub when you choose it" });
+  });
+
+  it("leaves out branches, commits and other repositories, and lists the choosable ones first", () => {
+    const list = prChoices([pr(1, { state: "closed" }), pr(2), pr(3, { repo: "acme/other" }), { ...pr(4), kind: "branch" } as CodeChange], "acme/web");
+    expect(list.map((c) => c.change.number)).toEqual([2, 1]);
+  });
+
+  it("offers the newest linkable pull request of a ticket for the Agent menu, or none", () => {
+    const link = (c: CodeChange) => ({ change: c });
+    expect(reviewablePr([link(pr(1)), link(pr(3)), link(pr(5, { headRepo: "x/web" }))])?.number).toBe(3);
+    expect(reviewablePr([link(pr(1, { state: "merged" }))])).toBeNull();
+    expect(reviewablePr([])).toBeNull();
+  });
+});
+
+describe("the permission mode named beside the push option", () => {
+  it("is read from the pre-flight row, or absent", () => {
+    expect(permissionMode({ rows: [{ level: "green", text: "Agents run as you, in your permission mode: auto" }], blocking: false })).toBe("auto");
+    expect(permissionMode({ rows: [{ level: "green", text: "Agents run as you, with your Claude settings (no default permission mode is set)" }], blocking: false })).toBeNull();
+    expect(permissionMode(null)).toBeNull();
   });
 });
