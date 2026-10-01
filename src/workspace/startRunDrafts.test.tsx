@@ -32,20 +32,33 @@ describe("a startRun draft", () => {
     vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
   });
 
-  it("is named for the ticket and offers no approve control on its card", () => {
+  it("is named for the ticket and opens the setup sheet instead of approving on its card", () => {
     const p = runDraft();
     expect(draftTitle(p)).toBe("Start an agent: CA-412");
     expect(draftSummary(p, null)).toBe("investigate in acme/web");
-    const out = renderToStaticMarkup(<DraftCard proposal={p} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
-    expect(out).toContain("Review and start from the ticket or the Agents view");
+    const props = { proposal: p, statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() };
+    const plain = renderToStaticMarkup(<DraftCard {...props} />);
+    expect(plain).not.toContain("Review and start");
+    const out = renderToStaticMarkup(<DraftCard {...props} onReview={vi.fn()} />);
+    expect(out).toContain("Investigate CA-412");
+    expect(out).toContain("Read the exact prompt and checks, then start it. Nothing runs before that.");
+    expect(out).toContain("Review and start");
     expect(out).toContain("Skip");
     for (const label of ["Apply", "Working…", "Approve", "Start agent"]) expect(out).not.toContain(label);
+  });
+
+  it("shows Pip's focus note on its card as Pip's", () => {
+    const withFocus = runDraft({ intent: { type: "startRun", connectionId: "mock", item: itemRef("CA-412"), spec: { ...spec, focus: "Look at the retry loop." } }, createdBy: "pip" });
+    const out = renderToStaticMarkup(<DraftCard proposal={withFocus} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} onReview={vi.fn()} />);
+    expect(out).toContain("Focus from Pip:");
+    expect(out).toContain("Look at the retry loop.");
   });
 
   it("previews as a plain line in the conversation", () => {
     expect(draftPreviewBody(runDraft(), null)).toContain("Start an agent: CA-412");
     const out = renderToStaticMarkup(<DraftPreview proposal={runDraft()} statusName={null} targetTitle="Fix the thing" onOpen={vi.fn()} />);
     expect(out).toContain("Start an agent: CA-412");
+    expect(out).toContain("Review and start →");
     expect(out).not.toContain("Approve");
   });
 

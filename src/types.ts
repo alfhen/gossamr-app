@@ -418,7 +418,9 @@ export type ProposalEdit =
   | { type: "comment"; body: string; mentions: { accountId: string; name: string }[]; /** A comment being answered, quoted after the first paragraph. */ quote?: string }
   | { type: "subtasks"; summaries: string[] }
   /** A new item's fields; the ones left out stay as they are. */
-  | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef };
+  | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef }
+  /** A run draft's settings, as the person edits them; the ones left out stay as they are. */
+  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
@@ -485,6 +487,32 @@ export interface RunReview {
   spec: RunSpec;
 }
 
+/** One line of what the agent did, kept for the run sheet's timeline. */
+export interface RunEvent {
+  runId: string;
+  seq: number;
+  at: string;
+  kind: string;
+  text: string;
+  /** Longer text behind the line, shown on request. */
+  detail: string | null;
+}
+
+/** A local clone of a repository, as found on this Mac. */
+export interface LocalClone {
+  path: string;
+  branch: string;
+  dirty: boolean;
+  /** What `origin/HEAD` points at, when the clone knows. */
+  defaultBranch: string | null;
+}
+
+export interface CloneChoice {
+  clones: LocalClone[];
+  /** The clone the person chose when several matched; listed first. */
+  picked: string | null;
+}
+
 /** Which runs to list. Every field that is set must match. */
 export interface RunQuery {
   states?: RunState[];
@@ -499,7 +527,7 @@ export interface RunsChanged {
 
 /** One line of a pre-flight check. */
 export interface PreflightRow {
-  level: "ok" | "warn" | "error";
+  level: "green" | "amber" | "red";
   text: string;
 }
 

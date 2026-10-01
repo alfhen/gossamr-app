@@ -8,7 +8,7 @@ import { isWorkConnection } from "./domains";
 import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
 
-export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Ask Pip";
+export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Agents" | "Ask Pip";
 
 export interface Command {
   id: string;
@@ -44,6 +44,10 @@ export interface CommandActions {
   newTab(): void;
   newTicket(): void;
   togglePip(): void;
+  startAgent(): void;
+  investigate(item: WorkItem): void;
+  showAgentsNeedingMe(): void;
+  openAgentSafety(): void;
   jumpToItem(item: WorkItem): void;
   askPip(query: string): void;
 }
@@ -56,6 +60,9 @@ export interface CommandContext {
   pendingDrafts: number;
   /** A GitHub account is connected. */
   github?: boolean;
+  agents?: boolean;
+  /** Agents waiting on the person, for the hint beside "Show agents that need me". */
+  agentsNeedingMe?: number;
 }
 
 const NO_CONTEXT: CommandContext = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
@@ -106,6 +113,14 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "github:connect", group: "GitHub", icon: "↗", label: ctx.github ? "Connect another GitHub account" : "Connect GitHub", keywords: "sign in token pull requests code", run: a.connectGithub },
     ...(ctx.github ? [{ id: "github:repos", group: "GitHub" as const, icon: "⚙", label: "Manage repositories", keywords: "github watch unwatch repos code", run: a.manageRepositories }] : []),
     ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", icon: "◐", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),
+    ...(ctx.agents
+      ? [
+          { id: "agents:start", group: "Agents" as const, icon: ">_", label: "Start an agent…", hint: "n", keywords: "run claude investigate background task", run: a.startAgent },
+          { id: "agents:needs", group: "Agents" as const, icon: "✋", label: "Show agents that need me", hint: ctx.agentsNeedingMe ? `${ctx.agentsNeedingMe} waiting` : undefined, keywords: "agents waiting permission question blocked", run: a.showAgentsNeedingMe },
+          { id: "agents:stop", group: "Agents" as const, icon: "■", label: "Stop all agents…", keywords: "agents halt kill end everything", run: a.openAgentSafety },
+          { id: "agents:safety", group: "Agents" as const, icon: "⛨", label: "Agent safety and settings", keywords: "agents touch permissions", run: a.openAgentSafety },
+        ]
+      : []),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },
     { id: "app:pip", group: "App", icon: "✦", label: "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
   ];
@@ -145,6 +160,36 @@ export function ticketCommands(items: readonly WorkItem[], query: string, jump: 
     .sort((a, b) => a.rank - b.rank || b.item.updated.localeCompare(a.item.updated))
     .slice(0, limit)
     .map(({ item }): Command => ({ id: `ticket:${itemKey(item.item)}`, group: "Tickets", icon: "·", label: item.title, hint: item.item.key, run: () => jump(item) }));
+}
+
+const AGENT_WORDS = /\b(?:investigate|investigation|agent|start)\b/gi;
+
+/**
+ * "Investigate <ticket>" entries for a query that asks for one: it names the action, or starts a command like
+ * "investigate", and the rest of the words find the ticket. Without such a word the tickets stay plain jumps.
+ */
+export function investigateCommands(items: readonly WorkItem[], query: string, run: (item: WorkItem) => void, limit = 5): Command[] {
+  if (!/\b(?:investigate|investigation|agent)/i.test(query)) return [];
+  const rest = query.replace(AGENT_WORDS, " ").trim();
+  const found = rest ? ticketCommands(items, rest, () => {}, limit).map((c) => c.id.slice("ticket:".length)) : [...items].sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, limit).map((i) => itemKey(i.item));
+  const byKey = new Map(items.map((i) => [itemKey(i.item), i]));
+  return found.flatMap((id) => {
+    const item = byKey.get(id);
+    return item ? [{ id: `investigate:${id}`, group: "Agents" as const, icon: ">_", label: `Investigate ${item.item.key}  ${item.title}`, hint: "agent", keywords: "start an agent", run: () => run(item) }] : [];
+  });
+}
+
+/** The ticket picker for "Start an agent…": no ticket first, then the ones that match, or the latest when nothing is typed. */
+export function agentTicketChoices(items: readonly WorkItem[], query: string, pick: (item: WorkItem | null) => void, limit = 8): Command[] {
+  const none: Command = { id: "agent:none", group: "Agents", icon: "·", label: "No ticket: a free-form task", hint: "↵", keywords: "without none free form", run: () => pick(null) };
+  const q = query.trim();
+  const tickets = q
+    ? ticketCommands(items, q, pick, limit)
+    : [...items]
+        .sort((a, b) => b.updated.localeCompare(a.updated))
+        .slice(0, limit)
+        .map((item): Command => ({ id: `ticket:${itemKey(item.item)}`, group: "Tickets", icon: "·", label: item.title, hint: item.item.key, run: () => pick(item) }));
+  return [...tickets, ...(q && !/^\s*no\b/i.test(q) ? [] : [none])];
 }
 
 /** Projects the person doesn't watch that match the search, each a way to start watching it. */

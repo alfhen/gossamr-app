@@ -7,6 +7,7 @@ import { draftStatus } from "./boardLogic";
 import { draftTitle } from "./DraftCard";
 import { showDraft } from "./draftTicket";
 import { showMe } from "./jump";
+import { useRunSetup } from "./runSetupStore";
 
 const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", link: "✦", startRun: "▶" };
 
@@ -37,7 +38,7 @@ export function draftPreviewBody(p: Proposal, statusName: string | null): string
     case "link":
       return `${i.kind} ${i.to.key}`;
     case "startRun":
-      return `Start an agent: ${i.item?.key ?? i.spec.repo}\nReview and start from the ticket or the Agents view`;
+      return `Start an agent: ${i.item?.key ?? i.spec.repo}\n${i.spec.focus?.trim() ? `Focus from Pip: ${i.spec.focus.trim()}\n` : ""}Read the exact prompt, then start it. Nothing runs before that.`;
     default:
       return unreachable(i);
   }
@@ -58,7 +59,7 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, onOpen }: P
   const pending = state === "pending" || state === "applying";
   const revision = p.revisions[p.revisions.length - 1];
   const made = p.intent.type === "create" && state === "applied" ? p.created[0] : undefined;
-  const go = pending ? (target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
+  const go = pending ? (p.intent.type === "startRun" ? "Review and start →" : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
   return (
     <button
       type="button"
@@ -94,7 +95,8 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
   const item = useWorkspace((s) => (target ? s.items[itemKey(target)] : undefined));
   const statusName = item && p.intent.type === "transition" ? (draftStatus(p, workflowOfItem({ containers }, item))?.name ?? null) : null;
   const open = () => {
-    if (target) showMe(target, { peek: true });
+    if (p.intent.type === "startRun" && p.state.type === "pending") void useRunSetup.getState().begin({ proposalId: p.id });
+    else if (target) showMe(target, { peek: true });
     else if (p.state.type === "pending" || p.state.type === "applying") showDraft(p.id);
     else if (p.created[0] && !showMe(p.created[0])) showDraft(p.id);
   };

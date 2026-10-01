@@ -7,6 +7,8 @@ import { useBackend } from "../backend/useBackend";
 import type { Person, Proposal, ProposalEdit } from "../types";
 import { draftStatus } from "./boardLogic";
 import { showMe } from "./jump";
+import { KIND_LABEL } from "./agentsLogic";
+import { useRunSetup } from "./runSetupStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { itemKey } from "../lib/filter";
 
@@ -72,13 +74,15 @@ export interface DraftCardProps {
   error: string | null;
   onApprove(edit: ProposalEdit | null): void;
   onSkip(): void;
+  /** Opens the setup sheet for a run draft, the one place it is approved. */
+  onReview?(): void;
   /** Present when the draft's item may be off screen. */
   onShow?(): void;
 }
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
 
-export function DraftCard({ proposal: p, statusName, people, working, error, onApprove, onSkip, onShow }: DraftCardProps) {
+export function DraftCard({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow }: DraftCardProps) {
   const intent = p.intent;
   const key = targetOf(intent)?.key ?? "";
   const stored = intent.type === "comment" ? docText(intent.body) : "";
@@ -180,7 +184,20 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
               {i < made && <span className="ml-auto font-mono text-ws-ink3">{p.created[i].key}</span>}
             </label>
           ))}
-        {intent.type === "startRun" && <p className="m-0 text-ws-ink2">Review and start from the ticket or the Agents view.</p>}
+        {intent.type === "startRun" && (
+          <div className="grid gap-1.5">
+            <p className="m-0 font-semibold">
+              {KIND_LABEL[intent.spec.kind]} {intent.item?.key ?? intent.spec.repo}
+            </p>
+            <p className="m-0 line-clamp-3 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{intent.spec.instruction}</p>
+            {intent.spec.focus?.trim() && (
+              <p className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2 py-1 text-sm [overflow-wrap:anywhere]">
+                <b className="font-semibold text-ws-pip">Focus from Pip:</b> {intent.spec.focus.trim()}
+              </p>
+            )}
+            <p className="m-0 text-sm text-ws-ink3">Runs as you, with your Claude settings, in a new worktree of {intent.spec.clonePath}. Read the exact prompt and checks, then start it. Nothing runs before that.</p>
+          </div>
+        )}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}
         {open && revision && !shownError && <p className="m-0 text-sm text-ws-ink3">{revision.note}</p>}
         {shownError && (
@@ -205,6 +222,11 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
                 <button type="button" disabled={working} onClick={onSkip} className={button}>
                   Skip
                 </button>
+                {runDraft && onReview && (
+                  <button type="button" disabled={working} onClick={onReview} className="rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45">
+                    Review and start
+                  </button>
+                )}
                 {!runDraft && (
                   <button
                     type="button"
@@ -258,6 +280,7 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
       error={error}
       onShow={jump && target && item ? () => showMe(target) : undefined}
       onSkip={() => void run(() => useWorkspace.getState().skip(p.id))}
+      onReview={p.intent.type === "startRun" ? () => void useRunSetup.getState().begin({ proposalId: p.id }) : undefined}
       onApprove={(edit) =>
         void run(async () => {
           if (edit && backend) await backend.proposalsEdit(p.id, edit);

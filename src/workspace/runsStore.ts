@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import type { Run, RunsEnvironment } from "../types";
-import { NO_FILTERS, attentionCount, type AgentFilters } from "./agentsLogic";
+import { NO_FILTERS, attentionCount, groupRuns, navOrder, stepRun, type AgentFilters } from "./agentsLogic";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 import { useTabs } from "./tabsStore";
@@ -13,6 +13,9 @@ const loadSeen = (): ReadonlySet<string> => {
   const raw = readStored(SEEN_KEY);
   return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : []);
 };
+
+/** What the sheet over the screen shows; starting an agent has its own store. */
+export type RunSheetTarget = { type: "run"; id: string } | { type: "safety" };
 
 interface RunsState {
   backend: Backend | null;
@@ -28,6 +31,9 @@ interface RunsState {
   introOpen: boolean | null;
   earlierOpen: boolean;
   stopping: boolean;
+  sheet: RunSheetTarget | null;
+  /** The ticket picker for starting an agent without a ticket open. */
+  picking: boolean;
   init(backend: Backend): void;
   dispose(): void;
   reload(): Promise<void>;
@@ -35,8 +41,16 @@ interface RunsState {
   setFilter(patch: Partial<AgentFilters>): void;
   clearFilters(): void;
   select(id: string | null): void;
-  /** Shows the Agents view with the run selected. The run sheet that opens from here arrives later. */
-  openRun(id: string): void;
+  /** Opens the run's sheet, on the Agents view unless `stay` keeps the screen the person is on. */
+  openRun(id: string, opts?: { stay?: boolean }): void;
+  openSafety(): void;
+  closeSheet(): void;
+  setPicking(open: boolean): void;
+  /** Moves the run sheet to the next (`1`) or previous (`-1`) run, in the order the Agents view lists them. */
+  browse(delta: 1 | -1): void;
+  stop(id: string): Promise<void>;
+  startNow(id: string): Promise<void>;
+  retryLaunch(id: string): Promise<void>;
   markSeen(): void;
   attach(id: string): Promise<void>;
   stopAll(): Promise<void>;
@@ -44,7 +58,7 @@ interface RunsState {
   setIntroOpen(open: boolean | null): void;
 }
 
-const idle = { runs: [] as Run[], status: "idle" as const, error: null, environment: null, selectedId: null };
+const idle = { runs: [] as Run[], status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, picking: false };
 
 let stop: (() => void) | null = null;
 let seq = 0;
@@ -98,9 +112,55 @@ export const useRuns = create<RunsState>((set, get) => ({
   clearFilters: () => set({ filters: NO_FILTERS }),
   select: (selectedId) => set({ selectedId }),
 
-  openRun(id) {
-    set({ selectedId: id, filters: NO_FILTERS });
-    useTabs.getState().setRoute("agents");
+  openRun(id, opts) {
+    set({ selectedId: id, filters: opts?.stay ? get().filters : NO_FILTERS, sheet: { type: "run", id } });
+    const tabs = useTabs.getState();
+    if (!opts?.stay || tabs.route === "settings" || tabs.route === "activity") tabs.setRoute("agents");
+  },
+
+  openSafety: () => set({ sheet: { type: "safety" } }),
+  closeSheet: () => set({ sheet: null }),
+  setPicking: (picking) => set({ picking }),
+
+  browse(delta) {
+    const { sheet, runs, filters, earlierOpen } = get();
+    if (sheet?.type !== "run") return;
+    const order = navOrder(groupRuns(runs, filters, Date.now()), earlierOpen, filters);
+    const next = stepRun(order, sheet.id, delta);
+    if (next) set({ selectedId: next, sheet: { type: "run", id: next } });
+  },
+
+  async stop(id) {
+    const { backend } = get();
+    if (!backend) return;
+    try {
+      await backend.runsStop(id);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't stop it: ${messageOf(e)}`);
+    }
+    void get().reload();
+  },
+
+  async startNow(id) {
+    const { backend } = get();
+    if (!backend) return;
+    try {
+      await backend.runsStartNow(id);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't start it: ${messageOf(e)}`);
+    }
+    void get().reload();
+  },
+
+  async retryLaunch(id) {
+    const { backend } = get();
+    if (!backend) return;
+    try {
+      await backend.runsRetryLaunch(id);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't retry the launch: ${messageOf(e)}`);
+    }
+    void get().reload();
   },
 
   markSeen() {
