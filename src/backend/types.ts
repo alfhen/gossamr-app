@@ -18,6 +18,7 @@ import type {
   RunQuery,
   RunReview,
   RunSpec,
+  RunOutcome,
   RunsChanged,
   RunsEnabledChange,
   RunsEnvironment,
@@ -198,6 +199,12 @@ export interface Backend {
   /** A worktree name for a new run in `clonePath` that nothing there uses yet. */
   runsSuggestName(clonePath: string, key: string, title: string): Promise<string>;
   runsEvents(id: string): Promise<RunEvent[]>;
+  /** The part of the result meant for Jira, the tickets it names, and the pull request or branch the run produced. */
+  runsOutcome(id: string): Promise<RunOutcome>;
+  /** Drafts a comment from the result. A draft only: nothing is posted until it is approved. */
+  runsDraftComment(id: string): Promise<Proposal>;
+  /** Drafts a link saying the run's ticket is blocked by `blockerKey`. A draft only. */
+  runsDraftBlocker(id: string, blockerKey: string): Promise<Proposal>;
   /** Starts a run that is still queued, as after a restart. */
   runsStartNow(id: string): Promise<Run>;
   /** How many agents carry on if the app quits or the person signs out. */

@@ -4,7 +4,7 @@ import { targetOf, unreachable } from "../lib/proposals";
 import type { Proposal } from "../types";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { draftStatus } from "./boardLogic";
-import { draftTitle } from "./DraftCard";
+import { draftTitle, linkSentence } from "./DraftCard";
 import { showDraft } from "./draftTicket";
 import { showMe } from "./jump";
 import { useRunSetup } from "./runSetupStore";
@@ -36,7 +36,7 @@ export function draftPreviewBody(p: Proposal, statusName: string | null): string
     case "update":
       return "Change fields";
     case "link":
-      return `${i.kind} ${i.to.key}`;
+      return linkSentence(i);
     case "startRun":
       return `Start an agent: ${i.item?.key ?? i.spec.repo}\n${i.spec.focus?.trim() ? `Focus from Pip: ${i.spec.focus.trim()}\n` : ""}Read the exact prompt, then start it. Nothing runs before that.`;
     default:

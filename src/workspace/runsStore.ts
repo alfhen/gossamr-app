@@ -1,8 +1,11 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
-import type { Run, RunsEnvironment } from "../types";
+import { targetOf } from "../lib/proposals";
+import type { Proposal, Run, RunsEnvironment } from "../types";
+import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, attentionCount, groupRuns, navOrder, stepRun, type AgentFilters } from "./agentsLogic";
+import { openTicketByKey, showMe } from "./jump";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 import { useTabs } from "./tabsStore";
@@ -34,6 +37,8 @@ interface RunsState {
   introOpen: boolean | null;
   earlierOpen: boolean;
   stopping: boolean;
+  /** The run a draft is being made from, so its buttons wait. */
+  drafting: string | null;
   sheet: RunSheetTarget | null;
   /** The ticket picker for starting an agent without a ticket open. */
   picking: boolean;
@@ -60,6 +65,10 @@ interface RunsState {
   noteCopied(id: string): void;
   markSeen(): void;
   attach(id: string): Promise<void>;
+  /** Drafts a comment from the run's result and takes the person to it. Nothing is posted. */
+  draftComment(id: string): Promise<void>;
+  /** Drafts a link saying the run's ticket is blocked by `blockerKey` and takes the person to it. Nothing is posted. */
+  draftBlocker(id: string, blockerKey: string): Promise<void>;
   stopAll(): Promise<void>;
   setEarlierOpen(open: boolean): void;
   setIntroOpen(open: boolean | null): void;
@@ -76,6 +85,28 @@ function forgetRecovered(seen: ReadonlySet<string>, runs: readonly Run[]): Reado
   return kept;
 }
 
+const READY = "Draft ready. Nothing is posted until you approve it.";
+
+/** Makes a draft from a run and shows it where it is approved: on the ticket it is about. */
+async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState>) => void, id: string, what: "comment" | "link", make: (backend: Backend) => Promise<Proposal>) {
+  const { backend, drafting } = get();
+  if (!backend || drafting) return;
+  set({ drafting: id });
+  try {
+    const draft = await make(backend);
+    await useWorkspace.getState().refreshProposals();
+    const target = targetOf(draft.intent);
+    const open = () => target && (showMe(target, { peek: true }) || void openTicketByKey(target.key));
+    get().closeSheet();
+    useToasts.getState().push(READY, "info", target ? { label: `Open ${target.key}`, run: open } : undefined);
+    open();
+  } catch (e) {
+    useToasts.getState().push(`Couldn't draft the ${what === "comment" ? "comment" : "blocker"}: ${messageOf(e)}`);
+  } finally {
+    set({ drafting: null });
+  }
+}
+
 let stop: (() => void) | null = null;
 let seq = 0;
 
@@ -87,6 +118,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   introOpen: null,
   earlierOpen: false,
   stopping: false,
+  drafting: null,
   ...idle,
 
   init(backend) {
@@ -225,6 +257,14 @@ export const useRuns = create<RunsState>((set, get) => ({
     } catch (e) {
       useToasts.getState().push(`Couldn't open Terminal: ${messageOf(e)}`);
     }
+  },
+
+  async draftComment(id) {
+    await draftFromRun(get, set, id, "comment", (backend) => backend.runsDraftComment(id));
+  },
+
+  async draftBlocker(id, blockerKey) {
+    await draftFromRun(get, set, id, "link", (backend) => backend.runsDraftBlocker(id, blockerKey));
   },
 
   async stopAll() {

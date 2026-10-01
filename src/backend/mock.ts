@@ -499,6 +499,18 @@ export class MockBackend implements Backend {
     return this.runs.suggestName(key, title);
   }
 
+  async runsOutcome(id: string) {
+    return this.runs.outcome(id);
+  }
+
+  async runsDraftComment(id: string) {
+    return this.runs.draftComment(id);
+  }
+
+  async runsDraftBlocker(id: string, blockerKey: string) {
+    return this.runs.draftBlocker(id, blockerKey);
+  }
+
   async runsEvents(id: string) {
     return this.runs.events(id);
   }

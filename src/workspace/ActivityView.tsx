@@ -3,11 +3,14 @@ import { itemKey } from "../lib/filter";
 import { relativeTime } from "../lib/views";
 import type { ContainerRef, FeedEntry, ItemRef, Proposal } from "../types";
 import { allContainers, nameOf, pendingDrafts, useWorkspace } from "../workspaceStore";
-import { CHIPS, CHIP_LABEL, SOURCES, SOURCE_LABEL, buildRows, codeVerb, draftsFor, groupByDay, initials, rowAt, rowId, stepIndex, toCodeEntry, verb, type ActivityChip, type ActivitySource, type CodeEntry } from "./activityLogic";
+import { CHIPS, CHIP_LABEL, SOURCE_LABEL, buildRows, codeVerb, draftsFor, groupByDay, initials, rowAt, rowId, sourcesFor, stepIndex, toCodeEntry, toRunEntries, verb, type ActivityChip, type ActivitySource, type CodeEntry, type RunEntry } from "./activityLogic";
 import { GithubMark } from "./DevBits";
 import { useDev } from "./devStore";
 import { openOnGithub } from "./githubUi";
 import { useActivity } from "./activityStore";
+import { useAgentsFlag } from "./agentsFlag";
+import { Icon } from "./AgentIcons";
+import { useRuns } from "./runsStore";
 import { LiveDraftCard } from "./DraftCard";
 import { ProjectSwitcher } from "./FilterBar";
 import { projectOf, withProject } from "./filters";
@@ -166,10 +169,77 @@ export function CodeFeedRow({ entry: e, ticketTitle, now, selected, position, to
   );
 }
 
-export function SourceBar({ source, onChange }: { source: ActivitySource; onChange(source: ActivitySource): void }) {
+export interface RunRowProps {
+  entry: RunEntry;
+  ticketTitle: string | null;
+  now: Date;
+  selected: boolean;
+  position: number;
+  total: number;
+  onOpen(): void;
+  onMarkRead(): void;
+}
+
+const RUN_CHIP: Record<RunEntry["kind"], string> = { started: "Started", needsYou: "Needs you", finished: "Finished", failed: "Failed" };
+
+/** An agent run's change of state. It opens the run. */
+export function RunFeedRow({ entry: e, ticketTitle, now, selected, position, total, onOpen, onMarkRead }: RunRowProps) {
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.target !== ev.currentTarget || ev.key !== "Enter") return;
+    ev.preventDefault();
+    onOpen();
+  };
+  return (
+    <article
+      id={feedRowId(e.id)}
+      data-source="agents"
+      data-kind={e.kind}
+      tabIndex={0}
+      aria-posinset={position}
+      aria-setsize={total}
+      aria-current={selected ? "true" : undefined}
+      data-unread={e.unread ? "true" : undefined}
+      onKeyDown={onKey}
+      className={`group flex gap-3 rounded-lg px-2 py-2.5 outline-offset-[-2px] hover:bg-ws-hover ${selected ? "bg-ws-sel" : ""}`}
+    >
+      <span aria-hidden className={`mt-2 size-2 shrink-0 rounded-full ${e.unread ? "bg-ws-accent" : "bg-transparent"}`} />
+      <span aria-hidden title="Agents" className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-ws-pip-soft text-ws-pip">
+        <Icon name="spark" className="size-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <button type="button" onClick={onOpen} className="block w-full text-left">
+          <span className={`block [overflow-wrap:anywhere] ${e.unread ? "font-semibold" : ""}`}>{e.text}</span>
+          {e.item && (
+            <span className="mt-0.5 block text-ws-ink2 [overflow-wrap:anywhere]">
+              <span className="font-mono text-sm font-semibold">{e.item.key}</span>
+              {ticketTitle && <span> {ticketTitle}</span>}
+            </span>
+          )}
+        </button>
+        <div className="mt-1 flex items-center gap-1 text-sm text-ws-ink3">
+          <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
+          <span className="rounded-full bg-ws-sel px-2 text-xs">{RUN_CHIP[e.kind]}</span>
+          {e.needsYou && e.unread && e.kind !== "needsYou" && <span className="ml-1 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Needs you</span>}
+          <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+            <button type="button" className={action} onClick={onOpen}>
+              Open run
+            </button>
+            {e.unread && (
+              <button type="button" className={action} onClick={onMarkRead}>
+                Mark read
+              </button>
+            )}
+          </span>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+export function SourceBar({ source, sources, onChange }: { source: ActivitySource; sources: readonly ActivitySource[]; onChange(source: ActivitySource): void }) {
   return (
     <div role="group" aria-label="Source" className="flex flex-wrap gap-1.5">
-      {SOURCES.map((s) => (
+      {sources.map((s) => (
         <button
           key={s}
           type="button"
@@ -178,6 +248,7 @@ export function SourceBar({ source, onChange }: { source: ActivitySource; onChan
           className={`rounded-xl border px-2.5 py-px text-sm font-semibold ${source === s ? "border-ws-accent bg-ws-accent-soft text-ws-accent" : "border-ws-sep2 text-ws-ink2 hover:bg-ws-hover"}`}
         >
           {s === "github" && <GithubMark className="mr-1 inline size-3 align-[-1px]" />}
+          {s === "agents" && <Icon name="spark" className="mr-1 inline size-3 align-[-1px]" />}
           {SOURCE_LABEL[s]}
         </button>
       ))}
@@ -217,6 +288,8 @@ export function EmptyNote({ children }: { children: ReactNode }) {
   );
 }
 
+const EMPTY_AGENTS = "Nothing from your agents yet. When one starts, needs you, finishes or fails, it shows up here.";
+
 const EMPTY_GITHUB = "No GitHub activity yet. Pull request events from the repositories you watch show up here.";
 
 const EMPTY: Record<ActivityChip, string> = {
@@ -251,11 +324,17 @@ export function ActivityView() {
   const needsMe = useWorkspace((s) => s.needsMe);
   const proposals = useWorkspace((s) => s.proposals);
   const selected = useTabs((s) => s.selected);
-  const { chip, entries, next, status, error, loadingMore, unread: jiraUnread, codeUnread, source, codeEvents, codeRead } = useActivity();
+  const { chip, entries, next, status, error, loadingMore, unread: jiraUnread, codeUnread, source, codeEvents, codeRead, runRead } = useActivity();
   const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
+  const agentsOn = useAgentsFlag((s) => s.enabled);
+  const runs = useRuns((s) => s.runs);
   const byChange = useDev((s) => s.byChange);
-  const shownSource: ActivitySource = hasGithub ? source : "jira";
-  const unread = shownSource === "jira" ? jiraUnread : shownSource === "github" ? codeUnread : jiraUnread + codeUnread;
+  const sources = sourcesFor({ github: hasGithub, agents: agentsOn });
+  const shownSource: ActivitySource = sources.includes(source) ? source : "jira";
+  const runEntries = useMemo(() => (agentsOn ? toRunEntries(runs, runRead, Date.now()) : []), [agentsOn, runs, runRead]);
+  const inProject = (item: ItemRef | null) => !project || (!!item && items[itemKey(item)]?.container.connectionId === project.connectionId && items[itemKey(item)]?.container.externalId === project.externalId);
+  const agentUnread = runEntries.filter((e) => e.unread && inProject(e.item)).length;
+  const unread = shownSource === "jira" ? jiraUnread : shownSource === "github" ? codeUnread : shownSource === "agents" ? agentUnread : jiraUnread + codeUnread + agentUnread;
   const [now, setNow] = useState(() => new Date());
   const sentinel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -265,8 +344,8 @@ export function ActivityView() {
   const byKey = useMemo(() => new Map(Object.values(items).map((i) => [i.item.key.toUpperCase(), i.item] as const)), [items]);
   const codeEntries = useMemo(() => codeEvents.flatMap((e) => toCodeEntry(e, { byKey, byChange, read: codeRead, now: Date.now() }) ?? []), [codeEvents, byKey, byChange, codeRead]);
   const rows = useMemo(
-    () => buildRows({ source: shownSource, chip, container: project, jira: entries, more: next !== null, code: codeEntries, containerOf: (ref: ItemRef) => items[itemKey(ref)]?.container ?? null }),
-    [shownSource, chip, projectKey, entries, next, codeEntries, items],
+    () => buildRows({ source: shownSource, chip, container: project, jira: entries, more: next !== null, code: codeEntries, agents: runEntries, containerOf: (ref: ItemRef) => items[itemKey(ref)]?.container ?? null }),
+    [shownSource, chip, projectKey, entries, next, codeEntries, runEntries, items],
   );
   const groups = useMemo(() => groupByDay(rows.map((row) => ({ at: rowAt(row), row })), now), [rows, now]);
 
@@ -288,6 +367,11 @@ export function ActivityView() {
   const open = (e: FeedEntry) => {
     useTabs.getState().select(itemKey(e.item));
     void useActivity.getState().markRead(e.unread ? [e.id] : []);
+  };
+
+  const openRun = (e: RunEntry) => {
+    useActivity.getState().markRunRead([e.id]);
+    useRuns.getState().openRun(e.runId);
   };
 
   const openCode = (e: CodeEntry) => {
@@ -316,7 +400,8 @@ export function ActivityView() {
         const row = rowsRef.current.find((r) => rowId(r) === id);
         if (row?.entry.unread) {
           ev.preventDefault();
-          if (row.source === "github") useActivity.getState().markCodeRead([row.entry.id]);
+          if (row.source === "agents") useActivity.getState().markRunRead([row.entry.id]);
+          else if (row.source === "github") useActivity.getState().markCodeRead([row.entry.id]);
           else void useActivity.getState().markRead([row.entry.id]);
         }
       }
@@ -338,10 +423,10 @@ export function ActivityView() {
           value={project}
           onChange={(p) => useTabs.getState().setFilter(withProject(tab.filter, p))}
         />
-        {hasGithub && <SourceBar source={source} onChange={(s) => useActivity.getState().setSource(s)} />}
+        {sources.length > 2 && <SourceBar source={shownSource} sources={sources} onChange={(s) => useActivity.getState().setSource(s)} />}
         <ChipBar chip={chip} counts={{ needsMe: unread, drafts: drafts.length }} onChange={(c) => useActivity.getState().setChip(c)} />
         {!showDrafts && (
-          <button type="button" disabled={unread === 0} onClick={() => void useActivity.getState().markAllRead(codeEntries.filter((e) => e.unread && (!project || (!!e.item && items[itemKey(e.item)]?.container.connectionId === project.connectionId && items[itemKey(e.item)]?.container.externalId === project.externalId))).map((e) => e.id))} className="ml-auto text-sm text-ws-ink3 underline disabled:no-underline disabled:opacity-45">
+          <button type="button" disabled={unread === 0} onClick={() => (useActivity.getState().markRunRead(runEntries.filter((e) => e.unread && inProject(e.item)).map((e) => e.id)), void useActivity.getState().markAllRead(codeEntries.filter((e) => e.unread && (!project || (!!e.item && items[itemKey(e.item)]?.container.connectionId === project.connectionId && items[itemKey(e.item)]?.container.externalId === project.externalId))).map((e) => e.id)))} className="ml-auto text-sm text-ws-ink3 underline disabled:no-underline disabled:opacity-45">
             Mark all read
           </button>
         )}
@@ -361,13 +446,30 @@ export function ActivityView() {
           ) : status !== "ready" ? (
             <EmptyNote>Loading activity…</EmptyNote>
           ) : rows.length === 0 ? (
-            <EmptyNote>{shownSource === "github" ? EMPTY_GITHUB : EMPTY[chip]}</EmptyNote>
+            <EmptyNote>{shownSource === "github" ? EMPTY_GITHUB : shownSource === "agents" ? EMPTY_AGENTS : EMPTY[chip]}</EmptyNote>
           ) : (
             <div role="feed" aria-label="Activity" aria-busy={loadingMore}>
               {groups.map((g) => (
                 <section key={g.day} aria-label={g.label}>
                   <DayHeading label={g.label} />
                   {g.entries.map(({ row }) => {
+                    if (row.source === "agents") {
+                      const r = row.entry;
+                      const linked = r.item ? items[itemKey(r.item)] : undefined;
+                      return (
+                        <RunFeedRow
+                          key={r.id}
+                          entry={r}
+                          ticketTitle={linked?.title ?? null}
+                          now={now}
+                          selected={false}
+                          position={++position}
+                          total={total}
+                          onOpen={() => openRun(r)}
+                          onMarkRead={() => useActivity.getState().markRunRead([r.id])}
+                        />
+                      );
+                    }
                     if (row.source === "github") {
                       const c = row.entry;
                       const linked = c.item ? items[itemKey(c.item)] : undefined;

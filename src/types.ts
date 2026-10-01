@@ -360,7 +360,12 @@ export interface WorkPatch {
   priority: WorkPriority | null;
 }
 
-export type ProposalOrigin = { type: "chat"; requestId: string } | { type: "board" } | { type: "autopilot"; eventId: string };
+export type ProposalOrigin =
+  | { type: "chat"; requestId: string }
+  | { type: "board" }
+  | { type: "autopilot"; eventId: string }
+  /** Made by the person from an agent run's result; the text is the agent's. */
+  | { type: "run"; runId: string; shortId: string | null };
 
 export type ProposalState =
   | { type: "pending" }
@@ -485,6 +490,19 @@ export interface Run {
   launchedAt: string | null;
   lastProgressAt: string;
   endedAt: string | null;
+}
+
+/** The part of a run's result meant for Jira. Without a `For Jira:` section it is the whole answer, shortened. */
+export interface JiraNote {
+  text: string;
+  fromMarker: boolean;
+}
+
+/** What the run sheet shows about a result: the note, the other tickets it names, and the change the run produced. */
+export interface RunOutcome {
+  note: JiraNote | null;
+  keys: string[];
+  change: CodeChange | null;
 }
 
 /** What the person reads before approving; `digest` is sent back with the approval. */

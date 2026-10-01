@@ -20,6 +20,7 @@ const on = (): AgentsActions => ({
   select: vi.fn(),
   open: vi.fn(),
   attach: vi.fn(),
+  draftComment: vi.fn(),
   filter: vi.fn(),
   clearFilters: vi.fn(),
   setView: vi.fn(),

@@ -13,6 +13,7 @@ import { failureAction } from "./failureActions";
 import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
+import { commentControl } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
@@ -95,6 +96,7 @@ export interface AgentsActions {
   select(id: string | null): void;
   open(id: string): void;
   attach(id: string): void;
+  draftComment(id: string): void;
   filter(patch: Partial<AgentFilters>): void;
   clearFilters(): void;
   setView(view: AgentsViewMode): void;
@@ -202,6 +204,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     onSelect: () => on.select(run.id),
     onOpen: () => on.open(run.id),
     onAttach: () => on.attach(run.id),
+    onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
     failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
   });
 
@@ -279,6 +282,7 @@ const actions: AgentsActions = {
   select: (id) => useRuns.getState().select(id),
   open: (id) => useRuns.getState().openRun(id),
   attach: (id) => void useRuns.getState().attach(id),
+  draftComment: (id) => void useRuns.getState().draftComment(id),
   filter: (patch) => useRuns.getState().setFilter(patch),
   clearFilters: () => useRuns.getState().clearFilters(),
   setView: (view) => usePrefs.getState().setAgentsView(view),
