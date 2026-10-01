@@ -22,8 +22,8 @@ pub const TICKET_BLOCK_LIMIT: usize = 4_000;
 pub const INVESTIGATE_INSTRUCTION: &str = "Investigate this work. Read the code and logs you need, and change nothing. Report what you found, how sure you are, and what you would do next. If you have anything for the tracker, put it under 'For Jira:'.";
 pub const TRIAGE_INSTRUCTION: &str = "Triage this work. Size it, say how sure you are, and name the areas of the code it touches and who likely owns them, going by the code and its history. List any duplicates you can find in the code or its notes. Change nothing. Put anything for the tracker under 'For Jira:'.";
 pub const VERIFY_INSTRUCTION: &str = "Check that the change described here works. Read the code, and run the existing tests or commands that only read. Say exactly what you ran and what you could not check. Change nothing. Put anything for the tracker under 'For Jira:'.";
-pub const BUILD_INSTRUCTION: &str = "Make the change this work describes, on your worktree's branch. Keep it small and follow the repository's conventions. Run its tests and commit with a clear message; do not push and do not open a pull request. Put anything for the tracker under 'For Jira:'.";
-pub const REVIEW_INSTRUCTION: &str = "Review the pull request named below. Fetch it with read-only commands such as `git fetch origin pull/<number>/head` or `gh pr view` and `gh pr diff`. Change nothing on the pull request and do not comment on it. Write your comments most important first, and put anything for the tracker under 'For Jira:'.";
+pub const BUILD_INSTRUCTION: &str = "Make the change this work describes, on your worktree's branch. Keep it small and follow the repository's conventions. Run its tests and commit with a clear message; do not push and do not open a pull request unless a later sentence says you may. Put anything for the tracker under 'For Jira:'.";
+pub const REVIEW_INSTRUCTION: &str = "Review the pull request named below, at the commit named there. Fetch it with read-only commands such as `git fetch origin pull/<number>/head` or `gh pr view` and `gh pr diff`. Change nothing on the pull request and do not comment on it. Write your comments most important first, and put anything for the tracker under 'For Jira:'.";
 const PUSH_ALLOWED: &str = "You may push your branch and open a pull request. Say what you pushed.";
 
 const MARKERS: [&str; 4] = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>"];
@@ -98,6 +98,9 @@ pub struct RunSpec {
     /// The pull request a review reads.
     #[serde(default)]
     pub pr: Option<u64>,
+    /// The commit at the pull request's head when the person read the draft.
+    #[serde(default)]
+    pub pr_sha: Option<String>,
     /// Whether a build is told it may push and open a pull request.
     #[serde(default)]
     pub allow_push: bool,
@@ -132,6 +135,9 @@ impl RunSpec {
             (RunKind::Review, Some(_)) => {}
             (_, Some(_)) => return Err(refuse("only a review takes a pull request")),
             (_, None) => {}
+        }
+        if self.pr_sha.as_deref().is_some_and(|s| self.pr.is_none() || !(7..=64).contains(&s.len()) || !s.bytes().all(|b| b.is_ascii_hexdigit())) {
+            return Err(refuse("the pull request's commit isn't valid"));
         }
         if self.allow_push && self.kind != RunKind::Build {
             return Err(refuse("only a build can push"));
@@ -201,6 +207,9 @@ impl RunSpec {
         if let Some(pr) = self.pr {
             canonical["pr"] = pr.into();
         }
+        if let Some(sha) = &self.pr_sha {
+            canonical["prSha"] = sha.as_str().into();
+        }
         if self.allow_push {
             canonical["allowPush"] = true.into();
         }
@@ -224,7 +233,8 @@ pub fn render_prompt(spec: &RunSpec) -> String {
     )];
     parts.push(spec.instruction.trim().to_string());
     if let (RunKind::Review, Some(pr)) = (spec.kind, spec.pr) {
-        parts.push(format!("Review pull request #{pr} in {}.", spec.repo));
+        let at = spec.pr_sha.as_deref().map(|sha| format!(" at commit {sha}")).unwrap_or_default();
+        parts.push(format!("Review pull request #{pr} in {}{at}.", spec.repo));
     }
     if spec.kind == RunKind::Build && spec.allow_push {
         parts.push(PUSH_ALLOWED.into());
@@ -531,6 +541,19 @@ mod tests {
     }
 
     #[test]
+    fn the_reviewed_commit_is_hex_belongs_to_a_review_and_enters_the_prompt_and_digest() {
+        let review = of_kind(RunKind::Review, Some(12), false);
+        let pinned = RunSpec { pr_sha: Some("a1b2c3d4e5f6".into()), ..review.clone() };
+        pinned.validate().unwrap();
+        assert!(render_prompt(&pinned).contains("Review pull request #12 in acme/webshop at commit a1b2c3d4e5f6."));
+        assert_ne!(pinned.digest(), review.digest());
+        for bad in ["", "abc", "zzzzzzzzzz", "a1b2c3d\n", &"a".repeat(65)] {
+            assert!(RunSpec { pr_sha: Some(bad.into()), ..review.clone() }.validate().is_err(), "{bad:?}");
+        }
+        assert!(RunSpec { pr_sha: Some("a1b2c3d4e5f6".into()), ..spec() }.validate().is_err(), "only a review has a pull request");
+    }
+
+    #[test]
     fn what_each_kind_needs_to_be_valid() {
         use RunKind::*;
         for kind in [Investigate, Triage, Verify] {
@@ -583,8 +606,9 @@ mod tests {
         let mut json = serde_json::to_value(spec()).unwrap();
         json.as_object_mut().unwrap().remove("pr");
         json.as_object_mut().unwrap().remove("allowPush");
+        json.as_object_mut().unwrap().remove("prSha");
         let back: RunSpec = serde_json::from_value(json).unwrap();
-        assert_eq!((back.pr, back.allow_push), (None, false));
+        assert_eq!((back.pr, back.pr_sha, back.allow_push), (None, None, false));
     }
 
     #[test]

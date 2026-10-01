@@ -113,6 +113,7 @@ impl Edit {
                         spec.instruction = default_instruction(v).into();
                     }
                     spec.pr = None;
+                    spec.pr_sha = None;
                     spec.allow_push = false;
                 }
                 if let Some(v) = instruction {
@@ -132,6 +133,7 @@ impl Edit {
                 }
                 if let Some(v) = pr {
                     spec.pr = Some(*v);
+                    spec.pr_sha = None;
                 }
                 if let Some(v) = allow_push {
                     spec.allow_push = *v;
@@ -283,11 +285,15 @@ impl Core {
         }
     }
 
-    /// `review_target`, and the draft's base branch still the one the pull request targets.
+    /// `review_target`, and the draft's base branch and commit still the ones the pull request has. What the person
+    /// approved is the commit they were shown, not whatever the branch holds later.
     pub(crate) async fn review_current(&self, spec: &RunSpec) -> Result<CodeChange> {
         let change = self.review_target(spec).await?;
         if change.base_ref.as_deref() != Some(spec.base.as_str()) {
             return Err(Error::Proposal("The pull request's base branch changed. Review the draft again.".into()));
+        }
+        if change.sha.is_none() || change.sha != spec.pr_sha {
+            return Err(Error::Proposal("The pull request has new commits since you read the draft. Review it again.".into()));
         }
         Ok(change)
     }
@@ -306,9 +312,9 @@ impl Core {
             spec.instruction = default_instruction(spec.kind).into();
         }
         if spec.kind == RunKind::Review {
-            if let Some(base) = self.review_target(&spec).await?.base_ref {
-                spec.base = base;
-            }
+            let change = self.review_target(&spec).await?;
+            spec.base = change.base_ref.unwrap_or(spec.base);
+            spec.pr_sha = change.sha;
         }
         let intent = self
             .with_db_for(&scope, |db| {
@@ -342,11 +348,16 @@ impl Core {
                 if let Some(work) = item.as_ref().map(|i| db.item(i)).transpose()?.flatten() {
                     fresh.ticket_block = Some(ticket_snapshot(&work));
                 }
-                if let Some(base) = pr.as_ref().and_then(|c| c.base_ref.clone()) {
-                    fresh.base = base;
+                if let Some(change) = &pr {
+                    fresh.base = change.base_ref.clone().unwrap_or(fresh.base);
+                    fresh.pr_sha = change.sha.clone();
                 }
                 if fresh != *spec {
-                    let note = if fresh.base != spec.base { "Base branch updated" } else { "Ticket text updated" };
+                    let note = match () {
+                        _ if fresh.base != spec.base => "Base branch updated",
+                        _ if fresh.pr_sha != spec.pr_sha => "Pull request commit updated",
+                        _ => "Ticket text updated",
+                    };
                     let intent = Intent::StartRun { connection_id: connection_id.clone(), item: item.clone(), spec: fresh };
                     p = proposals::edit_noted(db, id, intent, note, Utc::now())?;
                 }
@@ -814,7 +825,7 @@ mod tests {
 
     mod kinds {
         use super::*;
-        use crate::codehost::github::testserver::{pull_reply, Reply};
+        use crate::codehost::github::testserver::{pull_reply, pull_reply_at, Reply};
         use crate::inbox::testing::{fixture_watching_with, Fixture};
 
         const PULL: &str = "/repos/acme/webshop/pulls/12";
@@ -858,7 +869,7 @@ mod tests {
             assert_eq!(spec_of(&p).base, "develop", "the pull request's base replaces the draft's");
             let review = fx.core.runs_review(&p.id).await.unwrap();
             assert_eq!((review.pr_title.as_deref(), review.pr_url.as_deref()), (Some("Fix the cart"), Some("https://github.com/acme/webshop/pull/12")));
-            assert!(review.prompt.contains("Review pull request #12 in acme/webshop."));
+            assert!(review.prompt.contains("Review pull request #12 in acme/webshop at commit a1b2c3d4e5f6."));
             let run = fx.core.runs_approve(&p.id, &review.digest).await.unwrap();
             assert_eq!((run.spec.kind, run.spec.pr), (RunKind::Review, Some(12)));
         }
@@ -908,6 +919,21 @@ mod tests {
             let fresh = fx.core.runs_review(&p.id).await.unwrap();
             assert_eq!(fresh.spec.base, "develop");
             assert!(fx.core.runs_approve(&p.id, &fresh.digest).await.is_ok());
+        }
+
+        #[tokio::test]
+        async fn a_review_is_pinned_to_the_commit_the_person_was_shown() {
+            let moved = pull_reply_at(12, "open", Some("acme/webshop"), "main", "ffff0000ffff");
+            let fx = watching(vec![same_repo("open", "main"), same_repo("open", "main"), moved]).await;
+            let p = fx.core.draft_run(review_of(&fx), Some(fx.item("CA-1"))).await.unwrap();
+            assert_eq!(spec_of(&p).pr_sha.as_deref(), Some("a1b2c3d4e5f6"));
+            let read = fx.core.runs_review(&p.id).await.unwrap();
+            assert!(read.prompt.contains("Review pull request #12 in acme/webshop at commit a1b2c3d4e5f6."));
+            let err = fx.core.runs_approve(&p.id, &read.digest).await.unwrap_err().to_string();
+            assert!(err.contains("new commits since you read the draft"), "{err}");
+            let again = fx.core.runs_review(&p.id).await.unwrap();
+            assert!(again.prompt.contains("at commit ffff0000ffff") && again.digest != read.digest);
+            assert_eq!(fx.core.runs_approve(&p.id, &again.digest).await.unwrap().spec.pr_sha.as_deref(), Some("ffff0000ffff"));
         }
 
         #[tokio::test]

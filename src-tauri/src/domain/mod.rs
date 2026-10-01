@@ -78,6 +78,7 @@ pub(crate) mod fixtures {
             focus_from_run: None,
             ticket_block: None,
             pr: None,
+            pr_sha: None,
             allow_push: false,
         }
     }

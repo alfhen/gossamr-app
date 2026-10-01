@@ -104,6 +104,7 @@ impl Core {
                 focus_from_run: from_run,
                 ticket_block: Some(ticket_snapshot(&work)),
                 pr: None,
+                pr_sha: None,
                 allow_push: false,
             };
             let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), item: Some(item.clone()), ..Default::default() };
