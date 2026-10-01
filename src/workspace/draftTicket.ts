@@ -1,7 +1,7 @@
 import { docText } from "../lib/docs";
 import { containerKey, itemKey } from "../lib/filter";
 import { liveMentions, type Mention } from "../lib/mentions";
-import type { ContainerRef, ItemRef, Proposal, ProposalEdit, WorkItem, WorkItemKind } from "../types";
+import type { ContainerRef, ItemRef, Proposal, ProposalEdit, WorkBlock, WorkDoc, WorkItem, WorkItemKind } from "../types";
 import type { PeekSectionId } from "./peekLogic";
 import { useTabs } from "./tabsStore";
 
@@ -66,9 +66,22 @@ export interface DraftFields {
   container: ContainerRef;
 }
 
+/** The people a description mentions, so editing the text keeps them as mentions. */
+export function docMentions(doc: WorkDoc): Mention[] {
+  const found = new Map<string, Mention>();
+  const visit = (block: WorkBlock) => {
+    if (block.type === "paragraph" || block.type === "heading") {
+      for (const i of block.content) if (i.type === "mention") found.set(i.person.accountId, { accountId: i.person.accountId, name: i.name });
+    } else if (block.type === "list") block.items.forEach((item) => item.forEach(visit));
+    else if (block.type === "quote") block.content.forEach(visit);
+  };
+  doc.blocks.forEach(visit);
+  return [...found.values()];
+}
+
 export function fieldsOf(p: Proposal & { intent: Created }): DraftFields {
   const { fields, container } = p.intent;
-  return { title: fields.title, body: docText(fields.body), mentions: [], kind: fields.kind, container };
+  return { title: fields.title, body: docText(fields.body), mentions: docMentions(fields.body), kind: fields.kind, container };
 }
 
 /** The edit that turns the draft into `next`, naming only what changed; null when nothing did. */
