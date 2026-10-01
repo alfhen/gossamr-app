@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { buildCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
+import { agentTicketChoices, buildCommands, investigateCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
 import { BUILT_IN_VIEWS } from "./filters";
 
 const containers = await new MockBackend().cacheContainers();
@@ -9,7 +9,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "jumpToItem", "askPip"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "investigate", "showAgentsNeedingMe", "openAgentSafety", "jumpToItem", "askPip"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -215,5 +215,68 @@ describe("GitHub commands", () => {
   it("labels an unwatched repository as one", () => {
     const [c] = watchCommands([{ ref: { connectionId: "github:ada", externalId: "acme/infra" }, key: "acme/infra", name: "infra" }], { watch: () => {} });
     expect(c).toMatchObject({ group: "GitHub", label: "Watch repository acme/infra" });
+  });
+});
+
+describe("agent commands", () => {
+  const noop = new Proxy({}, { get: () => () => {} }) as CommandActions;
+  const ctx = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
+  const labels = (agents: boolean) => buildCommands([], [], noop, { ...ctx, agents }).map((c) => c.label);
+
+  it("offers the agent entries only when Agents is on", () => {
+    expect(labels(false).some((l) => /agent/i.test(l))).toBe(false);
+    expect(labels(true)).toEqual(expect.arrayContaining(["Start an agent…", "Show agents that need me", "Stop all agents…", "Agent safety and settings"]));
+  });
+
+  it("runs each entry", () => {
+    const a = actions();
+    const found = buildCommands([], [], a, { ...ctx, agents: true, agentsNeedingMe: 2 });
+    const named = (label: string) => found.find((c) => c.label === label)!;
+    named("Start an agent…").run();
+    named("Show agents that need me").run();
+    named("Agent safety and settings").run();
+    expect(a.startAgent).toHaveBeenCalled();
+    expect(a.showAgentsNeedingMe).toHaveBeenCalled();
+    expect(a.openAgentSafety).toHaveBeenCalled();
+    expect(named("Show agents that need me").hint).toBe("2 waiting");
+    expect(named("Start an agent…").stay).toBeFalsy();
+  });
+
+  it("finds start an agent by its plain words", () => {
+    const found = rankCommands(buildCommands([], [], noop, { ...ctx, agents: true }), "run claude").map((c) => c.label);
+    expect(found).toContain("Start an agent…");
+  });
+
+  it("offers Investigate for a ticket only when the query asks for it", () => {
+    const run = vi.fn();
+    expect(investigateCommands(items, "welcome", run)).toEqual([]);
+    const some = investigateCommands(items, "investigate welcome", run);
+    expect(some.length).toBeGreaterThan(0);
+    expect(some[0].label).toMatch(/^Investigate [A-Z]+-\d+ {2}/);
+    some[0].run();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0][0].title.toLowerCase()).toContain("welcome");
+  });
+
+  it("lists the latest tickets for a bare Investigate, and finds a key", () => {
+    expect(investigateCommands(items, "investigate", () => {}, 3)).toHaveLength(3);
+    const key = items[0].item.key;
+    expect(investigateCommands(items, `agent ${key}`, () => {})[0].label).toContain(key);
+  });
+
+  it("picks a ticket for a new agent: the matches, or the latest, and no ticket as a way out", () => {
+    const pick = vi.fn();
+    const latest = agentTicketChoices(items, "", pick);
+    expect(latest.map((c) => c.id)).toContain("agent:none");
+    expect(latest.length).toBe(9);
+    latest.find((c) => c.id === "agent:none")!.run();
+    expect(pick).toHaveBeenCalledWith(null);
+    const key = items[3].item.key;
+    const found = agentTicketChoices(items, key, pick);
+    expect(found[0].hint).toBe(key);
+    found[0].run();
+    expect(pick).toHaveBeenLastCalledWith(items[3]);
+    expect(found.map((c) => c.id)).not.toContain("agent:none");
+    expect(agentTicketChoices(items, "no ticket", pick).map((c) => c.id)).toContain("agent:none");
   });
 });

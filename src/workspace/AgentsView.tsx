@@ -10,6 +10,7 @@ import { AgentsEmpty, AgentsIntro, NoMatch } from "./AgentsEmpty";
 import { ALL, LANES, LANE_IDS, filterOptions, groupRuns, isFiltered, laneIsFolded, navOrder, stepRun, stoppable, summaryLine, type AgentFilters, type LaneGroup, type LaneId } from "./agentsLogic";
 import { useFooterHeight } from "./CanvasFooter";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
+import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
@@ -62,7 +63,9 @@ export function StopAll({ count, busy, onStop }: { count: number; busy: boolean;
       }}
       className="inline-flex flex-wrap items-center gap-2"
     >
-      <span className="text-sm text-ws-ink2">Stop every agent Gossamr started? Their work is kept. Agents from Terminal are not touched.</span>
+      <span className="text-sm text-ws-ink2">
+        Stop {count} {count === 1 ? "agent" : "agents"}? Their work is kept. Agents from Terminal are not touched.
+      </span>
       <button type="button" autoFocus onClick={() => (setAsking(false), onStop())} className={`${BUTTON} border-ws-blocked bg-ws-blocked font-semibold text-white`}>
         Yes, stop all
       </button>
@@ -99,6 +102,8 @@ export interface AgentsActions {
   checkEnvironment(): void;
   retry(): void;
   stopAll(): void;
+  startAgent(): void;
+  openSafety(): void;
 }
 
 function Toolbar({ runs, filters, view, introShown, on }: { runs: readonly Run[]; filters: AgentFilters; view: AgentsViewMode; introShown: boolean; on: AgentsActions }) {
@@ -202,6 +207,14 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
           {summaryLine(runs, now)}
         </span>
         <span className="flex-1" />
+        <button type="button" onClick={on.startAgent} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
+          <Icon name="play" />
+          Start an agent
+        </button>
+        <button type="button" onClick={on.openSafety} className={BUTTON}>
+          <Icon name="shield" />
+          Safety and settings
+        </button>
         <StopAll count={stoppable(runs).length} busy={stopping} onStop={on.stopAll} />
       </header>
       <Toolbar runs={runs} filters={filters} view={view} introShown={introShown} on={on} />
@@ -241,7 +254,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
       </div>
       <footer ref={footer} className="@container flex h-8 shrink-0 items-center gap-4 border-t border-ws-sep bg-ws-win px-6 text-xs text-ws-ink3">
         <p className="m-0 min-w-0 flex-1 truncate">
-          <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> move · <kbd className={KBD}>↵</kbd> open · <kbd className={KBD}>Esc</kbd> clear
+          <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> move · <kbd className={KBD}>↵</kbd> open · <kbd className={KBD}>n</kbd> start an agent · <kbd className={KBD}>Esc</kbd> clear
           <span className="hidden @xl:inline">
             {" "}
             · <kbd className={KBD}>⌘K</kbd> jump · <kbd className={KBD}>⌘J</kbd> Pip
@@ -269,6 +282,8 @@ const actions: AgentsActions = {
   checkEnvironment: () => void useRuns.getState().checkEnvironment(),
   retry: () => void useRuns.getState().reload(),
   stopAll: () => void useRuns.getState().stopAll(),
+  startAgent: () => useRuns.getState().setPicking(true),
+  openSafety: () => useRuns.getState().openSafety(),
 };
 
 export function AgentsView() {
@@ -295,7 +310,13 @@ export function AgentsView() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       const target = ev.target as HTMLElement;
-      if (ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet")) return;
+      if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet")) return;
+      if (ev.key === "n") {
+        if (useRuns.getState().sheet || useRunSetup.getState().open) return;
+        ev.preventDefault();
+        useRuns.getState().setPicking(true);
+        return;
+      }
       const { selectedId: current, select } = useRuns.getState();
       const action = keyAction(ev.key, current, orderRef.current);
       if (!action) return;

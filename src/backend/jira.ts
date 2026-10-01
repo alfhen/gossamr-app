@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Mention } from "../lib/mentions";
 import type {
   AssignedElsewhere,
@@ -15,7 +15,9 @@ import type {
   ProposalEdit,
   ProposalQuery,
   ProposalsChanged,
+  CloneChoice,
   Run,
+  RunEvent,
   RunQuery,
   RunReview,
   RunSpec,
@@ -65,7 +67,7 @@ export interface Scope {
  * Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change.
  * Writes carry `scope`, so a write started for one account is refused if someone else has signed in meanwhile.
  */
-const UNAVAILABLE_RUN_COMMANDS = ["runs_stop", "runs_stop_all", "runs_attach", "runs_preflight", "runs_disk", "runs_retry_launch"] as const;
+const UNAVAILABLE_RUN_COMMANDS = ["runs_stop", "runs_stop_all", "runs_attach", "runs_disk", "runs_events", "runs_keep_running"] as const;
 
 function notYet<T>(command: (typeof UNAVAILABLE_RUN_COMMANDS)[number]): Promise<T> {
   return Promise.reject(new Error(`${command} is not available yet`));
@@ -324,20 +326,52 @@ export class JiraBackend implements Backend {
     return notYet<void>("runs_attach");
   }
 
-  runsPreflight(_spec: RunSpec) {
-    return notYet<Preflight>("runs_preflight");
+  runsPreflight(spec: RunSpec | null) {
+    return invoke<Preflight>("runs_preflight", { spec });
+  }
+
+  runsDraft(spec: RunSpec, item: ItemRef | null) {
+    return invoke<Proposal>("runs_draft", { spec, item });
+  }
+
+  runsClones(repo: string) {
+    return invoke<CloneChoice>("runs_clones", { repo });
+  }
+
+  runsPickClone(repo: string, path: string) {
+    return invoke<void>("runs_pick_clone", { repo, path });
+  }
+
+  runsSuggestName(clonePath: string, key: string, title: string) {
+    return invoke<string>("runs_suggest_name", { clonePath, key, title });
+  }
+
+  runsEvents(_id: string) {
+    return notYet<RunEvent[]>("runs_events");
+  }
+
+  runsStartNow(id: string) {
+    return invoke<Run>("runs_start_now", { id });
+  }
+
+  runsKeepRunning() {
+    return notYet<number>("runs_keep_running");
+  }
+
+  revealPath(path: string) {
+    return revealItemInDir(path);
   }
 
   runsEnvironment() {
-    return readEnvironment(() => notYet<Preflight>("runs_preflight"));
+    return readEnvironment(() => this.runsPreflight(null));
   }
 
   runsDisk(_id: string) {
     return notYet<number>("runs_disk");
   }
 
-  runsRetryLaunch(_id: string) {
-    return notYet<Run>("runs_retry_launch");
+  runsRetryLaunch(id: string) {
+    return invoke<Run>("runs_retry_launch", { id });
   }
 
   onRunsChanged(listener: (change: RunsChanged) => void) {

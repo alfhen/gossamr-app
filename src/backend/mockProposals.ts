@@ -106,6 +106,19 @@ export class MockProposals {
       };
       return this.set(id, { intent: { ...intent, container: edit.container ?? intent.container, fields }, error: null });
     }
+    if (edit.type === "run" && intent.type === "startRun") {
+      if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
+      const { instruction, base, clonePath, kind, name } = edit;
+      const spec = {
+        ...intent.spec,
+        ...(instruction !== undefined ? { instruction } : {}),
+        ...(base !== undefined ? { base: base.trim() } : {}),
+        ...(clonePath !== undefined ? { clonePath } : {}),
+        ...(kind ? { kind } : {}),
+        ...(name !== undefined ? { name: name.trim() } : {}),
+      };
+      return this.set(id, { intent: { ...intent, spec }, error: null });
+    }
     throw new Error("that edit doesn't fit this draft");
   }
 

@@ -1,4 +1,4 @@
-import type { Preflight, Run, RunQuery, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
+import type { CloneChoice, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunQuery, RunReview, RunSpec, RunsChanged, RunsEnvironment, RunState } from "../types";
 import { itemRef } from "./mockConnector";
 import type { MockProposals } from "./mockProposals";
 
@@ -141,7 +141,25 @@ export interface MockRunsOptions {
   /** The moment the scripted ages count back from. Fixed by default so tests stay deterministic. */
   epoch?: number;
   environment?: RunsEnvironment["claude"];
+  /** How many runs may be live at once; starting another is refused by the pre-flight. */
+  cap?: number;
+  /** Starts with a run draft Pip proposed, carrying a focus note, for the setup sheet's Pip box. */
+  pipRun?: boolean;
 }
+
+/** Where the sample clones are, by repository; `acme/ops` has none, to show the blocked state. */
+const CLONES: Record<string, LocalClone[]> = {
+  "acme/storefront": [{ path: "/Users/sample/Code/storefront", branch: "main", dirty: false, defaultBranch: "main" }],
+  "acme/payments": [
+    { path: "/Users/sample/Code/payments", branch: "feature/ledger", dirty: true, defaultBranch: "main" },
+    { path: "/Users/sample/Developer/payments", branch: "main", dirty: false, defaultBranch: "main" },
+  ],
+  "acme/ops": [],
+};
+
+const LIVE: RunState[] = ["queued", "launching", "working", "needsAnswer", "needsPermission", "systemBlocked"];
+
+const slugOf = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").slice(0, 3).join("-");
 
 /** Runs held in memory for the sample-data backend. Nothing moves on its own: `advance` is the clock. */
 export class MockRuns {
@@ -155,6 +173,11 @@ export class MockRuns {
 
   private readonly epoch: number;
   private readonly claude: RunsEnvironment["claude"];
+  private readonly cap: number;
+  readonly pipRun: boolean;
+  private picked = new Map<string, string>();
+  /** The ticket text a draft is snapshotted from; set by the backend that owns the tickets. */
+  ticketText: (item: ItemRef) => string | null = () => null;
 
   constructor(
     private readonly proposals: MockProposals,
@@ -163,6 +186,8 @@ export class MockRuns {
     const o = typeof options === "boolean" ? { seed: options ? ("busy" as const) : ("empty" as const) } : options;
     this.epoch = o.epoch ?? EPOCH;
     this.claude = o.environment ?? "ok";
+    this.cap = o.cap ?? 6;
+    this.pipRun = !!o.pipRun;
     const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
   }
@@ -210,7 +235,7 @@ export class MockRuns {
   }
 
   review(proposalId: string): RunReview {
-    const spec = this.draftSpec(proposalId);
+    const spec = this.runs.find((r) => r.proposalId === proposalId)?.spec ?? this.draftSpec(proposalId);
     return {
       digest: mockDigest(spec),
       prompt: renderPrompt(spec),
@@ -330,15 +355,100 @@ export class MockRuns {
     return next;
   }
 
-  preflight(spec: RunSpec): Preflight {
-    const rows: Preflight["rows"] = [
-      { level: "ok", text: "Claude 2.1.286 is installed" },
-      { level: "ok", text: "Signed in" },
-      { level: "ok", text: "Background sessions are supported" },
-      { level: "ok", text: `Clone found at ${spec.clonePath}` },
-      { level: "ok", text: "Permission mode: default" },
+  preflight(spec: RunSpec | null): Preflight {
+    const rows: PreflightRow[] = [];
+    const add = (level: PreflightRow["level"], text: string) => rows.push({ level, text });
+    if (this.claude === "missing") add("red", "Claude Code isn't installed");
+    else {
+      add("green", "Claude Code 2.1.286");
+      if (this.claude === "signedOut") add("red", "Not signed in to Claude. Sign in in Terminal, then check again.");
+      else add("green", "Signed in to Claude");
+      add("green", "Background agents are supported");
+      add("green", "Shell environment read (72 variables). Agents get this PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
+    }
+    if (spec) {
+      const clone = (CLONES[spec.repo] ?? []).find((c) => c.path === spec.clonePath);
+      if (!clone) add("red", `${spec.clonePath} isn't a git clone`);
+      else if (clone.dirty) add("amber", `Clone: ${clone.path} on ${clone.branch}. It has uncommitted changes. The agent won't touch your files, but its worktree starts from your current HEAD (${clone.branch}).`);
+      else if (clone.branch !== spec.base) add("amber", `Clone: ${clone.path} on ${clone.branch}. It is on ${clone.branch}, not ${spec.base}. The agent's worktree starts from your current HEAD and is told to switch to ${spec.base}.`);
+      else add("green", `Clone: ${clone.path} on ${clone.branch}.`);
+    }
+    if (this.claude !== "missing") add("green", "Agents run as you, in your permission mode: auto");
+    const live = this.runs.filter((r) => LIVE.includes(r.state)).length;
+    if (live >= this.cap) add("red", `${live} agents are running, the most Gossamr starts at once (${this.cap}). Stop one or wait for one to finish.`);
+    else add("green", `${live} of ${this.cap} agents running`);
+    if (spec) add("green", `What runs: ${mockDigest(spec).slice(5)}`);
+    return { rows, blocking: rows.some((r) => r.level === "red") };
+  }
+
+  /** Drafts a run the way the backend does: the ticket text comes from here, never from the caller. */
+  draft(spec: RunSpec, item: ItemRef | null): Promise<Proposal> {
+    if (!(CLONES[spec.repo] ?? []).some((c) => c.path === spec.clonePath)) return Promise.reject(new Error(`${spec.clonePath} isn't a git clone`));
+    const ticketBlock = item ? this.ticketText(item) : null;
+    return this.proposals.create({ type: "startRun", connectionId: CONNECTION, item, spec: { ...spec, instruction: spec.instruction.trim() || TEMPLATE, ticketBlock } }, null);
+  }
+
+  clones(repo: string): CloneChoice {
+    const found = CLONES[repo] ?? [];
+    const picked = this.picked.get(repo) ?? null;
+    return { clones: [...found].sort((a, b) => Number(b.path === picked) - Number(a.path === picked)), picked };
+  }
+
+  pickClone(repo: string, path: string) {
+    if (!(CLONES[repo] ?? []).some((c) => c.path === path)) throw new Error(`${path} isn't a clone of ${repo} that Gossamr found`);
+    this.picked.set(repo, path);
+  }
+
+  suggestName(key: string, title: string): string {
+    const taken = new Set(this.runs.map((r) => r.spec.name));
+    for (let n = 0; ; n++) {
+      const name = [key.toLowerCase(), slugOf(title) || "task", (0xa000 + this.seq * 7 + n * 13).toString(16)].join("-");
+      if (!taken.has(name)) return name;
+    }
+  }
+
+  /** A run draft the way Pip leaves one: a short focus note, shown apart from the instruction. */
+  seedPipDraft(item: ItemRef): Promise<Proposal> {
+    const spec: RunSpec = {
+      ...specFor(item.key, `${item.key.toLowerCase()}-pip-0a1b`),
+      focus: "Check whether the subject-line variants share one template, and where the unsubscribe link is built.",
+      ticketBlock: this.ticketText(item),
+    };
+    return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item, spec }, null, "req-pip"));
+  }
+
+  startNow(id: string): Run {
+    const run = this.get(id);
+    if (run?.state !== "queued") throw new Error("only a queued run can be started");
+    const next = this.update(id, { state: "launching", launchedAt: this.now() });
+    this.changed();
+    return next;
+  }
+
+  keepRunning(): number {
+    return this.runs.filter((r) => STOPPABLE.includes(r.state)).length;
+  }
+
+  /** A believable timeline: what the run did, most recent last, ending the way its state says. */
+  events(id: string): RunEvent[] {
+    const run = this.get(id);
+    if (!run) throw new Error("that run no longer exists");
+    const at = (n: number) => new Date(Date.parse(run.queuedAt) + n * MINUTE).toISOString();
+    const started: [string, string, string | null] = ["start", "Created the worktree and started", `git worktree add ${run.expectedWorktree}`];
+    if (run.state === "queued") return [];
+    if (run.state === "launching") return [{ runId: id, seq: 1, at: at(0), kind: started[0], text: started[1], detail: started[2] }];
+    const lines: [string, string, string | null][] = [
+      started,
+      ["read", `Read the ${run.spec.repo.split("/")[1]} module the ticket points at`, "src/cart/totals.ts\nsrc/cart/rounding.ts"],
+      ["search", "Searched the logs for the failing request", "rg 'refund' logs/2026-09-30.log | head -40\n38 matches in 6 files"],
+      ["run", "Ran the tests for the cart module", "pnpm test src/cart\n 12 passed, 1 failed"],
     ];
-    return { rows, blocking: false };
+    if (run.state === "needsPermission" && run.needs) lines.push(["ask", "Wants to run a command", run.needs]);
+    if (run.state === "needsAnswer" && run.needs) lines.push(["ask", "Is waiting for an answer", run.needs]);
+    if (run.state === "failed") lines.splice(1, 3, ["error", run.error ?? "It didn't start", null]);
+    if (run.state === "done") lines.push(["done", "Wrote up what it found", run.result]);
+    if (run.state === "stopped") lines.push(["stop", "Stopped", null]);
+    return lines.map(([kind, text, detail], i) => ({ runId: id, seq: i + 1, at: at(i * 2), kind, text, detail }));
   }
 
   disk(id: string): number {

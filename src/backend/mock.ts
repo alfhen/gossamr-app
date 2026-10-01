@@ -1,5 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type {
   AdfNode,
   AssignedElsewhere,
@@ -39,7 +39,7 @@ import type {
 } from "../types";
 import { fold, type Mention } from "../lib/mentions";
 import { docText } from "../lib/docs";
-import { MOCK_CONNECTION, MockConnector, PEOPLE } from "./mockConnector";
+import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
 import { targetOf } from "../lib/proposals";
 import { MockProposals } from "./mockProposals";
 import { MockRuns } from "./mockRuns";
@@ -378,6 +378,11 @@ export class MockBackend implements Backend {
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined);
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
     this.runs = new MockRuns(this.proposals, options.runs);
+    this.runs.ticketText = (ref) => {
+      const w = this.connector.item(ref);
+      return w ? `${ref.key}: ${w.title}\n\n${docText(w.body)}`.trim() : null;
+    };
+    if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
   }
 
   private readonly device: NonNullable<MockOptions["device"]>;
@@ -439,8 +444,40 @@ export class MockBackend implements Backend {
     this.runs.attach(id);
   }
 
-  async runsPreflight(spec: RunSpec) {
+  async runsPreflight(spec: RunSpec | null) {
     return this.runs.preflight(spec);
+  }
+
+  runsDraft(spec: RunSpec, item: ItemRef | null) {
+    return this.runs.draft(spec, item);
+  }
+
+  async runsClones(repo: string) {
+    return this.runs.clones(repo);
+  }
+
+  async runsPickClone(repo: string, path: string) {
+    this.runs.pickClone(repo, path);
+  }
+
+  async runsSuggestName(_clonePath: string, key: string, title: string) {
+    return this.runs.suggestName(key, title);
+  }
+
+  async runsEvents(id: string) {
+    return this.runs.events(id);
+  }
+
+  async runsStartNow(id: string) {
+    return this.runs.startNow(id);
+  }
+
+  async runsKeepRunning() {
+    return this.runs.keepRunning();
+  }
+
+  async revealPath(path: string) {
+    if (isTauri()) await revealItemInDir(path);
   }
 
   async runsEnvironment() {

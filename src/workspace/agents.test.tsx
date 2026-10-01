@@ -29,6 +29,8 @@ const on = (): AgentsActions => ({
   checkEnvironment: vi.fn(),
   retry: vi.fn(),
   stopAll: vi.fn(),
+  startAgent: vi.fn(),
+  openSafety: vi.fn(),
 });
 
 const screen = (over: Partial<AgentsScreenProps> = {}) =>

@@ -5,6 +5,7 @@ import { TicketLinksContext } from "../components/ticketLinks";
 import type { WorkFilter } from "../types";
 import { useItemsByFilter, useWorkspace } from "../workspaceStore";
 import { ActivityView } from "./ActivityView";
+import { AgentSheets } from "./AgentSheets";
 import { AgentsView } from "./AgentsView";
 import { useActivity } from "./activityStore";
 import { CANVASES } from "./canvases";
@@ -175,6 +176,7 @@ export function Workspace({ backend }: { backend: Backend }) {
             {route === "settings" && <Settings />}
           </div>
           <PeekSheet />
+          {agentsEnabled && <AgentSheets />}
           {!pipOpen && <PipLauncher />}
           <SelectionAsk />
         </main>
