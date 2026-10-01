@@ -2,6 +2,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { Collapsed, PeekSectionId } from "./peekLogic";
 import { PEEK_DEFAULT, PIP_DEFAULT, storedWidth } from "./paneSizes";
+import { parseColumnOrders, type ColumnOrders } from "./columnOrder";
 import { readStored, writeStored } from "./storage";
 
 export const THEMES = ["auto", "light", "dark"] as const;
@@ -21,6 +22,8 @@ interface Prefs {
   paletteOpen: boolean;
   /** Peek sections the person folded. Kept for the session only. */
   peekCollapsed: Collapsed;
+  /** Board column order the person chose, per project. */
+  columnOrder: ColumnOrders;
   setUi(ui: UiMode): void;
   setTheme(theme: ThemeMode): void;
   setPipOpen(open: boolean): void;
@@ -28,11 +31,13 @@ interface Prefs {
   setPipWidth(width: number): void;
   setPaletteOpen(open: boolean): void;
   setPeekSection(id: PeekSectionId, collapsed: boolean): void;
+  /** Saves the order of a project's columns; `null` goes back to the default. */
+  setColumnOrder(container: string, ids: string[] | null): void;
 }
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth"> {
+export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     // Installs from before the workspace was the default stored "classic" without anyone choosing it.
@@ -42,6 +47,7 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
     pipOpen: raw?.pipOpen === true,
     peekWidth: storedWidth(raw?.peekWidth, PEEK_DEFAULT),
     pipWidth: storedWidth(raw?.pipWidth, PIP_DEFAULT),
+    columnOrder: parseColumnOrders(raw?.columnOrder),
   };
 }
 
@@ -56,9 +62,14 @@ export const usePrefs = create<Prefs>((set) => ({
   setPipWidth: (pipWidth) => set({ pipWidth }),
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
   setPeekSection: (id, collapsed) => set((s) => ({ peekCollapsed: { ...s.peekCollapsed, [id]: collapsed } })),
+  setColumnOrder: (container, ids) =>
+    set((s) => {
+      const { [container]: _dropped, ...rest } = s.columnOrder;
+      return { columnOrder: ids ? { ...rest, [container]: ids } : rest };
+    }),
 }));
 
-usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth }) => writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth }));
+usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder }) => writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder }));
 
 /** The browser build has no classic inbox to fall back to, so it always shows the workspace. */
 export const isWorkspaceUi = () => !isTauri() || usePrefs.getState().ui === "workspace";

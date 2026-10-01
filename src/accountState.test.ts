@@ -85,6 +85,17 @@ describe("which interface opens", () => {
   });
 });
 
+describe("the saved board column order", () => {
+  it("is read back per project and falls back to nothing when the stored value is corrupt", () => {
+    stubStorage({ "gossamr-prefs": JSON.stringify({ columnOrder: { "mock:CA": ["a", "b"], "mock:WEB": "nope" } }) });
+    expect(loadPrefs().columnOrder).toEqual({ "mock:CA": ["a", "b"] });
+    stubStorage({ "gossamr-prefs": JSON.stringify({ columnOrder: 7 }) });
+    expect(loadPrefs().columnOrder).toEqual({});
+    stubStorage({ "gossamr-prefs": "{not json" });
+    expect(loadPrefs().columnOrder).toEqual({});
+  });
+});
+
 describe("the connection row", () => {
   const now = new Date("2026-09-30T12:00:00Z");
   it("says what the sync is doing", () => {

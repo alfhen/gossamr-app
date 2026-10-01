@@ -154,3 +154,25 @@
     opacity: 0.7;
   }
 }
+
+/* The column being dragged stays put as a faded slot; its copy follows the pointer. */
+.ws-col-lifted {
+  opacity: 0.45;
+  border-style: dashed;
+  border-color: var(--color-ws-sep2);
+}
+.ws-col-drop {
+  box-shadow: 0 0 0 3px var(--color-ws-pip-soft);
+  animation: ws-col-drop-in 0.12s ease-out;
+}
+@keyframes ws-col-drop-in {
+  from {
+    transform: scaleY(0.6);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws-col-drop {
+    animation: none;
+  }
+}

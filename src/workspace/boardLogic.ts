@@ -2,6 +2,7 @@ import { compileFilter, containerKey, itemKey } from "../lib/filter";
 import { targetOf } from "../lib/proposals";
 import { nextStatuses } from "../lib/workflow";
 import { WITHER_DAYS, witherLevel, type WitherLevel } from "../lib/views";
+import { applyOrder, type ColumnOrders } from "./columnOrder";
 import type { ContainerRef, Intent, Proposal, StatusDef, WorkCategory, WorkContainer, WorkItem, Workflow } from "../types";
 
 export interface BoardColumn {
@@ -26,9 +27,9 @@ const CATEGORY_ORDER: Record<WorkCategory, number> = { todo: 0, active: 1, done:
 /**
  * One section per project that has items, each with its own workflow's columns. A status the workflow doesn't list
  * (a tracker that reveals workflows lazily) still gets a column so no card is hidden. `include` keeps a project the
- * filter names even when it has nothing in it yet.
+ * filter names even when it has nothing in it yet. Columns follow `orders` for the project, else the default order.
  */
-export function boardSections(items: readonly WorkItem[], containers: Record<string, WorkContainer>, include: ContainerRef | null = null): BoardSection[] {
+export function boardSections(items: readonly WorkItem[], containers: Record<string, WorkContainer>, include: ContainerRef | null = null, orders: ColumnOrders = {}): BoardSection[] {
   const byContainer = new Map<string, WorkItem[]>();
   for (const i of items) byContainer.set(containerKey(i.container), [...(byContainer.get(containerKey(i.container)) ?? []), i]);
   if (include && !byContainer.has(containerKey(include))) byContainer.set(containerKey(include), []);
@@ -40,10 +41,10 @@ export function boardSections(items: readonly WorkItem[], containers: Record<str
       const known = new Set(workflow.statuses.map((s) => s.id));
       const extra = new Map<string, StatusDef>();
       for (const i of list) if (!known.has(i.status.id)) extra.set(i.status.id, i.status);
-      const statuses = [
-        ...workflow.statuses,
-        ...[...extra.values()].sort((a, b) => CATEGORY_ORDER[a.category] - CATEGORY_ORDER[b.category] || a.name.localeCompare(b.name)),
-      ];
+      const statuses = applyOrder(
+        [...workflow.statuses, ...[...extra.values()].sort((a, b) => CATEGORY_ORDER[a.category] - CATEGORY_ORDER[b.category] || a.name.localeCompare(b.name))],
+        orders[key],
+      );
       const columns = statuses.map((status) => ({ status, items: list.filter((i) => i.status.id === status.id) }));
       return { key, name: container?.name ?? key, code: container?.key ?? key, workflow: { ...workflow, statuses }, columns, count: list.length };
     })
