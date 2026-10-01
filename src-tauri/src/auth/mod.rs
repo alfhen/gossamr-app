@@ -303,4 +303,78 @@ mod tests {
         assert_eq!(connection.display_name, "Acme");
         assert_eq!(c.scope(), Scope { cloud_id: "c1".into(), account_id: "u1".into() });
     }
+
+    fn credentials() -> Credentials {
+        Credentials {
+            tokens: Tokens { access_token: "a".into(), refresh_token: "r".into(), expires_at: u64::MAX },
+            site: Site { cloud_id: "c1".into(), name: "Acme".into(), url: "https://acme.atlassian.net".into() },
+            me: Account { account_id: "u1".into(), name: "Ann".into(), avatar_url: None },
+        }
+    }
+
+    fn github(login: &str) -> GithubSession {
+        GithubSession {
+            login: login.into(),
+            name: None,
+            avatar_url: None,
+            token: "t".into(),
+            source: github::SessionSource::Token,
+            scopes: None,
+            refresh_token: None,
+            expires_at: None,
+        }
+    }
+
+    fn restore_everything() -> (bool, usize) {
+        let http = reqwest::Client::new();
+        let auth = Auth::load(http.clone());
+        let signed_in = auth.session.try_lock().unwrap().is_some();
+        ClientConfig.resolve().ok();
+        let restored = GithubAuth::new(http, Arc::new(KeychainStore)).restore();
+        (signed_in, restored.len())
+    }
+
+    #[test]
+    fn a_normal_launch_reads_the_keychain_once_and_writes_nothing() {
+        let fake = secrets::fake::Fake::default();
+        let _installed = secrets::fake::install(&fake);
+        secrets::save(SESSION_KEY, &credentials()).unwrap();
+        secrets::save("oauth-app", &OAuthApp { client_id: "id".into(), client_secret: "secret".into() }).unwrap();
+        let store = KeychainStore;
+        store.save(&github("ann")).unwrap();
+        store.save(&github("bob")).unwrap();
+
+        let _relaunched = secrets::fake::install(&fake);
+        fake.reset_counts();
+        assert_eq!(restore_everything(), (true, 2));
+        assert_eq!((fake.reads(), fake.writes(), fake.removes()), (1, 0, 0));
+    }
+
+    #[test]
+    fn launching_after_the_old_layout_migrates_once_then_reads_once() {
+        let fake = secrets::fake::Fake::default();
+        let _installed = secrets::fake::install(&fake);
+        fake.put("session", &serde_json::to_string(&credentials()).unwrap());
+        fake.put("github-logins", r#"["ann","bob"]"#);
+        fake.put("github:ann", &serde_json::to_string(&github("ann")).unwrap());
+        fake.put("github:bob", &serde_json::to_string(&github("bob")).unwrap());
+        assert_eq!(restore_everything(), (true, 2));
+        for old in ["session", "github-logins", "github:ann", "github:bob"] {
+            assert_eq!(fake.get(old), None);
+        }
+
+        let _relaunched = secrets::fake::install(&fake);
+        fake.reset_counts();
+        assert_eq!(restore_everything(), (true, 2));
+        assert_eq!((fake.reads(), fake.writes()), (1, 0));
+    }
+
+    #[test]
+    fn a_denied_keychain_starts_signed_out_and_is_asked_once() {
+        let fake = secrets::fake::Fake::default();
+        fake.deny_reads_of("vault");
+        let _installed = secrets::fake::install(&fake);
+        assert_eq!(restore_everything(), (false, 0));
+        assert_eq!(fake.reads(), 1);
+    }
 }
