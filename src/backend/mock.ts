@@ -618,6 +618,9 @@ export class MockBackend implements Backend {
       case "subtasks":
         this.appliedToConnector = this.connector.createSubtasks(intent.parent, intent.summaries.slice(already.length));
         return true;
+      case "link":
+        this.connector.link(intent.from, intent.to, intent.kind);
+        return true;
       case "startRun":
         throw new Error("A run is approved with its own button");
       default:

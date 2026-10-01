@@ -3,7 +3,7 @@ import { itemKey } from "../lib/filter";
 import { relativeTime } from "../lib/views";
 import type { ContainerRef, FeedEntry, ItemRef, Proposal } from "../types";
 import { allContainers, nameOf, pendingDrafts, useWorkspace } from "../workspaceStore";
-import { CHIPS, CHIP_LABEL, SOURCE_LABEL, buildRows, codeVerb, draftsFor, groupByDay, initials, rowAt, rowId, sourcesFor, stepIndex, toCodeEntry, toRunEntries, verb, type ActivityChip, type ActivitySource, type CodeEntry, type RunEntry } from "./activityLogic";
+import { CHIPS, CHIP_LABEL, SOURCE_LABEL, buildRows, codeVerb, draftsFor, groupByDay, initials, rowAt, rowId, shownSourceOf, coversAgents, sourcesFor, stepIndex, toCodeEntry, toRunEntries, verb, type ActivityChip, type ActivitySource, type CodeEntry, type RunEntry } from "./activityLogic";
 import { GithubMark } from "./DevBits";
 import { useDev } from "./devStore";
 import { openOnGithub } from "./githubUi";
@@ -330,7 +330,11 @@ export function ActivityView() {
   const runs = useRuns((s) => s.runs);
   const byChange = useDev((s) => s.byChange);
   const sources = sourcesFor({ github: hasGithub, agents: agentsOn });
-  const shownSource: ActivitySource = sources.includes(source) ? source : "jira";
+  const shownSource: ActivitySource = shownSourceOf(source, sources);
+  // A source that went away (agents turned off) must not stay chosen in the store, or the feed keeps loading it.
+  useEffect(() => {
+    if (source !== shownSource) useActivity.getState().setSource(shownSource);
+  }, [source, shownSource]);
   const runEntries = useMemo(() => (agentsOn ? toRunEntries(runs, runRead, Date.now()) : []), [agentsOn, runs, runRead]);
   const inProject = (item: ItemRef | null) => !project || (!!item && items[itemKey(item)]?.container.connectionId === project.connectionId && items[itemKey(item)]?.container.externalId === project.externalId);
   const agentUnread = runEntries.filter((e) => e.unread && inProject(e.item)).length;
@@ -426,7 +430,7 @@ export function ActivityView() {
         {sources.length > 2 && <SourceBar source={shownSource} sources={sources} onChange={(s) => useActivity.getState().setSource(s)} />}
         <ChipBar chip={chip} counts={{ needsMe: unread, drafts: drafts.length }} onChange={(c) => useActivity.getState().setChip(c)} />
         {!showDrafts && (
-          <button type="button" disabled={unread === 0} onClick={() => (useActivity.getState().markRunRead(runEntries.filter((e) => e.unread && inProject(e.item)).map((e) => e.id)), void useActivity.getState().markAllRead(codeEntries.filter((e) => e.unread && (!project || (!!e.item && items[itemKey(e.item)]?.container.connectionId === project.connectionId && items[itemKey(e.item)]?.container.externalId === project.externalId))).map((e) => e.id)))} className="ml-auto text-sm text-ws-ink3 underline disabled:no-underline disabled:opacity-45">
+          <button type="button" disabled={unread === 0} onClick={() => (coversAgents(shownSource) && useActivity.getState().markRunRead(runEntries.filter((e) => e.unread && inProject(e.item)).map((e) => e.id)), void useActivity.getState().markAllRead(codeEntries.filter((e) => e.unread && (!project || (!!e.item && items[itemKey(e.item)]?.container.connectionId === project.connectionId && items[itemKey(e.item)]?.container.externalId === project.externalId))).map((e) => e.id)))} className="ml-auto text-sm text-ws-ink3 underline disabled:no-underline disabled:opacity-45">
             Mark all read
           </button>
         )}

@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
+import { itemRef } from "../backend/mockConnector";
 import { commentText, jiraNote, ticketKeys } from "../backend/mockRunResult";
 import results from "../../src-tauri/test-fixtures/agents/results.json";
 import type { CodeChange, Run } from "../types";
-import { agentMatchesChip, buildRows, sourcesFor, toRunEntries, type RunEntry } from "./activityLogic";
+import { agentMatchesChip, buildRows, coversAgents, shownSourceOf, sourcesFor, toRunEntries, type RunEntry } from "./activityLogic";
 import { blockerChoices, blockerControl, changeSummary, commentControl } from "./runSheetLogic";
 import { useActivity } from "./activityStore";
 import { useRuns } from "./runsStore";
@@ -254,5 +255,37 @@ describe("the activity store and agent entries", () => {
     expect(useActivity.getState()).toMatchObject({ status: "ready", entries: [], codeEvents: [] });
     useActivity.getState().dispose();
     useActivity.setState({ source: "all" });
+  });
+});
+
+describe("approving a blocker in the sample data", () => {
+  it("links the two tickets on both ends, once, and refuses one that isn't there", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
+    const backend = new MockBackend();
+    const p = await backend.proposalsCreate({ type: "link", from: itemRef("CA-402"), to: itemRef("CA-406"), kind: "blocks" }, "Blocked by CA-402");
+    await backend.proposalsApprove(p.id);
+    const linked = async (key: string) => (await backend.cacheItem(itemRef(key)))!.links.filter((l) => l.kind === "blocks" && l.from.key === "CA-402" && l.to.key === "CA-406");
+    expect(await linked("CA-402")).toHaveLength(1);
+    expect(await linked("CA-406")).toHaveLength(1);
+    const again = await backend.proposalsCreate({ type: "link", from: itemRef("CA-402"), to: itemRef("CA-406"), kind: "blocks" }, null);
+    await backend.proposalsApprove(again.id);
+    expect(await linked("CA-402")).toHaveLength(1);
+    const missing = await backend.proposalsCreate({ type: "link", from: itemRef("CA-402"), to: itemRef("NOPE-1"), kind: "blocks" }, null);
+    const done = await backend.proposalsApprove(missing.id).catch((e: Error) => e);
+    expect(done instanceof Error ? done.message : done.error).toMatch(/isn't in the sample data/);
+  });
+});
+
+describe("the Activity source after agents are turned off", () => {
+  it("falls back to the tracker's, which the view hands back to the store", () => {
+    const off = sourcesFor({ github: false, agents: false });
+    expect(shownSourceOf("agents", off)).toBe("jira");
+    expect(shownSourceOf("github", off)).toBe("jira");
+    expect(shownSourceOf("agents", sourcesFor({ github: false, agents: true }))).toBe("agents");
+    expect(shownSourceOf("all", off)).toBe("all");
+  });
+
+  it("marks agent entries read only for All sources and Agents", () => {
+    expect([coversAgents("all"), coversAgents("agents"), coversAgents("jira"), coversAgents("github")]).toEqual([true, true, false, false]);
   });
 });

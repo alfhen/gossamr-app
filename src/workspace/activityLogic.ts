@@ -125,6 +125,12 @@ export type ActivitySource = (typeof SOURCES)[number];
 
 export const SOURCE_LABEL: Record<ActivitySource, string> = { all: "All sources", jira: "Jira", github: "GitHub", agents: "Agents" };
 
+/** The source to show: the chosen one while it is offered, else the tracker's. */
+export const shownSourceOf = (source: ActivitySource, offered: readonly ActivitySource[]): ActivitySource => (offered.includes(source) ? source : "jira");
+
+/** Whether a source's "Mark all read" is about agent entries. */
+export const coversAgents = (source: ActivitySource) => source === "all" || source === "agents";
+
 /** The sources worth offering: the tracker always, GitHub once connected, Agents while they are on. */
 export const sourcesFor = (o: { github: boolean; agents: boolean }): ActivitySource[] => ["all", "jira", ...(o.github ? (["github"] as const) : []), ...(o.agents ? (["agents"] as const) : [])];
 
