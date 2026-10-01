@@ -67,10 +67,24 @@ fn contents_path(repo: &str, path: &str, reference: Option<&str>) -> String {
     out
 }
 
-/// One `repo:` qualifier per repository. Space-separated qualifiers may be read as "and", so each repository gets
-/// a search of its own and the results are merged.
+/// Room GitHub leaves for repository qualifiers in a search query, which it cuts off at 256 characters.
+const QUALIFIER_BUDGET: usize = 190;
+
+/// Repositories as `repo:` qualifiers, packed into as few queries as fit. Several `repo:` qualifiers in one query
+/// match any of them, and a query per repository would spend the 30 searches a minute GitHub allows on a dozen repos.
 fn qualifier_groups(repos: &[String]) -> Vec<String> {
-    repos.iter().map(|r| format!("repo:{r}")).collect()
+    let mut groups: Vec<String> = Vec::new();
+    for repo in repos {
+        let qualifier = format!("repo:{repo}");
+        match groups.last_mut() {
+            Some(group) if group.len() + 1 + qualifier.len() <= QUALIFIER_BUDGET => {
+                group.push(' ');
+                group.push_str(&qualifier);
+            }
+            _ => groups.push(qualifier),
+        }
+    }
+    groups
 }
 
 /// The page of a branch, with each segment of its name escaped and the slashes kept.
@@ -282,22 +296,40 @@ impl GithubHost {
                 }
             }
         }
-        for group in qualifier_groups(repos) {
+        // The text searches are a second source after the branch scan; a limit or an error there must not throw away
+        // what the scan found.
+        let mut failed = None;
+        'groups: for group in qualifier_groups(repos) {
             let q = encode(&format!("is:pr {query} in:title,body {group}"));
-            let (hits, _): (PullHits, _) = self.api.json(&format!("/search/issues?q={q}&per_page=30")).await?;
+            let hits: PullHits = match self.api.json(&format!("/search/issues?q={q}&per_page=30")).await {
+                Ok((hits, _)) => hits,
+                Err(e) => {
+                    failed = Some(e);
+                    break 'groups;
+                }
+            };
             for c in hits.items.iter().filter_map(|h| h.change(&self.connection_id)) {
                 if !exact || names(query, &c.title) || names(query, &c.body) {
                     add(c);
                 }
             }
             let q = encode(&format!("{query} {group}"));
-            let (hits, _): (CommitSearch, _) = self.api.json(&format!("/search/commits?q={q}&per_page=30")).await?;
+            let hits: CommitSearch = match self.api.json(&format!("/search/commits?q={q}&per_page=30")).await {
+                Ok((hits, _)) => hits,
+                Err(e) => {
+                    failed = Some(e);
+                    break 'groups;
+                }
+            };
             for c in hits.items {
                 let Some(repo) = c.repository.as_ref().map(|r| r.full_name.clone()) else { continue };
                 if !exact || names(query, &c.commit.message) {
                     add(c.change(&self.connection_id, &repo, ""));
                 }
             }
+        }
+        if let (true, Some(e)) = (found.is_empty(), failed) {
+            return Err(e);
         }
         let mut out: Vec<CodeChange> = found.into_values().collect();
         out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.external_id.cmp(&b.external_id)));
@@ -403,10 +435,16 @@ mod tests {
     }
 
     #[test]
-    fn each_repository_is_searched_on_its_own() {
+    fn repositories_share_a_search_until_the_query_would_be_too_long() {
         let repos = ["acme/webshop".to_string(), "acme/gateway".to_string()];
-        assert_eq!(qualifier_groups(&repos), ["repo:acme/webshop", "repo:acme/gateway"]);
+        assert_eq!(qualifier_groups(&repos), ["repo:acme/webshop repo:acme/gateway"]);
         assert!(qualifier_groups(&[]).is_empty());
+
+        let many: Vec<String> = (0..15).map(|i| format!("hobbii/laravel-event-stream-{i}")).collect();
+        let groups = qualifier_groups(&many);
+        assert!(groups.len() >= 2 && groups.len() <= 5, "{} searches for 15 repositories", groups.len());
+        assert!(groups.iter().all(|g| g.len() <= QUALIFIER_BUDGET));
+        assert_eq!(groups.iter().map(|g| g.split(' ').count()).sum::<usize>(), 15, "every repository is searched");
     }
 
     #[test]
