@@ -297,7 +297,10 @@ impl Core {
         self.with_db_for(&scope, |db| {
             let p = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
             let (connection_id, item, spec) = run_of(&p)?;
-            self.resolve_clone(&spec.clone_path)?;
+            // A draft from Pip isn't resolved when it is stored, and a path through a symlink can be repointed.
+            if self.resolve_clone(&spec.clone_path)? != spec.clone_path {
+                return Err(Error::Proposal("the clone path isn't its real path; edit the draft and review it again".into()));
+            }
             let (connection_id, item, spec) = (connection_id.clone(), item.clone(), spec.clone());
             let run_id = proposals::new_id()?;
             db.approve_start_run(id, digest, |p| Run::queued(run_id, p.id.clone(), connection_id, item, spec, file, Utc::now()))
@@ -684,5 +687,31 @@ mod tests {
         assert_eq!((spec.instruction.as_str(), spec.name.as_str(), spec.base.as_str(), spec.repo.as_str()), ("Look at logs", "new-name", "main", "acme/webshop"));
         assert_eq!(spec.clone_path, PathBuf::from("/Users/me/Code/other"));
         assert!(Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
+    }
+
+    #[tokio::test]
+    async fn approval_refuses_a_clone_path_that_is_not_its_real_path_and_accepts_the_real_one() {
+        let fx = crate::inbox::testing::fixture().await;
+        let real = clone_in(&fx, "webshop");
+        let link = fx.home.join("shortcut");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let item = || Some(fx.item("CA-1"));
+        let connection = fx.item("CA-1").connection_id;
+        let by_pip = |name: &str, path: &Path| {
+            let spec = RunSpec { clone_path: path.to_path_buf(), name: name.into(), ..crate::domain::fixtures::run_spec() };
+            Draft::from_pip("r", Intent::StartRun { connection_id: connection.clone(), item: item(), spec }, None)
+        };
+
+        let through_link = fx.core.propose(&fx.scope, by_pip("eng-1-linked-0001", &link)).await.unwrap();
+        let digest = fx.core.runs_review(&through_link.id).await.unwrap().digest;
+        let err = fx.core.runs_approve(&through_link.id, &digest).await.unwrap_err();
+        assert!(err.to_string().contains("real path"), "{err}");
+        assert_eq!(fx.core.proposal(&through_link.id).await.unwrap().unwrap().state, ProposalState::Pending);
+        assert!(fx.core.runs_list(&RunQuery::default()).await.unwrap().is_empty());
+
+        let canonical = fx.core.propose(&fx.scope, by_pip("eng-1-direct-0002", &real.canonicalize().unwrap())).await.unwrap();
+        let digest = fx.core.runs_review(&canonical.id).await.unwrap().digest;
+        let run = fx.core.runs_approve(&canonical.id, &digest).await.unwrap();
+        assert_eq!(run.spec.clone_path, real.canonicalize().unwrap());
     }
 }

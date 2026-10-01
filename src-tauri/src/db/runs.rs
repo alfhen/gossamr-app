@@ -123,22 +123,18 @@ impl Db {
     pub fn append_events(&self, run_id: &str, events: &[RunEvent]) -> Result<usize> {
         let tx = self.conn.unchecked_transaction()?;
         let last: Option<u32> = tx.query_row("SELECT max(seq) FROM run_events WHERE run_id = ?1", params![run_id], |r| r.get(0))?;
-        let mut next = last.map_or(0, |n| n + 1);
-        let mut stored = 0;
-        for e in events {
-            if next >= EVENTS_PER_RUN {
-                break;
-            }
+        let start = last.map_or(0, |n| n + 1);
+        let room = EVENTS_PER_RUN.saturating_sub(start) as usize;
+        let kept = &events[..events.len().min(room)];
+        for (seq, e) in (start..).zip(kept) {
             let detail = e.detail.as_deref().map(|d| d.chars().take(DETAIL_LIMIT).collect::<String>());
             tx.execute(
                 "INSERT INTO run_events (run_id, seq, at, kind, text, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![run_id, next, stamp(e.at), e.kind, e.text, detail],
+                params![run_id, seq, stamp(e.at), e.kind, e.text, detail],
             )?;
-            next += 1;
-            stored += 1;
         }
         tx.commit()?;
-        Ok(stored)
+        Ok(kept.len())
     }
 
     pub fn run_events(&self, run_id: &str) -> Result<Vec<RunEvent>> {
