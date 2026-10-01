@@ -482,6 +482,10 @@ export interface Run {
   sessionId: string | null;
   /** The question, or the exact command awaiting permission. */
   needs: string | null;
+  /** The answer Claude proposes to its own question, when it offers one. */
+  suggestedReply?: string | null;
+  /** An answer that was stopped on its way: the run is stopped, and this is what it was to be woken with. */
+  unsentAnswer?: string | null;
   lastDetail: string | null;
   tokens: number | null;
   branch: string | null;

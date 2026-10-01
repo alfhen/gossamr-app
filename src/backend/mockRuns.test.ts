@@ -114,6 +114,19 @@ describe("mock runs", () => {
     expect(await backend.runsStopAll()).toEqual({ stopped: 0, failed: 0 });
   });
 
+  it("answers a question, and only a question", async () => {
+    const backend = new MockBackend();
+    const [asking, permission] = ["needsAnswer", "needsPermission"].map((state) => backend.runs.list().find((r) => r.state === state)!);
+    expect(asking.suggestedReply).toBeTruthy();
+    await expect(backend.runsAnswer(asking.id, "   ")).rejects.toThrow(/Write an answer/);
+    await expect(backend.runsAnswer(asking.id, "x".repeat(4001))).rejects.toThrow(/up to 4000 characters/);
+    await expect(backend.runsAnswer(asking.id, "a\0b")).rejects.toThrow(/plain text/);
+    await expect(backend.runsAnswer(permission.id, "Yes")).rejects.toThrow(/only be answered in Terminal/);
+    const after = await backend.runsAnswer(asking.id, "Yes");
+    expect(after).toMatchObject({ id: asking.id, state: "working", needs: null, suggestedReply: null, shortId: asking.shortId });
+    await expect(backend.runsAnswer(asking.id, "Again")).rejects.toThrow(/isn't waiting for an answer/);
+  });
+
   it("refuses to stop a run that is only queued", async () => {
     const backend = new MockBackend();
     const run = await backend.runsApprove((await draft(backend)).id, mockDigest(spec));

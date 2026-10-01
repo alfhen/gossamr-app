@@ -33,7 +33,7 @@ All of them run with stdin from `/dev/null`, because the CLI otherwise reads std
 | (b) permission prompt shape, `--permission-mode manual` | Not run. It needs a signed-in config, and the rules for this PR allow only a fresh scratch config. Shape in the fixtures comes from the plan's earlier capture: `state:"working"`, `status:"waiting"`, `waitingFor:"permission prompt"`, `needs:"approve Bash: <command>"`. To run by hand: sign in to a scratch config with `claude setup-token` or `/login`, then launch with `--permission-mode manual` and a prompt to `touch` a file. |
 | (c) worktree base | Passes (`real_worktree_starts_at_the_clones_current_head_not_main`): with the clone on branch `feature` two commits ahead of `main`, the worktree's HEAD equals `feature`'s HEAD, not `main`'s. |
 | (d) environment | Passes (`real_daemon_gets_the_captured_environment_and_nothing_added_after_the_capture`), run as `env -i HOME=$HOME PATH=/usr/bin:/bin`. The capture from `/bin/zsh -ilc` returned the full interactive PATH, including entries that only `.zshrc` adds (Herd, LM Studio, nvm), against `/usr/bin:/bin` for the test process. The scratch daemon's environment (read with `ps eww`) had exactly the captured PATH, and a variable set in the process after the capture did not reach it. Not done: a comparison with a daemon started from Terminal, which is the same shell and the same rc files by construction. Note that the capture inherits the app's own environment as the shell's base, so anything exported in the environment Gossamr was started from is in the capture. |
-| (e) stop then `--bg --resume <sessionId> "say OK"` (U2) | Not run, for the same reason as (b): it needs a signed-in session to show whether the message is delivered. The fake CLI implements the behaviour the plan describes (a running session gets a copy; a stopped one keeps its id and takes the message as its name), and the wrapper tests cover that. U2 stays open. |
+| (e) stop then `--bg --resume <sessionId> "say OK"` (U2) | Passes with a settle time: see "Resume after stop" below. |
 
 ## Launcher check (PR 4)
 
@@ -46,6 +46,14 @@ All of them run with stdin from `/dev/null`, because the CLI otherwise reads std
 `real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_starts` (U5, needs the network) clones `octocat/Hello-World` into a scratch `~/Gossamr/agents/<owner>/<repo>`: `--bg` there is refused with `Workspace not trusted`; after the scratch config trusts that one folder, the launch succeeds and its session is listed in `.claude/worktrees/<name>` and runs (state `working`, no trust complaint), so trusting the clone covers its worktrees and one trust step per repository is enough. Observed once on 2.1.286.
 
 Attach in Terminal: `open -a Terminal <file>.command` was run once from the build sandbox. Terminal started but the script's marker file did not appear within 15 s, which may be a first-run prompt for a file created by a sandboxed process (it carries `com.apple.provenance`). The file Gossamr writes has to be tried by hand from the app (U11); the fallback is `osascript` with the same validated inputs.
+
+## Resume after stop (PR 12c, Claude Code 2.1.287)
+
+`real_stop_then_resume_continues_same_session` (ignored; the person's real config, `~/Code`, one prompt that uses no tools) launches a session that asks "Shall I continue?", waits for `blocked`, runs `claude stop`, waits for `stopped`, then `claude --bg --resume <sessionId> -- "<answer>"` with no other flag. When it continues the session, the listing keeps the same `id`, `sessionId` and `name` (no copy), `timeline.jsonl` gets the answer, the session ends `done` and `output.result` holds the reply. stdout is the launch shape, `backgrounded \u00b7 <id>[ \u00b7 <name>]`: with the same id when the session was continued, and a new id with no name when a copy was started.
+
+- Resumed immediately after `stopped` is listed, the first runs started a copy (2 of 3). With 3 s between `stopped` and the resume it continued the session in 5 of 5 runs, and with 6 s in 4 of 4. Gossamr waits 5 s and still checks that the id that comes back is the run's: a different id means a copy, which is stopped and reported.
+- `--` before the message is accepted, as with launch.
+- Not tested: a session stopped in the middle of a tool call, a resumed `needsPermission` session, and whether the guard text still applies after a conversation has been compacted.
 
 ## Cleanup check (PR 12a)
 

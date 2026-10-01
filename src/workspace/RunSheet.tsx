@@ -15,7 +15,8 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { MAY_TOUCH, canStartNow, commentWithPipPrompt, stopControl } from "./runSheetLogic";
+import { MAY_TOUCH, answerable, canStartNow, commentWithPipPrompt, stopControl } from "./runSheetLogic";
+import { RunAnswer } from "./RunAnswer";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
 import { askPip } from "./askPip";
@@ -28,6 +29,7 @@ export interface RunSheetActions extends ResultActions {
   cancelStop(): void;
   stop(): void;
   startNow(): void;
+  answer(text: string): void;
   retry(): void;
   fix(act: FailureAct): void;
   copied(): void;
@@ -53,6 +55,8 @@ export interface RunSheetViewProps {
   tickets: readonly { key: string; title: string }[];
   pickBlocker: boolean;
   drafting: boolean;
+  /** Its answer is on its way to the agent. */
+  answering: boolean;
   /** Terminal was opened for this failed run, or its command copied. */
   opened: boolean;
   /** Why this run is worth cleaning up, when it is. */
@@ -68,7 +72,7 @@ function OpenInTerminal({ run, on, filled = true }: { run: Run; on: RunSheetActi
   );
 }
 
-function Attention({ run, opened, on }: { run: Run; opened: boolean; on: RunSheetActions }) {
+function Attention({ run, opened, answering, on }: { run: Run; opened: boolean; answering: boolean; on: RunSheetActions }) {
   switch (run.state) {
     case "needsPermission": {
       const ask = permissionRequest(run.needs);
@@ -87,18 +91,8 @@ function Attention({ run, opened, on }: { run: Run; opened: boolean; on: RunShee
       );
     }
     case "needsAnswer":
-      return (
-        <Box tone="needs" label="Question from the agent">
-          <BoxTitle icon="hand" tone="needs">
-            Claude is asking you
-          </BoxTitle>
-          <q className="selectable block border-l-[3px] border-ws-sep2 py-0.5 pl-3 whitespace-pre-wrap text-ws-ink [quotes:none]">{run.needs?.trim() || "It is waiting for you"}</q>
-          <p className="m-0 text-sm text-ws-ink2">Answer in Terminal, in the session itself. Gossamr can&apos;t send an answer for you.</p>
-          <div>
-            <OpenInTerminal run={run} on={on} />
-          </div>
-        </Box>
-      );
+    case "stopped":
+      return <RunAnswer key={run.id} run={run} answering={answering} on={on} />;
     case "systemBlocked":
       return (
         <Box tone="needs" label="Sign-in needed">
@@ -236,11 +230,11 @@ function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode 
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, drafting, opened, cleanup = null, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, drafting, answering, opened, cleanup = null, on }: RunSheetViewProps) {
   const view = stateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
-  const attention = ["needsPermission", "needsAnswer", "systemBlocked", "unknown", "failed", "queued"].includes(run.state);
+  const attention = ["needsPermission", "needsAnswer", "systemBlocked", "unknown", "failed", "queued"].includes(run.state) || answerable(run);
   const live = run.state === "working" ? progressText(run) : null;
   return (
     <SheetFrame
@@ -307,7 +301,7 @@ export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, event
           ))}
       </div>
 
-      {attention && <Attention run={run} opened={opened} on={on} />}
+      {attention && <Attention run={run} opened={opened} answering={answering} on={on} />}
       {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} drafting={drafting} on={on} />}
       {outcome?.change && <Changes change={outcome.change} on={on} />}
 
@@ -355,6 +349,7 @@ export function RunSheet({ id }: { id: string }) {
   const [pickBlocker, setPickBlocker] = useState(false);
   const items = useWorkspace((s) => s.items);
   const drafting = useRuns((s) => s.drafting !== null);
+  const answering = useRuns((s) => s.answering.has(id));
   const [now, setNow] = useState(() => Date.now());
   const disk = useDisk(backend, id);
   const opened = useRuns((s) => s.terminalOpened.has(id));
@@ -416,6 +411,7 @@ export function RunSheet({ id }: { id: string }) {
     cancelStop: () => setConfirmStop(false),
     stop: () => (setConfirmStop(false), void store.stop(id)),
     startNow: () => void store.startNow(id),
+    answer: (text) => void store.answer(id, text),
     retry: () => void store.retryLaunch(id),
     fix: (act) => failureAction(id, act),
     copied: () => store.noteCopied(id),
@@ -437,6 +433,6 @@ export function RunSheet({ id }: { id: string }) {
       backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
     },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} drafting={drafting} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} drafting={drafting} answering={answering} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} on={on} />;
 }
 

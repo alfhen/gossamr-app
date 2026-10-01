@@ -39,6 +39,8 @@ interface RunsState {
   stopping: boolean;
   /** The run a draft is being made from, so its buttons wait. */
   drafting: string | null;
+  /** Runs whose answer is on its way to the agent. */
+  answering: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
   /** The ticket picker for starting an agent without a ticket open. */
   picking: boolean;
@@ -58,6 +60,8 @@ interface RunsState {
   browse(delta: 1 | -1): void;
   stop(id: string): Promise<void>;
   startNow(id: string): Promise<void>;
+  /** Sends the person's answer to a run that is asking a question; the run carries on under the same id. */
+  answer(id: string, text: string): Promise<void>;
   retryLaunch(id: string): Promise<void>;
   /** The step a failed launch needs the person for: Terminal to trust the folder or sign in, or the install page. */
   fix(id: string, act: Extract<FailureAct, "terminal" | "install">): Promise<void>;
@@ -123,6 +127,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   earlierOpen: false,
   stopping: false,
   drafting: null,
+  answering: new Set<string>(),
   ...idle,
 
   init(backend) {
@@ -203,6 +208,20 @@ export const useRuns = create<RunsState>((set, get) => ({
       useToasts.getState().push(`Couldn't start it: ${messageOf(e)}`);
     }
     void get().reload();
+  },
+
+  async answer(id, text) {
+    const { backend, answering } = get();
+    if (!backend || answering.has(id)) return;
+    set({ answering: new Set([...answering, id]) });
+    try {
+      await backend.runsAnswer(id, text);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't send the answer: ${messageOf(e)}`);
+    } finally {
+      set({ answering: new Set([...get().answering].filter((x) => x !== id)) });
+      void get().reload();
+    }
   },
 
   async retryLaunch(id) {

@@ -581,6 +581,12 @@ async fn runs_stop(runs: State<'_, RunsState>, id: String) -> Result<Run> {
     runs.stop(&id).await
 }
 
+/// Sends the person's answer to an agent that asked a question: stops its session and wakes it with the answer.
+#[tauri::command]
+async fn runs_answer(runs: State<'_, RunsState>, id: String, text: String) -> Result<Run> {
+    runs.answer(&id, &text).await
+}
+
 /// Stops every run Gossamr started, in any account, and nothing else.
 #[tauri::command]
 async fn runs_stop_all(runs: State<'_, RunsState>) -> Result<runs::control::StopAll> {
@@ -1010,6 +1016,7 @@ pub fn run() {
             runs_pick_clone,
             runs_suggest_name,
             runs_stop,
+            runs_answer,
             runs_stop_all,
             runs_attach,
             runs_trust_folder,
