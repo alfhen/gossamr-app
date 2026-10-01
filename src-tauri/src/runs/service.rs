@@ -82,7 +82,7 @@ pub struct RunService {
     /// One switch at a time: turning on reads the environment, which can take a while.
     pub(super) switching: tokio::sync::Mutex<()>,
     cap: usize,
-    timing: Timing,
+    pub(super) timing: Timing,
     pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
     pub(super) config_dir: Mutex<Option<PathBuf>>,
     /// Wakes the tracker when the window gains focus.

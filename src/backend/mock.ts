@@ -459,6 +459,10 @@ export class MockBackend implements Backend {
     return this.runs.stop(id);
   }
 
+  async runsAnswer(id: string, text: string) {
+    return this.runs.answer(id, text);
+  }
+
   async runsStopAll() {
     return this.runs.stopAll();
   }

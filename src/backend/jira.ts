@@ -322,6 +322,10 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_stop", { id });
   }
 
+  runsAnswer(id: string, text: string) {
+    return invoke<Run>("runs_answer", { id, text });
+  }
+
   runsStopAll() {
     return invoke<{ stopped: number; failed: number }>("runs_stop_all");
   }

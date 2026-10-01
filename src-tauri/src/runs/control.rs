@@ -178,11 +178,11 @@ fn size_within(dir: &Path, limit: Duration) -> u64 {
 }
 
 impl RunService {
-    async fn toolchain(&self) -> Result<Toolchain> {
+    pub(super) async fn toolchain(&self) -> Result<Toolchain> {
         self.tools.get().await.map_err(|e| Error::Claude(Failure::from(e).to_string()))
     }
 
-    fn stopped(run: &mut Run) {
+    pub(super) fn stopped(run: &mut Run) {
         let now = Utc::now();
         run.state = RunState::Stopped;
         run.needs = None;

@@ -69,7 +69,7 @@ interface Seed {
 
 const SEEDS: Seed[] = [
   { key: "DEVOPS-471", name: "devops-471-flaky-deploy-a1b2", state: "needsPermission", minutesAgo: 14, over: { needs: "approve Bash: git push origin HEAD", lastDetail: "Wants to run a command", tokens: 212_000 } },
-  { key: "CA-409", name: "ca-409-checkout-totals-c3d4", state: "needsAnswer", minutesAgo: 22, over: { needs: "Should the refund path keep the old rounding?", lastDetail: "Waiting for an answer", tokens: 148_000 } },
+  { key: "CA-409", name: "ca-409-checkout-totals-c3d4", state: "needsAnswer", minutesAgo: 22, over: { needs: "Should the refund path keep the old rounding?", suggestedReply: "Yes, keep the old rounding.", lastDetail: "Waiting for an answer", tokens: 148_000 } },
   { key: "WEB-108", name: "web-108-size-guide-e5f6", state: "working", minutesAgo: 6, over: { lastDetail: "Reading the size guide component", tokens: 578_000 } },
   { key: "SUP-12", name: "sup-12-refund-lookup-0718", state: "working", minutesAgo: 3, over: { lastDetail: "Searching the logs for the refund id", tokens: 96_000, spec: specFor("SUP-12", "sup-12-refund-lookup-0718", "acme/payments") } },
   { key: "DEVOPS-455", name: "devops-455-queue-lag-92a3", state: "done", minutesAgo: 95, over: { result: "The lag comes from one consumer that retries without backoff.\n\nFor Jira: add a backoff to the consumer and close the alert.", tokens: 340_000, branch: "worktree-devops-455-queue-lag-92a3" } },
@@ -176,6 +176,8 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
     shortId: failed ? null : (0x1000a000 + i * 0x111).toString(16).padStart(8, "0"),
     sessionId: null,
     needs: null,
+    suggestedReply: null,
+    unsentAnswer: null,
     lastDetail: null,
     tokens: null,
     branch: null,
@@ -350,6 +352,8 @@ export class MockRuns {
       shortId: null,
       sessionId: null,
       needs: null,
+      suggestedReply: null,
+      unsentAnswer: null,
       lastDetail: null,
       tokens: null,
       branch: null,
@@ -405,6 +409,17 @@ export class MockRuns {
     if (!run) throw new Error("that run no longer exists");
     if (!STOPPABLE.includes(run.state)) throw new Error("it can be stopped once it is working");
     const next = this.update(id, { state: "stopped", endedAt: this.now() });
+    this.changed();
+    return next;
+  }
+
+  answer(id: string, text: string): Run {
+    const run = this.get(id);
+    if (!run) throw new Error("that run no longer exists");
+    const again = run.state === "stopped" && !!run.unsentAnswer;
+    if (run.state !== "needsAnswer" && !again) throw new Error(run.state === "needsPermission" ? "A permission prompt can only be answered in Terminal." : `This run is ${run.state}, so it isn't waiting for an answer.`);
+    if (!text.trim() || text.length > 4000) throw new Error("Write an answer first.");
+    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now() });
     this.changed();
     return next;
   }

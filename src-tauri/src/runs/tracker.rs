@@ -29,6 +29,7 @@ const DETAIL_KEPT: usize = 500;
 const EVENT_TEXT_KEPT: usize = 500;
 const EVENT_DETAIL_KEPT: usize = 2_048;
 const RESULT_KEPT: usize = 20_000;
+const REPLY_KEPT: usize = 1_000;
 
 /// Why a run is worth interrupting for. Being quiet is not one of them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,6 +238,10 @@ impl RunService {
         }
         run.needs = match seen.state {
             RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => seen.text.as_deref().and_then(|t| cleaned(t, NEEDS_KEPT)),
+            _ => None,
+        };
+        run.suggested_reply = match seen.state {
+            RunState::NeedsAnswer => job.as_ref().and_then(|j| j.suggested_reply.as_deref()).and_then(|r| cleaned(r, REPLY_KEPT)),
             _ => None,
         };
         if seen.state == RunState::Done {
