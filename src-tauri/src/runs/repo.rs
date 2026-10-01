@@ -255,6 +255,7 @@ esac
                 _ => return,
             }
         }
+        panic!("{} is still busy for writing after 5 s", path.display());
     }
 
     pub fn fake_git(dir: &Path) -> Git {

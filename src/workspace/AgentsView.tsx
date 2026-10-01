@@ -201,7 +201,6 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     position: at,
     total: order.length,
     ticketTitle: ticketTitle(run),
-    onSelect: () => on.select(run.id),
     onOpen: () => on.open(run.id),
     onAttach: () => on.attach(run.id),
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,

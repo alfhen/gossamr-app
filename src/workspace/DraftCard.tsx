@@ -201,13 +201,14 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
           ))}
         {intent.type === "startRun" && (
           <div className="grid gap-1.5">
-            <p className="m-0 font-semibold">
+            <p className="m-0 flex items-baseline gap-2 font-semibold">
               {KIND_LABEL[intent.spec.kind]} {intent.item?.key ?? intent.spec.repo}
+              {p.createdBy === "pip" && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Proposed by Pip</span>}
             </p>
             <p className="m-0 line-clamp-3 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{intent.spec.instruction}</p>
             {intent.spec.focus?.trim() && (
               <p className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2 py-1 text-sm [overflow-wrap:anywhere]">
-                <b className="font-semibold text-ws-pip">Focus from Pip:</b> {intent.spec.focus.trim()}
+                <b className="font-semibold text-ws-pip">Focus from Pip{intent.spec.focusFromRun ? `, after reading run ${intent.spec.focusFromRun}` : ""}:</b> {intent.spec.focus.trim()}
               </p>
             )}
             <p className="m-0 text-sm text-ws-ink3">Runs as you, with your Claude settings, in a new worktree of {intent.spec.clonePath}. Read the exact prompt and checks, then start it. Nothing runs before that.</p>

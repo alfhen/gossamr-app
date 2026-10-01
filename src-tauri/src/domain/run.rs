@@ -33,7 +33,16 @@ pub enum RunKind {
     Verify,
 }
 
+/// The kinds a run can be started with. The one place that widens when more kinds are built.
+pub fn allowed_kinds() -> &'static [RunKind] {
+    &[RunKind::Investigate]
+}
+
 impl RunKind {
+    pub fn parse(name: &str) -> Option<Self> {
+        [RunKind::Investigate, RunKind::Triage, RunKind::Build, RunKind::Review, RunKind::Verify].into_iter().find(|k| k.as_str() == name)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             RunKind::Investigate => "investigate",
@@ -68,6 +77,14 @@ pub struct RunSpec {
     pub ticket_block: Option<String>,
 }
 
+/// Where a run would be set up, worked out by whoever knows the person's clones.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClonePlan {
+    pub path: PathBuf,
+    pub base: String,
+    pub name: String,
+}
+
 fn is_repo_part(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.starts_with('-') && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
@@ -83,7 +100,7 @@ fn too_long(s: &str, limit: usize) -> bool {
 impl RunSpec {
     /// The checks that need no file system. That the clone exists is checked where the file system is.
     pub fn validate(&self) -> Result<()> {
-        if self.kind != RunKind::Investigate {
+        if !allowed_kinds().contains(&self.kind) {
             return Err(refuse("only investigate runs are available yet"));
         }
         let parts: Vec<&str> = self.repo.split('/').collect();
@@ -449,6 +466,11 @@ mod tests {
     #[test]
     fn only_investigate_runs_exist_for_now() {
         assert!(rejected(|s| s.kind = RunKind::Build));
+        assert_eq!(allowed_kinds(), [RunKind::Investigate]);
+        assert_eq!(RunKind::parse("investigate"), Some(RunKind::Investigate));
+        assert_eq!(RunKind::parse("verify"), Some(RunKind::Verify));
+        assert_eq!(RunKind::parse("Investigate"), None);
+        assert_eq!(RunKind::parse("rm -rf"), None);
     }
 
     #[test]

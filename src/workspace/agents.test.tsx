@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunState } from "../types";
 import { AgentCard, onActivate } from "./AgentCard";
+import { AgentRow } from "./AgentRow";
+import { FailureNext, OpenInTerminal } from "./AgentParts";
 import { AgentsBanners } from "./AgentsBanners";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
@@ -65,7 +67,7 @@ const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...eight()[0],
 const buttonsOf = (html: string) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
 
 const card = (r: Run, opened = false) =>
-  renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onSelect={vi.fn()} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+  renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
@@ -422,5 +424,56 @@ describe("motion", () => {
     const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
     expect(reduced).toMatch(/\.ws-pulse::after\s*{\s*display:\s*none/);
     expect(reduced).toMatch(/\.ws-agent-card:hover\s*{\s*transform:\s*none/);
+  });
+});
+
+describe("opening a run", () => {
+  const props = (onOpen: () => void) => ({ run: run("done"), now: NOW, selected: false, position: 1, total: 1, ticketTitle: null, onOpen, onAttach: vi.fn(), failure: { opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } } });
+
+  it("opens the run when a card or a row is clicked, not only when Enter is pressed", () => {
+    const open = vi.fn();
+    const card = AgentCard(props(open)) as { props: { onClick: () => void } };
+    card.props.onClick();
+    const row = AgentRow(props(open)) as { props: { onClick: () => void } };
+    row.props.onClick();
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("controls inside a card", () => {
+  type El = { props: { onClick?: (ev: { stopPropagation(): void }) => void; children?: unknown } };
+  const buttons = (el: unknown): El[] => {
+    const found: El[] = [];
+    const walk = (n: unknown) => {
+      if (Array.isArray(n)) return n.forEach(walk);
+      const e = n as El | null;
+      if (!e || typeof e !== "object" || !("props" in e)) return;
+      if ((e as unknown as { type: unknown }).type === "button") found.push(e);
+      walk(e.props.children);
+    };
+    walk(el);
+    return found;
+  };
+  const click = (b: El) => {
+    const ev = { stopPropagation: vi.fn() };
+    b.props.onClick!(ev);
+    return ev.stopPropagation;
+  };
+
+  it("keeps a click on Open in Terminal from also opening the run", () => {
+    const onOpen = vi.fn();
+    const [b] = buttons(OpenInTerminal({ run: run("needsAnswer", { shortId: "1000a000" }), onOpen }));
+    const stop = click(b);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a click on the failure buttons from also opening the run", () => {
+    const failure = { opened: true, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } };
+    const bs = buttons(FailureNext({ run: failed("untrustedFolder"), failure }));
+    expect(bs).toHaveLength(2);
+    for (const b of bs) expect(click(b)).toHaveBeenCalledOnce();
+    expect(failure.on.act).toHaveBeenCalledOnce();
+    expect(failure.on.retry).toHaveBeenCalledOnce();
   });
 });

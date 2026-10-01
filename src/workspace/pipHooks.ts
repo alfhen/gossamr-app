@@ -3,6 +3,9 @@ import { filterChips } from "../lib/filter";
 import { itemsByFilter, useItemsByFilter, useWorkspace } from "../workspaceStore";
 import type { WorkItem } from "../types";
 import { useActivity } from "./activityStore";
+import { useAgentsFlag } from "./agentsFlag";
+import { needsPerson } from "./agentsLogic";
+import { useRuns } from "./runsStore";
 import { useActiveTab } from "./hooks";
 import { itemScene, type ItemScene } from "./pipScene";
 import { buildScreenContext, type Screen } from "./screenContext";
@@ -11,11 +14,15 @@ import { activeTab, useTabs } from "./tabsStore";
 const peekedItems = (p: ReturnType<typeof useWorkspace.getState>["peeked"]) => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.item]));
 
 /** The screen as it is right now, read when a question is asked so it is about what is on screen then. */
+const agentsIn = (on: boolean, sheet: ReturnType<typeof useRuns.getState>["sheet"], runs: ReturnType<typeof useRuns.getState>["runs"]): Screen["agents"] =>
+  on ? { openRun: sheet?.type === "run" ? sheet.id : null, waiting: runs.filter(needsPerson).length } : undefined;
+
 export function readScreen(): Screen {
   const tabs = useTabs.getState();
   const ws = useWorkspace.getState();
   const tab = activeTab(tabs);
   const { chip, container } = useActivity.getState();
+  const { sheet, runs } = useRuns.getState();
   return {
     route: tabs.route,
     tab,
@@ -26,6 +33,7 @@ export function readScreen(): Screen {
     selected: tabs.selected,
     marked: tabs.marked,
     activity: { chip, container },
+    agents: agentsIn(useAgentsFlag.getState().enabled, sheet, runs),
   };
 }
 
@@ -44,7 +52,14 @@ export function useScreen(): Screen {
   const marked = useTabs((s) => s.marked);
   const chip = useActivity((s) => s.chip);
   const container = useActivity((s) => s.container);
-  return useMemo(() => ({ route, tab, shown, items, peeked, containers, selected, marked, activity: { chip, container } }), [route, tab, shown, items, peeked, containers, selected, marked, chip, container]);
+  const enabled = useAgentsFlag((s) => s.enabled);
+  const sheet = useRuns((s) => s.sheet);
+  const runs = useRuns((s) => s.runs);
+  const agents = useMemo(() => agentsIn(enabled, sheet, runs), [enabled, sheet, runs]);
+  return useMemo(
+    () => ({ route, tab, shown, items, peeked, containers, selected, marked, activity: { chip, container }, agents }),
+    [route, tab, shown, items, peeked, containers, selected, marked, chip, container, agents],
+  );
 }
 
 /** What Pip can tell about the open ticket, or null when none is open on a screen that has a peek. */

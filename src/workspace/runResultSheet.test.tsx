@@ -224,7 +224,7 @@ describe("an agent row in Activity", () => {
 describe("the Draft comment shortcut on an agent card", () => {
   const card = (onDraftComment?: () => void) =>
     renderToStaticMarkup(
-      <AgentCard run={run("done")} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onSelect={vi.fn()} onOpen={vi.fn()} onAttach={vi.fn()} onDraftComment={onDraftComment} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />,
+      <AgentCard run={run("done")} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} onDraftComment={onDraftComment} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />,
     );
 
   it("is there when the screen says there is something to post, and not otherwise", () => {

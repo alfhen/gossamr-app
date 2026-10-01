@@ -532,6 +532,25 @@ export class MockRuns {
     return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item, spec }, null, "req-pip"));
   }
 
+  /** A run Pip proposes: it names the ticket and a focus note, and the repository, clone, name and ticket text are filled in here. */
+  pipDraft(item: ItemRef, focus: string | null, requestId: string): Promise<Proposal> {
+    const repo = [...this.runs.map((r) => r.spec.repo), "acme/storefront"].find((r) => (CLONES[r] ?? []).length > 0) ?? "acme/storefront";
+    const clone = (CLONES[repo] ?? [])[0];
+    if (!clone) return Promise.reject(new Error(`There is no local clone of ${repo}`));
+    const spec: RunSpec = {
+      kind: "investigate",
+      repo,
+      clonePath: clone.path,
+      base: clone.defaultBranch ?? clone.branch,
+      name: this.suggestName(item.key, ""),
+      instruction: TEMPLATE,
+      focus: focus?.trim() || null,
+      focusFromRun: null,
+      ticketBlock: this.ticketText(item) ?? `${item.key}: sample ticket`,
+    };
+    return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item, spec }, null, requestId));
+  }
+
   startNow(id: string): Run {
     const run = this.get(id);
     if (run?.state !== "queued") throw new Error("only a queued run can be started");

@@ -14,7 +14,6 @@ export interface AgentItemProps {
   total: number;
   /** The ticket's title when it is cached. */
   ticketTitle: string | null;
-  onSelect(): void;
   onOpen(): void;
   onAttach(): void;
   /** Present on a finished run that has something to post. */
@@ -32,7 +31,7 @@ export function onActivate(open: () => void) {
   };
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, onSelect, onOpen, onAttach, onDraftComment, failure }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -48,7 +47,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
       aria-posinset={position}
       aria-setsize={total}
       aria-current={selected ? "true" : undefined}
-      onClick={onSelect}
+      onClick={onOpen}
       onKeyDown={onActivate(onOpen)}
       style={{ ["--c" as string]: tone.color, boxShadow: `inset 3px 0 0 var(--c)${selected ? ", 0 0 0 2px var(--color-ws-accent-soft)" : ""}` }}
       className={`ws-agent-card relative grid cursor-pointer content-start gap-2 rounded-[10px] border py-2.5 pr-3.5 pl-4 outline-offset-2 ${selected ? "border-ws-accent" : needs ? "border-ws-pip/45" : "border-ws-sep"} ${needs ? "bg-ws-pip-soft" : "bg-ws-win"}`}

@@ -240,6 +240,10 @@ export interface ScreenContext {
   item: ItemRef | null;
   filter: WorkFilter | null;
   selection: ItemRef[];
+  /** The agent run open in the run sheet. */
+  run?: string | null;
+  /** How many agents wait on the person. */
+  runsWaiting?: number;
 }
 
 export type WorkFilter =

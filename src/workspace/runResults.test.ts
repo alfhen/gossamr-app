@@ -270,6 +270,10 @@ describe("approving a blocker in the sample data", () => {
     const again = await backend.proposalsCreate({ type: "link", from: itemRef("CA-402"), to: itemRef("CA-406"), kind: "blocks" }, null);
     await backend.proposalsApprove(again.id);
     expect(await linked("CA-402")).toHaveLength(1);
+    const stale = await backend.proposalsCreate({ type: "link", from: { ...itemRef("CA-403"), key: "CA-406" }, to: itemRef("CA-404"), kind: "relates" }, null);
+    await backend.proposalsApprove(stale.id);
+    const ca403 = (await backend.cacheItem(itemRef("CA-403")))!.links;
+    expect(ca403.find((l) => l.kind === "relates")).toMatchObject({ from: { externalId: "CA-403", key: "CA-403" }, to: { externalId: "CA-404" } });
     const missing = await backend.proposalsCreate({ type: "link", from: itemRef("CA-402"), to: itemRef("NOPE-1"), kind: "blocks" }, null);
     const done = await backend.proposalsApprove(missing.id).catch((e: Error) => e);
     expect(done instanceof Error ? done.message : done.error).toMatch(/isn't in the sample data/);

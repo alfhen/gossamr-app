@@ -3,9 +3,9 @@ import type { WorkFilter } from "../types";
 import type { ItemScene } from "./pipScene";
 import type { Route } from "./tabsStore";
 
-export type NudgeKind = "empty-filter" | "large-list" | "unassigned-view" | "waiting" | "blocked" | "stale" | "unowned";
+export type NudgeKind = "empty-filter" | "large-list" | "unassigned-view" | "waiting" | "blocked" | "stale" | "unowned" | "run-needs" | "run-done" | "run-failed";
 
-export type NudgeAction = { type: "open" } | { type: "ask"; prompt: string } | { type: "filter"; filter: WorkFilter; note: string };
+export type NudgeAction = { type: "open" } | { type: "ask"; prompt: string } | { type: "filter"; filter: WorkFilter; note: string } | { type: "open-run"; id: string };
 
 export interface Nudge {
   /** What dismissal is remembered under: the kind, plus the ticket for the ones about a ticket. */
@@ -22,6 +22,8 @@ export interface NudgeScene {
   chips: number;
   item: ItemScene | null;
   unassignedInView: number;
+  /** Suggestions about agent runs, from `runNudges`; they fit any screen but Settings. */
+  runs?: readonly Nudge[];
 }
 
 export const LARGE_LIST = 25;
@@ -49,6 +51,11 @@ function forTicket(i: ItemScene): Nudge[] {
 
 /** Every suggestion that fits what is on screen, most useful first. */
 export function nudgeCandidates(s: NudgeScene): Nudge[] {
+  const runs = s.route === "settings" ? [] : [...(s.runs ?? [])];
+  return [...runs, ...onScreen(s)];
+}
+
+function onScreen(s: NudgeScene): Nudge[] {
   if (s.item) return forTicket(s.item);
   if (s.route !== "workspace") return [];
   const out: Nudge[] = [];

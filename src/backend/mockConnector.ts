@@ -610,7 +610,7 @@ export class MockConnector {
   link(from: ItemRef, to: ItemRef, kind: WorkLink["kind"]) {
     const ends = [this.item(from), this.item(to)];
     if (!ends[0] || !ends[1]) throw new Error(`${ends[0] ? to.key : from.key} isn't in the sample data`);
-    const link: WorkLink = { from: itemRef(from.key), to: itemRef(to.key), kind };
+    const link: WorkLink = { from: (ends[0] as WorkItem).item, to: (ends[1] as WorkItem).item, kind };
     for (const end of ends as WorkItem[]) {
       if (end.links.some((l) => l.kind === kind && l.from.externalId === link.from.externalId && l.to.externalId === link.to.externalId)) continue;
       this.items.set(end.item.externalId, { ...end, links: [...end.links, link] });
