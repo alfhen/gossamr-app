@@ -4,6 +4,7 @@
 pub mod binary;
 pub mod cli;
 pub mod control;
+pub mod enable;
 pub mod env;
 pub mod failure;
 pub mod index;

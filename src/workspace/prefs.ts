@@ -27,8 +27,6 @@ interface Prefs {
   peekCollapsed: Collapsed;
   /** Board column order the person chose, per project. */
   columnOrder: ColumnOrders;
-  /** Whether the Agents view is offered in the desktop app. The browser build always offers it. */
-  agentsEnabled: boolean;
   agentsView: AgentsViewMode;
   /** The person dismissed the explainer on the Agents view. */
   agentsIntroSeen: boolean;
@@ -41,14 +39,13 @@ interface Prefs {
   setPeekSection(id: PeekSectionId, collapsed: boolean): void;
   /** Saves the order of a project's columns; `null` goes back to the default. */
   setColumnOrder(container: string, ids: string[] | null): void;
-  setAgentsEnabled(enabled: boolean): void;
   setAgentsView(view: AgentsViewMode): void;
   setAgentsIntroSeen(seen: boolean): void;
 }
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsEnabled" | "agentsView" | "agentsIntroSeen"> {
+export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsIntroSeen"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     // Installs from before the workspace was the default stored "classic" without anyone choosing it.
@@ -59,7 +56,6 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
     peekWidth: storedWidth(raw?.peekWidth, PEEK_DEFAULT),
     pipWidth: storedWidth(raw?.pipWidth, PIP_DEFAULT),
     columnOrder: parseColumnOrders(raw?.columnOrder),
-    agentsEnabled: raw?.agentsEnabled === true,
     agentsView: AGENTS_VIEWS.find((v) => v === raw?.agentsView) ?? "cards",
     agentsIntroSeen: raw?.agentsIntroSeen === true,
   };
@@ -81,22 +77,18 @@ export const usePrefs = create<Prefs>((set) => ({
       const { [container]: _dropped, ...rest } = s.columnOrder;
       return { columnOrder: ids ? { ...rest, [container]: ids } : rest };
     }),
-  setAgentsEnabled: (agentsEnabled) => set({ agentsEnabled }),
   setAgentsView: (agentsView) => set({ agentsView }),
   setAgentsIntroSeen: (agentsIntroSeen) => set({ agentsIntroSeen }),
 }));
 
-usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsEnabled, agentsView, agentsIntroSeen }) =>
-  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsEnabled, agentsView, agentsIntroSeen }),
+usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsIntroSeen }) =>
+  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsIntroSeen }),
 );
 
 /** The browser build has no classic inbox to fall back to, so it always shows the workspace. */
 export const isWorkspaceUi = () => !isTauri() || usePrefs.getState().ui === "workspace";
 
 export const useWorkspaceUi = () => usePrefs((s) => !isTauri() || s.ui === "workspace");
-
-/** The Agents view is a preview in the desktop app until it is switched on in Settings; the browser build has nothing else to show. */
-export const useAgentsEnabled = () => usePrefs((s) => !isTauri() || s.agentsEnabled);
 
 export function applyTheme(theme: ThemeMode, root: HTMLElement = document.documentElement) {
   if (theme === "auto") root.removeAttribute("data-theme");

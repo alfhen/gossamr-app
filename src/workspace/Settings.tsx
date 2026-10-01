@@ -4,6 +4,8 @@ import { announceSignedOut } from "../accountEvents";
 import { auth } from "../backend/auth";
 import type { ConnectionInfo, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { useAgentsFlag } from "./agentsFlag";
+import { AgentsSwitch } from "./AgentsSwitch";
 import { THEME_LABEL, THEMES, usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 import { agoText, count, nounFor, watchSummary } from "./watchLogic";
@@ -214,8 +216,7 @@ export function Settings() {
   const theme = usePrefs((s) => s.theme);
   const setTheme = usePrefs((s) => s.setTheme);
   const setUi = usePrefs((s) => s.setUi);
-  const agentsEnabled = usePrefs((s) => s.agentsEnabled);
-  const setAgentsEnabled = usePrefs((s) => s.setAgentsEnabled);
+  const agents = useAgentsFlag();
   const containers = useWorkspace((s) => s.containers);
   const connections = useWorkspace((s) => s.connections);
   const section = useTabs((s) => s.settingsSection);
@@ -260,13 +261,7 @@ export function Settings() {
 
         {isTauri() && (
           <Section title="Agents">
-            <label className="flex items-start gap-2.5">
-              <input type="checkbox" checked={agentsEnabled} onChange={(ev) => setAgentsEnabled(ev.target.checked)} className="mt-0.5" />
-              <span>
-                <span className="font-semibold">Show Agents in the sidebar</span>
-                <span className="block text-ws-ink3">A preview. Agents are Claude Code sessions that work in the background, and nothing starts until you approve it.</span>
-              </span>
-            </label>
+            <AgentsSwitch enabled={agents.enabled} pending={agents.pending} error={agents.error} note={agents.note} onChange={(on) => void agents.set(on)} />
           </Section>
         )}
 

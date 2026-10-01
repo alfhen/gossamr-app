@@ -30,6 +30,7 @@ import type {
   RunQuery,
   RunSpec,
   RunsChanged,
+  RunsEnabledChange,
   Snapshot,
   Status,
   Ticket,
@@ -415,6 +416,23 @@ export class MockBackend implements Backend {
 
   /** Scripted agent runs, with `advance()` as their clock. */
   readonly runs: MockRuns;
+
+  /** Agents are on in the sample build, as the browser build has always shown them. */
+  private agentsOn = true;
+  /** Makes the next `runsSetEnabled(true)` fail with this reason, as a failed environment capture does. */
+  enableFailure: string | null = null;
+
+  async runsEnabled() {
+    return this.agentsOn;
+  }
+
+  async runsSetEnabled(enabled: boolean): Promise<RunsEnabledChange> {
+    if (enabled && !this.agentsOn && this.enableFailure) throw new Error(this.enableFailure);
+    this.agentsOn = enabled;
+    const keepRunning = this.runs.keepRunning();
+    const note = !enabled && keepRunning > 0 ? `${keepRunning} ${keepRunning === 1 ? "agent is" : "agents are"} still running and was not stopped. Gossamr won't start new ones or follow these until you turn Agents back on; they keep running in Claude.` : null;
+    return { enabled, keepRunning, note };
+  }
 
   runsList(query?: RunQuery) {
     return Promise.resolve(this.runs.list(query));

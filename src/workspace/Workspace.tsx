@@ -20,7 +20,8 @@ import { PeekSheet } from "./PeekSheet";
 import { FilterNote, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
-import { applyTheme, useAgentsEnabled, usePrefs } from "./prefs";
+import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
+import { applyTheme, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { Rail } from "./Rail";
 import { Settings } from "./Settings";
@@ -114,6 +115,10 @@ export function Workspace({ backend }: { backend: Backend }) {
       useActivity.getState().dispose();
       useWorkspace.getState().dispose();
     };
+  }, [backend]);
+
+  useEffect(() => {
+    useAgentsFlag.getState().init(backend);
   }, [backend]);
 
   useEffect(() => {

@@ -34,7 +34,11 @@ impl AppConfig {
 
     pub fn save(&self, dir: &Path) -> Result<()> {
         std::fs::create_dir_all(dir)?;
-        std::fs::write(dir.join(FILE), serde_json::to_string_pretty(self)?)?;
+        let (temp, file) = (dir.join(format!("{FILE}.tmp")), dir.join(FILE));
+        std::fs::write(&temp, serde_json::to_string_pretty(self)?)?;
+        std::fs::rename(&temp, &file).inspect_err(|_| {
+            let _ = std::fs::remove_file(&temp);
+        })?;
         Ok(())
     }
 }
@@ -74,6 +78,19 @@ mod tests {
         assert_eq!(AppConfig::load(&dir), on);
         std::fs::write(dir.join(FILE), r#"{"agentsEnabled":"yes"}"#).unwrap();
         assert!(!AppConfig::load(&dir).agents_enabled, "a mistyped value gives the defaults");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_save_replaces_the_file_whole_and_leaves_no_temporary_file() {
+        let dir = std::env::temp_dir().join(format!("gossamr-config-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json.tmp"), "{ half").unwrap();
+        let on = AppConfig { agents_enabled: true, ..AppConfig::default() };
+        on.save(&dir).unwrap();
+        assert_eq!(AppConfig::load(&dir), on);
+        assert!(!dir.join("config.json.tmp").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

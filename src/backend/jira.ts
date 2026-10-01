@@ -22,6 +22,7 @@ import type {
   RunReview,
   RunSpec,
   RunsChanged,
+  RunsEnabledChange,
   Snapshot,
   Transition,
   Uploaded,
@@ -290,6 +291,14 @@ export class JiraBackend implements Backend {
   onProposalsChanged(listener: (change: ProposalsChanged) => void) {
     const pending = listen<ProposalsChanged>("proposals-changed", (e) => listener(e.payload));
     return () => void pending.then((unlisten) => unlisten());
+  }
+
+  runsEnabled() {
+    return invoke<boolean>("runs_enabled");
+  }
+
+  runsSetEnabled(enabled: boolean) {
+    return invoke<RunsEnabledChange>("runs_set_enabled", { enabled });
   }
 
   runsList(query: RunQuery = {}) {
