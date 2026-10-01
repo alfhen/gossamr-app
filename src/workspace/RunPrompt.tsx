@@ -59,6 +59,7 @@ function Part({ label, aside, children }: { label: string; aside?: ReactNode; ch
 /** The prompt in the parts it is made of, in the order the agent reads them. Together they are exactly what is sent. */
 export function PromptParts({ review, editor }: { review: RunReview; editor?: InstructionEditor }) {
   const parts = splitPrompt(review);
+  const extra = parts.find((p) => p.id === "extra");
   const whole = parts.length === 1 && parts[0].id === "all";
   const focus = review.focus?.trim();
   const ticket = review.ticketBlock?.trim();
@@ -89,6 +90,11 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
               <pre className={`${MONO_BLOCK} max-h-none`}>{review.instruction.trim()}</pre>
             )}
           </Part>
+          {extra && (
+            <Part label="Added for this run">
+              <pre className={`${MONO_BLOCK} max-h-none`}>{extra.text}</pre>
+            </Part>
+          )}
         </>
       )}
       {focus && (

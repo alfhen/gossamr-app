@@ -429,14 +429,14 @@ export type ProposalEdit =
   /** A new item's fields; the ones left out stay as they are. */
   | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef }
   /** A run draft's settings, as the person edits them; the ones left out stay as they are. */
-  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string };
+  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
   connectionId: string;
 }
 
-/** Mirrors src-tauri/src/domain/run.rs. Only `investigate` can be started yet. */
+/** Mirrors src-tauri/src/domain/run.rs. */
 export type RunKind = "investigate" | "triage" | "build" | "review" | "verify";
 
 /** Everything that decides what an agent does, as the person approves it. */
@@ -455,6 +455,12 @@ export interface RunSpec {
   focusFromRun?: string | null;
   /** Snapshot of the ticket made by the backend, never taken from a model. */
   ticketBlock?: string | null;
+  /** The pull request a review reads; reviews only. */
+  pr?: number | null;
+  /** The pull request's head commit when the draft was read; the backend fills it in. */
+  prSha?: string | null;
+  /** Whether a build is told it may push and open a pull request. Builds only. */
+  allowPush?: boolean;
 }
 
 export type RunState = "queued" | "launching" | "working" | "needsAnswer" | "needsPermission" | "systemBlocked" | "done" | "failed" | "stopped" | "unknown";
@@ -524,6 +530,9 @@ export interface RunReview {
   ticketBlock: string | null;
   guard: string;
   spec: RunSpec;
+  /** The reviewed pull request, as GitHub names it now. */
+  prTitle?: string | null;
+  prUrl?: string | null;
 }
 
 /** One line of what the agent did, kept for the run sheet's timeline. */
@@ -797,6 +806,8 @@ export interface CodeChange {
   /** The head branch of a pull request, the name of a branch, or the branch a commit was read from. */
   headRef: string;
   baseRef: string | null;
+  /** The repository a pull request's head branch lives in: another one for a fork. Unknown for older cached rows. */
+  headRepo?: string | null;
   state: CodeChangeState;
   mergedAt: string | null;
   createdAt: string | null;

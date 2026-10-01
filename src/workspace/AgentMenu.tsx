@@ -1,21 +1,34 @@
+import { useEffect, useState } from "react";
 import { itemKey } from "../lib/filter";
-import type { ItemRef, Run } from "../types";
-import { Icon } from "./AgentIcons";
+import type { CodeChange, ItemRef, Run, RunKind } from "../types";
+import { useWorkspace } from "../workspaceStore";
+import { Icon, KIND_ICON } from "./AgentIcons";
 import { StateChip } from "./AgentParts";
 import { progressText, runTitle } from "./agentsLogic";
 import { usePopover } from "./Popover";
 import { useRunSetup } from "./runSetupStore";
+import { reviewablePr } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 
 export interface AgentMenuProps {
   ticketKey: string;
   open: boolean;
   onOpen(open: boolean): void;
-  onInvestigate(): void;
+  onStart(kind: RunKind): void;
+  /** An open pull request linked to the ticket that a review could take; the Review entry is offered only with one. */
+  reviewPr?: Pick<CodeChange, "number" | "title"> | null;
 }
 
-/** The menu on a ticket for starting an agent. Only Investigate exists yet; choosing it opens a draft to read, not a run. */
-export function AgentMenuView({ ticketKey, open, onOpen, onInvestigate }: AgentMenuProps) {
+const ENTRIES: { kind: RunKind; label: string; note: string }[] = [
+  { kind: "investigate", label: "Investigate this ticket", note: "Reads the code and logs, changes nothing, reports back" },
+  { kind: "triage", label: "Triage this ticket", note: "Sizes it, finds likely owners and duplicates, changes nothing" },
+  { kind: "build", label: "Build this", note: "Makes the change on its own branch; pushing is off unless you allow it" },
+  { kind: "review", label: "Review the PR", note: "Reads the linked pull request, comments to you, changes nothing" },
+  { kind: "verify", label: "Verify the change", note: "Checks the change works by reading code and running read-only commands" },
+];
+
+/** The menu on a ticket for starting an agent. Choosing a kind opens a draft to read, not a run. */
+export function AgentMenuView({ ticketKey, open, onOpen, onStart, reviewPr = null }: AgentMenuProps) {
   return (
     <div className="relative">
       <button
@@ -35,15 +48,17 @@ export function AgentMenuView({ ticketKey, open, onOpen, onInvestigate }: AgentM
       {open && (
         <ul role="menu" aria-label={`Start an agent on ${ticketKey}`} className="absolute top-full left-0 z-30 m-0 mt-1 grid min-w-64 list-none gap-px rounded-lg border border-ws-sep2 bg-ws-win p-1 shadow-ws-pop">
           <li className="px-2 py-1 text-xs text-ws-ink3">Draft an agent for {ticketKey}</li>
-          <li role="none">
-            <button type="button" role="menuitem" autoFocus onClick={onInvestigate} className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left hover:bg-ws-hover focus-visible:bg-ws-hover">
-              <Icon name="search" className="mt-0.5 size-[15px] text-ws-ink3" />
-              <span className="grid">
-                <span>Investigate this ticket</span>
-                <small className="text-xs text-ws-ink3">Reads the code and logs, changes nothing, reports back</small>
-              </span>
-            </button>
-          </li>
+          {ENTRIES.filter((e) => e.kind !== "review" || reviewPr).map((e, i) => (
+            <li key={e.kind} role="none">
+              <button type="button" role="menuitem" autoFocus={i === 0} onClick={() => onStart(e.kind)} className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left hover:bg-ws-hover focus-visible:bg-ws-hover">
+                <Icon name={KIND_ICON[e.kind]} className="mt-0.5 size-[15px] text-ws-ink3" />
+                <span className="grid">
+                  <span>{e.label}</span>
+                  <small className="text-xs text-ws-ink3">{e.kind === "review" && reviewPr ? `#${reviewPr.number} ${reviewPr.title}` : e.note}</small>
+                </span>
+              </button>
+            </li>
+          ))}
           <li className="px-2 pt-1 pb-1.5 text-xs text-ws-ink3">You read the exact prompt and approve before anything starts.</li>
         </ul>
       )}
@@ -53,6 +68,18 @@ export function AgentMenuView({ ticketKey, open, onOpen, onInvestigate }: AgentM
 
 export function AgentMenu({ item }: { item: ItemRef }) {
   const { open, setOpen, root } = usePopover();
+  const backend = useWorkspace((w) => w.backend);
+  const [reviewPr, setReviewPr] = useState<CodeChange | null>(null);
+  const id = itemKey(item);
+  useEffect(() => {
+    if (!open || !backend) return;
+    let live = true;
+    backend
+      .devLinks(item)
+      .then((links) => live && setReviewPr(reviewablePr(links)))
+      .catch(() => live && setReviewPr(null));
+    return () => void (live = false);
+  }, [open, backend, id]);
   return (
     <div
       ref={root}
@@ -68,9 +95,10 @@ export function AgentMenu({ item }: { item: ItemRef }) {
         ticketKey={item.key}
         open={open}
         onOpen={setOpen}
-        onInvestigate={() => {
+        reviewPr={reviewPr?.number ? { number: reviewPr.number, title: reviewPr.title } : null}
+        onStart={(kind) => {
           setOpen(false);
-          void useRunSetup.getState().begin({ item });
+          void useRunSetup.getState().begin({ item, kind, ...(kind === "review" && reviewPr?.number ? { pr: reviewPr.number, repo: reviewPr.repo } : {}) });
         }}
       />
     </div>

@@ -1,5 +1,5 @@
 import { itemKey } from "../lib/filter";
-import type { ContainerRef, Intent, WorkContainer, WorkFilter, WorkItem } from "../types";
+import type { ContainerRef, Intent, RunKind, WorkContainer, WorkFilter, WorkItem } from "../types";
 import type { SavedView } from "./filters";
 import { THEMES, THEME_LABEL, type ThemeMode } from "./prefs";
 import { CODE_FILTERS, CODE_FILTER_LABEL } from "../lib/devLinks";
@@ -45,7 +45,7 @@ export interface CommandActions {
   newTicket(): void;
   togglePip(): void;
   startAgent(): void;
-  investigate(item: WorkItem): void;
+  startAgentOn(item: WorkItem, kind: RunKind): void;
   showAgentsNeedingMe(): void;
   openAgentSafety(): void;
   jumpToItem(item: WorkItem): void;
@@ -162,20 +162,30 @@ export function ticketCommands(items: readonly WorkItem[], query: string, jump: 
     .map(({ item }): Command => ({ id: `ticket:${itemKey(item.item)}`, group: "Tickets", icon: "·", label: item.title, hint: item.item.key, run: () => jump(item) }));
 }
 
-const AGENT_WORDS = /\b(?:investigate|investigation|agent|start)\b/gi;
+const AGENT_VERBS: { kind: RunKind; words: RegExp; label: string }[] = [
+  { kind: "investigate", words: /\b(?:investigate|investigation)\b/i, label: "Investigate" },
+  { kind: "triage", words: /^\s*triage\b/i, label: "Triage" },
+  { kind: "build", words: /^\s*build\b/i, label: "Build" },
+  { kind: "review", words: /^\s*review\b/i, label: "Review the PR on" },
+  { kind: "verify", words: /^\s*(?:verify|check)\b/i, label: "Verify" },
+];
+const AGENT_WORDS = /\b(?:investigate|investigation|triage|build|review|verify|check|agent|start)\b/gi;
 
 /**
- * "Investigate <ticket>" entries for a query that asks for one: it names the action, or starts a command like
- * "investigate", and the rest of the words find the ticket. Without such a word the tickets stay plain jumps.
+ * "Investigate <ticket>" entries for a query that asks for one: it names the action, and the rest of the words find
+ * the ticket. Without such a word the tickets stay plain jumps. The other kinds are offered only when the query
+ * starts with their word, since "review" and "build" are also ordinary words in a ticket title. A bare "agent"
+ * means investigate.
  */
-export function investigateCommands(items: readonly WorkItem[], query: string, run: (item: WorkItem) => void, limit = 5): Command[] {
-  if (!/\b(?:investigate|investigation|agent)/i.test(query)) return [];
+export function agentCommands(items: readonly WorkItem[], query: string, run: (item: WorkItem, kind: RunKind) => void, limit = 5): Command[] {
+  const verb = AGENT_VERBS.find((v) => v.words.test(query)) ?? (/\bagent/i.test(query) ? AGENT_VERBS[0] : null);
+  if (!verb) return [];
   const rest = query.replace(AGENT_WORDS, " ").trim();
   const found = rest ? ticketCommands(items, rest, () => {}, limit).map((c) => c.id.slice("ticket:".length)) : [...items].sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, limit).map((i) => itemKey(i.item));
   const byKey = new Map(items.map((i) => [itemKey(i.item), i]));
   return found.flatMap((id) => {
     const item = byKey.get(id);
-    return item ? [{ id: `investigate:${id}`, group: "Agents" as const, icon: ">_", label: `Investigate ${item.item.key}  ${item.title}`, hint: "agent", keywords: "start an agent", run: () => run(item) }] : [];
+    return item ? [{ id: `${verb.kind}:${id}`, group: "Agents" as const, icon: ">_", label: `${verb.label} ${item.item.key}  ${item.title}`, hint: "agent", keywords: "start an agent", run: () => run(item, verb.kind) }] : [];
   });
 }
 

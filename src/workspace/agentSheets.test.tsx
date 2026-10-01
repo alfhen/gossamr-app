@@ -3,12 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { renderPrompt } from "../backend/mockRuns";
-import type { AgentSettings, Preflight, Run, RunEvent, RunReview, RunSpec, RunState } from "../types";
+import type { AgentSettings, CodeChange, ItemRef, Preflight, Run, RunEvent, RunReview, RunSpec, RunState } from "../types";
 import { AgentMenuView, TicketAgentRows } from "./AgentMenu";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsSettingsView, type CleanupOffer } from "./AgentsSettings";
 import { RunSetupView, setupBlock, type SetupViewProps } from "./RunSetup";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
+import { prChoices } from "./runSheetLogic";
 import { placesOf } from "./RunWhere";
 import { offsetText } from "./RunTimeline";
 
@@ -281,6 +282,9 @@ const setup = (over: Partial<SetupViewProps> = {}) => {
     item: itemRef("CA-401"),
     ticketTitle: "Welcome flow refresh",
     kind: "investigate",
+    kindEditable: true,
+    pr: null,
+    prs: { status: "idle", query: "", choices: [], error: null },
     repo: "acme/storefront",
     repos: ["acme/storefront", "acme/payments"],
     shortage: null,
@@ -302,7 +306,7 @@ const setup = (over: Partial<SetupViewProps> = {}) => {
     onBase: vi.fn(),
     wide: false,
     onWide: vi.fn(),
-    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn() },
+    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn(), chooseKind: vi.fn(), searchPrs: vi.fn(), choosePr: vi.fn(), setAllowPush: vi.fn() },
     ...over,
   };
   return renderToStaticMarkup(<RunSetupView {...props} />);
@@ -397,10 +401,82 @@ describe("the setup sheet", () => {
     expect(html).toContain("Choose a repository first");
   });
 
-  it("shows only Investigate as available, the others as coming later", () => {
-    const html = setup();
-    expect(html.match(/Coming later/g)!.length).toBeGreaterThanOrEqual(4);
-    expect(html.match(/<button[^>]*disabled=""[^>]*title="Coming later"/g)).toHaveLength(4);
+  describe("the kind picker", () => {
+    const kinds = (html: string) => /role="group" aria-label="Kind of work"[\s\S]*?<\/div>/.exec(html)![0];
+    const pressed = (html: string, kind: string) => new RegExp(`aria-pressed="(true|false)"[^>]*>(?:(?!</button>)[\\s\\S])*?<b[^>]*>${kind}</b>`).exec(html)?.[1];
+
+    it("offers all five kinds, none marked as coming later, with the chosen one pressed", () => {
+      const html = setup();
+      expect(html).not.toContain("Coming later");
+      expect(kinds(html).match(/<button[^>]*aria-pressed/g)).toHaveLength(5);
+      expect(pressed(kinds(html), "Investigate")).toBe("true");
+      expect(pressed(kinds(html), "Triage")).toBe("false");
+      expect(kinds(html)).not.toContain('disabled=""');
+    });
+
+    it("turns Build off without a ticket, and says why", () => {
+      const html = setup({ item: null });
+      expect(kinds(html)).toContain("Needs a ticket");
+      expect(/<button[^>]*disabled=""[^>]*title="Build needs a ticket"/.test(html)).toBe(true);
+    });
+
+    it("locks the kinds the person didn't pick when the draft isn't this sheet's own", () => {
+      const html = kinds(setup({ kindEditable: false }));
+      expect(html.match(/<button[^>]*disabled=""/g)).toHaveLength(4);
+      expect(pressed(html, "Investigate")).toBe("true");
+    });
+
+    it("shows the push option only for Build, off, with the honest sentence", () => {
+      expect(setup()).not.toContain("Allow it to push and open a pull request");
+      const html = setup({ kind: "build", review: reviewOf({ kind: "build", allowPush: false }) });
+      expect(html).toContain("Allow it to push and open a pull request");
+      expect(/<input type="checkbox"[^>]*checked=""/.test(html)).toBe(false);
+      expect(html).toContain("not a lock");
+      expect(html).toContain("nothing technical stops a push whether this is ticked or not");
+      const on = setup({ kind: "build", review: reviewOf({ kind: "build", allowPush: true }) });
+      expect(/<input type="checkbox"[^>]*checked=""/.test(on)).toBe(true);
+    });
+
+    it("names the permission mode from the pre-flight beside the push option", () => {
+      const preflight: Preflight = { rows: [{ level: "green", text: "Agents run as you, in your permission mode: auto" }], blocking: false };
+      expect(setup({ kind: "build", preflight })).toContain("your own permission mode (auto)");
+    });
+  });
+
+  describe("the pull request picker for a review", () => {
+    const MOCK_PR = new MockBackend().github.code.changes.find((c) => c.kind === "pullRequest" && c.state === "open")!;
+    const change = (n: number, over: Partial<CodeChange> = {}): CodeChange => ({ ...MOCK_PR, repo: "acme/storefront", headRepo: null, number: n, externalId: `pr:acme/storefront#${n}`, title: `Pull request ${n}`, ...over });
+    const prs = (choices: CodeChange[]): SetupViewProps["prs"] => ({ status: "ready", query: "CA-401", choices: prChoices(choices, "acme/storefront"), error: null });
+    const picker = (p: Partial<SetupViewProps> = {}) => setup({ kind: "review", review: null, preflight: null, ...p });
+
+    it("is not shown for the other kinds", () => {
+      expect(setup()).not.toContain("Pull request to review");
+    });
+
+    it("lists a same-repository open pull request as choosable, and says why a fork, a closed and a draft one are not", () => {
+      const html = picker({ prs: prs([change(1, { headRepo: "acme/storefront" }), change(2, { headRepo: "mallory/storefront" }), change(3, { state: "closed" }), change(4, { state: "draft" })]) });
+      const row = (n: number) => new RegExp(`<button[^>]*role="radio"[^>]*>(?:(?!</button>)[\\s\\S])*?Pull request ${n}</span>(?:(?!</button>)[\\s\\S])*</button>`).exec(html)![0];
+      expect(row(1)).not.toContain('disabled=""');
+      expect(row(2)).toContain('disabled=""');
+      expect(row(2)).toContain("From a fork");
+      expect(row(3)).toContain("Closed");
+      expect(row(4)).toContain("Still a draft");
+    });
+
+    it("says that a pull request with an unknown head repository is checked on GitHub", () => {
+      expect(picker({ prs: prs([change(1)]) })).toContain("Checked on GitHub when you choose it");
+    });
+
+    it("holds Start until a pull request is chosen", () => {
+      const html = picker({ prs: prs([change(1)]) });
+      expect(disabled(html, "Start agent")).toBe(true);
+      expect(html).toContain("Choose the pull request to review");
+    });
+
+    it("says when nothing matches or the search failed", () => {
+      expect(picker({ prs: prs([]) })).toContain("No pull request in acme/storefront matches");
+      expect(picker({ prs: { status: "failed", query: "x", choices: [], error: "rate limited" } })).toContain("Couldn&#x27;t search for pull requests: rate limited");
+    });
   });
 
   it("asks for a second look when the draft changed, and holds Start until it is read", () => {
@@ -426,7 +502,7 @@ describe("the setup sheet", () => {
 describe("what ⌘↵ may start", () => {
   const props = (over: Partial<SetupViewProps> = {}) => {
     const review = reviewOf();
-    return { review, preflight: ok, phase: "ready" as const, busy: false, changed: false, choice: null, repo: "acme/storefront", instruction: review.instruction, base: "main", ...over };
+    return { review, preflight: ok, phase: "ready" as const, busy: false, changed: false, choice: null, repo: "acme/storefront", instruction: review.instruction, base: "main", kind: "investigate" as const, item: itemRef("CA-401") as ItemRef | null, pr: null as number | null, ...over };
   };
 
   it("is nothing while the checks have a red row, so the shortcut cannot get past a disabled button", () => {
@@ -508,13 +584,19 @@ describe("safety and settings", () => {
 });
 
 describe("the Agent menu on a ticket", () => {
-  it("offers Investigate, and says you approve before anything starts", () => {
-    const html = renderToStaticMarkup(<AgentMenuView ticketKey="CA-401" open onOpen={vi.fn()} onInvestigate={vi.fn()} />);
+  it("offers every kind but Review, and says you approve before anything starts", () => {
+    const html = renderToStaticMarkup(<AgentMenuView ticketKey="CA-401" open onOpen={vi.fn()} onStart={vi.fn()} />);
     expect(html).toContain('role="menu"');
-    expect(html).toContain("Investigate this ticket");
+    for (const shown of ["Investigate this ticket", "Triage this ticket", "Build this", "Verify the change"]) expect(html).toContain(shown);
     expect(html).toContain("approve before anything starts");
-    for (const hidden of ["Build", "Review the PR", "Verify", "Triage"]) expect(html).not.toContain(hidden);
-    expect(renderToStaticMarkup(<AgentMenuView ticketKey="CA-401" open={false} onOpen={vi.fn()} onInvestigate={vi.fn()} />)).not.toContain('role="menu"');
+    expect(html).not.toContain("Review the PR");
+    expect(renderToStaticMarkup(<AgentMenuView ticketKey="CA-401" open={false} onOpen={vi.fn()} onStart={vi.fn()} />)).not.toContain('role="menu"');
+  });
+
+  it("offers Review the PR only with a linked pull request, and names it", () => {
+    const html = renderToStaticMarkup(<AgentMenuView ticketKey="CA-402" open onOpen={vi.fn()} onStart={vi.fn()} reviewPr={{ number: 212, title: "CA-402: Cache the category tree" }} />);
+    expect(html).toContain("Review the PR");
+    expect(html).toContain("#212 CA-402: Cache the category tree");
   });
 
   it("lists the runs on the ticket and opens one", () => {

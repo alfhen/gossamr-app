@@ -212,3 +212,72 @@ describe("mock runs", () => {
     expect(epoch - Date.parse(newest.queuedAt)).toBeLessThan(60 * 60_000);
   });
 });
+
+describe("mock runs of every kind", () => {
+  const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront" };
+  const webshop = { repo: "acme/webshop", clonePath: "/Users/sample/Code/webshop" };
+
+  it("can add one scripted run of each other kind, with the build's pull request", async () => {
+    const backend = new MockBackend({ runs: { seed: "kinds" } });
+    const runs = await backend.runsList();
+    expect(new Set(runs.map((r) => r.spec.kind))).toEqual(new Set(["investigate", "triage", "build", "review", "verify"]));
+    const build = runs.find((r) => r.spec.kind === "build")!;
+    expect((await backend.runsOutcome(build.id)).change).toMatchObject({ kind: "pullRequest" });
+    expect(runs.find((r) => r.spec.kind === "review")!.spec.pr).toBe(331);
+  });
+
+  it("fills each kind's own instruction when the draft leaves it empty", async () => {
+    const backend = new MockBackend();
+    const item = itemRef("CA-412");
+    const triage = await backend.runsDraft({ ...spec, ...storefront, kind: "triage", instruction: "" }, item);
+    expect(triage.intent.type === "startRun" && triage.intent.spec.instruction).toMatch(/^Triage this work/);
+  });
+
+  it("refuses a build without a ticket, a push outside a build and a pull request outside a review", async () => {
+    const backend = new MockBackend();
+    await expect(backend.runsDraft({ ...spec, ...storefront, kind: "build" }, null)).rejects.toThrow("Build needs a ticket");
+    await expect(backend.runsDraft({ ...spec, ...storefront, allowPush: true }, itemRef("CA-412"))).rejects.toThrow("Only a build can push");
+    await expect(backend.runsDraft({ ...spec, ...storefront, pr: 3 }, itemRef("CA-412"))).rejects.toThrow("Only a review reads a pull request");
+    await expect(backend.runsDraft({ ...spec, ...storefront, kind: "review" }, itemRef("CA-412"))).rejects.toThrow("needs a pull request");
+  });
+
+  it("changes the digest with the push permission and the pull request", async () => {
+    const build = { ...spec, kind: "build" as const };
+    expect(mockDigest({ ...build, allowPush: true })).not.toBe(mockDigest(build));
+    expect(mockDigest({ ...spec, ...storefront, kind: "review", pr: 1 })).not.toBe(mockDigest({ ...spec, ...storefront, kind: "review", pr: 2 }));
+  });
+
+  it("refuses to review a fork, a closed or a missing pull request at every step", async () => {
+    const backend = new MockBackend({ githubRepos: 14 });
+    await backend.watchSetMode("github:ada", "everything");
+    const review = (pr: number) => backend.runsDraft({ ...spec, ...webshop, kind: "review", pr }, itemRef("CA-402"));
+    await expect(review(215)).rejects.toThrow("comes from a fork");
+    await expect(review(190)).rejects.toThrow("is closed");
+    await expect(review(999)).rejects.toThrow("wasn't found");
+    const ok = await review(212);
+    expect(ok.intent.type === "startRun" && ok.intent.spec).toMatchObject({ pr: 212, prSha: "sha2120000", base: "main" });
+    expect(await backend.runsReview(ok.id)).toMatchObject({ prTitle: "CA-402: Cache the category tree", prUrl: "https://github.com/acme/webshop/pull/212" });
+  });
+
+  it("swaps an untouched template when the kind is edited and clears what belongs to the old kind", async () => {
+    const backend = new MockBackend();
+    const made = await backend.runsDraft({ ...spec, ...storefront, kind: "build", instruction: "", allowPush: true }, itemRef("CA-412"));
+    const edited = await backend.proposalsEdit(made.id, { type: "run", kind: "verify" });
+    const next = edited.intent.type === "startRun" ? edited.intent.spec : null;
+    expect(next).toMatchObject({ kind: "verify", allowPush: false, pr: null });
+    expect(next!.instruction).toMatch(/^Check that the change/);
+    const custom = await backend.proposalsEdit(made.id, { type: "run", instruction: "My own words." });
+    const kept = await backend.proposalsEdit(custom.id, { type: "run", kind: "triage" });
+    expect(kept.intent.type === "startRun" && kept.intent.spec.instruction).toBe("My own words.");
+  });
+
+  it("shows the amber push row and the review row in the pre-flight", async () => {
+    const backend = new MockBackend({ githubRepos: 14 });
+    await backend.watchSetMode("github:ada", "everything");
+    const push = await backend.runsPreflight({ ...spec, ...storefront, kind: "build", allowPush: true });
+    expect(push.rows.find((r) => r.level === "amber" && /may push/.test(r.text))).toBeTruthy();
+    expect((await backend.runsPreflight({ ...spec, ...storefront, kind: "build" })).rows.some((r) => /may push/.test(r.text))).toBe(false);
+    const fork = await backend.runsPreflight({ ...spec, ...webshop, kind: "review", pr: 215 });
+    expect(fork.blocking).toBe(true);
+  });
+});

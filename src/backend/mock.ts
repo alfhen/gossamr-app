@@ -384,6 +384,7 @@ export class MockBackend implements Backend {
       const w = this.connector.item(ref);
       return w ? `${ref.key}: ${w.title}\n\n${docText(w.body)}`.trim() : null;
     };
+    this.runs.pullRequest = (repo, number) => this.github.code.change(repo, number);
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
   }
 

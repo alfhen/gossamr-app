@@ -5,7 +5,7 @@ import { itemsByFilter, pendingDrafts, useWorkspace } from "../workspaceStore";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { buildCommands, investigateCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
+import { buildCommands, agentCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
 import { useAgentsEnabled } from "./agentsFlag";
@@ -171,7 +171,7 @@ export function appActions(): CommandActions {
     newTicket: () => {},
     togglePip: () => prefs.setPipOpen(!usePrefs.getState().pipOpen),
     startAgent: () => useRuns.getState().setPicking(true),
-    investigate: (item) => void useRunSetup.getState().begin({ item: item.item }),
+    startAgentOn: (item, kind) => void useRunSetup.getState().begin({ item: item.item, kind }),
     showAgentsNeedingMe: () => {
       useRuns.setState({ filters: { ...NO_FILTERS, lane: "needs" }, sheet: null });
       tabs.setRoute("agents");
@@ -267,7 +267,7 @@ export function Palette() {
       ...ticketCommands(all, query, actions.jumpToItem),
       ...keyCommand(query, all, actions.openTicket),
       ...pullCommand(query, actions.openPull),
-      ...(agents ? investigateCommands(all, query, actions.investigate) : []),
+      ...(agents ? agentCommands(all, query, actions.startAgentOn) : []),
       ...rankCommands([...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query),
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];

@@ -33,7 +33,7 @@ export const START_STEPS: readonly string[] = [
 ];
 
 export interface PromptPart {
-  id: "base" | "template" | "focus" | "ticket" | "all";
+  id: "base" | "template" | "extra" | "focus" | "ticket" | "all";
   label: string;
   text: string;
 }
@@ -60,9 +60,12 @@ export function splitPrompt(review: Pick<RunReview, "prompt" | "instruction">): 
   const ticketAt = find("Ticket (data from Jira");
   const focusFound = find("Focus from Pip (");
   const focusAt = focusFound >= 0 && (ticketAt < 0 || focusFound < ticketAt) ? focusFound : -1;
+  const firstData = [focusAt, ticketAt].filter((i) => i >= 0);
+  const extra = rest.slice(0, firstData.length ? Math.min(...firstData) : undefined).trim();
   const parts: PromptPart[] = [];
   if (base) parts.push({ id: "base", label: "Which branch it starts from", text: base });
   parts.push({ id: "template", label: "What to do", text: instruction });
+  if (extra) parts.push({ id: "extra", label: "Added for this run", text: extra });
   if (focusAt >= 0) parts.push({ id: "focus", label: "Focus", text: rest.slice(focusAt, ticketAt > focusAt ? ticketAt : undefined).trim() });
   if (ticketAt >= 0) parts.push({ id: "ticket", label: "Ticket", text: rest.slice(ticketAt).trim() });
   const joined = parts.map((p) => p.text).join("\n\n");
@@ -120,12 +123,15 @@ export function startBlock(s: {
   changedBanner: boolean;
   noClone?: string | null;
   repoMissing?: boolean;
+  /** What the chosen kind still needs, from `kindBlock`. */
+  kindBlock?: string | null;
   /** What is typed in the instruction and base fields, when they can differ from the saved draft. */
   typed?: { instruction: string; base: string };
 }): string | null {
   if (s.starting) return "Starting…";
   if (s.repoMissing) return "Choose a repository first";
   if (s.noClone) return s.noClone;
+  if (s.kindBlock) return s.kindBlock;
   if (!s.draft || !s.review) return s.busy ? "Getting the draft ready…" : "There is no draft to start";
   if (s.changedBanner) return "Read the change above first";
   if (s.busy) return "Checking the changes…";
@@ -188,8 +194,8 @@ export function formatBytes(bytes: number): string {
 const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
 
 /** The launch as a shell would read it. Gossamr passes each part as its own argument, so nothing is run through a shell. */
-export function launchCommand(spec: Pick<RunSpec, "clonePath" | "name" | "repo">, key: string | null, guard: string, prompt: string): string {
-  const name = `${key ?? spec.repo} investigate`;
+export function launchCommand(spec: Pick<RunSpec, "clonePath" | "name" | "repo" | "kind">, key: string | null, guard: string, prompt: string): string {
+  const name = `${key ?? spec.repo} ${spec.kind}`;
   return [`cd ${quote(spec.clonePath)}`, `claude --bg --name ${quote(name)} --worktree ${quote(spec.name)} --append-system-prompt ${quote(guard)} ${quote(prompt)}`].join("\n");
 }
 
@@ -212,11 +218,11 @@ export type TimelineTone = "find" | "ask" | "err" | "plain";
 export const timelineTone = (kind: string): TimelineTone => (kind === "done" ? "find" : kind === "ask" ? "ask" : kind === "error" ? "err" : "plain");
 
 /** A pending run draft for the same ticket and kind, so choosing Investigate twice opens one draft. */
-export function findRunDraft(proposals: Record<string, Proposal> | readonly Proposal[], item: ItemRef | null, kind: RunKind): Proposal | undefined {
+export function findRunDraft(proposals: Record<string, Proposal> | readonly Proposal[], item: ItemRef | null, kind: RunKind, pr?: number): Proposal | undefined {
   const all = Array.isArray(proposals) ? proposals : Object.values(proposals);
   const wanted = item ? itemKey(item) : null;
   return all
-    .filter((p) => p.state.type === "pending" && p.intent.type === "startRun" && p.intent.spec.kind === kind && (p.intent.item ? itemKey(p.intent.item) : null) === wanted)
+    .filter((p) => p.state.type === "pending" && p.intent.type === "startRun" && p.intent.spec.kind === kind && (pr === undefined || p.intent.spec.pr === pr) && (p.intent.item ? itemKey(p.intent.item) : null) === wanted)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
@@ -338,4 +344,52 @@ export function changeSummary(change: Pick<CodeChange, "kind" | "changedFiles" |
   if (change.review === "approved") out.push("Approved");
   else if (change.review === "changesRequested") out.push("Changes requested");
   return out;
+}
+
+/** What a kind needs before there is a draft: a build works from a ticket, a review reads one pull request. */
+export function kindBlock(kind: RunKind, item: ItemRef | null, pr: number | null): string | null {
+  if (kind === "build" && !item) return "Build needs a ticket";
+  if (kind === "review" && pr === null) return "Choose the pull request to review";
+  return null;
+}
+
+export interface PrChoice {
+  change: CodeChange;
+  selectable: boolean;
+  /** Why it can't be chosen, or what is still to be checked. */
+  note: string | null;
+}
+
+const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/**
+ * The pull requests of `repo` a review could read. Only an open pull request from the same repository can be
+ * chosen; one whose head repository isn't known yet is chosen and GitHub is asked when the draft is made.
+ */
+export function prChoices(changes: readonly CodeChange[], repo: string): PrChoice[] {
+  return changes
+    .filter((c) => c.kind === "pullRequest" && c.number !== null && sameRepo(c.repo, repo))
+    .map((change): PrChoice => {
+      if (change.state === "merged") return { change, selectable: false, note: "Merged" };
+      if (change.state === "closed") return { change, selectable: false, note: "Closed" };
+      if (change.state === "draft") return { change, selectable: false, note: "Still a draft" };
+      if (change.headRepo && !sameRepo(change.headRepo, change.repo)) return { change, selectable: false, note: "From a fork" };
+      return { change, selectable: true, note: change.headRepo ? null : "Checked on GitHub when you choose it" };
+    })
+    .sort((a, b) => Number(b.selectable) - Number(a.selectable) || b.change.updatedAt.localeCompare(a.change.updatedAt));
+}
+
+/** The newest open pull request linked to a ticket that a review could take, or null. */
+export function reviewablePr(links: readonly Pick<DevLink, "change">[]): CodeChange | null {
+  const found = links.flatMap((l) => prChoices([l.change], l.change.repo)).filter((c) => c.selectable);
+  return found.sort((a, b) => b.change.updatedAt.localeCompare(a.change.updatedAt))[0]?.change ?? null;
+}
+
+/** The permission mode the pre-flight reported ("auto"), so the sheet can name it beside the push option. */
+export function permissionMode(preflight: Preflight | null): string | null {
+  for (const row of preflight?.rows ?? []) {
+    const found = /permission mode: (\S+)$/.exec(row.text);
+    if (found) return found[1];
+  }
+  return null;
 }

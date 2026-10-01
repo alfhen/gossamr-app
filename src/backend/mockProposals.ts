@@ -1,4 +1,5 @@
 import { docFromText, quoteAfterFirst } from "../lib/docs";
+import { INSTRUCTIONS } from "./mockRunKinds";
 import { targetOf } from "../lib/proposals";
 import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged } from "../types";
 
@@ -113,15 +114,22 @@ export class MockProposals {
     }
     if (edit.type === "run" && intent.type === "startRun") {
       if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
-      const { instruction, base, clonePath, kind, name } = edit;
+      const { instruction, base, clonePath, kind, name, pr, allowPush } = edit;
+      const was = intent.spec;
+      const switched = kind && kind !== was.kind;
+      const untouched = instruction === undefined && was.instruction.trim() === INSTRUCTIONS[was.kind];
       const spec = {
-        ...intent.spec,
+        ...was,
         ...(instruction !== undefined ? { instruction } : {}),
         ...(base !== undefined ? { base: base.trim() } : {}),
         ...(clonePath !== undefined ? { clonePath } : {}),
         ...(kind ? { kind } : {}),
+        ...(switched ? { pr: null, prSha: null, allowPush: false, ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}) } : {}),
+        ...(pr !== undefined ? { pr, prSha: null } : {}),
+        ...(allowPush !== undefined ? { allowPush } : {}),
         ...(name !== undefined ? { name: name.trim() } : {}),
       };
+      if (spec.allowPush && spec.kind !== "build") throw new Error("Only a build can push.");
       return this.set(id, { intent: { ...intent, spec }, error: null });
     }
     throw new Error("that edit doesn't fit this draft");
