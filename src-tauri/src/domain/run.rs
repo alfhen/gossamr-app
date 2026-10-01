@@ -233,8 +233,14 @@ pub fn without_markers(text: &str) -> String {
 /// The exact text handed to the agent as its prompt.
 pub fn render_prompt(spec: &RunSpec) -> String {
     let base = &spec.base;
+    // A build commits, so it stays on its own branch; the others only read and can sit detached.
+    let switch = if spec.kind == RunKind::Build {
+        format!("`git checkout -B worktree-{} origin/{base}`", spec.name)
+    } else {
+        format!("`git checkout --detach origin/{base}`")
+    };
     let mut parts = vec![format!(
-        "Your worktree starts at the clone's current HEAD, which may not be `{base}`. First run `git fetch origin {base}` and `git checkout --detach origin/{base}` in your worktree (it has no changes yet), then continue."
+        "Your worktree starts at the clone's current HEAD, which may not be `{base}`. First run `git fetch origin {base}` and {switch} in your worktree (it has no changes yet), then continue."
     )];
     parts.push(spec.instruction.trim().to_string());
     if let (RunKind::Review, Some(pr)) = (spec.kind, spec.pr) {
@@ -591,6 +597,15 @@ mod tests {
         assert_ne!(off.digest(), on.digest());
         let tail = render_prompt(&on).split("You may push").nth(1).unwrap().to_string();
         assert!(!tail.contains("<<<"), "the sentence is outside the data markers");
+    }
+
+    #[test]
+    fn a_build_stays_on_its_branch_while_the_others_detach() {
+        let build = render_prompt(&of_kind(RunKind::Build, None, true));
+        assert!(build.contains("`git checkout -B worktree-eng-1-fix-cart-3f9a origin/main`") && !build.contains("--detach"));
+        for kind in [RunKind::Triage, RunKind::Verify, RunKind::Review] {
+            assert!(render_prompt(&of_kind(kind, Some(1).filter(|_| kind == RunKind::Review), false)).contains("`git checkout --detach origin/main`"), "{kind:?}");
+        }
     }
 
     #[test]
