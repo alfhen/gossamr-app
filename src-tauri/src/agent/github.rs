@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use super::mcp::{item_ref, opt, reachable, required, tool, McpState, Reply, Run};
+use super::mcp::{item_ref, opt, reachable, required, tool, McpState, Reply, PipRun};
 use crate::domain::{
     clip, CheckState, CodeChange, CodeChangeKind, CodeChangeState, CommitQuery, PullRequestDetail,
     ReviewState, TreeEntryKind,
@@ -247,14 +247,14 @@ fn number(args: &Value) -> std::result::Result<u64, String> {
         .ok_or_else(|| "number is required".to_string())
 }
 
-pub(super) async fn run(st: &McpState, run: &Run, name: &str, args: &Value) -> Option<Reply> {
+pub(super) async fn run(st: &McpState, run: &PipRun, name: &str, args: &Value) -> Option<Reply> {
     if !NAMES.contains(&name) {
         return None;
     }
     Some(dispatch(st, run, name, args).await)
 }
 
-async fn dispatch(st: &McpState, run: &Run, name: &str, args: &Value) -> Reply {
+async fn dispatch(st: &McpState, run: &PipRun, name: &str, args: &Value) -> Reply {
     let core = &st.core;
     match name {
         "list_watched_repos" => {
@@ -648,7 +648,7 @@ mod tests {
 
     use super::testing::*;
     use super::*;
-    use crate::agent::mcp::{call_tool, Run, Runs};
+    use crate::agent::mcp::{call_tool, PipRun, PipRuns};
     use crate::codehost::github::testserver::Reply;
     use crate::inbox::code::tests::Linked;
 
@@ -659,16 +659,17 @@ mod tests {
 
     async fn gh(extra: Vec<(String, Vec<Reply>)>) -> Gh {
         let lx = watching_webshop(extra).await;
-        let runs: Runs = Arc::default();
+        let runs: PipRuns = Arc::default();
         runs.lock()
             .unwrap()
-            .insert("run-1".into(), Run::new(lx.fx.scope.clone()));
+            .insert("run-1".into(), PipRun::new(lx.fx.scope.clone()));
         let st = McpState {
             core: lx.fx.core.clone(),
             tokens: Default::default(),
             sink: Arc::new(|_| {}),
             view: Arc::new(|_, _, _| {}),
             runs,
+            planner: crate::agent::runs::testing::FakePlanner::unused(),
         };
         Gh { lx, st }
     }

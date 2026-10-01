@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use crate::auth::Scope;
 use crate::error::{Error, Result};
 use super::context::draft_line;
-use super::McpEndpoint;
+use super::{McpEndpoint, RunPlanner};
 use crate::domain::{ContainerRef, Doc, Filter, Intent, ItemKind, ItemRef, NewItem, Proposal, ProposalQuery, StateKind, Transitions};
 use crate::inbox::Core;
 use crate::model::CachedTicket;
@@ -37,14 +37,14 @@ pub type ViewSink = Arc<dyn Fn(&str, &Filter, &str) + Send + Sync>;
 
 /// One running request: the account it belongs to, and the tickets the user handed to Pip in it.
 #[derive(Clone, Debug)]
-pub struct Run {
+pub struct PipRun {
     pub scope: Scope,
     /// Keys (upper case) of tickets the user opened or named in the request. Pip may read and draft on these even in a
     /// project that isn't watched, and on nothing else outside the watched projects.
     pub handed: std::collections::HashSet<String>,
 }
 
-impl Run {
+impl PipRun {
     #[cfg(test)]
     pub fn new(scope: Scope) -> Self {
         Self { scope, handed: Default::default() }
@@ -53,7 +53,7 @@ impl Run {
 
 /// The runs in progress. Tools answer only for runs listed here, and only as that run's account, so switching accounts
 /// mid-run can't hand the agent another account's tickets.
-pub type Runs = Arc<std::sync::Mutex<std::collections::HashMap<String, Run>>>;
+pub type PipRuns = Arc<std::sync::Mutex<std::collections::HashMap<String, PipRun>>>;
 
 /// The bearer token of each run in progress, by run id. A token exists only between `endpoint` and `revoke`.
 type Tokens = Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>;
@@ -63,27 +63,29 @@ pub(super) struct McpState {
     pub tokens: Tokens,
     pub sink: ChangeSink,
     pub view: ViewSink,
-    pub runs: Runs,
+    pub runs: PipRuns,
+    pub planner: Arc<dyn RunPlanner>,
 }
 
 pub struct McpServer {
     pub port: u16,
-    pub runs: Runs,
+    pub runs: PipRuns,
+    pub planner: Arc<dyn RunPlanner>,
     tokens: Tokens,
 }
 
 impl McpServer {
-    pub async fn start(core: Arc<Core>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
+    pub async fn start(core: Arc<Core>, planner: Arc<dyn RunPlanner>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
-        let runs: Runs = Arc::default();
+        let runs: PipRuns = Arc::default();
         let tokens = Tokens::default();
-        let state = Arc::new(McpState { core, tokens: tokens.clone(), sink, view, runs: runs.clone() });
+        let state = Arc::new(McpState { core, tokens: tokens.clone(), sink, view, runs: runs.clone(), planner: planner.clone() });
         let router = Router::new().route("/mcp/{request_id}", post(handle)).with_state(state);
         tauri::async_runtime::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
-        Ok(Self { port, runs, tokens })
+        Ok(Self { port, runs, planner, tokens })
     }
 
     /// Mints a fresh token for this run, valid until `revoke`. A second call for the same run replaces the first.
@@ -228,8 +230,8 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "revise_proposal",
-            "Change one of YOUR OWN pending drafts (never anyone else's). Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title and/or description for a new item.",
-            json!({ "id": id, "body": { "type": "string" }, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" } }),
+            "Change one of YOUR OWN pending drafts (never anyone else's). Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title and/or description for a new item, focus and/or kind for an agent run.",
+            json!({ "id": id, "body": { "type": "string" }, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "focus": { "type": "string" }, "kind": { "type": "string" } }),
             &["id"],
         ),
         tool(
@@ -241,6 +243,7 @@ fn tool_list() -> Vec<Value> {
     ]
     .into_iter()
     .chain(super::github::tools())
+    .chain(super::runs::tools())
     .collect()
 }
 
@@ -310,7 +313,7 @@ pub(super) async fn call_tool(st: &McpState, request_id: &str, params: &Value) -
 
 /// Pip reads and drafts on items in watched projects, and on an unwatched one only when the user handed it over in this
 /// run. Creating a new item in any project is a different tool and isn't held to this.
-pub(super) async fn reachable(st: &McpState, run: &Run, key: &str) -> std::result::Result<(), String> {
+pub(super) async fn reachable(st: &McpState, run: &PipRun, key: &str) -> std::result::Result<(), String> {
     if run.handed.contains(&key.to_uppercase()) || st.core.is_item_watched(&run.scope, key).await.map_err(|e| e.to_string())? {
         return Ok(());
     }
@@ -319,7 +322,7 @@ pub(super) async fn reachable(st: &McpState, run: &Run, key: &str) -> std::resul
     ))
 }
 
-async fn run_tool(st: &McpState, run: &Run, run_id: &str, name: &str, args: &Value) -> Reply {
+async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &Value) -> Reply {
     let core = &st.core;
     let scope = &run.scope;
     match name {
@@ -476,6 +479,7 @@ async fn run_tool(st: &McpState, run: &Run, run_id: &str, name: &str, args: &Val
                     let body = opt(args, "description").map_or(fields.body.clone(), |d| Doc::from_text(d, &[]));
                     Intent::Create { container: container.clone(), fields: NewItem { title, body, ..fields.clone() }, link: link.clone() }
                 }
+                Intent::StartRun { connection_id, item, spec } => super::runs::revised(connection_id, item, spec, args)?,
                 _ => return Err("this kind of draft can't be revised".into()),
             };
             let revised = core.revise_as_pip(scope, id, intent).await.map_err(|e| e.to_string())?;
@@ -491,7 +495,10 @@ async fn run_tool(st: &McpState, run: &Run, run_id: &str, name: &str, args: &Val
         }
         other => match super::github::run(st, run, other, args).await {
             Some(reply) => reply,
-            None => Err(format!("Unknown tool {other}")),
+            None => match super::runs::run(st, run, run_id, other, args).await {
+                Some(reply) => reply,
+                None => Err(format!("Unknown tool {other}")),
+            },
         },
     }
 }
@@ -553,7 +560,7 @@ pub fn tool_label(name: &str, input: &Value) -> Option<String> {
         "propose_create" => format!("Suggested a new item: {}", s("title")),
         "revise_proposal" => "Updated a draft".into(),
         "retire_proposal" => "Withdrew a draft".into(),
-        _ => return super::github::label(name, input),
+        _ => return super::runs::label(name).or_else(|| super::github::label(name, input)),
     })
 }
 
@@ -619,9 +626,9 @@ mod tests {
         let counter = changes.clone();
         let views: Views = Arc::default();
         let seen = views.clone();
-        let runs: Runs = Arc::default();
-        runs.lock().unwrap().insert("run-1".into(), Run::new(fx.scope.clone()));
-        let st = McpState { core: fx.core.clone(), tokens: Tokens::default(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), view: Arc::new(move |run, f, note| seen.lock().unwrap().push((run.into(), f.clone(), note.into()))), runs };
+        let runs: PipRuns = Arc::default();
+        runs.lock().unwrap().insert("run-1".into(), PipRun::new(fx.scope.clone()));
+        let st = McpState { core: fx.core.clone(), tokens: Tokens::default(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), view: Arc::new(move |run, f, note| seen.lock().unwrap().push((run.into(), f.clone(), note.into()))), runs, planner: crate::agent::runs::testing::FakePlanner::unused() };
         Rig { fx, st, changes, views }
     }
 
@@ -714,9 +721,13 @@ mod tests {
         .map(String::from)
         .into_iter()
         .chain(crate::agent::github::NAMES.map(String::from))
+        .chain(crate::agent::runs::NAMES.map(String::from))
         .collect::<Vec<_>>();
         want.sort();
         assert_eq!(names, want);
+        for forbidden in ["start_run", "stop_run", "answer_run", "attach_run", "rm_run", "approve_run", "launch_run"] {
+            assert!(!names.iter().any(|n| n == forbidden), "{forbidden}");
+        }
         let described: Vec<Value> = tool_list().into_iter().filter(|t| t["name"] != "search_items").collect();
         assert!(described.iter().all(|t| t["inputSchema"]["required"].is_array()));
     }

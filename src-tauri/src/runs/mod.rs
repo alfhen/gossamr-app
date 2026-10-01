@@ -7,6 +7,7 @@ pub mod control;
 pub mod enable;
 pub mod env;
 pub mod failure;
+mod finder;
 pub mod index;
 pub mod launcher;
 pub mod preflight;
