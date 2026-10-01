@@ -1,0 +1,221 @@
+//! Run by hand against the real `claude`: `cargo test real_ -- --ignored --test-threads=1`.
+//!
+//! Each test uses a fresh `CLAUDE_CONFIG_DIR` in a scratch folder, so the person's own sessions, login and daemon are
+//! never touched. That config is signed out, so nothing here does model work. The folder is trusted by writing the
+//! scratch `.claude.json`. Everything a test starts is stopped and removed, and the scratch daemon is waited out.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use super::cli::{ClaudeCli, LaunchRequest, ShortId, SystemCli};
+use super::env::{capture, RunEnv};
+
+struct Scratch {
+    root: PathBuf,
+    config: PathBuf,
+    repo: PathBuf,
+    cli: SystemCli,
+    env: Arc<RunEnv>,
+    launched: Vec<ShortId>,
+}
+
+fn git(repo: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "core.hooksPath=/dev/null"])
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+impl Scratch {
+    async fn new(tag: &str) -> Self {
+        let base = std::env::var("GOSSAMR_SCRATCH").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+        let root = std::fs::canonicalize(&base).unwrap().join(format!("gossamr-real-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (config, repo) = (root.join("config"), root.join("repo"));
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "on main"]);
+        git(&repo, &["checkout", "-q", "-b", "feature"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "on feature"]);
+        let trust = serde_json::json!({ "projects": { repo.to_string_lossy(): { "hasTrustDialogAccepted": true } } });
+        std::fs::write(config.join(".claude.json"), trust.to_string()).unwrap();
+
+        let shell = std::env::var("SHELL").unwrap_or_default();
+        let env = capture(&shell).await.expect("shell environment").with("CLAUDE_CONFIG_DIR", &config.to_string_lossy());
+        let binary = super::binary::find_claude().expect("claude is installed");
+        let env = Arc::new(env);
+        Self { cli: SystemCli::new(binary, env.clone()), env, root, config, repo, launched: Vec::new() }
+    }
+
+    async fn launch(&mut self, name: &str) -> ShortId {
+        let req = LaunchRequest {
+            cwd: self.repo.clone(),
+            name: format!("{name} investigate"),
+            worktree: name.to_owned(),
+            guard: "Do nothing.".into(),
+            prompt: "Reply with OK and stop.".into(),
+        };
+        let launched = self.cli.launch(&req).await.expect("launch");
+        self.launched.push(launched.short_id.clone());
+        launched.short_id
+    }
+
+    fn worktree(&self, name: &str) -> PathBuf {
+        self.repo.join(".claude/worktrees").join(name)
+    }
+
+    async fn wait_for<T>(&self, what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(v) = probe() {
+                return v;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let claude = |args: &[&str]| {
+            Command::new(self.cli.binary())
+                .args(args)
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("HOME", std::env::var_os("HOME").unwrap_or_default())
+                .env("CLAUDE_CONFIG_DIR", &self.config)
+                .current_dir(&self.repo)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        for id in &self.launched {
+            claude(&["stop", id.as_str()]);
+            for _ in 0..15 {
+                if claude(&["rm", id.as_str()]) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(45);
+        while !scratch_daemons(&self.config).is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        let left = scratch_daemons(&self.config);
+        let _ = std::fs::remove_dir_all(&self.root);
+        assert!(left.is_empty(), "a scratch daemon outlived its sessions: {left:?}");
+    }
+}
+
+fn ps(args: &[&str]) -> String {
+    String::from_utf8_lossy(&Command::new("ps").args(args).output().unwrap().stdout).into_owned()
+}
+
+/// Daemons whose environment names this scratch config, so the person's own daemon is never matched.
+fn scratch_daemons(config: &Path) -> Vec<u32> {
+    let needle = format!("CLAUDE_CONFIG_DIR={}", config.display());
+    ps(&["-axo", "pid=,command="])
+        .lines()
+        .filter(|l| l.contains("claude daemon run"))
+        .filter_map(|l| l.split_whitespace().next()?.parse::<u32>().ok())
+        .filter(|pid| ps(&["eww", "-p", &pid.to_string(), "-o", "command="]).contains(&needle))
+        .collect()
+}
+
+/// `ps eww` prints the environment space-separated, and values can hold spaces, so a value runs to the next ` NAME=`.
+fn env_value(ps_line: &str, key: &str) -> Option<String> {
+    let start = ps_line.find(&format!(" {key}="))? + key.len() + 2;
+    let rest = &ps_line[start..];
+    let mut end = rest.len();
+    for (i, _) in rest.match_indices(' ') {
+        let after = &rest[i + 1..];
+        let name: String = after.chars().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_').collect();
+        if !name.is_empty() && after[name.len()..].starts_with('=') {
+            end = i;
+            break;
+        }
+    }
+    Some(rest[..end].to_owned())
+}
+
+#[tokio::test]
+#[ignore = "runs the real claude in a scratch config"]
+async fn real_launch_is_listed_by_worktree_then_stops_and_removes() {
+    let mut s = Scratch::new("lifecycle").await;
+    let auth = s.cli.auth_status().await.unwrap();
+    assert!(!auth.logged_in, "the scratch config must be signed out");
+    assert_eq!(auth.config_directory.as_deref(), Some(s.config.as_path()));
+
+    let id = s.launch("ce-1-spike-a1b2").await;
+    let expected = s.worktree("ce-1-spike-a1b2");
+    // The session is listed at the clone's root first; its cwd moves to the worktree once that exists (about 6 s).
+    let started = Instant::now();
+    let mut first_cwd: Option<Option<String>> = None;
+    let entry = loop {
+        let listed = s.cli.agents(false).await.unwrap();
+        if let Some(e) = listed.into_iter().find(|e| e.id.as_deref() == Some(id.as_str())) {
+            first_cwd.get_or_insert_with(|| e.cwd.clone());
+            if e.cwd.as_deref().map(Path::new) == Some(expected.as_path()) {
+                break e;
+            }
+        }
+        assert!(started.elapsed() < Duration::from_secs(30), "cwd never became the worktree: {first_cwd:?}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    eprintln!("first listed cwd: {first_cwd:?}; worktree cwd after {:?}", started.elapsed());
+    assert_eq!(entry.kind.as_deref(), Some("background"));
+    assert_eq!(&entry.session_id.as_deref().unwrap()[..8], id.as_str());
+
+    s.cli.stop(&id).await.unwrap();
+    let all = s.cli.agents(true).await.unwrap();
+    assert_eq!(all.iter().find(|e| e.id.as_deref() == Some(id.as_str())).unwrap().state.as_deref(), Some("stopped"));
+    assert!(!s.cli.agents(false).await.unwrap().iter().any(|e| e.id.as_deref() == Some(id.as_str())));
+
+    // rm right after stop can be refused while the stopped process still holds the worktree lock.
+    let removed = Instant::now();
+    while let Err(e) = s.cli.rm(&id).await {
+        eprintln!("rm refused after {:?}: {e}", removed.elapsed());
+        assert!(removed.elapsed() < Duration::from_secs(30), "rm never succeeded");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert!(!s.cli.agents(true).await.unwrap().iter().any(|e| e.id.as_deref() == Some(id.as_str())));
+    assert!(git(&s.repo, &["branch", "--list", "worktree-*"]).is_empty());
+}
+
+#[tokio::test]
+#[ignore = "runs the real claude in a scratch config"]
+async fn real_worktree_starts_at_the_clones_current_head_not_main() {
+    let mut s = Scratch::new("head").await;
+    s.launch("ce-2-spike-c3d4").await;
+    let worktree = s.worktree("ce-2-spike-c3d4");
+    s.wait_for("the worktree to appear", || worktree.join(".git").exists().then_some(())).await;
+    let head = git(&s.repo, &["rev-parse", "feature"]);
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head);
+    assert_ne!(head, git(&s.repo, &["rev-parse", "main"]));
+}
+
+/// Start the test binary as `env -i HOME=$HOME PATH=/usr/bin:/bin` to make the difference from a login shell visible.
+#[tokio::test]
+#[ignore = "runs the real claude in a scratch config; start the test process under `env -i`"]
+async fn real_daemon_gets_the_captured_environment_and_nothing_added_after_the_capture() {
+    let mut s = Scratch::new("env").await;
+    let captured_path = s.env.get("PATH").map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    let own_path = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var("GOSSAMR_LATE_VARIABLE", "set after the capture");
+    s.launch("ce-3-spike-e5f6").await;
+    let pid = s.wait_for("the scratch daemon", || scratch_daemons(&s.config).first().copied()).await;
+    let line = ps(&["eww", "-p", &pid.to_string(), "-o", "command="]);
+    let daemon_path = env_value(&line, "PATH").expect("daemon has a PATH");
+    eprintln!("test process PATH: {own_path}\ncaptured PATH:     {captured_path}\ndaemon PATH:       {daemon_path}");
+    assert_eq!(daemon_path, captured_path);
+    assert!(env_value(&line, "GOSSAMR_LATE_VARIABLE").is_none(), "a variable set after the capture reached the daemon");
+}

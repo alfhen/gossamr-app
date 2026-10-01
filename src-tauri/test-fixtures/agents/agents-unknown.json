@@ -1,0 +1,7 @@
+[
+  {"id":"9cadbecf","sessionId":"9cadbecf-9999-4999-8999-999999999999","cwd":"/work/example/.claude/worktrees/ce-9-new-shape-aa11","kind":"background","startedAt":1800000000000,"name":"CE-9 investigate","state":"paused-by-quota","status":"throttled","pid":51009,"futureField":{"nested":[1,2,3]},"needs":"login required — run /login"},
+  {"id":"adbecfd0","kind":"background"},
+  {"id":"becfd0e1","sessionId":"becfd0e1-0000-4000-8000-000000000000","startedAt":"not-a-number","pid":"nope","state":7},
+  "not an object",
+  null
+]

@@ -1,0 +1,10 @@
+[
+  {"id":"1a2b3c4d","sessionId":"1a2b3c4d-1111-4111-8111-111111111111","cwd":"/work/example/.claude/worktrees/ce-1-fix-login-9f3a","kind":"background","startedAt":1790000000000,"name":"CE-1 investigate","state":"working","status":"busy","pid":51001},
+  {"id":"2b3c4d5e","sessionId":"2b3c4d5e-2222-4222-8222-222222222222","cwd":"/work/example/.claude/worktrees/ce-2-slow-export-0c1d","kind":"background","startedAt":1790000100000,"name":"CE-2 investigate","state":"blocked","status":"idle","pid":51002},
+  {"id":"3c4d5e6f","sessionId":"3c4d5e6f-3333-4333-8333-333333333333","cwd":"/work/example/.claude/worktrees/ce-3-flaky-test-77ab","kind":"background","startedAt":1790000200000,"name":"CE-3 investigate","state":"working","status":"waiting","waitingFor":"permission prompt","pid":51003},
+  {"id":"4d5e6f70","sessionId":"4d5e6f70-4444-4444-8444-444444444444","cwd":"/work/example/.claude/worktrees/ce-4-docs-typo-b2e9","kind":"background","startedAt":1790000300000,"name":"CE-4 investigate","state":"done","status":"idle","pid":51004},
+  {"id":"5e6f7081","sessionId":"5e6f7081-5555-4555-8555-555555555555","cwd":"/work/example/.claude/worktrees/ce-5-old-run-1d2c","kind":"background","startedAt":1780000000000,"name":"CE-5 investigate","state":"stopped"},
+  {"id":"6f708192","sessionId":"6f708192-6666-4666-8666-666666666666","cwd":"/work/example","kind":"background","startedAt":1770000000000,"name":"old session","state":"blocked"},
+  {"cwd":"/work/example","kind":"interactive","name":"my terminal session","pid":41001,"sessionId":"7a8b9cad-7777-4777-8777-777777777777","startedAt":1790000400000,"status":"busy"},
+  {"cwd":"/work/other","kind":"interactive","name":"idle terminal","pid":41002,"sessionId":"8b9cadbe-8888-4888-8888-888888888888","startedAt":1790000500000,"status":"idle"}
+]
