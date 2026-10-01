@@ -114,6 +114,15 @@ describe("cleaning up through the store", () => {
 });
 
 describe("the mock settings", () => {
+  it("govern how many runs the pre-flight lets start", async () => {
+    const backend = new MockBackend();
+    const live = backend.runs.list().filter((r) => ["working", "needsAnswer", "needsPermission", "systemBlocked", "launching"].includes(r.state)).length;
+    const rows = async () => (await backend.runsPreflight(null)).rows.map((r) => r.text).join("|");
+    expect(await rows()).toContain(`${live} of 6 agents running`);
+    await backend.runsSetSettings({ maxRuns: 1, wallClockMinutes: 60, tokenCap: 0, terminal: "terminal" });
+    expect(await rows()).toContain(`${live} agents are running, the most Gossamr starts at once (1)`);
+  });
+
   it("clamps like the backend and returns what it kept", async () => {
     const backend = new MockBackend();
     const saved = await backend.runsSetSettings({ maxRuns: 40, wallClockMinutes: -5, tokenCap: 2_500_000, terminal: "iTerm" });

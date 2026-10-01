@@ -236,7 +236,6 @@ export class MockRuns {
 
   private readonly epoch: number;
   private readonly claude: RunsEnvironment["claude"];
-  private readonly cap: number;
   readonly pipRun: boolean;
   private picked = new Map<string, string>();
   /** Copies made in `~/Gossamr/agents` through `cloneFresh`. */
@@ -258,7 +257,7 @@ export class MockRuns {
     const o = typeof options === "boolean" ? { seed: options ? ("busy" as const) : ("empty" as const) } : options;
     this.epoch = o.epoch ?? EPOCH;
     this.claude = o.environment ?? "ok";
-    this.cap = o.cap ?? 6;
+    this.limits = { ...this.limits, maxRuns: o.cap ?? 6 };
     this.pipRun = !!o.pipRun;
     const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
@@ -497,8 +496,8 @@ export class MockRuns {
     }
     if (claude !== "missing") add("green", "Agents run as you, in your permission mode: auto");
     const live = this.runs.filter((r) => LIVE.includes(r.state)).length;
-    if (live >= this.cap) add("red", `${live} agents are running, the most Gossamr starts at once (${this.cap}). Stop one or wait for one to finish.`);
-    else add("green", `${live} of ${this.cap} agents running`);
+    if (live >= this.limits.maxRuns) add("red", `${live} agents are running, the most Gossamr starts at once (${this.limits.maxRuns}). Stop one or wait for one to finish.`);
+    else add("green", `${live} of ${this.limits.maxRuns} agents running`);
     if (spec) add("green", `What runs: ${mockDigest(spec).slice(5)}`);
     return { rows, blocking: rows.some((r) => r.level === "red") };
   }
