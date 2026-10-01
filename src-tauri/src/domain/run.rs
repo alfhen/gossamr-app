@@ -151,7 +151,7 @@ impl RunSpec {
     }
 }
 
-fn without_markers(text: &str) -> String {
+pub fn without_markers(text: &str) -> String {
     let mut out = text.to_string();
     while let Some(marker) = MARKERS.iter().find(|m| out.contains(*m)) {
         out = out.replace(marker, "");
@@ -472,6 +472,11 @@ mod tests {
             change(&mut s);
             assert_ne!(s.digest(), base.digest(), "{field}");
         }
+    }
+
+    #[test]
+    fn the_investigation_brief_asks_for_the_section_the_result_parser_reads() {
+        assert!(INVESTIGATE_INSTRUCTION.contains("'For Jira:'") && GUARD.contains("'For Jira:'"));
     }
 
     #[test]

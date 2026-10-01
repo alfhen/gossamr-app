@@ -71,6 +71,8 @@ pub enum Origin {
     Chat { request_id: String },
     Board,
     Autopilot { event_id: String },
+    /// Made by the person from what an agent run reported. The text is the agent's, which is why it is marked.
+    Run { run_id: String, short_id: Option<String> },
 }
 
 /// Fingerprint of the item as it was when the proposal was drafted.
@@ -512,6 +514,8 @@ mod tests {
     fn serialises_origin_and_state_the_way_the_page_reads_them() {
         let chat = serde_json::to_value(Origin::Chat { request_id: "r1".into() }).unwrap();
         assert_eq!(chat, serde_json::json!({ "type": "chat", "requestId": "r1" }));
+        let from_run = serde_json::to_value(Origin::Run { run_id: "r".into(), short_id: Some("ab12cd34".into()) }).unwrap();
+        assert_eq!(from_run, serde_json::json!({ "type": "run", "runId": "r", "shortId": "ab12cd34" }));
         let retired = serde_json::to_value(ProposalState::Retired("gone".into())).unwrap();
         assert_eq!(retired, serde_json::json!({ "type": "retired", "reason": "gone" }));
         assert_eq!(serde_json::to_value(ProposalState::Applying).unwrap(), serde_json::json!({ "type": "applying" }));

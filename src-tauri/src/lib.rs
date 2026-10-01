@@ -606,6 +606,30 @@ fn runs_keep_running(runs: State<'_, RunsState>) -> usize {
     runs.keep_running()
 }
 
+/// What a run's result holds for the tracker, the tickets it names and the change it produced.
+#[tauri::command]
+async fn runs_outcome(core: State<'_, CoreState>, id: String) -> Result<inbox::RunOutcome> {
+    core.run_outcome(&id).await
+}
+
+/// Drafts a comment from a finished run's `For Jira:` part. A draft only: the person edits and approves it.
+#[tauri::command]
+async fn runs_draft_comment(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
+    runs.ensure_enabled()?;
+    let made = core.draft_run_comment(&id).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(made)
+}
+
+/// Drafts a link saying the run's ticket is blocked by `blocker_key`. A draft only.
+#[tauri::command]
+async fn runs_draft_blocker(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String, blocker_key: String) -> Result<Proposal> {
+    runs.ensure_enabled()?;
+    let made = core.draft_run_blocker(&id, &blocker_key).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(made)
+}
+
 #[tauri::command]
 async fn runs_list(core: State<'_, CoreState>, query: Option<RunQuery>) -> Result<Vec<Run>> {
     core.runs_list(&query.unwrap_or_default()).await
@@ -965,6 +989,9 @@ pub fn run() {
             runs_open_pending,
             runs_keep_running,
             runs_list,
+            runs_outcome,
+            runs_draft_comment,
+            runs_draft_blocker,
             runs_get,
             sync_now,
             mark_seen,
