@@ -126,7 +126,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
   const prepare = async (mine: number) => {
     const { backend, item, repo, kind, title, proposalId, ownDraft } = get();
     if (!backend || !repo) return;
-    set({ phase: "preparing", error: null, cloneError: null, choice: null, review: null, preflight: null, busy: false });
+    set({ phase: "preparing", error: null, cloneError: null, cloning: false, choice: null, review: null, preflight: null, busy: false });
     try {
       if (proposalId && ownDraft) await backend.proposalsSkip(proposalId).catch(() => {});
       const choice = await backend.runsClones(repo);

@@ -123,6 +123,21 @@ describe("starting an agent from a ticket", () => {
     expect(s()).toMatchObject({ cloneError: null, phase: "ready" });
   });
 
+  it("lets the person move to another repository while a clone is running", async () => {
+    await s().begin({ item: CA });
+    await s().chooseRepo("acme/ops");
+    let finish!: () => void;
+    vi.spyOn(backend, "runsCloneFresh").mockReturnValueOnce(new Promise((resolve) => (finish = () => resolve({ path: "/x", branch: "main", dirty: false, defaultBranch: "main" }))));
+    const cloning = s().cloneFresh();
+    expect(s().cloning).toBe(true);
+    await s().chooseRepo("acme/storefront");
+    expect(s()).toMatchObject({ cloning: false, repo: "acme/storefront" });
+    finish();
+    await cloning;
+    expect(s()).toMatchObject({ cloning: false, repo: "acme/storefront", phase: "ready" });
+    expect(s().review!.spec.clonePath).toBe("/Users/sample/Code/storefront");
+  });
+
   it("clones once however often the button is pressed", async () => {
     await s().begin({ item: CA });
     await s().chooseRepo("acme/ops");
