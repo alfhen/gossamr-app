@@ -60,8 +60,41 @@ describe("board sections", () => {
   it("adds a column for a status its workflow doesn't list so no card is hidden", () => {
     const odd = { ...item("CA-402"), status: { id: "ca-mystery", name: "Mystery", category: "active" as const } };
     const ca = boardSections([odd], s().containers)[0];
-    expect(ca.columns[ca.columns.length - 1]).toMatchObject({ status: { name: "Mystery" }, items: [odd] });
-    expect(ca.columns.slice(0, -1).every((c) => c.items.length === 0)).toBe(true);
+    expect(ca.columns.map((c) => c.status.name)).toEqual(["Backlog", "Copy", "Design", "QA", "Scheduled", "Mystery", "Sent"]);
+    expect(ca.columns.find((c) => c.status.name === "Mystery")?.items).toEqual([odd]);
+    expect(ca.columns.filter((c) => c.items.length).length).toBe(1);
+  });
+});
+
+describe("column order", () => {
+  it("follows a saved order for the project and leaves the others on the default", () => {
+    const ca = section("CA").columns.map((c) => c.status.id);
+    const orders = { "mock:CA": [...ca].reverse() };
+    const all = boardSections(itemsByFilter(s(), ALL), s().containers, null, orders);
+    expect(all.find((x) => x.code === "CA")!.columns.map((c) => c.status.name)).toEqual(["Sent", "Scheduled", "QA", "Design", "Copy", "Backlog"]);
+    expect(all.find((x) => x.code === "DEVOPS")!.columns.map((c) => c.status.name)).toEqual(["To Do", "In Progress", "In Review", "Blocked", "Done"]);
+  });
+
+  it("keeps the workflow's statuses in the board's order so the workflow line matches", () => {
+    const orders = { "mock:CA": ["Sent", "Backlog", "Copy", "Design", "QA", "Scheduled"].map((n) => statusId("CA", n)) };
+    const ca = boardSections(itemsByFilter(s(), ALL), s().containers, null, orders).find((x) => x.code === "CA")!;
+    expect(ca.workflow.statuses.map((x) => x.name)).toEqual(ca.columns.map((c) => c.status.name));
+    expect(ca.workflow.statuses[0].name).toBe("Sent");
+  });
+
+  it("orders a workflow like Customer Acquisition's by category, with Won't Do after Done", () => {
+    const wf: Workflow = {
+      statuses: [
+        { id: "td", name: "To Do", category: "todo" },
+        { id: "dn", name: "Done", category: "done" },
+        { id: "ip", name: "In Progress", category: "active" },
+        { id: "wd", name: "Won't Do", category: "done" },
+      ],
+      transitions: { kind: "any" },
+    };
+    const containers = { "mock:CA": { ...s().containers["mock:CA"], workflow: wf } };
+    const ca = boardSections([], containers, containerRef("CA"))[0];
+    expect(ca.columns.map((c) => c.status.name)).toEqual(["To Do", "In Progress", "Done", "Won't Do"]);
   });
 });
 
