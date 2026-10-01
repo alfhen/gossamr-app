@@ -329,7 +329,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onPaste={(e) => {
-            const files = filesIn(e.clipboardData).filter((f) => f.type.startsWith("image/"));
+            const files = filesIn(e.clipboardData).filter((f) => f.type === "" || f.type.startsWith("image/"));
             if (!files.length) return;
             e.preventDefault();
             void attached.add(files);

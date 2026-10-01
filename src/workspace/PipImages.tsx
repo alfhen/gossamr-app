@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { filesIn } from "../lib/attachments";
-import { ACCEPTED_IMAGE_TYPES, MAX_IMAGES, prepareImage, refusal, type PipImage, type ShownImage } from "../lib/pipImages";
+import { ACCEPTED_IMAGE_TYPES, MAX_IMAGES, prepareImage, refusal, withDetectedType, type PipImage, type ShownImage } from "../lib/pipImages";
 import { messageOf, useToasts } from "./toasts";
 
 const LIGHTBOX_ATTR = "data-pip-lightbox";
@@ -15,8 +15,9 @@ export function useAttachments() {
 
   useEffect(() => () => held.current.forEach((i) => URL.revokeObjectURL(i.url)), []);
 
-  const add = async (files: File[]) => {
+  const add = async (picked: File[]) => {
     const toasts = useToasts.getState();
+    const files = await Promise.all(picked.map(withDetectedType));
     const room = MAX_IMAGES - held.current.length - pending.current;
     const usable = files.filter((f) => {
       const why = refusal(f);

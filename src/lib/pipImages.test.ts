@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultQuestion, fitWithin, MAX_SIDE, refusal } from "./pipImages";
+import { defaultQuestion, fitWithin, MAX_SIDE, refusal, sniffImageType, TARGET_BYTES } from "./pipImages";
 
 describe("fitWithin", () => {
   it("leaves small pictures alone and scales large ones so the longest side is 1568", () => {
@@ -31,5 +31,28 @@ describe("defaultQuestion", () => {
   it("asks about one screenshot or several", () => {
     expect(defaultQuestion(1)).toBe("What is in this screenshot?");
     expect(defaultQuestion(2)).toBe("What is in these screenshots?");
+  });
+});
+
+describe("sniffImageType", () => {
+  const bytes = (...b: (number | string)[]) => new Uint8Array(b.flatMap((x) => (typeof x === "string" ? [...x].map((c) => c.charCodeAt(0)) : [x])));
+
+  it("reads the type from the first bytes", () => {
+    expect(sniffImageType(bytes(0x89, "PNG\r\n", 0x1a, 0x0a))).toBe("image/png");
+    expect(sniffImageType(bytes(0xff, 0xd8, 0xff, 0xe0))).toBe("image/jpeg");
+    expect(sniffImageType(bytes("GIF89a"))).toBe("image/gif");
+    expect(sniffImageType(bytes("RIFF", 1, 2, 3, 4, "WEBPVP8 "))).toBe("image/webp");
+  });
+
+  it("says nothing for anything else", () => {
+    expect(sniffImageType(bytes("<svg xmlns"))).toBeNull();
+    expect(sniffImageType(bytes("RIFF", 1, 2, 3, 4, "WAVEfmt "))).toBeNull();
+    expect(sniffImageType(new Uint8Array())).toBeNull();
+  });
+});
+
+describe("TARGET_BYTES", () => {
+  it("keeps four base64-encoded images inside the backend's 20 MiB", () => {
+    expect(Math.ceil((TARGET_BYTES * 4) / 3) * 4).toBeLessThanOrEqual(20 * 1024 * 1024);
   });
 });

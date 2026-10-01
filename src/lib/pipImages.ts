@@ -1,8 +1,8 @@
 export const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 export const MAX_IMAGES = 4;
 export const MAX_SIDE = 1568;
-/** Under the 5 MB the model accepts, with room for base64 overhead on the way to the backend. */
-export const TARGET_BYTES = 4_000_000;
+/** Four of these as base64 stay under the backend's 20 MiB total, and each is under the 5 MB the model accepts. */
+export const TARGET_BYTES = 3_900_000;
 const MAX_SOURCE_BYTES = 30 * 1024 * 1024;
 export const DEFAULT_QUESTION = "What is in this screenshot?";
 
@@ -36,6 +36,22 @@ export function fitWithin(width: number, height: number, max = MAX_SIDE): { widt
   if (longest <= max) return { width, height };
   const scale = max / longest;
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+}
+
+/** The image type the first bytes say, whatever the browser called the file. */
+export function sniffImageType(head: Uint8Array): string | null {
+  const at = (offset: number, text: string) => [...text].every((c, i) => head[offset + i] === c.charCodeAt(0));
+  if (head[0] === 0x89 && at(1, "PNG")) return "image/png";
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "image/jpeg";
+  if (at(0, "GIF87a") || at(0, "GIF89a")) return "image/gif";
+  if (at(0, "RIFF") && at(8, "WEBP")) return "image/webp";
+  return null;
+}
+
+/** The file with its type taken from its content, so an empty or odd type (`image/jpg`) doesn't turn a real image away. */
+export async function withDetectedType(file: File): Promise<File> {
+  const type = sniffImageType(new Uint8Array(await file.slice(0, 12).arrayBuffer()));
+  return type && type !== file.type ? new File([file], file.name, { type }) : file;
 }
 
 /** Why a file can't be attached, or null when it can. */
