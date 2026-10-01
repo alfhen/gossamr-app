@@ -57,6 +57,8 @@ pub struct RunService {
     index: RunIndex,
     /// Held from the cap check to the end of the launch, so two approvals can't both pass the cap.
     launching: tokio::sync::Mutex<()>,
+    /// Recovery runs at startup and again after sign-in; two passes must not act on the same run.
+    recovery: tokio::sync::Mutex<()>,
     in_flight: Mutex<HashSet<String>>,
     clones: CloneCache,
     roots: Vec<PathBuf>,
@@ -115,6 +117,7 @@ impl RunService {
             tools,
             index,
             launching: tokio::sync::Mutex::new(()),
+            recovery: tokio::sync::Mutex::new(()),
             in_flight: Mutex::new(HashSet::new()),
             clones: CloneCache::default(),
             roots,
@@ -345,6 +348,7 @@ impl RunService {
         if !self.enabled {
             return;
         }
+        let _only_pass = self.recovery.lock().await;
         let live = vec![RunState::Launching, RunState::Working, RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked, RunState::Unknown];
         let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(live), ..RunQuery::default() }).await else { return };
         runs.iter().filter(|r| !self.index.contains(&r.id)).for_each(|r| self.remember(r));

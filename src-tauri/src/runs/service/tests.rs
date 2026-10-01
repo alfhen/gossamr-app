@@ -422,6 +422,23 @@ async fn a_launching_run_with_no_session_after_the_window_fails_as_interrupted()
 }
 
 #[tokio::test]
+async fn overlapping_recovery_passes_act_on_a_run_once() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    rig.set(&run, |r| {
+        r.state = RunState::Launching;
+        r.launched_at = Some(Utc::now());
+    })
+    .await;
+    let started = std::time::Instant::now();
+    tokio::join!(rig.svc.recover(), rig.svc.recover(), rig.svc.recover());
+    assert!(started.elapsed() < FAST.recover_window * 2, "the later passes find nothing left to do");
+    assert_eq!(rig.get(&run).await.error.as_deref(), Some("Launch was interrupted"));
+    assert_eq!(rig.changes.lock().unwrap().len(), 1, "the run was written once");
+    assert_eq!(rig.cli.launches(), 0);
+}
+
+#[tokio::test]
 async fn recovery_puts_live_runs_back_into_a_lost_index() {
     let rig = ready().await;
     let run = rig.queued(1).await;
