@@ -109,6 +109,12 @@ describe("the edit a change becomes", () => {
     expect(editFor(withMention, { ...f, body: "@Sam please look soon" })).toEqual({ type: "create", body: "@Sam please look soon", mentions: [{ accountId: "sam", name: "Sam" }] });
   });
 
+  it("finds mentions inside list items", () => {
+    const ida = { type: "mention" as const, person: { connectionId: "mock", accountId: "ida" }, name: "Ida" };
+    const list = { type: "list" as const, ordered: false, items: [[{ type: "paragraph" as const, content: [ida] }]] };
+    expect(docMentions({ blocks: [list] })).toEqual([{ accountId: "ida", name: "Ida" }]);
+  });
+
   it("reads the real ticket of an applied draft by its key", () => {
     expect(createdItemKey(create())).toBeNull();
     expect(createdItemKey(create({ state: { type: "applied" }, created: [{ connectionId: "mock", externalId: "DEVOPS-9", key: "DEVOPS-9" }] }))).toBe("mock:DEVOPS-9");
