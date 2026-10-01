@@ -339,7 +339,9 @@ export type Intent =
   | { type: "create"; container: ContainerRef; fields: NewWorkItem; link: WorkLink | null }
   | { type: "update"; item: ItemRef; patch: WorkPatch }
   | { type: "link"; from: ItemRef; to: ItemRef; kind: WorkLink["kind"] }
-  | { type: "subtasks"; parent: ItemRef; summaries: string[] };
+  | { type: "subtasks"; parent: ItemRef; summaries: string[] }
+  /** Never applied with `proposalsApprove`; `runsApprove` starts it, bound to the digest the person read. */
+  | { type: "startRun"; connectionId: string; item: ItemRef | null; spec: RunSpec };
 
 export interface NewWorkItem {
   title: string;
@@ -400,6 +402,8 @@ export interface Proposal {
   created: ItemRef[];
   /** Why the last attempt to apply it failed. */
   error: string | null;
+  /** The run an approved `startRun` became. */
+  run: string | null;
 }
 
 /** Which proposals to list. Every field that is set must match. */
@@ -419,6 +423,89 @@ export type ProposalEdit =
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
   connectionId: string;
+}
+
+/** Mirrors src-tauri/src/domain/run.rs. Only `investigate` can be started yet. */
+export type RunKind = "investigate" | "triage" | "build" | "review" | "verify";
+
+/** Everything that decides what an agent does, as the person approves it. */
+export interface RunSpec {
+  kind: RunKind;
+  /** `owner/name`. */
+  repo: string;
+  clonePath: string;
+  base: string;
+  /** The worktree folder; with `worktree-` in front it is also the branch. */
+  name: string;
+  instruction: string;
+  /** Pip's note, up to 300 characters, sent as data apart from the instruction. */
+  focus?: string | null;
+  /** The run whose output led Pip to propose this one. */
+  focusFromRun?: string | null;
+  /** Snapshot of the ticket made by the backend, never taken from a model. */
+  ticketBlock?: string | null;
+}
+
+export type RunState = "queued" | "launching" | "working" | "needsAnswer" | "needsPermission" | "systemBlocked" | "done" | "failed" | "stopped" | "unknown";
+
+export interface Run {
+  id: string;
+  proposalId: string;
+  connectionId: string;
+  item: ItemRef | null;
+  spec: RunSpec;
+  /** What the person read when approving. */
+  digest: string;
+  expectedWorktree: string;
+  state: RunState;
+  shortId: string | null;
+  sessionId: string | null;
+  /** The question, or the exact command awaiting permission. */
+  needs: string | null;
+  lastDetail: string | null;
+  tokens: number | null;
+  branch: string | null;
+  result: string | null;
+  error: string | null;
+  dbFile: string;
+  queuedAt: string;
+  launchedAt: string | null;
+  lastProgressAt: string;
+  endedAt: string | null;
+}
+
+/** What the person reads before approving; `digest` is sent back with the approval. */
+export interface RunReview {
+  digest: string;
+  prompt: string;
+  instruction: string;
+  focus: string | null;
+  ticketBlock: string | null;
+  guard: string;
+  spec: RunSpec;
+}
+
+/** Which runs to list. Every field that is set must match. */
+export interface RunQuery {
+  states?: RunState[];
+  item?: ItemRef;
+  connectionId?: string;
+}
+
+/** Emitted as the `runs-changed` event. */
+export interface RunsChanged {
+  connectionId: string;
+}
+
+/** One line of a pre-flight check. */
+export interface PreflightRow {
+  level: "ok" | "warn" | "error";
+  text: string;
+}
+
+export interface Preflight {
+  rows: PreflightRow[];
+  blocking: boolean;
 }
 
 /** A comment on a work item, mirroring the domain model. */

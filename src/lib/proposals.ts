@@ -1,5 +1,10 @@
 import type { Intent, ItemRef, Proposal } from "../types";
 
+/** Fails to compile when a switch over a union misses a case, and throws if one slips through at run time. */
+export function unreachable(value: never): never {
+  throw new Error(`Unhandled case: ${JSON.stringify(value)}`);
+}
+
 /** The existing item a draft is about; a new item has none yet. */
 export function targetOf(intent: Intent): ItemRef | null {
   switch (intent.type) {
@@ -11,9 +16,18 @@ export function targetOf(intent: Intent): ItemRef | null {
       return intent.from;
     case "subtasks":
       return intent.parent;
+    case "startRun":
+      return intent.item;
     case "create":
       return null;
+    default:
+      return unreachable(intent);
   }
+}
+
+/** The drafts a screen that can only approve with `proposalsApprove` may offer: a run is approved with `runsApprove`, after its prompt is shown. */
+export function withoutRunDrafts(proposals: Proposal[]): Proposal[] {
+  return proposals.filter((p) => p.intent.type !== "startRun");
 }
 
 /** Drafts Pip made while answering one question, oldest first so they read in the order they were proposed. */

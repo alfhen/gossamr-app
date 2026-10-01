@@ -1,6 +1,6 @@
 import { docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
-import { targetOf } from "../lib/proposals";
+import { targetOf, unreachable } from "../lib/proposals";
 import type { Proposal } from "../types";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { draftStatus } from "./boardLogic";
@@ -8,7 +8,7 @@ import { draftTitle } from "./DraftCard";
 import { showDraft } from "./draftTicket";
 import { showMe } from "./jump";
 
-const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", link: "✦" };
+const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", link: "✦", startRun: "▶" };
 
 const STATE: Record<Proposal["state"]["type"], string> = { pending: "Draft", applying: "Working…", applied: "Done", skipped: "Skipped", retired: "Out of date" };
 
@@ -36,6 +36,10 @@ export function draftPreviewBody(p: Proposal, statusName: string | null): string
       return "Change fields";
     case "link":
       return `${i.kind} ${i.to.key}`;
+    case "startRun":
+      return `Start an agent: ${i.item?.key ?? i.spec.repo}\nReview and start from the ticket or the Agents view`;
+    default:
+      return unreachable(i);
   }
 }
 

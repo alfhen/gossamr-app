@@ -7,10 +7,16 @@ import type {
   Intent,
   ItemRef,
   Person,
+  Preflight,
   Proposal,
   ProposalEdit,
   ProposalQuery,
   ProposalsChanged,
+  Run,
+  RunQuery,
+  RunReview,
+  RunSpec,
+  RunsChanged,
   Snapshot,
   Transition,
   Uploaded,
@@ -152,6 +158,31 @@ export interface Backend {
   proposalsApprove(id: string): Promise<Proposal>;
   /** Called when drafts changed, including by a sync revising or retiring them. Returns an unsubscribe function. */
   onProposalsChanged(listener: (change: ProposalsChanged) => void): () => void;
+  /** Background agent runs, newest first. */
+  runsList(query?: RunQuery): Promise<Run[]>;
+  runsGet(id: string): Promise<Run | null>;
+  /** The exact prompt a `startRun` draft would send, and the digest that approves it. */
+  runsReview(proposalId: string): Promise<RunReview>;
+  /**
+   * Starts a `startRun` draft, the only way one is approved. `digest` is from the review the person read; a draft that
+   * changed since rejects with "This draft changed after you read it. Review it again."
+   */
+  runsApprove(proposalId: string, digest: string): Promise<Run>;
+  /** Stops a working run; rejects until it is working. */
+  runsStop(id: string): Promise<Run>;
+  /** Stops every active run, across accounts. */
+  runsStopAll(): Promise<{ stopped: number; failed: number }>;
+  /** Opens Terminal attached to the run's session. */
+  runsAttach(id: string): Promise<void>;
+  runsPreflight(spec: RunSpec): Promise<Preflight>;
+  /** Bytes the run's session files take up. */
+  runsDisk(id: string): Promise<number>;
+  /** Launches a run whose launch failed, after checking that no session for it exists. */
+  runsRetryLaunch(id: string): Promise<Run>;
+  /** Called when a run was created or changed. Returns an unsubscribe function. */
+  onRunsChanged(listener: (change: RunsChanged) => void): () => void;
+  /** Called with a run id when a notification should open that run. Returns an unsubscribe function. */
+  onOpenRun(listener: (runId: string) => void): () => void;
   /** What each signed-in connection follows. */
   watchGet(): Promise<WatchState[]>;
   /** Choosing `selected` with nothing watched yet syncs nothing; add containers with `watchSetContainers`. */

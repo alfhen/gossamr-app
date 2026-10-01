@@ -32,6 +32,7 @@ const proposal = (over: Partial<Proposal>): Proposal => ({
   revisions: [],
   created: [],
   error: null,
+  run: null,
   ...over,
 });
 

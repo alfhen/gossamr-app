@@ -3,7 +3,7 @@ import { claude } from "../backend/claude";
 import { useClaude, type Turn } from "../claudeStore";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, participants, type Mention } from "../lib/mentions";
-import { draftsForTurn, earlierDrafts, targetOf } from "../lib/proposals";
+import { draftsForTurn, earlierDrafts, targetOf, withoutRunDrafts } from "../lib/proposals";
 import { selectedTicket, useStore } from "../store";
 import type { Proposal, Status, Ticket } from "../types";
 import { Sparkle } from "./icons";
@@ -23,7 +23,8 @@ function suggestions(t: Ticket): string[] {
 export function ClaudeDrawer() {
   const store = useStore();
   const ticket = selectedTicket(store);
-  const { open, setOpen, byTicket, proposals, ask, cancel } = useClaude();
+  const { open, setOpen, byTicket, proposals: allProposals, ask, cancel } = useClaude();
+  const proposals = useMemo(() => withoutRunDrafts(allProposals), [allProposals]);
   const conv = ticket ? byTicket[ticket.key] : undefined;
   const [sessions, setSessions] = useState<{ key: string; last: string | null } | null>(null);
   const [input, setInput] = useState("");
@@ -263,7 +264,7 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
   };
 
   const approve = async () => {
-    if (!backend) return;
+    if (!backend || intent.type === "startRun") return;
     setWorking(true);
     setProblem(null);
     try {
