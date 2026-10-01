@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { SwitchRow } from "../components/Switch";
 import { Markdown } from "../components/Markdown";
 import { draftsForTurn } from "../lib/proposals";
 import { developmentLine } from "../lib/devLinks";
@@ -59,12 +60,7 @@ export function SeeingPanel({ lines, following, onFollow }: { lines: string[]; f
         ))}
       </ul>
       {!following && <p className="m-0 mb-1.5 text-ws-ink3">Pinned: I keep this even as you move around.</p>}
-      <button type="button" role="switch" aria-checked={following} onClick={() => onFollow(!following)} className="flex items-center gap-1.5">
-        <i aria-hidden className={`relative h-[15px] w-[26px] rounded-full transition ${following ? "bg-ws-done" : "bg-ws-sep2"}`}>
-          <i className={`absolute top-0.5 size-[11px] rounded-full bg-white transition-all ${following ? "left-[13px]" : "left-0.5"}`} />
-        </i>
-        Follow my screen
-      </button>
+      <SwitchRow label="Follow my screen" checked={following} onChange={onFollow} className="items-center" />
     </div>
   );
 }

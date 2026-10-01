@@ -18,21 +18,22 @@ describe("the Agents switch", () => {
   it("is unchecked and quiet when off", () => {
     expect(view()).toEqual({ checked: false, busy: false, status: null, failed: false });
     const html = renderToStaticMarkup(<AgentsSwitch enabled={false} pending={null} error={null} note={null} onChange={vi.fn()} />);
-    expect(html).not.toContain("checked");
-    expect(html).not.toContain("disabled");
+    expect(html).toContain('aria-checked="false"');
+    expect(html).not.toContain('disabled=""');
     expect(html).not.toContain('role="alert"');
   });
 
   it("is checked when the backend says on", () => {
     expect(view({ enabled: true })).toMatchObject({ checked: true, busy: false, status: null });
-    expect(renderToStaticMarkup(<AgentsSwitch enabled pending={null} error={null} note={null} onChange={vi.fn()} />)).toContain("checked");
+    expect(renderToStaticMarkup(<AgentsSwitch enabled pending={null} error={null} note={null} onChange={vi.fn()} />)).toContain('aria-checked="true"');
   });
 
   it("shows what is being asked for, and locks, while the backend works", () => {
     expect(view({ pending: true })).toMatchObject({ checked: true, busy: true, status: "Turning on. Reading your shell environment…" });
     expect(view({ enabled: true, pending: false })).toMatchObject({ checked: false, busy: true, status: "Turning off…" });
     const html = renderToStaticMarkup(<AgentsSwitch enabled={false} pending error={null} note={null} onChange={vi.fn()} />);
-    expect(html).toContain("disabled");
+    expect(html).toContain('disabled=""');
+    expect(html).toContain('aria-busy="true"');
     expect(html).toContain("Reading your shell environment");
   });
 
@@ -41,7 +42,7 @@ describe("the Agents switch", () => {
     const html = renderToStaticMarkup(<AgentsSwitch enabled={false} pending={null} error="the shell printed nothing" note={null} onChange={vi.fn()} />);
     expect(html).toContain('role="alert"');
     expect(html).toContain("the shell printed nothing");
-    expect(html).not.toContain("checked");
+    expect(html).not.toContain('aria-checked="true"');
   });
 
   it("says what turning off left alone", () => {
