@@ -8,6 +8,7 @@ pub mod enable;
 pub mod env;
 pub mod failure;
 mod finder;
+pub mod fresh;
 pub mod index;
 pub mod launcher;
 pub mod pr;

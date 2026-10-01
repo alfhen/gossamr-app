@@ -52,6 +52,7 @@ async fn build_with(routes: Vec<(&str, Vec<Reply>)>, tools: Option<ToolchainErro
         Arc::new(move |id| seen.lock().unwrap().push(id.to_string())),
     )
     .enabled(true)
+    .with_home(fx.home.clone())
     .with_timing(FAST);
     Rig { svc: Arc::new(tune(svc)), fx, cli, clone, changes }
 }
@@ -904,4 +905,82 @@ mod kinds {
         let p = rig.svc.preflight(Some(of(&rig, RunKind::Review, 1))).await.unwrap();
         assert!(p.blocking && p.rows.iter().any(|r| r.level == Level::Red && r.text.contains("comes from a fork")), "{p:?}");
     }
+}
+
+fn fresh_path_of(rig: &Rig) -> PathBuf {
+    rig.fx.home.join("Gossamr/agents/acme/webshop")
+}
+
+#[tokio::test]
+async fn with_no_clone_the_folder_and_the_command_are_offered_and_nothing_is_made() {
+    let rig = ready().await;
+    std::fs::remove_dir_all(&rig.clone).unwrap();
+    rig.svc.clones.clear();
+    let choice = rig.svc.clones("acme/webshop").await.unwrap();
+    let fresh = choice.fresh.expect("an offer");
+    assert!(choice.clones.is_empty() && !fresh.occupied);
+    assert_eq!(fresh.path, fresh_path_of(&rig));
+    assert_eq!(fresh.command, format!("git clone https://github.com/acme/webshop.git {}", fresh.path.display()));
+    assert!(!rig.fx.home.join("Gossamr").exists());
+    assert!(rig.fx.core.runs_list(&RunQuery::default()).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_folder_in_the_way_is_flagged_and_a_clone_already_there_is_an_ordinary_choice() {
+    let rig = ready().await;
+    std::fs::remove_dir_all(&rig.clone).unwrap();
+    std::fs::create_dir_all(fresh_path_of(&rig)).unwrap();
+    rig.svc.clones.clear();
+    assert!(rig.svc.clones("acme/webshop").await.unwrap().fresh.unwrap().occupied);
+
+    clone_with_origin(&fresh_path_of(&rig), ORIGIN);
+    rig.svc.clones.clear();
+    let choice = rig.svc.clones("acme/webshop").await.unwrap();
+    assert_eq!(choice.clones.iter().map(|c| c.path.clone()).collect::<Vec<_>>(), [fresh_path_of(&rig)]);
+    assert!(choice.fresh.is_none(), "an offer is only for when there is nothing to choose");
+    rig.svc.pick_clone("acme/webshop", &fresh_path_of(&rig)).await.unwrap();
+}
+
+#[tokio::test]
+async fn cloning_makes_the_copy_a_clone_that_can_be_drafted_approved_and_launched() {
+    let rig = ready().await;
+    std::fs::remove_dir_all(&rig.clone).unwrap();
+    let clone = rig.svc.clone_fresh("acme/webshop").await.unwrap();
+    assert_eq!(clone.path, fresh_path_of(&rig));
+    let choice = rig.svc.clones("acme/webshop").await.unwrap();
+    assert_eq!(choice.clones.len(), 1);
+
+    let spec = RunSpec { clone_path: clone.path.clone(), ..rig.spec(7) };
+    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
+    let queued = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    rig.svc.launch(&queued.id).await.unwrap();
+    assert_eq!(rig.get(&queued).await.state, RunState::Launching);
+    assert_eq!(rig.cli.0.lock().unwrap().launches[0].cwd, clone.path);
+}
+
+#[tokio::test]
+async fn only_a_watched_repository_is_cloned_and_only_one_clone_of_it_at_a_time() {
+    let rig = ready().await;
+    assert!(rig.svc.clone_fresh("acme/unwatched").await.is_err());
+    assert!(rig.svc.clone_fresh("../escape/x").await.is_err());
+    assert!(!rig.fx.home.join("Gossamr").exists());
+    let held = fresh::Cloning::take(&rig.svc.cloning, "acme/webshop").unwrap();
+    assert!(rig.svc.clone_fresh("Acme/Webshop").await.unwrap_err().to_string().contains("already being cloned"));
+    drop(held);
+    rig.svc.set_flag(false);
+    assert!(rig.svc.clone_fresh("acme/webshop").await.is_err(), "agents are off");
+}
+
+#[tokio::test]
+async fn the_launch_still_refuses_a_path_that_is_not_a_clone_of_the_repository() {
+    let rig = ready().await;
+    let wrong = fresh_path_of(&rig);
+    clone_with_origin(&wrong, "https://github.com/acme/other");
+    let queued = rig.fx.core.draft_run(RunSpec { clone_path: wrong, ..rig.spec(8) }, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let digest = rig.fx.core.runs_review(&queued.id).await.unwrap().digest;
+    let run = rig.fx.core.runs_approve(&queued.id, &digest).await.unwrap();
+    rig.svc.launch(&run.id).await.unwrap();
+    assert_eq!(rig.get(&run).await.state, RunState::Failed);
+    assert_eq!(rig.cli.launches(), 0);
 }

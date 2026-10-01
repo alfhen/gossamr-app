@@ -1,11 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { CloneChoice, ItemRef, Preflight, RunKind, RunReview } from "../types";
+import type { CloneChoice, FreshCopy, ItemRef, Preflight, RunKind, RunReview } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
 import { KIND_LABEL } from "./agentsLogic";
 import { PromptParts } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
-import { COPY, START_STEPS, launchCommand, repoShortage, savedAsTyped, startBlock, worktreeBranch, type RepoShortage } from "./runSheetLogic";
+import { COPY, START_STEPS, homeShort, launchCommand, repoShortage, savedAsTyped, startBlock, worktreeBranch, type RepoShortage } from "./runSheetLogic";
 import { useRunSetup, type SetupPhase } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
 import { useWorkspace } from "../workspaceStore";
@@ -26,6 +26,7 @@ export interface SetupActions {
   start(): void;
   chooseRepo(repo: string): void;
   chooseClone(path: string): void;
+  cloneFresh(): void;
   retryRepos(): void;
   openSettings(): void;
   dismissChanged(): void;
@@ -50,6 +51,8 @@ export interface SetupViewProps {
   phase: SetupPhase;
   busy: boolean;
   error: string | null;
+  cloning: boolean;
+  cloneError: string | null;
   changed: boolean;
   fromPip: boolean;
   instruction: string;
@@ -85,6 +88,39 @@ function RepoShortageNote({ shortage, error, on }: { shortage: RepoShortage; err
   );
 }
 
+function FreshOffer({ p, fresh }: { p: SetupViewProps; fresh: FreshCopy }) {
+  const folder = homeShort(fresh.path);
+  return (
+    <div className="grid gap-2 border-t border-ws-sep pt-2">
+      <b className="text-ws-ink">Or use a fresh copy in {folder}</b>
+      {fresh.occupied ? (
+        <p className="m-0 text-ws-ink2">That folder already exists and isn&apos;t a clone of {p.repo}. Move it away to let Gossamr make the copy there.</p>
+      ) : (
+        <>
+          <p className="m-0 text-ws-ink2">Gossamr makes that folder and runs this, nowhere else:</p>
+          <CodeBox text={fresh.command} what="the clone command" wrap />
+          <p className="m-0 text-xs text-ws-ink3">
+            It signs in the way git does in your shell, and the repository&apos;s own hooks don&apos;t run.
+            {fresh.ghFallback && " If git can't sign in, it tries gh repo clone with your GitHub CLI login."} The first agent in a new folder needs you to trust the folder once, in Terminal.
+          </p>
+        </>
+      )}
+      {p.cloneError && (
+        <div role="alert" className="grid gap-1.5 text-ws-blocked">
+          <span className="[overflow-wrap:anywhere]">{p.cloneError}</span>
+          <span className="text-ws-ink2">If it is a sign-in problem, run this once in Terminal and try again, or clone the repository yourself into ~/Code.</span>
+          <CodeBox text="gh auth setup-git" what="the command" />
+        </div>
+      )}
+      <div>
+        <Btn disabled={fresh.occupied || p.cloning || p.phase !== "ready"} onClick={p.on.cloneFresh}>
+          {p.cloning ? "Cloning…" : `Clone into ${folder}`}
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
 function Where({ p }: { p: SetupViewProps }) {
   const { choice, review } = p;
   const chosen = review?.spec.clonePath;
@@ -116,6 +152,7 @@ function Where({ p }: { p: SetupViewProps }) {
               No clone of {p.repo} found
             </BoxTitle>
             <p className="m-0 text-ws-ink2">Gossamr looks in ~/Code, ~/Developer and ~/src, one level down, for a folder whose origin is {p.repo}. Clone it into one of them and open this again.</p>
+            {choice.fresh && <FreshOffer p={p} fresh={choice.fresh} />}
           </Box>
         )}
         {choice && choice.clones.length > 0 && (
@@ -381,6 +418,8 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     phase: s.phase,
     busy: s.busy,
     error: s.error,
+    cloning: s.cloning,
+    cloneError: s.cloneError,
     changed: s.changed,
     fromPip: s.fromPip,
     instruction,
@@ -396,6 +435,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
       start: () => void start(),
       chooseRepo: (repo) => void useRunSetup.getState().chooseRepo(repo),
       chooseClone: (path) => void useRunSetup.getState().chooseClone(path),
+      cloneFresh: () => void useRunSetup.getState().cloneFresh(),
       retryRepos: () => void useRunSetup.getState().reloadRepos(),
       openSettings: () => {
         useRunSetup.getState().close();
