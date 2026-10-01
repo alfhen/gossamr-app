@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use super::cli::CliError;
 use super::toolchain::ToolchainError;
+use crate::domain::RunFailure;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Failure {
@@ -56,6 +57,19 @@ impl From<ToolchainError> for Failure {
     }
 }
 
+impl From<&Failure> for RunFailure {
+    fn from(why: &Failure) -> Self {
+        match why {
+            Failure::ClaudeMissing => RunFailure::ClaudeMissing,
+            Failure::NotSignedIn => RunFailure::NotSignedIn,
+            Failure::NoClone(_) => RunFailure::NoClone,
+            Failure::CapReached(_) => RunFailure::CapReached,
+            Failure::NeedsTrust { folder } => RunFailure::UntrustedFolder { path: folder.clone() },
+            Failure::TooOld | Failure::NoEnvironment(_) | Failure::Invalid(_) | Failure::CommandFailed(_) | Failure::Unparseable(_) | Failure::Interrupted => RunFailure::Other,
+        }
+    }
+}
+
 impl Failure {
     /// What a failed `claude` call means. `folder` is where the launch ran.
     pub fn from_cli(e: CliError, folder: &std::path::Path) -> Self {
@@ -89,5 +103,38 @@ mod tests {
         assert_eq!(Failure::from_cli(missing, folder), Failure::ClaudeMissing);
         assert!(Failure::NeedsTrust { folder: folder.into() }.to_string().contains("/Users/me/Code/webshop"));
         assert_eq!(Failure::Interrupted.to_string(), "Launch was interrupted");
+    }
+
+    fn every_failure(folder: &std::path::Path) -> Vec<(Failure, RunFailure)> {
+        vec![
+            (Failure::ClaudeMissing, RunFailure::ClaudeMissing),
+            (Failure::TooOld, RunFailure::Other),
+            (Failure::NotSignedIn, RunFailure::NotSignedIn),
+            (Failure::NoEnvironment("Couldn't read your shell environment.".into()), RunFailure::Other),
+            (Failure::NoClone("/x isn't a git clone any more".into()), RunFailure::NoClone),
+            (Failure::Invalid("the base branch name isn't valid".into()), RunFailure::Other),
+            (Failure::CapReached(3), RunFailure::CapReached),
+            (Failure::NeedsTrust { folder: folder.into() }, RunFailure::UntrustedFolder { path: folder.into() }),
+            (Failure::CommandFailed("boom".into()), RunFailure::Other),
+            (Failure::Unparseable("hm".into()), RunFailure::Other),
+            (Failure::Interrupted, RunFailure::Other),
+        ]
+    }
+
+    #[test]
+    fn each_launch_failure_has_a_kind_the_page_can_act_on() {
+        for (why, kind) in every_failure(std::path::Path::new("/Users/me/Code/webshop")) {
+            assert_eq!(RunFailure::from(&why), kind, "{why:?}");
+        }
+    }
+
+    #[test]
+    fn a_failure_stored_as_text_alone_is_recognised_by_its_fixed_wording() {
+        let folder = std::path::Path::new("/Users/me/My Code/web shop");
+        for (why, kind) in every_failure(folder) {
+            let known = matches!(kind, RunFailure::UntrustedFolder { .. } | RunFailure::NotSignedIn | RunFailure::ClaudeMissing | RunFailure::CapReached);
+            let expected = if known { kind } else { RunFailure::Other };
+            assert_eq!(RunFailure::from_message(&why.to_string()), expected, "{why:?}");
+        }
     }
 }

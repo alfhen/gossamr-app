@@ -1,7 +1,7 @@
 import type { KeyboardEvent } from "react";
 import type { Run } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
-import { RunBody, StateChip, TONE } from "./AgentParts";
+import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
 import { KIND_LABEL, ageSince, ageText, branchOf, formatTokens, repoName, runTitle, stateView } from "./agentsLogic";
 
 export const agentId = (id: string) => `agent-${id}`;
@@ -17,6 +17,7 @@ export interface AgentItemProps {
   onSelect(): void;
   onOpen(): void;
   onAttach(): void;
+  failure: FailureState;
 }
 
 export const ticketLabel = (run: Run) => run.item?.key ?? null;
@@ -29,7 +30,7 @@ export function onActivate(open: () => void) {
   };
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, onSelect, onOpen, onAttach }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, onSelect, onOpen, onAttach, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -67,7 +68,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
           {repoName(run.spec.repo)} · {branchOf(run)}
         </span>
       </p>
-      <RunBody run={run} now={now} onAttach={onAttach} />
+      <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
       <div className="flex items-center gap-3 text-sm text-ws-ink3 tabular-nums">
         {tokens && <span>{tokens}</span>}
         <time dateTime={ageSince(run)} className="ml-auto" title={run.endedAt ? "Ended" : "Started"}>

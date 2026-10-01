@@ -214,6 +214,38 @@ impl RunState {
     }
 }
 
+/// Why a run failed, as far as the page needs to offer a next step. `Run::error` keeps the full text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum RunFailure {
+    UntrustedFolder { path: PathBuf },
+    NotSignedIn,
+    ClaudeMissing,
+    NoClone,
+    CapReached,
+    Other,
+}
+
+impl RunFailure {
+    /// The kind of a failure recorded before `Run::failure` existed, from the text stored then. Only the messages with
+    /// fixed wording are recognised; anything else reads as `Other`.
+    pub fn from_message(message: &str) -> Self {
+        let trusted = message.strip_prefix("Claude doesn't trust ").and_then(|rest| rest.split_once(" yet. Open Terminal"));
+        if let Some((path, _)) = trusted {
+            return RunFailure::UntrustedFolder { path: PathBuf::from(path) };
+        }
+        if message.starts_with("Claude isn't signed in.") {
+            RunFailure::NotSignedIn
+        } else if message.starts_with("Claude Code isn't installed") {
+            RunFailure::ClaudeMissing
+        } else if message.contains(" agents are already running.") {
+            RunFailure::CapReached
+        } else {
+            RunFailure::Other
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
@@ -234,6 +266,9 @@ pub struct Run {
     pub branch: Option<String>,
     pub result: Option<String>,
     pub error: Option<String>,
+    /// Set with `error` when a launch fails; absent for failures the tracker saw after the session started.
+    #[serde(default)]
+    pub failure: Option<RunFailure>,
     /// The database file of the account the run belongs to.
     pub db_file: String,
     pub queued_at: DateTime<Utc>,
@@ -243,6 +278,14 @@ pub struct Run {
 }
 
 impl Run {
+    /// A failed run stored before `failure` existed gets the kind its message says.
+    pub fn with_failure_filled(mut self) -> Self {
+        if self.state == RunState::Failed && self.failure.is_none() {
+            self.failure = self.error.as_deref().map(RunFailure::from_message);
+        }
+        self
+    }
+
     /// A run that has been approved and not started.
     pub fn queued(id: String, proposal_id: String, connection_id: String, item: Option<ItemRef>, spec: RunSpec, db_file: String, at: DateTime<Utc>) -> Self {
         Run {
@@ -262,6 +305,7 @@ impl Run {
             branch: None,
             result: None,
             error: None,
+            failure: None,
             db_file,
             queued_at: at,
             launched_at: None,

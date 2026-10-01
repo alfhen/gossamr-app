@@ -87,7 +87,7 @@ impl Db {
     fn run_where(&self, clause: &str, arg: &str) -> Result<Option<Run>> {
         let data: Option<String> =
             self.conn.query_row(&format!("SELECT data FROM runs WHERE {clause}"), params![arg], |r| r.get(0)).optional()?;
-        Ok(data.map(|d| serde_json::from_str(&d)).transpose()?)
+        Ok(data.map(|d| serde_json::from_str::<Run>(&d).map(Run::with_failure_filled)).transpose()?)
     }
 
     /// Runs matching the query, newest first.
@@ -113,7 +113,7 @@ impl Db {
         let rows = stmt.query_map(params_from_iter(args), |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(serde_json::from_str(&row?)?);
+            out.push(serde_json::from_str::<Run>(&row?)?.with_failure_filled());
         }
         Ok(out)
     }

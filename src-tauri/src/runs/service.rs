@@ -70,6 +70,7 @@ pub struct RunService {
     pub(super) changed: Arc<dyn Fn(&str) + Send + Sync>,
     pub(super) notifier: Arc<dyn RunNotifier>,
     pub(super) terminal: Arc<dyn Terminal>,
+    pub(super) home: Option<PathBuf>,
     enabled: AtomicBool,
     /// Held across a read-modify-write of `config.json`, so the enable switch and a picked clone can't undo each other.
     pub(super) config_lock: Mutex<()>,
@@ -139,6 +140,7 @@ impl RunService {
             changed,
             notifier: Arc::new(NoNotices),
             terminal: Arc::new(MacTerminal),
+            home: dirs::home_dir(),
             enabled: AtomicBool::new(false),
             config_lock: Mutex::new(()),
             switching: tokio::sync::Mutex::new(()),
@@ -153,6 +155,12 @@ impl RunService {
     #[cfg(test)]
     pub fn with_terminal(mut self, terminal: Arc<dyn Terminal>) -> Self {
         self.terminal = terminal;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_home(mut self, home: PathBuf) -> Self {
+        self.home = Some(home);
         self
     }
 
@@ -224,6 +232,7 @@ impl RunService {
         let now = Utc::now();
         run.state = RunState::Failed;
         run.error = Some(why.to_string());
+        run.failure = Some(why.into());
         run.ended_at = Some(now);
         run.last_progress_at = now;
         if let Err(e) = self.index.mark_terminal(&run.id) {
@@ -242,6 +251,7 @@ impl RunService {
         run.session_id = entry.session_id.clone().or(run.session_id.take());
         run.state = RunState::Launching;
         run.error = None;
+        run.failure = None;
         run.ended_at = None;
         run.launched_at.get_or_insert_with(Utc::now);
         self.remember(run);
@@ -314,6 +324,7 @@ impl RunService {
         run.launched_at = Some(now);
         run.last_progress_at = now;
         run.error = None;
+        run.failure = None;
         run.ended_at = None;
         self.store(run).await?;
         self.remember(run);

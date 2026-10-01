@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use super::*;
 use crate::domain::fixtures::run_spec;
+use crate::domain::RunFailure;
 use crate::inbox::testing::{fixture_watching, Fixture};
 use crate::runs::cli::{ClaudeCli, SystemCli};
 use crate::runs::env::RunEnv;
@@ -157,15 +158,18 @@ async fn the_cap_counts_runs_of_other_accounts_through_the_index() {
     }
     let run = rig.queued(1).await;
     rig.svc.launch(&run.id).await.unwrap();
-    assert!(rig.get(&run).await.error.unwrap().contains("2 agents are already running"));
+    let capped = rig.get(&run).await;
+    assert!(capped.error.unwrap().contains("2 agents are already running"));
+    assert_eq!(capped.failure, Some(RunFailure::CapReached));
     rig.svc.index.mark_terminal("other-0").unwrap();
     assert_eq!(rig.svc.retry_launch(&run.id).await.unwrap().state, RunState::Launching);
 }
 
-async fn assert_fails_without_launching(rig: &Rig, run: &Run, text: &str) -> Run {
+async fn assert_fails_without_launching(rig: &Rig, run: &Run, text: &str, kind: RunFailure) -> Run {
     rig.svc.launch(&run.id).await.unwrap();
     let after = rig.get(run).await;
     assert_eq!(after.state, RunState::Failed);
+    assert_eq!(after.failure, Some(kind), "{text}");
     assert!(after.error.as_deref().unwrap().contains(text), "{:?}", after.error);
     assert!(after.ended_at.is_some() && after.short_id.is_none());
     assert_eq!(rig.cli.launches(), 0);
@@ -178,38 +182,38 @@ async fn problems_found_before_launching_fail_the_run_with_the_reason_and_start_
     let rig = ready().await;
     rig.cli.with(|s| s.logged_in = false);
     let run = rig.queued(1).await;
-    assert_fails_without_launching(&rig, &run, "isn't signed in").await;
+    assert_fails_without_launching(&rig, &run, "isn't signed in", RunFailure::NotSignedIn).await;
 
     let rig = rig_with(|c| c.with(|s| s.bg = false)).await;
     let run = rig.queued(1).await;
-    assert_fails_without_launching(&rig, &run, "too old").await;
+    assert_fails_without_launching(&rig, &run, "too old", RunFailure::Other).await;
 
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
     std::fs::write(rig.clone.join(".fake-origin"), "https://github.com/acme/other.git").unwrap();
-    assert_fails_without_launching(&rig, &run, "isn't a clone of acme/webshop").await;
+    assert_fails_without_launching(&rig, &run, "isn't a clone of acme/webshop", RunFailure::NoClone).await;
 
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
     std::fs::remove_file(rig.clone.join(".fake-origin")).unwrap();
-    assert_fails_without_launching(&rig, &run, "couldn't read the origin").await;
+    assert_fails_without_launching(&rig, &run, "couldn't read the origin", RunFailure::NoClone).await;
 
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
     std::fs::remove_dir_all(&rig.clone).unwrap();
-    assert_fails_without_launching(&rig, &run, "isn't a git clone any more").await;
+    assert_fails_without_launching(&rig, &run, "isn't a git clone any more", RunFailure::NoClone).await;
 
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
     let moved = rig.fx.home.join("moved");
     std::fs::rename(&rig.clone, &moved).unwrap();
     std::os::unix::fs::symlink(&moved, &rig.clone).unwrap();
-    assert_fails_without_launching(&rig, &run, "isn't its real path").await;
+    assert_fails_without_launching(&rig, &run, "isn't its real path", RunFailure::NoClone).await;
 
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
     rig.set(&run, |r| r.spec.base = "--upload-pack=evil".into()).await;
-    assert_fails_without_launching(&rig, &run, "base branch name isn't valid").await;
+    assert_fails_without_launching(&rig, &run, "base branch name isn't valid", RunFailure::Other).await;
 }
 
 async fn rig_with(f: impl FnOnce(&FakeCli)) -> Rig {
@@ -225,12 +229,14 @@ async fn no_claude_and_no_shell_environment_fail_the_run_and_nothing_starts() {
     rig.svc.launch(&run.id).await.unwrap();
     let after = rig.get(&run).await;
     assert_eq!((after.state, after.error.unwrap()), (RunState::Failed, Failure::ClaudeMissing.to_string()));
+    assert_eq!(after.failure, Some(RunFailure::ClaudeMissing));
 
     let why = "Couldn't read your shell environment: your shell took too long to start.";
     let rig = build(Some(ToolchainError::NoEnvironment(why.into())), |s| s).await;
     let run = rig.queued(1).await;
     rig.svc.launch(&run.id).await.unwrap();
-    assert_eq!(rig.get(&run).await.error.as_deref(), Some(why));
+    let after = rig.get(&run).await;
+    assert_eq!((after.error.as_deref(), after.failure), (Some(why), Some(RunFailure::Other)));
 }
 
 #[tokio::test]
@@ -244,6 +250,8 @@ async fn an_untrusted_folder_a_failed_command_and_garbled_output_each_fail_with_
         assert_eq!(after.state, RunState::Failed, "{outcome:?}");
         let error = after.error.unwrap();
         assert!(error.contains(text), "{error}");
+        let kind = if outcome == Outcome::Untrusted { RunFailure::UntrustedFolder { path: rig.clone.clone() } } else { RunFailure::Other };
+        assert_eq!(after.failure, Some(kind), "{outcome:?}");
         if outcome == Outcome::Untrusted {
             assert!(error.contains(&rig.clone.display().to_string()));
         }
@@ -277,6 +285,40 @@ async fn retry_after_a_failed_command_launches_again() {
     assert_eq!((again.state, again.error.is_none()), (RunState::Launching, true));
     assert_eq!(rig.cli.launches(), 2);
     assert_eq!(rig.live(), vec![run.id.clone()]);
+}
+
+#[tokio::test]
+async fn retry_after_the_folder_is_trusted_launches_a_run_that_never_had_a_session_and_clears_the_failure() {
+    let rig = ready().await;
+    rig.cli.with(|s| s.outcome = Outcome::Untrusted);
+    let run = rig.queued(1).await;
+    rig.svc.launch(&run.id).await.unwrap();
+    let failed = rig.get(&run).await;
+    assert!(failed.short_id.is_none() && failed.failure.is_some() && failed.ended_at.is_some());
+    let still = rig.svc.retry_launch(&run.id).await.unwrap();
+    assert_eq!((still.state, still.failure), (RunState::Failed, Some(RunFailure::UntrustedFolder { path: rig.clone.clone() })), "not trusted yet: it fails the same way");
+
+    rig.cli.with(|s| s.outcome = Outcome::Starts);
+    let again = rig.svc.retry_launch(&run.id).await.unwrap();
+    assert_eq!((again.state, again.error, again.failure, again.ended_at), (RunState::Launching, None, None, None));
+    assert!(again.short_id.is_some());
+    assert_eq!(rig.get(&run).await.failure, None);
+    assert_eq!(rig.live(), vec![run.id.clone()]);
+}
+
+#[tokio::test]
+async fn a_run_failed_before_failures_were_typed_gets_its_kind_from_its_message_when_read() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let message = Failure::NeedsTrust { folder: rig.clone.clone() }.to_string();
+    rig.set(&run, |r| {
+        r.state = RunState::Failed;
+        r.error = Some(message.clone());
+    })
+    .await;
+    assert_eq!(rig.get(&run).await.failure, Some(RunFailure::UntrustedFolder { path: rig.clone.clone() }));
+    let listed = rig.fx.core.runs_list(&RunQuery::default()).await.unwrap();
+    assert_eq!(listed[0].failure, Some(RunFailure::UntrustedFolder { path: rig.clone.clone() }));
 }
 
 #[tokio::test]

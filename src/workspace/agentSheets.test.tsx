@@ -18,10 +18,10 @@ const seeded = () => new MockBackend().runs.list();
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 212_000, result: null, error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
 
-const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), retry: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn() });
+const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn() });
 
 const sheet = (r: Run, over: Partial<RunSheetViewProps> = {}) =>
-  renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="Retry failed payment webhooks" place={{ index: 2, total: 8 }} wide={false} onWide={vi.fn()} events={[]} disk={null} brief={null} confirmStop={false} on={actions()} {...over} />);
+  renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="Retry failed payment webhooks" place={{ index: 2, total: 8 }} wide={false} onWide={vi.fn()} events={[]} disk={null} brief={null} confirmStop={false} opened={false} on={actions()} {...over} />);
 
 const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
 
@@ -67,6 +67,71 @@ describe("the run sheet, by state", () => {
     expect(html).not.toContain('role="alert"');
     expect(html).not.toMatch(/stuck/i);
     expect(sheet(run("working", { lastProgressAt: iso(29) }))).not.toContain("Quiet for");
+  });
+
+  describe("a failed launch the person can fix", () => {
+    const failures = () => new MockBackend({ runs: { seed: "failures" } }).runs.list();
+    const failedOf = (type: string) => failures().find((r) => r.failure?.type === type)!;
+    const disabled = (html: string, label: string) => new RegExp(`<button[^>]*disabled=""[^>]*>(?:(?!</button>)[\\s\\S])*${label}</button>`).test(html);
+
+    it("walks through trusting a folder: explanation, one main button, the command to copy, and Retry that waits", () => {
+      const html = sheet(failedOf("untrustedFolder"));
+      expect(html).toContain("Claude asks you once per folder before it will work there.");
+      expect(html).toContain("hasn&#x27;t been trusted in /Users/sample/Code/storefront yet");
+      expect(html).toContain("Gossamr doesn&#x27;t change Claude&#x27;s settings for you.");
+      expect(buttons(html).filter((b) => !b.startsWith("Copy") && !b.startsWith("×") && !/^[⤢⤡]/.test(b))).toEqual(expect.arrayContaining(["Trust this folder in Terminal", "Retry"]));
+      expect(html).toContain("data-copy=\"cd &#x27;/Users/sample/Code/storefront&#x27; &amp;&amp; claude\"");
+      expect(disabled(html, "Retry")).toBe(true);
+      expect(html).toContain("What Gossamr recorded");
+      expect(html).toContain("accept the trust prompt");
+    });
+
+    it("lets Retry through once Terminal was opened", () => {
+      const html = sheet(failedOf("untrustedFolder"), { opened: true });
+      expect(disabled(html, "Retry")).toBe(false);
+    });
+
+    it("quotes a folder with a single quote or a space so the copied command still works", () => {
+      const html = sheet({ ...failedOf("untrustedFolder"), failure: { type: "untrustedFolder", path: "/Users/me/It's mine/repo" } });
+      expect(html).toContain("cd &#x27;/Users/me/It&#x27;\\&#x27;&#x27;s mine/repo&#x27; &amp;&amp; claude");
+    });
+
+    it("tells a signed-out run to open Terminal and type /login", () => {
+      const html = sheet(failedOf("notSignedIn"));
+      expect(buttons(html)).toContain("Open Terminal to sign in");
+      expect(html).toContain("Type /login");
+      expect(html).toContain('data-copy="claude"');
+      expect(disabled(html, "Retry")).toBe(true);
+    });
+
+    it("links a missing Claude to the install page, shows the install command, and keeps Retry open", () => {
+      const html = sheet(failedOf("claudeMissing"));
+      expect(buttons(html)).toContain("Open the install page");
+      expect(html).toContain("curl -fsSL https://claude.ai/install.sh | bash");
+      expect(disabled(html, "Retry")).toBe(false);
+    });
+
+    it("points a missing clone at starting the agent again with a clone chosen", () => {
+      const html = sheet(failedOf("noClone"));
+      expect(buttons(html)).toContain("Start it again and choose a clone");
+      expect(html).toContain("choose a clone of acme/storefront");
+      expect(html).not.toContain("Or run this");
+    });
+
+    it("explains the limit when the cap was reached and has only Retry", () => {
+      const html = sheet(failedOf("capReached"));
+      expect(html).toContain("Too many agents are running at once.");
+      expect(html).toContain("3 agents are already running");
+      expect(buttons(html).filter((b) => b === "Retry")).toHaveLength(1);
+      expect(buttons(html)).not.toContain("Start it again and choose a clone");
+    });
+
+    it("wires the buttons to the actions", () => {
+      const on = actions();
+      const html = sheet(failedOf("untrustedFolder"), { opened: true, on });
+      expect(html).toContain("Retry");
+      expect(on.fix).not.toHaveBeenCalled();
+    });
   });
 
   it("explains a failed launch and offers Retry launch only when there was no session", () => {

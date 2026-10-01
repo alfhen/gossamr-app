@@ -2,6 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use super::*;
+use crate::domain::RunFailure;
 use crate::runs::index::Entry;
 use crate::runs::rig::{ready, Rig};
 use crate::runs::testing::FakeCli;
@@ -266,4 +267,176 @@ async fn keep_running_counts_live_runs_of_every_account() {
     assert_eq!(rig.svc.keep_running(), 2);
     rig.svc.stop_all().await.unwrap();
     assert_eq!(rig.svc.keep_running(), 0);
+}
+
+fn home(tag: &str) -> PathBuf {
+    let home = tmp(&format!("home-{tag}"));
+    std::fs::create_dir_all(&home).unwrap();
+    home.canonicalize().unwrap()
+}
+
+fn clone_in(home: &Path, name: &str) -> PathBuf {
+    let clone = home.join(name);
+    std::fs::create_dir_all(clone.join(".git")).unwrap();
+    clone.canonicalize().unwrap()
+}
+
+#[test]
+fn the_trust_and_sign_in_files_are_exactly_three_lines_named_by_a_digest_and_private() {
+    let (dir, home) = (tmp("trust-file"), home("file"));
+    let clone = clone_in(&home, "My Code");
+    let claude = Path::new("/opt/fake/bin/claude");
+    let script = format!("#!/bin/zsh\ncd '{}'\nexec '/opt/fake/bin/claude'\n", clone.display());
+    for (purpose, prefix) in [(Purpose::Trust, "trust-"), (Purpose::SignIn, "signin-")] {
+        let file = write_claude_file(&dir, purpose, claude, &clone, Some(&home)).unwrap();
+        let name = file.file_name().unwrap().to_str().unwrap().to_owned();
+        let digest = name.strip_prefix(prefix).and_then(|n| n.strip_suffix(".command")).unwrap();
+        assert!(digest.len() == 16 && digest.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), script);
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(write_claude_file(&dir, purpose, claude, &clone, Some(&home)).unwrap(), file, "writing again replaces it");
+    }
+    assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn zsh_reads_a_hostile_but_quotable_folder_back_as_the_same_path_and_runs_nothing_in_it() {
+    let (dir, home) = (tmp("trust-zsh"), home("zsh"));
+    let clone = clone_in(&home, "with space/$(touch pwned)/`id`/${HOME}/a\"b/c\\d/*?[x]");
+    let bin = home.join("fake-claude");
+    std::fs::write(&bin, "#!/bin/zsh\nprint -rn -- \"$PWD|$#\" > \"$GOSSAMR_OUT\"\n").unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let file = write_claude_file(&dir, Purpose::Trust, &bin, &clone, Some(&home)).unwrap();
+
+    let out = home.join("out.txt");
+    let status = std::process::Command::new("/bin/zsh").arg(&file).env("GOSSAMR_OUT", &out).status().unwrap();
+    assert!(status.success());
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), format!("{}|0", clone.display()), "claude runs in the folder with no arguments");
+    assert!(!clone.join("pwned").exists() && !Path::new("pwned").exists());
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn a_folder_that_is_not_a_plain_clone_inside_home_gets_no_file() {
+    let (dir, home) = (tmp("trust-refuse"), home("refuse"));
+    let outside = tmp("trust-outside");
+    std::fs::create_dir_all(outside.join("repo/.git")).unwrap();
+    let outside = outside.canonicalize().unwrap().join("repo");
+    let real = clone_in(&home, "real");
+    std::os::unix::fs::symlink(&real, home.join("link")).unwrap();
+    std::fs::create_dir_all(home.join("plain")).unwrap();
+    let quoted = clone_in(&home, "it's");
+    let newline = clone_in(&home, "line\nbreak");
+    let escape = clone_in(&home, "esc\u{1b}[31m");
+    let claude = Path::new("/opt/fake/bin/claude");
+    let cases: [(&Path, &str); 9] = [
+        (&quoted, "a single quote"),
+        (&newline, "a newline"),
+        (&escape, "a control character"),
+        (&outside, "outside home"),
+        (&home, "home itself"),
+        (&home.join("link"), "a symlink"),
+        (&home.join("plain"), "not a clone"),
+        (&home.join("missing"), "missing"),
+        (Path::new("relative/path"), "relative"),
+    ];
+    for (folder, why) in cases {
+        assert!(write_claude_file(&dir, Purpose::Trust, claude, folder, Some(&home)).is_err(), "{why}");
+    }
+    assert!(write_claude_file(&dir, Purpose::Trust, claude, &real, None).is_err(), "no home to compare with");
+    assert!(write_claude_file(&dir, Purpose::Trust, Path::new("/opt/it's/claude"), &real, Some(&home)).is_err(), "a hostile claude path");
+    assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "nothing was written");
+    let _ = std::fs::remove_dir_all(outside.parent().unwrap().parent().unwrap());
+    let _ = std::fs::remove_dir_all(home);
+}
+
+async fn untrusted() -> (Rig, Run) {
+    let rig = ready().await;
+    rig.cli.with(|s| s.outcome = crate::runs::testing::Outcome::Untrusted);
+    let run = rig.queued(1).await;
+    rig.svc.start_now(&run.id).await.unwrap();
+    let run = rig.get(&run).await;
+    assert_eq!((run.state, run.failure.clone()), (RunState::Failed, Some(RunFailure::UntrustedFolder { path: rig.clone.clone() })));
+    (rig, run)
+}
+
+fn nothing_opened(rig: &Rig) {
+    assert!(rig.opened.0.lock().unwrap().is_empty());
+    assert!(!rig.fx.core.data_dir().join("attach").exists() || std::fs::read_dir(rig.fx.core.data_dir().join("attach")).unwrap().next().is_none());
+}
+
+#[tokio::test]
+async fn trusting_a_folder_opens_terminal_in_the_clone_of_the_stored_run_with_plain_claude() {
+    let (rig, run) = untrusted().await;
+    rig.svc.open_claude(&run.id, Purpose::Trust).await.unwrap();
+    let opened = rig.opened.0.lock().unwrap().clone();
+    assert_eq!(opened.len(), 1);
+    assert!(opened[0].starts_with(rig.fx.core.data_dir().join("attach")));
+    assert_eq!(std::fs::read_to_string(&opened[0]).unwrap(), format!("#!/bin/zsh\ncd '{}'\nexec '/opt/fake/bin/claude'\n", rig.clone.display()));
+    assert_eq!(rig.get(&run).await, run, "opening Terminal changes nothing about the run");
+    assert!(rig.svc.open_claude(&run.id, Purpose::SignIn).await.is_err(), "this run isn't about signing in");
+}
+
+#[tokio::test]
+async fn trusting_is_refused_unless_the_run_failed_because_the_folder_is_untrusted() {
+    let rig = ready().await;
+    let untrusted = RunFailure::UntrustedFolder { path: rig.clone.clone() };
+    let mut n = 0;
+    let mut run_in = |state: RunState, failure: Option<RunFailure>| {
+        n += 1;
+        (rig.queued(n), state, failure)
+    };
+    let cases = [
+        run_in(RunState::Queued, Some(untrusted.clone())),
+        run_in(RunState::Launching, Some(untrusted.clone())),
+        run_in(RunState::Working, Some(untrusted.clone())),
+        run_in(RunState::Done, Some(untrusted.clone())),
+        run_in(RunState::Stopped, Some(untrusted.clone())),
+        run_in(RunState::Failed, None),
+        run_in(RunState::Failed, Some(RunFailure::Other)),
+        run_in(RunState::Failed, Some(RunFailure::NotSignedIn)),
+        run_in(RunState::Failed, Some(RunFailure::ClaudeMissing)),
+        run_in(RunState::Failed, Some(RunFailure::NoClone)),
+        run_in(RunState::Failed, Some(RunFailure::CapReached)),
+    ];
+    for (run, state, failure) in cases {
+        let run = rig.set(&run.await, |r| {
+            r.state = state;
+            r.failure = failure.clone();
+        }).await;
+        assert!(rig.svc.open_claude(&run.id, Purpose::Trust).await.is_err(), "{state:?} {failure:?}");
+        let may_sign_in = state == RunState::Failed && failure == Some(RunFailure::NotSignedIn);
+        assert_eq!(rig.svc.open_claude(&run.id, Purpose::SignIn).await.is_ok(), may_sign_in, "{state:?} {failure:?}");
+    }
+    assert!(rig.svc.open_claude("no-such-run", Purpose::Trust).await.is_err());
+    assert_eq!(rig.opened.0.lock().unwrap().len(), 1, "only the one sign-in for a run that needs it");
+}
+
+#[tokio::test]
+async fn the_folder_comes_from_the_stored_spec_and_a_hostile_one_is_refused() {
+    let (rig, run) = untrusted().await;
+    let home = rig.fx.home.canonicalize().unwrap();
+    let outside = tmp("trust-svc-outside");
+    std::fs::create_dir_all(outside.join(".git")).unwrap();
+    let link = home.join("link");
+    std::os::unix::fs::symlink(&rig.clone, &link).unwrap();
+    std::fs::create_dir_all(home.join("not-a-clone")).unwrap();
+    let quoted = clone_in(&home, "it's; rm -rf ~");
+    for bad in [outside.canonicalize().unwrap(), link, home.join("not-a-clone"), quoted, home.join("gone"), PathBuf::from("relative")] {
+        rig.set(&run, |r| r.spec.clone_path = bad.clone()).await;
+        let refused = rig.svc.open_claude(&run.id, Purpose::Trust).await;
+        assert!(refused.is_err(), "{}", bad.display());
+    }
+    nothing_opened(&rig);
+    let _ = std::fs::remove_dir_all(outside);
+}
+
+#[tokio::test]
+async fn nothing_opens_when_agents_are_off() {
+    let (rig, run) = untrusted().await;
+    let off = RunService::new(rig.fx.core.clone(), Arc::new(crate::runs::toolchain::SystemToolchain::default()), crate::runs::index::RunIndex::load(&tmp("off-trust")), vec![], Arc::new(|_| {}));
+    assert!(off.open_claude(&run.id, Purpose::Trust).await.is_err());
 }

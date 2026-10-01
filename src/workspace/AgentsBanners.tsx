@@ -2,9 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { browserDeps, copyText } from "../components/CodeBlock";
 import type { RunsEnvironment } from "../types";
 import { Icon, type IconName } from "./AgentIcons";
+import { INSTALL_COMMAND } from "./failureHelp";
 import { messageOf, useToasts } from "./toasts";
-
-export const INSTALL_COMMAND = "curl -fsSL https://claude.ai/install.sh | bash";
 
 const TONES = {
   bad: { box: "border-ws-blocked/40 bg-ws-blocked-soft", head: "text-ws-blocked" },

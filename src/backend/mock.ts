@@ -467,6 +467,14 @@ export class MockBackend implements Backend {
     this.runs.attach(id);
   }
 
+  async runsTrustFolder(id: string) {
+    this.runs.trustFolder(id);
+  }
+
+  async runsSignIn(id: string) {
+    this.runs.signIn(id);
+  }
+
   async runsPreflight(spec: RunSpec | null) {
     return this.runs.preflight(spec);
   }

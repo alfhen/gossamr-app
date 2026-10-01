@@ -9,12 +9,13 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use super::cli::ShortId;
 use super::failure::Failure;
 use super::service::RunService;
 use super::toolchain::Toolchain;
-use crate::domain::{Run, RunState};
+use crate::domain::{Run, RunFailure, RunState};
 use crate::error::{Error, Result};
 
 const STOP_LIMIT: Duration = Duration::from_secs(5);
@@ -66,21 +67,80 @@ fn quotable(path: &Path) -> Result<&str> {
     Ok(text)
 }
 
+/// Writes `<dir>/<name>.command` with the script, private to the user. `name` is made here from a session id or a
+/// digest, never from outside text.
+fn write_script(dir: &Path, name: &str, script: &str) -> Result<PathBuf> {
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    let file = dir.join(format!("{name}.command"));
+    match std::fs::remove_file(&file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o700).open(&file)?;
+    std::io::Write::write_all(&mut out, script.as_bytes())?;
+    Ok(file)
+}
+
 /// Writes `<dir>/<short id>.command`: `cd` into the worktree, then `claude attach`. Nothing from a model or a ticket
 /// can be in it: the id is eight hex characters, and both paths are checked.
 pub fn write_attach_file(dir: &Path, claude: &Path, worktree: &Path, id: &ShortId) -> Result<PathBuf> {
     let id = ShortId::parse(id.as_str()).ok_or_else(|| refuse("that isn't a session id"))?;
     let (claude, worktree) = (quotable(claude)?, quotable(worktree)?);
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    let file = dir.join(format!("{id}.command"));
-    match std::fs::remove_file(&file) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-        _ => {}
+    write_script(dir, id.as_str(), &format!("#!/bin/zsh\ncd '{worktree}'\nexec '{claude}' attach {id}\n"))
+}
+
+/// Why Terminal is opened with plain `claude` in a clone, and so what the file is called.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+    Trust,
+    SignIn,
+}
+
+impl Purpose {
+    fn prefix(self) -> &'static str {
+        match self {
+            Purpose::Trust => "trust",
+            Purpose::SignIn => "signin",
+        }
     }
-    let script = format!("#!/bin/zsh\ncd '{worktree}'\nexec '{claude}' attach {id}\n");
-    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o700).open(&file)?;
-    std::io::Write::write_all(&mut out, script.as_bytes())?;
-    Ok(file)
+
+    fn allows(self, failure: Option<&RunFailure>) -> bool {
+        matches!((self, failure), (Purpose::Trust, Some(RunFailure::UntrustedFolder { .. })) | (Purpose::SignIn, Some(RunFailure::NotSignedIn)))
+    }
+
+    fn refusal(self) -> &'static str {
+        match self {
+            Purpose::Trust => "Terminal can be opened to trust a folder only for a run that failed because Claude doesn't trust it.",
+            Purpose::SignIn => "Terminal can be opened to sign in only for a run that failed because Claude isn't signed in.",
+        }
+    }
+}
+
+/// `clone` as a folder it is safe to open Terminal in: a real path (no symlink on the way) strictly inside `home`,
+/// holding a git clone, and fit for single quotes.
+fn checked_clone(clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
+    let text = quotable(clone)?;
+    let home = home.and_then(|h| h.canonicalize().ok()).ok_or_else(|| refuse("Gossamr can't tell where your home folder is."))?;
+    let real = clone.canonicalize().map_err(|_| refuse(format!("{text} isn't a folder that exists")))?;
+    if real != clone {
+        return Err(refuse(format!("{text} isn't its real path: it goes through a link")));
+    }
+    if real == home || !real.starts_with(&home) {
+        return Err(refuse(format!("{text} isn't inside your home folder")));
+    }
+    if !(real.is_dir() && real.join(".git").exists()) {
+        return Err(refuse(format!("{text} isn't a git clone")));
+    }
+    Ok(real)
+}
+
+/// Writes `<dir>/<trust|signin>-<digest of the folder>.command`: `cd` into the clone, then plain `claude`, which is
+/// interactive. Both paths are checked, and the name is a digest, so no outside text reaches the script or its name.
+pub fn write_claude_file(dir: &Path, purpose: Purpose, claude: &Path, clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
+    let clone = checked_clone(clone, home)?;
+    let (claude, clone_text) = (quotable(claude)?, quotable(&clone)?);
+    let digest: String = Sha256::digest(clone_text.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
+    write_script(dir, &format!("{}-{digest}", purpose.prefix()), &format!("#!/bin/zsh\ncd '{clone_text}'\nexec '{claude}'\n"))
 }
 
 /// Deletes attach scripts older than a day.
@@ -127,6 +187,7 @@ impl RunService {
         run.state = RunState::Stopped;
         run.needs = None;
         run.error = None;
+        run.failure = None;
         run.ended_at = Some(now);
         run.last_progress_at = now;
     }
@@ -202,6 +263,21 @@ impl RunService {
         let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
         let dir = self.core.data_dir().join(ATTACH_DIR);
         let file = write_attach_file(&dir, &claude, &run.expected_worktree, &id)?;
+        self.terminal.open(&file).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
+    }
+
+    /// Opens Terminal in the run's clone running plain `claude`, so Claude can ask its one-time trust question or sign
+    /// the person in. Only for a failed run whose reason is that one, and only for the clone in its stored spec.
+    pub async fn open_claude(&self, run_id: &str, purpose: Purpose) -> Result<()> {
+        self.ensure_enabled()?;
+        let run = self.load(run_id).await?;
+        if run.state != RunState::Failed || !purpose.allows(run.failure.as_ref()) {
+            return Err(refuse(purpose.refusal()));
+        }
+        let tc = self.toolchain().await?;
+        let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
+        let dir = self.core.data_dir().join(ATTACH_DIR);
+        let file = write_claude_file(&dir, purpose, &claude, &run.spec.clone_path, self.home.as_deref())?;
         self.terminal.open(&file).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
     }
 

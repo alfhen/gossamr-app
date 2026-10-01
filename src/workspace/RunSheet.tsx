@@ -8,6 +8,8 @@ import { Box, BoxTitle, Btn, CodeBox, CopyButton, Details, MONO_BLOCK, Sec, Shee
 import { StateChip } from "./AgentParts";
 import { KIND_LABEL, ageText, formatTokens, groupRuns, navOrder, permissionRequest, progressText, quietMinutes, quietText, repoName, runTitle, stateView } from "./agentsLogic";
 import { openTicketByKey } from "./jump";
+import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
+import { failureAction } from "./failureActions";
 import { PromptParts } from "./RunPrompt";
 import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
@@ -22,6 +24,8 @@ export interface RunSheetActions {
   stop(): void;
   startNow(): void;
   retry(): void;
+  fix(act: FailureAct): void;
+  copied(): void;
   openTicket(): void;
   reveal(path: string): void;
   loadBrief(): void;
@@ -39,6 +43,8 @@ export interface RunSheetViewProps {
   disk: number | null | "unknown";
   brief: RunReview | "loading" | "unavailable" | null;
   confirmStop: boolean;
+  /** Terminal was opened for this failed run, or its command copied. */
+  opened: boolean;
   on: RunSheetActions;
 }
 
@@ -50,7 +56,7 @@ function OpenInTerminal({ run, on, filled = true }: { run: Run; on: RunSheetActi
   );
 }
 
-function Attention({ run, on }: { run: Run; on: RunSheetActions }) {
+function Attention({ run, opened, on }: { run: Run; opened: boolean; on: RunSheetActions }) {
   switch (run.state) {
     case "needsPermission": {
       const ask = permissionRequest(run.needs);
@@ -106,24 +112,7 @@ function Attention({ run, on }: { run: Run; on: RunSheetActions }) {
         </Box>
       );
     case "failed":
-      return (
-        <Box tone="failed" label="Failure">
-          <BoxTitle icon="alert" tone="failed">
-            {run.shortId ? "The run stopped without finishing" : "It didn't start"}
-          </BoxTitle>
-          <pre className="selectable m-0 font-mono text-sm leading-normal break-words whitespace-pre-wrap text-ws-ink2">{run.error?.trim() || "No reason was recorded."}</pre>
-          {!run.shortId && (
-            <div className="grid gap-1.5">
-              <div>
-                <Btn tone="primary" icon="retry" onClick={on.retry}>
-                  Retry launch
-                </Btn>
-              </div>
-              <p className="m-0 text-xs text-ws-ink3">Looks for a session that already exists first, and only then starts one. Same prompt, nothing to approve again.</p>
-            </div>
-          )}
-        </Box>
-      );
+      return <FailureBox run={run} opened={opened} on={on} />;
     case "queued":
       return (
         <Box tone="plain" label="Waiting to start">
@@ -136,6 +125,60 @@ function Attention({ run, on }: { run: Run; on: RunSheetActions }) {
     default:
       return null;
   }
+}
+
+function FailureBox({ run, opened, on }: { run: Run; opened: boolean; on: RunSheetActions }) {
+  const help = failureHelp(run);
+  const message = run.error?.trim() || "No reason was recorded.";
+  const ready = help ? retryEnabled(help, opened) : true;
+  const stepDone = !!help?.primary && help.retryNeedsTerminal && opened;
+  return (
+    <Box tone="failed" label="Failure">
+      <BoxTitle icon="alert" tone="failed">
+        {run.shortId ? "The run stopped without finishing" : "It didn't start"}
+      </BoxTitle>
+      {help ? (
+        <>
+          <p className="m-0 font-semibold text-ws-ink">{help.summary}</p>
+          <p className="m-0 text-ws-ink2">{help.detail}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {help.primary && (
+              <Btn tone={stepDone ? "plain" : "primary"} icon={help.primary.act === "terminal" ? "term" : help.primary.act === "install" ? "ext" : "play"} onClick={() => on.fix(help.primary!.act)}>
+                {help.primary.label}
+              </Btn>
+            )}
+            <Btn tone={stepDone || !help.primary ? "primary" : "plain"} icon="retry" disabled={!ready} title={ready ? undefined : "Do the step above first, then retry"} onClick={on.retry}>
+              Retry
+            </Btn>
+          </div>
+          {help.command && (
+            <div className="grid gap-1">
+              <span className="text-xs text-ws-ink3">Or run this in your own terminal{help.command.note ? `. ${help.command.note}` : ":"}</span>
+              <CodeBox text={help.command.text} what="the command" wrap onCopied={on.copied} />
+            </div>
+          )}
+          <p className="m-0 text-xs text-ws-ink3">Retry looks for a session that already exists first, and only then starts one. Same prompt, nothing to approve again.</p>
+          <Details summary="What Gossamr recorded">
+            <pre className="selectable m-0 font-mono text-sm leading-normal break-words whitespace-pre-wrap text-ws-ink2">{message}</pre>
+          </Details>
+        </>
+      ) : (
+        <>
+          <pre className="selectable m-0 font-mono text-sm leading-normal break-words whitespace-pre-wrap text-ws-ink2">{message}</pre>
+          {!run.shortId && (
+            <div className="grid gap-1.5">
+              <div>
+                <Btn tone="primary" icon="retry" onClick={on.retry}>
+                  Retry launch
+                </Btn>
+              </div>
+              <p className="m-0 text-xs text-ws-ink3">Looks for a session that already exists first, and only then starts one. Same prompt, nothing to approve again.</p>
+            </div>
+          )}
+        </>
+      )}
+    </Box>
+  );
 }
 
 function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTitle: string | null; on: RunSheetActions }) {
@@ -196,7 +239,7 @@ function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode 
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, opened, on }: RunSheetViewProps) {
   const view = stateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -267,7 +310,7 @@ export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, event
           ))}
       </div>
 
-      {attention && <Attention run={run} on={on} />}
+      {attention && <Attention run={run} opened={opened} on={on} />}
       {run.state === "done" && <Result run={run} />}
 
       <Sec title="What it did" count={events ? `${events.length} ${events.length === 1 ? "entry" : "entries"}` : undefined}>
@@ -311,6 +354,7 @@ export function RunSheet({ id }: { id: string }) {
   const [confirmStop, setConfirmStop] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const disk = useDisk(backend, id);
+  const opened = useRuns((s) => s.terminalOpened.has(id));
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30_000);
@@ -351,6 +395,8 @@ export function RunSheet({ id }: { id: string }) {
     stop: () => (setConfirmStop(false), void store.stop(id)),
     startNow: () => void store.startNow(id),
     retry: () => void store.retryLaunch(id),
+    fix: (act) => failureAction(id, act),
+    copied: () => store.noteCopied(id),
     openTicket: () => {
       if (!run.item) return;
       store.closeSheet();
@@ -363,6 +409,6 @@ export function RunSheet({ id }: { id: string }) {
       backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
     },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} opened={opened} on={on} />;
 }
 

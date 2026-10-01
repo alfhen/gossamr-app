@@ -450,6 +450,15 @@ export interface RunSpec {
 
 export type RunState = "queued" | "launching" | "working" | "needsAnswer" | "needsPermission" | "systemBlocked" | "done" | "failed" | "stopped" | "unknown";
 
+/** Why a launch failed, for the failures the person can fix. `Run.error` has the full text. */
+export type RunFailure =
+  | { type: "untrustedFolder"; path: string }
+  | { type: "notSignedIn" }
+  | { type: "claudeMissing" }
+  | { type: "noClone" }
+  | { type: "capReached" }
+  | { type: "other" };
+
 export interface Run {
   id: string;
   proposalId: string;
@@ -469,6 +478,8 @@ export interface Run {
   branch: string | null;
   result: string | null;
   error: string | null;
+  /** Set with `error` when a launch fails; absent for a run that stopped after it started. */
+  failure?: RunFailure | null;
   dbFile: string;
   queuedAt: string;
   launchedAt: string | null;

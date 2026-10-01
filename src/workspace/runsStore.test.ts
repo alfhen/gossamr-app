@@ -191,6 +191,7 @@ describe("the run sheet", () => {
   it("starts a queued run and retries a failed launch", async () => {
     await settle();
     const failed = s().runs.find((r) => r.state === "failed")!;
+    await s().fix(failed.id, "terminal");
     await s().retryLaunch(failed.id);
     await settle();
     expect(s().runs.find((r) => r.id === failed.id)?.state).toBe("queued");
@@ -199,6 +200,79 @@ describe("the run sheet", () => {
     expect(s().runs.find((r) => r.id === failed.id)?.state).toBe("launching");
     await s().startNow(failed.id);
     expect(useToasts.getState().toasts[0].text).toMatch(/^Couldn't start it: /);
+  });
+
+  describe("a launch that failed on something the person can fix", () => {
+    const failing = async (kind: string) => {
+      backend = new MockBackend({ runs: { seed: "failures" } });
+      s().init(backend);
+      await settle();
+      return s().runs.find((r) => r.failure?.type === kind)!;
+    };
+    const find = (id: string) => s().runs.find((r) => r.id === id)!;
+
+    it("opens Terminal for an untrusted folder, then lets Retry through to Queued", async () => {
+      const run = await failing("untrustedFolder");
+      expect(s().terminalOpened.has(run.id)).toBe(false);
+      await s().fix(run.id, "terminal");
+      expect(backend.runs.terminals).toEqual([run.id]);
+      expect(s().terminalOpened.has(run.id)).toBe(true);
+      await s().retryLaunch(run.id);
+      await settle();
+      expect(find(run.id)).toMatchObject({ state: "queued", error: null, failure: null, endedAt: null });
+      expect(s().terminalOpened.has(run.id)).toBe(false);
+      backend.runs.advance(run.id);
+      await settle();
+      expect(find(run.id).state).toBe("launching");
+      backend.runs.advance(run.id);
+      await settle();
+      expect(find(run.id).state).toBe("working");
+    });
+
+    it("says it is still blocked when Retry is pressed before the folder was trusted", async () => {
+      const run = await failing("untrustedFolder");
+      await s().retryLaunch(run.id);
+      await settle();
+      expect(find(run.id)).toMatchObject({ state: "failed", failure: { type: "untrustedFolder" } });
+      expect(useToasts.getState().toasts[0].text).toMatch(/^Still blocked: Claude asks you once per folder/);
+    });
+
+    it("signs in through Terminal for a run that failed on a sign-in, and not for any other", async () => {
+      const run = await failing("notSignedIn");
+      await s().fix(run.id, "terminal");
+      expect(backend.runs.terminals).toEqual([run.id]);
+      await s().retryLaunch(run.id);
+      await settle();
+      expect(find(run.id).state).toBe("queued");
+      const other = await failing("other");
+      await s().fix(other.id, "terminal");
+      expect(useToasts.getState().toasts[0].text).toMatch(/^Couldn't open Terminal: /);
+      expect(s().terminalOpened.has(other.id)).toBe(false);
+    });
+
+    it("counts copying the command as taking the step, since that is how someone uses their own terminal", async () => {
+      const run = await failing("untrustedFolder");
+      s().noteCopied(run.id);
+      expect(s().terminalOpened.has(run.id)).toBe(true);
+    });
+
+    it("opens the install page for a missing Claude", async () => {
+      const run = await failing("claudeMissing");
+      const open = vi.spyOn(backend, "openUrl");
+      await s().fix(run.id, "install");
+      expect(open).toHaveBeenCalledWith("https://code.claude.com/docs/en/setup");
+    });
+
+    it("counts a run on the rail again if it fails again after a retry that worked", async () => {
+      const run = await failing("untrustedFolder");
+      s().markSeen();
+      expect(s().seenFailed.has(run.id)).toBe(true);
+      await s().fix(run.id, "terminal");
+      await s().retryLaunch(run.id);
+      await settle();
+      expect(s().seenFailed.has(run.id)).toBe(false);
+      expect(JSON.parse(localStorage.getItem("gossamr-runs-seen")!)).not.toContain(run.id);
+    });
   });
 
   it("opens the sheet when a notification asks for a run", async () => {

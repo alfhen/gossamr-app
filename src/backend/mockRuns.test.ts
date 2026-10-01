@@ -139,10 +139,41 @@ describe("mock runs", () => {
     const failed = (await backend.runsList({ states: ["failed"] }))[0];
     await expect(backend.runsAttach(failed.id)).rejects.toThrow(/no session/);
     await expect(backend.runsRetryLaunch((await backend.runsList({ states: ["working"] }))[0].id)).rejects.toThrow(/failed/);
+    expect((await backend.runsRetryLaunch(failed.id)).state).toBe("failed");
+    await backend.runsTrustFolder(failed.id);
     expect((await backend.runsRetryLaunch(failed.id)).state).toBe("queued");
     const working = (await backend.runsList({ states: ["working"] }))[0];
     await backend.runsAttach(working.id);
     expect(backend.runs.attached).toEqual([working.id]);
+  });
+
+  it("has one failed launch of each kind, and the busy set's failed run is an untrusted folder", async () => {
+    const failures = await new MockBackend({ runs: { seed: "failures" } }).runsList({ states: ["failed"] });
+    expect(failures.map((r) => r.failure?.type).sort()).toEqual(["capReached", "claudeMissing", "noClone", "notSignedIn", "other", "untrustedFolder"]);
+    for (const r of failures) expect([r.shortId, typeof r.error]).toEqual([null, "string"]);
+    const [busy] = await new MockBackend().runsList({ states: ["failed"] });
+    expect(busy.failure).toEqual({ type: "untrustedFolder", path: "/Users/sample/Code/storefront" });
+    expect(busy.error).toContain("/Users/sample/Code/storefront");
+  });
+
+  it("opens Terminal to trust or sign in only for the failure it is meant for, and retry waits for it", async () => {
+    const backend = new MockBackend({ runs: { seed: "failures" } });
+    const by = async (type: string) => (await backend.runsList()).find((r) => r.failure?.type === type)!;
+    const [untrusted, signedOut, other] = [await by("untrustedFolder"), await by("notSignedIn"), await by("other")];
+    await expect(backend.runsTrustFolder(signedOut.id)).rejects.toThrow(/doesn't trust/);
+    await expect(backend.runsSignIn(untrusted.id)).rejects.toThrow(/isn't signed in/);
+    await expect(backend.runsTrustFolder(other.id)).rejects.toThrow();
+    await expect(backend.runsTrustFolder("nope")).rejects.toThrow(/no longer exists/);
+    expect((await backend.runsRetryLaunch(untrusted.id)).state).toBe("failed");
+    expect((await backend.runsRetryLaunch(signedOut.id)).state).toBe("failed");
+    expect(backend.runs.terminals).toEqual([]);
+
+    await backend.runsTrustFolder(untrusted.id);
+    await backend.runsSignIn(signedOut.id);
+    expect(backend.runs.terminals).toEqual([untrusted.id, signedOut.id]);
+    expect((await backend.runsRetryLaunch(untrusted.id)).state).toBe("queued");
+    expect((await backend.runsRetryLaunch(signedOut.id)).state).toBe("queued");
+    await expect(backend.runsTrustFolder(untrusted.id)).rejects.toThrow(/doesn't trust/);
   });
 
   it("can start empty, with many runs, or with Claude missing, and counts ages back from a chosen moment", async () => {
