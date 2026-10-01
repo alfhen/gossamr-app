@@ -604,7 +604,7 @@ mod tests {
         let build = render_prompt(&of_kind(RunKind::Build, None, true));
         assert!(build.contains("`git checkout -B worktree-eng-1-fix-cart-3f9a origin/main`") && !build.contains("--detach"));
         for kind in [RunKind::Triage, RunKind::Verify, RunKind::Review] {
-            assert!(render_prompt(&of_kind(kind, Some(1).filter(|_| kind == RunKind::Review), false)).contains("`git checkout --detach origin/main`"), "{kind:?}");
+            assert!(render_prompt(&of_kind(kind, (kind == RunKind::Review).then_some(1), false)).contains("`git checkout --detach origin/main`"), "{kind:?}");
         }
     }
 
