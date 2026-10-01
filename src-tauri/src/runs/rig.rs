@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 
+use crate::config::TerminalChoice;
 use super::cli::{AgentEntry, JobInfo, ShortId, TimelineLine};
 use super::control::Terminal;
 use super::env::RunEnv;
@@ -28,11 +29,12 @@ impl RunNotifier for Notices {
 }
 
 #[derive(Default)]
-pub struct Opened(pub Mutex<Vec<PathBuf>>);
+pub struct Opened(pub Mutex<Vec<PathBuf>>, pub Mutex<Vec<TerminalChoice>>);
 
 impl Terminal for Opened {
-    fn open(&self, file: &Path) -> std::io::Result<()> {
+    fn open(&self, file: &Path, app: TerminalChoice) -> std::io::Result<()> {
         self.0.lock().unwrap().push(file.to_path_buf());
+        self.1.lock().unwrap().push(app);
         Ok(())
     }
 }

@@ -494,6 +494,8 @@ export interface Run {
   launchedAt: string | null;
   lastProgressAt: string;
   endedAt: string | null;
+  /** Set once `claude rm` has taken the worktree away; the run stays for its result. */
+  worktreeRemovedAt?: string | null;
 }
 
 /** The part of a run's result meant for Jira. Without a `For Jira:` section it is the whole answer, shortened. */
@@ -570,6 +572,17 @@ export interface RunQuery {
 export interface RunsChanged {
   connectionId: string;
 }
+
+/** What the person controls about runs. Zero turns a limit off. */
+export interface AgentSettings {
+  maxRuns: number;
+  wallClockMinutes: number;
+  tokenCap: number;
+  terminal: "terminal" | "iTerm";
+}
+
+/** What `claude rm` said: it removed the worktree, or refused and explained in its own words. */
+export type CleanupResult = { type: "removed" } | { type: "refused"; message: string };
 
 /** What `runs_set_enabled` did. `note` says what turning Agents off left alone. */
 export interface RunsEnabledChange {

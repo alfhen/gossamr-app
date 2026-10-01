@@ -13,6 +13,8 @@ import { failureAction } from "./failureActions";
 import { PromptParts } from "./RunPrompt";
 import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
+import { RunCleanup } from "./RunCleanup";
+import { cleanupReason } from "./cleanupLogic";
 import { MAY_TOUCH, canStartNow, commentWithPipPrompt, stopControl } from "./runSheetLogic";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
@@ -53,6 +55,8 @@ export interface RunSheetViewProps {
   drafting: boolean;
   /** Terminal was opened for this failed run, or its command copied. */
   opened: boolean;
+  /** Why this run is worth cleaning up, when it is. */
+  cleanup?: string | null;
   on: RunSheetActions;
 }
 
@@ -232,7 +236,7 @@ function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode 
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, drafting, opened, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, drafting, opened, cleanup = null, on }: RunSheetViewProps) {
   const view = stateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -312,6 +316,7 @@ export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, event
       </Sec>
 
       <RunWhere run={run} disk={disk} onReveal={on.reveal} />
+      <RunCleanup key={run.id} run={run} reason={cleanup} />
 
       <Sec title="What this agent may touch">
         <ul className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
@@ -432,6 +437,6 @@ export function RunSheet({ id }: { id: string }) {
       backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
     },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} drafting={drafting} opened={opened} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} drafting={drafting} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} on={on} />;
 }
 

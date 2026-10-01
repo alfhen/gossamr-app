@@ -22,6 +22,8 @@ import type {
   RunOutcome,
   RunsChanged,
   RunsEnabledChange,
+  AgentSettings,
+  CleanupResult,
   RunsEnvironment,
   Snapshot,
   Transition,
@@ -215,6 +217,11 @@ export interface Backend {
   revealPath(path: string): Promise<void>;
   /** Whether Claude Code is installed and signed in, for the banners on the Agents view. Never rejects. */
   runsEnvironment(): Promise<RunsEnvironment>;
+  runsSettings(): Promise<AgentSettings>;
+  /** Saves the limits, clamped by the backend, and returns what was saved. */
+  runsSetSettings(settings: AgentSettings): Promise<AgentSettings>;
+  /** Removes a finished run's worktree with `claude rm`. Never forces: Claude refuses unpushed work and says so. */
+  runsCleanup(id: string): Promise<CleanupResult>;
   /** Bytes the run's session files take up. */
   runsDisk(id: string): Promise<number>;
   /** Launches a run whose launch failed, after checking that no session for it exists. */
