@@ -349,7 +349,7 @@ export function RunSheet({ id }: { id: string }) {
   const [pickBlocker, setPickBlocker] = useState(false);
   const items = useWorkspace((s) => s.items);
   const drafting = useRuns((s) => s.drafting !== null);
-  const answering = useRuns((s) => s.answering === id);
+  const answering = useRuns((s) => s.answering.has(id));
   const [now, setNow] = useState(() => Date.now());
   const disk = useDisk(backend, id);
   const opened = useRuns((s) => s.terminalOpened.has(id));
