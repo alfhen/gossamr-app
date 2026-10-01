@@ -176,6 +176,15 @@ describe("mock runs", () => {
     await expect(backend.runsTrustFolder(untrusted.id)).rejects.toThrow(/doesn't trust/);
   });
 
+  it("reports Claude as signed in, and clears the blocking row, once signing in through Terminal worked", async () => {
+    const backend = new MockBackend({ runs: { seed: "failures", environment: "signedOut" } });
+    expect((await backend.runsEnvironment()).claude).toBe("signedOut");
+    expect((await backend.runsPreflight(null)).blocking).toBe(true);
+    await backend.runsSignIn((await backend.runsList()).find((r) => r.failure?.type === "notSignedIn")!.id);
+    expect(await backend.runsEnvironment()).toEqual({ claude: "ok", version: "2.1.286" });
+    expect((await backend.runsPreflight(null)).blocking).toBe(false);
+  });
+
   it("can start empty, with many runs, or with Claude missing, and counts ages back from a chosen moment", async () => {
     expect(await new MockBackend({ runs: { seed: "empty" } }).runsList()).toEqual([]);
     const many = await new MockBackend({ runs: { seed: "many" } }).runsList();

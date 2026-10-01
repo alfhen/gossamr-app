@@ -175,14 +175,15 @@ export const useRuns = create<RunsState>((set, get) => ({
     try {
       const before = get().runs.find((r) => r.id === id);
       const after = await backend.runsRetryLaunch(id);
-      if (after.state === "failed") {
-        const help = failureHelp(after);
-        const again = help?.retryNeedsTerminal && help.kind === before?.failure?.type;
-        useToasts.getState().push(again ? `Still blocked: ${help.summary} Finish the step in Terminal, then retry.` : `It failed again: ${after.error ?? "no reason was given"}`);
-      } else {
+      const help = after.state === "failed" ? failureHelp(after) : null;
+      const again = !!help?.retryNeedsTerminal && help.kind === before?.failure?.type;
+      if (!again && get().terminalOpened.has(id)) {
         const opened = new Set(get().terminalOpened);
         opened.delete(id);
         set({ terminalOpened: opened });
+      }
+      if (after.state === "failed") {
+        useToasts.getState().push(again ? `Still blocked: ${help.summary} Finish the step in Terminal, then retry.` : `It failed again: ${after.error ?? "no reason was given"}`);
       }
     } catch (e) {
       useToasts.getState().push(`Couldn't retry the launch: ${messageOf(e)}`);

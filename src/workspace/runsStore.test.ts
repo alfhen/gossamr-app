@@ -250,6 +250,15 @@ describe("the run sheet", () => {
       expect(s().terminalOpened.has(other.id)).toBe(false);
     });
 
+    it("does not carry the Terminal step over to a retry that fails for another reason", async () => {
+      const run = await failing("untrustedFolder");
+      await s().fix(run.id, "terminal");
+      vi.spyOn(backend, "runsRetryLaunch").mockResolvedValueOnce({ ...run, failure: { type: "notSignedIn" }, error: "Claude isn't signed in." });
+      await s().retryLaunch(run.id);
+      expect(s().terminalOpened.has(run.id)).toBe(false);
+      expect(useToasts.getState().toasts[0].text).toMatch(/^It failed again: /);
+    });
+
     it("counts copying the command as taking the step, since that is how someone uses their own terminal", async () => {
       const run = await failing("untrustedFolder");
       s().noteCopied(run.id);

@@ -225,8 +225,14 @@ export class MockRuns {
     return new Date(this.epoch + ++this.tick * MINUTE).toISOString();
   }
 
+  /** Signing in through `signIn` ends a signed-out Claude. */
+  private claudeNow(): RunsEnvironment["claude"] {
+    return this.claude === "signedOut" && this.signedIn ? "ok" : this.claude;
+  }
+
   environment(): RunsEnvironment {
-    return { claude: this.claude, version: this.claude === "ok" || this.claude === "signedOut" ? "2.1.286" : null };
+    const claude = this.claudeNow();
+    return { claude, version: claude === "ok" || claude === "signedOut" ? "2.1.286" : null };
   }
 
   private changed() {
@@ -426,10 +432,11 @@ export class MockRuns {
   preflight(spec: RunSpec | null): Preflight {
     const rows: PreflightRow[] = [];
     const add = (level: PreflightRow["level"], text: string) => rows.push({ level, text });
-    if (this.claude === "missing") add("red", "Claude Code isn't installed");
+    const claude = this.claudeNow();
+    if (claude === "missing") add("red", "Claude Code isn't installed");
     else {
       add("green", "Claude Code 2.1.286");
-      if (this.claude === "signedOut") add("red", "Not signed in to Claude. Sign in in Terminal, then check again.");
+      if (claude === "signedOut") add("red", "Not signed in to Claude. Sign in in Terminal, then check again.");
       else add("green", "Signed in to Claude");
       add("green", "Background agents are supported");
       add("green", "Shell environment read (72 variables). Agents get this PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
@@ -441,7 +448,7 @@ export class MockRuns {
       else if (clone.branch !== spec.base) add("amber", `Clone: ${clone.path} on ${clone.branch}. It is on ${clone.branch}, not ${spec.base}. The agent's worktree starts from your current HEAD and is told to switch to ${spec.base}.`);
       else add("green", `Clone: ${clone.path} on ${clone.branch}.`);
     }
-    if (this.claude !== "missing") add("green", "Agents run as you, in your permission mode: auto");
+    if (claude !== "missing") add("green", "Agents run as you, in your permission mode: auto");
     const live = this.runs.filter((r) => LIVE.includes(r.state)).length;
     if (live >= this.cap) add("red", `${live} agents are running, the most Gossamr starts at once (${this.cap}). Stop one or wait for one to finish.`);
     else add("green", `${live} of ${this.cap} agents running`);
