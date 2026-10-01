@@ -345,6 +345,12 @@ pub struct Run {
     pub short_id: Option<ShortId>,
     pub session_id: Option<String>,
     pub needs: Option<String>,
+    /// The answer Claude proposes to its own question, when it offers one.
+    #[serde(default)]
+    pub suggested_reply: Option<String>,
+    /// An answer that was stopped on its way: the run is stopped and this is what it was to be woken with.
+    #[serde(default)]
+    pub unsent_answer: Option<String>,
     pub last_detail: Option<String>,
     pub tokens: Option<u64>,
     pub branch: Option<String>,
@@ -387,6 +393,8 @@ impl Run {
             short_id: None,
             session_id: None,
             needs: None,
+            suggested_reply: None,
+            unsent_answer: None,
             last_detail: None,
             tokens: None,
             branch: None,

@@ -289,5 +289,58 @@ describe("the run sheet", () => {
     backend.runs.open("run-seed-2");
     expect(s().sheet).toEqual({ type: "run", id: "run-seed-2" });
   });
-});
 
+  describe("answering a question", () => {
+    const asking = async () => {
+      await settle();
+      return s().runs.find((r) => r.state === "needsAnswer")!;
+    };
+
+    it("sends the answer once and the run carries on under the same id", async () => {
+      const run = await asking();
+      const send = vi.spyOn(backend, "runsAnswer");
+      const done = s().answer(run.id, "Yes, keep it.");
+      await s().answer(run.id, "Yes, keep it.");
+      await done;
+      await settle();
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(run.id, "Yes, keep it.");
+      expect(s().runs.find((r) => r.id === run.id)).toMatchObject({ state: "working", needs: null, shortId: run.shortId });
+      expect(s().answering.size).toBe(0);
+    });
+
+    it("says why it failed and lets the person try again", async () => {
+      const run = await asking();
+      vi.spyOn(backend, "runsAnswer").mockRejectedValueOnce(new Error("Claude started a copy. Your answer is kept on the run."));
+      await s().answer(run.id, "Yes");
+      expect(useToasts.getState().toasts[0].text).toBe("Couldn't send the answer: Claude started a copy. Your answer is kept on the run.");
+      expect(s().answering.size).toBe(0);
+      await s().answer(run.id, "Yes");
+      await settle();
+      expect(s().runs.find((r) => r.id === run.id)?.state).toBe("working");
+    });
+
+    it("lets a second run be answered while the first is on its way, and each only once", async () => {
+      backend = new MockBackend({ runs: { seed: "many" } });
+      s().init(backend);
+      await settle();
+      const [first, second] = s().runs.filter((r) => r.state === "needsAnswer");
+      expect(second).toBeDefined();
+      const send = vi.spyOn(backend, "runsAnswer");
+      const one = s().answer(first.id, "Yes");
+      expect(s().answering.has(first.id) && !s().answering.has(second.id)).toBe(true);
+      const two = s().answer(second.id, "No");
+      await s().answer(first.id, "Yes again");
+      await Promise.all([one, two]);
+      expect(send.mock.calls).toEqual([[first.id, "Yes"], [second.id, "No"]]);
+    });
+
+    it("is refused for a permission prompt", async () => {
+      await settle();
+      const run = s().runs.find((r) => r.state === "needsPermission")!;
+      await s().answer(run.id, "Yes");
+      expect(useToasts.getState().toasts[0].text).toMatch(/permission prompt can only be answered in Terminal/);
+      expect(s().runs.find((r) => r.id === run.id)?.state).toBe("needsPermission");
+    });
+  });
+});

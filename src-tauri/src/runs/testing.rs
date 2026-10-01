@@ -20,6 +20,25 @@ pub enum Outcome {
     Garbled,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resume {
+    /// A stopped session continues under its own id; a running one is copied.
+    Wakes,
+    /// Always starts a copy, as `claude` does when the session still holds on.
+    Copies,
+    Exits,
+    Garbled,
+    /// Never answers, as when the app quits during the wake.
+    Hangs,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResumeCall {
+    pub session_id: String,
+    pub message: String,
+    pub cwd: Option<PathBuf>,
+}
+
 pub struct Scripted {
     pub version: String,
     pub logged_in: bool,
@@ -37,6 +56,13 @@ pub struct Scripted {
     /// Every id `claude stop` was run with.
     pub stops: Vec<String>,
     pub launches: Vec<LaunchRequest>,
+    pub resume: Resume,
+    pub resumes: Vec<ResumeCall>,
+    pub stop_fails: bool,
+    /// `claude stop` succeeds but the session is still listed as it was.
+    pub stop_lingers: bool,
+    /// `stop:<id>` and `resume:<id>` in the order they happened.
+    pub calls: Vec<String>,
     /// What `claude rm` answers, one refusal per call, before it starts succeeding.
     pub rm_refusals: Vec<String>,
     /// Every id `claude rm` was run with.
@@ -65,6 +91,11 @@ impl FakeCli {
             jobs: HashMap::new(),
             stops: vec![],
             launches: vec![],
+            resume: Resume::Wakes,
+            resumes: vec![],
+            stop_fails: false,
+            stop_lingers: false,
+            calls: vec![],
             rm_refusals: vec![],
             rms: vec![],
             in_flight: 0,
@@ -162,10 +193,49 @@ impl ClaudeCli for FakeCli {
         Ok(s.sessions.clone())
     }
 
+    async fn resume(&self, session_id: &str, message: &str, cwd: Option<&Path>) -> CliResult<Launched> {
+        let hangs = {
+            let mut s = self.0.lock().unwrap();
+            s.resumes.push(ResumeCall { session_id: session_id.into(), message: message.into(), cwd: cwd.map(Path::to_path_buf) });
+            s.resume == Resume::Hangs
+        };
+        if hangs {
+            std::future::pending::<()>().await;
+        }
+        let mut s = self.0.lock().unwrap();
+        match s.resume {
+            Resume::Exits => return Err(CliError::Failed { code: Some(1), stderr: "something broke".into() }),
+            Resume::Garbled => return Err(CliError::Unparseable { stdout: "whatever".into() }),
+            Resume::Wakes | Resume::Copies | Resume::Hangs => {}
+        }
+        let Some(at) = s.sessions.iter().position(|e| e.session_id.as_deref() == Some(session_id)) else {
+            return Err(CliError::Failed { code: Some(1), stderr: format!("No session {session_id}") });
+        };
+        let original = s.sessions[at].clone();
+        if s.resume == Resume::Wakes && original.state.as_deref() == Some("stopped") {
+            let entry = &mut s.sessions[at];
+            entry.state = Some("working".into());
+            entry.pid = Some(4242);
+            let id = entry.id.clone().expect("listed");
+            s.calls.push(format!("resume:{id}"));
+            return Ok(Launched { short_id: ShortId::parse(&id).expect("hex"), name: original.name });
+        }
+        s.next += 1;
+        let id = format!("{:08x}", 0xc000_0000u32 + s.next);
+        s.sessions.push(AgentEntry { name: None, ..FakeCli::session(&id, Path::new(original.cwd.as_deref().unwrap_or("/")) ) });
+        s.calls.push(format!("resume:{id}"));
+        Ok(Launched { short_id: ShortId::parse(&id).expect("hex"), name: None })
+    }
+
     async fn stop(&self, id: &ShortId) -> CliResult<()> {
         let mut s = self.0.lock().unwrap();
+        if s.stop_fails {
+            return Err(CliError::Failed { code: Some(1), stderr: "couldn't stop".into() });
+        }
         s.stops.push(id.to_string());
-        if let Some(e) = s.sessions.iter_mut().find(|e| e.id.as_deref() == Some(id.as_str())) {
+        s.calls.push(format!("stop:{id}"));
+        let lingers = s.stop_lingers;
+        if let Some(e) = s.sessions.iter_mut().filter(|_| !lingers).find(|e| e.id.as_deref() == Some(id.as_str())) {
             e.state = Some("stopped".into());
             e.pid = None;
         }

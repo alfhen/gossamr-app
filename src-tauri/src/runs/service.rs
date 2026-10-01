@@ -38,13 +38,18 @@ pub struct Timing {
     /// clone root for the first seconds, before its worktree exists.
     pub worktree_grace: Duration,
     pub poll: Duration,
+    /// How long `claude agents` is asked for `stopped` after a stop, before an answer is given up on.
+    pub stop_wait: Duration,
+    /// Pause after `stopped` is listed, before waking the session: resumed at once, `claude` sometimes starts a copy
+    /// instead (2 of 3 tries); after 3 s it never did in 5 tries.
+    pub stop_settle: Duration,
     /// How long `cleanup` waits between tries while Claude still holds its lock on a stopped session's worktree.
     pub rm_wait: Duration,
 }
 
 impl Default for Timing {
     fn default() -> Self {
-        Self { recover_window: Duration::from_secs(90), worktree_grace: Duration::from_secs(10), poll: Duration::from_secs(2), rm_wait: Duration::from_secs(1) }
+        Self { recover_window: Duration::from_secs(90), worktree_grace: Duration::from_secs(10), poll: Duration::from_secs(2), stop_wait: Duration::from_secs(10), stop_settle: Duration::from_secs(5), rm_wait: Duration::from_secs(1) }
     }
 }
 

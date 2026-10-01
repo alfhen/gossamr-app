@@ -267,6 +267,10 @@ pub fn parse_job(state_json: &str, timeline: &str) -> JobInfo {
     job
 }
 
+pub fn is_uuid(s: &str) -> bool {
+    s.len() == 36 && s.bytes().enumerate().all(|(i, b)| if matches!(i, 8 | 13 | 18 | 23) { b == b'-' } else { b.is_ascii_hexdigit() })
+}
+
 /// `2.1.286 (Claude Code)` gives `(2, 1, 286)`.
 pub fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
     let mut parts = s.split_whitespace().next()?.split('.').map(|p| p.parse::<u32>().ok());
@@ -280,6 +284,8 @@ pub trait ClaudeCli: Send + Sync {
     async fn supports_bg(&self) -> CliResult<bool>;
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched>;
     async fn agents(&self, all: bool) -> CliResult<Vec<AgentEntry>>;
+    /// Wakes a stopped session with `message`. Carries no other flag: any flag makes `claude` start a copy.
+    async fn resume(&self, session_id: &str, message: &str, cwd: Option<&Path>) -> CliResult<Launched>;
     async fn stop(&self, id: &ShortId) -> CliResult<()>;
     async fn rm(&self, id: &ShortId) -> CliResult<()>;
     async fn job(&self, config_dir: &Path, id: &ShortId) -> CliResult<Option<JobInfo>>;
@@ -380,6 +386,17 @@ impl ClaudeCli for SystemCli {
     async fn agents(&self, all: bool) -> CliResult<Vec<AgentEntry>> {
         let args: &[&str] = if all { &["agents", "--json", "--all"] } else { &["agents", "--json"] };
         parse_agents(&self.succeed(args).await?.stdout)
+    }
+
+    async fn resume(&self, session_id: &str, message: &str, cwd: Option<&Path>) -> CliResult<Launched> {
+        if !is_uuid(session_id) {
+            return Err(CliError::Output(format!("not a session id: {session_id}")));
+        }
+        let out = self.run(&["--bg", "--resume", session_id, "--", message], cwd, LAUNCH).await?;
+        if !out.ok {
+            return Err(out.failure());
+        }
+        parse_launch(&out.stdout).ok_or_else(|| CliError::Unparseable { stdout: cut(&out.stdout, STDOUT_KEPT) })
     }
 
     async fn stop(&self, id: &ShortId) -> CliResult<()> {
@@ -744,26 +761,29 @@ mod tests {
             let rig = Rig::new("resume", "");
             let first = rig.cli.launch(&rig.request("ce-4-x-0a1b")).await.unwrap();
             let session = rig.cli.agents(false).await.unwrap().remove(0).session_id.unwrap();
-            let resume = |msg: &str| {
-                std::process::Command::new(FAKE)
-                    .args(["--bg", "--resume", &session, "--", msg])
-                    .current_dir(&rig.repo)
-                    .env("FAKE_CLAUDE_SCENARIO", rig.dir.join("scenario"))
-                    .env("PATH", "/usr/bin:/bin")
-                    .output()
-                    .unwrap()
-            };
-            let copy = String::from_utf8(resume("say OK").stdout).unwrap();
-            assert!(copy.contains("already running: started a copy"));
-            let copy_id = parse_launch_stdout(&copy).unwrap();
-            assert_ne!(copy_id, first.short_id);
+            let copy = rig.cli.resume(&session, "say OK", Some(&rig.repo)).await.unwrap();
+            assert_ne!(copy.short_id, first.short_id, "a running session is copied");
 
             rig.cli.stop(&first.short_id).await.unwrap();
-            let again = String::from_utf8(resume("say OK again").stdout).unwrap();
-            assert_eq!(parse_launch_stdout(&again).unwrap(), first.short_id);
-            let rows = rig.cli.agents(false).await.unwrap();
-            let kept = rows.iter().find(|r| r.id.as_deref() == Some(first.short_id.as_str())).unwrap();
-            assert_eq!((kept.name.as_deref(), kept.state.as_deref()), (Some("say OK again"), Some("working")));
+            let again = rig.cli.resume(&session, "-- say OK again; $(not run)", Some(&rig.repo)).await.unwrap();
+            assert_eq!(again.short_id, first.short_id);
+            let calls = rig.calls();
+            let last: Vec<&str> = calls.rsplit("---\n").next().unwrap().lines().skip(1).collect();
+            assert_eq!(last, ["--bg", "--resume", session.as_str(), "--", "-- say OK again; $(not run)"], "no flag but --bg and --resume");
+            let seen: BTreeSet<String> = std::fs::read_to_string(rig.dir.join("env.last")).unwrap().lines().map(String::from).collect();
+            let allowed: BTreeSet<String> = ["PATH", "HOME", "FAKE_CLAUDE_SCENARIO", "PWD", "SHLVL", "_", "OLDPWD"].map(String::from).into();
+            assert!(seen.is_subset(&allowed), "unexpected variables: {seen:?}");
+        }
+
+        #[tokio::test]
+        async fn resume_refuses_anything_but_a_session_uuid_and_reports_a_missing_session() {
+            let rig = Rig::new("resume-bad", "");
+            for bad in ["", "--bg", "../../x", "b0000001-0000-4000-8000-00000000000g", "b0000001000040008000000000000000"] {
+                assert!(matches!(rig.cli.resume(bad, "hi", None).await, Err(CliError::Output(_))), "{bad}");
+            }
+            assert!(rig.calls().is_empty(), "nothing was run");
+            let err = rig.cli.resume("b0000009-0000-4000-8000-000000000000", "hi", None).await.unwrap_err();
+            assert!(err.to_string().contains("No session"), "{err}");
         }
 
         #[tokio::test]
