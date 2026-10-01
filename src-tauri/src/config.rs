@@ -53,7 +53,7 @@ impl AgentSettings {
 pub struct AppConfig {
     /// The `AgentProvider::id` Pip runs on.
     pub agent_provider: String,
-    /// Background agent runs. Off until the feature is accepted.
+    /// Background agent runs. On unless the person turned them off; a config without the key is a fresh install.
     pub agents_enabled: bool,
     /// The clone the person chose for a repository (`owner/name`) when several match.
     pub picked_clones: HashMap<String, PathBuf>,
@@ -62,7 +62,7 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self { agent_provider: "claude-code".into(), agents_enabled: false, picked_clones: HashMap::new(), agents: AgentSettings::default() }
+        Self { agent_provider: "claude-code".into(), agents_enabled: true, picked_clones: HashMap::new(), agents: AgentSettings::default() }
     }
 }
 
@@ -104,14 +104,17 @@ mod tests {
     }
 
     #[test]
-    fn agents_are_off_by_default_and_a_picked_clone_round_trips_beside_older_settings() {
+    fn agents_are_on_for_a_fresh_install_and_a_saved_choice_wins_and_a_picked_clone_round_trips_beside_older_settings() {
         let dir = std::env::temp_dir().join(format!("gossamr-config-agents-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(!AppConfig::load(&dir).agents_enabled);
+        assert!(AppConfig::load(&dir).agents_enabled);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE), r#"{"agentProvider":"codex"}"#).unwrap();
         let older = AppConfig::load(&dir);
-        assert_eq!((older.agent_provider.as_str(), older.agents_enabled, older.picked_clones.len()), ("codex", false, 0));
+        assert_eq!((older.agent_provider.as_str(), older.agents_enabled, older.picked_clones.len()), ("codex", true, 0));
+        std::fs::write(dir.join(FILE), r#"{"agentsEnabled":true,"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agentsEnabled":false,"agentProvider":"codex"}"#).unwrap();
+        assert!(!AppConfig::load(&dir).agents_enabled, "a saved off stays off");
         std::fs::write(dir.join(FILE), r#"{"agentsEnabled":true,"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
         let on = AppConfig::load(&dir);
         assert!(on.agents_enabled);
@@ -119,7 +122,7 @@ mod tests {
         on.save(&dir).unwrap();
         assert_eq!(AppConfig::load(&dir), on);
         std::fs::write(dir.join(FILE), r#"{"agentsEnabled":"yes"}"#).unwrap();
-        assert!(!AppConfig::load(&dir).agents_enabled, "a mistyped value gives the defaults");
+        assert_eq!(AppConfig::load(&dir), AppConfig::default(), "a mistyped value gives the defaults");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -148,7 +151,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.json.tmp"), "{ half").unwrap();
-        let on = AppConfig { agents_enabled: true, ..AppConfig::default() };
+        let on = AppConfig { agents_enabled: false, ..AppConfig::default() };
         on.save(&dir).unwrap();
         assert_eq!(AppConfig::load(&dir), on);
         assert!(!dir.join("config.json.tmp").exists());

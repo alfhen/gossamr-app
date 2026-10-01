@@ -8,6 +8,7 @@ import { NO_FILTERS, attentionCount, groupRuns, navOrder, stepRun, type AgentFil
 import { openTicketByKey, showMe } from "./jump";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
+import { usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 
 const SEEN_KEY = "gossamr-runs-seen";
@@ -178,7 +179,15 @@ export const useRuns = create<RunsState>((set, get) => ({
 
   openSafety: () => set({ sheet: { type: "safety" } }),
   closeSheet: () => set({ sheet: null }),
-  setPicking: (picking) => set({ picking }),
+  setPicking(picking) {
+    const prefs = usePrefs.getState();
+    if (picking && !prefs.agentsIntroSeen) {
+      prefs.setAgentsIntroSeen(true);
+      set({ sheet: { type: "safety" }, picking: false });
+      return;
+    }
+    set({ picking });
+  },
 
   browse(delta) {
     const { sheet, runs, filters, earlierOpen } = get();

@@ -4,6 +4,7 @@ import type { Backend } from "../backend/types";
 import { NO_FILTERS } from "./agentsLogic";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
+import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { attentionCount } from "./agentsLogic";
 
@@ -24,6 +25,20 @@ beforeEach(() => {
   useTabs.getState().setRoute("workspace");
   backend = new MockBackend();
   s().init(backend);
+});
+
+describe("starting an agent for the first time", () => {
+  it("shows the safety sheet once instead of the ticket picker, then lets the person start", () => {
+    usePrefs.setState({ agentsIntroSeen: false });
+    s().setPicking(true);
+    expect(s().sheet).toEqual({ type: "safety" });
+    expect(s().picking).toBe(false);
+    expect(usePrefs.getState().agentsIntroSeen).toBe(true);
+    s().closeSheet();
+    s().setPicking(true);
+    expect(s().picking).toBe(true);
+    expect(s().sheet).toBeNull();
+  });
 });
 
 describe("the runs store", () => {
