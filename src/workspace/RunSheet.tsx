@@ -13,9 +13,10 @@ import { failureAction } from "./failureActions";
 import { PromptParts } from "./RunPrompt";
 import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
-import { MAY_TOUCH, canStartNow, stopControl } from "./runSheetLogic";
+import { MAY_TOUCH, canStartNow, commentWithPipPrompt, stopControl } from "./runSheetLogic";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
+import { askPip } from "./askPip";
 import { useRuns } from "./runsStore";
 
 export interface RunSheetActions extends ResultActions {
@@ -420,6 +421,7 @@ export function RunSheet({ id }: { id: string }) {
     },
     reveal: (path) => void backend?.revealPath(path).catch(() => {}),
     draftComment: () => void store.draftComment(id),
+    draftWithPip: () => (askPip(commentWithPipPrompt(run)), store.closeSheet()),
     pickBlocker: () => setPickBlocker(true),
     cancelBlocker: () => setPickBlocker(false),
     draftBlocker: (key) => void store.draftBlocker(id, key),

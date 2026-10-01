@@ -3,6 +3,7 @@ import { docFromText } from "../lib/docs";
 import type { Intent, ItemRef, Run, ScreenContext, WorkFilter } from "../types";
 import { needsPerson, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
+import { jiraNote } from "./mockRunResult";
 import type { AskRequest, ClaudeEvent } from "./claude";
 
 /** What the scripted Pip does for one question. */
@@ -48,6 +49,18 @@ export function agentSummary(runs: readonly Run[], now: number): string {
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now()): PipScript {
   const q = prompt.toLowerCase();
+  const asked = /draft a jira comment from run (\S+?):/.exec(q)?.[1];
+  const forRun = asked ? runs.find((r) => r.id.toLowerCase() === asked) : undefined;
+  if (forRun?.item) {
+    const note = jiraNote(forRun.result ?? "").text;
+    const item = forRun.item;
+    return {
+      steps: ["Read the run", `Drafted a comment on ${item.key}`],
+      text: `I drafted a short comment on **${item.key}** from what the run found. It isn't posted; approve, edit or skip it below.`,
+      filter: null,
+      draft: { intent: { type: "comment", item, body: docFromText(note || "It finished without a written answer.") }, label: "From an agent run" },
+    };
+  }
   if (asksAboutAgents.test(q) && !asksForAgent.test(q)) {
     return { steps: ["Looked at your agents"], text: agentSummary(runs, now), filter: null, draft: null };
   }

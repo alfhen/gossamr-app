@@ -272,6 +272,11 @@ export function commentControl(run: Pick<Run, "item" | "result">): DraftControl 
   return { enabled: true, reason: null };
 }
 
+/** What "Draft with Pip" sends. Pip reads the run itself, so the prompt names it and never carries its text. */
+export function commentWithPipPrompt(run: Pick<Run, "id" | "item">): string {
+  return `Draft a Jira comment from run ${run.id}: read it with get_run, then propose a short comment on ${run.item?.key ?? "its ticket"}. Quote only what the run found, and don't say anything has been posted.`;
+}
+
 export function blockerControl(run: Pick<Run, "item">): DraftControl {
   return run.item ? { enabled: true, reason: null } : { enabled: false, reason: "This run isn't about a ticket, so there is nothing for a blocker to hold up." };
 }

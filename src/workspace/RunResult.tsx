@@ -5,6 +5,7 @@ import { blockerChoices, blockerControl, changeSummary, commentControl } from ".
 
 export interface ResultActions {
   draftComment(): void;
+  draftWithPip(): void;
   pickBlocker(): void;
   cancelBlocker(): void;
   draftBlocker(key: string): void;
@@ -92,6 +93,9 @@ export function Found({ run, outcome, tickets, pickBlocker, drafting, on }: Resu
         <div className="flex flex-wrap items-center gap-2">
           <Btn tone="primary" icon="ext" disabled={!comment.enabled || drafting} title={comment.reason ?? undefined} onClick={on.draftComment}>
             Draft a Jira comment from this
+          </Btn>
+          <Btn icon="spark" disabled={!comment.enabled || drafting} title={comment.reason ?? "Pip reads the run and writes a comment for you to edit"} onClick={on.draftWithPip}>
+            Draft with Pip
           </Btn>
           <Btn icon="branch" disabled={!blocker.enabled || drafting} aria-expanded={pickBlocker} title={blocker.reason ?? undefined} onClick={pickBlocker ? on.cancelBlocker : on.pickBlocker}>
             Draft a blocker
