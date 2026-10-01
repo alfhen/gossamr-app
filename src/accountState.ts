@@ -22,6 +22,9 @@ export function resetAccountState(accountId: string | null) {
   const changed = accountId !== lastAccount();
   stopClassicSync();
   stopWatchingProposals();
+  for (const conversation of Object.values(useClaude.getState().byTicket)) {
+    conversation.turns.forEach((t) => t.images?.forEach((i) => URL.revokeObjectURL(i.url)));
+  }
   useClaude.setState({ open: false, byTicket: {}, proposals: [] });
   resetPip(changed);
   useWorkspace.getState().dispose();

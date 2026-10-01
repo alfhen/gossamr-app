@@ -40,6 +40,17 @@ describe("per-account state", () => {
     expect(useTabs.getState().tabs.length).toBeGreaterThan(1);
   });
 
+  it("releases the object URLs of sent images when conversations are dropped", () => {
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const turn = { requestId: "r", prompt: "p", steps: [], text: "", status: "done" as const, error: null };
+    useClaude.setState({
+      byTicket: { workspace: { sessionId: null, turns: [{ ...turn, images: [{ id: "a", url: "blob:a", width: 1, height: 1 }, { id: "b", url: "blob:b", width: 1, height: 1 }] }, turn] } },
+    });
+    resetAccountState("jira:site:me");
+    expect(revoke.mock.calls.map(([u]) => u)).toEqual(["blob:a", "blob:b"]);
+    revoke.mockRestore();
+  });
+
   it("stops the proposals watch so a stale account cannot write drafts into the store", async () => {
     const backend = new MockBackend();
     let stopped = false;

@@ -101,6 +101,7 @@ impl Harness {
             mcp: self.server.endpoint(run_id),
             sandbox: self.sandbox.clone(),
             session: None,
+            images: Vec::new(),
         }
     }
 
@@ -295,7 +296,7 @@ impl AgentProvider for Scripted {
     }
 
     fn capabilities(&self) -> AgentCaps {
-        AgentCaps { mcp: true, resume: false, streaming: true, reads_code: false, read_only_sandbox: true }
+        AgentCaps { mcp: true, resume: false, streaming: true, reads_code: false, read_only_sandbox: true, vision: false }
     }
 
     async fn run(&self, req: AgentRequest) -> Result<EventStream> {

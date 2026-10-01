@@ -3,6 +3,7 @@
 
 pub mod context;
 mod github;
+pub mod images;
 pub mod mcp;
 pub mod sandbox;
 
@@ -21,6 +22,7 @@ use crate::domain::{ProposalQuery, StateKind};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 use context::ScreenContext;
+use images::ImageInput;
 use mcp::McpServer;
 use sandbox::Sandbox;
 
@@ -51,6 +53,8 @@ pub struct AgentRequest {
     pub sandbox: Sandbox,
     /// Continues an earlier session where the provider can. Never needed for correctness: the prompt is complete.
     pub session: Option<String>,
+    /// Screenshots sent with the prompt, inline. Only given to a provider with `vision`.
+    pub images: Vec<ImageInput>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +66,8 @@ pub struct AgentCaps {
     pub reads_code: bool,
     /// The agent starts with no way to change files or reach anything but the MCP endpoint.
     pub read_only_sandbox: bool,
+    /// The agent takes images inline with the prompt.
+    pub vision: bool,
 }
 
 pub type EventStream = mpsc::UnboundedReceiver<AgentEvent>;
@@ -89,6 +95,8 @@ pub struct AskRequest {
     pub session_id: Option<String>,
     #[serde(default)]
     pub context: ScreenContext,
+    #[serde(default)]
+    pub images: Vec<ImageInput>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,6 +105,15 @@ pub struct Update {
     pub request_id: String,
     #[serde(flatten)]
     pub event: AgentEvent,
+}
+
+/// Refuses images the provider can't take, rather than answering as if they weren't there.
+fn check_images(images: &[ImageInput], caps: AgentCaps) -> Result<()> {
+    images::validate(images)?;
+    if !images.is_empty() && !caps.vision {
+        return Err(Error::Claude("The assistant you've chosen can't look at images yet. Send the question as text.".into()));
+    }
+    Ok(())
 }
 
 pub type UpdateSink = Arc<dyn Fn(Update) + Send + Sync>;
@@ -129,6 +146,7 @@ impl AgentService {
             .get(id.as_str())
             .cloned()
             .ok_or_else(|| Error::Claude(format!("The assistant provider “{id}” isn't available.")))?;
+        check_images(&req.images, provider.capabilities())?;
 
         let scope = self.core.scope().await?;
         let mut context = req.context.in_connection(&crate::tracker::Connection::jira_id(&scope));
@@ -161,6 +179,7 @@ impl AgentService {
             mcp: self.mcp.endpoint(&run_id),
             sandbox,
             session,
+            images: req.images,
         };
 
         // Registered before the run starts, since the agent may call the tools straight away.
@@ -197,5 +216,41 @@ impl AgentService {
     fn finish(&self, run_id: &str) {
         self.running.lock().expect("lock poisoned").remove(run_id);
         self.mcp.runs.lock().expect("lock poisoned").remove(run_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn caps(vision: bool) -> AgentCaps {
+        AgentCaps { mcp: true, resume: false, streaming: true, reads_code: false, read_only_sandbox: true, vision }
+    }
+
+    #[test]
+    fn a_provider_without_vision_refuses_images_instead_of_dropping_them() {
+        let images = [images::tests::png()];
+        assert!(check_images(&images, caps(true)).is_ok());
+        let err = check_images(&images, caps(false)).unwrap_err().to_string();
+        assert!(err.contains("can't look at images"));
+        assert!(check_images(&[], caps(false)).is_ok());
+    }
+
+    #[test]
+    fn invalid_images_are_refused_even_for_a_provider_with_vision() {
+        let mut bad = images::tests::png();
+        bad.media_type = "image/gif".into();
+        assert!(check_images(&[bad], caps(true)).is_err());
+    }
+
+    #[test]
+    fn the_ask_request_takes_images_and_works_without_them() {
+        let with: AskRequest = serde_json::from_str(
+            r#"{"requestId":"r","prompt":"p","sessionId":null,"images":[{"mediaType":"image/png","data":"AAAA"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(with.images[0].media_type, "image/png");
+        let without: AskRequest = serde_json::from_str(r#"{"requestId":"r","prompt":"p","sessionId":null}"#).unwrap();
+        assert!(without.images.is_empty());
     }
 }

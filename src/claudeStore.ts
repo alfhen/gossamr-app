@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { claude, type ClaudeEvent } from "./backend/claude";
 import type { Backend } from "./backend/types";
+import type { PipImage, ShownImage } from "./lib/pipImages";
 import type { Proposal, ScreenContext } from "./types";
 
 export interface Turn {
@@ -14,6 +15,8 @@ export interface Turn {
   looking?: string;
   /** Text the question was about; the assistant is given it after the prompt. */
   quote?: string;
+  /** Pictures sent with the question. Shown from memory; a follow-up in the same session does not attach them again. */
+  images?: ShownImage[];
 }
 
 export interface Conversation {
@@ -28,7 +31,7 @@ interface ClaudeState {
   /** Every draft the backend holds. The chat cards read from here, so drafts outlive the conversation that made them. */
   proposals: Proposal[];
   setOpen(open: boolean): void;
-  ask(ticketKey: string, prompt: string, sessionId: string | null, context?: ScreenContext, extra?: { looking?: string; quote?: string }): Promise<void>;
+  ask(ticketKey: string, prompt: string, sessionId: string | null, context?: ScreenContext, extra?: { looking?: string; quote?: string; images?: PipImage[] }): Promise<void>;
   cancel(ticketKey: string): void;
   /** Puts a draft the backend just returned in place, ahead of the `proposals-changed` refresh. */
   putProposal(p: Proposal): void;
@@ -79,10 +82,26 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
   async ask(ticketKey, prompt, sessionId, context = ticketContext(ticketKey), extra = {}) {
     const requestId = newRequestId();
     const conv = get().byTicket[ticketKey] ?? empty;
-    const turn: Turn = { requestId, prompt, steps: [], text: "", status: "running", error: null, ...extra };
+    const { images = [], ...shown } = extra;
+    const turn: Turn = {
+      requestId,
+      prompt,
+      steps: [],
+      text: "",
+      status: "running",
+      error: null,
+      ...shown,
+      ...(images.length ? { images: images.map(({ id, url, width, height }) => ({ id, url, width, height })) } : {}),
+    };
     set({ byTicket: { ...get().byTicket, [ticketKey]: { ...conv, turns: [...conv.turns, turn] } } });
     try {
-      await claude.ask({ requestId, prompt: withQuote(prompt, extra.quote), sessionId, context });
+      await claude.ask({
+        requestId,
+        prompt: withQuote(prompt, extra.quote),
+        sessionId,
+        context,
+        ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}),
+      });
     } catch (err) {
       updateByRequest(requestId, (c) => applyEvent(c, requestId, { type: "done", sessionId: null, ok: false, message: String(err) }));
     }

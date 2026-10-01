@@ -14,6 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::agent::images::ImageInput;
 use crate::agent::{AgentCaps, AgentEvent, AgentProvider, AgentRequest, EventStream, McpEndpoint};
 use crate::error::{Error, Result};
 use stream::parse_line;
@@ -42,8 +43,12 @@ fn mcp_config(mcp: &McpEndpoint) -> String {
 }
 
 fn args(req: &AgentRequest) -> Vec<String> {
+    // Images can only ride in a structured user message, so the prompt is sent that way when there are any.
+    // Kept ahead of `--mcp-config`, which takes every argument up to the next flag.
+    let input: &[&str] = if req.images.is_empty() { &[] } else { &["--input-format", "stream-json"] };
     let mut a: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
         .into_iter()
+        .chain(input.iter().copied())
         .chain(["--model", MODEL, "--effort", EFFORT])
         // `--tools ""` removes every built-in tool, so `dontAsk` refuses whatever isn't in the allowlist.
         .chain(["--permission-mode", "dontAsk", "--tools", "", "--allowedTools", ALLOWED])
@@ -57,6 +62,14 @@ fn args(req: &AgentRequest) -> Vec<String> {
         a.extend(["--resume".into(), id.clone()]);
     }
     a
+}
+
+/// The one stdin line of a stream-json run: the prompt, then each image as an inline base64 block.
+fn user_message(prompt: &str, images: &[ImageInput]) -> String {
+    let blocks: Vec<_> = std::iter::once(json!({ "type": "text", "text": prompt }))
+        .chain(images.iter().map(|i| json!({ "type": "image", "source": { "type": "base64", "media_type": i.media_type, "data": i.data } })))
+        .collect();
+    format!("{}\n", json!({ "type": "user", "message": { "role": "user", "content": blocks } }))
 }
 
 fn command(binary: PathBuf, req: &AgentRequest) -> Command {
@@ -83,7 +96,7 @@ impl AgentProvider for ClaudeCodeProvider {
     }
 
     fn capabilities(&self) -> AgentCaps {
-        AgentCaps { mcp: true, resume: true, streaming: true, reads_code: false, read_only_sandbox: true }
+        AgentCaps { mcp: true, resume: true, streaming: true, reads_code: false, read_only_sandbox: true, vision: true }
     }
 
     async fn run(&self, req: AgentRequest) -> Result<EventStream> {
@@ -99,7 +112,8 @@ impl AgentProvider for ClaudeCodeProvider {
 
         // The prompt goes through stdin so long ticket context never hits argument limits or shell quoting.
         let mut stdin = child.stdin.take().expect("piped");
-        stdin.write_all(req.prompt.as_bytes()).await?;
+        let input = if req.images.is_empty() { req.prompt.clone() } else { user_message(&req.prompt, &req.images) };
+        stdin.write_all(input.as_bytes()).await?;
 
         // Registered before stdin closes, since Claude starts work (and may call the MCP tools) on EOF.
         let (cancel_tx, cancel_rx) = oneshot::channel();
@@ -194,6 +208,7 @@ mod tests {
             mcp: McpEndpoint { url: "http://127.0.0.1:1/mcp/r".into(), token: "tok".into() },
             sandbox: Sandbox::prepare(&std::env::temp_dir().join(format!("gossamr-claude-args-{}", std::process::id()))).unwrap(),
             session: session.map(String::from),
+            images: Vec::new(),
         }
     }
 
@@ -219,6 +234,44 @@ mod tests {
         let servers: serde_json::Value = serde_json::from_str(&after("--mcp-config")).unwrap();
         assert_eq!(servers["mcpServers"].as_object().unwrap().keys().collect::<Vec<_>>(), ["gossamr"]);
         assert_eq!(servers["mcpServers"]["gossamr"]["headers"]["Authorization"], "Bearer tok");
+    }
+
+    #[test]
+    fn images_change_only_how_the_prompt_is_sent() {
+        let plain = args(&request(Some("s-1")));
+        let mut with = request(Some("s-1"));
+        with.images = vec![crate::agent::images::tests::png()];
+        let mut a = args(&with);
+        let at = a.iter().position(|x| x == "--input-format").unwrap();
+        assert_eq!(a[at + 1], "stream-json");
+        a.drain(at..at + 2);
+        assert_eq!(a, plain, "the lockdown flags, MCP config and system prompt are untouched");
+        let mut full = args(&with);
+        let mcp = full.iter().position(|x| x == "--mcp-config").unwrap();
+        assert!(full.iter().position(|x| x == "--input-format").unwrap() < mcp, "the flag must not land between --mcp-config and its value");
+        assert!(serde_json::from_str::<serde_json::Value>(&full.remove(mcp + 1)).is_ok());
+        assert!(!plain.contains(&"--input-format".to_string()));
+    }
+
+    #[test]
+    fn the_stream_json_message_is_the_text_then_inline_base64_images() {
+        let line = user_message("What is this?", &[crate::agent::images::tests::png()]);
+        assert!(line.ends_with('\n') && line.matches('\n').count() == 1);
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["type"], "user");
+        assert_eq!(v["message"]["role"], "user");
+        let content = v["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0], json!({ "type": "text", "text": "What is this?" }));
+        assert_eq!(
+            content[1],
+            json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": crate::agent::images::tests::PNG } })
+        );
+    }
+
+    #[test]
+    fn it_is_the_provider_that_takes_images() {
+        assert!(ClaudeCodeProvider::new().capabilities().vision);
     }
 
     #[test]
@@ -281,5 +334,27 @@ mod tests {
             hang: "Call list_proposals ten times in a row, one after another, then reply with just: done.".into(),
         };
         conformance::check_all(&provider, &h, &probes).await.unwrap();
+    }
+
+    /// A real run with a screenshot attached, sent the way the app sends it. Same prerequisites as above.
+    #[tokio::test]
+    #[ignore]
+    async fn claude_code_sees_an_attached_image() {
+        let h = Harness::start().await;
+        let mut req = h.request("img", "What single colour fills this image? Reply with just the colour name.");
+        req.images = vec![ImageInput { media_type: "image/png".into(), data: "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGO4IyJCU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAJ3LED3QqzauAAAAAElFTkSuQmCC".into() }];
+        let events = ClaudeCodeProvider::new().run(req).await.unwrap();
+        let mut text = String::new();
+        let mut events = events;
+        let mut ok = false;
+        let mut why = None;
+        while let Some(e) = events.recv().await {
+            match e {
+                AgentEvent::Text { text: t } => text.push_str(&t),
+                AgentEvent::Done { ok: o, message, .. } => (ok, why) = (o, message),
+                _ => {}
+            }
+        }
+        assert!(ok && text.to_lowercase().contains("red"), "{text} {why:?}");
     }
 }
