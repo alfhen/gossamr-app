@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RunReview } from "../types";
 import { Sec } from "./AgentSheet";
 import type { PrSearch } from "./runSetupStore";
@@ -18,10 +18,13 @@ export interface PrPickerProps {
 /** Finds the pull request a review reads. Only an open pull request from the same repository can be chosen; the others say why not. */
 export function PrPicker({ repo, pr, review, prs, initialQuery, disabled, onSearch, onChoose }: PrPickerProps) {
   const [query, setQuery] = useState(initialQuery);
+  // The search writes to the store, which re-renders the sheet with a new `onSearch`; depending on it would search again and again.
+  const search = useRef(onSearch);
+  search.current = onSearch;
   useEffect(() => {
-    const timer = setTimeout(() => onSearch(query), query === initialQuery ? 0 : 250);
+    const timer = setTimeout(() => search.current(query), query === initialQuery ? 0 : 250);
     return () => clearTimeout(timer);
-  }, [query, initialQuery, onSearch]);
+  }, [query, initialQuery]);
   const listed = prs.choices.some((c) => c.change.number === pr);
   return (
     <Sec title="Pull request to review">
