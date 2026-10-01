@@ -4,6 +4,7 @@ import { itemRef } from "../backend/mockConnector";
 import { useWorkspace } from "../workspaceStore";
 import { repoShortage, startBlock } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
+import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -30,6 +31,7 @@ async function setup(options: ConstructorParameters<typeof MockBackend>[0] = {})
 }
 
 beforeEach(async () => {
+  usePrefs.setState({ agentsIntroSeen: true });
   s().close();
   await setup();
 });
@@ -392,5 +394,17 @@ describe("the repositories to choose from", () => {
     links.resolve([]);
     await opening;
     expect(s().repos).toEqual(["acme/gateway"]);
+  });
+});
+
+describe("the first agent start", () => {
+  it("opens the safety sheet instead of the setup sheet, once", async () => {
+    usePrefs.setState({ agentsIntroSeen: false });
+    await s().begin({ item: itemRef("ENG-1") });
+    expect(s().open).toBe(false);
+    expect(useRuns.getState().sheet).toEqual({ type: "safety" });
+    useRuns.getState().closeSheet();
+    await s().begin({ item: itemRef("ENG-1") });
+    expect(s().open).toBe(true);
   });
 });

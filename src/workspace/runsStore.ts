@@ -57,6 +57,8 @@ interface RunsState {
   openSafety(): void;
   closeSheet(): void;
   setPicking(open: boolean): void;
+  /** False when it opened the safety sheet because the person has not seen it; callers stop there. */
+  ensureAgentsIntro(): boolean;
   /** Moves the run sheet to the next (`1`) or previous (`-1`) run, in the order the Agents view lists them. */
   browse(delta: 1 | -1): void;
   stop(id: string): Promise<void>;
@@ -179,13 +181,16 @@ export const useRuns = create<RunsState>((set, get) => ({
 
   openSafety: () => set({ sheet: { type: "safety" } }),
   closeSheet: () => set({ sheet: null }),
-  setPicking(picking) {
+  ensureAgentsIntro() {
     const prefs = usePrefs.getState();
-    if (picking && !prefs.agentsIntroSeen) {
-      prefs.setAgentsIntroSeen(true);
-      set({ sheet: { type: "safety" }, picking: false });
-      return;
-    }
+    if (prefs.agentsIntroSeen) return true;
+    prefs.setAgentsIntroSeen(true);
+    set({ sheet: { type: "safety" }, picking: false });
+    return false;
+  },
+
+  setPicking(picking) {
+    if (picking && !get().ensureAgentsIntro()) return;
     set({ picking });
   },
 
