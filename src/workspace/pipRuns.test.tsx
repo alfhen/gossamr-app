@@ -8,7 +8,7 @@ import { useWorkspace } from "../workspaceStore";
 import { NUDGE_GAP_MS, nudgeCandidates, pickNudge, type NudgeScene } from "./nudges";
 import { useAgentsFlag } from "./agentsFlag";
 import { PipRunCard, PipRunStripView } from "./PipRunCard";
-import { STRIP_SHOWN, runNudgeId, runNudges, runStatesNow, runSummaryPrompt, stripRuns } from "./pipRuns";
+import { STRIP_SHOWN, describeRun, runNudgeId, runNudges, runStatesNow, runSummaryPrompt, stripRuns } from "./pipRuns";
 import { buildScreenContext, contextLines, type Screen } from "./screenContext";
 import { loadTabs, activeTab, useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
@@ -138,6 +138,11 @@ describe("what Pip is told about agents", () => {
     expect(contextLines({ ...ctx, run: null, runsWaiting: 0 }, null, { titleOf: () => null, describeFilter: () => "" })).toEqual(["Screen: Board"]);
   });
 
+  it("names the open run for what Pip can see", () => {
+    expect(describeRun(run("working", { item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" } }), "Checkout totals", NOW)).toBe("Checkout totals · Working");
+    expect(describeRun(run("needsAnswer"), null, NOW)).toMatch(/^Investigate .+ · Needs an answer$/);
+  });
+
   it("asks what the agents are doing with one fixed question", () => {
     expect(runSummaryPrompt()).toBe("What are my agents doing?");
   });
@@ -157,6 +162,16 @@ describe("the sample Pip and agents", () => {
     expect(s.draft).toBeNull();
     expect(s.runDraft ?? null).toBeNull();
     expect(agentSummary([], NOW)).toContain("no agent runs");
+  });
+
+  it("keeps a request to investigate on the investigation path, and takes the ticket the person named over the open one", () => {
+    const open = { connectionId: "mock", externalId: "CA-402", key: "CA-402" };
+    const mixed = scriptPip("which agents are running, investigate CA-406", { ...blank, item: open }, [], new MockBackend().runs.list());
+    expect(mixed.steps).toEqual(["Looked up CA-406", "Drafted an agent run"]);
+    expect(mixed.runDraft?.item).toEqual({ connectionId: "mock", externalId: "CA-406", key: "CA-406" });
+    expect(scriptPip("investigate CA-402", { ...blank, item: open }).runDraft?.item).toBe(open);
+    expect(scriptPip("start an agent", { ...blank, item: open }).runDraft?.item).toBe(open);
+    expect(scriptPip("which agents are running?", { ...blank, item: open }).runDraft ?? null).toBeNull();
   });
 
   it("proposes an investigation as a draft with a focus note and says it has not started", async () => {

@@ -21,7 +21,7 @@ import { usePrefs } from "./prefs";
 import { buildScreenContext, contextLabel, contextLines } from "./screenContext";
 import { suggestionsFor } from "./suggestions";
 import { useAgentsEnabled } from "./agentsFlag";
-import { runSummaryPrompt } from "./pipRuns";
+import { describeRun, runSummaryPrompt } from "./pipRuns";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { draftsForItem, pendingDrafts, useWorkspace } from "../workspaceStore";
@@ -211,13 +211,18 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const live = useMemo(() => buildScreenContext(screen), [screen]);
   const context: ScreenContext = pinned ?? live;
   const code = useDev((s) => s.index);
+  const runs = useRuns((s) => s.runs);
   const words = useMemo(
     () => ({
       titleOf: (ref: ItemRef) => screen.items[itemKey(ref)]?.title ?? null,
       describeFilter: (f: Parameters<typeof describeFilter>[0]) => describeFilter(f, lookup),
       developmentOf: (ref: ItemRef) => developmentLine(code.get(itemKey(ref))),
+      runOf: (id: string) => {
+        const run = runs.find((r) => r.id === id);
+        return run ? describeRun(run, run.item ? screen.items[itemKey(run.item)]?.title : null, Date.now()) : null;
+      },
     }),
-    [screen.items, lookup, code],
+    [screen.items, lookup, code, runs],
   );
   const openRef = context.item;
   useEffect(() => {
@@ -226,7 +231,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const { kind, label } = contextLabel(context, quote, words.titleOf);
   const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
   const agentsOn = useAgentsEnabled();
-  const hasRuns = useRuns((s) => s.runs.length > 0);
+  const hasRuns = runs.length > 0;
   const base = suggestionsFor({
     route: screen.route,
     quote: quote !== null,

@@ -1,5 +1,5 @@
 import type { Run } from "../types";
-import { needsPerson, runTitle } from "./agentsLogic";
+import { needsPerson, runTitle, stateView } from "./agentsLogic";
 import type { Nudge } from "./nudges";
 
 /** What the "What are my agents doing?" chip asks. Pip answers from its list_runs tool. */
@@ -42,3 +42,6 @@ export function stripRuns(runs: readonly Run[]): Run[] {
   const going = runs.filter((r) => GOING.has(r.state)).sort(newest);
   return [...needs, ...going].slice(0, STRIP_SHOWN);
 }
+
+/** The open run in words for "What I can see right now", such as "Investigate CA-1 · Working". */
+export const describeRun = (run: Run, ticketTitle: string | null | undefined, now: number) => `${runTitle(run, ticketTitle)} · ${stateView(run, now).label}`;

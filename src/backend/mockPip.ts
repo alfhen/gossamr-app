@@ -48,12 +48,16 @@ export function agentSummary(runs: readonly Run[], now: number): string {
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now()): PipScript {
   const q = prompt.toLowerCase();
-  if (asksAboutAgents.test(q) && !/\b(start|launch|kick off)\b/.test(q)) {
+  if (asksAboutAgents.test(q) && !asksForAgent.test(q)) {
     return { steps: ["Looked at your agents"], text: agentSummary(runs, now), filter: null, draft: null };
   }
   if (asksForAgent.test(q)) {
     const key = KEY.exec(prompt)?.[1];
-    const item: ItemRef | null = context.item ?? (key ? { connectionId: context.selection[0]?.connectionId ?? "mock", externalId: key, key } : null);
+    const item: ItemRef | null = key
+      ? context.item?.key === key
+        ? context.item
+        : { connectionId: context.item?.connectionId ?? context.selection[0]?.connectionId ?? "mock", externalId: key, key }
+      : context.item;
     if (item) {
       const focus = /(?:focus on|look at|check)\s+(.+)$/i.exec(prompt.trim())?.[1]?.trim().slice(0, 300) ?? null;
       return {
