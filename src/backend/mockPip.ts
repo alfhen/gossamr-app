@@ -1,6 +1,7 @@
 import { and } from "../lib/filter";
 import { docFromText } from "../lib/docs";
 import type { Intent, ItemRef, ScreenContext, WorkFilter } from "../types";
+import type { ImageData } from "../lib/pipImages";
 import type { AskRequest, ClaudeEvent } from "./claude";
 
 /** What the scripted Pip does for one question. */
@@ -21,7 +22,7 @@ const FILTERS: { pattern: RegExp; filter: WorkFilter; note: string }[] = [
 const asksToShow = /\b(show|filter|find|list|only|which)\b/;
 
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
-export function scriptPip(prompt: string, context: ScreenContext): PipScript {
+export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = []): PipScript {
   const q = prompt.toLowerCase();
   const wanted = FILTERS.find((f) => f.pattern.test(q));
   if (wanted && (asksToShow.test(q) || !context.item)) {
@@ -43,6 +44,15 @@ export function scriptPip(prompt: string, context: ScreenContext): PipScript {
         intent: { type: "comment", item, body: docFromText("Checking in on this one. Is it still on track, or does anything need to move?") },
         label: null,
       },
+    };
+  }
+  if (images.length) {
+    const kinds = images.map((i) => i.mediaType.replace("image/", "").toUpperCase()).join(", ");
+    return {
+      steps: [],
+      text: `I got ${images.length === 1 ? "your screenshot" : `your ${images.length} screenshots`} (${kinds}). This is the sample assistant, so I can't look at it; the real Pip describes what it sees and drafts from there.`,
+      filter: null,
+      draft: null,
     };
   }
   const where = context.view ?? "the workspace";
@@ -85,7 +95,7 @@ const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | null, pace = 25): Promise<void> {
   let stopped = false;
   running.set(req.requestId, () => (stopped = true));
-  const script = scriptPip(req.prompt, req.context);
+  const script = scriptPip(req.prompt, req.context, req.images);
   const session = req.sessionId ?? `mock-session-${req.requestId}`;
   emit(req.requestId, { type: "started", sessionId: session });
   try {

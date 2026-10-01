@@ -213,6 +213,16 @@ describe("scripted Pip", () => {
     expect(scriptPip("draft a comment", blank).draft).toBeNull();
   });
 
+  it("acknowledges screenshots without pretending to see them, after the keyword answers", () => {
+    const png = { mediaType: "image/png", data: "AAAA" };
+    const one = scriptPip("what is this?", blank, [png]);
+    expect(one.text).toContain("your screenshot (PNG)");
+    expect(one.text).toContain("can't look at it");
+    expect(scriptPip("what is this?", blank, [png, { mediaType: "image/jpeg", data: "AAAA" }]).text).toContain("2 screenshots (PNG, JPEG)");
+    expect(scriptPip("show stale", blank, [png]).filter).not.toBeNull();
+    expect(scriptPip("what is this?", blank).text).toContain("You're looking at");
+  });
+
   it("streams the answer, proposes the draft as Pip and emits the filter", async () => {
     const backend = new MockBackend();
     const item = { connectionId: "mock", externalId: "DEVOPS-471", key: "DEVOPS-471" };

@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { ImageData } from "../lib/pipImages";
 import type { ScreenContext, WorkFilter } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { mockAsk, mockCancel, mockPipEvents, type PipDrafter } from "./mockPip";
@@ -20,6 +21,8 @@ export interface AskRequest {
   prompt: string;
   context: ScreenContext;
   sessionId: string | null;
+  /** Screenshots for this question only, as base64. */
+  images?: ImageData[];
 }
 
 /** Emitted as the `pip-view` event when Pip narrows the view the person is looking at. */

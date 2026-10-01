@@ -4,12 +4,15 @@ import { draftsForTurn } from "../lib/proposals";
 import { developmentLine } from "../lib/devLinks";
 import { describeFilter, itemKey } from "../lib/filter";
 import { useClaude, type Turn } from "../claudeStore";
+import { filesIn } from "../lib/attachments";
+import { MAX_IMAGES, defaultQuestion } from "../lib/pipImages";
 import type { ItemRef, Proposal, ScreenContext } from "../types";
 import { useDev } from "./devStore";
 import { LiveDraftPreview } from "./DraftPreview";
 import { useLookup } from "./hooks";
 import { PipResizer } from "./PaneResizers";
 import { PipAvatar } from "./PipAvatar";
+import { AttachButton, AttachedThumbs, TurnImages, lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { chipCount, currentContext, unassignedIn, useItemScene, useScreen } from "./pipHooks";
 import { appliedState, usePip, type AppliedState } from "./pipStore";
 import { usePrefs } from "./prefs";
@@ -105,6 +108,7 @@ function TurnView({ turn, proposals }: { turn: Turn; proposals: Proposal[] }) {
   const working = turn.status === "running" && !turn.text;
   return (
     <div className="grid gap-2">
+      {turn.images && <TurnImages images={turn.images} />}
       <div className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
         {turn.prompt}
         {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{turn.quote}</blockquote>}
@@ -173,7 +177,7 @@ function usePaneEscape(onClose: () => void) {
         ticked: tabs.marked.length > 0,
         editing: editable,
         inPipInput: field?.id === PIP_INPUT_ID,
-        handled: ev.defaultPrevented || usePrefs.getState().paletteOpen,
+        handled: ev.defaultPrevented || usePrefs.getState().paletteOpen || lightboxOpen(),
       });
       if (!close) return;
       ev.preventDefault();
@@ -199,6 +203,8 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const running = turns.some((t) => t.status === "running");
   const [input, setInput] = useState("");
   const [seeing, setSeeing] = useState(false);
+  const attached = useAttachments();
+  const drop = useFileDrop((files) => void attached.add(files));
   const bodyRef = useRef<HTMLDivElement>(null);
   const proposalList = useMemo(() => Object.values(proposals), [proposals]);
   const following = pinned === null;
@@ -249,13 +255,16 @@ export function PipPane({ onClose }: { onClose(): void }) {
   usePaneEscape(onClose);
 
   const ask = (prompt: string) => {
-    const text = prompt.trim();
-    if (!text || running) return;
+    if (running) return;
+    const count = attached.images.length;
+    const text = prompt.trim() || (count ? defaultQuestion(count) : "");
+    if (!text) return;
     setInput("");
+    const images = attached.take();
     const pip = usePip.getState();
     const about = pip.quote ?? undefined;
     pip.clearQuote();
-    void useClaude.getState().ask(WORKSPACE_CONVERSATION, text, conv?.sessionId ?? null, pip.pinned ?? currentContext(), { looking: pip.pinned ? "your question" : label, quote: about });
+    void useClaude.getState().ask(WORKSPACE_CONVERSATION, text, conv?.sessionId ?? null, pip.pinned ?? currentContext(), { looking: pip.pinned ? "your question" : label, quote: about, images });
   };
 
   const submit = (ev: FormEvent) => {
@@ -264,7 +273,12 @@ export function PipPane({ onClose }: { onClose(): void }) {
   };
 
   return (
-    <aside aria-label="Pip" className="ws-legacy relative flex min-h-0 flex-col border-l border-ws-sep bg-ws-win">
+    <aside aria-label="Pip" {...drop.handlers} className="ws-legacy relative flex min-h-0 flex-col border-l border-ws-sep bg-ws-win">
+      {drop.over && (
+        <div aria-hidden className="pointer-events-none absolute inset-2 z-10 grid place-items-center rounded-xl border-2 border-dashed border-ws-pip bg-ws-pip-soft text-center font-semibold text-ws-pip">
+          Drop an image to show Pip
+        </div>
+      )}
       <PipResizer />
       <header data-tauri-drag-region className="grid gap-1.5 border-b border-ws-sep bg-ws-bar px-3 pt-[14px] pb-2.5">
         <div className="flex items-center gap-2">
@@ -307,13 +321,21 @@ export function PipPane({ onClose }: { onClose(): void }) {
           </button>
         </div>
       )}
-      <form onSubmit={submit} className="flex gap-2 border-t border-ws-sep p-3">
+      <AttachedThumbs images={attached.images} onRemove={attached.remove} />
+      <form onSubmit={submit} className={`flex gap-2 p-3 ${attached.images.length ? "" : "border-t border-ws-sep"}`}>
+        <AttachButton disabled={running || attached.images.length >= MAX_IMAGES} onFiles={(files) => void attached.add(files)} />
         <input
           id={PIP_INPUT_ID}
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onPaste={(e) => {
+            const files = filesIn(e.clipboardData).filter((f) => f.type.startsWith("image/"));
+            if (!files.length) return;
+            e.preventDefault();
+            void attached.add(files);
+          }}
           aria-label="Ask Pip"
-          placeholder={quote ? "Ask about the selected text…" : itemScene ? `Ask about ${itemScene.key}…` : "Ask about what you're looking at…"}
+          placeholder={attached.images.length ? "Say what to look at, or just ask…" : quote ? "Ask about the selected text…" : itemScene ? `Ask about ${itemScene.key}…` : "Ask about what you're looking at…"}
           autoComplete="off"
           className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 outline-none focus:border-ws-pip"
         />
@@ -322,7 +344,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
             Stop
           </button>
         ) : (
-          <button type="submit" disabled={!input.trim()} className="rounded-md bg-gradient-to-br from-ws-pip to-ws-pip2 px-3 font-semibold text-ws-on-pip disabled:opacity-45">
+          <button type="submit" disabled={!input.trim() && !attached.images.length} className="rounded-md bg-gradient-to-br from-ws-pip to-ws-pip2 px-3 font-semibold text-ws-on-pip disabled:opacity-45">
             Ask
           </button>
         )}

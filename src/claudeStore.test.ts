@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { MockBackend } from "./backend/mock";
 import { applyEvent, useClaude, watchProposals, type Conversation } from "./claudeStore";
+import type { AskRequest } from "./backend/claude";
 import type { Intent } from "./types";
 
 const conv = (): Conversation => ({
@@ -101,5 +102,25 @@ describe("ask", () => {
     expect(sent[1]).toMatchObject({ context: { view: "board", filter: { type: "mine" }, selection: [ref] } });
     expect(sent[0]).not.toHaveProperty("ticketKey");
     expect(sent.every((r) => !("cwd" in (r as object)))).toBe(true);
+  });
+
+  it("sends images with the request and keeps only what's needed to show them in the turn", async () => {
+    const sent: AskRequest[] = [];
+    const { claude } = await import("./backend/claude");
+    const original = claude.ask;
+    claude.ask = async (req) => void sent.push(req);
+    const image = { id: "i1", mediaType: "image/png", data: "AAAA", url: "blob:x", width: 10, height: 20 };
+    try {
+      await useClaude.getState().ask("CA-10", "look", null, undefined, { images: [image] });
+      await useClaude.getState().ask("CA-10", "no picture", null);
+    } finally {
+      claude.ask = original;
+    }
+    expect(sent[0].images).toEqual([{ mediaType: "image/png", data: "AAAA" }]);
+    expect(sent[1]).not.toHaveProperty("images");
+    const [first, second] = useClaude.getState().byTicket["CA-10"].turns;
+    expect(first.images).toEqual([{ id: "i1", url: "blob:x", width: 10, height: 20 }]);
+    expect(JSON.stringify(first)).not.toContain("AAAA");
+    expect(second).not.toHaveProperty("images");
   });
 });
