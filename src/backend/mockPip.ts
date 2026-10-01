@@ -46,6 +46,32 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       },
     };
   }
+  if (/(create|new|open|file)\b.*\b(ticket|task|issue)|follow-?up/.test(q)) {
+    const container = context.item ? { connectionId: context.item.connectionId, externalId: context.item.key.split("-")[0] } : { connectionId: "mock", externalId: "DEVOPS" };
+    const about = context.item ? ` after ${context.item.key}` : "";
+    return {
+      steps: ["Drafted a new ticket"],
+      text: `I drafted a follow-up ticket${about}. It doesn't exist yet; open it to edit anything, then create it or skip it.`,
+      filter: null,
+      draft: {
+        intent: {
+          type: "create",
+          container,
+          fields: {
+            title: "Follow up on the rollout",
+            body: docFromText("Check that the change landed everywhere and write up anything that surprised us.\n\nOwner to confirm the date."),
+            kind: "task",
+            assignee: null,
+            parent: null,
+            priority: null,
+            labels: [],
+          },
+          link: null,
+        },
+        label: null,
+      },
+    };
+  }
   if (images.length) {
     const kinds = images.map((i) => i.mediaType.replace("image/", "").toUpperCase()).join(", ");
     return {

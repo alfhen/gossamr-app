@@ -7,7 +7,7 @@ use serde::Deserialize;
 use super::{identity_of, Core};
 use crate::auth::Scope;
 use crate::db::Db;
-use crate::domain::{Basis, CreatedBy, Intent, Origin, Proposal, ProposalQuery, ProposalState};
+use crate::domain::{Basis, ContainerRef, CreatedBy, Doc, Intent, ItemKind, Origin, Proposal, ProposalQuery, ProposalState};
 use crate::error::{Error, Result};
 use crate::model::MentionRef;
 use crate::proposals::{self, Draft};
@@ -27,6 +27,19 @@ pub enum Edit {
     },
     Subtasks {
         summaries: Vec<String>,
+    },
+    /// A new item's fields; the ones left out stay as they are.
+    Create {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        body: Option<String>,
+        #[serde(default)]
+        mentions: Vec<MentionRef>,
+        #[serde(default)]
+        kind: Option<ItemKind>,
+        #[serde(default)]
+        container: Option<ContainerRef>,
     },
 }
 
@@ -49,6 +62,27 @@ impl Edit {
                 parent: parent.clone(),
                 summaries: summaries.iter().map(|s| s.trim().to_string()).collect(),
             }),
+            (Edit::Create { title, body, mentions, kind, container }, Intent::Create { container: was, fields, link }) => {
+                let container = container.clone().unwrap_or_else(|| was.clone());
+                if container.connection_id != was.connection_id {
+                    return Err(Error::Proposal("a new item can't move to another connection".into()));
+                }
+                let mut fields = fields.clone();
+                if let Some(title) = title {
+                    fields.title = title.trim().to_string();
+                }
+                if let Some(body) = body {
+                    let people: Vec<_> = mentions
+                        .iter()
+                        .map(|m| (crate::domain::PersonRef { connection_id: container.connection_id.clone(), account_id: m.account_id.clone() }, m.name.clone()))
+                        .collect();
+                    fields.body = Doc::from_text(body.trim(), &people);
+                }
+                if let Some(kind) = kind {
+                    fields.kind = *kind;
+                }
+                Ok(Intent::Create { container, fields, link: link.clone() })
+            }
             _ => Err(Error::Proposal("that edit doesn't fit this draft".into())),
         }
     }
@@ -279,6 +313,26 @@ mod tests {
     fn an_edit_of_the_wrong_kind_is_refused() {
         let current = Intent::Transition { item: item_ref("1"), to: "done".into() };
         assert!(Edit::Subtasks { summaries: vec!["a".into()] }.apply_to(&current).is_err());
+    }
+
+    #[test]
+    fn a_create_edit_changes_only_the_fields_it_names() {
+        use crate::domain::NewItem;
+        let at = |id: &str| ContainerRef { connection_id: "c".into(), external_id: id.into() };
+        let fields = NewItem { title: "Old".into(), body: Doc::paragraph("keep"), kind: ItemKind::Task, assignee: None, parent: None, priority: None, labels: vec!["x".into()] };
+        let current = Intent::Create { container: at("1"), fields, link: None };
+
+        let edit: Edit = serde_json::from_str(r#"{"type":"create","title":" New ","kind":"bug","container":{"connectionId":"c","externalId":"2"}}"#).unwrap();
+        let Intent::Create { container, fields, .. } = edit.apply_to(&current).unwrap() else { panic!() };
+        assert_eq!((container, fields.title.as_str(), fields.kind, fields.body.plain_text().as_str(), fields.labels.len()), (at("2"), "New", ItemKind::Bug, "keep", 1));
+
+        let body: Edit = serde_json::from_str(r#"{"type":"create","body":" Fresh text "}"#).unwrap();
+        let Intent::Create { fields, .. } = body.apply_to(&current).unwrap() else { panic!() };
+        assert_eq!(fields.body.plain_text(), "Fresh text");
+
+        let elsewhere = Edit::Create { title: None, body: None, mentions: vec![], kind: None, container: Some(ContainerRef { connection_id: "other".into(), external_id: "1".into() }) };
+        assert!(elsewhere.apply_to(&current).is_err());
+        assert!(Edit::Create { title: None, body: None, mentions: vec![], kind: None, container: None }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
     }
 
     #[test]

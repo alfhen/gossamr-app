@@ -10,6 +10,8 @@ import { draftsForItem, knownMoves, useItemsByFilter, useWorkspace, workflowOfIt
 import { draftStatus, movesAreOpaque, targetsFor } from "./boardLogic";
 import { PeekResizer, usePaneWidths } from "./PaneResizers";
 import { LiveDraftCard } from "./DraftCard";
+import { draftIdOf, draftItem, showsAsDraftTicket } from "./draftTicket";
+import { LiveDraftPeek } from "./DraftPeek";
 import { canvasElement, showMe } from "./jump";
 import { PEEK_DEFAULT } from "./paneSizes";
 import { usePrefs } from "./prefs";
@@ -34,8 +36,19 @@ const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: redu
 
 const chip = "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-sm font-semibold";
 
+/** What replaces the parts of the sheet that only make sense for a ticket that exists: the sheet then shows a draft of a new one. */
+export interface DraftSlots {
+  banner: ReactNode;
+  title: ReactNode;
+  meta: ReactNode;
+  description: ReactNode;
+  actions: ReactNode;
+}
+
 export interface PeekViewProps {
   item: WorkItem;
+  /** Shows the item as a draft that doesn't exist yet: editable fields and a Create button, and no comments, history, links or code. */
+  draft?: DraftSlots;
   assignee: string;
   now: Date;
   /** Statuses the item can move to; empty when the workflow isn't known yet. */
@@ -92,21 +105,30 @@ export function PeekView(p: PeekViewProps) {
   const folded = p.collapsed ?? {};
   const section = (id: PeekSectionId) => ({ collapsed: isCollapsed(folded, id), onToggle: p.onToggleSection ? () => p.onToggleSection!(id) : undefined });
   const commentCount = p.commentsLoading ? item.commentCount : p.comments.length;
+  const draft = p.draft;
   return (
     <aside
       id="peek-sheet"
-      aria-label={`Details for ${item.item.key}`}
+      aria-label={draft ? "Details for a new ticket draft" : `Details for ${item.item.key}`}
       onAnimationEnd={(ev) => ev.target === ev.currentTarget && p.onMotionEnd?.()}
       className={`selectable ws-legacy absolute inset-y-0 right-0 z-20 flex flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] max-w-full motion-safe:transition-[width] motion-safe:duration-200 ws-sized ${
         p.wide ? "w-full" : ""
-      } ${MOTION[p.motion ?? "none"]}`}
+      } ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""} ${MOTION[p.motion ?? "none"]}`}
       style={p.wide ? undefined : { width: p.width ?? PEEK_DEFAULT }}
     >
       {!p.wide && p.onWide && <PeekResizer />}
       <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-3.5 py-2">
-        <span className="shrink-0 font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
+        <span className={`shrink-0 font-mono text-sm font-semibold ${draft ? "text-ws-pip" : "text-ws-ink2"}`}>{item.item.key}</span>
         <span className="min-w-0 truncate text-xs text-ws-ink3">
-          peek · <kbd className="font-sans">j</kbd> <kbd className="font-sans">k</kbd> browse · <kbd className="font-sans">esc</kbd> close
+          {draft ? (
+            <>
+              draft · <kbd className="font-sans">esc</kbd> close
+            </>
+          ) : (
+            <>
+              peek · <kbd className="font-sans">j</kbd> <kbd className="font-sans">k</kbd> browse · <kbd className="font-sans">esc</kbd> close
+            </>
+          )}
         </span>
         {p.onWide && (
           <button
@@ -129,9 +151,10 @@ export function PeekView(p: PeekViewProps) {
           ×
         </button>
       </div>
-      <div className="grid min-h-0 flex-1 scroll-pt-11 content-start gap-5 overflow-auto px-[22px] pb-24">
-        <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length, development: p.developmentCount })} onJump={p.onJump} />
+      <div className={`grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] ${draft ? "pt-4 pb-6" : "scroll-pt-11 pb-24"}`}>
+        {!draft && <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length, development: p.developmentCount })} onJump={p.onJump} />}
         <div className="grid gap-2.5">
+          {draft?.banner}
           {p.banner}
           {p.crumb && (
             <p className="m-0 font-mono text-sm text-ws-ink3">
@@ -142,52 +165,56 @@ export function PeekView(p: PeekViewProps) {
               {item.item.key}
             </p>
           )}
-          <h2 className="m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{item.title}</h2>
-          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-ws-ink2">
-            <div className="relative">
-              <button
-                type="button"
-                aria-haspopup="menu"
-                aria-expanded={p.menuOpen}
-                disabled={!p.moves.length && !p.checking}
-                onClick={() => p.onMenu(!p.menuOpen)}
-                className={`${chip} ${CATEGORY_TONE[item.status.category]} disabled:cursor-default`}
-              >
-                {item.status.name}
-                {p.moves.length > 0 && <span aria-hidden className="text-[11px] opacity-70">▾</span>}
-              </button>
-              {p.menuOpen && (
-                <ul role="menu" aria-label={`Draft a move for ${item.item.key}`} className="absolute top-full left-0 z-30 m-0 mt-1 grid min-w-44 list-none gap-px rounded-lg border border-ws-sep2 bg-ws-win p-1 shadow-ws-pop">
-                  <li className="px-2 py-1 text-xs text-ws-ink3">{p.checking ? "Checking where it can move…" : "Draft a move to"}</li>
-                  {p.moves.map((s) => (
-                    <li key={s.id} role="none">
-                      <button type="button" role="menuitem" onClick={() => p.onMove(s)} className="w-full rounded px-2 py-1 text-left hover:bg-ws-hover">
-                        {s.name}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            {p.proposedMove && <span className={`${chip} border border-dashed border-ws-pip bg-ws-pip-soft font-medium text-ws-pip`}>→ {p.proposedMove} (proposed)</span>}
-            <span>
-              Assignee <b className="font-semibold text-ws-ink">{p.assignee}</b>
-            </span>
-            {item.priority && (
+          {draft ? draft.title : <h2 className="m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{item.title}</h2>}
+          {draft ? (
+            draft.meta
+          ) : (
+            <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-ws-ink2">
+              <div className="relative">
+                <button
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={p.menuOpen}
+                  disabled={!p.moves.length && !p.checking}
+                  onClick={() => p.onMenu(!p.menuOpen)}
+                  className={`${chip} ${CATEGORY_TONE[item.status.category]} disabled:cursor-default`}
+                >
+                  {item.status.name}
+                  {p.moves.length > 0 && <span aria-hidden className="text-[11px] opacity-70">▾</span>}
+                </button>
+                {p.menuOpen && (
+                  <ul role="menu" aria-label={`Draft a move for ${item.item.key}`} className="absolute top-full left-0 z-30 m-0 mt-1 grid min-w-44 list-none gap-px rounded-lg border border-ws-sep2 bg-ws-win p-1 shadow-ws-pop">
+                    <li className="px-2 py-1 text-xs text-ws-ink3">{p.checking ? "Checking where it can move…" : "Draft a move to"}</li>
+                    {p.moves.map((s) => (
+                      <li key={s.id} role="none">
+                        <button type="button" role="menuitem" onClick={() => p.onMove(s)} className="w-full rounded px-2 py-1 text-left hover:bg-ws-hover">
+                          {s.name}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {p.proposedMove && <span className={`${chip} border border-dashed border-ws-pip bg-ws-pip-soft font-medium text-ws-pip`}>→ {p.proposedMove} (proposed)</span>}
               <span>
-                Priority <b className="font-semibold text-ws-ink">{item.priority}</b>
+                Assignee <b className="font-semibold text-ws-ink">{p.assignee}</b>
               </span>
-            )}
-            <span className="capitalize">{item.kind}</span>
-            {item.labels.map((l) => (
-              <span key={l} className={`${chip} bg-ws-accent-soft font-normal text-ws-accent`}>
-                {l}
+              {item.priority && (
+                <span>
+                  Priority <b className="font-semibold text-ws-ink">{item.priority}</b>
+                </span>
+              )}
+              <span className="capitalize">{item.kind}</span>
+              {item.labels.map((l) => (
+                <span key={l} className={`${chip} bg-ws-accent-soft font-normal text-ws-accent`}>
+                  {l}
+                </span>
+              ))}
+              <span className="text-ws-ink3" title={`Last updated ${new Date(item.updated).toLocaleString()}`}>
+                Updated {relativeTime(item.updated, p.now)}
               </span>
-            ))}
-            <span className="text-ws-ink3" title={`Last updated ${new Date(item.updated).toLocaleString()}`}>
-              Updated {relativeTime(item.updated, p.now)}
-            </span>
-          </div>
+            </div>
+          )}
           {p.notice && (
             <p role="status" className="m-0 text-sm text-ws-ink2">
               {p.notice}
@@ -211,10 +238,10 @@ export function PeekView(p: PeekViewProps) {
         {p.drafts}
 
         <SectionCard id="description" title="Description" {...section("description")}>
-          <div className="min-w-0 [overflow-wrap:anywhere]">{p.description}</div>
+          <div className="min-w-0 [overflow-wrap:anywhere]">{draft ? draft.description : p.description}</div>
         </SectionCard>
 
-        {p.subtasks && p.subtasks.rows.length > 0 && (
+        {!draft && p.subtasks && p.subtasks.rows.length > 0 && (
           <SectionCard id="subtasks" title="Subtasks" count={p.subtasks.rows.length}>
             <div className="flex items-center gap-2 text-sm text-ws-ink3">
               <div
@@ -246,7 +273,7 @@ export function PeekView(p: PeekViewProps) {
           </SectionCard>
         )}
 
-        {p.links.length > 0 && (
+        {!draft && p.links.length > 0 && (
           <SectionCard id="links" title="Links" count={p.links.length} {...section("links")}>
             <ul className="m-0 grid list-none gap-1 p-0">
               {p.links.map((l) => (
@@ -262,23 +289,25 @@ export function PeekView(p: PeekViewProps) {
           </SectionCard>
         )}
 
-        {p.development}
+        {!draft && p.development}
 
-        <div className="mt-3">
-          <SectionCard id="comments" title="Comments" count={commentCount} tone="discussion" {...section("comments")}>
-            {p.comments.length === 0 && <p className="m-0 text-ws-ink3">{p.commentsLoading ? "Loading comments…" : "No comments yet."}</p>}
-            {p.comments.length > 0 && (
-              <ul className="m-0 grid list-none gap-3 p-0">
-                {p.comments.map((c) => (
-                  <CommentCard key={c.id} note={c} now={p.now} onReply={p.onReply} onShow={showComment} />
-                ))}
-              </ul>
-            )}
-            {p.composer && <div className="min-w-0 rounded-md border border-ws-sep2 bg-ws-win p-3">{p.composer}</div>}
-          </SectionCard>
-        </div>
+        {!draft && (
+          <div className="mt-3">
+            <SectionCard id="comments" title="Comments" count={commentCount} tone="discussion" {...section("comments")}>
+              {p.comments.length === 0 && <p className="m-0 text-ws-ink3">{p.commentsLoading ? "Loading comments…" : "No comments yet."}</p>}
+              {p.comments.length > 0 && (
+                <ul className="m-0 grid list-none gap-3 p-0">
+                  {p.comments.map((c) => (
+                    <CommentCard key={c.id} note={c} now={p.now} onReply={p.onReply} onShow={showComment} />
+                  ))}
+                </ul>
+              )}
+              {p.composer && <div className="min-w-0 rounded-md border border-ws-sep2 bg-ws-win p-3">{p.composer}</div>}
+            </SectionCard>
+          </div>
+        )}
 
-        {p.history.length > 0 && (
+        {!draft && p.history.length > 0 && (
           <SectionCard id="history" title="History" count={p.history.length} {...section("history")}>
             <ul className="m-0 grid list-none gap-2 p-0 text-sm text-ws-ink2">
               {p.history.map((h) => (
@@ -288,6 +317,7 @@ export function PeekView(p: PeekViewProps) {
           </SectionCard>
         )}
       </div>
+      {draft && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-[22px] py-2.5">{draft.actions}</div>}
     </aside>
   );
 }
@@ -387,13 +417,23 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
 export function PeekSheet() {
   const selected = useTabs((s) => s.selected);
   const bulk = useTabs((s) => s.marked.length > 1);
-  const current = useWorkspace((s) => (selected ? (s.items[selected] ?? s.peeked[selected]?.item) : undefined));
+  const draftId = draftIdOf(selected);
+  const draft = useWorkspace((s) => (draftId ? s.proposals[draftId] : undefined));
+  const draftShown = showsAsDraftTicket(draft) ? draft : undefined;
+  const asItem = useMemo(() => (draftShown ? draftItem(draftShown) : undefined), [draftShown]);
+  const current = useWorkspace((s) => (selected && !draftId ? (s.items[selected] ?? s.peeked[selected]?.item) : undefined));
   const peekedKey = useWorkspace((s) => Object.keys(s.peeked)[0]);
 
   useEffect(() => {
     if (peekedKey && peekedKey !== selected) useWorkspace.getState().clearPeeked();
   }, [peekedKey, selected]);
-  const item = bulk ? undefined : current;
+  const item = bulk ? undefined : (asItem ?? current);
+
+  // A draft that was skipped, went stale or vanished has nothing left to show.
+  const gone = !!draftId && !draftShown;
+  useEffect(() => {
+    if (gone) useTabs.getState().select(null);
+  }, [gone]);
   const [held, setHeld] = useState<WorkItem | null>(null);
   const [entering, setEntering] = useState(false);
   const [wide, setWide] = useState(false);
@@ -421,7 +461,10 @@ export function PeekSheet() {
 
   const shown = item ?? held;
   if (!shown) return null;
-  return <OpenPeek key={itemKey(shown.item)} item={shown} motion={leaving ? "out" : entering ? "in" : "none"} wide={wide} onWide={() => setWide((w) => !w)} onMotionEnd={() => setEntering(false)} />;
+  const shell = { motion: leaving ? ("out" as const) : entering ? ("in" as const) : ("none" as const), wide, onWide: () => setWide((w) => !w), onMotionEnd: () => setEntering(false) };
+  const shownDraft = draftIdOf(shown.item.externalId);
+  if (shownDraft) return <DraftSheet key={shown.item.externalId} id={shownDraft} {...shell} />;
+  return <OpenPeek key={itemKey(shown.item)} item={shown} {...shell} />;
 }
 
 interface Motion {
@@ -429,6 +472,11 @@ interface Motion {
   wide: boolean;
   onWide(): void;
   onMotionEnd(): void;
+}
+
+function DraftSheet({ id, ...shell }: { id: string } & Motion) {
+  const width = usePaneWidths().peek;
+  return <LiveDraftPeek proposalId={id} width={width} {...shell} />;
 }
 
 function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem } & Motion) {
