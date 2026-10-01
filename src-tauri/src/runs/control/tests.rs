@@ -349,7 +349,7 @@ fn a_folder_that_is_not_a_plain_clone_inside_home_gets_no_file() {
     assert!(write_claude_file(&dir, Purpose::Trust, claude, &real, None).is_err(), "no home to compare with");
     assert!(write_claude_file(&dir, Purpose::Trust, Path::new("/opt/it's/claude"), &real, Some(&home)).is_err(), "a hostile claude path");
     assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "nothing was written");
-    let _ = std::fs::remove_dir_all(outside.parent().unwrap().parent().unwrap());
+    let _ = std::fs::remove_dir_all(outside.parent().unwrap());
     let _ = std::fs::remove_dir_all(home);
 }
 
