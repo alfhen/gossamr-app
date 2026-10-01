@@ -39,7 +39,7 @@ function execCopy(text: string): boolean {
   }
 }
 
-const browserDeps = (): ClipboardDeps => ({
+export const browserDeps =(): ClipboardDeps => ({
   writeText: navigator.clipboard?.writeText ? (t) => navigator.clipboard.writeText(t) : undefined,
   execCopy,
 });

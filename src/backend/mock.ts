@@ -377,6 +377,7 @@ export class MockBackend implements Backend {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined);
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
+    this.runs = new MockRuns(this.proposals, options.runs);
   }
 
   private readonly device: NonNullable<MockOptions["device"]>;
@@ -408,7 +409,7 @@ export class MockBackend implements Backend {
   });
 
   /** Scripted agent runs, with `advance()` as their clock. */
-  readonly runs = new MockRuns(this.proposals);
+  readonly runs: MockRuns;
 
   runsList(query?: RunQuery) {
     return Promise.resolve(this.runs.list(query));
@@ -440,6 +441,10 @@ export class MockBackend implements Backend {
 
   async runsPreflight(spec: RunSpec) {
     return this.runs.preflight(spec);
+  }
+
+  async runsEnvironment() {
+    return this.runs.environment();
   }
 
   async runsDisk(id: string) {

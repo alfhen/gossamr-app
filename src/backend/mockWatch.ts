@@ -7,6 +7,8 @@ export interface MockOptions {
   githubRepos?: number;
   /** How the device flow ends once the sample waits for it: authorised after `delayMs`, or refused or expired. */
   device?: { delayMs: number; outcome: "authorised" | "denied" | "expired" };
+  /** Which scripted agent runs exist, and the moment their ages count back from. */
+  runs?: { seed?: "busy" | "empty" | "many"; epoch?: number; environment?: "ok" | "missing" | "signedOut" };
 }
 
 interface Stored {
@@ -86,7 +88,7 @@ export class MockWatch {
   }
 }
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=empty` or `many` changes the scripted agent runs and `?runsEnv=missing` or `signedOut` shows the Claude banners. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -101,5 +103,13 @@ export function mockOptionsFromUrl(): MockOptions {
   if (repos) options.githubRepos = repos;
   const outcome = params.get("mockDevice");
   if (outcome === "denied" || outcome === "expired" || outcome === "slow") options.device = { delayMs: 4000, outcome: outcome === "slow" ? "authorised" : outcome };
+  const seed = params.get("runs");
+  const environment = params.get("runsEnv");
+  options.runs = {
+    // The scripted ages count back from now, so the runs look recent whenever the page is opened.
+    epoch: Date.now(),
+    seed: seed === "empty" || seed === "many" ? seed : "busy",
+    environment: environment === "missing" || environment === "signedOut" ? environment : "ok",
+  };
   return options;
 }

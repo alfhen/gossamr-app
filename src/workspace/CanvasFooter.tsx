@@ -8,7 +8,7 @@ import type { useCards } from "./useCards";
 export const FOOTER_HEIGHT_VAR = "--ws-footer-h";
 
 /** Publishes its height on the root so floating layers (Pip launcher, toasts) can sit above it. */
-function useFooterHeight() {
+export function useFooterHeight() {
   const ref = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;

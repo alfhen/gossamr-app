@@ -508,6 +508,12 @@ export interface Preflight {
   blocking: boolean;
 }
 
+/** Whether Claude Code is there to run agents at all, ahead of any one run. `unknown` when the check could not be made. */
+export interface RunsEnvironment {
+  claude: "ok" | "missing" | "signedOut" | "unknown";
+  version: string | null;
+}
+
 /** A comment on a work item, mirroring the domain model. */
 export interface WorkComment {
   id: string;

@@ -17,6 +17,7 @@ import type {
   RunReview,
   RunSpec,
   RunsChanged,
+  RunsEnvironment,
   Snapshot,
   Transition,
   Uploaded,
@@ -175,6 +176,8 @@ export interface Backend {
   /** Opens Terminal attached to the run's session. */
   runsAttach(id: string): Promise<void>;
   runsPreflight(spec: RunSpec): Promise<Preflight>;
+  /** Whether Claude Code is installed and signed in, for the banners on the Agents view. Never rejects. */
+  runsEnvironment(): Promise<RunsEnvironment>;
   /** Bytes the run's session files take up. */
   runsDisk(id: string): Promise<number>;
   /** Launches a run whose launch failed, after checking that no session for it exists. */

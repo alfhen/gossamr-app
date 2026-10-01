@@ -1,0 +1,66 @@
+.ws-agent-card {
+  transition:
+    transform 0.12s,
+    box-shadow 0.12s,
+    border-color 0.12s;
+}
+.ws-agent-card:hover {
+  border-color: var(--color-ws-sep2);
+  transform: translateY(-1px);
+}
+
+/* The ring is the only motion on a working run; with reduced motion it is a plain dot. */
+.ws-pulse {
+  position: relative;
+}
+.ws-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: currentColor;
+  animation: ws-ring 1.8s ease-out infinite;
+}
+@keyframes ws-ring {
+  from {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-agent-card {
+    transition: none;
+  }
+  .ws-agent-card:hover {
+    transform: none;
+  }
+  .ws-pulse::after {
+    display: none;
+  }
+}
+
+.ws-select {
+  appearance: none;
+  max-width: 210px;
+  border: 1px solid var(--color-ws-sep2);
+  border-radius: 6px;
+  background-color: var(--color-ws-win);
+  background-image: linear-gradient(45deg, transparent 50%, var(--color-ws-ink3) 50%), linear-gradient(135deg, var(--color-ws-ink3) 50%, transparent 50%);
+  background-position:
+    calc(100% - 12px) 50%,
+    calc(100% - 8px) 50%;
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+  padding: 3px 24px 3px 8px;
+  color: var(--color-ws-ink);
+}
+.ws-select[data-set] {
+  border-color: var(--color-ws-accent);
+  color: var(--color-ws-accent);
+  font-weight: 600;
+}
