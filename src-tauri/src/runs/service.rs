@@ -20,6 +20,8 @@ use super::launcher::RunLauncher;
 use super::preflight::{preflight, Preflight};
 use super::repo::{default_roots, existing_names, find_clones, new_name, origin_matches, CloneCache, Git, LocalClone};
 use super::toolchain::{Toolchain, ToolchainSource};
+use super::control::{MacTerminal, Terminal};
+use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::AppConfig;
 use crate::domain::{render_prompt, Run, RunQuery, RunSpec, RunState, GUARD};
 use crate::error::{Error, Result};
@@ -52,25 +54,33 @@ pub struct CloneChoice {
 }
 
 pub struct RunService {
-    core: Arc<Core>,
-    tools: Arc<dyn ToolchainSource>,
-    index: RunIndex,
-    /// Held from the cap check to the end of the launch, so two approvals can't both pass the cap.
-    launching: tokio::sync::Mutex<()>,
-    /// Recovery runs at startup and again after sign-in; two passes must not act on the same run.
-    recovery: tokio::sync::Mutex<()>,
+    pub(super) core: Arc<Core>,
+    pub(super) tools: Arc<dyn ToolchainSource>,
+    pub(super) index: RunIndex,
+    /// Held from the cap check to the end of the launch, so two approvals can't both pass the cap. The tracker takes
+    /// it while it writes runs, so a poll never overwrites a launch half-recorded.
+    pub(super) launching: tokio::sync::Mutex<()>,
+    /// Recovery runs at startup and again after sign-in; two passes must not act on the same run. The tracker skips a
+    /// poll while one is running.
+    pub(super) recovery: tokio::sync::Mutex<()>,
     in_flight: Mutex<HashSet<String>>,
     clones: CloneCache,
     roots: Vec<PathBuf>,
-    changed: Arc<dyn Fn(&str) + Send + Sync>,
-    enabled: bool,
+    pub(super) changed: Arc<dyn Fn(&str) + Send + Sync>,
+    pub(super) notifier: Arc<dyn RunNotifier>,
+    pub(super) terminal: Arc<dyn Terminal>,
+    pub(super) enabled: bool,
     cap: usize,
     timing: Timing,
+    pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
+    pub(super) config_dir: Mutex<Option<PathBuf>>,
+    /// Wakes the tracker when the window gains focus.
+    pub focus: tokio::sync::Notify,
 }
 
 /// The nearest existing ancestor made real, with the rest appended: a worktree that doesn't exist yet still compares
 /// equal to the path `claude agents` reports once it does, even when a parent is a symlink (`/var` and `/private/var`).
-fn real(path: &Path) -> PathBuf {
+pub(super) fn real(path: &Path) -> PathBuf {
     let mut rest = Vec::new();
     let mut base = path.to_path_buf();
     loop {
@@ -88,7 +98,7 @@ fn real(path: &Path) -> PathBuf {
 }
 
 /// Whether `entry` is the session of `run`. Interactive sessions never are.
-fn belongs_to(entry: &AgentEntry, run: &Run) -> bool {
+pub(super) fn belongs_to(entry: &AgentEntry, run: &Run) -> bool {
     let Some(id) = entry.id.as_deref().and_then(ShortId::parse) else { return false };
     if entry.kind.as_deref() == Some("interactive") {
         return false;
@@ -122,10 +132,26 @@ impl RunService {
             clones: CloneCache::default(),
             roots,
             changed,
+            notifier: Arc::new(NoNotices),
+            terminal: Arc::new(MacTerminal),
             enabled: false,
             cap: MAX_CONCURRENT,
             timing: Timing::default(),
+            misses: Mutex::new(std::collections::HashMap::new()),
+            config_dir: Mutex::new(None),
+            focus: tokio::sync::Notify::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_terminal(mut self, terminal: Arc<dyn Terminal>) -> Self {
+        self.terminal = terminal;
+        self
+    }
+
+    pub fn with_notifier(mut self, notifier: Arc<dyn RunNotifier>) -> Self {
+        self.notifier = notifier;
+        self
     }
 
     pub fn default_roots() -> Vec<PathBuf> {
@@ -162,18 +188,18 @@ impl RunService {
         }
     }
 
-    async fn load(&self, id: &str) -> Result<Run> {
+    pub(super) async fn load(&self, id: &str) -> Result<Run> {
         self.core.run(id).await?.ok_or_else(|| Error::Proposal("that run no longer exists".into()))
     }
 
-    async fn store(&self, run: &Run) -> Result<()> {
+    pub(super) async fn store(&self, run: &Run) -> Result<()> {
         self.core.save_run(run).await?;
         (self.changed)(&run.connection_id);
         Ok(())
     }
 
     /// The index is a hint, so a failed write is not worth failing a launch over.
-    fn remember(&self, run: &Run) {
+    pub(super) fn remember(&self, run: &Run) {
         if let Err(e) = self.index.record(entry_of(run)) {
             eprintln!("couldn't update the run index: {e}");
         }
@@ -188,7 +214,9 @@ impl RunService {
         if let Err(e) = self.index.mark_terminal(&run.id) {
             eprintln!("couldn't update the run index: {e}");
         }
-        self.store(run).await
+        self.store(run).await?;
+        self.notifier.notify(run, Attention::Failed);
+        Ok(())
     }
 
     /// The run is its session from here on; the tracker (which reads `claude agents`) takes over the state.

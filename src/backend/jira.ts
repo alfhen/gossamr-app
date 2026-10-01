@@ -65,7 +65,7 @@ export interface Scope {
  * Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change.
  * Writes carry `scope`, so a write started for one account is refused if someone else has signed in meanwhile.
  */
-const UNAVAILABLE_RUN_COMMANDS = ["runs_stop", "runs_stop_all", "runs_attach", "runs_preflight", "runs_disk", "runs_retry_launch"] as const;
+const UNAVAILABLE_RUN_COMMANDS = ["runs_preflight", "runs_retry_launch"] as const;
 
 function notYet<T>(command: (typeof UNAVAILABLE_RUN_COMMANDS)[number]): Promise<T> {
   return Promise.reject(new Error(`${command} is not available yet`));
@@ -312,16 +312,16 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_approve", { proposalId, digest });
   }
 
-  runsStop(_id: string) {
-    return notYet<Run>("runs_stop");
+  runsStop(id: string) {
+    return invoke<Run>("runs_stop", { id });
   }
 
   runsStopAll() {
-    return notYet<{ stopped: number; failed: number }>("runs_stop_all");
+    return invoke<{ stopped: number; failed: number }>("runs_stop_all");
   }
 
-  runsAttach(_id: string) {
-    return notYet<void>("runs_attach");
+  runsAttach(id: string) {
+    return invoke<void>("runs_attach", { id });
   }
 
   runsPreflight(_spec: RunSpec) {
@@ -332,8 +332,8 @@ export class JiraBackend implements Backend {
     return readEnvironment(() => notYet<Preflight>("runs_preflight"));
   }
 
-  runsDisk(_id: string) {
-    return notYet<number>("runs_disk");
+  runsDisk(id: string) {
+    return invoke<number>("runs_disk", { id });
   }
 
   runsRetryLaunch(_id: string) {
