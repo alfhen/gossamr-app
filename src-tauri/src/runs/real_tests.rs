@@ -435,3 +435,38 @@ async fn started_listing(cli: &SignedIn, id: &ShortId, worktree: &Path) -> bool 
     }
     false
 }
+
+/// U5: trusting the clone's folder is enough for a session in one of its worktrees. Needs the network.
+#[tokio::test]
+#[ignore = "clones a small public repository from github.com and runs the real claude in a scratch config"]
+async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_starts() {
+    let mut s = Scratch::new("fresh").await;
+    let home = s.root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let path = super::fresh::ensure_clone(&super::repo::Git::new(s.env.clone()), &home, "octocat/Hello-World").await.expect("clone");
+    assert_eq!(path, super::fresh::agents_root(&home).join("octocat/Hello-World"));
+    assert!(path.join(".git").is_dir());
+    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into() };
+
+    let refused = s.cli.launch(&request("fresh-0a1b")).await.unwrap_err();
+    assert!(refused.stderr_mentions("Workspace not trusted"), "{refused}");
+
+    let mut config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.config.join(".claude.json")).unwrap()).unwrap();
+    config["projects"][path.to_string_lossy().as_ref()] = serde_json::json!({ "hasTrustDialogAccepted": true });
+    std::fs::write(s.config.join(".claude.json"), config.to_string()).unwrap();
+    let id = s.cli.launch(&request("fresh-0c2d")).await.expect("launch after trusting the clone").short_id;
+    s.launched.push(id.clone());
+
+    let worktree = path.join(".claude/worktrees/fresh-0c2d");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let entry = loop {
+        let listed = s.cli.agents(false).await.unwrap();
+        if let Some(e) = listed.into_iter().find(|e| e.id.as_deref() == Some(id.as_str()) && e.cwd.as_deref().map(Path::new) == Some(worktree.as_path())) {
+            break e;
+        }
+        assert!(Instant::now() < deadline, "the session never reached its worktree");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    eprintln!("session in the worktree: state {:?}, needs {:?}", entry.state, entry.needs);
+    assert!(!entry.needs.as_deref().is_some_and(|n| n.contains("not trusted")), "{:?}", entry.needs);
+}

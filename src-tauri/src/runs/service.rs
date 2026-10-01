@@ -54,6 +54,8 @@ pub struct CloneChoice {
     pub clones: Vec<LocalClone>,
     /// The clone the person chose when several matched; listed first.
     pub picked: Option<PathBuf>,
+    /// What cloning into `~/Gossamr/agents` would do, offered only when there is no clone to choose.
+    pub fresh: Option<FreshCopy>,
 }
 
 pub struct RunService {
@@ -69,6 +71,8 @@ pub struct RunService {
     in_flight: Mutex<HashSet<String>>,
     /// Runs whose worktree is being removed, so two requests can't both call `claude rm` for one.
     pub(super) cleaning: Mutex<HashSet<String>>,
+    /// Repositories being cloned into `~/Gossamr/agents` right now.
+    cloning: Mutex<HashSet<String>>,
     clones: CloneCache,
     roots: Vec<PathBuf>,
     pub(super) changed: Arc<dyn Fn(&str) + Send + Sync>,
@@ -140,6 +144,7 @@ impl RunService {
             recovery: tokio::sync::Mutex::new(()),
             in_flight: Mutex::new(HashSet::new()),
             cleaning: Mutex::new(HashSet::new()),
+            cloning: Mutex::new(HashSet::new()),
             clones: CloneCache::default(),
             roots,
             changed,
@@ -464,7 +469,11 @@ impl RunService {
 
     async fn scan(&self, repo: &str) -> Result<Vec<LocalClone>> {
         self.core.require_watched_repo(repo)?;
-        Ok(find_clones(&self.git().await?, repo, &self.roots).await)
+        let git = self.git().await?;
+        let mut found = find_clones(&git, repo, &self.roots).await;
+        found.extend(self.existing_fresh(&git, repo).await.filter(|c| !found.iter().any(|f| f.path == c.path)));
+        found.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(found)
     }
 
     /// The repositories a run can be set up in: every one watched on any GitHub connection.
@@ -490,7 +499,8 @@ impl RunService {
         if let Some(path) = &picked {
             clones.sort_by_key(|c| &c.path != path);
         }
-        Ok(CloneChoice { clones, picked })
+        let fresh = if clones.is_empty() { self.fresh_offer(repo).await } else { None };
+        Ok(CloneChoice { clones, picked, fresh })
     }
 
     /// Remembers which clone to use for a repository. Only a clone the scan finds can be picked.
@@ -525,6 +535,9 @@ impl RunLauncher for RunService {
         self.start(run_id, false).await.map(drop)
     }
 }
+
+mod fresh;
+pub use fresh::FreshCopy;
 
 #[cfg(test)]
 mod tests;
