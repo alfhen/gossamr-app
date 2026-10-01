@@ -81,6 +81,15 @@ describe("starting an agent from a ticket", () => {
     expect(s().review!.spec.repo).toBe("acme/payments");
   });
 
+  it("ends with the last repository when it is changed twice in a row, and one draft", async () => {
+    await s().begin({ item: CA });
+    await Promise.all([s().chooseRepo("acme/storefront"), s().chooseRepo("acme/payments")]);
+    expect(s().repo).toBe("acme/payments");
+    expect(s().review!.spec.repo).toBe("acme/payments");
+    const pending = (await backend.proposalsList()).filter((p) => p.state.type === "pending");
+    expect(pending.map((p) => p.id)).toEqual([s().proposalId]);
+  });
+
   it("blocks Start with a reason when the repository has no clone, and drafts nothing for it", async () => {
     await s().begin({ item: CA });
     await s().chooseRepo("acme/ops");

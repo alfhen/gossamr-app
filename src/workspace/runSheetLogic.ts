@@ -119,6 +119,8 @@ export function startBlock(s: {
   changedBanner: boolean;
   noClone?: string | null;
   repoMissing?: boolean;
+  /** What is typed in the instruction and base fields, when they can differ from the saved draft. */
+  typed?: { instruction: string; base: string };
 }): string | null {
   if (s.starting) return "Starting…";
   if (s.repoMissing) return "Choose a repository first";
@@ -126,15 +128,20 @@ export function startBlock(s: {
   if (!s.draft || !s.review) return s.busy ? "Getting the draft ready…" : "There is no draft to start";
   if (s.changedBanner) return "Read the change above first";
   if (s.busy) return "Checking the changes…";
-  if (!s.review.instruction.trim()) return "Write what it should do first";
+  if (!(s.typed?.instruction ?? s.review.instruction).trim()) return "Write what it should do first";
+  if (s.typed && !s.typed.base.trim()) return "Name the branch it starts from first";
   if (!s.preflight) return "Checking that it can start…";
   const red = s.preflight.rows.find((r) => r.level === "red");
   if (red) return red.text;
   return s.preflight.blocking ? "Fix the red item above" : null;
 }
 
+/** Whether the draft stored in the backend is what is typed in the fields, so approving it approves what the person sees. */
+export function savedAsTyped(review: Pick<RunReview, "instruction" | "spec"> | null, typed: { instruction: string; base: string }): boolean {
+  return !!review && !!typed.instruction.trim() && typed.instruction === review.instruction && typed.base.trim() === review.spec.base;
+}
+
 export interface StopControl {
-  /** Whether the button is shown at all. */
   shown: boolean;
   enabled: boolean;
   label: string;
@@ -156,7 +163,6 @@ export function stopControl(run: Pick<Run, "state">): StopControl {
   }
 }
 
-/** Runs the sheet's primary action can start again: only a queued one waits for the person. */
 export const canStartNow = (run: Pick<Run, "state">) => run.state === "queued";
 
 export function formatBytes(bytes: number): string {
@@ -204,7 +210,6 @@ export function findRunDraft(proposals: Record<string, Proposal> | readonly Prop
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
-/** Repositories to offer: the watched ones, then any a run already used. */
 export function repoChoices(watched: readonly string[], runs: readonly Pick<Run, "spec">[]): string[] {
   return [...new Set([...watched, ...runs.map((r) => r.spec.repo)])].sort((a, b) => a.localeCompare(b));
 }

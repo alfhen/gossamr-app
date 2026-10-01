@@ -67,7 +67,7 @@ export interface Scope {
  * Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change.
  * Writes carry `scope`, so a write started for one account is refused if someone else has signed in meanwhile.
  */
-const UNAVAILABLE_RUN_COMMANDS = ["runs_stop", "runs_stop_all", "runs_attach", "runs_preflight", "runs_disk", "runs_retry_launch", "runs_draft", "runs_clones", "runs_pick_clone", "runs_suggest_name", "runs_events", "runs_start_now", "runs_keep_running"] as const;
+const UNAVAILABLE_RUN_COMMANDS = ["runs_stop", "runs_stop_all", "runs_attach", "runs_disk", "runs_events", "runs_keep_running"] as const;
 
 function notYet<T>(command: (typeof UNAVAILABLE_RUN_COMMANDS)[number]): Promise<T> {
   return Promise.reject(new Error(`${command} is not available yet`));
@@ -326,32 +326,32 @@ export class JiraBackend implements Backend {
     return notYet<void>("runs_attach");
   }
 
-  runsPreflight(_spec: RunSpec | null) {
-    return notYet<Preflight>("runs_preflight");
+  runsPreflight(spec: RunSpec | null) {
+    return invoke<Preflight>("runs_preflight", { spec });
   }
 
-  runsDraft(_spec: RunSpec, _item: ItemRef | null) {
-    return notYet<Proposal>("runs_draft");
+  runsDraft(spec: RunSpec, item: ItemRef | null) {
+    return invoke<Proposal>("runs_draft", { spec, item });
   }
 
-  runsClones(_repo: string) {
-    return notYet<CloneChoice>("runs_clones");
+  runsClones(repo: string) {
+    return invoke<CloneChoice>("runs_clones", { repo });
   }
 
-  runsPickClone(_repo: string, _path: string) {
-    return notYet<void>("runs_pick_clone");
+  runsPickClone(repo: string, path: string) {
+    return invoke<void>("runs_pick_clone", { repo, path });
   }
 
-  runsSuggestName(_clonePath: string, _key: string, _title: string) {
-    return notYet<string>("runs_suggest_name");
+  runsSuggestName(clonePath: string, key: string, title: string) {
+    return invoke<string>("runs_suggest_name", { clonePath, key, title });
   }
 
   runsEvents(_id: string) {
     return notYet<RunEvent[]>("runs_events");
   }
 
-  runsStartNow(_id: string) {
-    return notYet<Run>("runs_start_now");
+  runsStartNow(id: string) {
+    return invoke<Run>("runs_start_now", { id });
   }
 
   runsKeepRunning() {
@@ -363,15 +363,15 @@ export class JiraBackend implements Backend {
   }
 
   runsEnvironment() {
-    return readEnvironment(() => notYet<Preflight>("runs_preflight"));
+    return readEnvironment(() => this.runsPreflight(null));
   }
 
   runsDisk(_id: string) {
     return notYet<number>("runs_disk");
   }
 
-  runsRetryLaunch(_id: string) {
-    return notYet<Run>("runs_retry_launch");
+  runsRetryLaunch(id: string) {
+    return invoke<Run>("runs_retry_launch", { id });
   }
 
   onRunsChanged(listener: (change: RunsChanged) => void) {

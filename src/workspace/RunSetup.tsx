@@ -5,7 +5,7 @@ import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } fro
 import { KIND_LABEL } from "./agentsLogic";
 import { PromptParts } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
-import { COPY, START_STEPS, launchCommand, startBlock, worktreeBranch } from "./runSheetLogic";
+import { COPY, START_STEPS, launchCommand, savedAsTyped, startBlock, worktreeBranch } from "./runSheetLogic";
 import { useRunSetup, type SetupPhase } from "./runSetupStore";
 
 const KINDS: { kind: RunKind; note: string }[] = [
@@ -187,19 +187,25 @@ function Steps({ children }: { children: ReactNode }) {
   return <ol className="m-0 grid list-none gap-2 p-0 text-ws-ink2 [counter-reset:s]">{children}</ol>;
 }
 
-/** The sheet that shows a run draft in full and starts it. Starting is the only way to approve; it carries the digest of what is on screen. */
-export function RunSetupView(p: SetupViewProps) {
-  const { review, preflight, phase, on } = p;
-  const blocked = startBlock({
-    draft: !!review,
-    review,
-    preflight,
-    busy: phase === "preparing" || p.busy,
-    starting: phase === "starting",
+/** Why Start is off for what the sheet shows, or null. The button and the ⌘↵ shortcut both ask this. */
+export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "phase" | "busy" | "changed" | "choice" | "repo" | "instruction" | "base">): string | null {
+  return startBlock({
+    draft: !!p.review,
+    review: p.review,
+    preflight: p.preflight,
+    busy: p.phase === "preparing" || p.busy,
+    starting: p.phase === "starting",
     changedBanner: p.changed,
     noClone: p.choice && p.choice.clones.length === 0 ? `No clone of ${p.repo} found` : null,
     repoMissing: !p.repo,
+    typed: { instruction: p.instruction, base: p.base },
   });
+}
+
+/** The sheet that shows a run draft in full and starts it. Starting is the only way to approve; it carries the digest of what is on screen. */
+export function RunSetupView(p: SetupViewProps) {
+  const { review, preflight, phase, on } = p;
+  const blocked = setupBlock(p);
   return (
     <SheetFrame
       label="Start an agent"
@@ -329,14 +335,56 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     if (s.review && base.trim() && base.trim() !== savedBase) edit.base = base;
     if (Object.keys(edit).length) await useRunSetup.getState().saveEdit(edit);
   };
-  const start = async () => {
-    await commit();
-    await useRunSetup.getState().start();
+  const view: SetupViewProps = {
+    item: s.item,
+    ticketTitle: ticketTitle ?? s.title,
+    kind: s.kind,
+    repo: s.repo,
+    repos: s.repos,
+    repoEditable: s.ownDraft || !s.proposalId,
+    choice: s.choice,
+    review: s.review,
+    preflight: s.preflight,
+    phase: s.phase,
+    busy: s.busy,
+    error: s.error,
+    changed: s.changed,
+    fromPip: s.fromPip,
+    instruction,
+    onInstruction: setInstruction,
+    onReset: s.initialInstruction && instruction !== s.initialInstruction ? () => setInstruction(s.initialInstruction!) : undefined,
+    base,
+    onBase: setBase,
+    wide,
+    onWide: () => setWide((w) => !w),
+    on: {
+      close: () => useRunSetup.getState().close(),
+      discard: () => void useRunSetup.getState().discard(),
+      start: () => void start(),
+      chooseRepo: (repo) => void useRunSetup.getState().chooseRepo(repo),
+      chooseClone: (path) => void useRunSetup.getState().chooseClone(path),
+      dismissChanged: () => useRunSetup.getState().dismissChanged(),
+      commit: () => void commit(),
+    },
   };
 
+  // Starts only what Start would start: the same checks, and only once the typed text is the saved draft.
+  async function start() {
+    if (setupBlock(view)) return;
+    await commit();
+    const now = useRunSetup.getState();
+    if (now.error || !savedAsTyped(now.review, { instruction, base })) return;
+    await now.start();
+  }
+
   useEffect(() => {
+    const frame = () => document.getElementById("agent-sheet");
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+        // The sheet's own fields start it; a field behind the sheet or a palette on top of it must not.
+        if (document.querySelector("[role=combobox]")) return;
+        const field = document.activeElement;
+        if (field instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(field.tagName) && !frame()?.contains(field)) return;
         ev.preventDefault();
         void start();
         return;
@@ -352,38 +400,5 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     return () => window.removeEventListener("keydown", onKey, true);
   });
 
-  return (
-    <RunSetupView
-      item={s.item}
-      ticketTitle={ticketTitle ?? s.title}
-      kind={s.kind}
-      repo={s.repo}
-      repos={s.repos}
-      repoEditable={s.ownDraft || !s.proposalId}
-      choice={s.choice}
-      review={s.review}
-      preflight={s.preflight}
-      phase={s.phase}
-      busy={s.busy}
-      error={s.error}
-      changed={s.changed}
-      fromPip={s.fromPip}
-      instruction={instruction}
-      onInstruction={setInstruction}
-      onReset={s.initialInstruction && instruction !== s.initialInstruction ? () => setInstruction(s.initialInstruction!) : undefined}
-      base={base}
-      onBase={setBase}
-      wide={wide}
-      onWide={() => setWide((w) => !w)}
-      on={{
-        close: () => useRunSetup.getState().close(),
-        discard: () => void useRunSetup.getState().discard(),
-        start: () => void start(),
-        chooseRepo: (repo) => void useRunSetup.getState().chooseRepo(repo),
-        chooseClone: (path) => void useRunSetup.getState().chooseClone(path),
-        dismissChanged: () => useRunSetup.getState().dismissChanged(),
-        commit: () => void commit(),
-      }}
-    />
-  );
+  return <RunSetupView {...view} />;
 }

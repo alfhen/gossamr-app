@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useBackend } from "../backend/useBackend";
 import { itemKey } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
+import { agentId } from "./AgentCard";
 import { AgentsSettingsView } from "./AgentsSettings";
 import { agentTicketChoices } from "./commands";
 import { PaletteView } from "./Palette";
@@ -12,7 +13,6 @@ import { stoppable } from "./agentsLogic";
 import { sheetKey } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 
-/** Concurrency the backend enforces; shown, not changed, here. */
 const CAP = 3;
 
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || !!t.closest("input, textarea, select, [contenteditable], [data-esc-local]"));
@@ -72,6 +72,16 @@ export function AgentSheets() {
   const picking = useRuns((s) => s.picking);
   const ticketTitle = useWorkspace((s) => (setupItem ? (s.items[itemKey(setupItem)]?.title ?? null) : null));
   const runSheetOpen = !setupOpen && sheet !== null;
+
+  // Closing a sheet that browsed from run to run has lost its opener; the run it ended on is the next best place.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current && !runSheetOpen && (!document.activeElement || document.activeElement === document.body)) {
+      const id = useRuns.getState().selectedId;
+      document.getElementById(id ? agentId(id) : "")?.focus({ preventScroll: true });
+    }
+    wasOpen.current = runSheetOpen;
+  }, [runSheetOpen]);
 
   useEffect(() => {
     if (!runSheetOpen) return;

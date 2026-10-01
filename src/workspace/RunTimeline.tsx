@@ -11,7 +11,6 @@ const DOT: Record<TimelineTone, string> = {
   err: "bg-ws-blocked-soft text-ws-blocked border-transparent",
 };
 
-/** Minutes after the first line, as the prototype shows them. */
 export function offsetText(at: string, first: string): string {
   const minutes = Math.max(0, Math.round((Date.parse(at) - Date.parse(first)) / 60_000));
   return minutes < 60 ? `+${minutes}m` : `+${Math.floor(minutes / 60)}h ${minutes % 60}m`;

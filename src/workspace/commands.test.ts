@@ -225,7 +225,7 @@ describe("agent commands", () => {
 
   it("offers the agent entries only when Agents is on", () => {
     expect(labels(false).some((l) => /agent/i.test(l))).toBe(false);
-    expect(labels(true)).toEqual(expect.arrayContaining(["Start an agent…", "Show agents that need me", "Agent safety and settings"]));
+    expect(labels(true)).toEqual(expect.arrayContaining(["Start an agent…", "Show agents that need me", "Stop all agents…", "Agent safety and settings"]));
   });
 
   it("runs each entry", () => {

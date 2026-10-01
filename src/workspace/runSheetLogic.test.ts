@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { renderPrompt } from "../backend/mockRuns";
 import type { Preflight, Proposal, Run, RunReview, RunSpec, RunState } from "../types";
-import { MAY_TOUCH, defaultRepo, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, repoChoices, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
+import { MAY_TOUCH, defaultRepo, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, repoChoices, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
 
 const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
   kind: "investigate",
@@ -92,6 +92,13 @@ describe("when Start is off", () => {
     expect(startBlock({ ...base, review: { ...review(), instruction: "  " } })).toMatch(/Write/);
     expect(startBlock({ ...base, preflight: null })).toMatch(/Checking/);
     expect(startBlock({ ...base, starting: true })).toBe("Starting…");
+  });
+
+  it("goes by what is typed, not only by what is saved", () => {
+    const typed = { instruction: "Read the logs.", base: "main" };
+    expect(startBlock({ ...base, typed })).toBeNull();
+    expect(startBlock({ ...base, typed: { ...typed, instruction: "  " } })).toMatch(/Write/);
+    expect(startBlock({ ...base, typed: { ...typed, base: " " } })).toMatch(/branch/);
   });
 
   it("gives the red row's own words as the reason", () => {
@@ -210,5 +217,22 @@ describe("keys while a run sheet is open", () => {
   it("does not browse from a sheet that is not a run", () => {
     expect(sheetKey("j", { ...ctx, browsing: false })).toBeNull();
     expect(sheetKey("Escape", { ...ctx, browsing: false })).toBe("close");
+  });
+});
+
+describe("whether the saved draft is what is typed", () => {
+  const saved = review();
+  const typed = { instruction: saved.instruction, base: "main" };
+
+  it("is only when the instruction matches exactly and the base matches once trimmed", () => {
+    expect(savedAsTyped(saved, typed)).toBe(true);
+    expect(savedAsTyped(saved, { ...typed, base: " main " })).toBe(true);
+    expect(savedAsTyped(saved, { ...typed, instruction: `${saved.instruction} more` })).toBe(false);
+    expect(savedAsTyped(saved, { ...typed, base: "develop" })).toBe(false);
+  });
+
+  it("is not when nothing is saved, or the instruction was cleared", () => {
+    expect(savedAsTyped(null, typed)).toBe(false);
+    expect(savedAsTyped(saved, { ...typed, instruction: "" })).toBe(false);
   });
 });

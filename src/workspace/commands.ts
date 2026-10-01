@@ -44,9 +44,7 @@ export interface CommandActions {
   newTab(): void;
   newTicket(): void;
   togglePip(): void;
-  /** Asks which ticket to start an agent on, or none. */
   startAgent(): void;
-  /** Opens the setup sheet for an Investigate run on the ticket. */
   investigate(item: WorkItem): void;
   showAgentsNeedingMe(): void;
   openAgentSafety(): void;
@@ -62,7 +60,6 @@ export interface CommandContext {
   pendingDrafts: number;
   /** A GitHub account is connected. */
   github?: boolean;
-  /** The Agents view is switched on. */
   agents?: boolean;
   /** Agents waiting on the person, for the hint beside "Show agents that need me". */
   agentsNeedingMe?: number;
@@ -120,7 +117,8 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
       ? [
           { id: "agents:start", group: "Agents" as const, icon: ">_", label: "Start an agent…", hint: "n", keywords: "run claude investigate background task", run: a.startAgent },
           { id: "agents:needs", group: "Agents" as const, icon: "✋", label: "Show agents that need me", hint: ctx.agentsNeedingMe ? `${ctx.agentsNeedingMe} waiting` : undefined, keywords: "agents waiting permission question blocked", run: a.showAgentsNeedingMe },
-          { id: "agents:safety", group: "Agents" as const, icon: "⛨", label: "Agent safety and settings", keywords: "agents stop all touch permissions", run: a.openAgentSafety },
+          { id: "agents:stop", group: "Agents" as const, icon: "■", label: "Stop all agents…", keywords: "agents halt kill end everything", run: a.openAgentSafety },
+          { id: "agents:safety", group: "Agents" as const, icon: "⛨", label: "Agent safety and settings", keywords: "agents touch permissions", run: a.openAgentSafety },
         ]
       : []),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },

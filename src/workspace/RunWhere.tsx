@@ -28,7 +28,6 @@ export interface Place {
   what: string;
 }
 
-/** The three places a run lives, in the order the sheet lists them. */
 export const placesOf = (run: Pick<Run, "expectedWorktree" | "spec" | "branch">): Place[] => [
   { label: "Worktree: where it edits", value: run.expectedWorktree, what: "the worktree path" },
   { label: "Your clone it was made from", value: run.spec.clonePath, what: "the clone path" },

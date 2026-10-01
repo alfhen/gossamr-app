@@ -100,7 +100,6 @@ export function TicketAgentRows({ runs, now, title, onOpen }: { runs: readonly R
   );
 }
 
-/** The runs on a ticket, for the peek. Opening one leaves the person on the board. */
 export function TicketAgents({ item, title }: { item: ItemRef; title: string }) {
   const runs = useRuns((s) => s.runs);
   const mine = runsOfTicket(runs, item);

@@ -7,7 +7,7 @@ import type { Preflight, Run, RunEvent, RunReview, RunSpec, RunState } from "../
 import { AgentMenuView, TicketAgentRows } from "./AgentMenu";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsSettingsView } from "./AgentsSettings";
-import { RunSetupView, type SetupViewProps } from "./RunSetup";
+import { RunSetupView, setupBlock, type SetupViewProps } from "./RunSetup";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
 import { placesOf } from "./RunWhere";
 import { offsetText } from "./RunTimeline";
@@ -278,6 +278,25 @@ describe("the setup sheet", () => {
 
   it("names the branch the run will use", () => {
     expect(setup()).toContain("worktree-ca-401-fix-ab12");
+  });
+});
+
+describe("what ⌘↵ may start", () => {
+  const props = (over: Partial<SetupViewProps> = {}) => {
+    const review = reviewOf();
+    return { review, preflight: ok, phase: "ready" as const, busy: false, changed: false, choice: null, repo: "acme/storefront", instruction: review.instruction, base: "main", ...over };
+  };
+
+  it("is nothing while the checks have a red row, so the shortcut cannot get past a disabled button", () => {
+    const red: Preflight = { rows: [{ level: "red", text: "Not signed in to Claude." }], blocking: true };
+    expect(setupBlock(props({ preflight: red }))).toBe("Not signed in to Claude.");
+    expect(setupBlock(props())).toBeNull();
+  });
+
+  it("is nothing for a cleared instruction, an unread change or a draft that is still being made", () => {
+    expect(setupBlock(props({ instruction: "" }))).toMatch(/Write/);
+    expect(setupBlock(props({ changed: true }))).toMatch(/change/);
+    expect(setupBlock(props({ review: null, phase: "preparing" }))).toMatch(/ready/);
   });
 });
 

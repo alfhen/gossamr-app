@@ -33,7 +33,6 @@ interface SetupState {
   review: RunReview | null;
   preflight: Preflight | null;
   phase: SetupPhase;
-  /** A save or re-check is in flight. */
   busy: boolean;
   error: string | null;
   /** The backend refused the digest: the draft changed after it was read. */
@@ -46,7 +45,6 @@ interface SetupState {
   saveEdit(edit: { instruction?: string; base?: string }): Promise<void>;
   dismissChanged(): void;
   start(): Promise<Run | null>;
-  /** Skips the draft and closes. */
   discard(): Promise<void>;
   close(): void;
 }
@@ -162,7 +160,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
       if (repo === get().repo) return;
       writeStored(LAST_REPO_KEY, repo);
       set({ repo });
-      await prepare(run);
+      await prepare(++run);
     },
 
     async chooseClone(path) {

@@ -50,7 +50,6 @@ function OpenInTerminal({ run, on, filled = true }: { run: Run; on: RunSheetActi
   );
 }
 
-/** What needs the person, in words, and the one thing they can do about it from here. */
 function Attention({ run, on }: { run: Run; on: RunSheetActions }) {
   switch (run.state) {
     case "needsPermission": {

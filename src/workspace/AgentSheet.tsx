@@ -25,7 +25,6 @@ export function Btn({ tone = "plain", icon, children, ...rest }: { tone?: Button
 
 export interface FrameProps {
   label: string;
-  /** The mono label at the left of the header: a ticket key or the sheet's name. */
   title: string;
   hint: ReactNode;
   wide: boolean;
@@ -41,12 +40,22 @@ export interface FrameProps {
 /** The frame the agent sheets share with the ticket peek: it slides over the screen from the right. */
 export function SheetFrame({ label, title, hint, wide, min = 520, draft = false, onWide, onClose, children, footer }: FrameProps) {
   const peek = usePaneWidths().peek;
+  const frame = useRef<HTMLElement>(null);
+  const [opener] = useState(() => (typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null)));
+  useEffect(() => {
+    if (!frame.current?.contains(document.activeElement)) frame.current?.focus({ preventScroll: true });
+    return () => {
+      if (opener?.isConnected && (!document.activeElement || document.activeElement === document.body || frame.current?.contains(document.activeElement))) opener.focus({ preventScroll: true });
+    };
+  }, [opener]);
   return (
     <aside
+      ref={frame}
+      tabIndex={-1}
       id="agent-sheet"
       role="dialog"
       aria-label={label}
-      className={`selectable ws-legacy ws-peek-in absolute inset-y-0 right-0 z-30 flex max-w-full flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}
+      className={`selectable ws-legacy ws-peek-in outline-none absolute inset-y-0 right-0 z-30 flex max-w-full flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}
       style={{ width: wide ? "100%" : Math.max(peek, min), minWidth: Math.min(min, 360) }}
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-3.5 py-2">
@@ -138,7 +147,6 @@ export function CopyButton({ text, label = "Copy", what }: { text: string; label
   );
 }
 
-/** A path or command in a box of its own, with a copy button. */
 export function CodeBox({ text, what, wrap = false }: { text: string; what: string; wrap?: boolean }) {
   return (
     <div className="flex items-start gap-2 rounded-md border border-ws-sep bg-ws-bar py-1 pr-1 pl-2.5">

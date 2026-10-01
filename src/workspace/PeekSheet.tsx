@@ -67,7 +67,6 @@ export interface PeekViewProps {
   drafts: ReactNode;
   /** The menu for starting an agent on the item; left out when Agents is off or the item is read-only. */
   agentMenu?: ReactNode;
-  /** The agents already working on the item. */
   agents?: ReactNode;
   composer: ReactNode;
   notice: string | null;
