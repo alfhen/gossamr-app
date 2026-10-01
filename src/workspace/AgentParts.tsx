@@ -61,7 +61,7 @@ export interface FailureState {
 
 const RETRY_WAITS = "Do the step above first, then retry";
 
-function FailureNext({ run, failure }: { run: Run; failure: FailureState }) {
+export function FailureNext({ run, failure }: { run: Run; failure: FailureState }) {
   const help = failureHelp(run);
   if (!help) return null;
   const ready = retryEnabled(help, failure.opened);

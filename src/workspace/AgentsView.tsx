@@ -199,7 +199,6 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     position: at,
     total: order.length,
     ticketTitle: ticketTitle(run),
-    onSelect: () => on.select(run.id),
     onOpen: () => on.open(run.id),
     onAttach: () => on.attach(run.id),
     failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
