@@ -23,7 +23,7 @@ use super::repo::{default_roots, existing_names, find_clones, new_name, origin_m
 use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
-use crate::config::AppConfig;
+use crate::config::{AgentSettings, AppConfig};
 use crate::domain::{render_prompt, Run, RunQuery, RunSpec, RunState, GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
@@ -43,11 +43,13 @@ pub struct Timing {
     /// Pause after `stopped` is listed, before waking the session: resumed at once, `claude` sometimes starts a copy
     /// instead (2 of 3 tries); after 3 s it never did in 5 tries.
     pub stop_settle: Duration,
+    /// How long `cleanup` waits between tries while Claude still holds its lock on a stopped session's worktree.
+    pub rm_wait: Duration,
 }
 
 impl Default for Timing {
     fn default() -> Self {
-        Self { recover_window: Duration::from_secs(90), worktree_grace: Duration::from_secs(10), poll: Duration::from_secs(2), stop_wait: Duration::from_secs(10), stop_settle: Duration::from_secs(5) }
+        Self { recover_window: Duration::from_secs(90), worktree_grace: Duration::from_secs(10), poll: Duration::from_secs(2), stop_wait: Duration::from_secs(10), stop_settle: Duration::from_secs(5), rm_wait: Duration::from_secs(1) }
     }
 }
 
@@ -72,6 +74,8 @@ pub struct RunService {
     /// poll while one is running.
     pub(super) recovery: tokio::sync::Mutex<()>,
     in_flight: Mutex<HashSet<String>>,
+    /// Runs whose worktree is being removed, so two requests can't both call `claude rm` for one.
+    pub(super) cleaning: Mutex<HashSet<String>>,
     /// Repositories being cloned into `~/Gossamr/agents` right now.
     cloning: Mutex<HashSet<String>>,
     clones: CloneCache,
@@ -85,7 +89,7 @@ pub struct RunService {
     pub(super) config_lock: Mutex<()>,
     /// One switch at a time: turning on reads the environment, which can take a while.
     pub(super) switching: tokio::sync::Mutex<()>,
-    cap: usize,
+    pub(super) settings: Mutex<AgentSettings>,
     pub(super) timing: Timing,
     pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
     pub(super) config_dir: Mutex<Option<PathBuf>>,
@@ -144,6 +148,7 @@ impl RunService {
             launching: tokio::sync::Mutex::new(()),
             recovery: tokio::sync::Mutex::new(()),
             in_flight: Mutex::new(HashSet::new()),
+            cleaning: Mutex::new(HashSet::new()),
             cloning: Mutex::new(HashSet::new()),
             clones: CloneCache::default(),
             roots,
@@ -154,7 +159,7 @@ impl RunService {
             enabled: AtomicBool::new(false),
             config_lock: Mutex::new(()),
             switching: tokio::sync::Mutex::new(()),
-            cap: MAX_CONCURRENT,
+            settings: Mutex::new(AgentSettings { max_runs: MAX_CONCURRENT, ..AgentSettings::default() }),
             timing: Timing::default(),
             misses: Mutex::new(std::collections::HashMap::new()),
             config_dir: Mutex::new(None),
@@ -196,9 +201,14 @@ impl RunService {
         self.enabled.store(on, Ordering::SeqCst);
     }
 
+    pub fn with_settings(self, settings: AgentSettings) -> Self {
+        *self.settings.lock().expect("settings lock poisoned") = settings.clamped();
+        self
+    }
+
     #[cfg(test)]
-    pub fn with_cap(mut self, cap: usize) -> Self {
-        self.cap = cap;
+    pub fn with_cap(self, cap: usize) -> Self {
+        self.settings.lock().expect("settings lock poisoned").max_runs = cap;
         self
     }
 
@@ -277,7 +287,7 @@ impl RunService {
         let spec = &run.spec;
         spec.validate().map_err(|e| Failure::Invalid(e.to_string()))?;
         let live = self.live_elsewhere(run);
-        if live >= self.cap {
+        if live >= self.cap() {
             return Err(Failure::CapReached(live));
         }
         let clone = &spec.clone_path;
@@ -455,7 +465,7 @@ impl RunService {
 
     pub async fn preflight(&self, spec: Option<RunSpec>) -> Result<Preflight> {
         self.ensure_enabled()?;
-        Ok(preflight(spec.as_ref(), &*self.tools, &self.index, self.cap).await)
+        Ok(preflight(spec.as_ref(), &*self.tools, &self.index, self.cap()).await)
     }
 
     async fn git(&self) -> Result<Git> {

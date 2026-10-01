@@ -4,7 +4,7 @@ use crate::runs::service::Timing;
 use crate::runs::testing::{Resume, ResumeCall};
 use std::time::Duration;
 
-const FAST: Timing = Timing { recover_window: Duration::from_millis(300), worktree_grace: Duration::from_millis(300), poll: Duration::from_millis(10), stop_wait: Duration::from_millis(100), stop_settle: Duration::ZERO };
+const FAST: Timing = Timing { recover_window: Duration::from_millis(300), worktree_grace: Duration::from_millis(300), poll: Duration::from_millis(10), stop_wait: Duration::from_millis(100), stop_settle: Duration::ZERO, rm_wait: Duration::from_millis(5) };
 
 async fn asking() -> (Rig, Run) {
     let mut rig = ready().await;

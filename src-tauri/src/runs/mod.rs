@@ -3,6 +3,7 @@
 
 pub mod answer;
 pub mod binary;
+pub mod cleanup;
 pub mod cli;
 pub mod control;
 pub mod enable;
@@ -12,6 +13,7 @@ mod finder;
 pub mod fresh;
 pub mod index;
 pub mod launcher;
+pub mod limits;
 pub mod pr;
 pub mod preflight;
 pub mod redact;

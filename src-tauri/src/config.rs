@@ -9,6 +9,45 @@ use crate::error::Result;
 
 const FILE: &str = "config.json";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TerminalChoice {
+    #[default]
+    Terminal,
+    #[serde(rename = "iTerm")]
+    ITerm,
+}
+
+pub const MAX_RUNS: std::ops::RangeInclusive<usize> = 1..=6;
+const MAX_MINUTES: u32 = 7 * 24 * 60;
+const MAX_TOKENS: u64 = 1_000_000_000;
+
+/// What the person controls about agent runs. Zero turns a limit off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AgentSettings {
+    pub max_runs: usize,
+    pub wall_clock_minutes: u32,
+    pub token_cap: u64,
+    pub terminal: TerminalChoice,
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal }
+    }
+}
+
+impl AgentSettings {
+    pub fn clamped(self) -> Self {
+        Self {
+            max_runs: self.max_runs.clamp(*MAX_RUNS.start(), *MAX_RUNS.end()),
+            wall_clock_minutes: self.wall_clock_minutes.min(MAX_MINUTES),
+            token_cap: self.token_cap.min(MAX_TOKENS),
+            terminal: self.terminal,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
@@ -18,18 +57,21 @@ pub struct AppConfig {
     pub agents_enabled: bool,
     /// The clone the person chose for a repository (`owner/name`) when several match.
     pub picked_clones: HashMap<String, PathBuf>,
+    pub agents: AgentSettings,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self { agent_provider: "claude-code".into(), agents_enabled: false, picked_clones: HashMap::new() }
+        Self { agent_provider: "claude-code".into(), agents_enabled: false, picked_clones: HashMap::new(), agents: AgentSettings::default() }
     }
 }
 
 impl AppConfig {
     /// A missing or unreadable file gives the defaults, so a bad edit can't stop the app from starting.
     pub fn load(dir: &Path) -> Self {
-        std::fs::read_to_string(dir.join(FILE)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        let mut config: Self = std::fs::read_to_string(dir.join(FILE)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        config.agents = config.agents.clamped();
+        config
     }
 
     pub fn save(&self, dir: &Path) -> Result<()> {
@@ -78,6 +120,25 @@ mod tests {
         assert_eq!(AppConfig::load(&dir), on);
         std::fs::write(dir.join(FILE), r#"{"agentsEnabled":"yes"}"#).unwrap();
         assert!(!AppConfig::load(&dir).agents_enabled, "a mistyped value gives the defaults");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn agent_settings_are_clamped_on_load_and_round_trip_with_the_terminal_choice() {
+        let dir = std::env::temp_dir().join(format!("gossamr-config-limits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal });
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":99,"wallClockMinutes":4294967295,"tokenCap":0,"terminal":"iTerm"}}"#).unwrap();
+        let loaded = AppConfig::load(&dir).agents;
+        assert_eq!((loaded.max_runs, loaded.wall_clock_minutes, loaded.token_cap, loaded.terminal), (6, MAX_MINUTES, 0, TerminalChoice::ITerm));
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":0}}"#).unwrap();
+        assert_eq!(AppConfig::load(&dir).agents.max_runs, 1);
+        let chosen = AppConfig { agents: AgentSettings { max_runs: 2, terminal: TerminalChoice::ITerm, ..AgentSettings::default() }, ..AppConfig::default() };
+        chosen.save(&dir).unwrap();
+        assert_eq!(AppConfig::load(&dir), chosen);
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":"many"}}"#).unwrap();
+        assert_eq!(AppConfig::load(&dir).agents, AgentSettings::default(), "a bad value gives the defaults");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

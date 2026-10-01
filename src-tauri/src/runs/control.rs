@@ -15,6 +15,7 @@ use super::cli::ShortId;
 use super::failure::Failure;
 use super::service::RunService;
 use super::toolchain::Toolchain;
+use crate::config::TerminalChoice;
 use crate::domain::{Run, RunFailure, RunState};
 use crate::error::{Error, Result};
 
@@ -40,19 +41,24 @@ fn refuse(message: impl Into<String>) -> Error {
 
 /// What opens the `.command` file in Terminal.
 pub trait Terminal: Send + Sync {
-    fn open(&self, file: &Path) -> std::io::Result<()>;
+    fn open(&self, file: &Path, app: TerminalChoice) -> std::io::Result<()>;
 }
 
-/// `open -a Terminal <file>`, with the file as its own argument: no shell, no Apple Events and so no permission prompt.
-pub fn open_args(file: &Path) -> Vec<OsString> {
-    vec!["-a".into(), "Terminal".into(), file.as_os_str().to_owned()]
+/// `open -a <Terminal or iTerm> <file>`, with the file as its own argument: no shell, no Apple Events and so no
+/// permission prompt.
+pub fn open_args(file: &Path, app: TerminalChoice) -> Vec<OsString> {
+    let name = match app {
+        TerminalChoice::Terminal => "Terminal",
+        TerminalChoice::ITerm => "iTerm",
+    };
+    vec!["-a".into(), name.into(), file.as_os_str().to_owned()]
 }
 
 pub struct MacTerminal;
 
 impl Terminal for MacTerminal {
-    fn open(&self, file: &Path) -> std::io::Result<()> {
-        let status = std::process::Command::new("/usr/bin/open").args(open_args(file)).status()?;
+    fn open(&self, file: &Path, app: TerminalChoice) -> std::io::Result<()> {
+        let status = std::process::Command::new("/usr/bin/open").args(open_args(file, app)).status()?;
         status.success().then_some(()).ok_or_else(|| std::io::Error::other(format!("open exited with {status}")))
     }
 }
@@ -263,7 +269,7 @@ impl RunService {
         let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
         let dir = self.core.data_dir().join(ATTACH_DIR);
         let file = write_attach_file(&dir, &claude, &run.expected_worktree, &id)?;
-        self.terminal.open(&file).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
+        self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
     }
 
     /// Opens Terminal in the run's clone running plain `claude`, so Claude can ask its one-time trust question or sign
@@ -278,7 +284,7 @@ impl RunService {
         let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
         let dir = self.core.data_dir().join(ATTACH_DIR);
         let file = write_claude_file(&dir, purpose, &claude, &run.spec.clone_path, self.home.as_deref())?;
-        self.terminal.open(&file).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
+        self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
     }
 
     /// Bytes under the run's folder in Claude's `jobs` directory (where multi-gigabyte scratch space lives): at least

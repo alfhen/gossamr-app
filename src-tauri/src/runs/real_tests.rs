@@ -197,6 +197,47 @@ async fn real_launch_is_listed_by_worktree_then_stops_and_removes() {
     assert!(git(&s.repo, &["branch", "--list", "worktree-*"]).is_empty());
 }
 
+/// `rm` the way `RunService::cleanup` does: lock refusals are waited out, anything else ends it.
+async fn rm_waiting_out_the_lock(cli: &SystemCli, id: &ShortId) -> (Result<(), String>, u32, Duration) {
+    let (started, mut waits) = (Instant::now(), 0);
+    loop {
+        match cli.rm(id).await {
+            Ok(()) => return (Ok(()), waits, started.elapsed()),
+            Err(super::cli::CliError::Failed { stderr, .. }) if super::cleanup::lock_refusal(&stderr) && started.elapsed() < Duration::from_secs(30) => {
+                waits += 1;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Err(e) => return (Err(e.to_string()), waits, started.elapsed()),
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "runs the real claude in a scratch config"]
+async fn real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_work_is_refused() {
+    let mut s = Scratch::new("cleanup").await;
+    let clean = s.launch("ce-3-clean-e5f6").await;
+    let unpushed = s.launch("ce-4-unpushed-a7b8").await;
+    for name in ["ce-3-clean-e5f6", "ce-4-unpushed-a7b8"] {
+        let worktree = s.worktree(name);
+        s.wait_for("the worktree to appear", || worktree.join(".git").exists().then_some(())).await;
+    }
+    git(&s.worktree("ce-4-unpushed-a7b8"), &["commit", "-q", "--allow-empty", "-m", "never pushed"]);
+
+    s.cli.stop(&clean).await.unwrap();
+    s.cli.stop(&unpushed).await.unwrap();
+    let (result, waits, took) = rm_waiting_out_the_lock(&s.cli, &clean).await;
+    eprintln!("clean rm: {result:?} after {waits} waits, {took:?}");
+    result.expect("rm succeeds once the lock clears");
+    assert!(!s.worktree("ce-3-clean-e5f6").exists());
+
+    let (result, _, _) = rm_waiting_out_the_lock(&s.cli, &unpushed).await;
+    let refusal = result.expect_err("a worktree with an unpushed commit is refused");
+    eprintln!("unpushed refusal: {refusal}");
+    assert!(s.worktree("ce-4-unpushed-a7b8").exists(), "the work is still there");
+    assert!(git(&s.repo, &["branch", "--list", "worktree-ce-4-unpushed-a7b8"]).contains("worktree-ce-4"), "and so is its branch");
+}
+
 #[tokio::test]
 #[ignore = "runs the real claude in a scratch config"]
 async fn real_worktree_starts_at_the_clones_current_head_not_main() {

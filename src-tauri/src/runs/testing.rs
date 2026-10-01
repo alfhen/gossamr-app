@@ -63,6 +63,10 @@ pub struct Scripted {
     pub stop_lingers: bool,
     /// `stop:<id>` and `resume:<id>` in the order they happened.
     pub calls: Vec<String>,
+    /// What `claude rm` answers, one refusal per call, before it starts succeeding.
+    pub rm_refusals: Vec<String>,
+    /// Every id `claude rm` was run with.
+    pub rms: Vec<String>,
     pub in_flight: usize,
     pub most_in_flight: usize,
     pub listings: usize,
@@ -92,6 +96,8 @@ impl FakeCli {
             stop_fails: false,
             stop_lingers: false,
             calls: vec![],
+            rm_refusals: vec![],
+            rms: vec![],
             in_flight: 0,
             most_in_flight: 0,
             listings: 0,
@@ -236,7 +242,13 @@ impl ClaudeCli for FakeCli {
         Ok(())
     }
 
-    async fn rm(&self, _id: &ShortId) -> CliResult<()> {
+    async fn rm(&self, id: &ShortId) -> CliResult<()> {
+        let mut s = self.0.lock().unwrap();
+        s.rms.push(id.to_string());
+        if !s.rm_refusals.is_empty() {
+            return Err(CliError::Failed { code: Some(1), stderr: s.rm_refusals.remove(0) });
+        }
+        s.sessions.retain(|e| e.id.as_deref() != Some(id.as_str()));
         Ok(())
     }
 

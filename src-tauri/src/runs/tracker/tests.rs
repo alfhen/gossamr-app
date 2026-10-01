@@ -345,6 +345,7 @@ async fn words_from_a_job_are_capped() {
 async fn being_quiet_never_notifies_and_new_tokens_reset_the_clock() {
     let (rig, run) = launched().await;
     let id = run.short_id.clone().unwrap();
+    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 0, ..Default::default() }).unwrap();
     rig.poll().await;
     rig.set(&run, |r| {
         r.launched_at = Some(Utc::now() - Span::hours(3));
@@ -421,4 +422,58 @@ fn focusing_within_30_seconds_opens_the_run_once_and_later_opens_nothing() {
     open.record("run-3", t0);
     open.record("run-4", t0 + Duration::from_secs(5));
     assert_eq!(open.take(t0 + Duration::from_secs(10)).as_deref(), Some("run-4"), "the latest notification wins");
+}
+
+#[tokio::test]
+async fn a_run_past_the_time_limit_is_stopped_once_with_the_reason_recorded_and_one_notice() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 30, ..Default::default() }).unwrap();
+    let id = run.short_id.clone().unwrap();
+
+    rig.svc.poll_at(Utc::now() + Span::minutes(29)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+    assert!(rig.cli.0.lock().unwrap().stops.is_empty());
+
+    rig.svc.poll_at(Utc::now() + Span::minutes(31)).await;
+    let stopped = rig.get(&run).await;
+    assert_eq!(stopped.state, RunState::Stopped);
+    assert_eq!(stopped.error.as_deref(), Some("Stopped by Gossamr: it passed the 30 minute limit"));
+    assert!(stopped.ended_at.is_some());
+    assert_eq!(rig.cli.0.lock().unwrap().stops, [id.to_string()]);
+    let events = rig.fx.core.run_events(&run.id).await.unwrap();
+    assert_eq!(events.last().map(|e| (e.kind.as_str(), e.text.as_str())), Some(("limit", "Stopped by Gossamr: it passed the 30 minute limit")));
+    assert_eq!(rig.noticed(), [(Attention::Limit, RunState::Stopped)]);
+    assert!(rig.svc.index.live().is_empty());
+
+    rig.svc.poll_at(Utc::now() + Span::minutes(90)).await;
+    assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 1, "a stopped run is not stopped again");
+    assert_eq!(rig.noticed().len(), 1);
+}
+
+#[tokio::test]
+async fn a_run_past_the_token_limit_is_stopped_and_one_waiting_on_you_is_too() {
+    let (rig, run) = launched().await;
+    let id = run.short_id.clone().unwrap();
+    rig.svc.set_settings(crate::config::AgentSettings { token_cap: 2_000, wall_clock_minutes: 0, ..Default::default() }).unwrap();
+    rig.job(&id, |j| j.tokens = Some(1_999));
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+
+    rig.job(&id, |j| j.tokens = Some(2_000));
+    rig.session(&run, permission);
+    rig.poll().await;
+    let stopped = rig.get(&run).await;
+    assert_eq!((stopped.state, stopped.needs), (RunState::Stopped, None));
+    assert_eq!(stopped.error.as_deref(), Some("Stopped by Gossamr: it passed the 2,000 token limit"));
+}
+
+#[tokio::test]
+async fn limits_of_zero_never_stop_a_run() {
+    let (rig, run) = launched().await;
+    rig.svc.set_settings(crate::config::AgentSettings { token_cap: 0, wall_clock_minutes: 0, ..Default::default() }).unwrap();
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.tokens = Some(u64::MAX / 2));
+    rig.svc.poll_at(Utc::now() + Span::days(3)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+    assert!(rig.cli.0.lock().unwrap().stops.is_empty());
 }

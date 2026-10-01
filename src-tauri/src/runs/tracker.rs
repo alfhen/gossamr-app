@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
+use super::limits;
 use super::cli::{AgentEntry, JobInfo, ShortId};
 use super::redact::redact;
 use super::service::{belongs_to, RunService};
@@ -37,6 +38,8 @@ pub enum Attention {
     Needs,
     Done,
     Failed,
+    /// Gossamr stopped it for passing a limit.
+    Limit,
 }
 
 pub trait RunNotifier: Send + Sync {
@@ -64,6 +67,7 @@ pub fn notice_text(run: &Run, why: Attention) -> Notice {
             };
             Notice { title: format!("{topic} needs you"), body }
         }
+        Attention::Limit => Notice { title: format!("{topic} was stopped"), body: run.error.clone().unwrap_or_else(|| "It passed a limit".into()) },
         Attention::Done => Notice { title: format!("{topic} finished"), body: "Open it to see what it found".into() },
         Attention::Failed => {
             let title = match run.error.as_deref() {
@@ -199,7 +203,7 @@ impl RunService {
     /// Applies one run's observation. Returns its connection when anything about it changed.
     async fn track(&self, tc: &Toolchain, config_dir: Option<&Path>, entries: &[AgentEntry], run_id: &str, now: DateTime<Utc>) -> crate::error::Result<Option<String>> {
         let Some(before) = self.core.run(run_id).await? else { return Ok(None) };
-        if matches!(before.state, RunState::Done | RunState::Failed | RunState::Stopped) {
+        if matches!(before.state, RunState::Done | RunState::Failed | RunState::Stopped) || before.worktree_removed_at.is_some() {
             return Ok(None);
         }
         let entry = entries.iter().find(|e| belongs_to(e, &before));
@@ -248,7 +252,21 @@ impl RunService {
             run.result = seen.result.as_deref().and_then(|r| cleaned(r, RESULT_KEPT));
         }
         run.error = matches!(seen.state, RunState::Failed | RunState::Unknown).then(|| seen.error.clone()).flatten();
-        let ended = matches!(seen.state, RunState::Done | RunState::Failed | RunState::Stopped);
+        let settings = self.settings();
+        let mut overrun = None;
+        if let (Some(over), Some(id)) = (limits::exceeded(&run, now, &settings), run.short_id.clone()) {
+            match tc.cli.stop(&id).await {
+                Ok(()) => {
+                    overrun = Some(over.reason(&settings));
+                    run.state = RunState::Stopped;
+                    run.needs = None;
+                    run.error.clone_from(&overrun);
+                    run.last_progress_at = now;
+                }
+                Err(e) => eprintln!("couldn't stop run {run_id} for passing a limit: {e}"),
+            }
+        }
+        let ended = matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped);
         if ended {
             run.ended_at.get_or_insert(now);
         }
@@ -260,6 +278,10 @@ impl RunService {
             if !fresh.is_empty() {
                 touched = self.core.append_run_events(run_id, &fresh).await? > 0;
             }
+        }
+        if let Some(reason) = &overrun {
+            let event = RunEvent { run_id: run.id.clone(), seq: 0, at: now, kind: "limit".into(), text: reason.clone(), detail: None };
+            touched |= self.core.append_run_events(run_id, &[event]).await? > 0;
         }
         if run != before {
             self.core.save_run(&run).await?;
@@ -273,7 +295,9 @@ impl RunService {
                 eprintln!("couldn't update the run index: {e}");
             }
         }
-        if run.state != before.state {
+        if overrun.is_some() {
+            self.notifier.notify(&run, Attention::Limit);
+        } else if run.state != before.state {
             match run.state {
                 RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => self.notifier.notify(&run, Attention::Needs),
                 RunState::Done => self.notifier.notify(&run, Attention::Done),

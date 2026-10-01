@@ -482,6 +482,23 @@ async fn runs_draft(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, 
     Ok(made)
 }
 
+/// The limits on runs and the terminal to open. Readable and writable while Agents are off.
+#[tauri::command]
+fn runs_settings(runs: State<'_, RunsState>) -> config::AgentSettings {
+    runs.settings()
+}
+
+#[tauri::command]
+fn runs_set_settings(runs: State<'_, RunsState>, settings: config::AgentSettings) -> Result<config::AgentSettings> {
+    runs.set_settings(settings)
+}
+
+/// Removes a finished run's worktree with `claude rm`, never forcing it.
+#[tauri::command]
+async fn runs_cleanup(runs: State<'_, RunsState>, id: String) -> Result<runs::cleanup::Cleanup> {
+    runs.cleanup(&id).await
+}
+
 /// Approves a run draft the person has read (`digest` is from `runs_review`) and hands the queued run to the launcher.
 #[tauri::command]
 async fn runs_approve(
@@ -909,6 +926,7 @@ pub fn run() {
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
                 .with_notifier(Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus }))
+                .with_settings(config.agents)
                 .enabled(config.agents_enabled),
             );
             let handle = app.handle().clone();
@@ -983,6 +1001,9 @@ pub fn run() {
             proposals_approve,
             runs_enabled,
             runs_set_enabled,
+            runs_settings,
+            runs_set_settings,
+            runs_cleanup,
             runs_review,
             runs_draft,
             runs_approve,
