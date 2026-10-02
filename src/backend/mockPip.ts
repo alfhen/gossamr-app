@@ -16,6 +16,8 @@ export interface PipScript {
   runDraft?: { item: ItemRef; focus: string | null } | null;
   /** A change to the text of a comment draft that came from a run. */
   revise?: { id: string; body: string } | null;
+  /** The draft this turn was about, remembered for the rest of the conversation. */
+  discussed?: string;
 }
 
 const FILTERS: { pattern: RegExp; filter: WorkFilter; note: string }[] = [
@@ -61,7 +63,7 @@ export function agentSummary(runs: readonly Run[], now: number): string {
 }
 
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
-export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = []): PipScript {
+export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null): PipScript {
   const q = prompt.toLowerCase();
   const talked = discusses.exec(prompt);
   if (talked) {
@@ -70,17 +72,24 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       text: `I read the whole run, not only the start of its result, and checked it against draft ${talked[1]}. The draft says what the run found. Tell me what to change, for example "shorter", and I'll revise it. It stays a draft until you approve it.`,
       filter: null,
       draft: null,
+      discussed: talked[1],
     };
   }
-  const left = asksToRevise.test(q) ? runDrafts(drafts).find((d) => !context.item || (d.intent.type === "comment" && d.intent.item.key === context.item.key)) : undefined;
-  if (left?.intent.type === "comment") {
-    return {
-      steps: ["Read the run's full result", `Revised the draft on ${left.intent.item.key}`],
-      text: "I changed the draft. It isn't posted; read it and approve, edit or skip it.",
-      filter: null,
-      draft: null,
-      revise: { id: left.id, body: revisedBody(docText(left.intent.body), asksForShorter.test(q)) },
-    };
+  if (asksToRevise.test(q)) {
+    const waiting = runDrafts(drafts);
+    const left = discussed ? waiting.find((d) => d.id === discussed) : waiting.length === 1 ? waiting[0] : undefined;
+    if (!left && waiting.length > 1) {
+      return { steps: [], text: `There are ${waiting.length} comment drafts from runs waiting. Use Discuss with Pip on the one you mean, then tell me what to change.`, filter: null, draft: null };
+    }
+    if (left?.intent.type === "comment") {
+      return {
+        steps: ["Read the run's full result", `Revised the draft on ${left.intent.item.key}`],
+        text: "I changed the draft. It isn't posted; read it and approve, edit or skip it.",
+        filter: null,
+        draft: null,
+        revise: { id: left.id, body: revisedBody(docText(left.intent.body), asksForShorter.test(q)) },
+      };
+    }
   }
   const asked = /draft a jira comment from run (\S+?):/.exec(q)?.[1];
   const forRun = asked ? runs.find((r) => r.id.toLowerCase() === asked) : undefined;
@@ -209,6 +218,8 @@ export interface PipDrafter {
 const listeners = new Set<Listener>();
 const viewListeners = new Set<ViewListener>();
 const running = new Map<string, () => void>();
+/** The draft each conversation last discussed, so "shorter" changes that one and no other. */
+const discussing = new Map<string, string>();
 
 export const mockPipEvents = {
   on(cb: Listener) {
@@ -228,8 +239,9 @@ const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | null, pace = 25): Promise<void> {
   let stopped = false;
   running.set(req.requestId, () => (stopped = true));
-  const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? []);
   const session = req.sessionId ?? `mock-session-${req.requestId}`;
+  const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null);
+  if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });
   try {
     for (const label of script.steps) {

@@ -6,7 +6,7 @@ import { itemRef } from "../backend/mockConnector";
 import { mockAsk, scriptPip } from "../backend/mockPip";
 import { jiraNote } from "../backend/mockRunResult";
 import { SCRIPTED_RESULT } from "../backend/mockRuns";
-import { docText } from "../lib/docs";
+import { docFromText, docText } from "../lib/docs";
 import type { Intent, Proposal, Run, RunKind, RunSpec, ScreenContext } from "../types";
 import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
@@ -121,6 +121,41 @@ describe("the sample Pip", () => {
     expect(after.intent.type === "comment" && docText(after.intent.body)).not.toBe(before);
     expect(after.revisions[after.revisions.length - 1]?.note).toBe("Revised by Pip");
     expect(backend.proposals.list({ states: ["applied"] }).filter((p) => p.intent.type === "comment")).toHaveLength(0);
+  });
+
+  it("revises only the draft that was discussed when two are waiting on the same ticket", async () => {
+    const { backend, run, draft: again } = await withDraft();
+    const other = backend.proposals.fromRun({ type: "comment", item: run.item!, body: docFromText("Another note.\n\nSecond paragraph.") }, null, { type: "run", runId: run.id, shortId: null });
+    expect(backend.proposals.list({ states: ["pending"] }).map((p) => p.id).sort()).toEqual([again.id, other.id].sort());
+    const ctx = { ...blank, item: run.item };
+    const waiting = backend.proposals.list();
+
+    const unclear = scriptPip("make it shorter", ctx, [], [run], Date.now(), waiting);
+    expect(unclear.revise ?? null).toBeNull();
+    expect(unclear.text).toContain("2 comment drafts");
+
+    const chosen = scriptPip("make it shorter", ctx, [], [run], Date.now(), waiting, other.id);
+    expect(chosen.revise?.id).toBe(other.id);
+    expect(scriptPip("make it shorter", ctx, [], [run], Date.now(), waiting, again.id).revise?.id).toBe(again.id);
+
+    const talk = scriptPip(commentWithPipPrompt(run, other.id), ctx, [], [run], Date.now(), waiting);
+    expect(talk.discussed).toBe(other.id);
+  });
+
+  it("remembers the discussed draft across the turns of one conversation", async () => {
+    const { backend, run } = await withDraft();
+    const other = backend.proposals.fromRun({ type: "comment", item: run.item!, body: docFromText("Another note.\n\nSecond paragraph.") }, null, { type: "run", runId: run.id, shortId: null });
+    const before = (id: string) => {
+      const { intent } = backend.proposals.get(id)!;
+      return intent.type === "comment" ? docText(intent.body) : "";
+    };
+    const mine = before(other.id);
+    const [first] = backend.proposals.list({ states: ["pending"] }).filter((p) => p.id !== other.id);
+    const keptFirst = before(first.id);
+    await mockAsk({ requestId: "t1", prompt: commentWithPipPrompt(run, other.id), context: { ...blank, item: run.item }, sessionId: "conv-1" }, backend, 0);
+    await mockAsk({ requestId: "t2", prompt: "make it shorter", context: { ...blank, item: run.item }, sessionId: "conv-1" }, backend, 0);
+    expect(before(other.id)).not.toBe(mine);
+    expect(before(first.id)).toBe(keptFirst);
   });
 
   it("will not revise a draft the person typed or one that was decided", async () => {
