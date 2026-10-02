@@ -517,6 +517,14 @@ export class MockBackend implements Backend {
     return this.runs.draftComment(id);
   }
 
+  async runsDraftTicket(id: string) {
+    return this.runs.draftTicket(id);
+  }
+
+  async runsRepoProject(repo: string) {
+    return this.runs.repoProject(repo);
+  }
+
   async runsDraftBlocker(id: string, blockerKey: string) {
     return this.runs.draftBlocker(id, blockerKey);
   }
@@ -594,8 +602,8 @@ export class MockBackend implements Backend {
     return this.proposals.list({ states: ["pending"] });
   }
 
-  async pipRevise(id: string, body: string) {
-    return this.proposals.pipRevise(id, body);
+  async pipRevise(id: string, change: string | { body?: string; title?: string }) {
+    return this.proposals.pipRevise(id, change);
   }
 
   pipRunDraft(item: ItemRef, focus: string | null, requestId: string) {

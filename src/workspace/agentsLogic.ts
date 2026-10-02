@@ -105,9 +105,11 @@ export const repoName = (repo: string) => repo.split("/").pop() ?? repo;
 
 export const branchOf = (run: Pick<Run, "branch" | "spec">) => run.branch ?? `worktree-${run.spec.name}`;
 
-/** The ticket's own title when it is cached; otherwise what the run is for, from the kind and the key. */
+/** The ticket's own title when it is cached; for an investigation with no ticket, the person's question; otherwise what the run is for, from the kind and the key. */
 export function runTitle(run: Pick<Run, "item" | "spec">, ticketTitle: string | null | undefined): string {
   if (ticketTitle?.trim()) return ticketTitle.trim();
+  const question = !run.item && run.spec.project ? run.spec.instruction.trim().replace(/\s+/g, " ") : "";
+  if (question) return question.length > 90 ? `${question.slice(0, 89).trimEnd()}…` : question;
   const kind = KIND_LABEL[run.spec.kind] ?? "Run";
   return run.item ? `${kind} ${run.item.key}` : `${kind} ${repoName(run.spec.repo)}`;
 }

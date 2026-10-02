@@ -1,6 +1,6 @@
 import { answerProblem } from "../lib/answer";
-import { itemKey } from "../lib/filter";
-import type { CodeChange, DevLink, ItemRef, Preflight, Proposal, Run, RunKind, RunReview, RunSpec } from "../types";
+import { containerKey, itemKey } from "../lib/filter";
+import type { CodeChange, ContainerRef, DevLink, ItemRef, Preflight, Proposal, Run, RunKind, RunOutcome, RunReview, RunSpec, WorkContainer } from "../types";
 import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
@@ -31,6 +31,22 @@ export const START_STEPS: readonly string[] = [
   "It works in the background. If your settings would ask you something, it stops and shows up under Needs you. You answer a question in Gossamr and a permission prompt in Terminal.",
   "When it is done it is under Ready to review. Anything for Jira comes back in its answer; nothing is posted without a draft you approve.",
 ];
+
+/** What a ticketless investigation starts with, for the person to replace with their own question. As `TICKETLESS_STARTER` in `domain/run.rs`. */
+export const TICKETLESS_STARTER = "Look into this: ";
+
+/** An investigation with no ticket is the one that ends as a draft ticket in a project the person picks. */
+export const ticketlessShape = (item: ItemRef | null, kind: RunKind) => !item && kind === "investigate";
+
+/** The project a new ticket goes in without asking: the repository's usual one, else the last one chosen, else the first watched. Only a project the person watches can be it. */
+export function defaultProject(options: { repoProject: ContainerRef | null; last: ContainerRef | null; projects: readonly WorkContainer[] }): ContainerRef | null {
+  const known = (ref: ContainerRef | null) => (ref ? options.projects.find((c) => containerKey(c.ref) === containerKey(ref))?.ref : undefined);
+  return known(options.repoProject) ?? known(options.last) ?? options.projects[0]?.ref ?? null;
+}
+
+export function startSteps(ticketless: boolean): readonly string[] {
+  return ticketless ? [START_STEPS[0], START_STEPS[1], "When it is done it is under Ready to review, and one draft ticket made from its answer waits for you. Nothing is created in Jira until you approve it."] : START_STEPS;
+}
 
 export interface PromptPart {
   id: "base" | "template" | "extra" | "focus" | "ticket" | "all";
@@ -127,6 +143,8 @@ export function startBlock(s: {
   kindBlock?: string | null;
   /** What is typed in the instruction and base fields, when they can differ from the saved draft. */
   typed?: { instruction: string; base: string };
+  /** Set for an investigation with no ticket: it needs the person's own question and a project for the ticket. */
+  ticketless?: { project: boolean };
 }): string | null {
   if (s.starting) return "Starting…";
   if (s.repoMissing) return "Choose a repository first";
@@ -135,7 +153,10 @@ export function startBlock(s: {
   if (!s.draft || !s.review) return s.busy ? "Getting the draft ready…" : "There is no draft to start";
   if (s.changedBanner) return "Read the change above first";
   if (s.busy) return "Checking the changes…";
-  if (!(s.typed?.instruction ?? s.review.instruction).trim()) return "Write what it should do first";
+  const written = (s.typed?.instruction ?? s.review.instruction).trim();
+  if (s.ticketless && (!written || written === TICKETLESS_STARTER.trim())) return "Write what it should look into first";
+  if (s.ticketless && !s.ticketless.project) return "Choose the project for the ticket first";
+  if (!written) return "Write what it should do first";
   if (s.typed && !s.typed.base.trim()) return "Name the branch it starts from first";
   if (!s.preflight) return "Checking that it can start…";
   const red = s.preflight.rows.find((r) => r.level === "red");
@@ -309,6 +330,36 @@ export function runDraftOf(proposals: Record<string, Proposal> | readonly Propos
   return all
     .filter((p) => p.state.type === "pending" && p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === runId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+/** Drafting a ticket needs a run that finished with no ticket of its own and something the agent wrote. */
+export function ticketControl(run: Pick<Run, "item" | "result" | "state">): DraftControl {
+  if (run.item) return { enabled: false, reason: "This run is about a ticket, so its result goes to that ticket as a comment." };
+  if (!run.result?.trim()) return { enabled: false, reason: "It finished without a written answer, so there is nothing to make a ticket from." };
+  return { enabled: true, reason: null };
+}
+
+/** What "Finish with Pip" sends. Pip reads the run itself, all of it, so the prompt names the run and the draft and never carries their text. */
+export function finishWithPipPrompt(run: { id: string }, draftId: string): string {
+  return `Finish the new ticket draft ${draftId}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then tighten the draft's title and description with revise_proposal, keeping only what the run found, and tell me what you changed. Don't say anything has been created: I still approve it.`;
+}
+
+/** The ticket draft a run left, if it is still waiting: the one the person can open, finish with Pip or approve. */
+export function runTicketDraftOf(proposals: Record<string, Proposal> | readonly Proposal[], runId: string): Proposal | undefined {
+  const all = Array.isArray(proposals) ? proposals : Object.values(proposals);
+  return all
+    .filter((p) => p.state.type === "pending" && p.intent.type === "create" && p.origin.type === "run" && p.origin.runId === runId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+/** What the card and the sheet say once the person approved the run's ticket, or null before. */
+export const createdFrom = (run: Pick<Run, "createdItem">) => (run.createdItem ? `Ticket ${run.createdItem.key} created from this` : null);
+
+/** What the sheet says about the ticket a run proposed. */
+export function ticketStatus(outcome: Pick<RunOutcome, "ticketDraft"> | null): "none" | "waiting" | "created" | "skipped" | "retired" {
+  const state = outcome?.ticketDraft?.state.type;
+  if (!state) return "none";
+  return state === "pending" || state === "applying" ? "waiting" : state === "applied" ? "created" : state === "skipped" ? "skipped" : "retired";
 }
 
 export function blockerControl(run: Pick<Run, "item">): DraftControl {

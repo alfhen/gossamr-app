@@ -5,7 +5,10 @@ import { containerKey } from "../lib/filter";
 import type { Person, Proposal, WorkContainer, WorkItemKind } from "../types";
 import { allContainers, useWorkspace } from "../workspaceStore";
 import { createdItemKey, draftItem, draftKey, editFor, fieldsOf, ITEM_KINDS, type DraftFields } from "./draftTicket";
+import { askPip } from "./askPip";
 import { openTicketByKey } from "./jump";
+import { finishWithPipPrompt } from "./runSheetLogic";
+import { useRuns } from "./runsStore";
 import { usePrefs } from "./prefs";
 import { PeekView, type DraftSlots, type PeekViewProps } from "./PeekSheet";
 import { useTabs } from "./tabsStore";
@@ -30,11 +33,15 @@ export interface DraftPeekViewProps extends Pick<PeekViewProps, "motion" | "wide
   onCommit(): void;
   onCreate(): void;
   onSkip(): void;
+  /** Present for a draft made from an agent run: opens that run. */
+  onOpenRun?(): void;
+  /** Present for a pending draft a run left: opens Pip on the run and this draft. */
+  onFinishWithPip?(): void;
 }
 
 const CHIP_SELECT = `${field} py-0.5 font-semibold`;
 
-export function DraftPeekView({ proposal: p, fields, containers, people, working, error, onChange, onCommit, onCreate, onSkip, ...view }: DraftPeekViewProps) {
+export function DraftPeekView({ proposal: p, fields, containers, people, working, error, onChange, onCommit, onCreate, onSkip, onOpenRun, onFinishWithPip, ...view }: DraftPeekViewProps) {
   const { state } = p;
   const open = state.type === "pending";
   const created = state.type === "applied" ? (p.created[0]?.key ?? null) : null;
@@ -50,6 +57,18 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
         <div role="note" className="flex items-center gap-2 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm font-semibold text-ws-pip">
           <span aria-hidden>✦</span>
           <span>New ticket draft</span>
+          {p.origin.type === "run" && (
+            <span className="font-normal">
+              · From agent run{" "}
+              {onOpenRun ? (
+                <button type="button" onClick={onOpenRun} title="Open the run this draft came from" className="rounded px-1 font-semibold underline decoration-dotted hover:bg-ws-hover">
+                  {p.origin.shortId ?? "open it"}
+                </button>
+              ) : (
+                p.origin.shortId
+              )}
+            </span>
+          )}
           <span className="font-normal">· not created yet</span>
           <span className="ml-auto font-normal text-ws-ink3">{state.type === "applied" ? "Created" : state.type === "applying" ? "Creating…" : "Needs your approval"}</span>
         </div>
@@ -138,6 +157,11 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
         )}
         {open || state.type === "applying" ? (
           <>
+            {open && onFinishWithPip && (
+              <button type="button" disabled={working} onClick={onFinishWithPip} title="Pip reads the whole run and this draft, and tightens it if you ask" className={button}>
+                Finish with Pip
+              </button>
+            )}
             <button type="button" disabled={working} onClick={onSkip} className={button}>
               Skip
             </button>
@@ -173,6 +197,13 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
       {...view}
     />
   );
+}
+
+const openRunOf = (p: Proposal) => p.origin.type === "run" && useRuns.getState().openRun(p.origin.runId);
+
+function finishWithPip(p: Proposal) {
+  if (p.origin.type !== "run") return;
+  askPip(finishWithPipPrompt({ id: p.origin.runId }, p.id));
 }
 
 type Motion = Pick<DraftPeekViewProps, "motion" | "wide" | "width" | "onWide" | "onMotionEnd">;
@@ -295,6 +326,8 @@ function OpenDraft({ proposal: p, ...motion }: { proposal: Create } & Motion) {
         })
       }
       onClose={() => useTabs.getState().select(null)}
+      onOpenRun={p.origin.type === "run" ? () => openRunOf(p) : undefined}
+      onFinishWithPip={p.origin.type === "run" && p.createdBy === "user" ? () => finishWithPip(p) : undefined}
       {...motion}
     />
   );

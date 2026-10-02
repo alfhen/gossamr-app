@@ -1,7 +1,7 @@
-import { docFromText, quoteAfterFirst } from "../lib/docs";
+import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { INSTRUCTIONS } from "./mockRunKinds";
 import { targetOf } from "../lib/proposals";
-import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged } from "../types";
+import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, WorkItemKind } from "../types";
 
 const CONNECTION = "mock";
 
@@ -10,6 +10,9 @@ export class MockProposals {
   private drafts: Proposal[] = [];
   private listeners = new Set<(c: ProposalsChanged) => void>();
   private seq = 0;
+
+  /** Called with each draft that was applied, for a backend that has to tell its own listeners. */
+  onApplied: (p: Proposal) => void = () => {};
 
   constructor(private readonly apply: (intent: Intent, already: ItemRef[]) => Promise<ItemRef[]>) {}
 
@@ -114,7 +117,8 @@ export class MockProposals {
     }
     if (edit.type === "run" && intent.type === "startRun") {
       if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
-      const { instruction, base, clonePath, kind, name, pr, allowPush } = edit;
+      const { instruction, base, clonePath, kind, name, pr, allowPush, project } = edit;
+      if (project && project.connectionId !== CONNECTION) throw new Error("the project belongs to another connection");
       const was = intent.spec;
       const switched = kind && kind !== was.kind;
       const untouched = instruction === undefined && was.instruction.trim() === INSTRUCTIONS[was.kind];
@@ -124,7 +128,8 @@ export class MockProposals {
         ...(base !== undefined ? { base: base.trim() } : {}),
         ...(clonePath !== undefined ? { clonePath } : {}),
         ...(kind ? { kind } : {}),
-        ...(switched ? { pr: null, prSha: null, allowPush: false, ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}) } : {}),
+        ...(switched ? { pr: null, prSha: null, allowPush: false, ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
+        ...(project ? { project } : {}),
         ...(pr !== undefined ? { pr, prSha: null } : {}),
         ...(allowPush !== undefined ? { allowPush } : {}),
         ...(name !== undefined ? { name: name.trim() } : {}),
@@ -135,13 +140,18 @@ export class MockProposals {
     throw new Error("that edit doesn't fit this draft");
   }
 
-  /** Pip's change to the text of its own pending comment, or of the pending comment an agent run left for the person. */
-  pipRevise(id: string, body: string): Proposal {
+  /** Pip's change to the text of its own pending comment, or of the pending comment or new ticket an agent run left for the person. A ticket may change its title and type too; its project never. */
+  pipRevise(id: string, change: string | { body?: string; title?: string; kind?: WorkItemKind }): Proposal {
+    const { body, title, kind } = typeof change === "string" ? { body: change, title: undefined, kind: undefined } : change;
     const p = this.pending(id);
-    const left = p.origin.type === "run" && p.intent.type === "comment" && p.createdBy === "user";
+    const left = p.origin.type === "run" && (p.intent.type === "comment" || p.intent.type === "create") && p.createdBy === "user";
     if (p.createdBy !== "pip" && !left) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
-    if (p.intent.type !== "comment") throw new Error("this kind of draft can't be revised");
-    const intent = { ...p.intent, body: docFromText(body) };
+    let intent: Intent;
+    if (p.intent.type === "comment") intent = { ...p.intent, body: docFromText(body ?? docText(p.intent.body)) };
+    else if (p.intent.type === "create") {
+      const fields = p.intent.fields;
+      intent = { ...p.intent, fields: { ...fields, title: title?.trim() || fields.title, body: body === undefined ? fields.body : docFromText(body), kind: kind ?? fields.kind } };
+    } else throw new Error("this kind of draft can't be revised");
     return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
   }
 
@@ -164,7 +174,9 @@ export class MockProposals {
     this.set(id, { state: { type: "applying" } });
     try {
       const created = await this.apply(p.intent, p.created);
-      return this.set(id, { state: { type: "applied" }, created: [...p.created, ...created], error: null });
+      const applied = this.set(id, { state: { type: "applied" }, created: [...p.created, ...created], error: null });
+      this.onApplied(applied);
+      return applied;
     } catch (e) {
       return this.set(id, { state: { type: "pending" }, error: String(e) });
     }

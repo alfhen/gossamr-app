@@ -102,7 +102,7 @@ export function AgentTicketPicker() {
       results={results}
       active={Math.min(active, Math.max(0, results.length - 1))}
       placeholder="Which ticket should the agent work on?"
-      empty="No ticket matches. Choose “No ticket” to describe a free-form task."
+      empty="No ticket matches. Choose “Investigate something” to describe a question of your own."
       hints={["↑↓ move", "↵ choose", "esc close"]}
       onQuery={(q) => (setQuery(q), setActive(0))}
       onActive={setActive}

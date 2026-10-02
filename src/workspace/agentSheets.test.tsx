@@ -20,7 +20,7 @@ const seeded = () => new MockBackend().runs.list();
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 212_000, result: null, error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
 
-const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn() });
+const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn() });
 
 const sheet = (r: Run, over: Partial<RunSheetViewProps> = {}) =>
   renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="Retry failed payment webhooks" place={{ index: 2, total: 8 }} wide={false} onWide={vi.fn()} events={[]} disk={null} brief={null} confirmStop={false} outcome={null} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={actions()} {...over} />);
@@ -290,6 +290,9 @@ const setup = (over: Partial<SetupViewProps> = {}) => {
     shortage: null,
     reposError: null,
     repoEditable: true,
+    ticketless: false,
+    project: null,
+    projects: [],
     choice: { clones: [{ path: "/Users/sample/Code/storefront", branch: "main", dirty: false, defaultBranch: "main" }], picked: null, fresh: null },
     review,
     preflight: ok,
@@ -306,7 +309,7 @@ const setup = (over: Partial<SetupViewProps> = {}) => {
     onBase: vi.fn(),
     wide: false,
     onWide: vi.fn(),
-    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn(), chooseKind: vi.fn(), searchPrs: vi.fn(), choosePr: vi.fn(), setAllowPush: vi.fn() },
+    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn(), chooseKind: vi.fn(), chooseProject: vi.fn(), searchPrs: vi.fn(), choosePr: vi.fn(), setAllowPush: vi.fn() },
     ...over,
   };
   return renderToStaticMarkup(<RunSetupView {...props} />);

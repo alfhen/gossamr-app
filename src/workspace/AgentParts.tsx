@@ -1,6 +1,7 @@
 import type { Run } from "../types";
 import { Icon, STATE_ICON } from "./AgentIcons";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
+import { createdFrom } from "./runSheetLogic";
 import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, stateView, type Tone } from "./agentsLogic";
 
 export const TONE: Record<Tone, { text: string; soft: string; color: string }> = {
@@ -157,7 +158,7 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
       return (
         <p className="m-0 flex items-start gap-2 text-ws-ink2">
           <Dot tone="done" live={false} />
-          <span className={`${clamp(2)} -mt-0.5 min-w-0 [overflow-wrap:anywhere]`}>{resultHeadline(run.result) ?? "Finished"}</span>
+          <span className={`${clamp(2)} -mt-0.5 min-w-0 [overflow-wrap:anywhere]`}>{createdFrom(run) ?? resultHeadline(run.result) ?? "Finished"}</span>
         </p>
       );
     case "stopped":
@@ -207,7 +208,7 @@ export function rowText(run: Run, now: number): string {
     case "failed":
       return failureHelp(run)?.summary ?? (run.error?.trim() || "It didn't start");
     case "done":
-      return resultHeadline(run.result) ?? "Finished";
+      return createdFrom(run) ?? resultHeadline(run.result) ?? "Finished";
     case "stopped":
       return run.lastDetail?.trim() || "Stopped before it finished";
     default:

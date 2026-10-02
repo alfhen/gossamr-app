@@ -290,5 +290,7 @@ describe("agent commands", () => {
     expect(pick).toHaveBeenLastCalledWith(items[3]);
     expect(found.map((c) => c.id)).not.toContain("agent:none");
     expect(agentTicketChoices(items, "no ticket", pick).map((c) => c.id)).toContain("agent:none");
+    expect(latest.find((c) => c.id === "agent:none")?.label).toBe("Investigate something (no ticket)");
+    expect(agentTicketChoices(items, "investigate", pick).map((c) => c.id)).toContain("agent:none");
   });
 });

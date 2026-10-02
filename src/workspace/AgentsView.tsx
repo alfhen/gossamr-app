@@ -13,7 +13,8 @@ import { failureAction } from "./failureActions";
 import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
-import { commentControl, runDraftOf } from "./runSheetLogic";
+import { showDraft as showTicketDraft } from "./draftTicket";
+import { commentControl, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
@@ -288,7 +289,13 @@ const actions: AgentsActions = {
   open: (id) => useRuns.getState().openRun(id),
   attach: (id) => void useRuns.getState().attach(id),
   draftComment: (id) => void useRuns.getState().draftComment(id),
-  openDraft: (run) => useRuns.getState().showDraft(run.item),
+  openDraft: (run) => {
+    if (run.item) return useRuns.getState().showDraft(run.item);
+    const draft = runTicketDraftOf(useWorkspace.getState().proposals, run.id);
+    if (!draft) return;
+    useRuns.getState().closeSheet();
+    showTicketDraft(draft.id);
+  },
   filter: (patch) => useRuns.getState().setFilter(patch),
   clearFilters: () => useRuns.getState().clearFilters(),
   setView: (view) => usePrefs.getState().setAgentsView(view),
@@ -374,7 +381,7 @@ export function AgentsView() {
       opened={opened}
       now={now}
       ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
-      draftReady={(run) => !!runDraftOf(proposals, run.id)}
+      draftReady={(run) => !!runDraftOf(proposals, run.id) || !!runTicketDraftOf(proposals, run.id)}
       on={actions}
     />
   );

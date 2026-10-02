@@ -210,6 +210,10 @@ export interface Backend {
   runsOutcome(id: string): Promise<RunOutcome>;
   /** Drafts a comment from the result. A draft only: nothing is posted until it is approved. */
   runsDraftComment(id: string): Promise<Proposal>;
+  /** Drafts a new ticket from a finished run that has no ticket: the one its `New ticket:` section proposes, else its answer for the person to edit. A draft only; a run gets one. */
+  runsDraftTicket(id: string): Promise<Proposal>;
+  /** The watched project the tickets linked to this repository's pull requests most recently belong to, if any. */
+  runsRepoProject(repo: string): Promise<ContainerRef | null>;
   /** Drafts a link saying the run's ticket is blocked by `blockerKey`. A draft only. */
   runsDraftBlocker(id: string, blockerKey: string): Promise<Proposal>;
   /** Starts a run that is still queued, as after a restart. */

@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
-import { commentText, jiraNote, ticketKeys } from "../backend/mockRunResult";
+import { commentText, jiraNote, ticketFromAnswer, ticketKeys, ticketProposal } from "../backend/mockRunResult";
 import results from "../../src-tauri/test-fixtures/agents/results.json";
+import tickets from "../../src-tauri/test-fixtures/agents/ticket-results.json";
 import type { CodeChange, Run } from "../types";
 import { agentMatchesChip, buildRows, coversAgents, shownSourceOf, sourcesFor, toRunEntries, type RunEntry } from "./activityLogic";
 import { blockerChoices, blockerControl, changeSummary, commentControl } from "./runSheetLogic";
@@ -25,6 +26,17 @@ describe("the sample parser agrees with the shared fixtures it can read", () => 
 
   it("finds ticket keys once each, upper case", () => {
     expect(ticketKeys("blocked by taf-3525 and DEVOPS-9, see TAF-3525")).toEqual(["TAF-3525", "DEVOPS-9"]);
+  });
+});
+
+describe("the sample ticket parser agrees with the shared ticket fixtures", () => {
+  it.each(tickets.map((c) => [c.name, c] as const))("%s", (_name, c) => {
+    expect(ticketProposal(c.input)).toEqual(c.expected);
+  });
+
+  it("seeds a draft from an answer with no section: the first line is the title", () => {
+    expect(ticketFromAnswer("## The consumer retries in a loop\n\nIt never backs off.")).toEqual({ title: "The consumer retries in a loop", kind: "task", body: "The consumer retries in a loop\n\nIt never backs off." });
+    expect(ticketFromAnswer("  \n")).toBeNull();
   });
 });
 

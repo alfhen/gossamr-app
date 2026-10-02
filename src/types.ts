@@ -429,7 +429,7 @@ export type ProposalEdit =
   /** A new item's fields; the ones left out stay as they are. */
   | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef }
   /** A run draft's settings, as the person edits them; the ones left out stay as they are. */
-  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean };
+  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; project?: ContainerRef };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
@@ -461,6 +461,8 @@ export interface RunSpec {
   prSha?: string | null;
   /** Whether a build is told it may push and open a pull request. Builds only. */
   allowPush?: boolean;
+  /** Where the draft ticket of an investigation with no ticket lands. Its presence makes the run end as a ticket; the agent never chooses it. */
+  project?: ContainerRef | null;
 }
 
 export type RunState = "queued" | "launching" | "working" | "needsAnswer" | "needsPermission" | "systemBlocked" | "done" | "failed" | "stopped" | "unknown";
@@ -506,12 +508,21 @@ export interface Run {
   endedAt: string | null;
   /** Set once `claude rm` has taken the worktree away; the run stays for its result. */
   worktreeRemovedAt?: string | null;
+  /** The ticket made from this run's draft once the person approved it. */
+  createdItem?: ItemRef | null;
 }
 
 /** The part of a run's result meant for Jira. Without a `For Jira:` section it is the whole answer, shortened. */
 export interface JiraNote {
   text: string;
   fromMarker: boolean;
+}
+
+/** The one ticket an investigation with no ticket proposes in its `New ticket:` section. */
+export interface TicketProposal {
+  title: string;
+  kind: WorkItemKind;
+  body: string;
 }
 
 /** What the run sheet shows about a result: the note, the other tickets it names, and the change the run produced. */
@@ -521,6 +532,10 @@ export interface RunOutcome {
   change: CodeChange | null;
   /** The comment draft made from this run, in whatever state it is in now. */
   draft: { id: string; state: ProposalState } | null;
+  /** For a run with no ticket: what its `New ticket:` section proposes, when it has one. */
+  ticket: TicketProposal | null;
+  /** The ticket draft made from this run, in whatever state it is in now. */
+  ticketDraft: { id: string; state: ProposalState } | null;
 }
 
 /** What the person reads before approving; `digest` is sent back with the approval. */
