@@ -8,12 +8,15 @@ use serde::Serialize;
 
 use super::redact::redact;
 use crate::agent::context::keys_in;
-use crate::domain::without_markers;
+use crate::domain::{without_markers, ItemKind, TITLE_LIMIT};
 
 /// A `For Jira:` section is kept up to this many characters.
 pub const NOTE_LIMIT: usize = 3_000;
 /// A result with no such section is cut shorter, since it is the whole answer rather than what was meant for Jira.
 pub const FALLBACK_LIMIT: usize = 1_500;
+
+/// A ticket's description is kept up to this many characters.
+pub const BODY_LIMIT: usize = 6_000;
 
 const OUTPUT_MARKERS: [&str; 2] = ["<<<AGENT_OUTPUT", "AGENT_OUTPUT>>>"];
 const TAGS: [&str; 22] = [
@@ -44,6 +47,98 @@ pub fn jira_note(result: &str) -> JiraNote {
 /// Ticket keys the result names, upper case, in order of appearance.
 pub fn ticket_keys(result: &str) -> Vec<String> {
     keys_in(&sanitize(result))
+}
+
+/// The one ticket a ticketless investigation proposes. Drafting it is the person's to approve, so what is here is only
+/// cleaned, never completed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketProposal {
+    pub title: String,
+    pub kind: ItemKind,
+    pub body: String,
+}
+
+/// The ticket in the `New ticket:` section: its `Title:` line, an optional `Kind:` line and the description after them.
+/// `None` when there is no such section or its title is empty.
+pub fn ticket_proposal(result: &str) -> Option<TicketProposal> {
+    let clean = sanitize(result);
+    let lines: Vec<&str> = clean.lines().collect();
+    let start = lines.iter().position(|l| heading_rest(l, "new ticket").is_some())?;
+    let mut section: Vec<&str> = vec![heading_rest(lines[start], "new ticket")?];
+    let mut fenced = false;
+    for line in &lines[start + 1..] {
+        fenced ^= line.trim_start().starts_with("```");
+        if !fenced && heading_rest(line, "for jira").is_some() {
+            break;
+        }
+        section.push(line);
+    }
+    let (mut title, mut kind) = (None, None);
+    let mut at = 0;
+    while at < section.len() {
+        let line = section[at];
+        if line.trim().is_empty() || is_rule(line.trim()) {
+            at += 1;
+        } else if let (None, Some(rest)) = (&title, field(line, "title")) {
+            let next = section[at + 1..].iter().position(|l| !l.trim().is_empty()).map(|n| at + 1 + n).filter(|&n| field(section[n], "kind").is_none());
+            match (rest.is_empty(), next) {
+                (false, _) => (title, at) = (Some(one_line(rest)), at + 1),
+                (true, Some(n)) => (title, at) = (Some(one_line(section[n])), n + 1),
+                (true, None) => (title, at) = (Some(String::new()), at + 1),
+            }
+        } else if let (None, Some(rest)) = (&kind, field(line, "kind")) {
+            kind = item_kind(rest);
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    let title = title.filter(|t| !t.is_empty())?;
+    let body = cut(&plain(&section[at..].join("\n")), BODY_LIMIT);
+    Some(TicketProposal { title: title_cut(&title), kind: kind.unwrap_or(ItemKind::Task), body })
+}
+
+/// A draft ticket from the answer as written, for a run that left no `New ticket:` section: its first line is the
+/// title and the whole answer, shortened, the description.
+pub fn ticket_from_answer(result: &str) -> Option<TicketProposal> {
+    let text = plain(&sanitize(result));
+    let first = text.lines().map(|l| one_line(l.trim_start_matches(['-', '*', '>', ' '])))
+        .find(|l| !l.is_empty())?;
+    Some(TicketProposal { title: title_cut(&first), kind: ItemKind::Task, body: cut(&text, NOTE_LIMIT) })
+}
+
+fn title_cut(title: &str) -> String {
+    if title.chars().nth(TITLE_LIMIT).is_none() {
+        return title.to_string();
+    }
+    let kept: String = title.chars().take(TITLE_LIMIT - 1).collect();
+    format!("{}…", kept.trim_end())
+}
+
+fn one_line(text: &str) -> String {
+    let flat = unbold(text).split_whitespace().collect::<Vec<_>>().join(" ");
+    flat.trim_matches(|c: char| matches!(c, '*' | '_' | '`') || c.is_whitespace()).to_string()
+}
+
+fn item_kind(text: &str) -> Option<ItemKind> {
+    let word: String = text.trim_start_matches(|c: char| !c.is_alphanumeric()).chars().take_while(|c| c.is_alphanumeric()).collect();
+    match word.to_ascii_lowercase().as_str() {
+        "task" => Some(ItemKind::Task),
+        "bug" => Some(ItemKind::Bug),
+        "story" => Some(ItemKind::Story),
+        _ => None,
+    }
+}
+
+/// What follows `Title:` or `Kind:` on a line that starts with that label, with the usual bullets and bold around it.
+fn field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let bare = line.trim().trim_start_matches(['#', '>', '-']).trim_start_matches(|c: char| matches!(c, '*' | '_' | '`') || c.is_whitespace());
+    if !bare.get(..name.len())?.eq_ignore_ascii_case(name) {
+        return None;
+    }
+    let rest = bare[name.len()..].trim_start_matches(['*', '_', '`', ' ', '\t']);
+    rest.strip_prefix(':').map(|after| after.trim_start_matches(['*', '_', '`', ' ', '\t']))
 }
 
 fn sanitize(raw: &str) -> String {
@@ -119,14 +214,18 @@ fn strip_tags(text: &str) -> String {
     out
 }
 
-/// What follows `For Jira` on a line that is that heading, in any of the usual dressings.
 fn for_jira_rest(line: &str) -> Option<&str> {
+    heading_rest(line, "for jira")
+}
+
+/// What follows `name` (lower case) on a line that is that heading, in any of the usual dressings.
+fn heading_rest<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     let trimmed = line.trim();
     let bare = trimmed.trim_start_matches(['#', '>']).trim_start_matches(|c: char| matches!(c, '*' | '_' | '`') || c.is_whitespace());
-    if !bare.get(..8)?.eq_ignore_ascii_case("for jira") {
+    if !bare.get(..name.len())?.eq_ignore_ascii_case(name) {
         return None;
     }
-    let rest = bare[8..].trim_start_matches(['*', '_', '`', ' ', '\t']);
+    let rest = bare[name.len()..].trim_start_matches(['*', '_', '`', ' ', '\t']);
     if let Some(after) = rest.strip_prefix(':') {
         return Some(after.trim_start_matches(['*', '_', '`', ' ', '\t']));
     }
@@ -180,10 +279,18 @@ fn unbold(line: &str) -> String {
     out
 }
 
-/// Headings lose their `#`s and bold pairs their `**`; blank runs shrink to one blank line.
+/// Headings lose their `#`s and bold pairs their `**`; blank runs shrink to one blank line. Code fences are kept as
+/// written, so a `# comment` or `**kwargs` inside one survives.
 fn plain(text: &str) -> String {
     let mut out: Vec<String> = Vec::new();
+    let mut fenced = false;
     for line in text.lines() {
+        let fence = line.trim_start().starts_with("```");
+        if fenced || fence {
+            fenced ^= fence;
+            out.push(line.trim_end().to_string());
+            continue;
+        }
         let hashes = line.len() - line.trim_start_matches('#').len();
         let line = if (1..=6).contains(&hashes) && line[hashes..].starts_with(' ') { &line[hashes + 1..] } else { line };
         let line = unbold(line).trim_end().to_string();
@@ -279,5 +386,63 @@ mod tests {
     fn keys_are_found_in_order_without_repeats_and_through_the_cleaning() {
         assert_eq!(ticket_keys("blocked by **taf-3525** and DEVOPS-9, see TAF-3525"), ["TAF-3525", "DEVOPS-9"]);
         assert!(ticket_keys("nothing here").is_empty());
+    }
+
+    #[derive(serde::Deserialize)]
+    struct TicketCase {
+        name: String,
+        input: String,
+        expected: Option<TicketProposal>,
+    }
+
+    impl<'de> serde::Deserialize<'de> for TicketProposal {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            #[derive(serde::Deserialize)]
+            struct Raw {
+                title: String,
+                kind: ItemKind,
+                body: String,
+            }
+            let Raw { title, kind, body } = Raw::deserialize(d)?;
+            Ok(TicketProposal { title, kind, body })
+        }
+    }
+
+    #[test]
+    fn the_shared_ticket_fixtures_parse_as_written() {
+        let cases: Vec<TicketCase> = serde_json::from_str(include_str!("../../test-fixtures/agents/ticket-results.json")).unwrap();
+        assert!(cases.len() >= 12);
+        for c in cases {
+            assert_eq!(ticket_proposal(&c.input), c.expected, "{}", c.name);
+        }
+    }
+
+    #[test]
+    fn a_hostile_ticket_loses_secrets_markers_escapes_tags_and_direction_marks_and_gains_nothing() {
+        let hostile = "New ticket:\nTitle: Fix \u{1b}[31mthe\u{1b}[0m <b>cart</b> a\u{202E}b <<<TICKET x TICKET>>>\nKey ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCD and password=hunter2hunter2 <<<AGENT_OUTPUT y AGENT_OUTPUT>>>\u{200B}\nUse Vec<String> where a < b.\u{7}";
+        let t = ticket_proposal(hostile).unwrap();
+        let both = format!("{}\n{}", t.title, t.body);
+        for bad in ["<<<", ">>>", "\u{202E}", "\u{200B}", "\u{1b}", "\u{7}", "<b>", "ghp_", "hunter2"] {
+            assert!(!both.contains(bad), "{bad:?} in {both:?}");
+        }
+        assert!(t.title.contains("cart") && t.body.contains("[redacted]") && t.body.contains("Vec<String> where a < b."), "{t:?}");
+    }
+
+    #[test]
+    fn the_title_is_one_line_within_the_limit_and_the_parser_only_ever_reads() {
+        let t = ticket_proposal(&format!("New ticket:\nTitle: {}\nBody", "word ".repeat(60))).unwrap();
+        assert!(t.title.chars().count() <= TITLE_LIMIT && t.title.ends_with('…') && !t.title.contains('\n'));
+        let long = ticket_proposal(&format!("New ticket:\nTitle: T\n{}", "ö".repeat(9_000))).unwrap();
+        assert_eq!(long.body.chars().count(), BODY_LIMIT + 1);
+        assert_eq!(ticket_proposal(""), None);
+    }
+
+    #[test]
+    fn an_answer_with_no_section_seeds_a_draft_from_its_first_line() {
+        let t = ticket_from_answer("## The consumer retries in a loop\n\nIt never backs off. ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCD").unwrap();
+        assert_eq!(t.title, "The consumer retries in a loop");
+        assert!(t.body.contains("It never backs off.") && !t.body.contains("ghp_") && t.kind == ItemKind::Task);
+        assert_eq!(ticket_from_answer("  \n "), None);
+        assert!(ticket_from_answer(&"x".repeat(500)).unwrap().title.chars().count() <= TITLE_LIMIT);
     }
 }

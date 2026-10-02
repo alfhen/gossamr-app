@@ -394,6 +394,32 @@ pub async fn pip_revises_a_runs_comment_but_never_one_the_person_wrote(h: &Harne
     (refused && !ok && revised && typed_after.as_ref() == Some(&typed) && h.lx.fx.tracker.intents().is_empty()).then_some(()).ok_or_else(|| format!("revising went wrong: {said}"))
 }
 
+pub async fn pip_revises_a_runs_new_ticket_but_never_one_the_person_wrote(h: &Harness) -> std::result::Result<(), String> {
+    let core = &h.lx.fx.core;
+    let container = core.containers_in(&h.lx.fx.scope).await.map_err(|e| e.to_string())?.first().map(|c| c.container_ref.clone()).ok_or("no project to draft in")?;
+    let ticket = |origin: Origin, title: &str| Draft {
+        origin,
+        created_by: CreatedBy::User,
+        intent: Intent::Create {
+            container: container.clone(),
+            fields: crate::domain::NewItem { title: title.into(), body: Doc::paragraph("body"), kind: crate::domain::ItemKind::Task, assignee: None, parent: None, priority: None, labels: vec![] },
+            link: None,
+        },
+        label: None,
+        basis: None,
+    };
+    let left = core.propose(&h.lx.fx.scope, ticket(Origin::Run { run_id: "probe".into(), short_id: None }, "from a run")).await.map_err(|e| e.to_string())?;
+    let typed = core.propose(&h.lx.fx.scope, ticket(Origin::Board, "typed by the person")).await.map_err(|e| e.to_string())?;
+    let (_, refused) = h.tool("runs-ticket", "revise_proposal", json!({ "id": typed.id, "title": "hijacked" })).await;
+    let (said, ok) = h.tool("runs-ticket", "revise_proposal", json!({ "id": left.id, "title": "reworked", "kind": "bug" })).await;
+    let after = |id: String| async move { core.proposal_in(&h.lx.fx.scope, &id).await.ok().flatten() };
+    let (typed_after, left_after) = (after(typed.id.clone()).await, after(left.id.clone()).await);
+    let revised = left_after.as_ref().is_some_and(|p| {
+        matches!(&p.intent, Intent::Create { container: c, fields, .. } if fields.title == "reworked" && fields.kind == crate::domain::ItemKind::Bug && *c == container) && p.state == crate::domain::ProposalState::Pending
+    });
+    (refused && !ok && revised && typed_after.as_ref() == Some(&typed) && h.lx.fx.tracker.intents().is_empty()).then_some(()).ok_or_else(|| format!("revising a run's ticket went wrong: {said}"))
+}
+
 pub async fn propose_run_never_starts_a_run(h: &Harness) -> std::result::Result<(), String> {
     let before = h.runs().await;
     let (reply, error) = h.tool("runs-propose", "propose_run", json!({ "key": "CA-1", "kind": "investigate", "focus": "the retry loop" })).await;
@@ -444,6 +470,7 @@ pub async fn check_run_tools(h: &Harness) -> std::result::Result<(), String> {
     agent_output_comes_back_as_data(h).await?;
     a_whole_result_can_be_read_through_the_tools(h).await?;
     pip_revises_a_runs_comment_but_never_one_the_person_wrote(h).await?;
+    pip_revises_a_runs_new_ticket_but_never_one_the_person_wrote(h).await?;
     propose_run_never_starts_a_run(h).await?;
     over_long_focus_is_rejected(h).await
 }

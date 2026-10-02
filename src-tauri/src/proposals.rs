@@ -59,6 +59,14 @@ fn check(intent: &Intent) -> Result<()> {
             if item.is_none() && spec.kind == crate::domain::RunKind::Build {
                 return Err(refuse("Build needs a ticket"));
             }
+            if let Some(project) = &spec.project {
+                if item.is_some() {
+                    return Err(refuse("a run on a ticket doesn't make a new one"));
+                }
+                if project.connection_id != *connection_id {
+                    return Err(refuse("the project belongs to another connection"));
+                }
+            }
             spec.validate()
         }
         _ => Ok(()),
@@ -152,10 +160,10 @@ pub fn require_pip_pending(p: &Proposal) -> Result<()> {
     Ok(())
 }
 
-/// What Pip may revise: its own pending drafts, and a pending comment the person's agent run left for them. The
-/// person made neither by hand, and both stay theirs to approve.
+/// What Pip may revise: its own pending drafts, and a pending comment or new ticket the person's agent run left for
+/// them. The person made none of these by hand, and all stay theirs to approve.
 pub fn require_pip_may_revise(p: &Proposal) -> Result<()> {
-    let from_run = matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. })) && p.created_by == CreatedBy::User;
+    let from_run = matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. })) && p.created_by == CreatedBy::User;
     if p.created_by != CreatedBy::Pip && !from_run {
         return Err(refuse("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it"));
     }

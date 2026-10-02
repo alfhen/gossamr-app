@@ -540,3 +540,56 @@ async fn turning_the_setting_off_stops_the_automatic_draft() {
     assert!(comment_drafts(&rig).await.is_empty());
     assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
 }
+
+async fn ticket_drafts(rig: &Rig) -> Vec<crate::domain::Proposal> {
+    let all = rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap();
+    all.into_iter().filter(|p| matches!(p.intent, crate::domain::Intent::Create { .. })).collect()
+}
+
+const TICKET_ANSWER: &str = "I read the consumer.\n\nNew ticket:\nTitle: Add a backoff to the order consumer\nKind: bug\nIt retries in a tight loop.";
+
+#[tokio::test]
+async fn a_finished_investigation_with_no_ticket_leaves_one_draft_ticket_and_a_restart_does_not_make_another() {
+    let rig = ready().await;
+    let run = rig.launched_ticketless(1).await;
+    rig.poll().await;
+    finish_with(&rig, &run, TICKET_ANSWER);
+    rig.poll().await;
+    let drafts = ticket_drafts(&rig).await;
+    let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
+    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::User));
+    assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
+    assert!(matches!(&draft.intent, crate::domain::Intent::Create { fields, .. } if fields.title == "Add a backoff to the order consumer"));
+    assert!(comment_drafts(&rig).await.is_empty() && rig.fx.tracker.intents().is_empty(), "nothing is posted or created");
+    assert_eq!(rig.drafted.lock().unwrap().len(), 1);
+    assert_eq!(rig.noticed().last(), Some(&(Attention::DraftedTicket, RunState::Done)));
+    assert_eq!(notice_text(&rig.get(&run).await, Attention::DraftedTicket).title, "Draft ticket ready");
+
+    rig.fx.core.skip_proposal(&draft.id).await.unwrap();
+    rig.set(&run, |r| r.state = RunState::Working).await;
+    rig.session(&run, working);
+    rig.poll().await;
+    finish_with(&rig, &run, TICKET_ANSWER);
+    rig.poll().await;
+    assert_eq!(ticket_drafts(&rig).await.len(), 1, "a skipped draft is not made again when the run finishes again");
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
+}
+
+#[tokio::test]
+async fn an_investigation_with_no_ticket_and_no_section_is_not_drafted_and_the_setting_applies_too() {
+    let rig = ready().await;
+    let run = rig.launched_ticketless(1).await;
+    rig.poll().await;
+    finish_with(&rig, &run, "It is the rounding, nothing marked.");
+    rig.poll().await;
+    assert!(ticket_drafts(&rig).await.is_empty() && rig.drafted.lock().unwrap().is_empty());
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
+
+    let rig = ready().await;
+    rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
+    let run = rig.launched_ticketless(1).await;
+    rig.poll().await;
+    finish_with(&rig, &run, TICKET_ANSWER);
+    rig.poll().await;
+    assert!(ticket_drafts(&rig).await.is_empty());
+}

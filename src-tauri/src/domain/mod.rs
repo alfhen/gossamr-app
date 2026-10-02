@@ -31,7 +31,7 @@ pub use proposal::{
 };
 pub use run::{
     allowed_kinds, default_instruction, pip_kinds, render_prompt, ticket_snapshot, valid_repo, without_markers, ClonePlan, Run, RunEvent, RunFailure, RunKind, RunQuery, RunReview, RunSpec, RunState, FOCUS_LIMIT, GUARD, GUARD_VERSION, INVESTIGATE_INSTRUCTION,
-    TICKET_BLOCK_LIMIT,
+    NEW_TICKET_TAIL, TICKET_BLOCK_LIMIT, TICKETLESS_STARTER, TITLE_LIMIT,
 };
 pub use watch::{
     ContainerPage, ContainerQuery, ContainerScope, ContainerSummary, Depth, Footprint, Stray, Visible, Watch, WatchChange, WatchMode, WatchSet,
@@ -80,6 +80,7 @@ pub(crate) mod fixtures {
             pr: None,
             pr_sha: None,
             allow_push: false,
+            project: None,
         }
     }
 

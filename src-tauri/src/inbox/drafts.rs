@@ -10,7 +10,7 @@ use super::{db_file, identity_of, Core};
 use crate::auth::Scope;
 use crate::db::Db;
 use crate::domain::{
-    default_instruction, ticket_snapshot, Basis, CodeChange, CodeChangeState, ContainerRef, CreatedBy, Doc, Intent, ItemKind, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind,
+    default_instruction, ticket_snapshot, Basis, TICKETLESS_STARTER, CodeChange, CodeChangeState, ContainerRef, CreatedBy, Doc, Intent, ItemKind, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind,
     RunEvent, RunQuery, RunReview, RunSpec,
 };
 use crate::error::{Error, Result};
@@ -63,6 +63,9 @@ pub enum Edit {
         pr: Option<u64>,
         #[serde(default)]
         allow_push: Option<bool>,
+        /// Where the ticket of an investigation with no ticket lands.
+        #[serde(default)]
+        project: Option<ContainerRef>,
     },
 }
 
@@ -106,7 +109,7 @@ impl Edit {
                 }
                 Ok(Intent::Create { container, fields, link: link.clone() })
             }
-            (Edit::Run { instruction, base, clone_path, kind, name, pr, allow_push }, Intent::StartRun { connection_id, item, spec }) => {
+            (Edit::Run { instruction, base, clone_path, kind, name, pr, allow_push, project }, Intent::StartRun { connection_id, item, spec }) => {
                 let mut spec = spec.clone();
                 if let Some(v) = kind.filter(|k| *k != spec.kind) {
                     if instruction.is_none() && spec.instruction.trim() == default_instruction(spec.kind) {
@@ -115,6 +118,9 @@ impl Edit {
                     spec.pr = None;
                     spec.pr_sha = None;
                     spec.allow_push = false;
+                    if v != RunKind::Investigate {
+                        spec.project = None;
+                    }
                 }
                 if let Some(v) = instruction {
                     spec.instruction = v.clone();
@@ -137,6 +143,9 @@ impl Edit {
                 }
                 if let Some(v) = allow_push {
                     spec.allow_push = *v;
+                }
+                if let Some(v) = project {
+                    spec.project = Some(v.clone());
                 }
                 Ok(Intent::StartRun { connection_id: connection_id.clone(), item: item.clone(), spec })
             }
@@ -309,7 +318,7 @@ impl Core {
         self.require_watched_repo(&spec.repo)?;
         spec.clone_path = self.resolve_clone(&spec.clone_path)?;
         if spec.instruction.trim().is_empty() {
-            spec.instruction = default_instruction(spec.kind).into();
+            spec.instruction = if spec.project.is_some() { TICKETLESS_STARTER.into() } else { default_instruction(spec.kind).into() };
         }
         if spec.kind == RunKind::Review {
             let change = self.review_target(&spec).await?;
@@ -434,6 +443,12 @@ impl Core {
         let outcome = proposals::execute(tracker.as_ref(), &claimed).await;
         let wrote = outcome.error.is_none() || !outcome.created.is_empty();
         let done = self.with_db_for(&scope, |db| proposals::finish(db, id, outcome, Utc::now())).await?;
+        if let (Origin::Run { run_id, .. }, Intent::Create { .. }, Some(made)) = (&done.origin, &done.intent, done.created.first().filter(|_| done.state == ProposalState::Applied)) {
+            // The ticket exists either way; the run learns of it again the next time its sheet reads the outcome.
+            if let Err(e) = self.record_created_from_run(run_id, made).await {
+                eprintln!("couldn't note the created ticket on run {run_id}: {e}");
+            }
+        }
         if wrote {
             match done.target() {
                 Some(item) => self.after_write(&scope, &item.key).await,
@@ -722,7 +737,7 @@ mod tests {
         let p = drafted_run(&fx).await;
         let read = fx.core.runs_review(&p.id).await.unwrap();
 
-        let edit = Edit::Run { instruction: Some("Also read the billing code.".into()), base: Some(" develop ".into()), clone_path: None, kind: None, name: None, pr: None, allow_push: None };
+        let edit = Edit::Run { instruction: Some("Also read the billing code.".into()), base: Some(" develop ".into()), clone_path: None, kind: None, name: None, pr: None, allow_push: None, project: None };
         let edited = fx.core.edit_proposal(&p.id, &edit).await.unwrap();
         let spec = spec_of(&edited);
         assert_eq!((spec.base.as_str(), spec.instruction.as_str()), ("develop", "Also read the billing code."));
@@ -794,7 +809,7 @@ mod tests {
         let Intent::StartRun { spec, .. } = edit.apply_to(&current).unwrap() else { panic!() };
         assert_eq!((spec.instruction.as_str(), spec.name.as_str(), spec.base.as_str(), spec.repo.as_str()), ("Look at logs", "new-name", "main", "acme/webshop"));
         assert_eq!(spec.clone_path, PathBuf::from("/Users/me/Code/other"));
-        assert!(Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
+        assert!(Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, project: None }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
     }
 
     #[tokio::test]
@@ -821,6 +836,51 @@ mod tests {
         let digest = fx.core.runs_review(&canonical.id).await.unwrap().digest;
         let run = fx.core.runs_approve(&canonical.id, &digest).await.unwrap();
         assert_eq!(run.spec.clone_path, real.canonicalize().unwrap());
+    }
+
+    fn project_of(fx: &crate::inbox::testing::Fixture) -> ContainerRef {
+        ContainerRef { connection_id: fx.item("CA-1").connection_id, external_id: "10000".into() }
+    }
+
+    #[tokio::test]
+    async fn an_investigation_with_no_ticket_and_a_project_starts_from_a_prompt_to_fill_in_and_keeps_its_project() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        let clone = clone_in(&fx, "webshop");
+        let spec = RunSpec { instruction: String::new(), project: Some(project_of(&fx)), ..spec_in(&clone) };
+        let p = fx.core.draft_run(spec, None).await.unwrap();
+        let spec = spec_of(&p);
+        assert_eq!((spec.instruction.as_str(), spec.project.clone()), (crate::domain::TICKETLESS_STARTER, Some(project_of(&fx))));
+        assert_eq!(spec.ticket_block, None);
+        let review = fx.core.runs_review(&p.id).await.unwrap();
+        assert!(review.prompt.ends_with(crate::domain::NEW_TICKET_TAIL) && review.prompt.contains(crate::domain::TICKETLESS_STARTER.trim()));
+    }
+
+    #[tokio::test]
+    async fn a_project_goes_only_with_no_ticket_and_this_connection() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        let clone = clone_in(&fx, "webshop");
+        let with = |project: ContainerRef| RunSpec { project: Some(project), ..spec_in(&clone) };
+        let err = fx.core.draft_run(with(project_of(&fx)), Some(fx.item("CA-1"))).await.unwrap_err();
+        assert!(err.to_string().contains("doesn't make a new one"), "{err}");
+        let elsewhere = ContainerRef { connection_id: "elsewhere".into(), external_id: "x".into() };
+        assert!(fx.core.draft_run(with(elsewhere), None).await.unwrap_err().to_string().contains("another connection"));
+        assert!(fx.core.runs_list(&RunQuery::default()).await.unwrap().is_empty());
+        assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_person_may_change_the_project_and_a_change_of_kind_drops_it() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        let clone = clone_in(&fx, "webshop");
+        let spec = RunSpec { instruction: String::new(), project: Some(project_of(&fx)), ..spec_in(&clone) };
+        let p = fx.core.draft_run(spec, None).await.unwrap();
+        let other = ContainerRef { external_id: "10001".into(), ..project_of(&fx) };
+        let edit = Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, project: Some(other.clone()) };
+        assert_eq!(spec_of(&fx.core.edit_proposal(&p.id, &edit).await.unwrap()).project, Some(other));
+        let triage = Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(RunKind::Triage), name: None, pr: None, allow_push: None, project: None };
+        assert_eq!(spec_of(&fx.core.edit_proposal(&p.id, &triage).await.unwrap()).project, None);
+        let wrong = Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, project: Some(ContainerRef { connection_id: "elsewhere".into(), external_id: "x".into() }) };
+        assert!(fx.core.edit_proposal(&p.id, &wrong).await.is_err());
     }
 
     mod kinds {
@@ -955,11 +1015,11 @@ mod tests {
             let clone = clone_in(&fx, "webshop");
             let build = RunSpec { kind: RunKind::Build, allow_push: true, instruction: String::new(), ..spec_in(&clone) };
             let p = fx.core.draft_run(build, Some(fx.item("CA-1"))).await.unwrap();
-            let edit = Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(RunKind::Triage), name: None, pr: None, allow_push: None };
+            let edit = Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(RunKind::Triage), name: None, pr: None, allow_push: None, project: None };
             let edited = spec_of(&fx.core.edit_proposal(&p.id, &edit).await.unwrap());
             assert_eq!((edited.kind, edited.allow_push, edited.instruction.as_str()), (RunKind::Triage, false, default_instruction(RunKind::Triage)));
 
-            let typed = Edit::Run { instruction: Some("My own words, long enough.".into()), base: None, clone_path: None, kind: Some(RunKind::Verify), name: None, pr: None, allow_push: None };
+            let typed = Edit::Run { instruction: Some("My own words, long enough.".into()), base: None, clone_path: None, kind: Some(RunKind::Verify), name: None, pr: None, allow_push: None, project: None };
             assert_eq!(spec_of(&fx.core.edit_proposal(&p.id, &typed).await.unwrap()).instruction, "My own words, long enough.");
         }
     }

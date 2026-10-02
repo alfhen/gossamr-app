@@ -230,7 +230,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "revise_proposal",
-            "Change one of YOUR OWN pending drafts, or the pending comment an agent run drafted for the user from its result (body only). Never anything else the user made. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title and/or description for a new item, focus and/or kind for an agent run.",
+            "Change one of YOUR OWN pending drafts, or the pending comment or new ticket an agent run drafted for the user from its result (its text, and for a ticket its type). Never anything else the user made. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, focus and/or kind (investigate, triage or verify) for an agent run.",
             json!({ "id": id, "body": { "type": "string" }, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "focus": { "type": "string" }, "kind": { "type": "string" } }),
             &["id"],
         ),
@@ -448,13 +448,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
             if let Some(parent) = opt(args, "parent") {
                 reachable(st, run, parent).await?;
             }
-            let kind = match opt(args, "kind").unwrap_or("task") {
-                "task" => ItemKind::Task,
-                "bug" => ItemKind::Bug,
-                "story" => ItemKind::Story,
-                "epic" => ItemKind::Epic,
-                other => return Err(format!("kind must be task, bug, story or epic, not {other}")),
-            };
+            let kind = item_kind(opt(args, "kind").unwrap_or("task"))?;
             let fields = NewItem {
                 title: required(args, "title")?.into(),
                 body: opt(args, "description").map(|d| Doc::from_text(d, &[])).unwrap_or_default(),
@@ -477,7 +471,8 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                 Intent::Create { container, fields, link } => {
                     let title = opt(args, "title").map_or(fields.title.clone(), String::from);
                     let body = opt(args, "description").map_or(fields.body.clone(), |d| Doc::from_text(d, &[]));
-                    Intent::Create { container: container.clone(), fields: NewItem { title, body, ..fields.clone() }, link: link.clone() }
+                    let kind = opt(args, "kind").map(item_kind).transpose()?.unwrap_or(fields.kind);
+                    Intent::Create { container: container.clone(), fields: NewItem { title, body, kind, ..fields.clone() }, link: link.clone() }
                 }
                 Intent::StartRun { connection_id, item, spec } => super::runs::revised(connection_id, item, spec, args)?,
                 _ => return Err("this kind of draft can't be revised".into()),
@@ -500,6 +495,16 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                 None => Err(format!("Unknown tool {other}")),
             },
         },
+    }
+}
+
+fn item_kind(name: &str) -> std::result::Result<ItemKind, String> {
+    match name {
+        "task" => Ok(ItemKind::Task),
+        "bug" => Ok(ItemKind::Bug),
+        "story" => Ok(ItemKind::Story),
+        "epic" => Ok(ItemKind::Epic),
+        other => Err(format!("kind must be task, bug, story or epic, not {other}")),
     }
 }
 
@@ -982,6 +987,60 @@ mod tests {
 
         r.fx.core.skip_proposal(&left.id).await.unwrap();
         assert!(r.err("revise_proposal", json!({ "id": left.id, "body": "late" })).await.contains("skipped"));
+    }
+
+    async fn new_ticket_from(r: &Rig, origin: Origin, by: CreatedBy) -> Proposal {
+        let container = r.fx.core.containers_in(&r.fx.scope).await.unwrap()[0].container_ref.clone();
+        let fields = NewItem { title: "Backoff".into(), body: Doc::from_text("It loops.", &[]), kind: ItemKind::Task, assignee: None, parent: None, priority: None, labels: vec![] };
+        let draft = Draft { origin, created_by: by, intent: Intent::Create { container, fields, link: None }, label: None, basis: None };
+        r.fx.core.propose(&r.fx.scope, draft).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn pip_may_revise_the_title_text_and_type_of_the_pending_ticket_a_run_left_and_nothing_else_of_it() {
+        let r = rig().await;
+        let left = new_ticket_from(&r, from_run(), CreatedBy::User).await;
+        let reply = r.ok("revise_proposal", json!({ "id": left.id, "title": "Add a backoff to the consumer", "description": "It retries in a tight loop.\n\nEvidence: consumer.rs.", "kind": "bug" })).await;
+        assert!(reply.contains("not been applied"), "{reply}");
+        let revised = r.stored(&left.id).await;
+        let (Intent::Create { container, fields, link }, Intent::Create { container: was, .. }) = (&revised.intent, &left.intent) else { panic!() };
+        assert_eq!((fields.title.as_str(), fields.kind, container, link), ("Add a backoff to the consumer", ItemKind::Bug, was, &None));
+        assert_eq!(fields.body.plain_text(), "It retries in a tight loop.\nEvidence: consumer.rs.");
+        assert_eq!((fields.assignee.as_ref(), fields.parent.as_ref(), fields.priority, fields.labels.len()), (None, None, None, 0));
+        assert_eq!((revised.created_by, revised.origin.clone(), revised.state.clone()), (CreatedBy::User, from_run(), ProposalState::Pending));
+        assert_eq!(revised.revisions.last().unwrap().note, "Revised by Pip");
+        assert!(r.err("revise_proposal", json!({ "id": left.id, "kind": "nonsense" })).await.contains("kind must be"));
+        assert!(r.err("retire_proposal", json!({ "id": left.id })).await.contains("wasn't made by Pip"), "it may be revised, not withdrawn");
+        assert!(r.fx.tracker.intents().is_empty(), "nothing is created");
+
+        r.ok("revise_proposal", json!({ "id": left.id, "title": "Only the title" })).await;
+        let Intent::Create { fields, .. } = r.stored(&left.id).await.intent else { panic!() };
+        assert_eq!((fields.title.as_str(), fields.kind), ("Only the title", ItemKind::Bug), "what isn't named stays");
+
+        r.fx.core.skip_proposal(&left.id).await.unwrap();
+        assert!(r.err("revise_proposal", json!({ "id": left.id, "title": "late" })).await.contains("skipped"));
+    }
+
+    #[tokio::test]
+    async fn a_new_ticket_the_person_made_or_autopilot_made_stays_off_limits_even_with_a_run_origin_next_door() {
+        let r = rig().await;
+        let by_hand = new_ticket_from(&r, Origin::Board, CreatedBy::User).await;
+        let by_autopilot = new_ticket_from(&r, from_run(), CreatedBy::Autopilot).await;
+        let before = (r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await);
+        for other in [&by_hand.id, &by_autopilot.id] {
+            assert!(r.err("revise_proposal", json!({ "id": other, "title": "hijacked" })).await.contains("wasn't made by Pip"));
+        }
+        let intent = Intent::Create { container: ContainerRef { connection_id: "c".into(), external_id: "x".into() }, fields: NewItem { title: "x".into(), body: Doc::default(), kind: ItemKind::Task, assignee: None, parent: None, priority: None, labels: vec![] }, link: None };
+        assert!(r.fx.core.revise_as_pip(&r.fx.scope, &by_hand.id, intent).await.is_err(), "the rule lives in Core too");
+        assert_eq!((r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await), before);
+    }
+
+    #[tokio::test]
+    async fn the_list_names_the_run_a_ticket_draft_came_from_and_that_pip_may_revise_it() {
+        let r = rig().await;
+        let left = new_ticket_from(&r, from_run(), CreatedBy::User).await;
+        let list = r.ok("list_proposals", json!({})).await;
+        assert!(list.lines().any(|l| l.starts_with(&left.id) && l.contains("drafted from run r1; you may revise its text but not retire it")), "{list}");
     }
 
     #[tokio::test]

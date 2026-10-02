@@ -160,6 +160,19 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The work items linked to pull requests of `repo` (compared without regard to case): `(item key, the pull request's
+    /// update time)`, newest first.
+    pub fn item_keys_for_repo(&self, item_connection_id: &str, repo: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT l.item_key, c.updated_at FROM item_links l
+             JOIN code_changes c ON c.connection_id = l.connection_id AND c.external_id = l.code_id
+             WHERE l.item_connection_id = ?1 AND c.repo = ?2 COLLATE NOCASE AND c.kind = 'pullRequest'
+             ORDER BY c.updated_at DESC, l.item_key",
+        )?;
+        let rows = stmt.query_map(params![item_connection_id, repo], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Project keys the connection knows, from its containers and its catalog.
     pub fn project_keys(&self, connection_id: &str) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare("SELECT key FROM containers WHERE connection_id = ?1 UNION SELECT key FROM container_catalog WHERE connection_id = ?1")?;
