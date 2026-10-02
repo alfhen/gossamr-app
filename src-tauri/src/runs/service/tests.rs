@@ -104,7 +104,9 @@ async fn a_queued_run_launches_into_its_worktree_with_the_prompt_the_person_appr
     };
     assert_eq!(count, 1);
     assert_eq!(req.cwd, rig.clone);
-    assert_eq!((req.name.as_str(), req.worktree.as_str()), ("CA-1 investigate", "eng-1-fix-cart-0001"));
+    assert_eq!((req.name.as_str(), req.worktree.as_str()), ("Gossamr: CA-1 investigate", "eng-1-fix-cart-0001"));
+    assert_eq!(run.spec.name, "eng-1-fix-cart-0001", "the stored name stays the plain slug");
+    assert_eq!(run.digest, run.spec.digest(), "the session title is not part of what was approved");
     assert_eq!(req.guard, GUARD);
     assert_eq!(req.prompt, render_prompt(&run.spec));
     assert!(req.prompt.starts_with("Your worktree starts at the clone's current HEAD"));
@@ -788,7 +790,7 @@ mod through_the_real_spawner {
         let log = calls(&real);
         assert!(!FORBIDDEN.iter().any(|flag| log.lines().any(|l| l == *flag)), "{log}");
         let launch = log.split("---\n").find(|call| call.contains("\n--bg\n")).unwrap();
-        assert!(launch.starts_with(&format!("cwd={}\n--bg\n--name\nCA-1 investigate\n--worktree\neng-1-fix-cart-0001\n--append-system-prompt\n{GUARD}\n--\n", real.rig.clone.display())), "{launch}");
+        assert!(launch.starts_with(&format!("cwd={}\n--bg\n--name\nGossamr: CA-1 investigate\n--worktree\neng-1-fix-cart-0001\n--append-system-prompt\n{GUARD}\n--\n", real.rig.clone.display())), "{launch}");
 
         let seen: BTreeSet<String> = std::fs::read_to_string(real.scenario_dir.join("env.last")).unwrap().lines().map(String::from).collect();
         let captured: BTreeSet<String> = ["PATH", "HOME", "FAKE_CLAUDE_SCENARIO"].map(String::from).into();
@@ -862,7 +864,7 @@ mod kinds {
             let run = approved(&rig, of(&rig, kind, n as u32 + 1)).await;
             rig.svc.launch(&run.id).await.unwrap();
             let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
-            assert_eq!(req.name, format!("CA-1 {}", kind.as_str()));
+            assert_eq!(req.name, format!("Gossamr: CA-1 {}", kind.as_str()));
             assert_eq!(req.prompt, render_prompt(&run.spec));
             assert_eq!(rig.get(&run).await.state, RunState::Launching, "{kind:?}");
         }

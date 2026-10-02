@@ -712,6 +712,21 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn a_session_name_with_a_colon_and_spaces_reaches_claude_whole_and_is_listed_unchanged() {
+            let rig = Rig::new("prefixed", "");
+            let mut req = rig.request("ce-5-name-ab12");
+            req.name = "Gossamr: CE-5 investigate".into();
+            let launched = rig.cli.launch(&req).await.unwrap();
+            assert_eq!(launched.name.as_deref(), Some("Gossamr: CE-5 investigate"));
+            assert!(rig.calls().lines().any(|l| l == "Gossamr: CE-5 investigate"), "one argument, not split: {}", rig.calls());
+            let rows = rig.cli.agents(false).await.unwrap();
+            let mine = rows.iter().find(|r| r.id.as_deref() == Some(launched.short_id.as_str())).unwrap();
+            assert_eq!(mine.name.as_deref(), Some("Gossamr: CE-5 investigate"));
+            let worktree = std::fs::canonicalize(&rig.repo).unwrap().join(".claude/worktrees/ce-5-name-ab12");
+            assert_eq!(mine.cwd.as_deref().map(Path::new), Some(worktree.as_path()), "the folder keeps the plain slug");
+        }
+
+        #[tokio::test]
         async fn launch_runs_in_the_clone_with_the_exact_flags_and_nothing_else_in_the_environment() {
             let rig = Rig::new("flags", "");
             rig.cli.launch(&rig.request("ce-2-x-cd34")).await.unwrap();
