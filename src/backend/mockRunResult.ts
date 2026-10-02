@@ -211,12 +211,18 @@ export function planAnswer(result: string): string {
   return out.trim();
 }
 
-/** The plan without its closing `For Jira:` note; an answer that is only the note stays whole. */
+/** The plan without its closing `For Jira:` note, as `plan_without_note` in `runs/result.rs`: only the last such heading outside a code fence, and only when nothing after it starts a section or a code block. */
 export function planWithoutNote(result: string): string {
   const clean = planAnswer(result);
   const lines = clean.split("\n");
-  const at = headingOutsideFences(lines, "for jira");
+  const inside = fenceTracker();
+  let at = -1;
+  lines.forEach((l, i) => {
+    if (!inside(l) && headingRest(l, "for jira") !== null) at = i;
+  });
   if (at < 0) return clean;
+  const after = fenceTracker();
+  if (lines.slice(at + 1).some((l) => after(l) || endsSection(l))) return clean;
   const before = lines.slice(0, at);
   while (before.length && (!before[before.length - 1].trim() || /^([-*_])\1{2,}$/.test(before[before.length - 1].trim()))) before.pop();
   return before.length ? before.join("\n") : clean;

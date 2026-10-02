@@ -197,6 +197,21 @@ describe("Draft the plan as a comment", () => {
     expect(body).toContain("change the consumer.");
   });
 
+  it("cuts only a closing For Jira note, never a mention in the middle of the plan", async () => {
+    const update = (result: string) => (backend.runs as unknown as { update(id: string, patch: Partial<Run>): Run }).update(plan.id, { result });
+    const body = async () => {
+      const made = await backend.runsDraftPlanComment(plan.id);
+      return made.proposal.intent.type === "comment" ? JSON.stringify(made.proposal.intent.body) : "";
+    };
+    update("## Steps\n\n1. Do the work.\nFor Jira: say what changed here.\n2. Add the test.\n\n## Risks\n\nNone known.");
+    const whole = await body();
+    for (const kept of ["say what changed here", "Add the test", "None known"]) expect(whole).toContain(kept);
+    update("## Steps\n\nDo it.\n\nFor Jira:\nThe plan is attached.");
+    const cut = await body();
+    expect(cut).toContain("Do it.");
+    expect(cut).not.toContain("The plan is attached");
+  });
+
   it("is only for a finished plan run on a ticket", async () => {
     const triage = (await backend.runsList()).find((r) => r.spec.kind === "triage")!;
     await expect(backend.runsDraftPlanComment(triage.id)).rejects.toThrow("only a plan run");
