@@ -20,6 +20,8 @@ export interface AgentItemProps {
   onDraftComment?(): void;
   /** A comment draft from this run is waiting. */
   draftReady?: boolean;
+  /** A breakdown into subtasks from this run is waiting; opening it shows the ticket's drafts. */
+  breakdownReady?: boolean;
   onOpenDraft?(): void;
   failure: FailureState;
 }
@@ -34,7 +36,7 @@ export function onActivate(open: () => void) {
   };
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, draftReady, onOpenDraft, failure }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, draftReady, breakdownReady, onOpenDraft, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -73,8 +75,8 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
         </span>
       </p>
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
-      {draftReady && onOpenDraft ? (
-        <div>
+      <div className="flex flex-wrap items-center gap-2 empty:hidden">
+        {draftReady && onOpenDraft ? (
           <button
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onOpenDraft())}
@@ -84,10 +86,8 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
           >
             Draft ready
           </button>
-        </div>
-      ) : (
-        onDraftComment && (
-          <div>
+        ) : (
+          onDraftComment && (
             <button
               type="button"
               onClick={(ev) => (ev.stopPropagation(), onDraftComment())}
@@ -97,9 +97,20 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
             >
               Draft comment
             </button>
-          </div>
-        )
-      )}
+          )
+        )}
+        {breakdownReady && onOpenDraft && (
+          <button
+            type="button"
+            onClick={(ev) => (ev.stopPropagation(), onOpenDraft())}
+            onKeyDown={(ev) => ev.stopPropagation()}
+            title="The subtasks are a draft. Nothing is created until you approve it."
+            className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
+          >
+            Breakdown proposed
+          </button>
+        )}
+      </div>
       <div className="flex items-center gap-3 text-sm text-ws-ink3 tabular-nums">
         {tokens && <span>{tokens}</span>}
         <time dateTime={ageSince(run)} className="ml-auto" title={run.endedAt ? "Ended" : "Started"}>

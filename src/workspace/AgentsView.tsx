@@ -14,7 +14,7 @@ import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
-import { commentControl, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
+import { commentControl, runBreakdownDraftOf, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
@@ -188,11 +188,13 @@ export interface AgentsScreenProps {
   ticketTitle(run: Run): string | null;
   /** Whether a finished run has a comment draft waiting. */
   draftReady?(run: Run): boolean;
+  /** Whether a finished run has a breakdown into subtasks waiting. */
+  breakdownReady?(run: Run): boolean;
   on: AgentsActions;
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, opened, now, ticketTitle, draftReady, on }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, opened, now, ticketTitle, draftReady, breakdownReady, on }: AgentsScreenProps) {
   const footer = useFooterHeight();
   const groups = useMemo(() => groupRuns(runs, filters, now), [runs, filters, now]);
   const order = useMemo(() => navOrder(groups, earlierOpen, filters), [groups, earlierOpen, filters]);
@@ -209,6 +211,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     onOpen: () => on.open(run.id),
     onAttach: () => on.attach(run.id),
     draftReady: !!draftReady?.(run),
+    breakdownReady: !!breakdownReady?.(run),
     onOpenDraft: on.openDraft ? () => on.openDraft?.(run) : undefined,
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
     failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
@@ -382,6 +385,7 @@ export function AgentsView() {
       now={now}
       ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
       draftReady={(run) => !!runDraftOf(proposals, run.id) || !!runTicketDraftOf(proposals, run.id)}
+      breakdownReady={(run) => !!runBreakdownDraftOf(proposals, run.id)}
       on={actions}
     />
   );

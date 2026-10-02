@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { CodeChange, Run, RunOutcome } from "../types";
 import { Box, Btn, CopyButton, Details, Sec } from "./AgentSheet";
-import { blockerChoices, blockerControl, changeSummary, commentControl, createdFrom, ticketControl, ticketStatus } from "./runSheetLogic";
+import { blockerChoices, blockerControl, breakdownStatus, changeSummary, commentControl, createdFrom, ticketControl, ticketStatus } from "./runSheetLogic";
 
 export interface ResultActions {
   draftComment(): void;
@@ -18,6 +18,8 @@ export interface ResultActions {
   /** Opens Pip on the run and its ticket draft, to tighten the draft before it is approved. */
   finishWithPip(): void;
   openCreated(): void;
+  /** Opens Pip on the run, and on its breakdown draft when one is waiting. */
+  askPipBreakdown(): void;
 }
 
 export interface ResultProps {
@@ -172,6 +174,49 @@ export function Found(props: ResultProps) {
   return props.run.item ? <TicketRunFound {...props} /> : <TicketFound run={props.run} outcome={props.outcome} drafting={props.drafting} on={props.on} />;
 }
 
+/** The subtasks a Triage proposed. They are drafted on the ticket, and nothing is created until the person approves them. */
+function Breakdown({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "on">) {
+  const summaries = outcome?.subtasks ?? [];
+  const status = breakdownStatus(outcome);
+  if (summaries.length === 0 && status === "none") return null;
+  const key = run.item?.key ?? "the ticket";
+  return (
+    <div data-breakdown={status} className="grid gap-2 rounded-md border border-ws-sep bg-ws-bar p-2.5">
+      <p className="m-0 text-xs font-semibold text-ws-ink3">The breakdown it proposes</p>
+      <ol className="selectable m-0 grid list-decimal gap-0.5 pl-5 text-[13.5px] [overflow-wrap:anywhere]">
+        {summaries.map((s) => (
+          <li key={s}>{s}</li>
+        ))}
+      </ol>
+      {status === "waiting" && (
+        <p role="status" className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm">
+          <b className="font-semibold text-ws-pip">A breakdown is drafted on {key}.</b> Edit the list, then approve it or skip it. Nothing is created in Jira until you approve it.
+        </p>
+      )}
+      {status === "created" && <p className="m-0 text-sm text-ws-ink2">Its subtasks were created.</p>}
+      {status === "skipped" && <p className="m-0 text-sm text-ws-ink3">You skipped its breakdown.</p>}
+      {status === "retired" && <p className="m-0 text-sm text-ws-ink3">Its breakdown is out of date.</p>}
+      {status === "none" && <p className="m-0 text-sm text-ws-ink3">It isn&apos;t drafted. Pip can draft it from the run.</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        {status === "waiting" ? (
+          <>
+            <Btn tone="primary" icon="ext" onClick={on.openDraft}>
+              Open the draft
+            </Btn>
+            <Btn icon="spark" disabled={drafting} title="Pip reads the whole run and the breakdown, and changes it if you ask" onClick={on.askPipBreakdown}>
+              Discuss with Pip
+            </Btn>
+          </>
+        ) : status === "none" ? (
+          <Btn icon="spark" disabled={drafting} title="Pip reads the whole run and drafts the subtasks for you to edit" onClick={on.askPipBreakdown}>
+            Draft with Pip
+          </Btn>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, on }: ResultProps) {
   const text = run.result?.trim();
   const note = outcome?.note;
@@ -203,6 +248,7 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, on }: Re
             <p className="selectable m-0 whitespace-pre-wrap text-[13.5px] text-ws-ink2 [overflow-wrap:anywhere]">{text}</p>
           </Details>
         )}
+        <Breakdown run={run} outcome={outcome} drafting={drafting} on={on} />
         {draft && (
           <p data-draft="ready" role="status" className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm">
             <b className="font-semibold text-ws-pip">A comment is drafted on {run.item?.key ?? "the ticket"}.</b> Read it, edit it or skip it. Nothing is posted until you approve it.

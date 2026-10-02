@@ -362,6 +362,30 @@ export function ticketStatus(outcome: Pick<RunOutcome, "ticketDraft"> | null): "
   return state === "pending" || state === "applying" ? "waiting" : state === "applied" ? "created" : state === "skipped" ? "skipped" : "retired";
 }
 
+/** What "Discuss with Pip" on a breakdown sends, or, with no draft, a request for Pip to propose one. Pip reads the run itself, so the prompt never carries its text. */
+export function breakdownWithPipPrompt(run: { id: string; item: { key: string } | null }, draftId: string | null = null): string {
+  const key = run.item?.key ?? "its ticket";
+  if (draftId) {
+    return `Let's talk about the breakdown draft ${draftId} on ${key}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then check the subtasks against it and tell me what you would change. Edit the draft only if I ask you to, with revise_proposal and only its summaries, and don't say anything has been created.`;
+  }
+  return `Propose subtasks for ${key} from run ${run.id}: read the whole run with get_run and then get_run_result until it says that is the end, then propose 3 to 8 short subtasks with propose_subtasks, only if the ticket is too big for one piece. Don't say anything has been created.`;
+}
+
+/** The breakdown draft a run left, if it is still waiting: the one the person can open, discuss or approve. */
+export function runBreakdownDraftOf(proposals: Record<string, Proposal> | readonly Proposal[], runId: string): Proposal | undefined {
+  const all = Array.isArray(proposals) ? proposals : Object.values(proposals);
+  return all
+    .filter((p) => p.state.type === "pending" && p.intent.type === "subtasks" && p.origin.type === "run" && p.origin.runId === runId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+/** What the sheet says about the breakdown a run proposed. */
+export function breakdownStatus(outcome: Pick<RunOutcome, "subtasksDraft"> | null): "none" | "waiting" | "created" | "skipped" | "retired" {
+  const state = outcome?.subtasksDraft?.state.type;
+  if (!state) return "none";
+  return state === "pending" || state === "applying" ? "waiting" : state === "applied" ? "created" : state === "skipped" ? "skipped" : "retired";
+}
+
 export function blockerControl(run: Pick<Run, "item">): DraftControl {
   return run.item ? { enabled: true, reason: null } : { enabled: false, reason: "This run isn't about a ticket, so there is nothing for a blocker to hold up." };
 }

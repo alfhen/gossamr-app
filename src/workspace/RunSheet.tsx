@@ -15,7 +15,7 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { MAY_TOUCH, answerable, canStartNow, commentWithPipPrompt, finishWithPipPrompt, stopControl } from "./runSheetLogic";
+import { MAY_TOUCH, answerable, breakdownWithPipPrompt, canStartNow, commentWithPipPrompt, finishWithPipPrompt, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { Changes, Found, type ResultActions } from "./RunResult";
@@ -436,6 +436,7 @@ export function RunSheet({ id }: { id: string }) {
       store.closeSheet();
       showDraft(draft.id);
     },
+    askPipBreakdown: () => (askPip(breakdownWithPipPrompt(run, outcome?.subtasksDraft?.state.type === "pending" ? outcome.subtasksDraft.id : null)), store.closeSheet()),
     openCreated: () => {
       if (!run.createdItem) return;
       store.closeSheet();

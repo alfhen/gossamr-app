@@ -1,6 +1,6 @@
 import type { AgentSettings, CleanupResult, CloneChoice, ContainerRef, FreshCopy, CodeChange, ItemRef, LocalClone, Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal } from "../types";
 import { containerRef, itemRef } from "./mockConnector";
-import { commentText, jiraNote, ticketBody, ticketFromAnswer, ticketKeys, ticketProposal } from "./mockRunResult";
+import { commentText, jiraNote, subtaskProposals, ticketBody, ticketFromAnswer, ticketKeys, ticketProposal } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
 import { docFromText, docText } from "../lib/docs";
 import type { MockProposals } from "./mockProposals";
@@ -98,7 +98,8 @@ const KIND_SEEDS: Seed[] = [
 /** What a sample run writes when it finishes, for each kind: an answer that ends in a `For Jira:` section. */
 export const SCRIPTED_RESULT: Record<RunKind, string> = {
   investigate: "The lag comes from one consumer that retries without backoff.\n\nFor Jira:\nThe consumer retries failed messages immediately, which is what builds the lag. It needs a backoff. I am fairly sure; I did not run it against production traffic.",
-  triage: "About a day. It touches the estimate module and the checkout summary.\n\nFor Jira:\nSize 3. It touches the estimate module and the checkout summary, and the checkout team owns both. No duplicates found.",
+  triage:
+    "About three days. It touches the estimate module, the checkout summary and the carrier lookup.\n\nSubtasks:\n- Cache the carrier rates the estimate asks for\n- Show the estimate in the checkout summary\n- Fall back to a flat rate when the carrier is slow\n- Cover the estimate with tests\n\nFor Jira:\nSize 8, too big for one piece, so a breakdown into four subtasks is proposed. The checkout team owns the estimate module and the summary. No duplicates found.",
   verify: "The fix works for percentage coupons.\n\nFor Jira:\nChecked percentage coupons: the totals are right and the tests pass. Fixed-amount coupons were not checked because they need the payment sandbox.",
   build: "Cached the category tree and committed it on the run's branch.\n\nFor Jira:\nThe category tree is now cached and the change is committed on the run's branch. It is not pushed. A person needs to review it and open the pull request.",
   review: "1. The retry loop never backs off.\n2. The new test doesn't cover the timeout path.\n\nFor Jira:\nReviewed the pull request. One blocking issue: the retry loop never backs off. The timeout path has no test. The author needs to fix both before it can merge.",
@@ -470,8 +471,17 @@ export class MockRuns {
       return;
     }
     const note = jiraNote(run.result ?? "");
-    if (!note.fromMarker || !note.text || this.commentDrafts(run.id).length) return;
-    this.proposals.fromRun({ type: "comment", item: run.item, body: docFromText(commentText(note, this.changes.get(run.id) ?? null, run.spec.kind)) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
+    if (note.fromMarker && note.text && !this.commentDrafts(run.id).length) {
+      this.proposals.fromRun({ type: "comment", item: run.item, body: docFromText(commentText(note, this.changes.get(run.id) ?? null, run.spec.kind)) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
+    }
+    const summaries = run.spec.kind === "triage" ? subtaskProposals(run.result ?? "") : [];
+    if (summaries.length && !this.subtaskDrafts(run.id).length) {
+      this.proposals.fromRun({ type: "subtasks", parent: run.item, summaries }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
+    }
+  }
+
+  private subtaskDrafts(runId: string): Proposal[] {
+    return this.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === runId && p.intent.type === "subtasks");
   }
 
   private ticketDrafts(runId: string): Proposal[] {
@@ -748,6 +758,7 @@ export class MockRuns {
     const own = run.item?.key.toUpperCase();
     const draft = this.commentDrafts(id)[0];
     const ticketDraft = this.ticketDrafts(id)[0];
+    const subtasksDraft = this.subtaskDrafts(id)[0];
     return {
       note: result ? jiraNote(result) : null,
       keys: result ? ticketKeys(result).filter((k) => k !== own) : [],
@@ -755,6 +766,8 @@ export class MockRuns {
       draft: draft ? { id: draft.id, state: draft.state } : null,
       ticket: result && !run.item ? ticketProposal(result) : null,
       ticketDraft: ticketDraft ? { id: ticketDraft.id, state: ticketDraft.state } : null,
+      subtasks: result && run.item && run.spec.kind === "triage" ? subtaskProposals(result) : [],
+      subtasksDraft: subtasksDraft ? { id: subtasksDraft.id, state: subtasksDraft.state } : null,
     };
   }
 
