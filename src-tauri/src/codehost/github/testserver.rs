@@ -134,8 +134,17 @@ pub fn pull_reply(number: u64, state: &str, head_repo: Option<&str>, base: &str)
 }
 
 pub fn pull_reply_at(number: u64, state: &str, head_repo: Option<&str>, base: &str, sha: &str) -> Reply {
+    pull_reply_drafted(number, state, head_repo, base, sha, false)
+}
+
+/// An open pull request that is still a draft, as `gh pr create --draft` leaves it.
+pub fn draft_pull_reply(number: u64, head_repo: Option<&str>, base: &str) -> Reply {
+    pull_reply_drafted(number, "open", head_repo, base, "a1b2c3d4e5f6", true)
+}
+
+fn pull_reply_drafted(number: u64, state: &str, head_repo: Option<&str>, base: &str, sha: &str, draft: bool) -> Reply {
     let head_repo = head_repo.map_or("null".to_string(), |r| format!("{{\"full_name\":\"{r}\"}}"));
     Reply::ok(&format!(
-        "{{\"number\":{number},\"state\":\"{state}\",\"draft\":false,\"title\":\"Fix the cart\",\"body\":null,\"created_at\":\"2026-09-25T08:00:00Z\",\"updated_at\":\"2026-09-29T09:30:00Z\",\"merged_at\":null,\"html_url\":\"https://github.com/acme/webshop/pull/{number}\",\"user\":{{\"login\":\"ann\"}},\"head\":{{\"ref\":\"fix-cart\",\"sha\":\"{sha}\",\"repo\":{head_repo}}},\"base\":{{\"ref\":\"{base}\",\"sha\":\"bbb\"}}}}"
+        "{{\"number\":{number},\"state\":\"{state}\",\"draft\":{draft},\"title\":\"Fix the cart\",\"body\":null,\"created_at\":\"2026-09-25T08:00:00Z\",\"updated_at\":\"2026-09-29T09:30:00Z\",\"merged_at\":null,\"html_url\":\"https://github.com/acme/webshop/pull/{number}\",\"user\":{{\"login\":\"ann\"}},\"head\":{{\"ref\":\"fix-cart\",\"sha\":\"{sha}\",\"repo\":{head_repo}}},\"base\":{{\"ref\":\"{base}\",\"sha\":\"bbb\"}}}}"
     ))
 }

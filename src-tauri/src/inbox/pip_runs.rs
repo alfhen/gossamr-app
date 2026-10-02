@@ -109,6 +109,8 @@ impl Core {
                 pr_sha: None,
                 plan: None,
                 plan_from_run: None,
+                build_account: None,
+                build_from_run: None,
                 allow_push: false,
                 project: None,
             };

@@ -895,7 +895,7 @@ mod kinds {
         assert!(!quiet.rows.iter().any(|r| r.text.contains("push")), "no push row without the tick");
         let build = RunSpec { allow_push: true, ..of(&rig, RunKind::Build, 1) };
         let p = rig.svc.preflight(Some(build)).await.unwrap();
-        assert!(has(&p, Level::Amber, "may push a branch and open a pull request if your Claude settings allow it. Your permission mode is auto: with auto mode"), "{p:?}");
+        assert!(has(&p, Level::Amber, "may push a branch and open a draft pull request if your Claude settings allow it. Your permission mode is auto: with auto mode"), "{p:?}");
 
         let p = rig.svc.preflight(Some(of(&rig, RunKind::Review, 2))).await.unwrap();
         assert!(has(&p, Level::Green, "Reviews pull request #12 in acme/webshop. Its branch is in acme/webshop"), "{p:?}");
@@ -920,6 +920,42 @@ mod kinds {
         let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
         assert_eq!(req.prompt, review.prompt);
         assert!(req.prompt.contains("<<<PLAN\n## Approach\n\nRound once.") && req.prompt.contains("do not deviate silently") && req.prompt.contains("do not push"));
+    }
+
+    #[tokio::test]
+    async fn a_build_that_may_push_launches_told_to_open_a_draft_pull_request() {
+        let rig = build_with(vec![], None, |s| s.with_cap(10)).await;
+        let run = approved(&rig, RunSpec { allow_push: true, ..of(&rig, RunKind::Build, 1) }).await;
+        rig.svc.launch(&run.id).await.unwrap();
+        let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
+        assert_eq!(req.prompt, render_prompt(&run.spec));
+        assert!(req.prompt.contains("`gh pr create --draft`") && req.prompt.contains("never merge it") && req.prompt.contains("under 'For Jira:'"));
+        let quiet = approved(&rig, of(&rig, RunKind::Build, 2)).await;
+        rig.svc.launch(&quiet.id).await.unwrap();
+        assert!(!rig.cli.0.lock().unwrap().launches.last().unwrap().prompt.contains("gh pr create"));
+    }
+
+    #[tokio::test]
+    async fn a_review_from_a_build_launches_with_the_account_that_was_approved_and_preflight_names_it() {
+        let rig = build_with(vec![(PULL, vec![crate::codehost::github::testserver::draft_pull_reply(12, Some("acme/webshop"), "main")])], None, |s| s.with_cap(10)).await;
+        let mut build = approved(&rig, RunSpec { allow_push: true, ..of(&rig, RunKind::Build, 1) }).await;
+        build.state = RunState::Done;
+        build.result = Some("Rounded once and added a test.\n\nFor Jira:\nDraft PR #12 opened.".into());
+        build.result_complete = true;
+        rig.fx.core.save_run(&build).await.unwrap();
+        let pr = crate::codehost::links::tests::pr(12, &format!("worktree-{}", build.spec.name), "T", "");
+        rig.fx.core.with_code_db("github:ann", |db| db.upsert_code_changes(&[pr], "2026-09-29T00:00:00Z")).unwrap();
+
+        let review = RunSpec { build_from_run: Some(build.id.clone()), ..of(&rig, RunKind::Review, 2) };
+        let p = rig.fx.core.draft_run(review, Some(rig.fx.item("CA-1"))).await.unwrap();
+        let read = rig.fx.core.runs_review(&p.id).await.unwrap();
+        let run = rig.fx.core.runs_approve(&p.id, &read.digest).await.unwrap();
+        let pre = rig.svc.preflight(Some(run.spec.clone())).await.unwrap();
+        assert!(pre.rows.iter().any(|r| r.level == Level::Green && r.text.contains(&format!("builder's account from run {}", build.id))), "{pre:?}");
+        rig.svc.launch(&run.id).await.unwrap();
+        let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
+        assert_eq!(req.prompt, read.prompt);
+        assert!(req.prompt.contains("<<<BUILD\nRounded once and added a test.") && req.prompt.contains("at commit a1b2c3d4e5f6") && req.prompt.contains("claim to check"));
     }
 
     #[tokio::test]
