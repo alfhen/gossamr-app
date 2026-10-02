@@ -5,6 +5,7 @@ import type { CleanupResult, ItemRef, Proposal, Run, RunsEnvironment } from "../
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, attentionCount, groupRuns, navOrder, stepRun, type AgentFilters } from "./agentsLogic";
+import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
@@ -78,6 +79,8 @@ interface RunsState {
   draftComment(id: string): Promise<void>;
   /** Drafts a link saying the run's ticket is blocked by `blockerKey` and takes the person to it. Nothing is posted. */
   draftBlocker(id: string, blockerKey: string): Promise<void>;
+  /** Drafts a new ticket from a finished run that has no ticket and opens the draft. Nothing is created. */
+  draftTicket(id: string): Promise<void>;
   stopAll(): Promise<void>;
   /** Removes a finished run's worktree. Null when the call failed, which is shown as a message. */
   cleanup(id: string): Promise<CleanupResult | null>;
@@ -120,6 +123,8 @@ async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState
     set({ drafting: null });
   }
 }
+
+const TICKET_READY = "Draft ticket ready. Nothing is created until you approve it.";
 
 let stop: (() => void) | null = null;
 let seq = 0;
@@ -310,6 +315,23 @@ export const useRuns = create<RunsState>((set, get) => ({
 
   async draftBlocker(id, blockerKey) {
     await draftFromRun(get, set, id, "link", (backend) => backend.runsDraftBlocker(id, blockerKey));
+  },
+
+  async draftTicket(id) {
+    const { backend, drafting } = get();
+    if (!backend || drafting) return;
+    set({ drafting: id });
+    try {
+      const draft = await backend.runsDraftTicket(id);
+      await useWorkspace.getState().refreshProposals();
+      get().closeSheet();
+      useToasts.getState().push(TICKET_READY, "info", { label: "Open", run: () => showDraft(draft.id) });
+      showDraft(draft.id);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't draft the ticket: ${messageOf(e)}`);
+    } finally {
+      set({ drafting: null });
+    }
   },
 
   async stopAll() {

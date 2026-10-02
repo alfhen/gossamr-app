@@ -17,9 +17,9 @@ const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOStr
 const seeded = () => new MockBackend().runs.list();
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 1000, result: "Found it.\n\nFor Jira: add a backoff.", error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: iso(2), ...over });
 
-const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn() });
+const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn() });
 
-const outcome = (over: Partial<RunOutcome> = {}): RunOutcome => ({ note: { text: "add a backoff.", fromMarker: true }, keys: ["WEB-9", "CA-2"], change: null, draft: null, ...over });
+const outcome = (over: Partial<RunOutcome> = {}): RunOutcome => ({ note: { text: "add a backoff.", fromMarker: true }, keys: ["WEB-9", "CA-2"], change: null, draft: null, ticket: null, ticketDraft: null, ...over });
 
 const tickets = [
   { key: "WEB-9", title: "Banner flicker" },
@@ -94,12 +94,11 @@ describe("What it found", () => {
     expect(disabled(html, "Draft a Jira comment from this")).toBe(false);
   });
 
-  it("disables both with the reason when the run has no ticket", () => {
+  it("offers a ticket instead of a comment or a blocker when the run has no ticket", () => {
     const html = sheet(run("done", { item: null }));
-    expect(disabled(html, "Draft a Jira comment from this")).toBe(true);
-    expect(disabled(html, "Draft a blocker")).toBe(true);
-    expect(html).toContain("This run isn&#x27;t about a ticket, so there is nothing to comment on.");
-    expect(button(html, "Draft a Jira comment from this")).toContain("title=");
+    expect(html).not.toContain("Draft a Jira comment from this");
+    expect(html).not.toContain("Draft a blocker");
+    expect(disabled(html, "Draft a ticket from this")).toBe(false);
   });
 
   it("disables the comment when it finished without an answer, but not the blocker", () => {
@@ -112,9 +111,7 @@ describe("What it found", () => {
 
   it("offers Draft with Pip under the same rules as the plain draft", () => {
     expect(disabled(sheet(run("done")), "Draft with Pip")).toBe(false);
-    const noTicket = sheet(run("done", { item: null }));
-    expect(disabled(noTicket, "Draft with Pip")).toBe(true);
-    expect(button(noTicket, "Draft with Pip")).toContain("title=");
+    expect(sheet(run("done", { item: null }))).not.toContain("Draft with Pip");
     expect(disabled(sheet(run("done", { result: null }), { outcome: outcome({ note: null, keys: [] }) }), "Draft with Pip")).toBe(true);
     expect(disabled(sheet(run("done"), { drafting: true }), "Draft with Pip")).toBe(true);
     for (const state of ["working", "failed"] as const) expect(sheet(run(state, { result: null }))).not.toContain("Draft with Pip");
@@ -262,5 +259,54 @@ describe("the Draft comment shortcut on an agent card", () => {
   it("is there when the screen says there is something to post, and not otherwise", () => {
     expect(card(vi.fn())).toContain("Draft comment");
     expect(card()).not.toContain("Draft comment");
+  });
+});
+
+describe("an investigation with no ticket", () => {
+  const ticketless = (state = "done" as RunState, over: Partial<Run> = {}) => run(state, { item: null, result: "Read it.\n\nNew ticket:\nTitle: Add a backoff\nKind: bug\nIt loops.", ...over });
+  const proposed = outcome({ note: null, keys: [], ticket: { title: "Add a backoff", kind: "bug", body: "It loops." } });
+
+  it("shows the ticket it proposes and offers to draft it, with no comment or blocker buttons", () => {
+    const html = sheet(ticketless(), { outcome: proposed });
+    expect(html).toContain("The ticket it proposes");
+    expect(html).toContain("Add a backoff");
+    expect(html).toContain("It loops.");
+    expect(disabled(html, "Draft a ticket from this")).toBe(false);
+    for (const gone of ["Draft a Jira comment from this", "Draft a blocker", "Draft with Pip", "Finish with Pip"]) expect(html).not.toContain(gone);
+  });
+
+  it("says when the answer had no New ticket section and offers the person-driven draft", () => {
+    const html = sheet(ticketless("done", { result: "It is the rounding." }), { outcome: outcome({ note: null, keys: [] }) });
+    expect(html).toContain("No &#x27;New ticket:&#x27; section, so this is its whole answer");
+    expect(html).toContain("Not parsed");
+    expect(html).toContain("It is the rounding.");
+    expect(disabled(html, "Draft a ticket from this")).toBe(false);
+  });
+
+  it("cannot draft a ticket from nothing", () => {
+    const html = sheet(ticketless("done", { result: null }), { outcome: outcome({ note: null, keys: [] }) });
+    expect(disabled(html, "Draft a ticket from this")).toBe(true);
+    expect(html).toContain("nothing to make a ticket from");
+  });
+
+  it("offers Open the draft ticket and Finish with Pip while the draft waits, and no second draft", () => {
+    const html = sheet(ticketless(), { outcome: { ...proposed, ticketDraft: { id: "d1", state: { type: "pending" } } } });
+    expect(html).toContain("A new ticket is drafted.");
+    expect(html).toContain("Nothing is created in Jira until you approve it.");
+    expect(disabled(html, "Open the draft ticket")).toBe(false);
+    expect(disabled(html, "Finish with Pip")).toBe(false);
+    expect(html).not.toContain("Draft a ticket from this");
+    expect(disabled(sheet(ticketless(), { outcome: { ...proposed, ticketDraft: { id: "d1", state: { type: "pending" } } }, drafting: true }), "Finish with Pip")).toBe(true);
+  });
+
+  it("says which ticket was created, and offers no draft once it was decided", () => {
+    const created = sheet(ticketless("done", { createdItem: { connectionId: "mock", externalId: "CA-812", key: "CA-812" } }), { outcome: { ...proposed, ticketDraft: { id: "d1", state: { type: "applied" } } } });
+    expect(created).toContain("Ticket CA-812 created from this");
+    expect(created).toContain("Open CA-812");
+    expect(created).not.toContain("Draft a ticket from this");
+    const skipped = sheet(ticketless(), { outcome: { ...proposed, ticketDraft: { id: "d1", state: { type: "skipped" } } } });
+    expect(skipped).toContain("You skipped its ticket draft.");
+    expect(skipped).not.toContain("Draft a ticket from this");
+    expect(sheet(ticketless(), { outcome: { ...proposed, ticketDraft: { id: "d1", state: { type: "retired", reason: "x" } } } })).toContain("out of date");
   });
 });

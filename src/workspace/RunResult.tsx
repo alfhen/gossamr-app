@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { CodeChange, Run, RunOutcome } from "../types";
 import { Box, Btn, CopyButton, Details, Sec } from "./AgentSheet";
-import { blockerChoices, blockerControl, changeSummary, commentControl } from "./runSheetLogic";
+import { blockerChoices, blockerControl, changeSummary, commentControl, createdFrom, ticketControl, ticketStatus } from "./runSheetLogic";
 
 export interface ResultActions {
   draftComment(): void;
@@ -12,6 +12,12 @@ export interface ResultActions {
   cancelBlocker(): void;
   draftBlocker(key: string): void;
   openChange(url: string): void;
+  /** Drafts a new ticket from a run that has no ticket. */
+  draftTicket(): void;
+  openTicketDraft(): void;
+  /** Opens Pip on the run and its ticket draft, to tighten the draft before it is approved. */
+  finishWithPip(): void;
+  openCreated(): void;
 }
 
 export interface ResultProps {
@@ -62,8 +68,111 @@ function BlockerPicker({ tickets, named, own, drafting, on }: { tickets: ResultP
   );
 }
 
+const TICKET_KIND: Record<string, string> = { task: "Task", bug: "Bug", story: "Story", epic: "Epic" };
+
+/** What an investigation with no ticket found. It ends as one draft ticket, which nothing creates until the person approves it. */
+function TicketFound({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "on">) {
+  const text = run.result?.trim();
+  const proposal = outcome?.ticket;
+  const status = ticketStatus(outcome);
+  const control = ticketControl(run);
+  const made = createdFrom(run);
+  return (
+    <Sec title="What it found">
+      <Box>
+        {proposal ? (
+          <>
+            <p className="m-0 flex flex-wrap items-center gap-2 text-xs font-semibold text-ws-ink3">
+              The ticket it proposes
+              <span className="rounded-full bg-ws-hover px-2 font-semibold text-ws-ink2">{TICKET_KIND[proposal.kind] ?? proposal.kind}</span>
+            </p>
+            <p data-ticket="title" className="selectable m-0 text-[14px] font-semibold [overflow-wrap:anywhere]">
+              {proposal.title}
+            </p>
+            {proposal.body && (
+              <p data-ticket="body" className="selectable m-0 whitespace-pre-wrap text-[13.5px] text-ws-ink2 [overflow-wrap:anywhere]">
+                {proposal.body}
+              </p>
+            )}
+          </>
+        ) : text ? (
+          <>
+            <p className="m-0 flex flex-wrap items-center gap-2 text-xs font-semibold text-ws-ink3">
+              No 'New ticket:' section, so this is its whole answer
+              <span className="rounded-full bg-ws-warn/15 px-2 font-semibold text-ws-warn">Not parsed</span>
+            </p>
+            <p data-ticket="answer" className="selectable m-0 whitespace-pre-wrap text-[13.5px] [overflow-wrap:anywhere]">
+              {text}
+            </p>
+          </>
+        ) : (
+          <p className="m-0 text-ws-ink3">It finished without a written answer.</p>
+        )}
+        {proposal && text && (
+          <Details summary="The full answer">
+            <p className="selectable m-0 whitespace-pre-wrap text-[13.5px] text-ws-ink2 [overflow-wrap:anywhere]">{text}</p>
+          </Details>
+        )}
+        {status === "waiting" && (
+          <p data-ticket-draft="waiting" role="status" className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm">
+            <b className="font-semibold text-ws-pip">A new ticket is drafted.</b> Read it, edit it or skip it. Nothing is created in Jira until you approve it.
+          </p>
+        )}
+        {status === "created" && (
+          <p data-ticket-draft="created" className="m-0 text-sm text-ws-ink2">
+            {made ?? "Its ticket was created"}.
+          </p>
+        )}
+        {status === "skipped" && (
+          <p data-ticket-draft="skipped" className="m-0 text-sm text-ws-ink3">
+            You skipped its ticket draft.
+          </p>
+        )}
+        {status === "retired" && (
+          <p data-ticket-draft="retired" className="m-0 text-sm text-ws-ink3">
+            Its ticket draft is out of date.
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {status === "waiting" ? (
+            <>
+              <Btn tone="primary" icon="ext" onClick={on.openTicketDraft}>
+                Open the draft ticket
+              </Btn>
+              <Btn icon="spark" disabled={drafting} title="Pip reads the whole run and the draft, and tightens the draft if you ask" onClick={on.finishWithPip}>
+                Finish with Pip
+              </Btn>
+            </>
+          ) : status === "created" && run.createdItem ? (
+            <Btn icon="ext" onClick={on.openCreated}>
+              Open {run.createdItem.key}
+            </Btn>
+          ) : status === "none" ? (
+            <Btn tone="primary" icon="ext" disabled={!control.enabled || drafting} title={control.reason ?? undefined} onClick={on.draftTicket}>
+              Draft a ticket from this
+            </Btn>
+          ) : null}
+          {text && <CopyButton text={text} label="Copy" what="the result" />}
+        </div>
+        {status === "none" && control.reason && (
+          <p role="note" className="m-0 text-sm text-ws-ink3">
+            {control.reason}
+          </p>
+        )}
+        <p className="m-0 text-xs text-ws-ink3">
+          The words are the agent&apos;s, written after reading code. A ticket is drafted for you to read and edit; nothing is created until you approve it, and the project was your choice.
+        </p>
+      </Box>
+    </Sec>
+  );
+}
+
 /** What the agent found. Drafting from it is one click and posts nothing. */
-export function Found({ run, outcome, tickets, pickBlocker, drafting, on }: ResultProps) {
+export function Found(props: ResultProps) {
+  return props.run.item ? <TicketRunFound {...props} /> : <TicketFound run={props.run} outcome={props.outcome} drafting={props.drafting} on={props.on} />;
+}
+
+function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, on }: ResultProps) {
   const text = run.result?.trim();
   const note = outcome?.note;
   const comment = commentControl(run);

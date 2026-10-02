@@ -14,8 +14,8 @@ export interface PipScript {
   draft: { intent: Intent; label: string | null } | null;
   /** An agent run to propose on a ticket, with an optional focus note. */
   runDraft?: { item: ItemRef; focus: string | null } | null;
-  /** A change to the text of a comment draft that came from a run. */
-  revise?: { id: string; body: string } | null;
+  /** A change to the text of a comment or new-ticket draft that came from a run. */
+  revise?: { id: string; body?: string; title?: string } | null;
   /** The draft this turn was about, remembered for the rest of the conversation. */
   discussed?: string;
 }
@@ -31,12 +31,19 @@ const asksToShow = /\b(show|filter|find|list|only|which)\b/;
 const asksAboutAgents = /\bmy agents\b|\bagents?\b.*\b(doing|up to|status|running)\b|\bwhat.*\bagents?\b/;
 const asksForAgent = /\b(start|launch|run|kick off)\b.*\b(agent|investigation)\b|\binvestigate\b/;
 const KEY = /\b([A-Z][A-Z0-9]+-\d+)\b/;
+const finishes = /new ticket draft (\S+), drafted from agent run (\S+?)\./i;
 const discusses = /comment draft (\S+) on \S+, drafted from agent run (\S+?)\./i;
 const asksToRevise = /\b(shorten|shorter|tighten|trim|rewrite|reword|rephrase|revise)\b/;
 const asksForShorter = /\b(shorten|shorter|tighten|trim)\b/;
 
 /** The comment a run left for the person, newest first, that Pip may revise. */
 const runDrafts = (drafts: readonly Proposal[]) => drafts.filter((d) => d.state.type === "pending" && d.origin.type === "run" && d.intent.type === "comment");
+
+/** A sample tightening of a ticket: the title loses a trailing possessive, and each paragraph keeps its first sentence. */
+function tightenedTicket(title: string, body: string): { title: string; body: string } {
+  const first = (paragraph: string) => /^.*?[.!?](?=\s|$)/s.exec(paragraph.trim())?.[0] ?? paragraph.trim();
+  return { title: title.replace(/'s\s+\w+$/, ""), body: body.split(/\n{2,}|\n/).filter((p) => p.trim()).map(first).join("\n\n") };
+}
 
 function revisedBody(text: string, shorter: boolean): string {
   const lines = text.split("\n").filter((l) => l.trim());
@@ -65,6 +72,19 @@ export function agentSummary(runs: readonly Run[], now: number): string {
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null): PipScript {
   const q = prompt.toLowerCase();
+  const finishing = finishes.exec(prompt);
+  if (finishing) {
+    const left = drafts.find((d) => d.id === finishing[1] && d.state.type === "pending" && d.origin.type === "run" && d.intent.type === "create");
+    if (left?.intent.type !== "create") return { steps: [], text: "I can't find that ticket draft any more, or it has been decided already, so there is nothing for me to finish.", filter: null, draft: null };
+    return {
+      steps: ["Read the run", "Read the rest of its result", "Tightened the draft ticket"],
+      text: "I read the whole run and tightened the draft: a shorter title and one sentence for each point. Nothing is created in Jira; read it, edit it, then approve it or skip it.",
+      filter: null,
+      draft: null,
+      discussed: left.id,
+      revise: { id: left.id, ...tightenedTicket(left.intent.fields.title, docText(left.intent.fields.body)) },
+    };
+  }
   const talked = discusses.exec(prompt);
   if (talked) {
     return {
@@ -210,8 +230,8 @@ export interface PipDrafter {
   pipRuns(): Run[];
   /** The drafts Pip can see. */
   pipDrafts(): Proposal[];
-  /** Revises a comment draft that came from a run, the way `revise_proposal` does. */
-  pipRevise(id: string, body: string): Promise<unknown>;
+  /** Revises a comment or new-ticket draft that came from a run, the way `revise_proposal` does. */
+  pipRevise(id: string, change: string | { body?: string; title?: string }): Promise<unknown>;
   /** Drafts a run the way propose_run does: Pip names the ticket and a focus note, the backend builds the rest. */
   pipRunDraft(item: ItemRef, focus: string | null, requestId: string): Promise<unknown>;
 }
@@ -251,7 +271,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       emit(req.requestId, { type: "tool", label });
     }
     if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
-    if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, script.revise.body);
+    if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title });
     if (!stopped && script.runDraft) await drafter?.pipRunDraft?.(script.runDraft.item, script.runDraft.focus, req.requestId);
     if (!stopped && script.filter) viewListeners.forEach((l) => l(req.requestId, script.filter!.filter, script.filter!.note));
     for (const word of script.text.match(/\S+\s*/g) ?? []) {

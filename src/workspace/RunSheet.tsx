@@ -15,7 +15,8 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { MAY_TOUCH, answerable, canStartNow, commentWithPipPrompt, stopControl } from "./runSheetLogic";
+import { MAY_TOUCH, answerable, canStartNow, commentWithPipPrompt, finishWithPipPrompt, stopControl } from "./runSheetLogic";
+import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
@@ -422,6 +423,24 @@ export function RunSheet({ id }: { id: string }) {
     pickBlocker: () => setPickBlocker(true),
     cancelBlocker: () => setPickBlocker(false),
     draftBlocker: (key) => void store.draftBlocker(id, key),
+    draftTicket: () => void store.draftTicket(id),
+    openTicketDraft: () => {
+      if (!outcome?.ticketDraft) return;
+      store.closeSheet();
+      showDraft(outcome.ticketDraft.id);
+    },
+    finishWithPip: () => {
+      const draft = outcome?.ticketDraft;
+      if (draft?.state.type !== "pending") return;
+      askPip(finishWithPipPrompt(run, draft.id));
+      store.closeSheet();
+      showDraft(draft.id);
+    },
+    openCreated: () => {
+      if (!run.createdItem) return;
+      store.closeSheet();
+      void openTicketByKey(run.createdItem.key);
+    },
     openChange: (url) => void openOnGithub(url),
     loadBrief: () => {
       if (brief !== null || !backend) return;

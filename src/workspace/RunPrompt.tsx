@@ -36,6 +36,8 @@ export function TicketText({ text }: { text: string }) {
 }
 
 export interface InstructionEditor {
+  /** Replaces the usual "What to do" for an investigation with no ticket, which is the person's own question. */
+  question?: boolean;
   text: string;
   disabled: boolean;
   onChange(text: string): void;
@@ -75,10 +77,10 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
               <pre className={`${MONO_BLOCK} max-h-none`}>{parts[0].text}</pre>
             </Part>
           )}
-          <Part label={editor ? "What to do (you can edit this)" : "What to do"} aside={editor?.onReset && <button type="button" onClick={editor.onReset} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover">Reset to the first draft</button>}>
+          <Part label={editor?.question ? "What should it look into? (your own words)" : editor ? "What to do (you can edit this)" : "What to do"} aside={editor?.onReset && <button type="button" onClick={editor.onReset} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover">Reset to the first draft</button>}>
             {editor ? (
               <textarea
-                aria-label="What the agent should do"
+                aria-label={editor.question ? "What it should look into" : "What the agent should do"}
                 rows={6}
                 value={editor.text}
                 disabled={editor.disabled}

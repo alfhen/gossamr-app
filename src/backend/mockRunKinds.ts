@@ -1,4 +1,7 @@
 import type { CodeChange, RunKind, RunSpec } from "../types";
+import { TICKETLESS_STARTER } from "../workspace/runSheetLogic";
+
+export { TICKETLESS_STARTER };
 
 const STATUS_NOTE = "Finish your answer with a short, factual note for the ticket under 'For Jira:': what you did or found, what state things are in, a link to the pull request if there is one, and what a person needs to do next.";
 
@@ -10,6 +13,11 @@ export const INSTRUCTIONS: Record<RunKind, string> = {
   build: `Make the change this work describes, on your worktree's branch. Keep it small and follow the repository's conventions. Run its tests and commit with a clear message; do not push and do not open a pull request unless a later sentence says you may. ${STATUS_NOTE}`,
   review: `Review the pull request named below, at the commit named there. Fetch it with read-only commands such as \`git fetch origin pull/<number>/head\` or \`gh pr view\` and \`gh pr diff\`. Change nothing on the pull request and do not comment on it. Write your comments most important first. ${STATUS_NOTE}`,
 };
+
+/** What a ticketless investigation is told after the person's own text, as `NEW_TICKET_TAIL` in `domain/run.rs`. */
+export const NEW_TICKET_TAIL =
+  "Read the code and logs you need, and change nothing. There is no ticket for this work yet, so instead of a note for an existing ticket, finish your answer with the ticket that should be filed, under 'New ticket:'. Start with a line 'Title:' (one line, at most 120 characters), optionally follow it with 'Kind:' (task, bug or story), then write the description: what you found, the evidence, what should be done, and how sure you are. Put everything you found into this one ticket.";
+
 
 export const PUSH_ALLOWED = "You may push your branch and open a pull request. Say what you pushed.";
 
@@ -28,6 +36,8 @@ export function reviewRefusal(change: CodeChange | null, spec: Pick<RunSpec, "re
 
 /** Why a spec can't be drafted, or null; the same matrix as `RunSpec::validate` and `proposals::check`. */
 export function specProblem(spec: RunSpec, hasItem: boolean): string | null {
+  if (spec.project && spec.kind !== "investigate") return "Only an investigation can end as a new ticket.";
+  if (spec.project && hasItem) return "A run on a ticket doesn't make a new one.";
   if (spec.kind === "build" && !hasItem) return "Build needs a ticket.";
   if (spec.kind === "review" && spec.pr == null) return "A review needs a pull request.";
   if (spec.kind !== "review" && spec.pr != null) return "Only a review reads a pull request.";

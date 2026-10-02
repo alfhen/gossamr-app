@@ -1,15 +1,16 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { itemKey } from "../lib/filter";
-import type { CloneChoice, ItemRef, Preflight, Proposal, ProposalEdit, Run, RunKind, RunReview, RunSpec } from "../types";
-import { useWorkspace } from "../workspaceStore";
-import { defaultRepo, findRunDraft, kindBlock, linkedRepo, prChoices, repoChoices, type PrChoice } from "./runSheetLogic";
+import type { CloneChoice, ContainerRef, ItemRef, Preflight, Proposal, ProposalEdit, Run, RunKind, RunReview, RunSpec } from "../types";
+import { allContainers, useWorkspace } from "../workspaceStore";
+import { defaultProject, defaultRepo, findRunDraft, kindBlock, linkedRepo, prChoices, repoChoices, ticketlessShape, type PrChoice } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { readStored, writeStored } from "./storage";
 import { useTabs } from "./tabsStore";
 import { messageOf, useToasts } from "./toasts";
 
 const LAST_REPO_KEY = "gossamr-agent-repo";
+const LAST_PROJECT_KEY = "gossamr-agent-project";
 const CHANGED = /changed after you read it/i;
 
 export type SetupPhase = "preparing" | "ready" | "starting";
@@ -36,6 +37,10 @@ interface SetupState {
   /** What the ticket is called, for naming the worktree. */
   title: string | null;
   repo: string | null;
+  /** Where the ticket of an investigation with no ticket lands. */
+  project: ContainerRef | null;
+  /** The person chose the project, so a change of repository leaves it alone. */
+  projectChosen: boolean;
   repos: string[];
   reposStatus: "loading" | "ready" | "failed";
   reposError: string | null;
@@ -64,6 +69,7 @@ interface SetupState {
   searchPrs(query: string): Promise<void>;
   choosePr(number: number): Promise<void>;
   chooseRepo(repo: string): Promise<void>;
+  chooseProject(project: ContainerRef): Promise<void>;
   chooseClone(path: string): Promise<void>;
   cloneFresh(): Promise<void>;
   saveEdit(edit: RunEditFields): Promise<void>;
@@ -81,6 +87,8 @@ const closed = {
   item: null,
   title: null,
   repo: null,
+  project: null,
+  projectChosen: false,
   repos: [] as string[],
   reposStatus: "loading" as "loading" | "ready" | "failed",
   reposError: null,
@@ -104,6 +112,12 @@ let run = 0;
 const lastRepo = () => {
   const stored = readStored(LAST_REPO_KEY);
   return typeof stored === "string" ? stored : null;
+};
+
+const lastProject = (): ContainerRef | null => {
+  const stored = readStored(LAST_PROJECT_KEY);
+  const found = stored as Partial<ContainerRef> | null;
+  return found && typeof found.connectionId === "string" && typeof found.externalId === "string" ? { connectionId: found.connectionId, externalId: found.externalId } : null;
 };
 
 export const useRunSetup = create<SetupState>((set, get) => {
@@ -144,6 +158,14 @@ export const useRunSetup = create<SetupState>((set, get) => {
     if (current(mine)) set({ preflight });
   };
 
+  /** The project for the ticket of a ticketless investigation in `repo`: the one the person chose, else the repository's usual one, else the last used, else the first watched. */
+  const projectFor = async (backend: Backend, repo: string): Promise<ContainerRef | null> => {
+    const { project, projectChosen } = get();
+    if (projectChosen && project) return project;
+    const repoProject = await backend.runsRepoProject(repo).catch(() => null);
+    return defaultProject({ repoProject, last: lastProject(), projects: allContainers(useWorkspace.getState()) });
+  };
+
   const prepare = async (mine: number) => {
     const { backend, item, repo, kind, pr, title, proposalId, ownDraft } = get();
     if (!backend || !repo) return;
@@ -163,7 +185,10 @@ export const useRunSetup = create<SetupState>((set, get) => {
         return;
       }
       const name = await backend.runsSuggestName(clone.path, item?.key ?? repo.split("/").pop() ?? "task", title ?? "");
-      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: false };
+      const project = ticketlessShape(item, kind) ? await projectFor(backend, repo) : null;
+      if (!current(mine)) return;
+      set({ project });
+      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: false, project };
       const draft = await backend.runsDraft(spec, item);
       if (!current(mine)) return void backend.proposalsSkip(draft.id).catch(() => {});
       set({ proposalId: draft.id, ownDraft: true });
@@ -192,14 +217,17 @@ export const useRunSetup = create<SetupState>((set, get) => {
       try {
         await loadRepos(mine);
         if (!current(mine)) return;
-        const id = proposalId ?? findRunDraft(workspace.proposals, item, kind, pr)?.id;
+        const waiting = findRunDraft(workspace.proposals, item, kind, pr);
+        // A ticketless draft from before projects existed would end as a comment with nowhere to go.
+        const reusable = waiting?.intent.type === "startRun" && ticketlessShape(item, kind) && !waiting.intent.spec.project ? undefined : waiting;
+        const id = proposalId ?? reusable?.id;
         if (id) {
           const draft: Proposal | null = await backend.proposalsGet(id);
           if (!current(mine)) return;
           if (draft?.intent.type !== "startRun" || draft.state.type !== "pending") throw new Error("that draft can't be started any more");
           const { spec, item: of } = draft.intent;
           const ticket = of ? workspace.items[itemKey(of)] : undefined;
-          set({ item: of, kind: spec.kind, pr: spec.pr ?? null, title: ticket?.title ?? null, repo: spec.repo, repos: repoChoices(latestWatched, useRuns.getState().runs), proposalId: id, ownDraft: false, fromPip: draft.createdBy === "pip", choice: await backend.runsClones(spec.repo) });
+          set({ item: of, kind: spec.kind, pr: spec.pr ?? null, title: ticket?.title ?? null, repo: spec.repo, project: spec.project ?? null, projectChosen: true, repos: repoChoices(latestWatched, useRuns.getState().runs), proposalId: id, ownDraft: false, fromPip: draft.createdBy === "pip", choice: await backend.runsClones(spec.repo) });
           await refresh(mine);
           if (current(mine)) set({ phase: "ready", initialInstruction: get().review?.instruction ?? null });
           return;
@@ -210,7 +238,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
         const watched = latestWatched;
         const repos = repoChoices(watched, useRuns.getState().runs);
         const repo = repos.find((r) => wanted && r.toLowerCase() === wanted.toLowerCase()) ?? defaultRepo(repos, item, useRuns.getState().runs, lastRepo(), linkedRepo(links, watched));
-        set({ title, repos, repo });
+        set({ title, repos, repo, project: ticketlessShape(item, kind) ? defaultProject({ repoProject: null, last: lastProject(), projects: allContainers(workspace) }) : null });
         if (repo) await prepare(mine);
         else set({ phase: "ready", preflight: await backend.runsPreflight(null).catch(() => null) });
       } catch (e) {
@@ -227,6 +255,13 @@ export const useRunSetup = create<SetupState>((set, get) => {
       writeStored(LAST_REPO_KEY, repo);
       set({ repo, pr: null, prs: NO_PRS });
       await prepare(++run);
+    },
+
+    async chooseProject(project) {
+      const { backend, proposalId } = get();
+      writeStored(LAST_PROJECT_KEY, project);
+      set({ project, projectChosen: true });
+      if (backend && proposalId) await get().saveEdit({ project });
     },
 
     async chooseKind(kind) {

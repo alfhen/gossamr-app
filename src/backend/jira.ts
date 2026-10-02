@@ -381,6 +381,14 @@ export class JiraBackend implements Backend {
     return invoke<Proposal>("runs_draft_comment", { id });
   }
 
+  runsDraftTicket(id: string) {
+    return invoke<Proposal>("runs_draft_ticket", { id });
+  }
+
+  runsRepoProject(repo: string) {
+    return invoke<ContainerRef | null>("runs_repo_project", { repo });
+  }
+
   runsDraftBlocker(id: string, blockerKey: string) {
     return invoke<Proposal>("runs_draft_blocker", { id, blockerKey });
   }

@@ -1,15 +1,16 @@
-import { useEffect, useState, type ReactNode } from "react";
-import type { CloneChoice, FreshCopy, ItemRef, Preflight, RunKind, RunReview } from "../types";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import type { CloneChoice, ContainerRef, FreshCopy, ItemRef, Preflight, RunKind, RunReview, WorkContainer } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
 import { KIND_LABEL } from "./agentsLogic";
 import { PrPicker } from "./PrPicker";
 import { PromptParts } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
-import { COPY, START_STEPS, homeShort, kindBlock, launchCommand, permissionMode, repoShortage, savedAsTyped, startBlock, worktreeBranch, type RepoShortage } from "./runSheetLogic";
+import { COPY, homeShort, kindBlock, launchCommand, permissionMode, repoShortage, savedAsTyped, startBlock, startSteps, ticketlessShape, worktreeBranch, type RepoShortage } from "./runSheetLogic";
+import { containerKey } from "../lib/filter";
 import { useRunSetup, type PrSearch, type RunEditFields, type SetupPhase } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
-import { useWorkspace } from "../workspaceStore";
+import { allContainers, useWorkspace } from "../workspaceStore";
 
 const KINDS: { kind: RunKind; note: string }[] = [
   { kind: "investigate", note: "Read the code and logs, change nothing, report" },
@@ -34,6 +35,7 @@ export interface SetupActions {
   /** Saves what is in the instruction box or the base field, when it differs from the draft. */
   commit(): void;
   chooseKind(kind: RunKind): void;
+  chooseProject(project: ContainerRef): void;
   searchPrs(query: string): void;
   choosePr(number: number): void;
   setAllowPush(on: boolean): void;
@@ -54,6 +56,10 @@ export interface SetupViewProps {
   reposError: string | null;
   /** The repository can be changed here only when this sheet made the draft. */
   repoEditable: boolean;
+  /** An investigation with no ticket: it asks for the person's own question and ends as a draft ticket in `project`. */
+  ticketless: boolean;
+  project: ContainerRef | null;
+  projects: readonly WorkContainer[];
   choice: CloneChoice | null;
   review: RunReview | null;
   preflight: Preflight | null;
@@ -225,7 +231,7 @@ function Heading({ p }: { p: SetupViewProps }) {
         <span className="text-sm text-ws-ink3">{p.fromPip ? "Proposed by Pip. Nothing has started." : "Started by you, still a draft you approve."}</span>
       </div>
       <h2 className="m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">
-        {KIND_LABEL[p.kind]} {p.item ? `${p.item.key}${p.ticketTitle ? `: ${p.ticketTitle}` : ""}` : "a task"}
+        {p.ticketless ? "Investigate something (no ticket)" : `${KIND_LABEL[p.kind]} ${p.item ? `${p.item.key}${p.ticketTitle ? `: ${p.ticketTitle}` : ""}` : "a task"}`}
       </h2>
       <p className="m-0 text-ws-ink2">Nothing runs until you press Start. You can stop it once it&apos;s working.</p>
     </div>
@@ -281,12 +287,50 @@ function PushOption({ p }: { p: SetupViewProps }) {
   );
 }
 
+function ProjectPicker({ p }: { p: SetupViewProps }) {
+  const locked = p.phase !== "ready" || p.busy;
+  return (
+    <Sec title="Where the ticket goes">
+      <p className="m-0 text-ws-ink2">There is no ticket for this. When the agent finishes, Gossamr drafts one new ticket from what it found, in this project. You read it, edit it and approve it; nothing is created in Jira before that, and the agent never picks the project.</p>
+      {p.projects.length === 0 ? (
+        <p className="m-0 text-ws-ink2">There is no project to put it in. Choose the projects to watch in Settings.</p>
+      ) : (
+        <label className="grid gap-1">
+          <span className="text-xs text-ws-ink3">Project</span>
+          <select
+            aria-label="Project for the ticket"
+            value={p.project ? containerKey(p.project) : ""}
+            disabled={locked}
+            onChange={(ev) => {
+              const next = p.projects.find((c) => containerKey(c.ref) === ev.target.value);
+              if (next) p.on.chooseProject(next.ref);
+            }}
+            className={FIELD}
+          >
+            {!p.project && (
+              <option value="" disabled>
+                Choose a project…
+              </option>
+            )}
+            {p.project && !p.projects.some((c) => containerKey(c.ref) === containerKey(p.project!)) && <option value={containerKey(p.project)}>{p.project.externalId}</option>}
+            {p.projects.map((c) => (
+              <option key={containerKey(c.ref)} value={containerKey(c.ref)}>
+                {c.key} · {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+    </Sec>
+  );
+}
+
 function Steps({ children }: { children: ReactNode }) {
   return <ol className="m-0 grid list-none gap-2 p-0 text-ws-ink2 [counter-reset:s]">{children}</ol>;
 }
 
 /** Why Start is off for what the sheet shows, or null. The button and the ⌘↵ shortcut both ask this. */
-export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "phase" | "busy" | "changed" | "choice" | "repo" | "instruction" | "base" | "kind" | "item" | "pr">): string | null {
+export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "phase" | "busy" | "changed" | "choice" | "repo" | "instruction" | "base" | "kind" | "item" | "pr"> & Partial<Pick<SetupViewProps, "ticketless" | "project">>): string | null {
   return startBlock({
     draft: !!p.review,
     review: p.review,
@@ -298,6 +342,7 @@ export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "pha
     repoMissing: !p.repo,
     kindBlock: kindBlock(p.kind, p.item, p.pr),
     typed: { instruction: p.instruction, base: p.base },
+    ticketless: p.ticketless ? { project: !!p.project } : undefined,
   });
 }
 
@@ -355,16 +400,20 @@ export function RunSetupView(p: SetupViewProps) {
         </p>
       )}
 
-      <Sec title="Ticket">
-        {p.item ? (
-          <p className="m-0">
-            <span className="font-mono font-semibold text-ws-ink2">{p.item.key}</span>
-            {p.ticketTitle && <span className="ml-2 text-ws-ink">{p.ticketTitle}</span>}
-          </p>
-        ) : (
-          <p className="m-0 text-ws-ink2">No ticket: a free-form task.</p>
-        )}
-      </Sec>
+      {p.ticketless ? (
+        <ProjectPicker p={p} />
+      ) : (
+        <Sec title="Ticket">
+          {p.item ? (
+            <p className="m-0">
+              <span className="font-mono font-semibold text-ws-ink2">{p.item.key}</span>
+              {p.ticketTitle && <span className="ml-2 text-ws-ink">{p.ticketTitle}</span>}
+            </p>
+          ) : (
+            <p className="m-0 text-ws-ink2">No ticket: a free-form task.</p>
+          )}
+        </Sec>
+      )}
       <KindPicker p={p} />
       {p.kind === "build" && <PushOption p={p} />}
       {p.kind === "review" && p.repo && (
@@ -386,7 +435,7 @@ export function RunSetupView(p: SetupViewProps) {
         {review ? (
           <PromptParts
             review={review}
-            editor={{ text: p.instruction, disabled: phase === "starting", onChange: p.onInstruction, onBlur: on.commit, onReset: p.onReset }}
+            editor={{ question: p.ticketless, text: p.instruction, disabled: phase === "starting", onChange: p.onInstruction, onBlur: on.commit, onReset: p.onReset }}
           />
         ) : (
           <p role="status" className="m-0 text-ws-ink3">
@@ -411,7 +460,7 @@ export function RunSetupView(p: SetupViewProps) {
 
       <Sec title="What happens when you press Start">
         <Steps>
-          {START_STEPS.map((text, i) => (
+          {startSteps(p.ticketless).map((text, i) => (
             <li key={i} className="grid grid-cols-[20px_minmax(0,1fr)] gap-2">
               <span aria-hidden className="grid size-5 place-items-center rounded-full bg-ws-hover text-[11px] font-bold">
                 {i + 1}
@@ -449,6 +498,8 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     if (Object.keys(edit).length) await useRunSetup.getState().saveEdit(edit);
   };
   const githubConnected = useWorkspace((w) => w.connections.some((c) => c.kind === "github"));
+  const containers = useWorkspace((w) => w.containers);
+  const projects = useMemo(() => allContainers({ containers }), [containers]);
   const view: SetupViewProps = {
     item: s.item,
     ticketTitle: ticketTitle ?? s.title,
@@ -461,6 +512,9 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     shortage: repoShortage({ repos: s.repos, loading: s.reposStatus === "loading", failed: s.reposStatus === "failed", githubConnected }),
     reposError: s.reposError,
     repoEditable: s.ownDraft || !s.proposalId,
+    ticketless: ticketlessShape(s.item, s.kind),
+    project: s.project,
+    projects,
     choice: s.choice,
     review: s.review,
     preflight: s.preflight,
@@ -493,6 +547,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
       dismissChanged: () => useRunSetup.getState().dismissChanged(),
       commit: () => void commit(),
       chooseKind: (kind) => void useRunSetup.getState().chooseKind(kind),
+      chooseProject: (project) => void useRunSetup.getState().chooseProject(project),
       searchPrs: (query) => void useRunSetup.getState().searchPrs(query),
       choosePr: (number) => void useRunSetup.getState().choosePr(number),
       setAllowPush: (on) => void useRunSetup.getState().saveEdit({ allowPush: on }),

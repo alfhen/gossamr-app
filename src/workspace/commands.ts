@@ -191,7 +191,7 @@ export function agentCommands(items: readonly WorkItem[], query: string, run: (i
 
 /** The ticket picker for "Start an agent…": no ticket first, then the ones that match, or the latest when nothing is typed. */
 export function agentTicketChoices(items: readonly WorkItem[], query: string, pick: (item: WorkItem | null) => void, limit = 8): Command[] {
-  const none: Command = { id: "agent:none", group: "Agents", icon: "·", label: "No ticket: a free-form task", hint: "↵", keywords: "without none free form", run: () => pick(null) };
+  const none: Command = { id: "agent:none", group: "Agents", icon: "·", label: "Investigate something (no ticket)", hint: "↵", keywords: "without none free form question prompt", run: () => pick(null) };
   const q = query.trim();
   const tickets = q
     ? ticketCommands(items, q, pick, limit)
@@ -199,7 +199,7 @@ export function agentTicketChoices(items: readonly WorkItem[], query: string, pi
         .sort((a, b) => b.updated.localeCompare(a.updated))
         .slice(0, limit)
         .map((item): Command => ({ id: `ticket:${itemKey(item.item)}`, group: "Tickets", icon: "·", label: item.title, hint: item.item.key, run: () => pick(item) }));
-  return [...tickets, ...(q && !/^\s*no\b/i.test(q) ? [] : [none])];
+  return [...tickets, ...(q && !/^\s*(no|investigate)\b/i.test(q) ? [] : [none])];
 }
 
 /** Projects the person doesn't watch that match the search, each a way to start watching it. */
