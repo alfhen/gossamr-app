@@ -329,7 +329,7 @@ describe("the setup sheet", () => {
     const html = setup({ review });
     expect(html).toContain("Which branch it starts from");
     expect(html).toContain("What to do (you can edit this)");
-    expect(html).toContain("Ticket text from Jira");
+    expect(html).toContain("Ticket from Jira, with its comments");
     expect(html).toContain("Show the whole prompt as one piece");
     expect(html).toContain('data-copy="' + review.prompt.replace(/&/g, "&amp;").replace(/'/g, "&#x27;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + '"');
   });
