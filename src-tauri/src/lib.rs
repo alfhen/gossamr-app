@@ -641,7 +641,8 @@ fn runs_keep_running(runs: State<'_, RunsState>) -> usize {
 
 /// What a run's result holds for the tracker, the tickets it names and the change it produced.
 #[tauri::command]
-async fn runs_outcome(core: State<'_, CoreState>, id: String) -> Result<inbox::RunOutcome> {
+async fn runs_outcome(core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<inbox::RunOutcome> {
+    runs.refresh_result(&id).await;
     core.run_outcome(&id).await
 }
 

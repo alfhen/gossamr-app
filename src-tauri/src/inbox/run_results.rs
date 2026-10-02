@@ -29,6 +29,8 @@ pub struct RunOutcome {
     pub subtasks: Vec<String>,
     /// The subtasks draft made from this run, in whatever state it is now.
     pub subtasks_draft: Option<RunDraft>,
+    /// The run's full answer couldn't be read, so `note` is only Claude's one-line summary of it.
+    pub summary_only: bool,
 }
 
 /// The comment draft made from a run, in whatever state it is now.
@@ -62,7 +64,9 @@ fn intro(kind: RunKind) -> &'static str {
 /// The comment as it is first drafted. The person edits it before posting.
 pub fn comment_text(run: &Run, note: &JiraNote, change: Option<&CodeChange>) -> String {
     let mut parts = vec![intro(run.spec.kind).to_string()];
-    if !note.from_marker {
+    if !run.result_complete {
+        parts.push(SUMMARY_ONLY.into());
+    } else if !note.from_marker {
         parts.push("The agent didn't mark anything for Jira, so this is its whole answer, shortened:".into());
     }
     parts.push(note.text.clone());
@@ -71,6 +75,9 @@ pub fn comment_text(run: &Run, note: &JiraNote, change: Option<&CodeChange>) -> 
     }
     parts.join("\n\n")
 }
+
+/// Said wherever a run's result is only the one-line summary Claude keeps, so nobody takes it for the whole answer.
+pub const SUMMARY_ONLY: &str = "Gossamr could only read a one-line summary of the run, not its full answer. Open the session to see the rest.";
 
 const FOUND_BY: &str = "Found by an agent that was asked to only read code and change nothing.";
 
@@ -131,6 +138,7 @@ impl Core {
             ticket_draft: ticket_draft.map(|p| RunDraft { id: p.id, state: p.state }),
             subtasks: result.filter(|_| run.spec.kind == RunKind::Triage && run.item.is_some()).map(subtask_proposals).unwrap_or_default(),
             subtasks_draft: self.subtask_drafts_of(&run).await?.into_iter().next().map(|p| RunDraft { id: p.id, state: p.state }),
+            summary_only: run.state == RunState::Done && result.is_some() && !run.result_complete,
         })
     }
 
@@ -198,10 +206,13 @@ impl Core {
         self.draft_from_run(&run, intent, label_of(&run)).await
     }
 
-    /// The same draft, made when a run finishes. Only a result that marked a `For Jira:` section is used, and a run
-    /// that already has a comment draft in any state, even a skipped one, gets no second.
+    /// The same draft, made when a run finishes. Only a full answer that marked a `For Jira:` section is used, and a
+    /// run that already has a comment draft in any state, even a skipped one, gets no second.
     pub async fn auto_draft_run_comment(&self, id: &str) -> Result<Option<Proposal>> {
         let Ok((run, item)) = self.finished_run(id).await else { return Ok(None) };
+        if !run.result_complete {
+            return Ok(None);
+        }
         let note = jira_note(run.result.as_deref().unwrap_or(""));
         if !note.from_marker || note.text.is_empty() || !self.comment_drafts_of(&run).await?.is_empty() {
             return Ok(None);
@@ -216,7 +227,7 @@ impl Core {
     pub async fn draft_run_subtasks(&self, id: &str) -> Result<Option<Proposal>> {
         let Ok((run, item)) = self.finished_run(id).await else { return Ok(None) };
         let summaries = subtask_proposals(run.result.as_deref().unwrap_or(""));
-        if run.spec.kind != RunKind::Triage || summaries.is_empty() {
+        if !run.result_complete || run.spec.kind != RunKind::Triage || summaries.is_empty() {
             return Ok(None);
         }
         let scope = self.scope().await?;
@@ -298,6 +309,9 @@ impl Core {
     /// `New ticket:` section and a title is used.
     pub async fn auto_draft_run_ticket(&self, id: &str) -> Result<Option<Proposal>> {
         let Ok(run) = self.ticketless_run(id).await else { return Ok(None) };
+        if !run.result_complete {
+            return Ok(None);
+        }
         let Some(proposal) = run.spec.project.as_ref().and(run.result.as_deref()).and_then(ticket_proposal) else { return Ok(None) };
         Ok(self.draft_ticket_once(&run, &proposal).await?.ok())
     }
@@ -369,6 +383,7 @@ mod tests {
         let mut run = fx.core.runs_approve(&p.id, &digest).await.unwrap();
         run.state = RunState::Done;
         run.result = Some(result.into());
+        run.result_complete = true;
         run.short_id = crate::runs::cli::ShortId::parse(&format!("ab12{:04x}", N.load(std::sync::atomic::Ordering::SeqCst)));
         run.ended_at = Some(Utc::now());
         edit(&mut run);
@@ -448,6 +463,33 @@ mod tests {
         let run = run_with(&fx, |r| r.result = Some("It is the rounding.".into())).await;
         let text = body_of(&fx.core.draft_run_comment(&run.id).await.unwrap());
         assert!(text.contains("didn't mark anything for Jira") && text.ends_with("It is the rounding."), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_summary_only_run_is_drafted_on_request_with_honest_wording_and_never_automatically() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let summary = "Triage complete: small PR.\n\nFor Jira: a marker inside a summary.";
+        let run = run_with(&fx, |r| (r.result, r.summary, r.result_complete) = (Some(summary.into()), Some(summary.into()), false)).await;
+        assert_eq!(fx.core.auto_draft_run_comment(&run.id).await.unwrap(), None);
+        assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().iter().all(|p| !matches!(p.intent, Intent::Comment { .. })));
+
+        let text = body_of(&fx.core.draft_run_comment(&run.id).await.unwrap());
+        assert!(text.contains(SUMMARY_ONLY) && !text.contains("didn't mark anything"), "{text}");
+        assert!(fx.core.run_outcome(&run.id).await.unwrap().summary_only);
+        assert!(!fx.core.run_outcome(&run_with(&fx, |_| {}).await.id).await.unwrap().summary_only);
+    }
+
+    #[tokio::test]
+    async fn nothing_else_is_drafted_automatically_from_a_bare_summary() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let triage = triage_with(&fx, BREAKDOWN).await;
+        fx.core.save_run(&Run { result_complete: false, ..triage.clone() }).await.unwrap();
+        assert_eq!(fx.core.draft_run_subtasks(&triage.id).await.unwrap(), None);
+
+        let loose = ticketless(&fx, TICKET_RESULT, |r| r.result_complete = false).await;
+        assert_eq!(fx.core.auto_draft_run_ticket(&loose.id).await.unwrap(), None);
+        let full = ticketless(&fx, TICKET_RESULT, |_| {}).await;
+        assert!(fx.core.auto_draft_run_ticket(&full.id).await.unwrap().is_some());
     }
 
     #[tokio::test]

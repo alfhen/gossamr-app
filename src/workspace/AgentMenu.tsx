@@ -120,7 +120,7 @@ export function TicketAgentRows({ runs, now, title, onOpen }: { runs: readonly R
                 <StateChip run={r} now={now} />
               </span>
             </span>
-            <span className="truncate text-sm text-ws-ink2">{r.state === "working" || r.state === "launching" || r.state === "queued" ? progressText(r) : (r.needs ?? r.result ?? r.error ?? "").split("\n")[0]}</span>
+            <span className="truncate text-sm text-ws-ink2">{r.state === "working" || r.state === "launching" || r.state === "queued" ? progressText(r) : (r.needs ?? r.summary ?? r.result ?? r.error ?? "").split("\n")[0]}</span>
           </button>
         </li>
       ))}

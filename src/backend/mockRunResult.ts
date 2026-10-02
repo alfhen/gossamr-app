@@ -1,4 +1,4 @@
-import type { CodeChange, JiraNote, RunKind, TicketProposal, WorkItemKind } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type JiraNote, type RunKind, type TicketProposal, type WorkItemKind } from "../types";
 
 const KEY = /\b[A-Za-z][A-Za-z0-9_]*-\d+\b/g;
 
@@ -187,9 +187,10 @@ export const ticketBody = (t: TicketProposal) => (t.body ? `${t.body}\n\n${FOUND
 export const ticketKeys = (text: string): string[] => [...new Set((text.match(KEY) ?? []).map((k) => k.toUpperCase()))];
 
 /** The comment as the backend first drafts it, for the sample data. */
-export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate"): string {
+export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false): string {
   const parts = [kind === "investigate" ? "Looked into this with an agent (it was asked to only read code and change nothing)." : "An agent worked on this."];
-  if (!note.fromMarker) parts.push("The agent didn't mark anything for Jira, so this is its whole answer, shortened:");
+  if (summaryOnly) parts.push(SUMMARY_ONLY);
+  else if (!note.fromMarker) parts.push("The agent didn't mark anything for Jira, so this is its whole answer, shortened:");
   parts.push(note.text);
   if (change?.kind === "pullRequest") parts.push(`Pull request: ${change.url}`);
   return parts.join("\n\n");

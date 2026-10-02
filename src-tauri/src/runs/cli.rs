@@ -289,6 +289,8 @@ pub trait ClaudeCli: Send + Sync {
     async fn stop(&self, id: &ShortId) -> CliResult<()>;
     async fn rm(&self, id: &ShortId) -> CliResult<()>;
     async fn job(&self, config_dir: &Path, id: &ShortId) -> CliResult<Option<JobInfo>>;
+    /// The text of the session's last assistant message, read from its transcript under `projects`.
+    async fn final_answer(&self, projects: &Path, session_id: &str, cwds: &[PathBuf]) -> Option<String>;
     /// The `claude` this runs, for a command that has to start the same one in a terminal.
     fn binary(&self) -> Option<PathBuf> {
         None
@@ -412,6 +414,11 @@ impl ClaudeCli for SystemCli {
         tokio::task::spawn_blocking(move || read_job(&dir))
             .await
             .map_err(|e| CliError::Spawn(std::io::Error::other(e)))?
+    }
+
+    async fn final_answer(&self, projects: &Path, session_id: &str, cwds: &[PathBuf]) -> Option<String> {
+        let (projects, session_id, cwds) = (projects.to_path_buf(), session_id.to_owned(), cwds.to_vec());
+        tokio::task::spawn_blocking(move || super::transcript::final_answer(&projects, &session_id, &cwds)).await.ok().flatten()
     }
 
     fn binary(&self) -> Option<PathBuf> {
@@ -709,6 +716,22 @@ mod tests {
             assert!(!rig.cli.agents(true).await.unwrap().iter().any(|r| r.id.as_deref() == Some(launched.short_id.as_str())));
             assert!(rig.cli.job(&rig.dir.join("config"), &launched.short_id).await.unwrap().is_none());
             assert!(rig.cli.stop(&launched.short_id).await.is_err(), "an unknown session is an error");
+        }
+
+        #[tokio::test]
+        async fn the_final_answer_is_read_from_the_transcript_the_session_wrote_under_the_projects_folder() {
+            let rig = Rig::new("transcript", "transcript=Done. For Jira: it works\n");
+            let launched = rig.cli.launch(&rig.request("ce-9-answer-ab12")).await.unwrap();
+            let rows = rig.cli.agents(false).await.unwrap();
+            let mine = rows.iter().find(|r| r.id.as_deref() == Some(launched.short_id.as_str())).unwrap();
+            let (session, cwd) = (mine.session_id.clone().unwrap(), PathBuf::from(mine.cwd.clone().unwrap()));
+            let projects = rig.cli.auth_status().await.unwrap().projects_directory.unwrap();
+            assert_eq!(projects, rig.dir.join("config/projects"));
+
+            let answer = rig.cli.final_answer(&projects, &session, std::slice::from_ref(&cwd)).await;
+            assert!(answer.as_deref().is_some_and(|a| a == "Done. For Jira: it works"), "{answer:?}");
+            assert_eq!(rig.cli.final_answer(&projects, &session, &[PathBuf::from("/elsewhere")]).await, answer, "found by its session id when the folder differs");
+            assert_eq!(rig.cli.final_answer(&projects, "00000000-0000-4000-8000-000000000000", &[cwd]).await, None);
         }
 
         #[tokio::test]

@@ -2,7 +2,8 @@
 # Stand-in for `claude` in tests. FAKE_CLAUDE_SCENARIO names a key=value file; sessions, jobs/ and calls.log live
 # beside it. Keys: version, help_bg (0 hides --bg), logged_in (0 prints loggedIn:false and exits 1),
 # config_dir, service_line (1 prints the daemon start line), launch_fail (untrusted|garbage|exit),
-# interactive (1 lists a foreign interactive session), foreign_bg (1 lists a foreign background session).
+# interactive (1 lists a foreign interactive session), foreign_bg (1 lists a foreign background session),
+# transcript (text a new session's transcript ends with, written under <config_dir>/projects like Claude does).
 set -u
 scenario=${FAKE_CLAUDE_SCENARIO:?FAKE_CLAUDE_SCENARIO is not set}
 dir=$(dirname "$scenario")
@@ -24,7 +25,20 @@ new_session() { # worktree name prompt
   [ -n "$wt" ] && cwd=$PWD/.claude/worktrees/$wt && mkdir -p "$cwd"
   printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$id-0000-4000-8000-000000000000" "$cwd" "$2" working >> "$sessions"
   write_job "$id" "$wt" "$3" "$cwd"
+  write_transcript "$id-0000-4000-8000-000000000000" "$cwd"
   echo "$id"
+}
+
+write_transcript() { # sessionId cwd
+  local text folder
+  text=$(cfg transcript "")
+  [ -z "$text" ] && return
+  folder=$(printf '%s' "$2" | sed 's/[^A-Za-z0-9]/-/g')
+  mkdir -p "$config_dir/projects/$folder"
+  {
+    printf '{"type":"user","message":{"role":"user","content":"a prompt"}}\n'
+    printf '{"type":"assistant","isSidechain":false,"message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$(esc "$text")"
+  } > "$config_dir/projects/$folder/$1.jsonl"
 }
 
 write_job() { # id worktree prompt cwd

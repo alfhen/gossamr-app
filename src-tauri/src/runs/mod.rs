@@ -9,6 +9,7 @@ pub mod control;
 pub mod enable;
 pub mod env;
 pub mod failure;
+mod final_answer;
 mod finder;
 pub mod fresh;
 pub mod index;
@@ -22,6 +23,7 @@ pub mod result;
 pub mod service;
 pub mod state;
 pub mod toolchain;
+pub mod transcript;
 pub mod tracker;
 
 #[cfg(test)]
