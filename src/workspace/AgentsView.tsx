@@ -337,6 +337,11 @@ function useBuildChanges(runs: readonly Run[]) {
   const backend = useRuns((s) => s.backend);
   const [changes, setChanges] = useState<Record<string, CodeChange | null>>({});
   const asked = useRef(new Map<string, number>());
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((n) => n + 1), CHANGE_RECHECK_MS);
+    return () => clearInterval(timer);
+  }, []);
   useEffect(() => {
     if (!backend) return;
     const at = Date.now();
@@ -349,7 +354,7 @@ function useBuildChanges(runs: readonly Run[]) {
         () => {},
       );
     }
-  }, [backend, runs, changes]);
+  }, [backend, runs, changes, tick]);
   return changes;
 }
 
