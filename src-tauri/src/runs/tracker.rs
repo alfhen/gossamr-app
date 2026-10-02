@@ -22,6 +22,8 @@ use crate::notify::Notice;
 
 pub const POLL_BUSY: Duration = Duration::from_secs(4);
 pub const POLL_IDLE: Duration = Duration::from_secs(30);
+/// A finished run is watched this long after it ended, in case its session is still open and the person carries on.
+const WATCH_FINISHED: chrono::Duration = chrono::Duration::hours(6);
 /// Focusing the window this soon after a notification opens the run it was about.
 pub const OPEN_WINDOW: Duration = Duration::from_secs(30);
 
@@ -57,6 +59,11 @@ pub struct NoNotices;
 
 impl RunNotifier for NoNotices {
     fn notify(&self, _run: &Run, _why: Attention) {}
+}
+
+/// A session whose process is alive and that is not at rest, the only kind a finished run can be taken up by again.
+fn is_active(entry: &AgentEntry) -> bool {
+    entry.pid.is_some() && matches!(entry.state.as_deref(), Some("working" | "blocked")) && entry.status.as_deref() != Some("idle")
 }
 
 fn topic(run: &Run) -> &str {
@@ -180,18 +187,20 @@ impl RunService {
         ];
         let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(unfinished.to_vec()), ..RunQuery::default() }).await else { return idle };
         let waiting = self.awaiting_answer(now).await;
-        if runs.is_empty() && waiting.is_empty() {
+        let finished = self.recently_finished(now).await;
+        if runs.is_empty() && waiting.is_empty() && finished.is_empty() {
             return idle;
         }
-        let busy = runs.iter().any(|r| r.state != RunState::Queued) || !waiting.is_empty();
+        let mut busy = runs.iter().any(|r| r.state != RunState::Queued) || !waiting.is_empty();
         let Ok(tc) = self.tools.get().await else { return Polled { busy } };
         self.collect_answers(&tc, &waiting).await;
         let Ok(entries) = tc.cli.agents(true).await else { return Polled { busy } };
+        busy |= finished.iter().any(|r| entries.iter().any(|e| belongs_to(e, r) && is_active(e)));
         let config_dir = self.claude_config_dir(&tc).await;
 
         let _turn = self.launching.lock().await;
         let mut changed = HashSet::new();
-        for listed in &runs {
+        for listed in runs.iter().chain(&finished) {
             match self.track(&tc, config_dir.as_deref(), &entries, &listed.id, now).await {
                 Ok(Some(connection_id)) => {
                     changed.insert(connection_id);
@@ -202,6 +211,13 @@ impl RunService {
         }
         changed.iter().for_each(|c| (self.changed)(c));
         Polled { busy }
+    }
+
+    /// Runs that finished lately and still have a worktree: their session may be open at its prompt.
+    async fn recently_finished(&self, now: DateTime<Utc>) -> Vec<Run> {
+        let query = RunQuery { states: Some(vec![RunState::Done]), ..RunQuery::default() };
+        let Ok(done) = self.core.runs_list(&query).await else { return Vec::new() };
+        done.into_iter().filter(|r| r.short_id.is_some() && r.worktree_removed_at.is_none() && r.ended_at.is_some_and(|at| now - at <= WATCH_FINISHED)).collect()
     }
 
     /// `jobs/<id>` lives under the config directory `claude auth status` reports, never a hard-coded `~/.claude`.
@@ -217,24 +233,34 @@ impl RunService {
     /// Applies one run's observation. Returns its connection when anything about it changed.
     async fn track(&self, tc: &Toolchain, config_dir: Option<&Path>, entries: &[AgentEntry], run_id: &str, now: DateTime<Utc>) -> crate::error::Result<Option<String>> {
         let Some(before) = self.core.run(run_id).await? else { return Ok(None) };
-        if matches!(before.state, RunState::Done | RunState::Failed | RunState::Stopped) || before.worktree_removed_at.is_some() {
+        if matches!(before.state, RunState::Failed | RunState::Stopped) || before.worktree_removed_at.is_some() {
             return Ok(None);
         }
         let entry = entries.iter().find(|e| belongs_to(e, &before));
+        let finished = before.state == RunState::Done;
+        if finished && !entry.is_some_and(is_active) {
+            return Ok(None);
+        }
         let short = before.short_id.clone().or_else(|| entry.and_then(|e| e.id.as_deref().and_then(ShortId::parse)));
         let job = match (entry, config_dir, &short) {
             (Some(_), Some(dir), Some(id)) => tc.cli.job(dir, id).await.ok().flatten(),
             _ => None,
         };
         let misses = self.misses.lock().expect("misses lock poisoned").get(run_id).copied().unwrap_or(0);
-        let seen = map_state(entry, job.as_ref(), &before, now, misses);
-        {
-            let mut all = self.misses.lock().expect("misses lock poisoned");
-            if seen.pid_misses > 0 {
-                all.insert(run_id.to_owned(), seen.pid_misses);
+        let idle = self.idle_polls.lock().expect("idle polls lock poisoned").get(run_id).copied().unwrap_or(0);
+        let seen = map_state(entry, job.as_ref(), &before, now, misses, idle);
+        for (counts, n) in [(&self.misses, seen.pid_misses), (&self.idle_polls, seen.idle_polls)] {
+            let mut all = counts.lock().expect("run counts lock poisoned");
+            if n > 0 {
+                all.insert(run_id.to_owned(), n);
             } else {
                 all.remove(run_id);
             }
+        }
+        // A finished run is only reopened by its session working or asking again, never by anything else.
+        let reopened = finished && matches!(seen.state, RunState::Working | RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked);
+        if finished && !reopened {
+            return Ok(None);
         }
 
         let mut run = before.clone();
@@ -253,6 +279,10 @@ impl RunService {
         if seen.state != before.state || reason_changed {
             run.state = seen.state;
             run.last_progress_at = now;
+        }
+        if reopened {
+            run.continued_at = Some(now);
+            run.ended_at = None;
         }
         run.needs = match seen.state {
             RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => seen.text.as_deref().and_then(|t| cleaned(t, NEEDS_KEPT)),
@@ -305,7 +335,7 @@ impl RunService {
             touched = true;
         }
         let drafted = if run.state == RunState::Done && before.state != RunState::Done && settings.draft_on_finish { self.draft_for(&run).await } else { None };
-        if run.short_id != before.short_id {
+        if run.short_id != before.short_id || reopened {
             self.remember(&run);
         }
         if ended {
@@ -318,7 +348,8 @@ impl RunService {
         } else if run.state != before.state {
             match run.state {
                 RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => self.notifier.notify(&run, Attention::Needs),
-                RunState::Done => self.notifier.notify(&run, drafted.unwrap_or(Attention::Done)),
+                // Finishing again after the person carried on is only worth a notice when it makes a draft.
+                RunState::Done if before.continued_at.is_none() || drafted.is_some() => self.notifier.notify(&run, drafted.unwrap_or(Attention::Done)),
                 RunState::Failed => self.notifier.notify(&run, Attention::Failed),
                 _ => {}
             }

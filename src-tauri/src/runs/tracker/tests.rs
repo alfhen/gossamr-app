@@ -82,9 +82,10 @@ async fn a_run_follows_its_session_from_working_to_a_permission_prompt_and_back_
     assert!(rig.svc.index.live().is_empty(), "a finished run leaves the index's live list");
     assert!(!rig.changes.lock().unwrap().is_empty());
 
+    rig.set(&run, |r| r.ended_at = Some(Utc::now() - Span::hours(7))).await;
     let polls = rig.cli.0.lock().unwrap().listings;
     rig.poll().await;
-    assert_eq!(rig.cli.0.lock().unwrap().listings, polls, "nothing unfinished, so claude isn't asked");
+    assert_eq!(rig.cli.0.lock().unwrap().listings, polls, "nothing unfinished or lately finished, so claude isn't asked");
 }
 
 #[tokio::test]
@@ -863,4 +864,246 @@ async fn timeline_lines_with_fractions_of_a_second_are_stored_once_however_often
     rig.poll().await;
     rig.poll().await;
     assert_eq!(rig.fx.core.run_events(&run.id).await.unwrap().len(), 3, "a new line is added once");
+}
+
+const ANSWER: &str = "Built it.\n\nFor Jira:\nPass-through rules added.";
+const SECOND_ANSWER: &str = "Fixed the review comment.\n\nFor Jira:\nA different note.";
+
+fn attached_idle(entry: &mut AgentEntry) {
+    entry.state = Some("working".into());
+    entry.status = Some("idle".into());
+    entry.waiting_for = None;
+    entry.pid = Some(4242);
+}
+
+/// Claude's answer to the person: in the transcript, and as the newest timeline line.
+fn answered(rig: &Rig, run: &Run, at: &str, text: &str) {
+    rig.cli.with(|s| {
+        s.answers.insert(session_of(run), text.into());
+    });
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.timeline.push(line(at, "working", text)));
+}
+
+/// The person typed a follow-up: a line with a detail and no text.
+fn typed(rig: &Rig, run: &Run, at: &str) {
+    let follow_up = TimelineLine { at: Some(at.into()), state: Some("working".into()), detail: Some("one more thing".into()), text: None };
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.timeline.push(follow_up));
+}
+
+async fn polls(rig: &Rig, n: u32) {
+    for _ in 0..n {
+        rig.poll().await;
+    }
+}
+
+async fn attached_and_answered() -> (Rig, Run) {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    answered(&rig, &run, "2026-01-01T00:05:00Z", ANSWER);
+    rig.session(&run, attached_idle);
+    rig.poll().await;
+    rig.poll().await;
+    (rig, run)
+}
+
+#[tokio::test]
+async fn a_session_left_open_at_its_prompt_after_answering_is_done_on_the_second_idle_poll() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    answered(&rig, &run, "2026-01-01T00:05:00Z", ANSWER);
+    rig.session(&run, attached_idle);
+
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working, "one idle look is not enough");
+    assert!(rig.noticed().is_empty() && comment_drafts(&rig).await.is_empty());
+
+    rig.poll().await;
+    let done = rig.get(&run).await;
+    assert_eq!((done.state, done.result.as_deref(), done.result_complete), (RunState::Done, Some(ANSWER), true));
+    assert!(done.ended_at.is_some() && done.continued_at.is_none());
+    assert_eq!(rig.noticed(), [(Attention::Drafted, RunState::Done)]);
+    assert_eq!(comment_drafts(&rig).await.len(), 1);
+    assert!(rig.svc.index.live().is_empty());
+
+    for _ in 0..3 {
+        rig.poll().await;
+    }
+    assert_eq!(rig.get(&run).await, done, "an idle session leaves a finished run alone");
+    assert_eq!((rig.noticed().len(), comment_drafts(&rig).await.len()), (1, 1));
+
+    let tally = rig.svc.stop_all().await.unwrap();
+    assert_eq!(tally.stopped, 0);
+    assert!(rig.cli.0.lock().unwrap().stops.is_empty(), "stop all never touches a finished run");
+}
+
+#[tokio::test]
+async fn an_idle_session_that_has_not_answered_or_is_asking_or_has_work_in_the_background_stays_working() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    rig.session(&run, attached_idle);
+    let id = run.short_id.clone().unwrap();
+
+    rig.job(&id, |j| j.timeline.push(TimelineLine { at: Some("2026-01-01T00:01:00Z".into()), state: Some("working".into()), detail: Some("Running ls".into()), text: None }));
+    polls(&rig, 4).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working, "between tool calls the newest line has no text");
+
+    rig.job(&id, |j| j.timeline.push(line("2026-01-01T00:02:00Z", "blocked", "Which one?")));
+    polls(&rig, 4).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working, "a question is not an answer");
+
+    answered(&rig, &run, "2026-01-01T00:03:00Z", ANSWER);
+    rig.job(&id, |j| j.in_flight = Some(2));
+    polls(&rig, 4).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working, "background tasks are still going");
+    assert!(rig.noticed().is_empty());
+
+    rig.job(&id, |j| j.in_flight = Some(0));
+    polls(&rig, 4).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Done);
+}
+
+#[tokio::test]
+async fn a_busy_look_between_two_idle_looks_starts_the_count_again() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    answered(&rig, &run, "2026-01-01T00:05:00Z", ANSWER);
+    rig.session(&run, attached_idle);
+    rig.poll().await;
+    rig.session(&run, working);
+    rig.poll().await;
+    rig.session(&run, attached_idle);
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Done);
+}
+
+#[tokio::test]
+async fn a_finished_run_whose_session_carries_on_goes_back_to_working_and_finishes_again_without_a_second_notice_or_draft() {
+    let (rig, run) = attached_and_answered().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Done);
+
+    typed(&rig, &run, "2026-01-01T00:10:00Z");
+    rig.session(&run, working);
+    let polled = rig.svc.poll_at(Utc::now()).await;
+    assert!(polled.busy, "a finished run being worked on again is watched closely");
+    let again = rig.get(&run).await;
+    assert_eq!(again.state, RunState::Working);
+    assert!(again.continued_at.is_some() && again.ended_at.is_none());
+    assert_eq!(again.result.as_deref(), Some(ANSWER), "the earlier answer stays until there is a new one");
+    assert_eq!(rig.svc.index.live().len(), 1, "it counts as running again");
+
+    answered(&rig, &run, "2026-01-01T00:15:00Z", SECOND_ANSWER);
+    rig.session(&run, attached_idle);
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+    rig.poll().await;
+    let second = rig.get(&run).await;
+    assert_eq!((second.state, second.result.as_deref()), (RunState::Done, Some(SECOND_ANSWER)));
+    assert!(second.ended_at.is_some() && second.continued_at.is_some());
+    assert!(rig.svc.index.live().is_empty());
+    assert_eq!(rig.noticed(), [(Attention::Drafted, RunState::Done)], "no second notice");
+    assert_eq!((comment_drafts(&rig).await.len(), rig.drafted.lock().unwrap().len()), (1, 1), "no second draft");
+}
+
+#[tokio::test]
+async fn a_finished_run_that_is_asked_something_or_blocked_after_carrying_on_notifies_like_any_other() {
+    let (rig, run) = attached_and_answered().await;
+    typed(&rig, &run, "2026-01-01T00:10:00Z");
+    rig.session(&run, |e| {
+        working(e);
+        permission(e);
+    });
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some("approve Bash: ls".into()));
+    rig.poll().await;
+    let asked = rig.get(&run).await;
+    assert_eq!((asked.state, asked.needs.as_deref()), (RunState::NeedsPermission, Some("approve Bash: ls")));
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Needs, RunState::NeedsPermission)));
+}
+
+#[tokio::test]
+async fn limits_never_stop_a_finished_idle_session_or_one_the_person_carried_on() {
+    let (rig, run) = attached_and_answered().await;
+    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 30, token_cap: 1, ..Default::default() }).unwrap();
+    rig.set(&run, |r| {
+        r.launched_at = Some(Utc::now() - Span::hours(5));
+        r.tokens = Some(900_000);
+    })
+    .await;
+    for _ in 0..3 {
+        rig.poll().await;
+    }
+    assert_eq!(rig.get(&run).await.state, RunState::Done);
+
+    typed(&rig, &run, "2026-01-01T00:10:00Z");
+    rig.session(&run, working);
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.tokens = Some(950_000));
+    rig.poll().await;
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+    assert!(rig.cli.0.lock().unwrap().stops.is_empty(), "the session was never stopped for a limit");
+    assert!(!rig.noticed().iter().any(|(why, _)| *why == Attention::Limit));
+}
+
+#[tokio::test]
+async fn a_finished_run_is_only_reopened_by_a_live_session_that_is_working_or_asking() {
+    let (rig, run) = attached_and_answered().await;
+    let before = rig.get(&run).await;
+    for change in [
+        (|e: &mut AgentEntry| e.state = Some("done".into())) as fn(&mut AgentEntry),
+        |e| {
+            e.state = Some("working".into());
+            e.status = Some("busy".into());
+            e.pid = None;
+        },
+        |e| {
+            e.state = Some("stopped".into());
+            e.pid = None;
+        },
+    ] {
+        rig.session(&run, |e| {
+            attached_idle(e);
+            change(e);
+        });
+        rig.poll().await;
+        assert_eq!(rig.get(&run).await, before);
+    }
+    rig.cli.with(|s| s.sessions.clear());
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await, before, "an unlisted finished run stays finished");
+}
+
+#[tokio::test]
+async fn a_finished_run_that_ended_long_ago_or_lost_its_worktree_is_not_watched() {
+    let (rig, run) = attached_and_answered().await;
+    typed(&rig, &run, "2026-01-01T00:10:00Z");
+    rig.session(&run, working);
+    rig.set(&run, |r| r.worktree_removed_at = Some(Utc::now())).await;
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Done);
+    rig.set(&run, |r| {
+        r.worktree_removed_at = None;
+        r.ended_at = Some(Utc::now() - Span::hours(7));
+    })
+    .await;
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Done);
+}
+
+#[tokio::test]
+async fn the_second_answer_of_a_continued_session_is_read_from_its_newest_timeline_line_when_the_transcript_is_unreadable() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.timeline.push(line("2026-01-01T00:05:00Z", "done", ANSWER)));
+    rig.session(&run, |e| e.state = Some("done".into()));
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.result.as_deref(), Some(ANSWER));
+
+    typed(&rig, &run, "2026-01-01T00:10:00Z");
+    rig.session(&run, working);
+    rig.poll().await;
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.timeline.push(line("2026-01-01T00:15:00Z", "working", SECOND_ANSWER)));
+    rig.session(&run, attached_idle);
+    polls(&rig, 2).await;
+    assert_eq!(rig.get(&run).await.result.as_deref(), Some(SECOND_ANSWER));
 }

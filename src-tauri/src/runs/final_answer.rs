@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 
 use super::cli::{AgentEntry, JobInfo};
 use super::service::{real, RunService};
+use super::state::turn_finished;
 use super::toolchain::Toolchain;
 use super::tracker::{cleaned, RESULT_KEPT};
 use crate::domain::{Run, RunQuery, RunState};
@@ -16,9 +17,12 @@ use crate::domain::{Run, RunQuery, RunState};
 /// A finished run is looked at again for its answer for this long after it ended.
 const AWAIT_WINDOW: Duration = Duration::from_secs(120);
 
-/// The text of the timeline's `done` line. Equal to the summary it can't be told from one, so it doesn't count.
+/// The text of the newest line when it is an answer, which is how a session that stayed open ends each turn, else of
+/// the timeline's `done` line. Equal to the summary it can't be told from one, so it doesn't count.
 fn timeline_answer(job: &JobInfo) -> Option<String> {
-    let text = job.timeline.iter().rev().find(|l| l.state.as_deref() == Some("done")).and_then(|l| l.text.as_deref())?.trim();
+    let newest = job.timeline.last().filter(|_| turn_finished(job));
+    let line = newest.or_else(|| job.timeline.iter().rev().find(|l| l.state.as_deref() == Some("done")));
+    let text = line.and_then(|l| l.text.as_deref())?.trim();
     (!text.is_empty() && Some(text) != job.result.as_deref().map(str::trim)).then(|| text.to_owned())
 }
 
@@ -124,5 +128,39 @@ impl RunService {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runs::cli::TimelineLine;
+
+    fn line(state: &str, text: Option<&str>) -> TimelineLine {
+        TimelineLine { at: None, state: Some(state.into()), detail: None, text: text.map(Into::into) }
+    }
+
+    #[test]
+    fn a_session_that_answered_and_stayed_open_has_its_last_line_as_the_answer() {
+        let open = JobInfo { timeline: vec![line("working", None), line("working", Some("The answer."))], ..JobInfo::default() };
+        assert_eq!(timeline_answer(&open).as_deref(), Some("The answer."));
+        let asking = JobInfo { timeline: vec![line("blocked", Some("Which one?"))], ..JobInfo::default() };
+        assert_eq!(timeline_answer(&asking), None);
+        let running = JobInfo { timeline: vec![line("working", Some("The answer.")), line("working", None)], ..JobInfo::default() };
+        assert_eq!(timeline_answer(&running), None, "a newer turn has begun");
+    }
+
+    #[test]
+    fn the_newest_answer_beats_an_older_done_line() {
+        let job = JobInfo { timeline: vec![line("done", Some("Final.")), line("working", None), line("working", Some("Later."))], ..JobInfo::default() };
+        assert_eq!(timeline_answer(&job).as_deref(), Some("Later."));
+    }
+
+    #[test]
+    fn a_done_line_is_used_when_the_newest_line_is_not_an_answer() {
+        let job = JobInfo { timeline: vec![line("done", Some("Final.")), line("working", None)], ..JobInfo::default() };
+        assert_eq!(timeline_answer(&job).as_deref(), Some("Final."));
+        let alone = JobInfo { timeline: vec![line("done", Some("Final."))], ..JobInfo::default() };
+        assert_eq!(timeline_answer(&alone).as_deref(), Some("Final."));
     }
 }

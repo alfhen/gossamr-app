@@ -143,6 +143,8 @@ pub struct JobInfo {
     pub tokens: Option<u64>,
     pub result: Option<String>,
     pub children: Vec<JobChild>,
+    /// Background tasks and queued work the session still has, from `inFlight`.
+    pub in_flight: Option<u64>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub updated_at: Option<String>,
@@ -254,6 +256,7 @@ pub fn parse_job(state_json: &str, timeline: &str) -> JobInfo {
                     .collect()
             })
             .unwrap_or_default();
+        job.in_flight = v.get("inFlight").map(|f| ["tasks", "queued"].iter().filter_map(|k| f.get(k).and_then(number)).sum::<u64>());
         job.worktree_path = text(&v, "worktreePath");
         job.worktree_branch = text(&v, "worktreeBranch");
         job.updated_at = stamp(&v, "updatedAt");
@@ -477,6 +480,15 @@ mod tests {
         let named = parse_launch(&format!("backgrounded {DOT} 1a2b3c4d {DOT} a {DOT} b")).unwrap();
         assert_eq!(named.name.as_deref(), Some("a \u{b7} b"));
         assert_eq!(parse_launch(&format!("backgrounded {DOT} 1a2b3c4d")).unwrap().name, None);
+    }
+
+    #[test]
+    fn in_flight_work_is_counted_from_tasks_and_queued_and_absent_when_not_reported() {
+        let busy = parse_job(r#"{"inFlight":{"tasks":2,"queued":1,"kinds":["local_agent"],"drainableMonitors":0}}"#, "");
+        assert_eq!(busy.in_flight, Some(3));
+        assert_eq!(parse_job(r#"{"inFlight":{"tasks":0,"queued":0,"kinds":[]}}"#, "").in_flight, Some(0));
+        assert_eq!(parse_job(r#"{"inFlight":null}"#, "").in_flight, Some(0));
+        assert_eq!(parse_job(r#"{"state":"working"}"#, "").in_flight, None);
     }
 
     #[test]

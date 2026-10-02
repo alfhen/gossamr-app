@@ -405,6 +405,10 @@ pub struct Run {
     /// Set when `claude rm` took the worktree away; the run is kept for its result.
     #[serde(default)]
     pub worktree_removed_at: Option<DateTime<Utc>>,
+    /// Set when the person carried on a finished run in Terminal: it is theirs from then on, so the limits no longer
+    /// stop it and finishing again doesn't announce itself a second time.
+    #[serde(default)]
+    pub continued_at: Option<DateTime<Utc>>,
     /// The ticket made from this run's draft once the person approved it.
     #[serde(default)]
     pub created_item: Option<ItemRef>,
@@ -449,6 +453,7 @@ impl Run {
             last_progress_at: at,
             ended_at: None,
             worktree_removed_at: None,
+            continued_at: None,
             created_item: None,
         }
     }

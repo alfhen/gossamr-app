@@ -94,6 +94,7 @@ pub struct RunService {
     pub(super) settings: Mutex<AgentSettings>,
     pub(super) timing: Timing,
     pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
+    pub(super) idle_polls: Mutex<std::collections::HashMap<String, u32>>,
     pub(super) config_dir: Mutex<Option<PathBuf>>,
     pub(super) projects_dir: Mutex<Option<PathBuf>>,
     /// Wakes the tracker when the window gains focus.
@@ -174,6 +175,7 @@ impl RunService {
             settings: Mutex::new(AgentSettings { max_runs: MAX_CONCURRENT, ..AgentSettings::default() }),
             timing: Timing::default(),
             misses: Mutex::new(std::collections::HashMap::new()),
+            idle_polls: Mutex::new(std::collections::HashMap::new()),
             config_dir: Mutex::new(None),
             projects_dir: Mutex::new(None),
             focus: tokio::sync::Notify::new(),
@@ -257,6 +259,12 @@ impl RunService {
         self.core.save_run(run).await?;
         (self.changed)(&run.connection_id);
         Ok(())
+    }
+
+    /// Forgets a run's counts of missing processes and idle polls.
+    pub(super) fn reset_counts(&self, run_id: &str) {
+        self.misses.lock().expect("misses lock poisoned").remove(run_id);
+        self.idle_polls.lock().expect("idle polls lock poisoned").remove(run_id);
     }
 
     /// The index is a hint, so a failed write is not worth failing a launch over.

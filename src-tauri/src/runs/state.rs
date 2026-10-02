@@ -13,6 +13,9 @@ pub const LAUNCH_WAIT: Duration = Duration::from_secs(90);
 pub const QUIET_AFTER: Duration = Duration::from_secs(30 * 60);
 /// A working session without a process on this many polls in a row has died.
 const MISSES_TO_FAIL: u32 = 2;
+/// An attached session that has answered and sits at its prompt stays `working` in the listing, only `idle`. It counts
+/// as done once it has looked like that on this many polls in a row, so a pause between tool calls can't end a run.
+pub const IDLE_POLLS_TO_DONE: u32 = 2;
 
 /// A run that was listed and then isn't stays `Unknown` this long, then fails. A daemon restart or a slow listing
 /// shouldn't end a run, but a session that never comes back must not hold a slot in the concurrency cap for good.
@@ -33,11 +36,13 @@ pub struct Observed {
     pub result: Option<String>,
     /// Consecutive polls a working session had no process; the caller passes it back next time.
     pub pid_misses: u32,
+    /// Consecutive polls a working session was idle after a finished turn; the caller passes it back next time.
+    pub idle_polls: u32,
 }
 
 impl Observed {
     fn new(state: RunState) -> Self {
-        Self { state, text: None, error: None, result: None, pid_misses: 0 }
+        Self { state, text: None, error: None, result: None, pid_misses: 0, idle_polls: 0 }
     }
 
     fn text(state: RunState, text: Option<String>) -> Self {
@@ -57,8 +62,24 @@ fn is_terminal(state: RunState) -> bool {
     matches!(state, RunState::Done | RunState::Failed | RunState::Stopped)
 }
 
-/// First match wins. `prior_misses` is `pid_misses` from the previous poll of this run.
-pub fn map_state(entry: Option<&AgentEntry>, job: Option<&JobInfo>, run: &Run, now: DateTime<Utc>, prior_misses: u32) -> Observed {
+/// The session's newest timeline line is Claude's answer to the person: it has text and is not a question. While a
+/// turn runs the newest lines are commands and the person's own message, which carry no text.
+pub fn turn_finished(job: &JobInfo) -> bool {
+    job.timeline.last().is_some_and(|l| l.state.as_deref() != Some("blocked") && nonblank(l.text.as_deref()).is_some())
+}
+
+/// A listed, idle session that has answered and has nothing running in the background. A run already marked done
+/// stays done while the session sits idle, whatever the job files say.
+fn finished_and_idle(run: &Run, job: Option<&JobInfo>) -> bool {
+    if job.is_some_and(|j| j.in_flight.is_some_and(|n| n > 0)) {
+        return false;
+    }
+    run.state == RunState::Done || job.is_some_and(turn_finished)
+}
+
+/// First match wins. `prior_misses` and `prior_idle` are `pid_misses` and `idle_polls` from the previous poll of this
+/// run.
+pub fn map_state(entry: Option<&AgentEntry>, job: Option<&JobInfo>, run: &Run, now: DateTime<Utc>, prior_misses: u32, prior_idle: u32) -> Observed {
     let Some(entry) = entry else {
         return match run.state {
             RunState::Queued => Observed::new(RunState::Queued),
@@ -91,7 +112,17 @@ pub fn map_state(entry: Option<&AgentEntry>, job: Option<&JobInfo>, run: &Run, n
         };
     }
     match state {
-        Some("working") if entry.pid.is_some() => Observed::new(RunState::Working),
+        Some("working") if entry.pid.is_some() => {
+            if entry.status.as_deref() != Some("idle") || !finished_and_idle(run, job) {
+                return Observed::new(RunState::Working);
+            }
+            let polls = prior_idle + 1;
+            if run.state == RunState::Done || polls >= IDLE_POLLS_TO_DONE {
+                Observed { result: nonblank(job.and_then(|j| j.result.as_deref())), ..Observed::new(RunState::Done) }
+            } else {
+                Observed { idle_polls: polls, ..Observed::new(RunState::Working) }
+            }
+        }
         Some("working") => {
             let misses = prior_misses + 1;
             if misses >= MISSES_TO_FAIL {
@@ -172,7 +203,7 @@ mod tests {
     }
 
     fn observe(e: Option<&AgentEntry>, j: Option<&JobInfo>, r: &Run) -> Observed {
-        map_state(e, j, r, now(), 0)
+        map_state(e, j, r, now(), 0, 0)
     }
 
     #[test]
@@ -243,11 +274,11 @@ mod tests {
         let alive = entry("working", Some("busy"), None, Some(9));
         assert_eq!(observe(Some(&alive), None, &run(RunState::Working)), Observed::new(RunState::Working));
         let gone = entry("working", Some("busy"), None, None);
-        let first = map_state(Some(&gone), None, &run(RunState::Working), now(), 0);
+        let first = map_state(Some(&gone), None, &run(RunState::Working), now(), 0, 0);
         assert_eq!((first.state, first.pid_misses), (RunState::Working, 1));
-        let second = map_state(Some(&gone), None, &run(RunState::Working), now(), first.pid_misses);
+        let second = map_state(Some(&gone), None, &run(RunState::Working), now(), first.pid_misses, 0);
         assert_eq!((second.state, second.error.as_deref()), (RunState::Failed, Some(PROCESS_ENDED)));
-        assert_eq!(map_state(Some(&alive), None, &run(RunState::Working), now(), 1).pid_misses, 0, "a process resets the count");
+        assert_eq!(map_state(Some(&alive), None, &run(RunState::Working), now(), 1, 0).pid_misses, 0, "a process resets the count");
     }
 
     #[test]
@@ -259,6 +290,82 @@ mod tests {
         let lagging = job(|j| j.state = Some("working".into()));
         assert_eq!(observe(Some(&e), Some(&lagging), &run(RunState::Working)).state, RunState::Done);
         assert_eq!(observe(Some(&e), None, &run(RunState::Working)).result, None);
+    }
+
+    fn answered(text: &str) -> JobInfo {
+        job(|j| j.timeline = vec![TimelineLine { at: Some("2026-09-30T11:00:00Z".into()), state: Some("working".into()), detail: None, text: Some(text.into()) }])
+    }
+
+    fn running_tools() -> JobInfo {
+        job(|j| j.timeline = vec![TimelineLine { at: Some("2026-09-30T11:00:00Z".into()), state: Some("working".into()), detail: Some("Running ls".into()), text: None }])
+    }
+
+    #[test]
+    fn row_6a_the_observed_listing_matrix_for_a_session_with_a_process() {
+        let working = run(RunState::Working);
+        let finished = answered("All done.");
+        let at_prompt = entry("working", Some("idle"), None, Some(9));
+        // Unattached and running, or attached and running: busy.
+        let busy = entry("working", Some("busy"), None, Some(9));
+        assert_eq!(map_state(Some(&busy), Some(&finished), &working, now(), 0, 1).state, RunState::Working);
+        // Attached, finished its turn, sitting at the prompt: working/idle, done once it has been seen twice.
+        let first = map_state(Some(&at_prompt), Some(&finished), &working, now(), 0, 0);
+        assert_eq!((first.state, first.idle_polls), (RunState::Working, 1));
+        let second = map_state(Some(&at_prompt), Some(&finished), &working, now(), 0, first.idle_polls);
+        assert_eq!((second.state, second.idle_polls), (RunState::Done, 0));
+        // Attached and waiting on a permission prompt or a question.
+        let permission = entry("working", Some("waiting"), Some("permission prompt"), Some(9));
+        assert_eq!(map_state(Some(&permission), Some(&finished), &working, now(), 0, 1).state, RunState::NeedsPermission);
+        let asking = entry("blocked", None, None, None);
+        assert_eq!(map_state(Some(&asking), Some(&finished), &working, now(), 0, 1).state, RunState::NeedsAnswer);
+        // Attached, finished, and the person typed a follow-up: busy again whatever the old idle count was.
+        assert_eq!(map_state(Some(&busy), Some(&running_tools()), &working, now(), 0, 1), Observed::new(RunState::Working));
+        // Unattached and finished, or attached and done by Claude's own account.
+        let done = entry("done", None, None, None);
+        assert_eq!(map_state(Some(&done), None, &working, now(), 0, 0).state, RunState::Done);
+        assert_eq!(map_state(Some(&entry("done", Some("idle"), None, Some(9))), None, &working, now(), 0, 0).state, RunState::Done);
+    }
+
+    #[test]
+    fn row_6b_idle_without_a_finished_turn_is_never_done() {
+        let at_prompt = entry("working", Some("idle"), None, Some(9));
+        let working = run(RunState::Working);
+        for (what, j) in [("no job files", None), ("only tool lines", Some(running_tools())), ("an empty timeline", Some(JobInfo::default()))] {
+            let o = map_state(Some(&at_prompt), j.as_ref(), &working, now(), 0, 5);
+            assert_eq!((o.state, o.idle_polls), (RunState::Working, 0), "{what}");
+        }
+        let question = job(|j| j.timeline = vec![TimelineLine { state: Some("blocked".into()), text: Some("Which one?".into()), ..TimelineLine::default() }]);
+        assert_eq!(map_state(Some(&at_prompt), Some(&question), &working, now(), 0, 5).state, RunState::Working);
+        let blank = answered("  \n");
+        assert_eq!(map_state(Some(&at_prompt), Some(&blank), &working, now(), 0, 5).state, RunState::Working);
+    }
+
+    #[test]
+    fn row_6c_background_work_keeps_an_idle_session_working() {
+        let at_prompt = entry("working", Some("idle"), None, Some(9));
+        let mut j = answered("Started the test run; will report.");
+        j.in_flight = Some(2);
+        assert_eq!(map_state(Some(&at_prompt), Some(&j), &run(RunState::Working), now(), 0, 5).state, RunState::Working);
+        j.in_flight = Some(0);
+        assert_eq!(map_state(Some(&at_prompt), Some(&j), &run(RunState::Working), now(), 0, 5).state, RunState::Done);
+    }
+
+    #[test]
+    fn row_6d_an_idle_session_stays_done_for_a_run_already_done_whatever_the_job_says() {
+        let at_prompt = entry("working", Some("idle"), None, Some(9));
+        let done = run(RunState::Done);
+        assert_eq!(map_state(Some(&at_prompt), None, &done, now(), 0, 0).state, RunState::Done);
+        assert_eq!(map_state(Some(&at_prompt), Some(&running_tools()), &done, now(), 0, 0).state, RunState::Done);
+        assert_eq!(map_state(Some(&entry("working", Some("busy"), None, Some(9))), None, &done, now(), 0, 0).state, RunState::Working);
+    }
+
+    #[test]
+    fn a_finished_turn_is_the_newest_line_having_text_and_not_being_a_question() {
+        assert!(turn_finished(&answered("Done.")));
+        let mut j = answered("Done.");
+        j.timeline.push(TimelineLine { detail: Some("one more thing".into()), ..TimelineLine::default() });
+        assert!(!turn_finished(&j), "a newer line without text means a new turn began");
+        assert!(!turn_finished(&JobInfo::default()));
     }
 
     #[test]
@@ -306,8 +413,8 @@ mod tests {
         r.error = Some(NOT_LISTED.into());
         r.last_progress_at = now() - Span::days(2);
         let listed = entry("paused-by-quota", None, None, Some(1));
-        assert_eq!(map_state(Some(&listed), None, &r, now(), 0).state, RunState::Unknown);
-        assert_eq!(map_state(Some(&entry("working", Some("busy"), None, Some(1))), None, &r, now(), 0).state, RunState::Working, "and it recovers when it is listed again");
+        assert_eq!(map_state(Some(&listed), None, &r, now(), 0, 0).state, RunState::Unknown);
+        assert_eq!(map_state(Some(&entry("working", Some("busy"), None, Some(1))), None, &r, now(), 0, 0).state, RunState::Working, "and it recovers when it is listed again");
     }
 
     #[test]

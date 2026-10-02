@@ -75,6 +75,34 @@ Seen on one real Triage run (CA-271) in the person's own config, reading structu
 
 Timeline events: `claude` writes millisecond times (`2026-10-02T12:22:45.174Z`) and Gossamr stores whole seconds, so a line was never recognised as stored and was appended again on every poll (the run sheet showed one command eight times). Times are now cut to whole seconds before comparing.
 
+## A session left open at its prompt (Claude Code 2.1.287)
+
+When someone attaches (`claude attach <id>`, which "Open in Terminal" runs), Claude keeps the session's process alive at the prompt after the turn ends. The session then never reports `done`. Observed on a real Build run (CA-271) and on other sessions in the person's config, reading only keys and values of `state`, `status`, `waitingFor`, `kind`, pid presence, `state.json`'s non-private keys and the shape of `timeline.jsonl` lines (never message text, `intent` or `providerEnv`).
+
+Every `(state, status)` pair in `claude agents --json --all` at the time:
+
+| state | status | pid | What it was |
+|---|---|---|---|
+| `working` | `busy` | yes | A turn is running, attached or not. `state.json` `tempo:"active"`. |
+| `working` | `idle` | yes | **Attached, and the turn has ended**: the session sits at its prompt. `tempo:"idle"`. Seen on the CA-271 Build run (the bug) and on another session of the person's. |
+| `blocked` | none | no | Asked a question or needs login (`needs`). Unattached, nothing running. |
+| `done` | none | no | Finished and unattached (the process exited). The common case. |
+| `done` | `idle` | yes | Claude's own `done` followed by an attach: the process is alive again. |
+| none | `busy` | yes | An interactive session (`kind:"interactive"`, no `id`): not a background run. |
+| `working` | `waiting` | yes | Permission prompt, with `waitingFor:"permission prompt"` (from the earlier capture; not seen live). |
+
+What marks a finished turn in the job files, for a `working`/`idle` session:
+
+- `state.json` stays `state:"working"` and has `tempo:"idle"`; `output` is `null` (only a real `done` fills `output.result`) and `lastTerminalAt` is `null`.
+- `timeline.jsonl` never gets a `done` line. The turn's answer is written as an ordinary `state:"working"` line that has `text` (2718 characters for the CA-271 run: its final message) after lines that only have a `detail` (commands, the person's own messages). A question is the same shape but with `state:"blocked"`. A follow-up typed by the person is a new line with a `detail` and no `text`, so a newest line without `text` means a turn is running.
+- `state.json` `inFlight` counts background work: `{tasks, queued, kinds, drainableMonitors}`. A session that ended its turn while `tasks` was 2 (teammates) was `working`/`idle` too, and wakes by itself when they finish, so that is not finished.
+
+The rule Gossamr uses (`runs/state.rs`): `state:"working"` with a pid and `status:"idle"` is **Done** when the newest timeline line has text and is not a question, `inFlight` is 0, and the same was seen on two polls in a row (a poll apart: 4 s while anything runs). The listing alone is not enough: a freshly launched session and the moment between tool calls can also look idle, and the timeline line is what tells "answered" from "not started". `status` busy, a permission prompt, `blocked`, or a newer line without text all keep or put the run back in its live state. The answer is read the same way as for any done run (transcript tail, then the newest timeline line with text).
+
+A finished run is watched for 6 hours after it ended (one listing per poll, no job files unless the session is alive). It goes back to Working, or to the needs-you states, only when its session is listed with a pid, `working` or `blocked`, and not idle. Going back sets `continuedAt`: from then on the time and token limits no longer apply to it and finishing again makes no second notice (a draft is made only if none exists, so none is duplicated). A finished run whose session is still alive and idle is removed by Clean up with `claude stop` first, then `claude rm`; Stop all only touches runs that are not finished.
+
+Not verified: the attached `working`/`busy` to `idle` flicker between tool calls (if it exists the two-poll rule and the timeline condition cover it); a permission prompt on an attached session after a follow-up; what the listing shows for a session whose terminal was closed without stopping it.
+
 ## Cleanup check (PR 12a)
 
 `real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_work_is_refused` (scratch config, signed out) stops two sessions and removes them straight away. The clean one was removed on the first try (0 waits, 0.7 s): the lock refusal described above did not appear for a signed-out session that never did model work, so the retry loop is covered by the scripted CLI and was not seen firing for real in this run. The session with a commit that was never pushed was refused with stdout text ending in a suggestion to run `claude rm <id> --discard-unpushed`, and its worktree and branch were left in place. Gossamr returns that text unchanged and never passes the flag. Not checked: the lock refusal for a session that was doing model work when stopped.

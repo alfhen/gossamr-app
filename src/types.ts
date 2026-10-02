@@ -515,6 +515,7 @@ export interface Run {
   endedAt: string | null;
   /** Set once `claude rm` has taken the worktree away; the run stays for its result. */
   worktreeRemovedAt?: string | null;
+  continuedAt?: string | null;
   /** The ticket made from this run's draft once the person approved it. */
   createdItem?: ItemRef | null;
 }
