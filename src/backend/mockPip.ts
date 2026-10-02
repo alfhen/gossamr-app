@@ -78,6 +78,16 @@ export function agentSummary(runs: readonly Run[], now: number): string {
     .join("\n\n");
 }
 
+const FINDINGS_SHOWN = 5;
+
+/** What the finished runs found, one line each: the part of the result meant for Jira, or its first line. */
+function findings(runs: readonly Run[]): string {
+  const done = runs.filter((r) => r.state === "done");
+  if (!done.length) return "No agent has finished yet.";
+  const line = (r: Run) => `- **${r.item?.key ?? r.spec.repo}** ${resultHeadline(jiraNote(r.result ?? "").text) ?? "finished without a written answer"}`;
+  return `${done.length} ${done.length === 1 ? "run has" : "runs have"} finished:\n${done.slice(0, FINDINGS_SHOWN).map(line).join("\n")}${done.length > FINDINGS_SHOWN ? `\n…and ${done.length - FINDINGS_SHOWN} more.` : ""}`;
+}
+
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null): PipScript {
   const q = prompt.toLowerCase();
@@ -171,6 +181,17 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       draft: { intent: { type: "comment", item, body: docFromText(note || "It finished without a written answer.") }, label: "From an agent run" },
     };
   }
+  const openRun = context.run ? runs.find((r) => r.id === context.run) : undefined;
+  if (openRun?.item && openRun.state === "done" && /draft a comment from this run/.test(q)) {
+    const item = openRun.item;
+    return {
+      steps: ["Read the run", `Drafted a comment on ${item.key}`],
+      text: `I drafted a short comment on **${item.key}** from what the run found. It isn't posted; approve, edit or skip it below.`,
+      filter: null,
+      draft: { intent: { type: "comment", item, body: docFromText(jiraNote(openRun.result ?? "").text || "It finished without a written answer.") }, label: "From an agent run" },
+    };
+  }
+  if (/\bfinished runs\b.*\bfind\b/.test(q)) return { steps: ["Read the finished runs"], text: findings(runs), filter: null, draft: null };
   if (asksAboutAgents.test(q) && !asksForAgent.test(q)) {
     return { steps: ["Looked at your agents"], text: agentSummary(runs, now), filter: null, draft: null };
   }
@@ -257,7 +278,6 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       draft: null,
     };
   }
-  const openRun = context.run ? runs.find((r) => r.id === context.run) : undefined;
   if (openRun) {
     const doing = openRun.needs ?? openRun.lastDetail ?? resultHeadline(openRun.result);
     return {

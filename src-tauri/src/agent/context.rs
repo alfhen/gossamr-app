@@ -118,9 +118,9 @@ pub fn system_prompt(reads_code: bool) -> String {
          list_watched_repos names them. They only read, and only in watched repositories: when one is refused, ask the user \
          to watch that repository rather than guessing. When you say what was done on a ticket, link the pull requests you \
          found, by their URL, and say when a result was cut short. \
-         When the screen is Agents, the person is looking at their agent runs and not at a board: there is no ticket list, \
-         filter or ticked ticket, and the runs they see are the ones named in the Agents screen line and the agent runs \
-         block. Use list_runs and get_run for them. \
+         When the screen is Agents, the person is looking at their agent runs and not at a board: there is no ticket list \
+         or ticked ticket. The Agents screen line counts the runs after the person's filter, while the agent runs block \
+         can list runs outside it. Use list_runs and get_run for the run ids in the block. \
          You can see the user's agent runs: list_runs, get_run, get_run_result and get_run_events only read them. get_run shows the start of a result and the part the run marked for Jira; before you write or change anything from a run, read the rest with get_run_result (it says where the next page starts) and never say a result was cut off while more can be fetched. When a run has left a comment or a new-ticket draft for the user, you may change its text (a ticket's title, description and type) with revise_proposal if they ask; they still approve it. propose_run saves a draft that starts \
          an agent only after the user reads the exact prompt and approves it; you give it a ticket, a kind and at most a short \
          focus note, and the prompt and ticket text are not yours to write. Never say a run has started, finished or found \
@@ -468,7 +468,7 @@ mod tests {
         assert!(!p.contains("Applied filter") && !p.contains("Selected:") && !p.contains("Open item"));
         assert!(p.contains("[Agent runs: your agents.") && p.contains("r1") && p.contains("r2"), "{p}");
         let prompt = system_prompt(false);
-        assert!(prompt.contains("When the screen is Agents") && prompt.contains("not at a board") && prompt.contains("list_runs and get_run"));
+        assert!(prompt.contains("When the screen is Agents") && prompt.contains("not at a board") && prompt.contains("run ids in the block") && prompt.contains("outside it"));
         assert!(system_prompt(true).contains("When the screen is Agents"));
     }
 

@@ -51,5 +51,5 @@ export const describeRun = (run: Run, ticketTitle: string | null | undefined, no
 export function agentsSuggestionScene(runs: readonly Run[], openRun: string | null): AgentsSuggestionScene {
   const run = openRun ? runs.find((r) => r.id === openRun) : undefined;
   const stage = !run ? null : needsPerson(run) ? "needs" : run.state === "failed" ? "failed" : run.state === "done" ? "done" : GOING.has(run.state) ? "going" : "ended";
-  return { runs: runs.length, waiting: runs.filter(needsPerson).length, open: run && stage ? { stage, ticket: !!run.item } : null };
+  return { runs: runs.length, waiting: runs.filter(needsPerson).length, done: runs.filter((r) => r.state === "done").length, open: run && stage ? { stage, ticket: !!run.item } : null };
 }

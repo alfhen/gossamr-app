@@ -83,8 +83,9 @@ describe("chips and placeholder on the Agents screen", () => {
   it("offers questions about the agents and none of the board's", () => {
     const chips = suggestionsFor(scene());
     expect(chips).toEqual(["Which agents need me?", "What are my agents doing?", "What did the finished runs find?"]);
+    expect(suggestionsFor(scene({ agents: agentsSuggestionScene([run("w", "working")], null) }))).toEqual(["What are my agents doing?"]);
     expect(suggestionsFor(scene({ agents: agentsSuggestionScene([], null) }))).toEqual(["Which tickets would an agent help with?"]);
-    expect(suggestionsFor(scene({ agents: agentsSuggestionScene([run("z", "working")], null), pendingDrafts: 1 }))).toEqual(["What are my agents doing?", "What did the finished runs find?", "Which drafts are safe to approve?"]);
+    expect(suggestionsFor(scene({ agents: agentsSuggestionScene([run("z", "working")], null), pendingDrafts: 1 }))).toEqual(["What are my agents doing?", "Which drafts are safe to approve?"]);
     for (const c of [...chips, ...suggestionsFor(scene({ agents: agentsSuggestionScene(RUNS, "c") }))]) expect(c).not.toMatch(/stale|blocked|unassigned|Catch me up/i);
   });
 
@@ -123,6 +124,24 @@ describe("the sample Pip on the Agents screen", () => {
     expect(s.steps).toEqual(["Looked at your agents"]);
     expect(s.text).toContain("You have 4 agent runs");
     expect(s.text).not.toContain("stale");
+  });
+
+  it("drafts a comment from the open finished run when no ticket is open", () => {
+    const item = { connectionId: "mock", externalId: "CA-1", key: "CA-1" };
+    const done = run("c", "done", { item, result: "Long notes.\n\nFor Jira: The rounding bug is in the cart." });
+    const s = scriptPip("Draft a comment from this run", ctx({ run: "c" }), [], [done], NOW);
+    expect(s.draft?.intent).toMatchObject({ type: "comment", item });
+    expect(s.draft?.label).toBe("From an agent run");
+    expect(scriptPip("Draft a comment from this run", ctx({ run: "b" }), [], [run("b", "working", { item })], NOW).draft).toBeNull();
+  });
+
+  it("says what the finished runs found, not how many there are", () => {
+    const item = { connectionId: "mock", externalId: "CA-1", key: "CA-1" };
+    const s = scriptPip("What did the finished runs find?", ctx({}), [], [run("c", "done", { item, result: "The rounding bug is in the cart." }), run("b", "working")], NOW);
+    expect(s.text).toContain("1 run has finished");
+    expect(s.text).toContain("**CA-1** The rounding bug is in the cart.");
+    expect(s.text).not.toContain("working");
+    expect(scriptPip("What did the finished runs find?", ctx({}), [], [run("b", "working")], NOW).text).toBe("No agent has finished yet.");
   });
 
   it("describes the open run", () => {

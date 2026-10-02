@@ -6,6 +6,7 @@ import { runSummaryPrompt } from "./pipRuns";
 export interface AgentsSuggestionScene {
   runs: number;
   waiting: number;
+  done: number;
   /** The run open in the run sheet: how it stands, and whether it has a ticket to comment on. */
   open: { stage: "needs" | "failed" | "done" | "going" | "ended"; ticket: boolean } | null;
 }
@@ -77,7 +78,7 @@ function runChips(run: NonNullable<AgentsSuggestionScene["open"]>): string[] {
 
 function agentsChips(agents: AgentsSuggestionScene | undefined, drafts: string[]): string[] {
   if (!agents?.runs) return ["Which tickets would an agent help with?"];
-  return [...(agents.waiting > 0 ? ["Which agents need me?"] : []), runSummaryPrompt(), "What did the finished runs find?", ...drafts];
+  return [...(agents.waiting > 0 ? ["Which agents need me?"] : []), runSummaryPrompt(), ...(agents.done > 0 ? ["What did the finished runs find?"] : []), ...drafts];
 }
 
 /** The input's hint: what the next question will be about. */
