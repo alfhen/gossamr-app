@@ -230,7 +230,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "revise_proposal",
-            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, focus and/or kind (investigate, triage or verify) for an agent run.",
+            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, focus and/or kind (investigate, triage, plan or verify) for an agent run.",
             json!({ "id": id, "body": { "type": "string" }, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "focus": { "type": "string" }, "kind": { "type": "string" } }),
             &["id"],
         ),

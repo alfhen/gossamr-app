@@ -108,6 +108,9 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
             } else if config_dir.is_some() {
                 rows.add(Level::Green, "Agents run as you, with your Claude settings (no default permission mode is set)");
             }
+            if let Some(from) = spec.and_then(|s| s.plan_from_run.as_deref().zip(s.plan.as_deref())) {
+                rows.add(Level::Green, format!("This build follows the plan from run {} as written in the prompt ({} characters). If the plan is wrong it is told to stop and say so.", from.0, from.1.chars().count()));
+            }
             if spec.is_some_and(|s| s.kind == RunKind::Build && s.allow_push) {
                 let shown = mode.as_deref().unwrap_or("not set");
                 rows.add(

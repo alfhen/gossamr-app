@@ -84,7 +84,7 @@ impl Core {
         let PipRunAsk { key, kind, focus, from_run } = ask;
         let key = key.as_str();
         if !pip_kinds().contains(&kind) {
-            return Err(refuse("Pip can only propose investigations, triage and checks"));
+            return Err(refuse("Pip can only propose investigations, triage, plans and checks"));
         }
         let instruction = default_instruction(kind);
         self.require_watched_repo(&repo)?;
@@ -107,6 +107,8 @@ impl Core {
                 ticket_block: Some(snapshot(db, &work, &links)),
                 pr: None,
                 pr_sha: None,
+                plan: None,
+                plan_from_run: None,
                 allow_push: false,
                 project: None,
             };

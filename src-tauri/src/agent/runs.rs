@@ -393,7 +393,7 @@ pub(super) fn valid_focus(text: &str) -> std::result::Result<String, String> {
 fn kind_of(name: &str) -> std::result::Result<RunKind, String> {
     let parsed = RunKind::parse(name);
     if matches!(parsed, Some(RunKind::Build | RunKind::Review)) {
-        return Err("Pip can propose investigations, triage and checks. Builds and reviews are started by the person.".into());
+        return Err("Pip can propose investigations, triage, plans and checks. Builds and reviews are started by the person.".into());
     }
     let allowed: Vec<&str> = pip_kinds().iter().map(|k| k.as_str()).collect();
     parsed.filter(|k| pip_kinds().contains(k)).ok_or_else(|| format!("kind must be {}, not {name}", allowed.join(" or ")))
@@ -613,7 +613,7 @@ mod tests {
         let mut fields: Vec<&str> = schema["inputSchema"]["properties"].as_object().unwrap().keys().map(String::as_str).collect();
         fields.sort();
         assert_eq!(fields, ["focus", "from_run", "key", "kind"], "no instruction, repository, clone, base, name or ticket text");
-        assert_eq!(schema["inputSchema"]["properties"]["kind"]["enum"], json!(["investigate", "triage", "verify"]));
+        assert_eq!(schema["inputSchema"]["properties"]["kind"]["enum"], json!(["investigate", "triage", "plan", "verify"]));
     }
 
     #[tokio::test]
@@ -873,9 +873,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pip_can_draft_triage_and_verify_with_their_own_templates() {
+    async fn pip_can_draft_triage_plan_and_verify_with_their_own_templates() {
         let r = rig().await;
-        for (kind, expected) in [(RunKind::Triage, "triage"), (RunKind::Verify, "verify")] {
+        for (kind, expected) in [(RunKind::Triage, "triage"), (RunKind::Plan, "plan"), (RunKind::Verify, "verify")] {
             let id = id_in(&r.ok("propose_run", json!({ "key": "CA-1", "kind": expected })).await);
             let spec = spec_of(&r.fx.core.proposal_in(&r.fx.scope, &id).await.unwrap().unwrap());
             assert_eq!((spec.kind, spec.instruction.as_str(), spec.pr, spec.allow_push), (kind, crate::domain::default_instruction(kind), None, false));

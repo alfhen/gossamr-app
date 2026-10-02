@@ -860,7 +860,7 @@ mod kinds {
     async fn every_kind_launches_through_the_cli_with_the_prompt_that_was_approved() {
         let same = || pull_reply(12, "open", Some("acme/webshop"), "main");
         let rig = build_with(vec![(PULL, vec![same()])], None, |s| s.with_cap(10)).await;
-        for (n, kind) in [RunKind::Triage, RunKind::Verify, RunKind::Build, RunKind::Review].into_iter().enumerate() {
+        for (n, kind) in [RunKind::Triage, RunKind::Plan, RunKind::Verify, RunKind::Build, RunKind::Review].into_iter().enumerate() {
             let run = approved(&rig, of(&rig, kind, n as u32 + 1)).await;
             rig.svc.launch(&run.id).await.unwrap();
             let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
@@ -899,6 +899,27 @@ mod kinds {
 
         let p = rig.svc.preflight(Some(of(&rig, RunKind::Review, 2))).await.unwrap();
         assert!(has(&p, Level::Green, "Reviews pull request #12 in acme/webshop. Its branch is in acme/webshop"), "{p:?}");
+    }
+
+    #[tokio::test]
+    async fn a_build_from_a_plan_launches_with_the_plan_that_was_approved_and_preflight_names_it() {
+        let rig = build_with(vec![], None, |s| s.with_cap(10)).await;
+        let mut plan = approved(&rig, of(&rig, RunKind::Plan, 1)).await;
+        plan.state = RunState::Done;
+        plan.result = Some("## Approach\n\nRound once.\n\nFor Jira:\nPlan attached to the run.".into());
+        plan.result_complete = true;
+        rig.fx.core.save_run(&plan).await.unwrap();
+
+        let build = RunSpec { plan_from_run: Some(plan.id.clone()), ..of(&rig, RunKind::Build, 2) };
+        let p = rig.fx.core.draft_run(build, Some(rig.fx.item("CA-1"))).await.unwrap();
+        let review = rig.fx.core.runs_review(&p.id).await.unwrap();
+        let run = rig.fx.core.runs_approve(&p.id, &review.digest).await.unwrap();
+        let pre = rig.svc.preflight(Some(run.spec.clone())).await.unwrap();
+        assert!(pre.rows.iter().any(|r| r.level == Level::Green && r.text.contains(&format!("follows the plan from run {}", plan.id))), "{pre:?}");
+        rig.svc.launch(&run.id).await.unwrap();
+        let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
+        assert_eq!(req.prompt, review.prompt);
+        assert!(req.prompt.contains("<<<PLAN\n## Approach\n\nRound once.") && req.prompt.contains("do not deviate silently") && req.prompt.contains("do not push"));
     }
 
     #[tokio::test]

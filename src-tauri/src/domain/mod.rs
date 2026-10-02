@@ -32,7 +32,7 @@ pub use proposal::{
 };
 pub use run::{
     allowed_kinds, default_instruction, pip_kinds, render_prompt, valid_repo, without_markers, ClonePlan, Run, RunEvent, RunFailure, RunKind, RunQuery, RunReview, RunSpec, RunState, FOCUS_LIMIT, GUARD, GUARD_VERSION, INVESTIGATE_INSTRUCTION,
-    NEW_TICKET_TAIL, TICKET_BLOCK_LIMIT, TICKETLESS_STARTER, TITLE_LIMIT,
+    NEW_TICKET_TAIL, PLAN_LIMIT, plan_label, TICKET_BLOCK_LIMIT, TICKETLESS_STARTER, TITLE_LIMIT,
 };
 pub use snapshot::{ticket_snapshot, SnapComment, TicketFacts};
 pub use watch::{
@@ -81,6 +81,8 @@ pub(crate) mod fixtures {
             ticket_block: None,
             pr: None,
             pr_sha: None,
+            plan: None,
+            plan_from_run: None,
             allow_push: false,
             project: None,
         }
