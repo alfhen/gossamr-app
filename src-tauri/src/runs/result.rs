@@ -66,10 +66,9 @@ pub fn ticket_proposal(result: &str) -> Option<TicketProposal> {
     let lines: Vec<&str> = clean.lines().collect();
     let (start, first) = heading_outside_fences(&lines, "new ticket")?;
     let mut section: Vec<&str> = vec![first];
-    let mut fenced = false;
+    let mut fences = Fences::default();
     for line in &lines[start + 1..] {
-        fenced ^= line.trim_start().starts_with("```");
-        if !fenced && heading_rest(line, "for jira").is_some() {
+        if !fences.inside(line) && heading_rest(line, "for jira").is_some() {
             break;
         }
         section.push(line);
@@ -120,9 +119,10 @@ pub fn subtask_proposals(result: &str) -> Vec<String> {
     let lines: Vec<&str> = clean.lines().collect();
     let Some((start, inline)) = heading_outside_fences(&lines, "subtasks") else { return Vec::new() };
     let mut section: Vec<&str> = vec![inline];
+    let mut fences = Fences::default();
     for line in &lines[start + 1..] {
         let t = line.trim();
-        if t.starts_with("```") || ends_section(t) || heading_rest(t, "new ticket").is_some() {
+        if fences.inside(line) || ends_section(t) || heading_rest(t, "new ticket").is_some() {
             break;
         }
         section.push(line);
@@ -163,16 +163,42 @@ fn list_marker(line: &str) -> Option<&str> {
     rest.strip_prefix(['.', ')']).filter(|r| r.starts_with([' ', '\t'])).map(str::trim_start)
 }
 
+/// Follows fenced code blocks line by line as CommonMark does: a run of three or more backticks or tildes opens one
+/// (a backtick fence's info string has no backticks), and only a run of the same character at least as long, with
+/// nothing after it, closes it. A fence left open runs to the end.
+#[derive(Default)]
+struct Fences {
+    open: Option<(char, usize)>,
+}
+
+impl Fences {
+    /// Feeds the next line; true when it is a fence marker or inside a fence.
+    fn inside(&mut self, line: &str) -> bool {
+        let t = line.trim_start();
+        let marker = t.chars().next().filter(|c| matches!(c, '`' | '~'));
+        let run = marker.map_or(0, |m| t.chars().take_while(|c| *c == m).count());
+        let rest = t.get(run..).unwrap_or_default();
+        match (self.open, marker) {
+            (Some((open, len)), Some(m)) => {
+                if m == open && run >= len && rest.trim().is_empty() {
+                    self.open = None;
+                }
+                true
+            }
+            (Some(_), None) => true,
+            (None, Some(m)) if run >= 3 && !(m == '`' && rest.contains('`')) => {
+                self.open = Some((m, run));
+                true
+            }
+            (None, _) => false,
+        }
+    }
+}
+
 /// The first line that is the `name` heading and not inside a code fence, with what follows it on that line.
 fn heading_outside_fences<'a>(lines: &[&'a str], name: &str) -> Option<(usize, &'a str)> {
-    let mut fenced = false;
-    lines.iter().enumerate().find_map(|(i, line)| {
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
-            return None;
-        }
-        heading_rest(line, name).filter(|_| !fenced).map(|rest| (i, rest))
-    })
+    let mut fences = Fences::default();
+    lines.iter().enumerate().find_map(|(i, line)| if fences.inside(line) { None } else { heading_rest(line, name).map(|rest| (i, rest)) })
 }
 
 fn title_cut(title: &str) -> String {
@@ -350,11 +376,9 @@ fn unbold(line: &str) -> String {
 /// written, so a `# comment` or `**kwargs` inside one survives.
 fn plain(text: &str) -> String {
     let mut out: Vec<String> = Vec::new();
-    let mut fenced = false;
+    let mut fences = Fences::default();
     for line in text.lines() {
-        let fence = line.trim_start().starts_with("```");
-        if fenced || fence {
-            fenced ^= fence;
+        if fences.inside(line) {
             out.push(line.trim_end().to_string());
             continue;
         }
@@ -570,5 +594,27 @@ mod tests {
         let note = jira_note("```\nFor Jira: in a fence\n```\n\nFor Jira:\nThe real note.");
         assert_eq!((note.text.as_str(), note.from_marker), ("The real note.", true));
         assert!(!jira_note("Answer.\n```\nFor Jira: in a fence\n```").from_marker);
+    }
+
+    #[test]
+    fn fences_follow_commonmark_for_length_character_and_closing() {
+        let heading = |fence: &str, close: &str| format!("{fence}\nSubtasks:\n- In a fence\n{close}\n\nSubtasks:\n- Real one");
+        assert_eq!(subtask_proposals(&heading("````", "````")), ["Real one"]);
+        assert_eq!(subtask_proposals(&heading("~~~", "~~~")), ["Real one"]);
+        assert_eq!(subtask_proposals("````\n```\nSubtasks:\n- In a fence\n```\n````\nSubtasks:\n- Real one"), ["Real one"], "a shorter run inside does not close it");
+        assert_eq!(subtask_proposals("~~~\n```\nSubtasks:\n- In a fence\n~~~\nSubtasks:\n- Real one"), ["Real one"], "another character does not close it");
+        assert_eq!(subtask_proposals("```rust\nSubtasks:\n- In a fence\n```\nSubtasks:\n- Real one"), ["Real one"], "an opening fence may carry an info string");
+        assert!(subtask_proposals("```\nSubtasks:\n- In a fence\n``` text\nSubtasks:\n- Still in it").is_empty(), "a closing fence has nothing after it");
+        assert!(subtask_proposals("````\nSubtasks:\n- In a fence\n```\nSubtasks:\n- Still in it").is_empty(), "a shorter closer does not close");
+        assert!(subtask_proposals("```\nSubtasks:\n- Never closed").is_empty(), "an unclosed fence runs to the end");
+        assert_eq!(subtask_proposals("Use ```inline``` here\nSubtasks:\n- Real one"), ["Real one"], "backticks in a line of text open nothing");
+    }
+
+    #[test]
+    fn code_in_a_fence_is_kept_as_written_whatever_fence_holds_it() {
+        let tilde = ticket_proposal("New ticket:\nTitle: T\n~~~\n# not a heading\n**kwargs\n~~~\nDone.").unwrap();
+        assert!(tilde.body.contains("# not a heading") && tilde.body.contains("**kwargs"), "{}", tilde.body);
+        let four = ticket_proposal("New ticket:\nTitle: T\n````\n```\nFor Jira: inside\n```\n````\nAfter");
+        assert!(four.unwrap().body.contains("For Jira: inside"));
     }
 }

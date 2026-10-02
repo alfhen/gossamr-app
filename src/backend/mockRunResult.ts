@@ -14,16 +14,35 @@ function headingRest(line: string, name: string): string | null {
 
 const afterHeading = (line: string) => headingRest(line, "for jira");
 
+/**
+ * Follows fenced code blocks line by line as `Fences` in `runs/result.rs` does: three or more backticks or tildes open
+ * one, only the same character at least as long with nothing after it closes it, and one left open runs to the end.
+ * The returned function is true for a fence marker or a line inside a fence.
+ */
+function fenceTracker(): (line: string) => boolean {
+  let open: { ch: string; len: number } | null = null;
+  return (line) => {
+    const t = line.trimStart();
+    const ch = t[0] === "`" || t[0] === "~" ? t[0] : null;
+    let run = 0;
+    while (ch && t[run] === ch) run++;
+    const rest = t.slice(run);
+    if (open) {
+      if (ch === open.ch && run >= open.len && !rest.trim()) open = null;
+      return true;
+    }
+    if (ch && run >= 3 && !(ch === "`" && rest.includes("`"))) {
+      open = { ch, len: run };
+      return true;
+    }
+    return false;
+  };
+}
+
 /** The first line that is the `name` heading and not inside a code fence, or -1. */
 function headingOutsideFences(lines: string[], name: string): number {
-  let fenced = false;
-  return lines.findIndex((l) => {
-    if (l.trimStart().startsWith("```")) {
-      fenced = !fenced;
-      return false;
-    }
-    return !fenced && headingRest(l, name) !== null;
-  });
+  const inside = fenceTracker();
+  return lines.findIndex((l) => !inside(l) && headingRest(l, name) !== null);
 }
 
 function endsSection(raw: string): boolean {
@@ -34,13 +53,9 @@ function endsSection(raw: string): boolean {
 
 /** Headings lose their `#`s and bold pairs their `**`, except inside code fences. */
 function plain(text: string): string {
-  let fenced = false;
+  const inside = fenceTracker();
   const lines = text.split("\n").map((l) => {
-    const fence = l.trimStart().startsWith("```");
-    if (fenced || fence) {
-      fenced = fenced !== fence;
-      return l.trimEnd();
-    }
+    if (inside(l)) return l.trimEnd();
     return l.replace(/^#{1,6} /, "").replace(/\*\*(\S(?:[^*]*\S)?)\*\*/g, "$1").trimEnd();
   });
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -86,10 +101,9 @@ export function ticketProposal(result: string): TicketProposal | null {
   const start = headingOutsideFences(lines, "new ticket");
   if (start < 0) return null;
   const section = [headingRest(lines[start], "new ticket") ?? ""];
-  let fenced = false;
+  const inside = fenceTracker();
   for (const l of lines.slice(start + 1)) {
-    if (l.trimStart().startsWith("```")) fenced = !fenced;
-    if (!fenced && headingRest(l, "for jira") !== null) break;
+    if (!inside(l) && headingRest(l, "for jira") !== null) break;
     section.push(l);
   }
   let title: string | null = null;
