@@ -77,9 +77,10 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   }
   if (asksToRevise.test(q)) {
     const waiting = runDrafts(drafts);
-    const left = discussed ? waiting.find((d) => d.id === discussed) : waiting.length === 1 ? waiting[0] : undefined;
-    if (!left && waiting.length > 1) {
-      return { steps: [], text: `There are ${waiting.length} comment drafts from runs waiting. Use Discuss with Pip on the one you mean, then tell me what to change.`, filter: null, draft: null };
+    const onScreen = (d: Proposal) => d.intent.type === "comment" && !!context.item && d.intent.item.connectionId === context.item.connectionId && d.intent.item.externalId === context.item.externalId;
+    const left = discussed ? waiting.find((d) => d.id === discussed) : waiting.length === 1 && onScreen(waiting[0]) ? waiting[0] : undefined;
+    if (!left && waiting.length > 0) {
+      return { steps: [], text: "Which comment draft do you mean? Use Discuss with Pip on it, then tell me what to change.", filter: null, draft: null };
     }
     if (left?.intent.type === "comment") {
       return {

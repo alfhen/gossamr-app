@@ -12,6 +12,7 @@ import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
 import { AgentsSettingsView } from "./AgentsSettings";
 import { DraftCard } from "./DraftCard";
+import { followOutcome } from "./followOutcome";
 import { Found } from "./RunResult";
 import { commentWithPipPrompt, runDraftOf } from "./runSheetLogic";
 
@@ -92,6 +93,30 @@ describe("the sample backend drafts a comment when a run finishes", () => {
   });
 });
 
+describe("following a run's outcome", () => {
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  it("re-reads it when a draft is skipped elsewhere, and stops after it is unsubscribed", async () => {
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    const run = await finished(backend);
+    const [draft] = commentsOf(backend, run);
+    const seen: (string | null)[] = [];
+    const stop = followOutcome(backend, run.id, (o) => seen.push(o.draft?.state.type ?? null));
+    await settle();
+    expect(seen).toEqual(["pending"]);
+
+    await backend.proposalsSkip(draft.id);
+    await settle();
+    expect(seen[seen.length - 1]).toBe("skipped");
+
+    stop();
+    const count = seen.length;
+    await backend.runsDraftComment(run.id);
+    await settle();
+    expect(seen).toHaveLength(count);
+  });
+});
+
 describe("the sample Pip", () => {
   async function withDraft() {
     const backend = new MockBackend({ runs: { seed: "empty" } });
@@ -132,7 +157,7 @@ describe("the sample Pip", () => {
 
     const unclear = scriptPip("make it shorter", ctx, [], [run], Date.now(), waiting);
     expect(unclear.revise ?? null).toBeNull();
-    expect(unclear.text).toContain("2 comment drafts");
+    expect(unclear.text).toContain("Which comment draft");
 
     const chosen = scriptPip("make it shorter", ctx, [], [run], Date.now(), waiting, other.id);
     expect(chosen.revise?.id).toBe(other.id);
@@ -140,6 +165,20 @@ describe("the sample Pip", () => {
 
     const talk = scriptPip(commentWithPipPrompt(run, other.id), ctx, [], [run], Date.now(), waiting);
     expect(talk.discussed).toBe(other.id);
+  });
+
+  it("revises the only waiting draft without being told which only when it is on the open ticket", async () => {
+    const { backend, run } = await withDraft();
+    const waiting = backend.proposals.list();
+    const asks = (item: ScreenContext["item"]) => scriptPip("make it shorter", { ...blank, item }, [], [run], Date.now(), waiting);
+    expect(asks(run.item).revise?.id).toBe(waiting[0].id);
+    for (const elsewhere of [itemRef("CA-999"), { ...run.item!, connectionId: "another" }, null]) {
+      const script = asks(elsewhere);
+      expect(script.revise ?? null).toBeNull();
+      expect(script.text).toContain("Which comment draft");
+    }
+    const chosen = scriptPip("make it shorter", { ...blank, item: itemRef("CA-999") }, [], [run], Date.now(), waiting, waiting[0].id);
+    expect(chosen.revise?.id, "an explicit choice still works anywhere").toBe(waiting[0].id);
   });
 
   it("remembers the discussed draft across the turns of one conversation", async () => {
