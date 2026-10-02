@@ -127,6 +127,6 @@ describe("the sample Pip on the Agents screen", () => {
 
   it("describes the open run", () => {
     const s = scriptPip("what's going on here?", ctx({ run: "b" }), [], [run("b", "working", { lastDetail: "Reading the cart code" })], NOW);
-    expect(s.text).toContain("working: Reading the cart code");
+    expect(s.text).toContain("Its state: working. Reading the cart code");
   });
 });

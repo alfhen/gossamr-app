@@ -262,7 +262,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     const doing = openRun.needs ?? openRun.lastDetail ?? resultHeadline(openRun.result);
     return {
       steps: ["Read the run"],
-      text: `You have **${runTitle(openRun, null)}** open. It is ${stateView(openRun, now).label.toLowerCase()}${doing ? `: ${doing}` : "."}`,
+      text: `You have **${runTitle(openRun, null)}** open. Its state: ${stateView(openRun, now).label.toLowerCase()}${doing ? `. ${doing}` : "."}`,
       filter: null,
       draft: null,
     };
