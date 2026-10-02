@@ -88,5 +88,29 @@
     "input": "Answer.\n```\nFor Jira: in a fence\n```",
     "text": "Answer.\n```\nFor Jira: in a fence\n```",
     "fromMarker": false
+  },
+  {
+    "name": "a For Jira line inside a four-backtick fence with a shorter run in it is not the section",
+    "input": "````\n```\nFor Jira: inside\n```\n````\n\nFor Jira:\nThe real note.",
+    "text": "The real note.",
+    "fromMarker": true
+  },
+  {
+    "name": "a For Jira line inside a tilde fence is not the section",
+    "input": "~~~\nFor Jira: inside\n~~~\n\nFor Jira:\nThe real note.",
+    "text": "The real note.",
+    "fromMarker": true
+  },
+  {
+    "name": "a shorter closing run does not end the fence",
+    "input": "````\nFor Jira: inside\n```\nFor Jira: still inside",
+    "text": "````\nFor Jira: inside\n```\nFor Jira: still inside",
+    "fromMarker": false
+  },
+  {
+    "name": "a fence that is never closed runs to the end",
+    "input": "Answer.\n```\nFor Jira: never closed",
+    "text": "Answer.\n```\nFor Jira: never closed",
+    "fromMarker": false
   }
 ]

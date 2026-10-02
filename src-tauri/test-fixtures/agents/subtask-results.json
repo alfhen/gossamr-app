@@ -121,5 +121,41 @@
     "name": "a Subtasks line only inside a code fence is no breakdown",
     "input": "```\nSubtasks:\n- Only in a fence\n```",
     "expected": []
+  },
+  {
+    "name": "a Subtasks line inside a four-backtick fence with a shorter run in it is not the section",
+    "input": "````\n```\nSubtasks:\n- In a fence\n```\n````\n\nSubtasks:\n- Real one",
+    "expected": [
+      "Real one"
+    ]
+  },
+  {
+    "name": "a Subtasks line inside a tilde fence is not the section",
+    "input": "~~~\nSubtasks:\n- In a fence\n~~~\n\nSubtasks:\n- Real one",
+    "expected": [
+      "Real one"
+    ]
+  },
+  {
+    "name": "a shorter closing run does not end the fence",
+    "input": "````\nSubtasks:\n- In a fence\n```\nSubtasks:\n- Still in it",
+    "expected": []
+  },
+  {
+    "name": "a fence that is never closed runs to the end",
+    "input": "```\nSubtasks:\n- Never closed",
+    "expected": []
+  },
+  {
+    "name": "a negative answer is no breakdown",
+    "input": "Subtasks:\nNo subtasks needed.\n\nFor Jira: it fits as one piece.",
+    "expected": []
+  },
+  {
+    "name": "a negative answer in a list is no breakdown, but a task that starts with the same word stays",
+    "input": "Subtasks:\n- Not applicable here\n- None of the retries back off: add a cap\n- Nothing to split in the UI",
+    "expected": [
+      "None of the retries back off: add a cap"
+    ]
   }
 ]
