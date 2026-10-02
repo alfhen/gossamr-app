@@ -319,8 +319,8 @@ fn ends_section(line: &str) -> bool {
 
 fn section(clean: &str) -> Option<String> {
     let lines: Vec<&str> = clean.lines().collect();
-    let start = lines.iter().position(|l| for_jira_rest(l).is_some())?;
-    let mut kept: Vec<&str> = vec![for_jira_rest(lines[start])?];
+    let (start, first) = heading_outside_fences(&lines, "for jira")?;
+    let mut kept: Vec<&str> = vec![first];
     kept.extend(lines[start + 1..].iter().take_while(|l| !ends_section(l)));
     Some(kept.join("\n"))
 }
@@ -567,5 +567,8 @@ mod tests {
         let ticket = "```\nNew ticket:\nTitle: In a fence\n```\n\nNew ticket:\nTitle: The real one\nBody";
         assert_eq!(ticket_proposal(ticket).unwrap().title, "The real one");
         assert_eq!(ticket_proposal("```\nNew ticket:\nTitle: In a fence\n```"), None);
+        let note = jira_note("```\nFor Jira: in a fence\n```\n\nFor Jira:\nThe real note.");
+        assert_eq!((note.text.as_str(), note.from_marker), ("The real note.", true));
+        assert!(!jira_note("Answer.\n```\nFor Jira: in a fence\n```").from_marker);
     }
 }

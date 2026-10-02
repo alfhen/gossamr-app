@@ -76,5 +76,17 @@
     "input": "For Jira: keep this\n---\nnot this",
     "text": "keep this",
     "fromMarker": true
+  },
+  {
+    "name": "a For Jira line inside a code fence is not the section",
+    "input": "Notes first.\n```\nFor Jira: not this\n```\n\nFor Jira:\nThe real note.",
+    "text": "The real note.",
+    "fromMarker": true
+  },
+  {
+    "name": "a For Jira line only inside a code fence leaves the whole answer",
+    "input": "Answer.\n```\nFor Jira: in a fence\n```",
+    "text": "Answer.\n```\nFor Jira: in a fence\n```",
+    "fromMarker": false
   }
 ]
