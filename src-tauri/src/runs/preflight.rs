@@ -111,11 +111,14 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
             if let Some(from) = spec.and_then(|s| s.plan_from_run.as_deref().zip(s.plan.as_deref())) {
                 rows.add(Level::Green, format!("This build follows the plan from run {} as written in the prompt ({} characters). If the plan is wrong it is told to stop and say so.", from.0, from.1.chars().count()));
             }
+            if let Some(from) = spec.and_then(|s| s.build_from_run.as_deref().zip(s.build_account.as_deref())) {
+                rows.add(Level::Green, format!("This review carries the builder's account from run {} in the prompt ({} characters), as a claim to check against the diff.", from.0, from.1.chars().count()));
+            }
             if spec.is_some_and(|s| s.kind == RunKind::Build && s.allow_push) {
                 let shown = mode.as_deref().unwrap_or("not set");
                 rows.add(
                     Level::Amber,
-                    format!("This agent may push a branch and open a pull request if your Claude settings allow it. Your permission mode is {shown}: {}.", push_explanation(mode.as_deref())),
+                    format!("This agent may push a branch and open a draft pull request if your Claude settings allow it. Your permission mode is {shown}: {}.", push_explanation(mode.as_deref())),
                 );
             }
         }

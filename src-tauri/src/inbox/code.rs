@@ -160,7 +160,7 @@ impl Core {
         Ok(db)
     }
 
-    pub(super) fn with_code_db<T>(&self, id: &str, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+    pub(crate) fn with_code_db<T>(&self, id: &str, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
         let db = self.code_db(id)?;
         let guard = db.lock().expect("db lock poisoned");
         f(&guard)
