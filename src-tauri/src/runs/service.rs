@@ -127,6 +127,14 @@ pub(super) fn belongs_to(entry: &AgentEntry, run: &Run) -> bool {
     run.short_id.as_ref() == Some(&id) || entry.cwd.as_deref().is_some_and(|cwd| real(Path::new(cwd)) == real(&run.expected_worktree))
 }
 
+/// How a session is titled in Claude's own lists. Only the title carries the prefix: the worktree folder and branch
+/// take `spec.name`, and the spec (and so its digest) is left as approved.
+fn session_name(label: &str, kind: RunKind) -> String {
+    format!("{SESSION_PREFIX}{label} {}", kind.as_str())
+}
+
+const SESSION_PREFIX: &str = "Gossamr: ";
+
 fn entry_of(run: &Run) -> Entry {
     Entry {
         db_file: run.db_file.clone(),
@@ -364,7 +372,7 @@ impl RunService {
         let label = run.item.as_ref().map_or("Agent", |i| i.key.as_str());
         let request = LaunchRequest {
             cwd: spec.clone_path.clone(),
-            name: format!("{label} {}", spec.kind.as_str()),
+            name: session_name(label, spec.kind),
             worktree: spec.name.clone(),
             guard: GUARD.into(),
             prompt: render_prompt(spec),

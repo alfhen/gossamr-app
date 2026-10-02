@@ -238,6 +238,25 @@ async fn real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_w
     assert!(git(&s.repo, &["branch", "--list", "worktree-ce-4-unpushed-a7b8"]).contains("worktree-ce-4"), "and so is its branch");
 }
 
+/// A session titled `Gossamr: <label> <kind>`: the colon and space survive the argv and the listing, and the worktree
+/// folder and branch still take the plain slug.
+#[tokio::test]
+#[ignore = "runs the real claude in a scratch config"]
+async fn real_prefixed_session_name_is_listed_unchanged_and_the_worktree_keeps_the_slug() {
+    let mut s = Scratch::new("prefix").await;
+    let title = "Gossamr: CE-7 investigate";
+    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into() };
+    let launched = s.cli.launch(&req).await.expect("launch");
+    s.launched.push(launched.short_id.clone());
+    assert_eq!(launched.name.as_deref(), Some(title), "stdout: {launched:?}");
+
+    let worktree = s.worktree("ce-7-prefix-0a1b");
+    s.wait_for("the worktree to appear", || worktree.join(".git").exists().then_some(())).await;
+    let row = s.cli.agents(true).await.unwrap().into_iter().find(|e| e.id.as_deref() == Some(launched.short_id.as_str())).expect("listed");
+    assert_eq!(row.name.as_deref(), Some(title));
+    assert!(git(&s.repo, &["branch", "--list", "worktree-ce-7-prefix-0a1b"]).contains("worktree-ce-7-prefix-0a1b"));
+}
+
 #[tokio::test]
 #[ignore = "runs the real claude in a scratch config"]
 async fn real_worktree_starts_at_the_clones_current_head_not_main() {

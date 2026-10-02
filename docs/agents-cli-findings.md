@@ -82,3 +82,7 @@ Each test creates its own config directory and repository under `GOSSAMR_SCRATCH
 ## Fake `claude`
 
 `src-tauri/test-support/fake-claude.sh` is driven by `FAKE_CLAUDE_SCENARIO` (a `key=value` file; its keys are listed at the top of the script). It keeps sessions and `jobs/<id>/` files next to the scenario, records every call's cwd and arguments in `calls.log` and the names of its environment variables in `env.last`.
+
+## Session names
+
+Gossamr titles every session it starts `Gossamr: <ticket key> <kind>` (for example `Gossamr: CE-773 investigate`) so it is recognisable in `claude agents`, `claude attach` and the desktop sessions. `--name` carries the title; `--worktree`, the folder and the `worktree-<slug>` branch keep the plain slug, and the run spec and its digest are untouched (the prefix is added where the launch request is built). Verified on 2.1.286 by `real_prefixed_session_name_is_listed_unchanged_and_the_worktree_keeps_the_slug` (ignored, scratch config): a colon and a space in `--name` arrive as one argument, the `backgrounded \u00b7 <id> \u00b7 <name>` line prints the name whole, `claude agents --json` returns it unchanged, and the worktree and branch use the slug. Nothing reads a session's name to find a run: runs are matched by worktree path or short id, `--resume` keeps the saved name, and the `name` fields of the listing and of the launch output are not used outside tests. Sessions started before this keep their old titles.
