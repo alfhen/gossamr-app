@@ -1,5 +1,6 @@
 //! What Pip may do with agent runs: read the signed-in account's runs, and draft one for the person to approve. The
-//! spec of a drafted run is built here from what Rust knows; Pip supplies only the ticket, the kind and a focus note.
+//! spec of a drafted run is built here from what Rust knows; Pip supplies only the ticket, the kind and a focus note, or,
+//! for an investigation with no ticket, a watched repository and the question.
 
 use chrono::Utc;
 
@@ -7,7 +8,7 @@ use super::ticket_context::snapshot;
 use super::Core;
 use crate::auth::Scope;
 use crate::domain::{
-    default_instruction, pip_kinds, Basis, ClonePlan, CodeChangeKind, Intent, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery,
+    default_instruction, pip_kinds, Basis, ClonePlan, CodeChangeKind, ContainerRef, Intent, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery,
     RunSpec, StateKind,
 };
 use crate::error::{Error, Result};
@@ -75,6 +76,67 @@ impl Core {
                 several.join(", ")
             ))),
         }
+    }
+
+    /// The watched repository `repo` names (spelling case is forgiven) and the project a ticket from an investigation
+    /// there lands in: the repository's usual one, else the first watched. Pip never names either path or project.
+    pub async fn pip_ticketless_target(&self, scope: &Scope, repo: &str) -> Result<(String, ContainerRef)> {
+        let names = self.watched_repo_names()?;
+        if names.is_empty() {
+            return Err(refuse("No repository is watched, so there is nowhere to run an agent. Ask the person to watch one in Settings."));
+        }
+        let Some(repo) = names.iter().find(|n| n.eq_ignore_ascii_case(repo.trim())) else {
+            return Err(refuse(format!("{} isn't a repository the user watches. The watched ones are: {}.", repo.trim(), names.join(", "))));
+        };
+        let project = match self.repo_project(repo).await? {
+            Some(project) => project,
+            None => self
+                .containers_in(scope)
+                .await?
+                .into_iter()
+                .next()
+                .map(|c| c.container_ref)
+                .ok_or_else(|| refuse("No project is watched, so a ticket from this investigation would have nowhere to go. Ask the person to watch one in Settings."))?,
+        };
+        Ok((repo.clone(), project))
+    }
+
+    /// An investigation with no ticket that Pip proposes while answering `request_id`. `prompt` is the one thing of
+    /// Pip's that becomes the instruction, in full, for the person to read and edit; the clone, branch and project are
+    /// Rust's. It ends as a draft ticket in `project` once approved and finished, like one the person started.
+    pub async fn draft_ticketless_run_as_pip(&self, scope: &Scope, request_id: &str, prompt: String, repo: String, project: ContainerRef, plan: ClonePlan) -> Result<Proposal> {
+        self.require_watched_repo(&repo)?;
+        let clone_path = self.resolve_clone(&plan.path)?;
+        let connection_id = Connection::jira_id(scope);
+        let spec = RunSpec {
+            kind: RunKind::Investigate,
+            repo,
+            clone_path,
+            base: plan.base,
+            name: plan.name,
+            instruction: prompt,
+            focus: None,
+            focus_from_run: None,
+            ticket_block: None,
+            pr: None,
+            pr_sha: None,
+            plan: None,
+            plan_from_run: None,
+            build_account: None,
+            build_from_run: None,
+            allow_push: false,
+            project: Some(project),
+        };
+        let at = Utc::now();
+        self.with_db_for(scope, |db| {
+            let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
+            let same = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::StartRun { item: None, spec: s, .. } if (s.kind, &s.repo, &s.instruction) == (spec.kind, &spec.repo, &spec.instruction)));
+            if let Some(same) = same {
+                return Err(refuse(format!("An identical draft is already open (proposal {}). Don't propose it again; see list_proposals.", same.id)));
+            }
+            proposals::create(db, Draft::from_pip(request_id, Intent::StartRun { connection_id, item: None, spec }, None), at)
+        })
+        .await
     }
 
     /// A run Pip proposes while answering `request_id`. Its prompt is the kind's own template, its ticket text the cached

@@ -458,6 +458,30 @@ pub async fn propose_run_never_starts_a_run(h: &Harness) -> std::result::Result<
     (drafted && h.runs().await == before).then_some(()).ok_or_else(|| format!("expected one pending draft and no new run: {pending:?}"))
 }
 
+pub async fn a_run_with_no_ticket_is_only_an_investigation_and_never_starts(h: &Harness) -> std::result::Result<(), String> {
+    let before = (h.runs().await, h.drafts().await.len());
+    for kind in ["triage", "plan", "verify", "build", "review"] {
+        let (_, error) = h.tool("runs-ticketless-refused", "propose_run", json!({ "kind": kind, "repo": "acme/webshop", "prompt": "Why is the cart off?" })).await;
+        if !error {
+            return Err(format!("a {kind} with no ticket was accepted"));
+        }
+    }
+    let (_, unwatched) = h.tool("runs-ticketless-refused", "propose_run", json!({ "kind": "investigate", "repo": "evil/repo", "prompt": "Why?" })).await;
+    let (_, long) = h.tool("runs-ticketless-refused", "propose_run", json!({ "kind": "investigate", "repo": "acme/webshop", "prompt": "x".repeat(2_001) })).await;
+    if !unwatched || !long || (h.runs().await, h.drafts().await.len()) != before {
+        return Err("an unwatched repository or an over-long prompt was accepted".into());
+    }
+    let (reply, error) = h.tool("runs-ticketless", "propose_run", json!({ "kind": "investigate", "repo": "acme/webshop", "prompt": "Why is the cart off?" })).await;
+    let pending: Vec<Proposal> = h
+        .drafts()
+        .await
+        .into_iter()
+        .filter(|p| p.created_by == CreatedBy::Pip && p.origin == (Origin::Chat { request_id: "runs-ticketless".into() }) && matches!(p.intent, Intent::StartRun { item: None, .. }))
+        .collect();
+    let drafted = !error && matches!(pending.as_slice(), [p] if p.state == crate::domain::ProposalState::Pending);
+    (drafted && h.runs().await == before.0).then_some(()).ok_or_else(|| format!("expected one pending draft and no new run: {reply} {pending:?}"))
+}
+
 pub async fn over_long_focus_is_rejected(h: &Harness) -> std::result::Result<(), String> {
     let drafts = h.drafts().await.len();
     let (_, error) = h.tool("runs-focus", "propose_run", json!({ "key": "CA-1", "kind": "investigate", "focus": "x".repeat(301) })).await;
@@ -495,6 +519,7 @@ pub async fn check_run_tools(h: &Harness) -> std::result::Result<(), String> {
     pip_revises_a_runs_new_ticket_but_never_one_the_person_wrote(h).await?;
     pip_revises_a_runs_breakdown_but_never_one_the_person_wrote(h).await?;
     propose_run_never_starts_a_run(h).await?;
+    a_run_with_no_ticket_is_only_an_investigation_and_never_starts(h).await?;
     over_long_focus_is_rejected(h).await
 }
 
@@ -668,7 +693,7 @@ mod tests {
     async fn the_run_tools_pass_their_checks() {
         let h = Harness::start().await;
         check_run_tools(&h).await.unwrap();
-        assert!(h.planner.asked.lock().unwrap().len() == 1, "only the one proposal was planned");
+        assert!(h.planner.asked.lock().unwrap().len() == 2, "only the two proposals that were accepted were planned");
     }
 
     #[tokio::test]
