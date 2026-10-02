@@ -264,7 +264,7 @@ impl RunService {
         };
         if seen.state == RunState::Done {
             run.summary = seen.result.as_deref().and_then(|r| cleaned(r, SUMMARY_KEPT));
-            let answer = self.read_answer(tc, &run, entry, job.as_ref(), self.timing.answer_tries).await.and_then(|a| cleaned(&a, RESULT_KEPT));
+            let answer = self.read_answer(tc, &run, entry, job.as_ref()).await.and_then(|a| cleaned(&a, RESULT_KEPT));
             run.result_complete = answer.is_some();
             run.result = answer.or_else(|| run.summary.clone());
         }

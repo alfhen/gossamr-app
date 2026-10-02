@@ -688,24 +688,30 @@ async fn a_run_whose_transcript_never_appears_keeps_the_summary_says_so_and_draf
     let done = rig.get(&run).await;
     assert_eq!(done.state, RunState::Done);
     assert_eq!((done.result.as_deref(), done.summary.as_deref(), done.result_complete), (done.summary.as_deref(), Some("Triage complete. For Jira:\nA marker inside a summary."), false));
-    assert_eq!(rig.cli.0.lock().unwrap().answer_reads.len(), 3, "read the configured number of times, then gave up");
+    assert_eq!(rig.cli.0.lock().unwrap().answer_reads.len(), 1, "one look at the transition, no sleeping while the tracker holds its lock");
     assert!(comment_drafts(&rig).await.is_empty(), "a bare summary is never drafted from, whatever it says");
     assert!(rig.drafted.lock().unwrap().is_empty());
     assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
 }
 
 #[tokio::test]
-async fn a_final_message_that_lands_after_the_session_is_listed_done_is_found_by_a_retry() {
+async fn a_final_message_that_lands_after_the_session_is_listed_done_is_found_by_a_later_poll_and_drafted_then() {
     let (rig, run) = launched().await;
     rig.poll().await;
     rig.cli.with(|s| s.answer_misses = 2);
     finish_with(&rig, &run, "Found it.\n\nFor Jira:\nAdd a backoff.");
+    rig.poll().await;
+    assert!(!rig.get(&run).await.result_complete && comment_drafts(&rig).await.is_empty());
+    rig.poll().await;
+    assert!(!rig.get(&run).await.result_complete);
+
     rig.poll().await;
     let done = rig.get(&run).await;
     assert_eq!((done.result.as_deref(), done.result_complete), (Some("Found it.\n\nFor Jira:\nAdd a backoff."), true));
     assert_eq!(done.summary.as_deref(), Some(SUMMARY));
     assert_eq!(rig.cli.0.lock().unwrap().answer_reads.len(), 3);
     assert_eq!(comment_drafts(&rig).await.len(), 1);
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
 }
 
 #[tokio::test]

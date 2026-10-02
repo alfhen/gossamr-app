@@ -45,15 +45,11 @@ pub struct Timing {
     pub stop_settle: Duration,
     /// How long `cleanup` waits between tries while Claude still holds its lock on a stopped session's worktree.
     pub rm_wait: Duration,
-    /// How many times a finished run's transcript is read for its final message, and the pause between reads: the
-    /// message can land a moment after the session is listed as done.
-    pub answer_tries: u32,
-    pub answer_wait: Duration,
 }
 
 impl Default for Timing {
     fn default() -> Self {
-        Self { recover_window: Duration::from_secs(90), worktree_grace: Duration::from_secs(10), poll: Duration::from_secs(2), stop_wait: Duration::from_secs(10), stop_settle: Duration::from_secs(5), rm_wait: Duration::from_secs(1), answer_tries: 3, answer_wait: Duration::from_millis(700) }
+        Self { recover_window: Duration::from_secs(90), worktree_grace: Duration::from_secs(10), poll: Duration::from_secs(2), stop_wait: Duration::from_secs(10), stop_settle: Duration::from_secs(5), rm_wait: Duration::from_secs(1) }
     }
 }
 

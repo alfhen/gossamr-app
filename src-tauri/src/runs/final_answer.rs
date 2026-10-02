@@ -57,26 +57,16 @@ impl RunService {
         Some(found)
     }
 
-    /// The run's final answer: the transcript's last message, read up to `tries` times a moment apart since it can
-    /// land after the session is listed as done, else the timeline's `done` text.
-    pub(super) async fn read_answer(&self, tc: &Toolchain, run: &Run, entry: Option<&AgentEntry>, job: Option<&JobInfo>, tries: u32) -> Option<String> {
+    /// The run's final answer: the transcript's last message, else the timeline's `done` text. One look: the message
+    /// can land after the session is listed as done, which the polling of recently finished runs covers.
+    pub(super) async fn read_answer(&self, tc: &Toolchain, run: &Run, entry: Option<&AgentEntry>, job: Option<&JobInfo>) -> Option<String> {
         let session = run.session_id.clone().or_else(|| entry.and_then(|e| e.session_id.clone()));
-        let projects = self.claude_projects_dir(tc).await;
-        let cwds = folders(run, entry, job);
-        for attempt in 0..tries.max(1) {
-            if let (Some(session), Some(projects)) = (&session, &projects) {
-                if let Some(answer) = tc.cli.final_answer(projects, session, &cwds).await {
-                    return Some(answer);
-                }
-            }
-            if let Some(answer) = job.and_then(timeline_answer) {
+        if let (Some(session), Some(projects)) = (session, self.claude_projects_dir(tc).await) {
+            if let Some(answer) = tc.cli.final_answer(&projects, &session, &folders(run, entry, job)).await {
                 return Some(answer);
             }
-            if attempt + 1 < tries {
-                tokio::time::sleep(self.timing.answer_wait).await;
-            }
         }
-        None
+        job.and_then(timeline_answer)
     }
 
     async fn job_of(&self, tc: &Toolchain, run: &Run) -> Option<JobInfo> {
@@ -100,7 +90,7 @@ impl RunService {
 
     async fn refresh_with(&self, tc: &Toolchain, run: &Run) -> bool {
         let job = self.job_of(tc, run).await;
-        let Some(answer) = self.read_answer(tc, run, None, job.as_ref(), 1).await else { return false };
+        let Some(answer) = self.read_answer(tc, run, None, job.as_ref()).await else { return false };
         let _turn = self.launching.lock().await;
         let Ok(Some(mut run)) = self.core.run(&run.id).await else { return false };
         if run.state != RunState::Done || run.result_complete || !adopt(&mut run, &answer) {
