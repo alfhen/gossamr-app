@@ -95,7 +95,8 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     };
   }
   const breakdownTalk = talksBreakdown.exec(prompt);
-  const breakdown = (id: string | null | undefined) => drafts.find((d) => d.id === id && d.state.type === "pending" && d.origin.type === "run" && d.intent.type === "subtasks");
+  const breakdown = (id: string | null | undefined) =>
+    drafts.find((d) => d.id === id && d.state.type === "pending" && d.intent.type === "subtasks" && (d.createdBy === "pip" || (d.origin.type === "run" && d.createdBy === "user")));
   if (breakdownTalk) {
     const left = breakdown(breakdownTalk[1]);
     if (!left) return { steps: [], text: "I can't find that breakdown draft any more, or it has been decided already, so there is nothing to discuss.", filter: null, draft: null };

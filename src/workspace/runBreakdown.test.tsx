@@ -117,6 +117,17 @@ describe("Pip and a breakdown in the sample", () => {
     expect(second.revise).toEqual({ id: draft.id, summaries: (draft.intent as Extract<Intent, { type: "subtasks" }>).summaries.slice(0, 3) });
   });
 
+  it("discusses and trims a breakdown Pip drafted itself, but not one the person made by hand", async () => {
+    const { run, backend } = await draftOf();
+    const pips = await backend.pipDraft({ type: "subtasks", parent: itemRef("CA-412"), summaries: ["One", "Two", "Three", "Four"] }, null, "q1");
+    const talk = scriptPip(breakdownWithPipPrompt(run, (pips as Proposal).id), blank, [], [run], Date.now(), [pips as Proposal]);
+    expect(talk.discussed).toBe((pips as Proposal).id);
+    const trimmed = scriptPip("fewer", blank, [], [run], Date.now(), [pips as Proposal], (pips as Proposal).id);
+    expect(trimmed.revise).toEqual({ id: (pips as Proposal).id, summaries: ["One", "Two", "Three"] });
+    const mine = await backend.proposalsCreate({ type: "subtasks", parent: itemRef("CA-412"), summaries: ["by hand"] });
+    expect(scriptPip(breakdownWithPipPrompt(run, mine.id), blank, [], [run], Date.now(), [mine]).text).toContain("can't find that breakdown draft");
+  });
+
   it("shortens the wording of every summary when asked for shorter, and only cuts the list when asked for fewer", async () => {
     const { run, draft } = await draftOf();
     const all = (draft.intent as Extract<Intent, { type: "subtasks" }>).summaries;
