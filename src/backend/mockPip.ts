@@ -14,6 +14,8 @@ export interface PipScript {
   draft: { intent: Intent; label: string | null } | null;
   /** An agent run to propose on a ticket, with an optional focus note. */
   runDraft?: { item: ItemRef; focus: string | null } | null;
+  /** An investigation with no ticket to propose: a watched repository, when the request named one, and the question. */
+  ticketlessRun?: { repo: string | null; prompt: string } | null;
   /** A change to the text of a comment, new-ticket or breakdown draft that came from a run. */
   revise?: { id: string; body?: string; title?: string; summaries?: string[] } | null;
   /** The draft this turn was about, remembered for the rest of the conversation. */
@@ -30,6 +32,14 @@ const FILTERS: { pattern: RegExp; filter: WorkFilter; note: string }[] = [
 const asksToShow = /\b(show|filter|find|list|only|which)\b/;
 const asksAboutAgents = /\bmy agents\b|\bagents?\b.*\b(doing|up to|status|running)\b|\bwhat.*\bagents?\b/;
 const asksForAgent = /\b(start|launch|run|kick off)\b.*\b(agent|investigation)\b|\binvestigate\b/;
+const REPO = /\b(acme\/[a-z][\w.-]*)\b/i;
+
+/** The question in a request to investigate with no ticket, and the repository it names; null when there is no question in it. */
+export function ticketlessQuestion(prompt: string): { repo: string | null; prompt: string } | null {
+  const text = prompt.trim().replace(/^(?:please\s+)?(?:can you\s+)?(?:start|launch|kick off|run)\s+(?:an?\s+)?(?:agent|investigation)(?:\s+(?:to|and|that))?\s*|^(?:please\s+)?investigate\s+/i, "");
+  const question = text.charAt(0).toUpperCase() + text.slice(1);
+  return question.length < 12 ? null : { repo: REPO.exec(prompt)?.[1] ?? null, prompt: question };
+}
 const KEY = /\b([A-Z][A-Z0-9]+-\d+)\b/;
 const finishes = /new ticket draft (\S+), drafted from agent run (\S+?)\./i;
 const talksBreakdown = /breakdown draft (\S+) on \S+, drafted from agent run (\S+?)\./i;
@@ -212,6 +222,16 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
         runDraft: { item, focus },
       };
     }
+    const ask = ticketlessQuestion(prompt);
+    if (ask) {
+      return {
+        steps: ["Drafted an agent run"],
+        text: `No ticket covers this, so I drafted an investigation in **${ask.repo ?? "your repository"}** with no ticket: “${ask.prompt}” It has not started. Open the draft to read and edit the exact prompt, then start it. When the agent finishes, you get a draft ticket from what it found, and you approve that too.`,
+        filter: null,
+        draft: null,
+        ticketlessRun: ask,
+      };
+    }
   }
   const wanted = FILTERS.find((f) => f.pattern.test(q));
   if (wanted && (asksToShow.test(q) || !context.item)) {
@@ -312,6 +332,8 @@ export interface PipDrafter {
   pipRevise(id: string, change: string | { body?: string; title?: string; summaries?: string[] }): Promise<unknown>;
   /** Drafts a run the way propose_run does: Pip names the ticket and a focus note, the backend builds the rest. */
   pipRunDraft(item: ItemRef, focus: string | null, requestId: string): Promise<unknown>;
+  /** Drafts an investigation with no ticket the way propose_run does: Pip gives a repository and a prompt, the backend builds the rest. */
+  pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string): Promise<unknown>;
 }
 
 const listeners = new Set<Listener>();
@@ -351,6 +373,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
     if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
     if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, summaries: script.revise.summaries });
     if (!stopped && script.runDraft) await drafter?.pipRunDraft?.(script.runDraft.item, script.runDraft.focus, req.requestId);
+    if (!stopped && script.ticketlessRun) await drafter?.pipTicketlessRunDraft?.(script.ticketlessRun.repo, script.ticketlessRun.prompt, req.requestId);
     if (!stopped && script.filter) viewListeners.forEach((l) => l(req.requestId, script.filter!.filter, script.filter!.note));
     for (const word of script.text.match(/\S+\s*/g) ?? []) {
       if (stopped) break;

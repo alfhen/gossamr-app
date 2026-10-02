@@ -17,6 +17,8 @@ pub const GUARD_VERSION: u32 = 1;
 
 const INSTRUCTION_LIMIT: usize = 20_000;
 pub const FOCUS_LIMIT: usize = 300;
+/// The most of a ticketless run's instruction that Pip may write; the person can lengthen it in the setup sheet.
+pub const PIP_PROMPT_LIMIT: usize = 2_000;
 pub const TICKET_BLOCK_LIMIT: usize = 10_000;
 pub const PLAN_LIMIT: usize = 12_000;
 pub const BUILD_ACCOUNT_LIMIT: usize = 12_000;

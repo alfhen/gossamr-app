@@ -29,6 +29,6 @@ pub mod tracker;
 #[cfg(test)]
 mod real_tests;
 #[cfg(test)]
-mod rig;
+pub(crate) mod rig;
 #[cfg(test)]
 mod testing;

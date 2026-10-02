@@ -32,6 +32,8 @@ impl Draft {
     }
 }
 
+const EDITED_NOTE: &str = "Edited";
+
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
@@ -116,7 +118,7 @@ pub(crate) fn not_pending(p: &Proposal) -> Error {
 /// Replaces a pending proposal's payload with the person's edit. What it is about and what kind of change it is stay
 /// fixed, and subtasks already created stay in front so a retry still lines up.
 pub fn edit(db: &Db, id: &str, intent: Intent, at: DateTime<Utc>) -> Result<Proposal> {
-    edit_noted(db, id, intent, "Edited", at)
+    edit_noted(db, id, intent, EDITED_NOTE, at)
 }
 
 pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Utc>) -> Result<Proposal> {
@@ -160,9 +162,18 @@ pub fn require_pip_pending(p: &Proposal) -> Result<()> {
     Ok(())
 }
 
+/// Whether the person has changed what an agent run draft would do. Their edit is theirs to keep: Pip's later revision
+/// would silently replace what they wrote.
+pub fn person_edited_run(p: &Proposal) -> bool {
+    matches!(p.intent, Intent::StartRun { .. }) && p.revisions.iter().any(|r| r.note == EDITED_NOTE)
+}
+
 /// What Pip may revise: its own pending drafts, and a pending comment, new ticket or breakdown into subtasks the
 /// person's agent run left for them. The person made none of these by hand, and all stay theirs to approve.
 pub fn require_pip_may_revise(p: &Proposal) -> Result<()> {
+    if person_edited_run(p) {
+        return Err(refuse("the user edited this agent run draft, so Pip can't change it any more"));
+    }
     let from_run = matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. })) && p.created_by == CreatedBy::User;
     if p.created_by != CreatedBy::Pip && !from_run {
         return Err(refuse("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it"));

@@ -4,7 +4,7 @@ import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithout
 import { answerProblem } from "../lib/answer";
 import { docFromText, docText } from "../lib/docs";
 import type { MockProposals } from "./mockProposals";
-import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, INSTRUCTIONS, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, planLabel, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
+import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, planLabel, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
 
 const CONNECTION = "mock";
 const GUARD =
@@ -864,6 +864,30 @@ export class MockRuns {
       ticketBlock: this.ticketText(item) ?? `${item.key}: sample ticket`,
     };
     return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item, spec }, null, requestId));
+  }
+
+  /** An investigation with no ticket that Pip proposes: only a watched repository and the question are Pip's; the clone, name and project are filled in here, as the backend does. */
+  pipTicketlessDraft(repo: string | null, prompt: string, requestId: string): Promise<Proposal> {
+    const watched = Object.keys(CLONES);
+    const found = repo === null ? "acme/storefront" : watched.find((r) => r.toLowerCase() === repo.trim().toLowerCase());
+    if (!found) return Promise.reject(new Error(`${repo?.trim()} isn't a repository the user watches. The watched ones are: ${watched.join(", ")}.`));
+    const clone = (CLONES[found] ?? [])[0];
+    if (!clone) return Promise.reject(new Error(`There is no local clone of ${found}`));
+    const asked = pipPrompt(prompt);
+    if ("problem" in asked) return Promise.reject(new Error(asked.problem));
+    const spec: RunSpec = {
+      kind: "investigate",
+      repo: found,
+      clonePath: clone.path,
+      base: clone.defaultBranch ?? clone.branch,
+      name: this.suggestName("agent", asked.prompt),
+      instruction: asked.prompt,
+      focus: null,
+      focusFromRun: null,
+      ticketBlock: null,
+      project: containerRef(REPO_PROJECTS[found] ?? "CA"),
+    };
+    return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item: null, spec }, null, requestId));
   }
 
   startNow(id: string): Run {

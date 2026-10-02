@@ -44,7 +44,7 @@ export function draftTitle(p: Proposal): string {
     case "link":
       return `Link ${i.from.key}`;
     case "startRun":
-      return `Start an agent: ${i.item?.key ?? i.spec.repo}`;
+      return `Start an agent: ${i.item?.key ?? `${i.spec.repo}, no ticket`}`;
     default:
       return unreachable(i);
   }
@@ -206,10 +206,15 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
         {intent.type === "startRun" && (
           <div className="grid gap-1.5">
             <p className="m-0 flex items-baseline gap-2 font-semibold">
-              {KIND_LABEL[intent.spec.kind]} {intent.item?.key ?? intent.spec.repo}
+              {KIND_LABEL[intent.spec.kind]} {intent.item?.key ?? `in ${intent.spec.repo}, no ticket`}
               {p.createdBy === "pip" && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Proposed by Pip</span>}
             </p>
             <p className="m-0 line-clamp-3 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{intent.spec.instruction}</p>
+            {!intent.item && intent.spec.project && (
+              <p data-ticketless className="m-0 text-sm text-ws-ink2">
+                {p.createdBy === "pip" ? "Pip wrote this question; read and edit it in the prompt before you start. " : ""}When the agent finishes, Gossamr drafts one new ticket from what it found, for you to approve.
+              </p>
+            )}
             {intent.spec.plan?.trim() && intent.spec.planFromRun && (
               <p data-plan-from className="m-0 text-sm text-ws-ink2">
                 Follows the plan from run <b className="font-mono font-semibold">{intent.spec.planFromRun}</b> ({intent.spec.plan.length.toLocaleString("en")} characters, shown whole in the prompt).

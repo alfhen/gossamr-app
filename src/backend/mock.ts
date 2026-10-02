@@ -624,6 +624,10 @@ export class MockBackend implements Backend {
     return this.runs.pipDraft(item, focus, requestId);
   }
 
+  pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string) {
+    return this.runs.pipTicketlessDraft(repo, prompt, requestId);
+  }
+
   proposalsEdit(id: string, edit: ProposalEdit) {
     return this.proposals.edit(id, edit);
   }
