@@ -1,5 +1,5 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
-import { INSTRUCTIONS, PLAN_LIMIT } from "./mockRunKinds";
+import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT } from "./mockRunKinds";
 import { targetOf } from "../lib/proposals";
 import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, WorkItemKind } from "../types";
 
@@ -117,7 +117,7 @@ export class MockProposals {
     }
     if (edit.type === "run" && intent.type === "startRun") {
       if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
-      const { instruction, base, clonePath, kind, name, pr, allowPush, plan, project } = edit;
+      const { instruction, base, clonePath, kind, name, pr, allowPush, plan, buildAccount, project } = edit;
       if (project && project.connectionId !== CONNECTION) throw new Error("the project belongs to another connection");
       const was = intent.spec;
       const switched = kind && kind !== was.kind;
@@ -128,15 +128,18 @@ export class MockProposals {
         ...(base !== undefined ? { base: base.trim() } : {}),
         ...(clonePath !== undefined ? { clonePath } : {}),
         ...(kind ? { kind } : {}),
-        ...(switched ? { pr: null, prSha: null, allowPush: false, ...(kind !== "build" ? { plan: null, planFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
+        ...(switched ? { pr: null, prSha: null, allowPush: kind === "build", ...(kind !== "build" ? { plan: null, planFromRun: null } : {}), ...(kind !== "review" ? { buildAccount: null, buildFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
         ...(project ? { project } : {}),
-        ...(pr !== undefined ? { pr, prSha: null } : {}),
+        ...(pr !== undefined ? { pr, prSha: null, ...(pr !== was.pr ? { buildAccount: null, buildFromRun: null } : {}) } : {}),
         ...(allowPush !== undefined ? { allowPush } : {}),
         ...(plan !== undefined ? (plan.trim() ? { plan } : { plan: null, planFromRun: null }) : {}),
+        ...(buildAccount !== undefined ? (buildAccount.trim() ? { buildAccount } : { buildAccount: null, buildFromRun: null }) : {}),
         ...(name !== undefined ? { name: name.trim() } : {}),
       };
       if (spec.allowPush && spec.kind !== "build") throw new Error("Only a build can push.");
       if (plan?.trim() && !was.planFromRun) throw new Error("this draft doesn't carry a plan");
+      if (buildAccount?.trim() && !was.buildFromRun) throw new Error("this draft doesn't carry a builder's account");
+      if (buildAccount && [...buildAccount].length > BUILD_ACCOUNT_LIMIT) throw new Error(`The builder's account must be text of at most ${BUILD_ACCOUNT_LIMIT} characters.`);
       if (plan && [...plan].length > PLAN_LIMIT) throw new Error(`The plan must be text of at most ${PLAN_LIMIT} characters.`);
       return this.set(id, { intent: { ...intent, spec }, error: null });
     }

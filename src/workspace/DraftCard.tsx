@@ -215,6 +215,11 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
                 Follows the plan from run <b className="font-mono font-semibold">{intent.spec.planFromRun}</b> ({intent.spec.plan.length.toLocaleString("en")} characters, shown whole in the prompt).
               </p>
             )}
+            {intent.spec.buildAccount?.trim() && intent.spec.buildFromRun && (
+              <p data-build-from className="m-0 text-sm text-ws-ink2">
+                Checks the builder&apos;s account from run <b className="font-mono font-semibold">{intent.spec.buildFromRun}</b> ({intent.spec.buildAccount.length.toLocaleString("en")} characters, shown whole in the prompt) as a claim, not as evidence.
+              </p>
+            )}
             {intent.spec.focus?.trim() && (
               <p className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2 py-1 text-sm [overflow-wrap:anywhere]">
                 <b className="font-semibold text-ws-pip">Focus from Pip{intent.spec.focusFromRun ? `, after reading run ${intent.spec.focusFromRun}` : ""}:</b> {intent.spec.focus.trim()}

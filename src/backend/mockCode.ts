@@ -114,6 +114,18 @@ export class MockCode {
         linkedKeys: ["CA-402"],
         createdAt: hoursAgo(now, 50),
       }),
+      pr("acme/webshop", 218, {
+        title: "CA-402: Cache the category tree (agent)",
+        headRef: "worktree-ca-402-category-cache-e1f2",
+        state: "draft",
+        sha: "a1b2c3d4e5f6",
+        checks: "passing",
+        additions: 84,
+        deletions: 12,
+        changedFiles: 5,
+        linkedKeys: ["CA-402"],
+        updatedAt: hoursAgo(now, 1),
+      }),
       pr("acme/webshop", 215, {
         title: "Fix the size-guide typo",
         headRef: "patch-1",

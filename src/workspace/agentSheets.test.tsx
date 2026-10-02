@@ -20,7 +20,7 @@ const seeded = () => new MockBackend().runs.list();
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 212_000, result: null, error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
 
-const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn() });
+const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() });
 
 const sheet = (r: Run, over: Partial<RunSheetViewProps> = {}) =>
   renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="Retry failed payment webhooks" place={{ index: 2, total: 8 }} wide={false} onWide={vi.fn()} events={[]} disk={null} brief={null} confirmStop={false} outcome={null} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={actions()} {...over} />);
@@ -430,9 +430,11 @@ describe("the setup sheet", () => {
     });
 
     it("shows the push option only for Build, off, with the honest sentence", () => {
-      expect(setup()).not.toContain("Allow it to push and open a pull request");
+      expect(setup()).not.toContain("Push its branch and open a draft pull request");
       const html = setup({ kind: "build", review: reviewOf({ kind: "build", allowPush: false }) });
-      expect(html).toContain("Allow it to push and open a pull request");
+      expect(html).toContain("Push its branch and open a draft pull request");
+      expect(html).toContain("On by default");
+      expect(html).toContain("never mark it ready and never merge it");
       expect(/<input type="checkbox"[^>]*checked=""/.test(html)).toBe(false);
       expect(html).toContain("not a lock");
       expect(html).toContain("nothing technical stops a push whether this is ticked or not");
@@ -456,14 +458,15 @@ describe("the setup sheet", () => {
       expect(setup()).not.toContain("Pull request to review");
     });
 
-    it("lists a same-repository open pull request as choosable, and says why a fork, a closed and a draft one are not", () => {
-      const html = picker({ prs: prs([change(1, { headRepo: "acme/storefront" }), change(2, { headRepo: "mallory/storefront" }), change(3, { state: "closed" }), change(4, { state: "draft" })]) });
+    it("lists a same-repository open pull request as choosable, and says why a fork and a closed one are not, and takes a draft one", () => {
+      const html = picker({ prs: prs([change(1, { headRepo: "acme/storefront" }), change(2, { headRepo: "mallory/storefront" }), change(3, { state: "closed" }), change(4, { state: "draft", headRepo: "acme/storefront" })]) });
       const row = (n: number) => new RegExp(`<button[^>]*role="radio"[^>]*>(?:(?!</button>)[\\s\\S])*?Pull request ${n}</span>(?:(?!</button>)[\\s\\S])*</button>`).exec(html)![0];
       expect(row(1)).not.toContain('disabled=""');
       expect(row(2)).toContain('disabled=""');
       expect(row(2)).toContain("From a fork");
       expect(row(3)).toContain("Closed");
-      expect(row(4)).toContain("Still a draft");
+      expect(row(4)).toContain("Draft pull request");
+      expect(row(4)).not.toContain('disabled=""');
     });
 
     it("says that a pull request with an unknown head repository is checked on GitHub", () => {

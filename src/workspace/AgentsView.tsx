@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
-import type { Run, RunsEnvironment } from "../types";
+import type { CodeChange, Run, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { AgentCard, agentId, type AgentItemProps } from "./AgentCard";
 import { Icon } from "./AgentIcons";
@@ -14,7 +14,7 @@ import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
-import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, runBreakdownDraftOf, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
+import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
@@ -192,11 +192,13 @@ export interface AgentsScreenProps {
   draftReady?(run: Run): boolean;
   /** Whether a finished run has a breakdown into subtasks waiting. */
   breakdownReady?(run: Run): boolean;
+  /** What "Review this" does for a finished build whose pull request can be reviewed; absent for any other run. */
+  reviewThis?(run: Run): (() => void) | undefined;
   on: AgentsActions;
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, opened, now, ticketTitle, draftReady, breakdownReady, on }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, opened, now, ticketTitle, draftReady, breakdownReady, reviewThis, on }: AgentsScreenProps) {
   const footer = useFooterHeight();
   const groups = useMemo(() => groupRuns(runs, filters, now), [runs, filters, now]);
   const order = useMemo(() => navOrder(groups, earlierOpen, filters), [groups, earlierOpen, filters]);
@@ -217,6 +219,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     onOpenDraft: on.openDraft ? () => on.openDraft?.(run) : undefined,
     onOpenBreakdown: on.openBreakdown ? () => on.openBreakdown?.(run) : undefined,
     onBuildFromPlan: buildFromPlanControl(run).enabled ? () => on.buildFromPlan(run) : undefined,
+    onReviewThis: reviewThis?.(run),
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
     failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
   });
@@ -327,6 +330,29 @@ const actions: AgentsActions = {
   openSafety: () => useRuns.getState().openSafety(),
 };
 
+const CHANGE_RECHECK_MS = 30_000;
+
+/** The pull request each finished build opened, as the last sync saw it, asked again while a build has none. */
+function useBuildChanges(runs: readonly Run[]) {
+  const backend = useRuns((s) => s.backend);
+  const [changes, setChanges] = useState<Record<string, CodeChange | null>>({});
+  const asked = useRef(new Map<string, number>());
+  useEffect(() => {
+    if (!backend) return;
+    const at = Date.now();
+    for (const run of runs) {
+      if (run.spec.kind !== "build" || run.state !== "done" || !run.item || run.resultComplete === false || changes[run.id]?.number != null) continue;
+      if (at - (asked.current.get(run.id) ?? 0) < CHANGE_RECHECK_MS) continue;
+      asked.current.set(run.id, at);
+      backend.runsOutcome(run.id).then(
+        (outcome) => setChanges((c) => ({ ...c, [run.id]: outcome.change })),
+        () => {},
+      );
+    }
+  }, [backend, runs, changes]);
+  return changes;
+}
+
 export function AgentsView() {
   const runs = useRuns((s) => s.runs);
   const status = useRuns((s) => s.status);
@@ -343,6 +369,7 @@ export function AgentsView() {
   const items = useWorkspace((s) => s.items);
   const proposals = useWorkspace((s) => s.proposals);
   const now = useNow();
+  const changes = useBuildChanges(runs);
 
   const order = useMemo(() => navOrder(groupRuns(runs, filters, now), earlierOpen, filters), [runs, filters, earlierOpen, now]);
   const orderRef = useRef(order);
@@ -395,6 +422,10 @@ export function AgentsView() {
       ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
       draftReady={(run) => !!runDraftOf(proposals, run.id) || !!runTicketDraftOf(proposals, run.id)}
       breakdownReady={(run) => !!runBreakdownDraftOf(proposals, run.id)}
+      reviewThis={(run) => {
+        const change = changes[run.id] ?? null;
+        return change && reviewThisControl(run, change).enabled ? () => void useRunSetup.getState().begin(reviewThisOptions(run, change)) : undefined;
+      }}
       on={actions}
     />
   );

@@ -207,7 +207,7 @@ export const PLAN_COMMENT_LIMIT = 24_000;
 export function planAnswer(result: string): string {
   const clean = result.replace(/\r\n/g, "\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "");
   let out = clean;
-  while (/<<<(?:TICKET|FOCUS|PLAN|AGENT_OUTPUT)|(?:TICKET|FOCUS|PLAN|AGENT_OUTPUT)>>>/.test(out)) out = out.replace(/<<<(?:TICKET|FOCUS|PLAN|AGENT_OUTPUT)|(?:TICKET|FOCUS|PLAN|AGENT_OUTPUT)>>>/g, "");
+  while (/<<<(?:TICKET|FOCUS|PLAN|BUILD|AGENT_OUTPUT)|(?:TICKET|FOCUS|PLAN|BUILD|AGENT_OUTPUT)>>>/.test(out)) out = out.replace(/<<<(?:TICKET|FOCUS|PLAN|BUILD|AGENT_OUTPUT)|(?:TICKET|FOCUS|PLAN|BUILD|AGENT_OUTPUT)>>>/g, "");
   return out.trim();
 }
 

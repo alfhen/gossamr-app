@@ -215,6 +215,8 @@ export interface Backend {
   runsDraftPlanComment(id: string): Promise<PlanComment>;
   /** Reads a pending build draft's plan again from its plan run, replacing the person's edits. Only this changes the plan. */
   runsRefreshPlan(id: string): Promise<Proposal>;
+  /** Reads a pending review draft's builder account again from its build run, replacing the person's edits. Only this changes it. */
+  runsRefreshBuildAccount(id: string): Promise<Proposal>;
   /** Drafts a new ticket from a finished run that has no ticket: the one its `New ticket:` section proposes, else its answer for the person to edit. A draft only; a run gets one. */
   runsDraftTicket(id: string): Promise<Proposal>;
   /** The watched project the tickets linked to this repository's pull requests most recently belong to, if any. */

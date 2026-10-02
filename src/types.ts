@@ -431,7 +431,7 @@ export type ProposalEdit =
   /** A new item's fields; the ones left out stay as they are. */
   | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef }
   /** A run draft's settings, as the person edits them; the ones left out stay as they are. */
-  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; plan?: string; project?: ContainerRef };
+  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
@@ -465,7 +465,11 @@ export interface RunSpec {
   plan?: string | null;
   /** The plan run it came from. Set with `plan`, builds only. */
   planFromRun?: string | null;
-  /** Whether a build is told it may push and open a pull request. Builds only. */
+  /** For a review made from a build run: the builder's final answer, sent as data apart from the instruction. */
+  buildAccount?: string | null;
+  /** The build run it came from. Set with `buildAccount`, reviews only. */
+  buildFromRun?: string | null;
+  /** Whether a build is told it may push and open a draft pull request. Builds only. */
   allowPush?: boolean;
   /** Where the draft ticket of an investigation with no ticket lands. Its presence makes the run end as a ticket; the agent never chooses it. */
   project?: ContainerRef | null;
@@ -577,6 +581,8 @@ export interface RunReview {
   ticketBlock: string | null;
   /** For a build made from a plan: the plan as it will be sent. */
   plan?: string | null;
+  /** For a review made from a build: the builder's account as it will be sent. */
+  buildAccount?: string | null;
   guard: string;
   spec: RunSpec;
   /** The reviewed pull request, as GitHub names it now. */

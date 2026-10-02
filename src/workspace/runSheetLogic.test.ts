@@ -315,9 +315,9 @@ describe("the pull requests a review can take", () => {
     expect(prChoices([pr(1, { headRepo: "ACME/Web" })], "acme/web")[0]).toMatchObject({ selectable: true, note: null });
   });
 
-  it("refuses a fork, a closed, a merged and a draft pull request, each with its reason", () => {
+  it("refuses a fork, a closed and a merged pull request with its reason, and takes a draft one", () => {
     const notes = prChoices([pr(1, { headRepo: "x/web" }), pr(2, { state: "closed" }), pr(3, { state: "merged" }), pr(4, { state: "draft" })], "acme/web");
-    expect(notes.map((c) => [c.change.number, c.selectable, c.note]).sort()).toEqual([[1, false, "From a fork"], [2, false, "Closed"], [3, false, "Merged"], [4, false, "Still a draft"]]);
+    expect(notes.map((c) => [c.change.number, c.selectable, c.note]).sort()).toEqual([[1, false, "From a fork"], [2, false, "Closed"], [3, false, "Merged"], [4, true, "Draft pull request"]]);
   });
 
   it("lets one with an unknown head repository be chosen, to be checked on GitHub", () => {

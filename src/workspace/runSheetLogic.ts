@@ -49,13 +49,16 @@ export function startSteps(ticketless: boolean): readonly string[] {
 }
 
 export interface PromptPart {
-  id: "base" | "template" | "extra" | "focus" | "plan" | "ticket" | "all";
+  id: "base" | "template" | "extra" | "focus" | "plan" | "account" | "ticket" | "all";
   label: string;
   text: string;
 }
 
 /** Starts the plan part of a build's prompt: the sentence about following it, then the plan between its markers. As `PLAN_FOLLOW` in `domain/run.rs`. */
 export const PLAN_INTRO = "A person read, edited and approved the plan below.";
+
+/** Starts the builder's account part of a review's prompt: the sentence about checking it, then the account between its markers. As `BUILD_ACCOUNT_PREFACE` in `domain/run.rs`. */
+export const ACCOUNT_INTRO = "The builder's own account of what it did is below.";
 
 /**
  * Cuts the prompt the backend rendered into the parts the person reads. The parts are slices of that prompt, so
@@ -76,23 +79,27 @@ export function splitPrompt(review: Pick<RunReview, "prompt" | "instruction">): 
     const i = rest.indexOf(`\n\n${marker}`);
     return i < 0 ? -1 : i + 2;
   };
-  const planAt = find(PLAN_INTRO);
-  // The plan is carried between its own markers, which its text can't contain, so what follows them is the ticket.
-  const planEnd = planAt >= 0 ? rest.indexOf("\nPLAN>>>", planAt) : -1;
-  const afterPlan = planEnd >= 0 ? planEnd + "\nPLAN>>>".length : 0;
   const ticketFound = find("Ticket (data from Jira");
-  const ticketAt = planAt >= 0 && planEnd < 0 ? -1 : ticketFound >= afterPlan ? ticketFound : -1;
+  // Each carried part sits between its own markers, which its text can't contain, so what follows them is the ticket.
+  // A part's opening sentence only counts ahead of the ticket, whose text can say anything.
+  const block = (intro: string, close: string) => {
+    const at = find(intro);
+    if (at < 0 || (ticketFound >= 0 && at > ticketFound)) return { at: -1, end: 0, open: false };
+    const end = rest.indexOf(close, at);
+    return { at, end: end >= 0 ? end + close.length : 0, open: end < 0 };
+  };
+  const plan = block(PLAN_INTRO, "\nPLAN>>>");
+  const account = block(ACCOUNT_INTRO, "\nBUILD>>>");
+  const ticketAt = plan.open || account.open ? -1 : ticketFound >= Math.max(plan.end, account.end) ? ticketFound : -1;
   const focusFound = find("Focus from Pip (");
-  const focusAt = focusFound >= 0 && (planAt < 0 || focusFound < planAt) && (ticketAt < 0 || focusFound < ticketAt) ? focusFound : -1;
-  const firstData = [focusAt, planAt, ticketAt].filter((i) => i >= 0);
-  const extra = rest.slice(0, firstData.length ? Math.min(...firstData) : undefined).trim();
+  const focusAt = focusFound >= 0 && (plan.at < 0 || focusFound < plan.at) && (account.at < 0 || focusFound < account.at) && (ticketAt < 0 || focusFound < ticketAt) ? focusFound : -1;
+  const starts = ([["focus", focusAt], ["plan", plan.at], ["account", account.at], ["ticket", ticketAt]] as const).filter(([, at]) => at >= 0).sort((a, b) => a[1] - b[1]);
+  const extra = rest.slice(0, starts.length ? starts[0][1] : undefined).trim();
   const parts: PromptPart[] = [];
   if (base) parts.push({ id: "base", label: "Which branch it starts from", text: base });
   parts.push({ id: "template", label: "What to do", text: instruction });
   if (extra) parts.push({ id: "extra", label: "Added for this run", text: extra });
-  if (focusAt >= 0) parts.push({ id: "focus", label: "Focus", text: rest.slice(focusAt, planAt > focusAt ? planAt : ticketAt > focusAt ? ticketAt : undefined).trim() });
-  if (planAt >= 0) parts.push({ id: "plan", label: "Plan", text: rest.slice(planAt, ticketAt > planAt ? ticketAt : undefined).trim() });
-  if (ticketAt >= 0) parts.push({ id: "ticket", label: "Ticket", text: rest.slice(ticketAt).trim() });
+  starts.forEach(([id, at], i) => parts.push({ id, label: id === "ticket" ? "Ticket" : id === "focus" ? "Focus" : id === "plan" ? "Plan" : "The builder's account", text: rest.slice(at, starts[i + 1]?.[1]).trim() }));
   const joined = parts.map((p) => p.text).join("\n\n");
   return joined === prompt ? parts : whole;
 }
@@ -151,7 +158,7 @@ export function startBlock(s: {
   /** What the chosen kind still needs, from `kindBlock`. */
   kindBlock?: string | null;
   /** What is typed in the instruction, base and plan fields, when they can differ from the saved draft. */
-  typed?: { instruction: string; base: string; plan?: string };
+  typed?: { instruction: string; base: string; plan?: string; buildAccount?: string };
   /** Set for an investigation with no ticket: it needs the person's own question and a project for the ticket. */
   ticketless?: { project: boolean };
 }): string | null {
@@ -168,6 +175,7 @@ export function startBlock(s: {
   if (!written) return "Write what it should do first";
   if (s.typed && !s.typed.base.trim()) return "Name the branch it starts from first";
   if (s.review.plan && s.typed?.plan !== undefined && !s.typed.plan.trim()) return "Write the plan first, or remove it";
+  if (s.review.buildAccount && s.typed?.buildAccount !== undefined && !s.typed.buildAccount.trim()) return "Write the builder's account first, or remove it";
   if (!s.preflight) return "Checking that it can start…";
   const red = s.preflight.rows.find((r) => r.level === "red");
   if (red) return red.text;
@@ -175,9 +183,10 @@ export function startBlock(s: {
 }
 
 /** Whether the draft stored in the backend is what is typed in the fields, so approving it approves what the person sees. */
-export function savedAsTyped(review: Pick<RunReview, "instruction" | "spec" | "plan"> | null, typed: { instruction: string; base: string; plan?: string }): boolean {
+export function savedAsTyped(review: Pick<RunReview, "instruction" | "spec" | "plan" | "buildAccount"> | null, typed: { instruction: string; base: string; plan?: string; buildAccount?: string }): boolean {
   const plan = !review?.plan || typed.plan === undefined || typed.plan === review.plan;
-  return !!review && !!typed.instruction.trim() && typed.instruction === review.instruction && typed.base.trim() === review.spec.base && plan;
+  const account = !review?.buildAccount || typed.buildAccount === undefined || typed.buildAccount === review.buildAccount;
+  return !!review && !!typed.instruction.trim() && typed.instruction === review.instruction && typed.base.trim() === review.spec.base && plan && account;
 }
 
 export interface StopControl {
@@ -367,6 +376,30 @@ export function buildFromPlanOptions(run: Pick<Run, "id" | "item" | "spec">) {
   return { item: run.item, kind: "build" as const, repo: run.spec.repo, planFromRun: run.id };
 }
 
+type BuiltRun = Pick<Run, "spec" | "item" | "state" | "result" | "resultComplete">;
+
+/**
+ * "Review this" needs a finished Build run on a ticket whose whole answer was read, and a pull request it opened in
+ * its own repository that is still open (a draft counts). `change` is the run's pull request as the last sync saw it.
+ */
+export function reviewThisControl(run: BuiltRun, change: Pick<CodeChange, "kind" | "state" | "repo" | "headRepo" | "number"> | null): DraftControl {
+  const no = (reason: string): DraftControl => ({ enabled: false, reason });
+  if (run.spec.kind !== "build") return no("Only a build can be reviewed from here.");
+  if (run.state !== "done") return no("The build isn't finished yet.");
+  if (!run.item) return no("A review from a build needs a ticket, and this build isn't about one.");
+  if (!run.result?.trim()) return no("It finished without a written answer, so there is nothing to check against.");
+  if (run.resultComplete === false) return no(`${SUMMARY_ONLY} A review can only follow a build Gossamr has read in full.`);
+  if (!change || change.kind !== "pullRequest" || change.number == null) return no("This build has no pull request yet. Push it and open one, or ask it to, then review it.");
+  if (change.repo.toLowerCase() !== run.spec.repo.toLowerCase() || (change.headRepo && change.headRepo.toLowerCase() !== run.spec.repo.toLowerCase())) return no("Its pull request isn't from a branch in the same repository, which Gossamr doesn't review yet.");
+  if (change.state === "merged" || change.state === "closed") return no(`Its pull request is ${change.state}, so there is nothing to review.`);
+  return { enabled: true, reason: null };
+}
+
+/** What opens the Review draft for a finished build run: the same ticket and repository, pinned to the run's pull request and carrying its answer. */
+export function reviewThisOptions(run: Pick<Run, "id" | "item" | "spec">, change: Pick<CodeChange, "number">) {
+  return { item: run.item, kind: "review" as const, repo: run.spec.repo, pr: change.number ?? undefined, buildFromRun: run.id };
+}
+
 /** What "Draft the plan as a comment" tells the person: the comment holds the whole plan, and says when it was cut. */
 export function planCommentMessage(made: { cut: boolean; total: number }): string {
   return made.cut
@@ -510,7 +543,7 @@ export interface PrChoice {
 const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 /**
- * The pull requests of `repo` a review could read. Only an open pull request from the same repository can be
+ * The pull requests of `repo` a review could read. Only an open pull request (a draft counts) from the same repository can be
  * chosen; one whose head repository isn't known yet is chosen and GitHub is asked when the draft is made.
  */
 export function prChoices(changes: readonly CodeChange[], repo: string): PrChoice[] {
@@ -519,9 +552,8 @@ export function prChoices(changes: readonly CodeChange[], repo: string): PrChoic
     .map((change): PrChoice => {
       if (change.state === "merged") return { change, selectable: false, note: "Merged" };
       if (change.state === "closed") return { change, selectable: false, note: "Closed" };
-      if (change.state === "draft") return { change, selectable: false, note: "Still a draft" };
       if (change.headRepo && !sameRepo(change.headRepo, change.repo)) return { change, selectable: false, note: "From a fork" };
-      return { change, selectable: true, note: change.headRepo ? null : "Checked on GitHub when you choose it" };
+      return { change, selectable: true, note: change.headRepo ? (change.state === "draft" ? "Draft pull request" : null) : "Checked on GitHub when you choose it" };
     })
     .sort((a, b) => Number(b.selectable) - Number(a.selectable) || b.change.updatedAt.localeCompare(a.change.updatedAt));
 }

@@ -59,30 +59,31 @@ describe("choosing the kind of work", () => {
 });
 
 describe("a build", () => {
-  it("does not allow a push by default and says so in the prompt", async () => {
+  it("opens a draft pull request by default and says so in the prompt", async () => {
     await s().begin({ item: CA, kind: "build" });
     const { review, preflight } = s();
-    expect(review!.spec.allowPush).toBe(false);
-    expect(review!.prompt).toContain("do not push");
-    expect(review!.prompt).not.toContain("You may push");
-    expect(preflight!.rows.some((r) => r.level === "amber" && /may push/.test(r.text))).toBe(false);
+    expect(review!.spec.allowPush).toBe(true);
+    expect(review!.prompt).toContain("`gh pr create --draft`");
+    expect(review!.prompt).toContain("never merge it");
+    expect(preflight!.rows.find((r) => r.level === "amber" && /may push/.test(r.text))?.text).toContain("draft pull request");
   });
 
-  it("puts the permission in the prompt and an amber row in the checks only when ticked, and takes it back", async () => {
+  it("takes the permission out of the prompt and the checks when turned off, and back when turned on", async () => {
     await s().begin({ item: CA, kind: "build" });
-    const off = s().review!.digest;
-    await s().saveEdit({ allowPush: true });
-    expect(s().review!.prompt).toContain("You may push your branch and open a pull request.");
-    expect(s().review!.digest).not.toBe(off);
-    expect(s().preflight!.rows.find((r) => r.level === "amber" && /may push/.test(r.text))?.text).toContain("permission mode is auto");
+    const on = s().review!.digest;
     await s().saveEdit({ allowPush: false });
-    expect(s().review!.prompt).not.toContain("You may push");
-    expect(s().review!.digest).toBe(off);
+    expect(s().review!.prompt).toContain("do not push");
+    expect(s().review!.prompt).not.toContain("gh pr create");
+    expect(s().review!.digest).not.toBe(on);
+    expect(s().preflight!.rows.some((r) => r.level === "amber" && /may push/.test(r.text))).toBe(false);
+    await s().saveEdit({ allowPush: true });
+    expect(s().review!.prompt).toContain("You may push your branch and open a draft pull request");
+    expect(s().preflight!.rows.find((r) => r.level === "amber" && /may push/.test(r.text))?.text).toContain("permission mode is auto");
+    expect(s().review!.digest).toBe(on);
   });
 
   it("leaves the permission behind when the kind changes", async () => {
     await s().begin({ item: CA, kind: "build" });
-    await s().saveEdit({ allowPush: true });
     await s().chooseKind("verify");
     expect(s().review!.spec.allowPush).toBe(false);
     expect(s().review!.prompt).not.toMatch(/push/i);

@@ -390,6 +390,10 @@ export class JiraBackend implements Backend {
     return invoke<Proposal>("runs_refresh_plan", { id });
   }
 
+  runsRefreshBuildAccount(id: string) {
+    return invoke<Proposal>("runs_refresh_build_account", { id });
+  }
+
   runsDraftTicket(id: string) {
     return invoke<Proposal>("runs_draft_ticket", { id });
   }
