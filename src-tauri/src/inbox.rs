@@ -28,7 +28,7 @@ mod watch;
 
 pub use code::{CodeRef, CodeService};
 pub use drafts::Edit;
-pub use run_results::{RunOutcome, SUMMARY_ONLY};
+pub use run_results::{PlanComment, RunOutcome, SUMMARY_ONLY};
 pub use watch::{CatalogPage, WatchState};
 
 /// Events this old drop out of the inbox unless they are still unread.

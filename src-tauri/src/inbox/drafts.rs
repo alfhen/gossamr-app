@@ -64,6 +64,9 @@ pub enum Edit {
         pr: Option<u64>,
         #[serde(default)]
         allow_push: Option<bool>,
+        /// The plan a build carries, as the person edited it. Blank removes it.
+        #[serde(default)]
+        plan: Option<String>,
         /// Where the ticket of an investigation with no ticket lands.
         #[serde(default)]
         project: Option<ContainerRef>,
@@ -110,7 +113,7 @@ impl Edit {
                 }
                 Ok(Intent::Create { container, fields, link: link.clone() })
             }
-            (Edit::Run { instruction, base, clone_path, kind, name, pr, allow_push, project }, Intent::StartRun { connection_id, item, spec }) => {
+            (Edit::Run { instruction, base, clone_path, kind, name, pr, allow_push, plan, project }, Intent::StartRun { connection_id, item, spec }) => {
                 let mut spec = spec.clone();
                 if let Some(v) = kind.filter(|k| *k != spec.kind) {
                     if instruction.is_none() && spec.instruction.trim() == default_instruction(spec.kind) {
@@ -119,6 +122,10 @@ impl Edit {
                     spec.pr = None;
                     spec.pr_sha = None;
                     spec.allow_push = false;
+                    if v != RunKind::Build {
+                        spec.plan = None;
+                        spec.plan_from_run = None;
+                    }
                     if v != RunKind::Investigate {
                         spec.project = None;
                     }
@@ -144,6 +151,16 @@ impl Edit {
                 }
                 if let Some(v) = allow_push {
                     spec.allow_push = *v;
+                }
+                if let Some(v) = plan {
+                    if v.trim().is_empty() {
+                        spec.plan = None;
+                        spec.plan_from_run = None;
+                    } else if spec.plan_from_run.is_some() {
+                        spec.plan = Some(v.clone());
+                    } else {
+                        return Err(Error::Proposal("this draft doesn't carry a plan".into()));
+                    }
                 }
                 if let Some(v) = project {
                     spec.project = Some(v.clone());
@@ -325,6 +342,13 @@ impl Core {
             let change = self.review_target(&spec).await?;
             spec.base = change.base_ref.unwrap_or(spec.base);
             spec.pr_sha = change.sha;
+        }
+        spec.plan = None;
+        if let Some(from) = spec.plan_from_run.take() {
+            if item.is_none() {
+                return Err(Error::Proposal("Build needs a ticket".into()));
+            }
+            spec.plan_from_run = Some(self.attach_plan(&mut spec, &from, item.as_ref()).await?);
         }
         let links = item.as_ref().map(|i| self.ticket_dev_links(i)).unwrap_or_default();
         let intent = self
@@ -740,7 +764,7 @@ mod tests {
         let p = drafted_run(&fx).await;
         let read = fx.core.runs_review(&p.id).await.unwrap();
 
-        let edit = Edit::Run { instruction: Some("Also read the billing code.".into()), base: Some(" develop ".into()), clone_path: None, kind: None, name: None, pr: None, allow_push: None, project: None };
+        let edit = Edit::Run { instruction: Some("Also read the billing code.".into()), base: Some(" develop ".into()), clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: None, project: None };
         let edited = fx.core.edit_proposal(&p.id, &edit).await.unwrap();
         let spec = spec_of(&edited);
         assert_eq!((spec.base.as_str(), spec.instruction.as_str()), ("develop", "Also read the billing code."));
@@ -812,7 +836,7 @@ mod tests {
         let Intent::StartRun { spec, .. } = edit.apply_to(&current).unwrap() else { panic!() };
         assert_eq!((spec.instruction.as_str(), spec.name.as_str(), spec.base.as_str(), spec.repo.as_str()), ("Look at logs", "new-name", "main", "acme/webshop"));
         assert_eq!(spec.clone_path, PathBuf::from("/Users/me/Code/other"));
-        assert!(Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, project: None }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
+        assert!(Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: None, project: None }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
     }
 
     #[tokio::test]
@@ -878,11 +902,11 @@ mod tests {
         let spec = RunSpec { instruction: String::new(), project: Some(project_of(&fx)), ..spec_in(&clone) };
         let p = fx.core.draft_run(spec, None).await.unwrap();
         let other = ContainerRef { external_id: "10001".into(), ..project_of(&fx) };
-        let edit = Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, project: Some(other.clone()) };
+        let edit = Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: None, project: Some(other.clone()) };
         assert_eq!(spec_of(&fx.core.edit_proposal(&p.id, &edit).await.unwrap()).project, Some(other));
-        let triage = Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(RunKind::Triage), name: None, pr: None, allow_push: None, project: None };
+        let triage = Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(RunKind::Triage), name: None, pr: None, allow_push: None, plan: None, project: None };
         assert_eq!(spec_of(&fx.core.edit_proposal(&p.id, &triage).await.unwrap()).project, None);
-        let wrong = Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, project: Some(ContainerRef { connection_id: "elsewhere".into(), external_id: "x".into() }) };
+        let wrong = Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: None, project: Some(ContainerRef { connection_id: "elsewhere".into(), external_id: "x".into() }) };
         assert!(fx.core.edit_proposal(&p.id, &wrong).await.is_err());
     }
 
@@ -1018,11 +1042,11 @@ mod tests {
             let clone = clone_in(&fx, "webshop");
             let build = RunSpec { kind: RunKind::Build, allow_push: true, instruction: String::new(), ..spec_in(&clone) };
             let p = fx.core.draft_run(build, Some(fx.item("CA-1"))).await.unwrap();
-            let edit = Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(RunKind::Triage), name: None, pr: None, allow_push: None, project: None };
+            let edit = Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(RunKind::Triage), name: None, pr: None, allow_push: None, plan: None, project: None };
             let edited = spec_of(&fx.core.edit_proposal(&p.id, &edit).await.unwrap());
             assert_eq!((edited.kind, edited.allow_push, edited.instruction.as_str()), (RunKind::Triage, false, default_instruction(RunKind::Triage)));
 
-            let typed = Edit::Run { instruction: Some("My own words, long enough.".into()), base: None, clone_path: None, kind: Some(RunKind::Verify), name: None, pr: None, allow_push: None, project: None };
+            let typed = Edit::Run { instruction: Some("My own words, long enough.".into()), base: None, clone_path: None, kind: Some(RunKind::Verify), name: None, pr: None, allow_push: None, plan: None, project: None };
             assert_eq!(spec_of(&fx.core.edit_proposal(&p.id, &typed).await.unwrap()).instruction, "My own words, long enough.");
         }
     }

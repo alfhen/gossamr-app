@@ -44,6 +44,71 @@ pub fn jira_note(result: &str) -> JiraNote {
     JiraNote { text: cut(&plain(&clean), FALLBACK_LIMIT), from_marker: false }
 }
 
+/// A plan comment is kept up to this many characters; Jira refuses comments of about 32,000 and the intro, the cut note
+/// and the document structure need room.
+pub const PLAN_COMMENT_LIMIT: usize = 24_000;
+
+/// A plan run's answer, cleaned the way every agent text is but with its markdown left as written.
+pub fn plan_answer(result: &str) -> String {
+    sanitize(result).trim().to_string()
+}
+
+/// The plan without its closing `For Jira:` note, which goes to the ticket on its own. Only a note that ends the answer
+/// is removed: the last `For Jira:` heading outside a code fence, with nothing after it that starts another section or
+/// a code block. Anything else, such as a step that mentions `For Jira:`, leaves the plan whole.
+pub fn plan_without_note(result: &str) -> String {
+    let clean = sanitize(result);
+    let whole = || clean.trim().to_string();
+    let lines: Vec<&str> = clean.lines().collect();
+    let Some(at) = last_heading_outside_fences(&lines, "for jira") else { return whole() };
+    let mut after = Fences::default();
+    if lines[at + 1..].iter().any(|l| after.inside(l) || ends_section(l)) {
+        return whole();
+    }
+    let mut before = lines[..at].to_vec();
+    while before.last().is_some_and(|l| l.trim().is_empty() || is_rule(l.trim())) {
+        before.pop();
+    }
+    if before.is_empty() {
+        whole()
+    } else {
+        before.join("\n")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fitted {
+    pub text: String,
+    /// Characters the whole text had before it was cut; `cut` says whether it was.
+    pub total: usize,
+    pub cut: bool,
+}
+
+/// `text` within `limit` characters. When it has to be cut, the cut falls at the end of a paragraph or sentence, and
+/// `note(total)` is added after it so nobody takes the rest for missing.
+pub fn fit(text: &str, limit: usize, note: impl Fn(usize) -> String) -> Fitted {
+    let total = text.chars().count();
+    if total <= limit {
+        return Fitted { text: text.to_string(), total, cut: false };
+    }
+    let note = note(total);
+    let room = limit.saturating_sub(note.chars().count());
+    Fitted { text: format!("{}\n\n{note}", at_boundary(text, room)), total, cut: true }
+}
+
+/// The longest start of `text` of at most `room` characters that ends a paragraph, a sentence or at least a word, as far
+/// as the second half of that window allows; otherwise a plain cut.
+fn at_boundary(text: &str, room: usize) -> String {
+    let end = text.char_indices().nth(room).map_or(text.len(), |(i, _)| i);
+    let window = &text[..end];
+    let floor = window.char_indices().nth(room / 2).map_or(0, |(i, _)| i);
+    let paragraph = window.rfind("\n\n").filter(|&i| i >= floor);
+    let sentence = || window.char_indices().filter(|&(i, c)| i >= floor && matches!(c, '.' | '!' | '?') && text[i + 1..].starts_with(char::is_whitespace)).map(|(i, _)| i + 1).next_back();
+    let word = || window.rfind(char::is_whitespace).filter(|&i| i >= floor);
+    let at = paragraph.or_else(sentence).or_else(word).unwrap_or(end);
+    window[..at].trim_end().to_string()
+}
+
 /// Ticket keys the result names, upper case, in order of appearance.
 pub fn ticket_keys(result: &str) -> Vec<String> {
     keys_in(&sanitize(result))
@@ -211,6 +276,18 @@ impl Fences {
 fn heading_outside_fences<'a>(lines: &[&'a str], name: &str) -> Option<(usize, &'a str)> {
     let mut fences = Fences::default();
     lines.iter().enumerate().find_map(|(i, line)| if fences.inside(line) { None } else { heading_rest(line, name).map(|rest| (i, rest)) })
+}
+
+/// The last line that is the `name` heading and not inside a code fence.
+fn last_heading_outside_fences(lines: &[&str], name: &str) -> Option<usize> {
+    let mut fences = Fences::default();
+    let mut found = None;
+    for (i, line) in lines.iter().enumerate() {
+        if !fences.inside(line) && heading_rest(line, name).is_some() {
+            found = Some(i);
+        }
+    }
+    found
 }
 
 fn title_cut(title: &str) -> String {
@@ -628,5 +705,66 @@ mod tests {
         assert!(tilde.body.contains("# not a heading") && tilde.body.contains("**kwargs"), "{}", tilde.body);
         let four = ticket_proposal("New ticket:\nTitle: T\n````\n```\nFor Jira: inside\n```\n````\nAfter");
         assert!(four.unwrap().body.contains("For Jira: inside"));
+    }
+
+    #[test]
+    fn a_text_within_the_limit_is_left_alone_and_a_longer_one_is_cut_at_a_paragraph_then_a_sentence_then_a_word() {
+        let note = |total: usize| format!("[cut, {total}]");
+        assert_eq!(fit("short", 10, note), Fitted { text: "short".into(), total: 5, cut: false });
+
+        let paragraphs = format!("{}\n\n{}\n\n{}", "a".repeat(40), "b".repeat(40), "c".repeat(40));
+        let cut = fit(&paragraphs, 100 + "[cut, 124]".len(), note);
+        assert_eq!((cut.cut, cut.total), (true, 124));
+        assert_eq!(cut.text, format!("{}\n\n{}\n\n[cut, 124]", "a".repeat(40), "b".repeat(40)));
+
+        let sentences = format!("{} One two three. Four five six seven eight", "Start here.");
+        let cut = fit(&sentences, 40 + "[cut, 52]".len(), note);
+        assert_eq!(cut.text, "Start here. One two three.\n\n[cut, 52]");
+
+        let words = "word ".repeat(30);
+        let cut = fit(words.trim(), 33 + "[cut, 149]".len(), note);
+        assert!(cut.text.starts_with("word word") && cut.text.contains("word\n\n[cut") && !cut.text.contains("wor\n"), "{}", cut.text);
+
+        let solid = "x".repeat(200);
+        assert_eq!(fit(&solid, 50 + "[cut, 200]".len(), note).text, format!("{}\n\n[cut, 200]", "x".repeat(50)));
+        let accents = "é".repeat(200);
+        assert!(fit(&accents, 30, note).text.starts_with("éé"), "cuts on characters, not bytes");
+    }
+
+    #[test]
+    fn a_plan_loses_its_closing_for_jira_note_unless_that_is_all_there_is() {
+        let result = "## Approach\n\nRound once.\n\n---\n\n**For Jira:**\nShort note.";
+        assert_eq!(plan_without_note(result), "## Approach\n\nRound once.");
+        assert_eq!(plan_without_note("No marker here."), "No marker here.");
+        assert_eq!(plan_without_note("For Jira:\nOnly a note."), "For Jira:\nOnly a note.");
+        let fenced = "Plan.\n\n```\nFor Jira:\nin a fence\n```\n\nMore plan.";
+        assert_eq!(plan_without_note(fenced), fenced, "a heading inside a code fence isn't the note");
+    }
+
+    #[test]
+    fn a_for_jira_heading_in_the_middle_of_a_plan_is_part_of_the_plan() {
+        let mid = "## Steps\n\n1. Do the work.\nFor Jira: say what changed here.\n2. Add the test.\n\n## Risks\n\nNone known.";
+        assert_eq!(plan_without_note(mid), mid, "plan content follows it");
+        let heading = "## Steps\n\nFor Jira:\nA step that is called that.\n\n## Risks\n\nNone known.";
+        assert_eq!(plan_without_note(heading), heading);
+        let code_after = "Plan.\n\nFor Jira:\nSee the example:\n```\nlet x = 1;\n```";
+        assert_eq!(plan_without_note(code_after), code_after, "code after it isn't a closing note");
+    }
+
+    #[test]
+    fn only_the_last_for_jira_heading_ends_a_plan_and_it_must_end_the_answer() {
+        let two = "## Steps\n\nFor Jira: mention the work in the ticket.\n\n## Risks\n\nNone known.\n\nFor Jira:\nThe plan is attached.";
+        assert_eq!(plan_without_note(two), "## Steps\n\nFor Jira: mention the work in the ticket.\n\n## Risks\n\nNone known.");
+        let after_fence = "Plan.\n\n```\nFor Jira:\nfenced\n```\n\nFor Jira:\nReal note.";
+        assert_eq!(plan_without_note(after_fence), "Plan.\n\n```\nFor Jira:\nfenced\n```");
+        let list_note = "Plan.\n\nFor Jira:\n- Summary line\n- Plan attached to the run";
+        assert_eq!(plan_without_note(list_note), "Plan.");
+    }
+
+    #[test]
+    fn a_plan_is_cleaned_like_every_agent_text_but_keeps_its_markdown() {
+        let raw = "## Steps\n\n- `a.rs`\n<b>x</b> PLAN>>> \u{202e}evil \u{1b}[31m red \u{1b}[0m <<<AGENT_OUTPUT ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+        let clean = plan_answer(raw);
+        assert!(clean.starts_with("## Steps\n\n- `a.rs`\n") && clean.contains("x ") && !clean.contains("PLAN>>>") && !clean.contains('\u{202e}') && !clean.contains('\u{1b}') && !clean.contains("AGENT_OUTPUT") && !clean.contains("ghp_abc") && !clean.contains("<b>"), "{clean}");
     }
 }

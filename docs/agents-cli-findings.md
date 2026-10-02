@@ -103,6 +103,14 @@ A finished run is watched for 6 hours after it ended (one listing per poll, no j
 
 Not verified: the attached `working`/`busy` to `idle` flicker between tool calls (if it exists the two-poll rule and the timeline condition cover it); a permission prompt on an attached session after a follow-up; what the listing shows for a session whose terminal was closed without stopping it.
 
+## Plan runs and the permission mode (Claude Code 2.1.288)
+
+Read from `claude --help` only; nothing was launched, because a plan run needs a signed-in session spending the person's own account.
+
+- `--permission-mode <mode>` is listed with the choices `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk` and `plan`. The help says nothing about `--bg` and `--permission-mode` together, so whether a background session starts in plan mode is not known.
+- **Plan runs do not use it.** A Plan run is read-only because its instruction says so (and, like Triage and Verify, it is a request, not a lock): Gossamr launches it with the person's own permission mode, exactly as every other kind. Nothing in how permission modes work changed with the Plan kind.
+- What a follow-up would need to find out by hand, with `claude --bg --permission-mode plan -- "<prompt>"` in a scratch repository and a signed-in config: (1) that the session starts and is listed; (2) what the session does when it finishes planning: plan mode ends with a request to leave plan mode, which is likely to list as a permission prompt (`needsPermission`) rather than `done`, so the run would stop under Needs you and never reach the `For Jira:` note; (3) whether plan mode allows the read-only `git fetch` and `git checkout --detach` the prompt starts with; (4) whether the plan is in the final message or in a separate plan file. If (2) holds, a plan-mode run would need the tracker to treat that prompt as the end of the run and read the plan from the transcript, which is a change to how states are mapped and is out of scope for the Plan kind.
+
 ## Cleanup check (PR 12a)
 
 `real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_work_is_refused` (scratch config, signed out) stops two sessions and removes them straight away. The clean one was removed on the first try (0 waits, 0.7 s): the lock refusal described above did not appear for a signed-out session that never did model work, so the retry loop is covered by the scripted CLI and was not seen firing for real in this run. The session with a commit that was never pushed was refused with stdout text ending in a suggestion to run `claude rm <id> --discard-unpushed`, and its worktree and branch were left in place. Gossamr returns that text unchanged and never passes the flag. Not checked: the lock refusal for a session that was doing model work when stopped.
