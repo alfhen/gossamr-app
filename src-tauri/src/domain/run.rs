@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{ItemRef, WorkItem};
+use super::{ContainerRef, ItemRef, WorkItem};
 use crate::error::{Error, Result};
 use crate::runs::cli::ShortId;
 
@@ -33,6 +33,13 @@ pub const VERIFY_INSTRUCTION: &str = concat!("Check that the change described he
 pub const BUILD_INSTRUCTION: &str = concat!("Make the change this work describes, on your worktree's branch. Keep it small and follow the repository's conventions. Run its tests and commit with a clear message; do not push and do not open a pull request unless a later sentence says you may. ", status_note!());
 pub const REVIEW_INSTRUCTION: &str = concat!("Review the pull request named below, at the commit named there. Fetch it with read-only commands such as `git fetch origin pull/<number>/head` or `gh pr view` and `gh pr diff`. Change nothing on the pull request and do not comment on it. Write your comments most important first. ", status_note!());
 const PUSH_ALLOWED: &str = "You may push your branch and open a pull request. Say what you pushed.";
+
+/// What a ticketless investigation is told after the person's own text. It asks for the section the parser in
+/// `runs/result.rs` reads, which a finished run drafts as one new ticket.
+pub const NEW_TICKET_TAIL: &str = "Read the code and logs you need, and change nothing. There is no ticket for this work yet, so instead of a note for an existing ticket, finish your answer with the ticket that should be filed, under 'New ticket:'. Start with a line 'Title:' (one line, at most 120 characters), optionally follow it with 'Kind:' (task, bug or story), then write the description: what you found, the evidence, what should be done, and how sure you are. Put everything you found into this one ticket.";
+/// The text a ticketless investigation starts with, for the person to replace with their own question.
+pub const TICKETLESS_STARTER: &str = "Look into this: ";
+pub const TITLE_LIMIT: usize = 120;
 
 const MARKERS: [&str; 4] = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>"];
 
@@ -112,6 +119,10 @@ pub struct RunSpec {
     /// Whether a build is told it may push and open a pull request.
     #[serde(default)]
     pub allow_push: bool,
+    /// The project the draft ticket lands in when an investigation with no ticket finishes. Its presence is what makes
+    /// the run end as a ticket; the agent never chooses it.
+    #[serde(default)]
+    pub project: Option<ContainerRef>,
 }
 
 /// Where a run would be set up, worked out by whoever knows the person's clones.
@@ -155,6 +166,9 @@ impl RunSpec {
         }
         if self.allow_push && self.kind != RunKind::Build {
             return Err(refuse("only a build can push"));
+        }
+        if self.project.is_some() && self.kind != RunKind::Investigate {
+            return Err(refuse("only an investigation can end as a new ticket"));
         }
         if !valid_repo(&self.repo) {
             return Err(refuse("the repository must look like owner/name"));
@@ -226,6 +240,9 @@ impl RunSpec {
         if self.allow_push {
             canonical["allowPush"] = true.into();
         }
+        if let Some(project) = &self.project {
+            canonical["project"] = serde_json::json!(project);
+        }
         Sha256::digest(canonical.to_string().as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
     }
 }
@@ -257,6 +274,9 @@ pub fn render_prompt(spec: &RunSpec) -> String {
     }
     if spec.kind == RunKind::Build && spec.allow_push {
         parts.push(PUSH_ALLOWED.into());
+    }
+    if spec.kind == RunKind::Investigate && spec.project.is_some() {
+        parts.push(NEW_TICKET_TAIL.into());
     }
     if let Some(focus) = spec.focus.as_deref().filter(|f| !f.trim().is_empty()) {
         let after = spec.focus_from_run.as_deref().map(|r| format!(", written after reading run {}", without_markers(r))).unwrap_or_default();
@@ -376,6 +396,9 @@ pub struct Run {
     /// Set when `claude rm` took the worktree away; the run is kept for its result.
     #[serde(default)]
     pub worktree_removed_at: Option<DateTime<Utc>>,
+    /// The ticket made from this run's draft once the person approved it.
+    #[serde(default)]
+    pub created_item: Option<ItemRef>,
 }
 
 impl Run {
@@ -415,6 +438,7 @@ impl Run {
             last_progress_at: at,
             ended_at: None,
             worktree_removed_at: None,
+            created_item: None,
         }
     }
 }
@@ -754,5 +778,66 @@ mod tests {
         let back: Run = serde_json::from_value(serde_json::to_value(&run).unwrap()).unwrap();
         assert_eq!(back, run);
         assert!(serde_json::from_str::<ShortId>("\"../etc\"").is_err());
+    }
+
+    fn ticketless() -> RunSpec {
+        let project = ContainerRef { connection_id: "jira:site:me".into(), external_id: "10000".into() };
+        RunSpec { instruction: "Why is the order consumer slow?".into(), project: Some(project), ..spec() }
+    }
+
+    #[test]
+    fn a_ticketless_investigation_is_told_the_person_s_words_then_to_end_with_a_new_ticket_section() {
+        let prompt = render_prompt(&ticketless());
+        let at = |needle: &str| prompt.find(needle).unwrap_or_else(|| panic!("missing {needle}\n{prompt}"));
+        assert!(at("Why is the order consumer slow?") < at("Read the code and logs you need, and change nothing."));
+        assert!(prompt.ends_with(NEW_TICKET_TAIL) && NEW_TICKET_TAIL.contains("under 'New ticket:'") && NEW_TICKET_TAIL.contains("'Title:'") && NEW_TICKET_TAIL.contains("at most 120 characters"));
+        assert!(!prompt.contains("For Jira") && !prompt.to_lowercase().contains("push"), "{prompt}");
+    }
+
+    #[test]
+    fn only_the_ticketless_shape_changes_and_its_project_is_part_of_what_was_approved() {
+        let plain = spec();
+        assert_eq!(render_prompt(&RunSpec { project: None, ..ticketless() }), render_prompt(&RunSpec { instruction: ticketless().instruction, ..plain.clone() }));
+        assert!(!render_prompt(&plain).contains("New ticket"));
+        assert_ne!(ticketless().digest(), RunSpec { project: None, ..ticketless() }.digest());
+        let elsewhere = ContainerRef { external_id: "10001".into(), ..ticketless().project.unwrap() };
+        assert_ne!(ticketless().digest(), RunSpec { project: Some(elsewhere), ..ticketless() }.digest(), "the project is what the person chose");
+        for kind in [RunKind::Triage, RunKind::Verify, RunKind::Review, RunKind::Build] {
+            let one = of_kind(kind, (kind == RunKind::Review).then_some(1), false);
+            assert!(!render_prompt(&one).contains("New ticket"), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_project_belongs_to_an_investigation_alone() {
+        ticketless().validate().unwrap();
+        for kind in [RunKind::Triage, RunKind::Verify, RunKind::Review, RunKind::Build] {
+            let one = RunSpec { project: ticketless().project, ..of_kind(kind, (kind == RunKind::Review).then_some(1), false) };
+            assert!(one.validate().is_err(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn the_digests_of_every_other_kind_are_what_they_were_before_projects_existed() {
+        let digests: Vec<String> = [(RunKind::Triage, None), (RunKind::Verify, None), (RunKind::Build, None), (RunKind::Review, Some(12))].iter().map(|(k, pr)| of_kind(*k, *pr, false).digest()).collect();
+        assert_eq!(digests, GOLDEN_DIGESTS);
+    }
+
+    const GOLDEN_DIGESTS: [&str; 4] = [
+        "90b5a4c9ebaf270fa7e86733a578fed0721aa667921103d4ac47752a6841e5fe",
+        "0145b452701a5ad3b0148a4b40845b0c5d7d081aa1b16589f54f3e8fdff787bd",
+        "f84cf09d7e585d6c48646d8bffa4dfcb42d133ad25213ada1e4ef48c38ff6002",
+        "a985df10703fa779b63db5f757955b149b20a3d942af2c91c4f55859abfe8833",
+    ];
+
+    #[test]
+    fn a_spec_stored_before_projects_existed_reads_with_none() {
+        let mut json = serde_json::to_value(spec()).unwrap();
+        json.as_object_mut().unwrap().remove("project");
+        let back: RunSpec = serde_json::from_value(json).unwrap();
+        assert_eq!(back.project, None);
+        let mut run = serde_json::to_value(Run::queued("r".into(), "p".into(), "c".into(), None, spec(), "f".into(), Utc::now())).unwrap();
+        run.as_object_mut().unwrap().remove("createdItem");
+        assert_eq!(serde_json::from_value::<Run>(run).unwrap().created_item, None);
     }
 }

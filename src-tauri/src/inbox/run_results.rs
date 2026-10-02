@@ -3,14 +3,15 @@
 //! Everything here makes drafts only. The text in them is the agent's, so each draft says which run it came from
 //! and the person reads and edits it like any other before anything is posted.
 
-use super::Core;
+use chrono::Utc;
 use serde::Serialize;
 
-use crate::domain::{CodeChange, CodeChangeKind, CreatedBy, Intent, ItemRef, LinkKind, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunState, StateKind};
+use super::Core;
+use crate::domain::{CodeChange, CodeChangeKind, ContainerRef, CreatedBy, Doc, Intent, ItemRef, LinkKind, NewItem, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunState, StateKind};
 use crate::error::{Error, Result};
-use crate::proposals::Draft;
+use crate::proposals::{self, Draft};
 use crate::runs::pr;
-use crate::runs::result::{jira_note, ticket_keys, JiraNote};
+use crate::runs::result::{jira_note, ticket_from_answer, ticket_keys, ticket_proposal, JiraNote, TicketProposal};
 use crate::tracker::{self, Connection};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -20,6 +21,10 @@ pub struct RunOutcome {
     pub keys: Vec<String>,
     pub change: Option<CodeChange>,
     pub draft: Option<RunDraft>,
+    /// For a run with no ticket: the ticket its `New ticket:` section proposes, when it has one.
+    pub ticket: Option<TicketProposal>,
+    /// The ticket draft made from this run, in whatever state it is now.
+    pub ticket_draft: Option<RunDraft>,
 }
 
 /// The comment draft made from a run, in whatever state it is now.
@@ -32,6 +37,15 @@ pub struct RunDraft {
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
+}
+
+fn state_words(state: &ProposalState) -> &'static str {
+    match state {
+        ProposalState::Pending | ProposalState::Applying => "waiting for you",
+        ProposalState::Applied => "already created",
+        ProposalState::Skipped => "skipped",
+        ProposalState::Retired(_) => "out of date",
+    }
 }
 
 fn intro(kind: RunKind) -> &'static str {
@@ -52,6 +66,22 @@ pub fn comment_text(run: &Run, note: &JiraNote, change: Option<&CodeChange>) -> 
         parts.push(format!("Pull request: {}", pull.url));
     }
     parts.join("\n\n")
+}
+
+const FOUND_BY: &str = "Found by an agent that was asked to only read code and change nothing.";
+
+fn ticket_drafts(all: Vec<Proposal>, run_id: &str) -> Vec<Proposal> {
+    all.into_iter().filter(|p| matches!((&p.origin, &p.intent), (Origin::Run { run_id: r, .. }, Intent::Create { .. }) if r == run_id)).collect()
+}
+
+/// The ticket an approved draft made.
+fn ticket_made(draft: &Proposal) -> Option<&ItemRef> {
+    draft.created.first().filter(|_| draft.state == ProposalState::Applied)
+}
+
+fn ticket_fields(proposal: &TicketProposal) -> NewItem {
+    let body = if proposal.body.is_empty() { FOUND_BY.to_string() } else { format!("{}\n\n{FOUND_BY}", proposal.body) };
+    NewItem { title: proposal.title.clone(), body: Doc::from_text(&body, &[]), kind: proposal.kind, assignee: None, parent: None, priority: None, labels: Vec::new() }
 }
 
 fn label_of(run: &Run) -> String {
@@ -78,12 +108,25 @@ impl Core {
         let run = self.run(id).await?.ok_or_else(|| refuse("that run no longer exists"))?;
         let own = run.item.as_ref().map(|i| i.key.to_uppercase());
         let result = run.result.as_deref().map(str::trim).filter(|r| !r.is_empty());
+        let ticket_draft = self.ticket_drafts_of(&run).await?.into_iter().next();
+        if let Some(made) = ticket_draft.as_ref().and_then(ticket_made) {
+            if let Err(e) = self.record_created_from_run(&run.id, made).await {
+                eprintln!("couldn't note the created ticket on run {}: {e}", run.id);
+            }
+        }
         Ok(RunOutcome {
             note: result.map(jira_note),
             keys: result.map(ticket_keys).unwrap_or_default().into_iter().filter(|k| Some(k) != own.as_ref()).collect(),
             change: self.change_of(&run)?,
             draft: self.comment_drafts_of(&run).await?.into_iter().next().map(|p| RunDraft { id: p.id, state: p.state }),
+            ticket: result.filter(|_| run.item.is_none()).and_then(ticket_proposal),
+            ticket_draft: ticket_draft.map(|p| RunDraft { id: p.id, state: p.state }),
         })
+    }
+
+    /// Every ticket draft made from `run`, newest first, whether it is still waiting or was decided. A run has at most one.
+    async fn ticket_drafts_of(&self, run: &Run) -> Result<Vec<Proposal>> {
+        Ok(ticket_drafts(self.proposals(&ProposalQuery::default()).await?, &run.id))
     }
 
     /// Every comment draft made from `run`, newest first, whether it is still waiting or was decided.
@@ -150,6 +193,95 @@ impl Core {
         Ok(Some(self.draft_from_run(&run, intent, label_of(&run)).await?))
     }
 
+    async fn ticketless_run(&self, id: &str) -> Result<Run> {
+        let run = self.run(id).await?.ok_or_else(|| refuse("that run no longer exists"))?;
+        if run.state != RunState::Done {
+            return Err(refuse("that run hasn't finished"));
+        }
+        if run.item.is_some() {
+            return Err(refuse("that run is about a ticket, so its result goes to that ticket as a comment"));
+        }
+        Ok(run)
+    }
+
+    /// Where a run's ticket lands: the project chosen when it started, else the repository's usual one.
+    async fn project_of(&self, run: &Run) -> Result<ContainerRef> {
+        match &run.spec.project {
+            Some(project) => Ok(project.clone()),
+            None => self.repo_project(&run.spec.repo).await?.ok_or_else(|| refuse("there is no project to put the ticket in; start the run again and choose one")),
+        }
+    }
+
+    /// Stores the one ticket draft of `run`. Looking and storing happen under one lock, so two callers can't both make
+    /// one; an existing draft, in any state, is returned as `Err`.
+    async fn draft_ticket_once(&self, run: &Run, proposal: &TicketProposal) -> Result<std::result::Result<Proposal, Proposal>> {
+        let scope = self.scope().await?;
+        let container = self.project_of(run).await?;
+        if container.connection_id != Connection::jira_id(&scope) {
+            return Err(refuse("that project belongs to another connection"));
+        }
+        let draft = Draft {
+            origin: Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) },
+            created_by: CreatedBy::User,
+            intent: Intent::Create { container, fields: ticket_fields(proposal), link: None },
+            label: Some(label_of(run)),
+            basis: None,
+        };
+        self.with_db_for(&scope, |db| {
+            if let Some(existing) = ticket_drafts(db.proposals(&ProposalQuery::default())?, &run.id).into_iter().next() {
+                return Ok(Err(existing));
+            }
+            Ok(Ok(proposals::create(db, draft, Utc::now())?))
+        })
+        .await
+    }
+
+    /// A draft ticket from a finished run that has no ticket: the one its `New ticket:` section proposes, or, when it has
+    /// none, the answer as written for the person to edit. Never created in Jira until approved. A run that already has
+    /// a ticket draft, even a skipped one, gets no second.
+    pub async fn draft_run_ticket(&self, id: &str) -> Result<Proposal> {
+        let run = self.ticketless_run(id).await?;
+        let result = run.result.as_deref().unwrap_or("");
+        let proposal = ticket_proposal(result).or_else(|| ticket_from_answer(result)).ok_or_else(|| refuse("the run finished without a written answer, so there is nothing to draft"))?;
+        self.draft_ticket_once(&run, &proposal).await?.map_err(|existing| refuse(format!("that run already has a ticket draft ({}), {}", existing.id, state_words(&existing.state))))
+    }
+
+    /// The same draft, made when an investigation that was started to end as a ticket finishes. Only a result with a
+    /// `New ticket:` section and a title is used.
+    pub async fn auto_draft_run_ticket(&self, id: &str) -> Result<Option<Proposal>> {
+        let Ok(run) = self.ticketless_run(id).await else { return Ok(None) };
+        let Some(proposal) = run.spec.project.as_ref().and(run.result.as_deref()).and_then(ticket_proposal) else { return Ok(None) };
+        Ok(self.draft_ticket_once(&run, &proposal).await?.ok())
+    }
+
+    /// The watched project that most recently had a ticket linked to a pull request of `repo`.
+    pub async fn repo_project(&self, repo: &str) -> Result<Option<ContainerRef>> {
+        let scope = self.scope().await?;
+        let jira = Connection::jira_id(&scope);
+        let mut linked: Vec<(String, String)> = Vec::new();
+        for id in self.code.connection_ids() {
+            linked.extend(self.with_code_db(&id, |db| db.item_keys_for_repo(&jira, repo))?);
+        }
+        linked.sort_by(|a, b| b.1.cmp(&a.1));
+        let projects = self.containers_in(&scope).await?;
+        Ok(linked.iter().find_map(|(key, _)| {
+            let prefix = key.rsplit_once('-')?.0;
+            projects.iter().find(|c| c.key.eq_ignore_ascii_case(prefix)).map(|c| c.container_ref.clone())
+        }))
+    }
+
+    /// Remembers on the run which ticket its approved draft created, so the run can say so.
+    pub(super) async fn record_created_from_run(&self, run_id: &str, made: &ItemRef) -> Result<()> {
+        self.with_db_for(&self.scope().await?, |db| match db.run(run_id)? {
+            Some(mut run) if run.created_item.as_ref() != Some(made) => {
+                run.created_item = Some(made.clone());
+                db.save_run(&run).map(|_| ())
+            }
+            _ => Ok(()),
+        })
+        .await
+    }
+
     /// A link saying the run's ticket is blocked by `blocker_key`. The blocker is the end that blocks, so it is the
     /// draft's `from`, and the draft shows on the blocker's ticket.
     pub async fn draft_run_blocker(&self, id: &str, blocker_key: &str) -> Result<Proposal> {
@@ -178,28 +310,58 @@ mod tests {
 
     use super::*;
     use crate::domain::fixtures::run_spec;
-    use crate::domain::{CodeChangeState, RunSpec};
+    use crate::domain::{CodeChangeState, ItemKind, RunSpec};
     use crate::inbox::testing::{fixture_watching, Fixture};
 
     const RESULT: &str = "The lag comes from one consumer.\n\nFor Jira:\nAdd a backoff to the consumer.";
 
-    async fn run_with(fx: &Fixture, edit: impl FnOnce(&mut Run)) -> Run {
-        let clone = fx.home.join("webshop");
-        std::fs::create_dir_all(clone.join(".git")).unwrap();
-        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let name = format!("eng-1-fix-cart-{n:04x}");
-        let spec = RunSpec { clone_path: clone, name, ..run_spec() };
-        let p = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
+    async fn approved(fx: &Fixture, spec: RunSpec, item: Option<ItemRef>, result: &str, edit: impl FnOnce(&mut Run)) -> Run {
+        let p = fx.core.draft_run(spec, item).await.unwrap();
         let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
         let mut run = fx.core.runs_approve(&p.id, &digest).await.unwrap();
         run.state = RunState::Done;
-        run.result = Some(RESULT.into());
-        run.short_id = crate::runs::cli::ShortId::parse(&format!("ab12{n:04x}"));
+        run.result = Some(result.into());
+        run.short_id = crate::runs::cli::ShortId::parse(&format!("ab12{:04x}", N.load(std::sync::atomic::Ordering::SeqCst)));
         run.ended_at = Some(Utc::now());
         edit(&mut run);
         fx.core.save_run(&run).await.unwrap();
         run
+    }
+
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+    fn next_spec(fx: &Fixture) -> RunSpec {
+        let clone = fx.home.join("webshop");
+        std::fs::create_dir_all(clone.join(".git")).unwrap();
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        RunSpec { clone_path: clone, name: format!("eng-1-fix-cart-{n:04x}"), ..run_spec() }
+    }
+
+    async fn run_with(fx: &Fixture, edit: impl FnOnce(&mut Run)) -> Run {
+        approved(fx, next_spec(fx), Some(fx.item("CA-1")), RESULT, edit).await
+    }
+
+    const TICKET_RESULT: &str = "I read the consumer.\n\nNew ticket:\nTitle: Add a backoff to the order consumer\nKind: bug\nIt retries in a tight loop.";
+
+    async fn project(fx: &Fixture) -> ContainerRef {
+        fx.core.containers_in(&fx.scope).await.unwrap()[0].container_ref.clone()
+    }
+
+    /// A finished investigation with no ticket that was started to end as one.
+    async fn ticketless(fx: &Fixture, result: &str, edit: impl FnOnce(&mut Run)) -> Run {
+        let spec = RunSpec { instruction: String::new(), project: Some(project(fx).await), ..next_spec(fx) };
+        approved(fx, spec, None, result, edit).await
+    }
+
+    fn create_of(p: &Proposal) -> (&ContainerRef, &NewItem) {
+        match &p.intent {
+            Intent::Create { container, fields, .. } => (container, fields),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    async fn ticket_drafts_in(fx: &Fixture) -> Vec<Proposal> {
+        fx.core.proposals(&ProposalQuery::default()).await.unwrap().into_iter().filter(|p| matches!(p.intent, Intent::Create { .. })).collect()
     }
 
     async fn cache_change(fx: &Fixture, change: CodeChange) {
@@ -372,5 +534,202 @@ mod tests {
         }
         assert_eq!(fx.core.auto_draft_run_comment("missing").await.unwrap(), None);
         assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().iter().all(|p| !matches!(p.intent, Intent::Comment { .. })));
+    }
+
+    #[tokio::test]
+    async fn a_ticketless_run_leaves_one_draft_ticket_in_its_project_marked_as_from_the_run_and_creates_nothing() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = ticketless(&fx, TICKET_RESULT, |_| {}).await;
+        let p = fx.core.auto_draft_run_ticket(&run.id).await.unwrap().unwrap();
+        assert_eq!((p.state.clone(), p.created_by), (ProposalState::Pending, CreatedBy::User));
+        assert_eq!(p.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+        assert_eq!(p.label, Some(format!("From agent run {}", run.short_id.as_ref().unwrap())));
+        let (container, fields) = create_of(&p);
+        assert_eq!(*container, project(&fx).await);
+        assert_eq!((fields.title.as_str(), fields.kind, fields.assignee.as_ref(), fields.parent.as_ref(), fields.priority), ("Add a backoff to the order consumer", ItemKind::Bug, None, None, None));
+        assert!(fields.labels.is_empty());
+        assert_eq!(fields.body.plain_text(), format!("It retries in a tight loop.\n{FOUND_BY}"));
+        assert!(fx.tracker.intents().is_empty(), "a draft creates nothing in Jira");
+
+        let outcome = fx.core.run_outcome(&run.id).await.unwrap();
+        assert_eq!(outcome.ticket_draft, Some(RunDraft { id: p.id.clone(), state: ProposalState::Pending }));
+        assert_eq!(outcome.ticket.map(|t| t.title), Some("Add a backoff to the order consumer".into()));
+        assert_eq!(outcome.draft, None, "no comment draft: there is no ticket to comment on");
+    }
+
+    #[tokio::test]
+    async fn a_run_gets_one_ticket_draft_whatever_happens_to_it_and_whoever_asks() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = ticketless(&fx, TICKET_RESULT, |_| {}).await;
+        let first = fx.core.auto_draft_run_ticket(&run.id).await.unwrap().unwrap();
+        assert_eq!(fx.core.auto_draft_run_ticket(&run.id).await.unwrap(), None, "waiting");
+        let err = fx.core.draft_run_ticket(&run.id).await.unwrap_err().to_string();
+        assert!(err.contains(&first.id) && err.contains("waiting for you"), "{err}");
+
+        fx.core.skip_proposal(&first.id).await.unwrap();
+        assert_eq!(fx.core.auto_draft_run_ticket(&run.id).await.unwrap(), None, "skipped");
+        assert!(fx.core.draft_run_ticket(&run.id).await.unwrap_err().to_string().contains("skipped"));
+        assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().ticket_draft.unwrap().state, ProposalState::Skipped);
+        assert_eq!(ticket_drafts_in(&fx).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn two_asks_at_once_make_one_draft() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = ticketless(&fx, TICKET_RESULT, |_| {}).await;
+        let (a, b) = tokio::join!(fx.core.draft_run_ticket(&run.id), fx.core.auto_draft_run_ticket(&run.id));
+        assert_eq!([a.is_ok(), b.ok().flatten().is_some()].iter().filter(|made| **made).count(), 1);
+        assert_eq!(ticket_drafts_in(&fx).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn no_section_or_no_title_means_no_automatic_draft_and_the_button_seeds_one_from_the_answer() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        for answer in ["The consumer retries in a loop.\nIt never backs off.", "New ticket:\nKind: bug\nNo title here.", "For Jira: only a comment."] {
+            let run = ticketless(&fx, answer, |_| {}).await;
+            assert_eq!(fx.core.auto_draft_run_ticket(&run.id).await.unwrap(), None, "{answer}");
+        }
+        assert!(ticket_drafts_in(&fx).await.is_empty());
+
+        let run = ticketless(&fx, "The consumer retries in a loop.\nIt never backs off.", |_| {}).await;
+        let p = fx.core.draft_run_ticket(&run.id).await.unwrap();
+        let (container, fields) = create_of(&p);
+        assert_eq!((fields.title.as_str(), fields.kind, container.clone()), ("The consumer retries in a loop.", ItemKind::Task, project(&fx).await));
+        assert!(fields.body.plain_text().starts_with("The consumer retries in a loop.\nIt never backs off."));
+        assert_eq!(p.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+    }
+
+    #[tokio::test]
+    async fn only_a_run_that_started_to_end_as_a_ticket_is_drafted_automatically_and_only_when_it_finished_cleanly() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let plain = approved(&fx, RunSpec { instruction: String::new(), ..next_spec(&fx) }, None, TICKET_RESULT, |_| {}).await;
+        assert_eq!(fx.core.auto_draft_run_ticket(&plain.id).await.unwrap(), None, "no project was chosen");
+        let on_ticket = run_with(&fx, |r| r.result = Some(TICKET_RESULT.into())).await;
+        assert_eq!(fx.core.auto_draft_run_ticket(&on_ticket.id).await.unwrap(), None);
+        for state in [RunState::Working, RunState::Failed, RunState::Stopped] {
+            let run = ticketless(&fx, TICKET_RESULT, |r| r.state = state).await;
+            assert_eq!(fx.core.auto_draft_run_ticket(&run.id).await.unwrap(), None, "{state:?}");
+        }
+        assert_eq!(fx.core.auto_draft_run_ticket("missing").await.unwrap(), None);
+        assert!(ticket_drafts_in(&fx).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_button_refuses_a_run_with_a_ticket_one_that_is_unfinished_or_has_no_answer() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let on_ticket = run_with(&fx, |_| {}).await;
+        assert!(fx.core.draft_run_ticket(&on_ticket.id).await.unwrap_err().to_string().contains("about a ticket"));
+        let working = ticketless(&fx, TICKET_RESULT, |r| r.state = RunState::Working).await;
+        assert!(fx.core.draft_run_ticket(&working.id).await.unwrap_err().to_string().contains("hasn't finished"));
+        let blank = ticketless(&fx, " \n", |_| {}).await;
+        assert!(fx.core.draft_run_ticket(&blank.id).await.unwrap_err().to_string().contains("nothing to draft"));
+        assert!(fx.core.draft_run_ticket("missing").await.is_err());
+        assert!(ticket_drafts_in(&fx).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_project_of_another_connection_is_refused_and_nothing_is_stored() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = ticketless(&fx, TICKET_RESULT, |r| r.spec.project = Some(ContainerRef { connection_id: "elsewhere".into(), external_id: "x".into() })).await;
+        for made in [fx.core.draft_run_ticket(&run.id).await.map(|_| ()), fx.core.auto_draft_run_ticket(&run.id).await.map(|_| ())] {
+            assert!(made.unwrap_err().to_string().contains("another connection"));
+        }
+        assert!(ticket_drafts_in(&fx).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_older_run_with_no_project_uses_the_repositorys_usual_one_or_says_there_is_none() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = approved(&fx, RunSpec { instruction: String::new(), ..next_spec(&fx) }, None, TICKET_RESULT, |_| {}).await;
+        let err = fx.core.draft_run_ticket(&run.id).await.unwrap_err().to_string();
+        assert!(err.contains("no project"), "{err}");
+        link_repo_to(&fx, &[("CA-1", 4, 9)]).await;
+        let p = fx.core.draft_run_ticket(&run.id).await.unwrap();
+        assert_eq!(*create_of(&p).0, project(&fx).await);
+    }
+
+    async fn link_repo_to(fx: &Fixture, links: &[(&str, u64, u32)]) {
+        use chrono::TimeZone;
+        let linked: Vec<crate::domain::DevLink> = links
+            .iter()
+            .map(|(key, number, day)| {
+                let mut change = crate::codehost::links::tests::pr(*number, "branch", "T", "");
+                change.updated_at = Utc.with_ymd_and_hms(2026, 9, *day, 9, 0, 0).unwrap();
+                crate::domain::DevLink { item: fx.item(key), change, provenance: crate::domain::LinkSource::Branch, confidence: 1.0 }
+            })
+            .collect();
+        let changes: Vec<CodeChange> = linked.iter().map(|l| l.change.clone()).collect();
+        fx.core.with_code_db("github:ann", |db| {
+            db.upsert_code_changes(&changes, "2026-09-29T00:00:00Z")?;
+            db.replace_item_links("github:ann", &linked, "2026-09-29T00:00:00Z")
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_repositorys_usual_project_is_the_watched_one_of_its_newest_linked_pull_request() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        assert_eq!(fx.core.repo_project("acme/webshop").await.unwrap(), None, "nothing is linked yet");
+        let ca = project(&fx).await;
+        fx.add_in("OTH-5", "oth").await;
+        let oth = fx.core.cache_item(&fx.item("OTH-5")).await.unwrap().unwrap().container;
+        let containers = fx.core.containers_in(&fx.scope).await.unwrap();
+        let mut other = containers[0].clone();
+        (other.container_ref, other.key, other.name) = (oth.clone(), "OTH".into(), "Others".into());
+        fx.set_containers(&[containers[0].clone(), other]).await;
+
+        link_repo_to(&fx, &[("CA-1", 1, 3), ("OTH-5", 2, 20)]).await;
+        assert_eq!(fx.core.repo_project("ACME/webshop").await.unwrap(), Some(oth.clone()));
+        link_repo_to(&fx, &[("CA-1", 1, 25), ("OTH-5", 2, 20)]).await;
+        assert_eq!(fx.core.repo_project("acme/webshop").await.unwrap(), Some(ca.clone()));
+        assert_eq!(fx.core.repo_project("acme/other").await.unwrap(), None);
+
+        fx.set_containers(&[containers[0].clone()]).await;
+        link_repo_to(&fx, &[("CA-1", 1, 3), ("OTH-5", 2, 20)]).await;
+        assert_eq!(fx.core.repo_project("acme/webshop").await.unwrap(), Some(ca), "a project that isn't there is skipped");
+    }
+
+    #[tokio::test]
+    async fn approving_the_draft_records_the_created_ticket_on_the_run() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = ticketless(&fx, TICKET_RESULT, |_| {}).await;
+        let p = fx.core.auto_draft_run_ticket(&run.id).await.unwrap().unwrap();
+        assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap().created_item, None);
+        let made = fx.item("CA-812");
+        fx.tracker.will(Ok(crate::tracker::Applied { created: vec![made.clone()], error: None }));
+        let done = fx.core.approve_proposal(&p.id).await.unwrap();
+        assert_eq!((done.state.clone(), done.created.clone()), (ProposalState::Applied, vec![made.clone()]));
+        assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap().created_item, Some(made.clone()));
+        assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().ticket_draft.unwrap().state, ProposalState::Applied);
+
+        let other = ticketless(&fx, TICKET_RESULT, |_| {}).await;
+        assert_eq!(fx.core.run(&other.id).await.unwrap().unwrap().created_item, None, "another run is not touched");
+    }
+
+    #[tokio::test]
+    async fn a_failed_approval_leaves_the_run_without_a_ticket() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = ticketless(&fx, TICKET_RESULT, |_| {}).await;
+        let p = fx.core.auto_draft_run_ticket(&run.id).await.unwrap().unwrap();
+        fx.tracker.will(Err(Error::Api { status: 503, message: "down".into() }));
+        let failed = fx.core.approve_proposal(&p.id).await.unwrap();
+        assert_eq!(failed.state, ProposalState::Pending);
+        assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap().created_item, None);
+    }
+
+    #[tokio::test]
+    async fn reading_the_outcome_catches_up_a_run_whose_approved_ticket_was_never_noted() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = ticketless(&fx, TICKET_RESULT, |_| {}).await;
+        let p = fx.core.auto_draft_run_ticket(&run.id).await.unwrap().unwrap();
+        let made = fx.item("CA-812");
+        fx.tracker.will(Ok(crate::tracker::Applied { created: vec![made.clone()], error: None }));
+        fx.core.approve_proposal(&p.id).await.unwrap();
+        let mut lost = fx.core.run(&run.id).await.unwrap().unwrap();
+        lost.created_item = None;
+        fx.core.save_run(&lost).await.unwrap();
+        assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap().created_item, None);
+        fx.core.run_outcome(&run.id).await.unwrap();
+        assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap().created_item, Some(made));
     }
 }

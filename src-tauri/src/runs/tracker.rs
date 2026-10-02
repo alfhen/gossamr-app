@@ -39,6 +39,8 @@ pub enum Attention {
     Done,
     /// Finished, and a comment for its ticket is waiting as a draft.
     Drafted,
+    /// Finished, and a new ticket from its result is waiting as a draft.
+    DraftedTicket,
     Failed,
     /// Gossamr stopped it for passing a limit.
     Limit,
@@ -71,6 +73,7 @@ pub fn notice_text(run: &Run, why: Attention) -> Notice {
         }
         Attention::Limit => Notice { title: format!("{topic} was stopped"), body: run.error.clone().unwrap_or_else(|| "It passed a limit".into()) },
         Attention::Drafted => Notice { title: format!("Draft ready on {topic}"), body: "An agent finished. Read its comment before anything is posted".into() },
+        Attention::DraftedTicket => Notice { title: "Draft ticket ready".into(), body: format!("An agent finished in {topic}. Read the ticket before anything is created") },
         Attention::Done => Notice { title: format!("{topic} finished"), body: "Open it to see what it found".into() },
         Attention::Failed => {
             let title = match run.error.as_deref() {
@@ -290,7 +293,7 @@ impl RunService {
             self.core.save_run(&run).await?;
             touched = true;
         }
-        let drafted = run.state == RunState::Done && before.state != RunState::Done && settings.draft_on_finish && self.draft_comment_for(&run).await;
+        let drafted = if run.state == RunState::Done && before.state != RunState::Done && settings.draft_on_finish { self.draft_for(&run).await } else { None };
         if run.short_id != before.short_id {
             self.remember(&run);
         }
@@ -304,7 +307,7 @@ impl RunService {
         } else if run.state != before.state {
             match run.state {
                 RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => self.notifier.notify(&run, Attention::Needs),
-                RunState::Done => self.notifier.notify(&run, if drafted { Attention::Drafted } else { Attention::Done }),
+                RunState::Done => self.notifier.notify(&run, drafted.unwrap_or(Attention::Done)),
                 RunState::Failed => self.notifier.notify(&run, Attention::Failed),
                 _ => {}
             }
@@ -312,18 +315,23 @@ impl RunService {
         Ok(touched.then(|| run.connection_id.clone()))
     }
 
-    /// Whether a comment draft was made. A failure is only logged: the run's result is already saved, and the
-    /// sheet's own button still drafts it.
-    async fn draft_comment_for(&self, run: &Run) -> bool {
-        match self.core.auto_draft_run_comment(&run.id).await {
+    /// The draft a finished run leaves: a comment on its ticket, or a new ticket when it has none. `None` when nothing
+    /// was made. A failure is only logged: the run's result is already saved, and the sheet's own button still drafts it.
+    async fn draft_for(&self, run: &Run) -> Option<Attention> {
+        let (made, why) = if run.item.is_some() {
+            (self.core.auto_draft_run_comment(&run.id).await, Attention::Drafted)
+        } else {
+            (self.core.auto_draft_run_ticket(&run.id).await, Attention::DraftedTicket)
+        };
+        match made {
             Ok(Some(_)) => {
                 (self.drafted)(&run.connection_id);
-                true
+                Some(why)
             }
-            Ok(None) => false,
+            Ok(None) => None,
             Err(e) => {
-                eprintln!("couldn't draft a comment for run {}: {e}", run.id);
-                false
+                eprintln!("couldn't draft from run {}: {e}", run.id);
+                None
             }
         }
     }

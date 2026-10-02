@@ -1,0 +1,116 @@
+[
+  {
+    "name": "plain heading, title, kind and description",
+    "input": "I read the consumer code.\n\nNew ticket:\nTitle: Add a backoff to the order consumer\nKind: bug\nThe consumer retries in a tight loop.\n\nEvidence: consumer.rs line 40.",
+    "expected": {
+      "title": "Add a backoff to the order consumer",
+      "kind": "bug",
+      "body": "The consumer retries in a tight loop.\n\nEvidence: consumer.rs line 40."
+    }
+  },
+  {
+    "name": "bold labels",
+    "input": "Done.\n\n**New ticket:**\n**Title:** Cart total ignores the discount code\n**Kind:** Story\nThe discount is applied after tax.",
+    "expected": {
+      "title": "Cart total ignores the discount code",
+      "kind": "story",
+      "body": "The discount is applied after tax."
+    }
+  },
+  {
+    "name": "markdown heading, bullets and a description with its own headings",
+    "input": "## Findings\nStuff.\n\n## New ticket\n- Title: Slow search on large boards\n- Kind: task\n\n## What I found\nSearch scans every card.\n\n## What to do\nAdd an index.",
+    "expected": {
+      "title": "Slow search on large boards",
+      "kind": "task",
+      "body": "What I found\nSearch scans every card.\n\nWhat to do\nAdd an index."
+    }
+  },
+  {
+    "name": "kind missing or unknown means task",
+    "input": "New ticket:\nTitle: Fix the typo\nBody text.",
+    "expected": {
+      "title": "Fix the typo",
+      "kind": "task",
+      "body": "Body text."
+    }
+  },
+  {
+    "name": "unknown kind is dropped, not kept in the body",
+    "input": "New ticket:\nTitle: Fix it\nKind: epic\nBody.",
+    "expected": {
+      "title": "Fix it",
+      "kind": "task",
+      "body": "Body."
+    }
+  },
+  {
+    "name": "kind before title and title on the next line",
+    "input": "New ticket:\nKind: bug.\nTitle:\nThe worker leaks handles\nIt never closes the socket.",
+    "expected": {
+      "title": "The worker leaks handles",
+      "kind": "bug",
+      "body": "It never closes the socket."
+    }
+  },
+  {
+    "name": "title only",
+    "input": "New ticket:\nTitle: Rename the flag",
+    "expected": {
+      "title": "Rename the flag",
+      "kind": "task",
+      "body": ""
+    }
+  },
+  {
+    "name": "a For Jira section after the ticket is not part of it",
+    "input": "New ticket:\nTitle: Cache the catalog\nIt is fetched on every call.\n\nFor Jira: ignore this part.",
+    "expected": {
+      "title": "Cache the catalog",
+      "kind": "task",
+      "body": "It is fetched on every call."
+    }
+  },
+  {
+    "name": "no section",
+    "input": "The consumer retries in a tight loop.\n\nFor Jira: add a backoff.",
+    "expected": null
+  },
+  {
+    "name": "section without a title",
+    "input": "New ticket:\nKind: bug\nThe consumer retries.",
+    "expected": null
+  },
+  {
+    "name": "empty title",
+    "input": "New ticket:\nTitle:\n\nKind: bug",
+    "expected": null
+  },
+  {
+    "name": "title cut to 120 characters",
+    "input": "New ticket:\nTitle: éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\nBody.",
+    "expected": {
+      "title": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé…",
+      "kind": "task",
+      "body": "Body."
+    }
+  },
+  {
+    "name": "code fences keep their hashes and stars",
+    "input": "New ticket:\nTitle: Fix the script\nRun:\n```bash\n# build\nmake CFLAGS=**x**\n```\nThen retry.",
+    "expected": {
+      "title": "Fix the script",
+      "kind": "task",
+      "body": "Run:\n```bash\n# build\nmake CFLAGS=**x**\n```\nThen retry."
+    }
+  },
+  {
+    "name": "a For Jira line inside a fence does not end the ticket",
+    "input": "New ticket:\nTitle: Template\n```\nFor Jira: example\n```\nAfter the fence.",
+    "expected": {
+      "title": "Template",
+      "kind": "task",
+      "body": "```\nFor Jira: example\n```\nAfter the fence."
+    }
+  }
+]

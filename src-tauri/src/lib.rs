@@ -444,6 +444,9 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: Strin
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
         cache_changed(&app, &connection);
+        if result.as_ref().is_ok_and(|p| matches!((&p.origin, &p.intent), (domain::Origin::Run { .. }, domain::Intent::Create { .. }))) {
+            runs_changed(&app, &connection);
+        }
     }
     publish(&app, &core).await;
     result
@@ -649,6 +652,21 @@ async fn runs_draft_comment(app: AppHandle, core: State<'_, CoreState>, runs: St
     let made = core.draft_run_comment(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
+}
+
+/// Drafts a new ticket from a finished run that has no ticket. A draft only: the person edits and approves it.
+#[tauri::command]
+async fn runs_draft_ticket(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
+    runs.ensure_enabled()?;
+    let made = core.draft_run_ticket(&id).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(made)
+}
+
+/// The project a new ticket from `repo` would most likely belong in, from the tickets its pull requests carry out.
+#[tauri::command]
+async fn runs_repo_project(core: State<'_, CoreState>, repo: String) -> Result<Option<domain::ContainerRef>> {
+    core.repo_project(&repo).await
 }
 
 /// Drafts a link saying the run's ticket is blocked by `blocker_key`. A draft only.
@@ -1031,6 +1049,8 @@ pub fn run() {
             runs_outcome,
             runs_draft_comment,
             runs_draft_blocker,
+            runs_draft_ticket,
+            runs_repo_project,
             runs_get,
             sync_now,
             mark_seen,

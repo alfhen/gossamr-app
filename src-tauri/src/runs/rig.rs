@@ -96,6 +96,16 @@ impl Rig {
         self.svc.start_now(&queued.id).await.unwrap()
     }
 
+    /// An investigation with no ticket, started to end as a draft ticket in the fixture's first project.
+    pub async fn launched_ticketless(&self, n: u32) -> Run {
+        let project = self.fx.core.containers_in(&self.fx.scope).await.unwrap()[0].container_ref.clone();
+        let spec = RunSpec { project: Some(project), instruction: String::new(), ..self.spec(n) };
+        let p = self.fx.core.draft_run(spec, None).await.unwrap();
+        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
+        let queued = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        self.svc.start_now(&queued.id).await.unwrap()
+    }
+
     pub async fn queued(&self, n: u32) -> Run {
         let p = self.fx.core.draft_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap();
         let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;

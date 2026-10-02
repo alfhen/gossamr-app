@@ -106,6 +106,7 @@ impl Core {
                 pr: None,
                 pr_sha: None,
                 allow_push: false,
+                project: None,
             };
             let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), item: Some(item.clone()), ..Default::default() };
             let same = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::StartRun { spec: s, .. } if same_ask(s, &spec)));
