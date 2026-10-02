@@ -1089,3 +1089,21 @@ async fn a_finished_run_that_ended_long_ago_or_lost_its_worktree_is_not_watched(
     rig.poll().await;
     assert_eq!(rig.get(&run).await.state, RunState::Done);
 }
+
+#[tokio::test]
+async fn the_second_answer_of_a_continued_session_is_read_from_its_newest_timeline_line_when_the_transcript_is_unreadable() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.timeline.push(line("2026-01-01T00:05:00Z", "done", ANSWER)));
+    rig.session(&run, |e| e.state = Some("done".into()));
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.result.as_deref(), Some(ANSWER));
+
+    typed(&rig, &run, "2026-01-01T00:10:00Z");
+    rig.session(&run, working);
+    rig.poll().await;
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.timeline.push(line("2026-01-01T00:15:00Z", "working", SECOND_ANSWER)));
+    rig.session(&run, attached_idle);
+    polls(&rig, 2).await;
+    assert_eq!(rig.get(&run).await.result.as_deref(), Some(SECOND_ANSWER));
+}

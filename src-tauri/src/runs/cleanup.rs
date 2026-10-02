@@ -3,7 +3,7 @@
 use chrono::Utc;
 use serde::Serialize;
 
-use super::cli::CliError;
+use super::cli::{CliError, ShortId};
 use super::failure::Failure;
 use super::service::{belongs_to, RunService};
 use crate::domain::{Run, RunState};
@@ -44,10 +44,11 @@ impl Drop for Cleaning<'_> {
 }
 
 impl RunService {
-    /// A finished run whose session is still open at its prompt holds its worktree's lock, which `claude rm` refuses
-    /// until the session is stopped.
-    async fn session_alive(&self, tc: &super::toolchain::Toolchain, run: &Run) -> bool {
-        tc.cli.agents(true).await.is_ok_and(|entries| entries.iter().any(|e| belongs_to(e, run) && e.pid.is_some()))
+    /// The id the listing gives a finished run's session when it is still open at its prompt. It holds its worktree's
+    /// lock, which `claude rm` refuses until the session is stopped, and after a resume it can differ from the stored id.
+    async fn live_session(&self, tc: &super::toolchain::Toolchain, run: &Run) -> Option<ShortId> {
+        let entries = tc.cli.agents(true).await.ok()?;
+        entries.iter().find(|e| belongs_to(e, run) && e.pid.is_some()).and_then(|e| e.id.as_deref().and_then(ShortId::parse))
     }
 
     /// Removes the run's worktree and branch. Never forces: unpushed work stays, and Claude says so.
@@ -68,9 +69,13 @@ impl RunService {
             }));
         };
         let tc = self.tools.get().await.map_err(|e| Error::Claude(Failure::from(e).to_string()))?;
-        if self.session_alive(&tc, &run).await {
-            tc.cli.stop(&id).await?;
-        }
+        let id = match self.live_session(&tc, &run).await {
+            Some(live) => {
+                tc.cli.stop(&live).await?;
+                live
+            }
+            None => id,
+        };
         let mut tries = 0;
         loop {
             match tc.cli.rm(&id).await {

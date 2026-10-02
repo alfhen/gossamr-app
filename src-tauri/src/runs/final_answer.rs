@@ -17,11 +17,11 @@ use crate::domain::{Run, RunQuery, RunState};
 /// A finished run is looked at again for its answer for this long after it ended.
 const AWAIT_WINDOW: Duration = Duration::from_secs(120);
 
-/// The text of the timeline's `done` line, or of the last line when the session answered and stayed open (it never
-/// writes a `done` line then). Equal to the summary it can't be told from one, so it doesn't count.
+/// The text of the newest line when it is an answer, which is how a session that stayed open ends each turn, else of
+/// the timeline's `done` line. Equal to the summary it can't be told from one, so it doesn't count.
 fn timeline_answer(job: &JobInfo) -> Option<String> {
-    let done = job.timeline.iter().rev().find(|l| l.state.as_deref() == Some("done"));
-    let line = done.or_else(|| job.timeline.last().filter(|_| turn_finished(job)));
+    let newest = job.timeline.last().filter(|_| turn_finished(job));
+    let line = newest.or_else(|| job.timeline.iter().rev().find(|l| l.state.as_deref() == Some("done")));
     let text = line.and_then(|l| l.text.as_deref())?.trim();
     (!text.is_empty() && Some(text) != job.result.as_deref().map(str::trim)).then(|| text.to_owned())
 }
@@ -151,8 +151,16 @@ mod tests {
     }
 
     #[test]
-    fn a_done_line_still_wins() {
-        let job = JobInfo { timeline: vec![line("done", Some("Final.")), line("working", Some("Later."))], ..JobInfo::default() };
+    fn the_newest_answer_beats_an_older_done_line() {
+        let job = JobInfo { timeline: vec![line("done", Some("Final.")), line("working", None), line("working", Some("Later."))], ..JobInfo::default() };
+        assert_eq!(timeline_answer(&job).as_deref(), Some("Later."));
+    }
+
+    #[test]
+    fn a_done_line_is_used_when_the_newest_line_is_not_an_answer() {
+        let job = JobInfo { timeline: vec![line("done", Some("Final.")), line("working", None)], ..JobInfo::default() };
         assert_eq!(timeline_answer(&job).as_deref(), Some("Final."));
+        let alone = JobInfo { timeline: vec![line("done", Some("Final."))], ..JobInfo::default() };
+        assert_eq!(timeline_answer(&alone).as_deref(), Some("Final."));
     }
 }
