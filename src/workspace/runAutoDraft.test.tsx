@@ -7,7 +7,8 @@ import { mockAsk, scriptPip } from "../backend/mockPip";
 import { jiraNote } from "../backend/mockRunResult";
 import { SCRIPTED_RESULT } from "../backend/mockRuns";
 import { docFromText, docText } from "../lib/docs";
-import type { Intent, Proposal, Run, RunKind, RunSpec, ScreenContext } from "../types";
+import type { Backend } from "../backend/types";
+import type { Intent, Proposal, Run, RunKind, RunOutcome, RunSpec, ScreenContext } from "../types";
 import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
 import { AgentsSettingsView } from "./AgentsSettings";
@@ -114,6 +115,30 @@ describe("following a run's outcome", () => {
     await backend.runsDraftComment(run.id);
     await settle();
     expect(seen).toHaveLength(count);
+  });
+});
+
+describe("following a run's outcome out of order", () => {
+  it("ignores a slow earlier read that finishes after a newer one", async () => {
+    const later = (state: "pending" | "skipped") => ({ note: null, keys: [], change: null, draft: { id: "d1", state: { type: state } } }) as RunOutcome;
+    const waiting: ((o: RunOutcome) => void)[] = [];
+    let changed = () => {};
+    const backend = {
+      runsOutcome: () => new Promise<RunOutcome>((resolve) => waiting.push(resolve)),
+      onDevLinksChanged: () => () => {},
+      onProposalsChanged: (cb: () => void) => ((changed = cb), () => {}),
+    } as unknown as Backend;
+    const seen: string[] = [];
+    followOutcome(backend, "r1", (o) => seen.push(o.draft?.state.type ?? "none"));
+    changed();
+    expect(waiting).toHaveLength(2);
+    waiting[1](later("skipped"));
+    await Promise.resolve();
+    await Promise.resolve();
+    waiting[0](later("pending"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen).toEqual(["skipped"]);
   });
 });
 
