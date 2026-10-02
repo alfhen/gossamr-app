@@ -8,6 +8,13 @@ const DESCRIPTION_BUDGET = 3_500;
 const COMMENTS_BUDGET = 5_000;
 const COMMENT_LIMIT = 1_200;
 const COMMENT_COUNT = 10;
+const MARKERS = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>"];
+
+function withoutMarkers(text: string): string {
+  let out = text;
+  for (let found = MARKERS.find((m) => out.includes(m)); found; found = MARKERS.find((m) => out.includes(m))) out = out.split(found).join("");
+  return out;
+}
 
 export interface TicketMaterial {
   item: WorkItem;
@@ -17,6 +24,7 @@ export interface TicketMaterial {
   code: DevLink[];
 }
 
+const CHECKS: Record<string, string> = { none: "", pending: ", checks pending", passing: ", checks passing", failing: ", checks failing" };
 const oneLine = (text: string, limit: number) => text.replace(/\s+/g, " ").trim().slice(0, limit);
 
 function relation(kind: string, outward: boolean): string {
@@ -41,12 +49,12 @@ function head(m: TicketMaterial): string {
     const title = m.titleOf(ref);
     return title ? `${ref.key} ${title}` : ref.key;
   };
-  if (item.parent) lines.push(`Parent: ${titled(item.parent)}`);
+  if (item.parent) lines.push(`Parent: ${oneLine(titled(item.parent), 300)}`);
   const linked = item.links.filter((l) => l.kind !== "implementedBy").map((l) => {
     const outward = l.from.key === item.item.key;
     return `${relation(l.kind, outward)} ${titled(outward ? l.to : l.from)}`;
   });
-  const code = m.code.map(({ change: c }) => (c.kind === "pullRequest" ? `pull request ${c.repo}#${c.number} (${c.state}), branch ${c.headRef}: ${c.title}` : `${c.kind} ${c.repo}:${c.headRef} (${c.state})`));
+  const code = m.code.map(({ change: c }) => (c.kind === "pullRequest" ? `pull request ${c.repo}#${c.number} (${c.state}${CHECKS[c.checks]}), branch ${c.headRef}: ${c.title}` : `${c.kind} ${c.repo}:${c.headRef} (${c.state})`));
   let used = lines.reduce((n, l) => n + l.length + 1, 0);
   for (const [label, entries] of [["Linked tickets:", linked], ["Pull requests and branches:", code]] as const) {
     if (!entries.length) continue;
@@ -88,5 +96,5 @@ function comments(m: TicketMaterial): string {
 export function ticketBlockText(m: TicketMaterial): string {
   const text = docText(m.item.body);
   const description = !text ? "Description: none." : `Description:\n${text.slice(0, DESCRIPTION_BUDGET)}${text.length > DESCRIPTION_BUDGET ? `\n[description cut at ${DESCRIPTION_BUDGET} characters]` : ""}`;
-  return [head(m), description, comments(m)].join("\n\n").trim().slice(0, TICKET_BLOCK_LIMIT);
+  return withoutMarkers([head(m), description, comments(m)].join("\n\n")).trim().slice(0, TICKET_BLOCK_LIMIT);
 }
