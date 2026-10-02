@@ -216,7 +216,7 @@ impl RunService {
         if let Err(e) = self.index.mark_terminal(&run.id) {
             eprintln!("couldn't update the run index: {e}");
         }
-        self.misses.lock().expect("misses lock poisoned").remove(&run.id);
+        self.reset_counts(&run.id);
         self.store(&run).await?;
         Ok(run)
     }
@@ -248,7 +248,7 @@ impl RunService {
                 Ok(Ok(())) => {
                     tally.stopped += 1;
                     let _ = self.index.mark_terminal(&entry.run_id);
-                    self.misses.lock().expect("misses lock poisoned").remove(&entry.run_id);
+                    self.reset_counts(&entry.run_id);
                     if let Some(mut run) = mine {
                         Self::stopped(&mut run);
                         let _ = self.store(&run).await;

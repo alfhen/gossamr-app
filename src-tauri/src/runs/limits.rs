@@ -36,10 +36,10 @@ fn grouped(n: u64) -> String {
 }
 
 /// Which limit a run has reached, if any. Only a run that is under way counts: a queued, launching or finished one
-/// is exempt, and a limit of zero is off.
+/// is exempt, and so is one the person carried on in Terminal. A limit of zero is off.
 pub fn exceeded(run: &Run, now: DateTime<Utc>, settings: &AgentSettings) -> Option<Overrun> {
     let under_way = matches!(run.state, RunState::Working | RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked);
-    if !under_way {
+    if !under_way || run.continued_at.is_some() {
         return None;
     }
     let wall = settings.wall_clock_minutes;

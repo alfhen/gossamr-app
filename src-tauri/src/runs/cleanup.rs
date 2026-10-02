@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use super::cli::CliError;
 use super::failure::Failure;
-use super::service::RunService;
+use super::service::{belongs_to, RunService};
 use crate::domain::{Run, RunState};
 use crate::error::{Error, Result};
 
@@ -44,6 +44,12 @@ impl Drop for Cleaning<'_> {
 }
 
 impl RunService {
+    /// A finished run whose session is still open at its prompt holds its worktree's lock, which `claude rm` refuses
+    /// until the session is stopped.
+    async fn session_alive(&self, tc: &super::toolchain::Toolchain, run: &Run) -> bool {
+        tc.cli.agents(true).await.is_ok_and(|entries| entries.iter().any(|e| belongs_to(e, run) && e.pid.is_some()))
+    }
+
     /// Removes the run's worktree and branch. Never forces: unpushed work stays, and Claude says so.
     pub async fn cleanup(&self, run_id: &str) -> Result<Cleanup> {
         self.ensure_enabled()?;
@@ -62,6 +68,9 @@ impl RunService {
             }));
         };
         let tc = self.tools.get().await.map_err(|e| Error::Claude(Failure::from(e).to_string()))?;
+        if self.session_alive(&tc, &run).await {
+            tc.cli.stop(&id).await?;
+        }
         let mut tries = 0;
         loop {
             match tc.cli.rm(&id).await {

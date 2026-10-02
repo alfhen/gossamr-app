@@ -69,7 +69,7 @@ impl RunService {
             if let Err(e) = self.index.mark_terminal(&run.id) {
                 eprintln!("couldn't update the run index: {e}");
             }
-            self.misses.lock().expect("misses lock poisoned").remove(&run.id);
+            self.reset_counts(&run.id);
             // Saved before the wake, so an app that quits between the two still has the answer to send again.
             run.unsent_answer = Some(text.to_owned());
             self.store(&run).await?;

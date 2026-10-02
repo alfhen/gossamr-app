@@ -40,6 +40,15 @@ fn queued_launching_and_finished_runs_are_exempt() {
 }
 
 #[test]
+fn a_run_the_person_carried_on_is_exempt() {
+    let settings = AgentSettings { wall_clock_minutes: 1, token_cap: 1, ..AgentSettings::default() };
+    let mut r = run(RunState::Working, 600, Some(9));
+    assert!(exceeded(&r, Utc::now(), &settings).is_some());
+    r.continued_at = Some(Utc::now());
+    assert_eq!(exceeded(&r, Utc::now(), &settings), None);
+}
+
+#[test]
 fn zero_turns_a_limit_off_and_a_run_that_never_launched_has_no_clock() {
     let off = AgentSettings { wall_clock_minutes: 0, token_cap: 0, ..AgentSettings::default() };
     assert_eq!(exceeded(&run(RunState::Working, 100_000, Some(u64::MAX)), Utc::now(), &off), None);

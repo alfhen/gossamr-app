@@ -97,3 +97,32 @@ async fn the_tracker_leaves_a_run_whose_worktree_is_gone_alone() {
     rig.poll().await;
     assert_eq!(rig.cli.0.lock().unwrap().listings, before, "no unfinished run, so no listing");
 }
+
+#[tokio::test]
+async fn a_finished_run_whose_session_is_still_open_is_stopped_before_its_worktree_is_removed() {
+    let rig = ready().await;
+    let run = rig.launched(1).await;
+    rig.poll().await;
+    rig.set(&run, |r| r.state = RunState::Done).await;
+    let id = run.short_id.as_ref().unwrap().to_string();
+    rig.cli.with(|s| s.rm_refusals = vec![LOCKED.into()]);
+
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    let cli = rig.cli.0.lock().unwrap();
+    assert_eq!((cli.stops.clone(), cli.rms.len()), (vec![id], 2));
+}
+
+#[tokio::test]
+async fn a_finished_run_with_no_process_is_removed_without_a_stop() {
+    let rig = ready().await;
+    let run = rig.launched(1).await;
+    rig.poll().await;
+    rig.session(&run, |e| {
+        e.state = Some("done".into());
+        e.status = None;
+        e.pid = None;
+    });
+    rig.set(&run, |r| r.state = RunState::Done).await;
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    assert!(rig.cli.0.lock().unwrap().stops.is_empty());
+}
