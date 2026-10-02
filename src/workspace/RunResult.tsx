@@ -5,7 +5,9 @@ import { blockerChoices, blockerControl, changeSummary, commentControl } from ".
 
 export interface ResultActions {
   draftComment(): void;
-  draftWithPip(): void;
+  /** Opens Pip on the run, and on its comment draft when one is waiting. */
+  askPip(): void;
+  openDraft(): void;
   pickBlocker(): void;
   cancelBlocker(): void;
   draftBlocker(key: string): void;
@@ -67,6 +69,8 @@ export function Found({ run, outcome, tickets, pickBlocker, drafting, on }: Resu
   const comment = commentControl(run);
   const blocker = blockerControl(run);
   const reason = comment.reason ?? blocker.reason;
+  const draft = outcome?.draft?.state.type === "pending" ? outcome.draft : null;
+  const decided = outcome?.draft && !draft ? outcome.draft.state.type : null;
   return (
     <Sec title="What it found">
       <Box>
@@ -90,13 +94,36 @@ export function Found({ run, outcome, tickets, pickBlocker, drafting, on }: Resu
             <p className="selectable m-0 whitespace-pre-wrap text-[13.5px] text-ws-ink2 [overflow-wrap:anywhere]">{text}</p>
           </Details>
         )}
+        {draft && (
+          <p data-draft="ready" role="status" className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm">
+            <b className="font-semibold text-ws-pip">A comment is drafted on {run.item?.key ?? "the ticket"}.</b> Read it, edit it or skip it. Nothing is posted until you approve it.
+          </p>
+        )}
+        {decided && (
+          <p data-draft={decided} className="m-0 text-sm text-ws-ink3">
+            {decided === "applied" ? "Its comment draft was posted." : decided === "skipped" ? "You skipped its comment draft." : "Its comment draft is out of date."}
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-2">
-          <Btn tone="primary" icon="ext" disabled={!comment.enabled || drafting} title={comment.reason ?? undefined} onClick={on.draftComment}>
-            Draft a Jira comment from this
-          </Btn>
-          <Btn icon="spark" disabled={!comment.enabled || drafting} title={comment.reason ?? "Pip reads the run and writes a comment for you to edit"} onClick={on.draftWithPip}>
-            Draft with Pip
-          </Btn>
+          {draft ? (
+            <>
+              <Btn tone="primary" icon="ext" onClick={on.openDraft}>
+                Open the draft
+              </Btn>
+              <Btn icon="spark" disabled={drafting} title="Pip reads the whole run and the draft, and changes the draft if you ask" onClick={on.askPip}>
+                Discuss with Pip
+              </Btn>
+            </>
+          ) : (
+            <>
+              <Btn tone={decided === "applied" ? undefined : "primary"} icon="ext" disabled={!comment.enabled || drafting} title={comment.reason ?? undefined} onClick={on.draftComment}>
+                Draft a Jira comment from this
+              </Btn>
+              <Btn icon="spark" disabled={!comment.enabled || drafting} title={comment.reason ?? "Pip reads the whole run and writes a comment for you to edit"} onClick={on.askPip}>
+                Draft with Pip
+              </Btn>
+            </>
+          )}
           <Btn icon="branch" disabled={!blocker.enabled || drafting} aria-expanded={pickBlocker} title={blocker.reason ?? undefined} onClick={pickBlocker ? on.cancelBlocker : on.pickBlocker}>
             Draft a blocker
           </Btn>

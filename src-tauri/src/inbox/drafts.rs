@@ -210,11 +210,11 @@ impl Core {
         self.with_db_for(scope, |db| db.proposal(id)).await
     }
 
-    /// Pip's own change to one of its pending drafts. Anyone else's, and anything already decided, is refused here
-    /// whatever the caller checked.
+    /// Pip's change to one of its pending drafts, or to a pending comment drafted from a run's result. Anyone else's,
+    /// and anything already decided, is refused here whatever the caller checked.
     pub async fn revise_as_pip(&self, scope: &Scope, id: &str, intent: Intent) -> Result<Proposal> {
         self.with_db_for(scope, |db| {
-            proposals::require_pip_pending(&db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?)?;
+            proposals::require_pip_may_revise(&db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?)?;
             proposals::edit_noted(db, id, intent, "Revised by Pip", Utc::now())
         })
         .await

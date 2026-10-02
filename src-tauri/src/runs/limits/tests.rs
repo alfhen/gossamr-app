@@ -62,7 +62,7 @@ fn the_reason_names_the_limit_in_plain_words() {
 async fn settings_are_clamped_saved_and_read_back_by_a_new_start() {
     let rig = ready().await;
     assert_eq!(rig.svc.settings(), AgentSettings::default());
-    let saved = rig.svc.set_settings(AgentSettings { max_runs: 40, wall_clock_minutes: 5, token_cap: 0, terminal: TerminalChoice::ITerm }).unwrap();
+    let saved = rig.svc.set_settings(AgentSettings { max_runs: 40, wall_clock_minutes: 5, token_cap: 0, terminal: TerminalChoice::ITerm, draft_on_finish: false }).unwrap();
     assert_eq!((saved.max_runs, saved.wall_clock_minutes, saved.token_cap), (6, 5, 0));
     assert_eq!(rig.svc.settings(), saved);
     assert_eq!(AppConfig::load(&rig.fx.core.data_dir()).agents, saved);

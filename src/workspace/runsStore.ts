@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { targetOf } from "../lib/proposals";
-import type { CleanupResult, Proposal, Run, RunsEnvironment } from "../types";
+import type { CleanupResult, ItemRef, Proposal, Run, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, attentionCount, groupRuns, navOrder, stepRun, type AgentFilters } from "./agentsLogic";
@@ -56,6 +56,8 @@ interface RunsState {
   openRun(id: string, opts?: { stay?: boolean }): void;
   openSafety(): void;
   closeSheet(): void;
+  /** Shows a ticket's drafts, where a draft is approved, and closes the run sheet over it. */
+  showDraft(item: ItemRef | null): void;
   setPicking(open: boolean): void;
   /** False when it opened the safety sheet because the person has not seen it; callers stop there. */
   ensureAgentsIntro(): boolean;
@@ -98,6 +100,8 @@ function forgetRecovered(seen: ReadonlySet<string>, runs: readonly Run[]): Reado
 
 const READY = "Draft ready. Nothing is posted until you approve it.";
 
+const openDraftsOn = (target: ItemRef) => showMe(target, { peek: true }) || void openTicketByKey(target.key);
+
 /** Makes a draft from a run and shows it where it is approved: on the ticket it is about. */
 async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState>) => void, id: string, what: "comment" | "link", make: (backend: Backend) => Promise<Proposal>) {
   const { backend, drafting } = get();
@@ -107,10 +111,9 @@ async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState
     const draft = await make(backend);
     await useWorkspace.getState().refreshProposals();
     const target = targetOf(draft.intent);
-    const open = () => target && (showMe(target, { peek: true }) || void openTicketByKey(target.key));
     get().closeSheet();
-    useToasts.getState().push(READY, "info", target ? { label: `Open ${target.key}`, run: open } : undefined);
-    open();
+    useToasts.getState().push(READY, "info", target ? { label: `Open ${target.key}`, run: () => openDraftsOn(target) } : undefined);
+    if (target) openDraftsOn(target);
   } catch (e) {
     useToasts.getState().push(`Couldn't draft the ${what === "comment" ? "comment" : "blocker"}: ${messageOf(e)}`);
   } finally {
@@ -181,6 +184,11 @@ export const useRuns = create<RunsState>((set, get) => ({
 
   openSafety: () => set({ sheet: { type: "safety" } }),
   closeSheet: () => set({ sheet: null }),
+
+  showDraft(item) {
+    get().closeSheet();
+    if (item) openDraftsOn(item);
+  },
   ensureAgentsIntro() {
     const prefs = usePrefs.getState();
     if (prefs.agentsIntroSeen) return true;

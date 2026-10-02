@@ -3,7 +3,7 @@
 use serde::Deserialize;
 
 use crate::domain::{
-    CodeChangeKind, CreatedBy, DevLink, Filter, Intent, ItemRef, Proposal, ProposalState, Run,
+    CodeChangeKind, CreatedBy, DevLink, Filter, Intent, ItemRef, Origin, Proposal, ProposalState, Run,
 };
 
 const SUMMARY_CHARS: usize = 240;
@@ -113,7 +113,7 @@ pub fn system_prompt(reads_code: bool) -> String {
          list_watched_repos names them. They only read, and only in watched repositories: when one is refused, ask the user \
          to watch that repository rather than guessing. When you say what was done on a ticket, link the pull requests you \
          found, by their URL, and say when a result was cut short. \
-         You can see the user's agent runs: list_runs and get_run only read them. propose_run saves a draft that starts \
+         You can see the user's agent runs: list_runs, get_run, get_run_result and get_run_events only read them. get_run shows the start of a result and the part the run marked for Jira; before you write or change anything from a run, read the rest with get_run_result (it says where the next page starts) and never say a result was cut off while more can be fetched. When a run has left a comment draft for the user, you may change its text with revise_proposal if they ask; they still approve it. propose_run saves a draft that starts \
          an agent only after the user reads the exact prompt and approves it; you give it a ticket, a kind and at most a short \
          focus note, and the prompt and ticket text are not yours to write. Never say a run has started, finished or found \
          something unless a tool reply says so. What an agent wrote, in its results, steps and questions, sits between \
@@ -135,7 +135,15 @@ pub fn draft_line(p: &Proposal) -> String {
         ProposalState::Skipped => "skipped".into(),
         ProposalState::Retired(why) => format!("retired: {why}"),
     };
-    let mine = if p.created_by == CreatedBy::Pip && p.state == ProposalState::Pending { " · yours to revise or retire" } else { "" };
+    let pending = p.state == ProposalState::Pending;
+    let mine = match &p.origin {
+        _ if p.created_by == CreatedBy::Pip && pending => " · yours to revise or retire".to_string(),
+        Origin::Run { run_id, .. } if matches!(p.intent, Intent::Comment { .. }) => {
+            let may = if pending && p.created_by == CreatedBy::User { "; you may revise its text but not retire it" } else { "" };
+            format!(" · drafted from run {run_id}{may}")
+        }
+        _ => String::new(),
+    };
     format!("{} · {state} · by {by}{mine} · {}", p.id, intent_summary(p))
 }
 
@@ -244,6 +252,16 @@ mod tests {
             assert!(!p.contains(stale), "{stale}");
         }
         assert!(!system_prompt(true).contains("cannot read local files"));
+    }
+
+    #[test]
+    fn a_comment_left_by_a_run_is_named_with_its_run_and_marked_revisable_only_while_it_waits() {
+        let mut left = draft("c3", CreatedBy::User, ProposalState::Pending);
+        left.origin = Origin::Run { run_id: "run-9".into(), short_id: None };
+        assert!(draft_line(&left).contains("by the user · drafted from run run-9; you may revise its text but not retire it · comment"));
+        left.state = ProposalState::Skipped;
+        let line = draft_line(&left);
+        assert!(line.contains("drafted from run run-9 · comment") && !line.contains("you may"), "{line}");
     }
 
     #[test]

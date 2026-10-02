@@ -590,6 +590,14 @@ export class MockBackend implements Backend {
     return this.runs.list();
   }
 
+  pipDrafts() {
+    return this.proposals.list({ states: ["pending"] });
+  }
+
+  async pipRevise(id: string, body: string) {
+    return this.proposals.pipRevise(id, body);
+  }
+
   pipRunDraft(item: ItemRef, focus: string | null, requestId: string) {
     return this.runs.pipDraft(item, focus, requestId);
   }

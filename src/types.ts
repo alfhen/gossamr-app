@@ -519,6 +519,8 @@ export interface RunOutcome {
   note: JiraNote | null;
   keys: string[];
   change: CodeChange | null;
+  /** The comment draft made from this run, in whatever state it is in now. */
+  draft: { id: string; state: ProposalState } | null;
 }
 
 /** What the person reads before approving; `digest` is sent back with the approval. */
@@ -592,6 +594,8 @@ export interface AgentSettings {
   wallClockMinutes: number;
   tokenCap: number;
   terminal: "terminal" | "iTerm";
+  /** Draft a Jira comment on the run's ticket when it finishes with a `For Jira:` section. */
+  draftOnFinish: boolean;
 }
 
 /** What `claude rm` said: it removed the worktree, or refused and explained in its own words. */

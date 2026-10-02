@@ -20,6 +20,7 @@ import { RunAnswer } from "./RunAnswer";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
 import { askPip } from "./askPip";
+import { followOutcome } from "./followOutcome";
 import { useRuns } from "./runsStore";
 
 export interface RunSheetActions extends ResultActions {
@@ -371,16 +372,10 @@ export function RunSheet({ id }: { id: string }) {
   const ticketRef = run?.item ?? null;
   useEffect(() => {
     if (!backend || !finished) return;
-    let live = true;
-    const read = () => backend.runsOutcome(id).then((o) => live && setOutcome(o), () => {});
-    void read();
-    const off = backend.onDevLinksChanged(() => void read());
+    const stop = followOutcome(backend, id, setOutcome);
     // The pull request may not have been seen by a sync yet; asking GitHub about the ticket caches it, as the ticket peek does.
     if (ticketRef) void backend.devLinksLive(ticketRef).catch(() => {});
-    return () => {
-      live = false;
-      off();
-    };
+    return stop;
   }, [backend, id, finished, ticketRef?.externalId]);
 
   const progress = run ? `${run.state}:${run.lastProgressAt}:${run.lastDetail ?? ""}` : "";
@@ -422,7 +417,8 @@ export function RunSheet({ id }: { id: string }) {
     },
     reveal: (path) => void backend?.revealPath(path).catch(() => {}),
     draftComment: () => void store.draftComment(id),
-    draftWithPip: () => (askPip(commentWithPipPrompt(run)), store.closeSheet()),
+    askPip: () => (askPip(commentWithPipPrompt(run, outcome?.draft?.state.type === "pending" ? outcome.draft.id : null)), store.closeSheet()),
+    openDraft: () => store.showDraft(run.item),
     pickBlocker: () => setPickBlocker(true),
     cancelBlocker: () => setPickBlocker(false),
     draftBlocker: (key) => void store.draftBlocker(id, key),

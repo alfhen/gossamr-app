@@ -47,6 +47,7 @@ pub struct Rig {
     pub notices: Arc<Notices>,
     pub opened: Arc<Opened>,
     pub changes: Arc<Mutex<Vec<String>>>,
+    pub drafted: Arc<Mutex<Vec<String>>>,
 }
 
 pub async fn ready() -> Rig {
@@ -61,6 +62,8 @@ pub async fn ready() -> Rig {
     let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
     let (notices, opened, changes) = (Arc::new(Notices::default()), Arc::new(Opened::default()), Arc::new(Mutex::new(Vec::new())));
     let seen = changes.clone();
+    let drafted = Arc::new(Mutex::new(Vec::new()));
+    let told = drafted.clone();
     let svc = RunService::new(
         fx.core.clone(),
         Arc::new(tools),
@@ -69,10 +72,11 @@ pub async fn ready() -> Rig {
         Arc::new(move |id| seen.lock().unwrap().push(id.to_string())),
     )
     .enabled(true)
+    .with_drafted(Arc::new(move |id| told.lock().unwrap().push(id.to_string())))
     .with_notifier(notices.clone())
     .with_terminal(opened.clone())
     .with_home(fx.home.canonicalize().unwrap());
-    Rig { fx, svc: Arc::new(svc), cli, clone, notices, opened, changes }
+    Rig { fx, svc: Arc::new(svc), cli, clone, notices, opened, changes, drafted }
 }
 
 pub fn line(at: &str, state: &str, text: &str) -> TimelineLine {

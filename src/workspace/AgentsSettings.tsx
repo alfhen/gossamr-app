@@ -184,6 +184,11 @@ function LimitsForm({ settings, disabled, onSave }: { settings: AgentSettings; d
         <span className="text-sm text-ws-ink3">0 is never</span>
       </label>
       <label className="flex flex-wrap items-center gap-2">
+        <input type="checkbox" disabled={disabled} checked={settings.draftOnFinish} onChange={(e) => onSave({ ...settings, draftOnFinish: e.target.checked })} />
+        <span>Draft a Jira comment when an agent finishes</span>
+        <span className="text-sm text-ws-ink3">only a draft, and only when it wrote a For Jira section</span>
+      </label>
+      <label className="flex flex-wrap items-center gap-2">
         <span className="min-w-[210px]">Open sessions in</span>
         <select disabled={disabled} aria-label="Terminal app" value={settings.terminal} onChange={(e) => onSave({ ...settings, terminal: e.target.value as AgentSettings["terminal"] })} className={FIELD.replace("w-20", "w-32")}>
           <option value="terminal">Terminal</option>

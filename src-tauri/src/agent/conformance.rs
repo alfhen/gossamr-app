@@ -305,7 +305,7 @@ pub async fn run_tools_are_read_only(h: &Harness) -> std::result::Result<(), Str
     }
     let run = seed_run(h, 1, |r| r.state = RunState::Working).await;
     let (runs, drafts) = (h.runs().await, h.drafts().await.len());
-    for (tool, args) in [("list_runs", json!({})), ("get_run", json!({ "id": run.id }))] {
+    for (tool, args) in [("list_runs", json!({})), ("get_run", json!({ "id": run.id })), ("get_run_events", json!({ "id": run.id }))] {
         let (text, error) = h.tool("runs-ro", tool, args).await;
         if error {
             return Err(format!("{tool} failed: {text}"));
@@ -350,6 +350,48 @@ pub async fn agent_output_comes_back_as_data(h: &Harness) -> std::result::Result
         && block.matches("AGENT_OUTPUT>>>").count() == 1;
     let nothing_followed = h.drafts().await.len() == drafts && h.planner.asked.lock().unwrap().len() == asked;
     (!error && marked && nothing_followed).then_some(()).ok_or_else(|| format!("agent text wasn't handed over as data: {reply}"))
+}
+
+pub async fn a_whole_result_can_be_read_through_the_tools(h: &Harness) -> std::result::Result<(), String> {
+    let body: String = (0..2_000).map(|n| format!("line{n:04} ")).collect();
+    let result = format!("{body}\n\nFor Jira:\nThe consumer needs a backoff.");
+    let run = seed_run(h, 5, |r| (r.state, r.result) = (RunState::Done, Some(result.clone()))).await;
+    let (first, error) = h.tool("runs-pages", "get_run", json!({ "id": run.id })).await;
+    if error || !first.contains("The consumer needs a backoff.") || !first.contains("get_run_result") {
+        return Err(format!("get_run didn't give the For Jira section and the way to the rest: {first}"));
+    }
+    let (mut offset, mut text) = (0usize, String::new());
+    for _ in 0..20 {
+        let (page, error) = h.tool("runs-pages", "get_run_result", json!({ "id": run.id, "offset": offset })).await;
+        if error {
+            return Err(format!("a page failed: {page}"));
+        }
+        text.push_str(page.split_once("<<<AGENT_OUTPUT\n").and_then(|(_, r)| r.split_once("\nAGENT_OUTPUT>>>")).map_or("", |(t, _)| t));
+        match page.split("and offset ").nth(1).and_then(|n| n.trim_end_matches('.').parse::<usize>().ok()) {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+    (text.contains("line0000") && text.contains("line1999") && text.ends_with("The consumer needs a backoff.")).then_some(()).ok_or_else(|| "paging didn't reach the end of the result".into())
+}
+
+pub async fn pip_revises_a_runs_comment_but_never_one_the_person_wrote(h: &Harness) -> std::result::Result<(), String> {
+    let core = &h.lx.fx.core;
+    let comment = |origin: Origin, text: &str| Draft {
+        origin,
+        created_by: CreatedBy::User,
+        intent: Intent::Comment { item: h.lx.fx.item("CA-1"), body: Doc::paragraph(text) },
+        label: None,
+        basis: None,
+    };
+    let left = core.propose(&h.lx.fx.scope, comment(Origin::Run { run_id: "probe".into(), short_id: None }, "from a run")).await.map_err(|e| e.to_string())?;
+    let typed = core.propose(&h.lx.fx.scope, comment(Origin::Board, "typed by the person")).await.map_err(|e| e.to_string())?;
+    let (_, refused) = h.tool("runs-revise", "revise_proposal", json!({ "id": typed.id, "body": "hijacked" })).await;
+    let (said, ok) = h.tool("runs-revise", "revise_proposal", json!({ "id": left.id, "body": "reworked" })).await;
+    let after = |id: String| async move { core.proposal_in(&h.lx.fx.scope, &id).await.ok().flatten() };
+    let (typed_after, left_after) = (after(typed.id.clone()).await, after(left.id.clone()).await);
+    let revised = left_after.as_ref().is_some_and(|p| matches!(&p.intent, Intent::Comment { body, .. } if body.plain_text() == "reworked") && p.state == crate::domain::ProposalState::Pending);
+    (refused && !ok && revised && typed_after.as_ref() == Some(&typed) && h.lx.fx.tracker.intents().is_empty()).then_some(()).ok_or_else(|| format!("revising went wrong: {said}"))
 }
 
 pub async fn propose_run_never_starts_a_run(h: &Harness) -> std::result::Result<(), String> {
@@ -400,6 +442,8 @@ pub async fn check_run_tools(h: &Harness) -> std::result::Result<(), String> {
     unknown_run_ids_are_refused(h).await?;
     another_connections_runs_are_not_visible(h).await?;
     agent_output_comes_back_as_data(h).await?;
+    a_whole_result_can_be_read_through_the_tools(h).await?;
+    pip_revises_a_runs_comment_but_never_one_the_person_wrote(h).await?;
     propose_run_never_starts_a_run(h).await?;
     over_long_focus_is_rejected(h).await
 }

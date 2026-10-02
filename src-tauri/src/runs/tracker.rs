@@ -37,6 +37,8 @@ const REPLY_KEPT: usize = 1_000;
 pub enum Attention {
     Needs,
     Done,
+    /// Finished, and a comment for its ticket is waiting as a draft.
+    Drafted,
     Failed,
     /// Gossamr stopped it for passing a limit.
     Limit,
@@ -68,6 +70,7 @@ pub fn notice_text(run: &Run, why: Attention) -> Notice {
             Notice { title: format!("{topic} needs you"), body }
         }
         Attention::Limit => Notice { title: format!("{topic} was stopped"), body: run.error.clone().unwrap_or_else(|| "It passed a limit".into()) },
+        Attention::Drafted => Notice { title: format!("Draft ready on {topic}"), body: "An agent finished. Read its comment before anything is posted".into() },
         Attention::Done => Notice { title: format!("{topic} finished"), body: "Open it to see what it found".into() },
         Attention::Failed => {
             let title = match run.error.as_deref() {
@@ -287,6 +290,7 @@ impl RunService {
             self.core.save_run(&run).await?;
             touched = true;
         }
+        let drafted = run.state == RunState::Done && before.state != RunState::Done && settings.draft_on_finish && self.draft_comment_for(&run).await;
         if run.short_id != before.short_id {
             self.remember(&run);
         }
@@ -300,12 +304,28 @@ impl RunService {
         } else if run.state != before.state {
             match run.state {
                 RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => self.notifier.notify(&run, Attention::Needs),
-                RunState::Done => self.notifier.notify(&run, Attention::Done),
+                RunState::Done => self.notifier.notify(&run, if drafted { Attention::Drafted } else { Attention::Done }),
                 RunState::Failed => self.notifier.notify(&run, Attention::Failed),
                 _ => {}
             }
         }
         Ok(touched.then(|| run.connection_id.clone()))
+    }
+
+    /// Whether a comment draft was made. A failure is only logged: the run's result is already saved, and the
+    /// sheet's own button still drafts it.
+    async fn draft_comment_for(&self, run: &Run) -> bool {
+        match self.core.auto_draft_run_comment(&run.id).await {
+            Ok(Some(_)) => {
+                (self.drafted)(&run.connection_id);
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                eprintln!("couldn't draft a comment for run {}: {e}", run.id);
+                false
+            }
+        }
     }
 
     pub async fn events(&self, run_id: &str) -> crate::error::Result<Vec<RunEvent>> {

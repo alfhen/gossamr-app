@@ -94,6 +94,15 @@ const KIND_SEEDS: Seed[] = [
   { key: "CA-413", name: "ca-413-coupon-stacking-e1f3", state: "done", minutesAgo: 210, over: { ...kindOver("CA-413", "ca-413-coupon-stacking-e1f3", "verify"), result: "The fix works for percentage coupons. I could not check fixed-amount coupons: they need the payment sandbox.", tokens: 98_000 } },
 ];
 
+/** What a sample run writes when it finishes, for each kind: an answer that ends in a `For Jira:` section. */
+export const SCRIPTED_RESULT: Record<RunKind, string> = {
+  investigate: "The lag comes from one consumer that retries without backoff.\n\nFor Jira:\nThe consumer retries failed messages immediately, which is what builds the lag. It needs a backoff. I am fairly sure; I did not run it against production traffic.",
+  triage: "About a day. It touches the estimate module and the checkout summary.\n\nFor Jira:\nSize 3. It touches the estimate module and the checkout summary, and the checkout team owns both. No duplicates found.",
+  verify: "The fix works for percentage coupons.\n\nFor Jira:\nChecked percentage coupons: the totals are right and the tests pass. Fixed-amount coupons were not checked because they need the payment sandbox.",
+  build: "Cached the category tree and committed it on the run's branch.\n\nFor Jira:\nThe category tree is now cached and the change is committed on the run's branch. It is not pushed. A person needs to review it and open the pull request.",
+  review: "1. The retry loop never backs off.\n2. The new test doesn't cover the timeout path.\n\nFor Jira:\nReviewed the pull request. One blocking issue: the retry loop never backs off. The timeout path has no test. The author needs to fix both before it can merge.",
+};
+
 const FAILED_TEXT = {
   notSignedIn: "Claude isn't signed in. Run `claude` in Terminal and sign in, then retry.",
   claudeMissing: "Claude Code isn't installed, or Gossamr can't find it.",
@@ -427,10 +436,24 @@ export class MockRuns {
       patch.tokens = (run.tokens ?? 0) + 12_000;
     }
     if (to === "done") {
-      patch.result = "Found the cause and wrote down what to do next.";
+      patch.result = SCRIPTED_RESULT[run.spec.kind];
       patch.endedAt = at;
     }
-    return this.update(run.id, patch);
+    const next = this.update(run.id, patch);
+    if (to === "done") this.autoDraft(next);
+    return next;
+  }
+
+  /** What the backend does when a run reaches Done: one comment draft from a marked `For Jira:` section, never a second. */
+  private autoDraft(run: Run) {
+    if (!this.limits.draftOnFinish || !run.item) return;
+    const note = jiraNote(run.result ?? "");
+    if (!note.fromMarker || !note.text || this.commentDrafts(run.id).length) return;
+    this.proposals.fromRun({ type: "comment", item: run.item, body: docFromText(commentText(note, this.changes.get(run.id) ?? null, run.spec.kind)) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
+  }
+
+  private commentDrafts(runId: string): Proposal[] {
+    return this.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === runId && p.intent.type === "comment");
   }
 
   /** Moves one run, or every run that isn't finished, a step along: queued, launching, working, done. Runs waiting on the person go back to working. */
@@ -672,7 +695,8 @@ export class MockRuns {
     if (!run) throw new Error("that run no longer exists");
     const result = run.result?.trim();
     const own = run.item?.key.toUpperCase();
-    return { note: result ? jiraNote(result) : null, keys: result ? ticketKeys(result).filter((k) => k !== own) : [], change: this.changes.get(id) ?? null };
+    const draft = this.commentDrafts(id)[0];
+    return { note: result ? jiraNote(result) : null, keys: result ? ticketKeys(result).filter((k) => k !== own) : [], change: this.changes.get(id) ?? null, draft: draft ? { id: draft.id, state: draft.state } : null };
   }
 
   private finished(id: string): { run: Run; item: ItemRef } {
@@ -692,7 +716,7 @@ export class MockRuns {
     const { run, item } = this.finished(id);
     const { note } = this.outcome(id);
     if (!note?.text) throw new Error("the run finished without a written answer, so there is nothing to draft");
-    const body = commentText(note, this.changes.get(id) ?? null);
+    const body = commentText(note, this.changes.get(id) ?? null, run.spec.kind);
     const same = this.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "comment" && p.intent.item.externalId === item.externalId && docText(p.intent.body) === body);
     if (same) throw new Error(`that comment is already waiting as a draft on ${item.key} (draft ${same.id})`);
     return this.proposals.fromRun({ type: "comment", item, body: docFromText(body) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
@@ -707,7 +731,7 @@ export class MockRuns {
     return this.proposals.fromRun({ type: "link", from: itemRef(key), to: item, kind: "blocks" }, `Blocked by ${key}`, this.fromRun(run));
   }
 
-  private limits: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal" };
+  private limits: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true };
   /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
   readonly unpushed = new Set<string>();
 

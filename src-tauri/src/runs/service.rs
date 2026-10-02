@@ -82,6 +82,8 @@ pub struct RunService {
     roots: Vec<PathBuf>,
     pub(super) changed: Arc<dyn Fn(&str) + Send + Sync>,
     pub(super) notifier: Arc<dyn RunNotifier>,
+    /// Told the connection when a finished run left a comment draft, so the page re-reads its drafts.
+    pub(super) drafted: Arc<dyn Fn(&str) + Send + Sync>,
     pub(super) terminal: Arc<dyn Terminal>,
     pub(super) home: Option<PathBuf>,
     enabled: AtomicBool,
@@ -154,6 +156,7 @@ impl RunService {
             roots,
             changed,
             notifier: Arc::new(NoNotices),
+            drafted: Arc::new(|_| {}),
             terminal: Arc::new(MacTerminal),
             home: dirs::home_dir(),
             enabled: AtomicBool::new(false),
@@ -181,6 +184,11 @@ impl RunService {
 
     pub fn with_notifier(mut self, notifier: Arc<dyn RunNotifier>) -> Self {
         self.notifier = notifier;
+        self
+    }
+
+    pub fn with_drafted(mut self, drafted: Arc<dyn Fn(&str) + Send + Sync>) -> Self {
+        self.drafted = drafted;
         self
     }
 

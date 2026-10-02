@@ -152,6 +152,19 @@ pub fn require_pip_pending(p: &Proposal) -> Result<()> {
     Ok(())
 }
 
+/// What Pip may revise: its own pending drafts, and a pending comment the person's agent run left for them. The
+/// person made neither by hand, and both stay theirs to approve.
+pub fn require_pip_may_revise(p: &Proposal) -> Result<()> {
+    let from_run = matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. })) && p.created_by == CreatedBy::User;
+    if p.created_by != CreatedBy::Pip && !from_run {
+        return Err(refuse("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it"));
+    }
+    if p.state != ProposalState::Pending {
+        return Err(not_pending(p));
+    }
+    Ok(())
+}
+
 pub fn skip(db: &Db, id: &str, at: DateTime<Utc>) -> Result<Proposal> {
     let mut p = load(db, id)?;
     match p.state {

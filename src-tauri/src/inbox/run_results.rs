@@ -6,7 +6,7 @@
 use super::Core;
 use serde::Serialize;
 
-use crate::domain::{CodeChange, CodeChangeKind, CreatedBy, Intent, ItemRef, LinkKind, Origin, Proposal, ProposalQuery, Run, RunKind, RunState, StateKind};
+use crate::domain::{CodeChange, CodeChangeKind, CreatedBy, Intent, ItemRef, LinkKind, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunState, StateKind};
 use crate::error::{Error, Result};
 use crate::proposals::Draft;
 use crate::runs::pr;
@@ -19,6 +19,15 @@ pub struct RunOutcome {
     pub note: Option<JiraNote>,
     pub keys: Vec<String>,
     pub change: Option<CodeChange>,
+    pub draft: Option<RunDraft>,
+}
+
+/// The comment draft made from a run, in whatever state it is now.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunDraft {
+    pub id: String,
+    pub state: ProposalState,
 }
 
 fn refuse(message: impl Into<String>) -> Error {
@@ -73,7 +82,15 @@ impl Core {
             note: result.map(jira_note),
             keys: result.map(ticket_keys).unwrap_or_default().into_iter().filter(|k| Some(k) != own.as_ref()).collect(),
             change: self.change_of(&run)?,
+            draft: self.comment_drafts_of(&run).await?.into_iter().next().map(|p| RunDraft { id: p.id, state: p.state }),
         })
+    }
+
+    /// Every comment draft made from `run`, newest first, whether it is still waiting or was decided.
+    async fn comment_drafts_of(&self, run: &Run) -> Result<Vec<Proposal>> {
+        let Some(item) = run.item.clone() else { return Ok(Vec::new()) };
+        let found = self.proposals(&ProposalQuery { item: Some(item), ..Default::default() }).await?;
+        Ok(found.into_iter().filter(|p| matches!((&p.origin, &p.intent), (Origin::Run { run_id, .. }, Intent::Comment { .. }) if *run_id == run.id)).collect())
     }
 
     async fn finished_run(&self, id: &str) -> Result<(Run, ItemRef)> {
@@ -100,6 +117,12 @@ impl Core {
         Ok(waiting.into_iter().find(|p| same(&p.intent)))
     }
 
+    async fn comment_intent(&self, run: &Run, item: ItemRef, note: &JiraNote) -> Result<Intent> {
+        let change = self.change_of(run)?;
+        let body = tracker::comment_doc(&comment_text(run, note, change.as_ref()), &[]);
+        Ok(Intent::Comment { item, body })
+    }
+
     /// A comment on the run's ticket made from the `For Jira:` part of its result. Built here, without Pip.
     pub async fn draft_run_comment(&self, id: &str) -> Result<Proposal> {
         let (run, item) = self.finished_run(id).await?;
@@ -107,14 +130,24 @@ impl Core {
         if note.text.is_empty() {
             return Err(refuse("the run finished without a written answer, so there is nothing to draft"));
         }
-        let change = self.change_of(&run)?;
-        let text = comment_text(&run, &note, change.as_ref());
-        let body = tracker::comment_doc(&text, &[]);
-        let same = |i: &Intent| matches!(i, Intent::Comment { item: it, body: b } if *it == item && b.plain_text() == body.plain_text());
+        let intent = self.comment_intent(&run, item.clone(), &note).await?;
+        let same = |i: &Intent| matches!((i, &intent), (Intent::Comment { item: a, body: x }, Intent::Comment { item: b, body: y }) if a == b && x.plain_text() == y.plain_text());
         if let Some(existing) = self.pending_same(same).await? {
             return Err(refuse(format!("that comment is already waiting as a draft on {} (draft {})", item.key, existing.id)));
         }
-        self.draft_from_run(&run, Intent::Comment { item, body }, label_of(&run)).await
+        self.draft_from_run(&run, intent, label_of(&run)).await
+    }
+
+    /// The same draft, made when a run finishes. Only a result that marked a `For Jira:` section is used, and a run
+    /// that already has a comment draft in any state, even a skipped one, gets no second.
+    pub async fn auto_draft_run_comment(&self, id: &str) -> Result<Option<Proposal>> {
+        let Ok((run, item)) = self.finished_run(id).await else { return Ok(None) };
+        let note = jira_note(run.result.as_deref().unwrap_or(""));
+        if !note.from_marker || note.text.is_empty() || !self.comment_drafts_of(&run).await?.is_empty() {
+            return Ok(None);
+        }
+        let intent = self.comment_intent(&run, item, &note).await?;
+        Ok(Some(self.draft_from_run(&run, intent, label_of(&run)).await?))
     }
 
     /// A link saying the run's ticket is blocked by `blocker_key`. The blocker is the end that blocks, so it is the
@@ -305,5 +338,39 @@ mod tests {
         assert_eq!(outcome.note.unwrap(), JiraNote { text: "waiting on CA-9 and CA-12.".into(), from_marker: true });
         let empty = run_with(&fx, |r| r.result = None).await;
         assert_eq!(fx.core.run_outcome(&empty.id).await.unwrap().note, None);
+    }
+
+    #[tokio::test]
+    async fn an_automatic_draft_is_the_same_user_draft_from_the_run_and_is_made_once_whatever_happens_to_it() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = run_with(&fx, |_| {}).await;
+        let auto = fx.core.auto_draft_run_comment(&run.id).await.unwrap().unwrap();
+        assert_eq!((auto.state.clone(), auto.created_by), (crate::domain::ProposalState::Pending, CreatedBy::User));
+        assert_eq!(auto.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+        assert_eq!(body_of(&auto), "Looked into this with an agent (it was asked to only read code and change nothing).\nAdd a backoff to the consumer.");
+        assert!(fx.tracker.intents().is_empty());
+        assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().draft, Some(RunDraft { id: auto.id.clone(), state: crate::domain::ProposalState::Pending }));
+
+        assert_eq!(fx.core.auto_draft_run_comment(&run.id).await.unwrap(), None, "waiting");
+        assert!(fx.core.draft_run_comment(&run.id).await.unwrap_err().to_string().contains(&auto.id));
+        fx.core.skip_proposal(&auto.id).await.unwrap();
+        assert_eq!(fx.core.auto_draft_run_comment(&run.id).await.unwrap(), None, "skipped");
+        assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().draft.unwrap().state, crate::domain::ProposalState::Skipped);
+        assert!(fx.core.draft_run_comment(&run.id).await.is_ok(), "the button still works after a skip");
+    }
+
+    #[tokio::test]
+    async fn nothing_is_drafted_automatically_without_a_marked_section_a_ticket_or_a_clean_finish() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let unmarked = run_with(&fx, |r| r.result = Some("It is the rounding.".into())).await;
+        let empty = run_with(&fx, |r| r.result = Some("For Jira:".into())).await;
+        let no_ticket = run_with(&fx, |r| r.item = None).await;
+        let failed = run_with(&fx, |r| r.state = RunState::Failed).await;
+        let stopped = run_with(&fx, |r| r.state = RunState::Stopped).await;
+        for run in [unmarked, empty, no_ticket, failed, stopped] {
+            assert_eq!(fx.core.auto_draft_run_comment(&run.id).await.unwrap(), None, "{:?}", run.state);
+        }
+        assert_eq!(fx.core.auto_draft_run_comment("missing").await.unwrap(), None);
+        assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().iter().all(|p| !matches!(p.intent, Intent::Comment { .. })));
     }
 }

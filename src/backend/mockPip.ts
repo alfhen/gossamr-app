@@ -1,6 +1,6 @@
 import { and } from "../lib/filter";
-import { docFromText } from "../lib/docs";
-import type { Intent, ItemRef, Run, ScreenContext, WorkFilter } from "../types";
+import { docFromText, docText } from "../lib/docs";
+import type { Intent, ItemRef, Proposal, Run, ScreenContext, WorkFilter } from "../types";
 import { needsPerson, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote } from "./mockRunResult";
@@ -14,6 +14,10 @@ export interface PipScript {
   draft: { intent: Intent; label: string | null } | null;
   /** An agent run to propose on a ticket, with an optional focus note. */
   runDraft?: { item: ItemRef; focus: string | null } | null;
+  /** A change to the text of a comment draft that came from a run. */
+  revise?: { id: string; body: string } | null;
+  /** The draft this turn was about, remembered for the rest of the conversation. */
+  discussed?: string;
 }
 
 const FILTERS: { pattern: RegExp; filter: WorkFilter; note: string }[] = [
@@ -27,6 +31,18 @@ const asksToShow = /\b(show|filter|find|list|only|which)\b/;
 const asksAboutAgents = /\bmy agents\b|\bagents?\b.*\b(doing|up to|status|running)\b|\bwhat.*\bagents?\b/;
 const asksForAgent = /\b(start|launch|run|kick off)\b.*\b(agent|investigation)\b|\binvestigate\b/;
 const KEY = /\b([A-Z][A-Z0-9]+-\d+)\b/;
+const discusses = /comment draft (\S+) on \S+, drafted from agent run (\S+?)\./i;
+const asksToRevise = /\b(shorten|shorter|tighten|trim|rewrite|reword|rephrase|revise)\b/;
+const asksForShorter = /\b(shorten|shorter|tighten|trim)\b/;
+
+/** The comment a run left for the person, newest first, that Pip may revise. */
+const runDrafts = (drafts: readonly Proposal[]) => drafts.filter((d) => d.state.type === "pending" && d.origin.type === "run" && d.intent.type === "comment");
+
+function revisedBody(text: string, shorter: boolean): string {
+  const lines = text.split("\n").filter((l) => l.trim());
+  const note = lines.length > 1 ? lines.slice(1) : lines;
+  return shorter ? (note[0] ?? text) : `Short version: ${(note[0] ?? text).replace(/\.$/, "")}. The rest is in the run.`;
+}
 
 /** What the agents are doing, one line each, from the runs the person has. */
 export function agentSummary(runs: readonly Run[], now: number): string {
@@ -47,8 +63,35 @@ export function agentSummary(runs: readonly Run[], now: number): string {
 }
 
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
-export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now()): PipScript {
+export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null): PipScript {
   const q = prompt.toLowerCase();
+  const talked = discusses.exec(prompt);
+  if (talked) {
+    return {
+      steps: ["Read the run", "Read the rest of its result", "Looked at the draft"],
+      text: `I read the whole run, not only the start of its result, and checked it against draft ${talked[1]}. The draft says what the run found. Tell me what to change, for example "shorter", and I'll revise it. It stays a draft until you approve it.`,
+      filter: null,
+      draft: null,
+      discussed: talked[1],
+    };
+  }
+  if (asksToRevise.test(q)) {
+    const waiting = runDrafts(drafts);
+    const onScreen = (d: Proposal) => d.intent.type === "comment" && !!context.item && d.intent.item.connectionId === context.item.connectionId && d.intent.item.externalId === context.item.externalId;
+    const left = discussed ? waiting.find((d) => d.id === discussed) : waiting.length === 1 && onScreen(waiting[0]) ? waiting[0] : undefined;
+    if (!left && waiting.length > 0) {
+      return { steps: [], text: "Which comment draft do you mean? Use Discuss with Pip on it, then tell me what to change.", filter: null, draft: null };
+    }
+    if (left?.intent.type === "comment") {
+      return {
+        steps: ["Read the run's full result", `Revised the draft on ${left.intent.item.key}`],
+        text: "I changed the draft. It isn't posted; read it and approve, edit or skip it.",
+        filter: null,
+        draft: null,
+        revise: { id: left.id, body: revisedBody(docText(left.intent.body), asksForShorter.test(q)) },
+      };
+    }
+  }
   const asked = /draft a jira comment from run (\S+?):/.exec(q)?.[1];
   const forRun = asked ? runs.find((r) => r.id.toLowerCase() === asked) : undefined;
   if (forRun?.item) {
@@ -165,6 +208,10 @@ export interface PipDrafter {
   pipDraft(intent: Intent, label: string | null, requestId: string): Promise<unknown>;
   /** The runs Pip can read. */
   pipRuns(): Run[];
+  /** The drafts Pip can see. */
+  pipDrafts(): Proposal[];
+  /** Revises a comment draft that came from a run, the way `revise_proposal` does. */
+  pipRevise(id: string, body: string): Promise<unknown>;
   /** Drafts a run the way propose_run does: Pip names the ticket and a focus note, the backend builds the rest. */
   pipRunDraft(item: ItemRef, focus: string | null, requestId: string): Promise<unknown>;
 }
@@ -172,6 +219,8 @@ export interface PipDrafter {
 const listeners = new Set<Listener>();
 const viewListeners = new Set<ViewListener>();
 const running = new Map<string, () => void>();
+/** The draft each conversation last discussed, so "shorter" changes that one and no other. */
+const discussing = new Map<string, string>();
 
 export const mockPipEvents = {
   on(cb: Listener) {
@@ -191,8 +240,9 @@ const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | null, pace = 25): Promise<void> {
   let stopped = false;
   running.set(req.requestId, () => (stopped = true));
-  const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? []);
   const session = req.sessionId ?? `mock-session-${req.requestId}`;
+  const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null);
+  if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });
   try {
     for (const label of script.steps) {
@@ -201,6 +251,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       emit(req.requestId, { type: "tool", label });
     }
     if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
+    if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, script.revise.body);
     if (!stopped && script.runDraft) await drafter?.pipRunDraft?.(script.runDraft.item, script.runDraft.focus, req.requestId);
     if (!stopped && script.filter) viewListeners.forEach((l) => l(req.requestId, script.filter!.filter, script.filter!.note));
     for (const word of script.text.match(/\S+\s*/g) ?? []) {
