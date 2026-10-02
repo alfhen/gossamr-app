@@ -110,7 +110,14 @@ pub fn ticket_from_answer(result: &str) -> Option<TicketProposal> {
 /// At most this many subtasks are proposed, each up to `TITLE_LIMIT` characters.
 pub const SUBTASK_MAX: usize = 8;
 
-const NO_SUBTASKS: [&str; 7] = ["none", "n/a", "na", "nothing", "no subtasks", "not needed", "not applicable"];
+const NO_SUBTASKS: [&str; 4] = ["none", "n/a", "na", "nothing"];
+const NO_SUBTASKS_PREFIXES: [&str; 8] = ["no subtask", "no breakdown", "no need", "nothing to split", "not needed", "not required", "not necessary", "not applicable"];
+
+/// An answer that declines the breakdown rather than naming a task, such as "None." or "No subtasks needed".
+fn declines_breakdown(text: &str) -> bool {
+    let lower = text.trim_end_matches(['.', '!']).to_lowercase();
+    NO_SUBTASKS.contains(&lower.as_str()) || NO_SUBTASKS_PREFIXES.iter().any(|p| lower.starts_with(p))
+}
 
 /// The summaries in the `Subtasks:` section, in order. Only list lines are read when the section has any (nested ones
 /// belong to a deeper level and are left out), else each plain line. Blanks, labels, "none" and repeats are dropped.
@@ -136,8 +143,7 @@ pub fn subtask_proposals(result: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for line in wanted {
         let text = one_line(unchecked(list_marker(line).unwrap_or(line.trim())));
-        let lower = text.trim_end_matches('.').to_lowercase();
-        if text.is_empty() || text.starts_with('#') || text.ends_with(':') || NO_SUBTASKS.contains(&lower.as_str()) || out.iter().any(|o| o.to_lowercase() == text.to_lowercase()) {
+        if text.is_empty() || text.starts_with('#') || text.ends_with(':') || declines_breakdown(&text) || out.iter().any(|o| o.to_lowercase() == text.to_lowercase()) {
             continue;
         }
         out.push(title_cut(&text));
