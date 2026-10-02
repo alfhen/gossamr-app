@@ -68,7 +68,7 @@ describe("the mock's reads for the Activity feed and Pip's tools", () => {
     const b = backend();
     expect((await b.codeSearch("CA-208")).map((c) => c.externalId)).toEqual(["pr:acme/webshop#208", "commit:acme/webshop@9999999ccccccc"]);
     expect(await b.codeSearch("CA-20")).toEqual([]);
-    expect((await b.codeSearch("category")).map((c) => c.number)).toEqual([212]);
+    expect((await b.codeSearch("category")).map((c) => c.number)).toEqual([218, 212]);
     expect(await b.codeSearch("  ")).toEqual([]);
   });
 

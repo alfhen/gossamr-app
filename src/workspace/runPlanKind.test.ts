@@ -73,13 +73,13 @@ describe("Build from this plan", () => {
     await begin();
     const { review } = s();
     expect(review!.ticketBlock, String(s().error)).toBeTruthy();
-    expect(review!.spec).toMatchObject({ kind: "build", repo: plan.spec.repo, plan: plan.result, planFromRun: plan.id, allowPush: false });
+    expect(review!.spec).toMatchObject({ kind: "build", repo: plan.spec.repo, plan: plan.result, planFromRun: plan.id, allowPush: true });
     expect(review!.plan).toBe(plan.result);
-    expect(review!.prompt).toContain("do not push");
+    expect(review!.prompt).toContain("gh pr create --draft");
     expect(review!.prompt).toContain(`Plan from run ${plan.id}:\n<<<PLAN\n## Approach`);
     expect(review!.prompt).toContain("do not deviate silently");
     const parts = splitPrompt(review!);
-    expect(parts.map((p) => p.id)).toEqual(["base", "template", "plan", "ticket"]);
+    expect(parts.map((p) => p.id)).toEqual(["base", "template", "extra", "plan", "ticket"]);
     expect(parts.find((p) => p.id === "plan")!.text).toContain("PLAN>>>");
     expect(parts.map((p) => p.text).join("\n\n")).toBe(review!.prompt);
     expect(s().preflight!.rows.some((r) => r.level === "green" && r.text.includes(`follows the plan from run ${plan.id}`))).toBe(true);

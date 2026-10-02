@@ -15,7 +15,7 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { MAY_TOUCH, answerable, breakdownWithPipPrompt, buildFromPlanOptions, canStartNow, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
+import { MAY_TOUCH, answerable, breakdownWithPipPrompt, buildFromPlanOptions, canStartNow, reviewThisControl, reviewThisOptions, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { Changes, Found, type ResultActions } from "./RunResult";
@@ -431,6 +431,12 @@ export function RunSheet({ id }: { id: string }) {
     buildFromPlan: () => {
       store.closeSheet();
       void useRunSetup.getState().begin(buildFromPlanOptions(run));
+    },
+    reviewThis: () => {
+      const change = outcome?.change;
+      if (!change || !reviewThisControl(run, change).enabled) return;
+      store.closeSheet();
+      void useRunSetup.getState().begin(reviewThisOptions(run, change));
     },
     draftPlanComment: () => void store.draftPlanComment(id),
     openPlanDraft: () => store.showDraft(run.item),

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { SUMMARY_ONLY, type CodeChange, type Run, type RunOutcome } from "../types";
 import { Box, Btn, CopyButton, Details, Sec } from "./AgentSheet";
-import { blockerChoices, blockerControl, breakdownStatus, buildFromPlanControl, changeSummary, commentControl, createdFrom, planCommentControl, ticketControl, ticketStatus } from "./runSheetLogic";
+import { blockerChoices, blockerControl, breakdownStatus, buildFromPlanControl, changeSummary, commentControl, createdFrom, planCommentControl, reviewThisControl, ticketControl, ticketStatus } from "./runSheetLogic";
 
 export interface ResultActions {
   draftComment(): void;
@@ -25,6 +25,8 @@ export interface ResultActions {
   /** Drafts the whole plan as a comment on the ticket. */
   draftPlanComment(): void;
   openPlanDraft(): void;
+  /** Opens a Review draft for the build's pull request that carries the builder's answer. */
+  reviewThis(): void;
 }
 
 export interface ResultProps {
@@ -230,6 +232,30 @@ function Breakdown({ run, outcome, drafting, waitingBreakdown = false, on }: Pic
   );
 }
 
+/** What to do with a finished build: have its pull request reviewed against the ticket. It opens a draft and starts nothing. */
+function ReviewBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "on">) {
+  const control = outcome ? reviewThisControl(run, outcome.change) : { enabled: false, reason: "Looking for its pull request…" };
+  const change = outcome?.change?.kind === "pullRequest" ? outcome.change : null;
+  return (
+    <div data-review-box className="grid gap-2 rounded-md border border-ws-sep bg-ws-bar p-2.5">
+      <p className="m-0 text-xs font-semibold text-ws-ink3">Review the pull request</p>
+      <p className="m-0 text-sm text-ws-ink2">
+        {change ? `Pull request #${change.number}${change.state === "draft" ? " (a draft)" : ""} is what a review would read, at the commit GitHub has now.` : "A review reads the build's pull request at the commit GitHub has now."} It checks the diff against the ticket, treats what the builder says it did as a claim to verify, and reports what is unfinished, untested, out of scope or risky. It only reads, and comments nothing on the pull request.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Btn tone="primary" icon="eye" disabled={!control.enabled || drafting} title={control.reason ?? "Opens a Review draft that carries the builder's answer as a claim to check, for you to read and edit before it starts"} onClick={on.reviewThis}>
+          Review this
+        </Btn>
+      </div>
+      {control.reason && (
+        <p role="note" className="m-0 text-sm text-ws-ink3">
+          {control.reason}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** What a Plan run wrote: the plan itself, to read, and the two things to do with it. Neither posts anything. */
 function PlanBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "on">) {
   const text = run.result?.trim();
@@ -320,6 +346,7 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingB
           </Details>
         )}
         <Breakdown run={run} outcome={outcome} drafting={drafting} waitingBreakdown={waitingBreakdown} on={on} />
+        {run.spec.kind === "build" && <ReviewBox run={run} outcome={outcome} drafting={drafting} on={on} />}
         {draft && (
           <p data-draft="ready" role="status" className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm">
             <b className="font-semibold text-ws-pip">A comment is drafted on {run.item?.key ?? "the ticket"}.</b> Read it, edit it or skip it. Nothing is posted until you approve it.

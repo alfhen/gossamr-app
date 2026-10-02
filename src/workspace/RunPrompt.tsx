@@ -46,6 +46,8 @@ export interface InstructionEditor {
   onReset?(): void;
   /** A build made from a plan: the plan is its own part, shown in full and editable here. */
   plan?: { text: string; disabled: boolean; onChange(text: string): void; onBlur(): void; onRefresh(): void; onRemove(): void };
+  /** A review made from a build: the builder's account is its own part, shown in full and editable here. */
+  account?: { text: string; disabled: boolean; onChange(text: string): void; onBlur(): void; onRefresh(): void; onRemove(): void };
 }
 
 function Part({ label, aside, children }: { label: string; aside?: ReactNode; children: ReactNode }) {
@@ -68,6 +70,8 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
   const focus = review.focus?.trim();
   const plan = review.plan?.trim() ? review.plan : null;
   const planFrom = review.spec.planFromRun;
+  const account = review.buildAccount?.trim() ? review.buildAccount : null;
+  const accountFrom = review.spec.buildFromRun;
   const ticket = review.ticketBlock?.trim();
   return (
     <div className="grid gap-3">
@@ -146,6 +150,40 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
             />
           ) : (
             <pre data-plan className={`${MONO_BLOCK} max-h-none`}>{plan}</pre>
+          )}
+        </Part>
+      )}
+      {account && accountFrom && (
+        <Part
+          label={`What the builder says it did (run ${accountFrom})`}
+          aside={
+            editor?.account && (
+              <span className="flex gap-1">
+                <button type="button" disabled={editor.account.disabled} onClick={editor.account.onRefresh} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
+                  Read it again
+                </button>
+                <button type="button" disabled={editor.account.disabled} onClick={editor.account.onRemove} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
+                  Review without it
+                </button>
+              </span>
+            )
+          }
+        >
+          <p className="m-0 text-xs text-ws-ink2">
+            The final answer of build run {accountFrom}, sent whole and as data. The reviewer is told to treat it as a claim to check against the diff and the ticket, not as evidence. {editor?.account ? "Edit it before you approve; what is here is exactly what the agent gets. It is read again from the run only when you press the button." : ""} {account.length.toLocaleString("en")} characters.
+          </p>
+          {editor?.account ? (
+            <textarea
+              aria-label={`What the builder says it did (run ${accountFrom})`}
+              rows={10}
+              value={editor.account.text}
+              disabled={editor.account.disabled}
+              onChange={(ev) => editor.account?.onChange(ev.target.value)}
+              onBlur={editor.account.onBlur}
+              className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2.5 py-1.5 font-mono text-sm leading-normal text-ws-ink outline-offset-2 disabled:opacity-60"
+            />
+          ) : (
+            <pre data-build-account className={`${MONO_BLOCK} max-h-none`}>{account}</pre>
           )}
         </Part>
       )}

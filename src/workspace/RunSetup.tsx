@@ -42,6 +42,8 @@ export interface SetupActions {
   setAllowPush(on: boolean): void;
   refreshPlan?(): void;
   removePlan?(): void;
+  refreshBuildAccount?(): void;
+  removeBuildAccount?(): void;
 }
 
 export interface SetupViewProps {
@@ -81,6 +83,9 @@ export interface SetupViewProps {
   /** The plan text as typed, for a build made from a plan. */
   plan?: string;
   onPlan?(text: string): void;
+  /** The builder's account as typed, for a review made from a build. */
+  buildAccount?: string;
+  onBuildAccount?(text: string): void;
   wide: boolean;
   onWide(): void;
   on: SetupActions;
@@ -240,6 +245,11 @@ function Heading({ p }: { p: SetupViewProps }) {
         {p.ticketless ? "Investigate something (no ticket)" : `${KIND_LABEL[p.kind]} ${p.item ? `${p.item.key}${p.ticketTitle ? `: ${p.ticketTitle}` : ""}` : "a task"}`}
       </h2>
       <p className="m-0 text-ws-ink2">Nothing runs until you press Start. You can stop it once it&apos;s working.</p>
+      {p.review?.spec.buildFromRun && p.review.buildAccount && (
+        <p className="m-0 text-ws-ink2">
+          This review follows build run {p.review.spec.buildFromRun}, pinned to the pull request&apos;s commit as GitHub has it now. What the builder says it did is its own part of the prompt below, in full, and you can edit it before you start. The reviewer is told to check it against the diff and the ticket, not to believe it.
+        </p>
+      )}
       {p.review?.spec.planFromRun && p.review.plan && (
         <p className="m-0 text-ws-ink2">
           This build follows the plan from run {p.review.spec.planFromRun}. The plan is its own part of the prompt below, in full, and you can edit it before you start. If the plan turns out to be wrong, the agent is told to stop and say so instead of working around it.
@@ -287,8 +297,8 @@ function PushOption({ p }: { p: SetupViewProps }) {
       <label className="flex items-start gap-2">
         <input type="checkbox" checked={on} disabled={!p.review || p.busy || p.phase !== "ready"} onChange={(ev) => p.on.setAllowPush(ev.target.checked)} className="mt-1" />
         <span className="grid gap-0.5">
-          <b className="font-semibold text-ws-ink">Allow it to push and open a pull request</b>
-          <span className="text-ws-ink2">Off, the prompt tells it to commit on its own branch and not push. On, the prompt says it may push and open a pull request.</span>
+          <b className="font-semibold text-ws-ink">Push its branch and open a draft pull request</b>
+          <span className="text-ws-ink2">On by default. The prompt tells it to push the branch, open a draft pull request, never mark it ready and never merge it, and to put the link in its note for Jira. Off, the prompt tells it to commit on its own branch and not push.</span>
         </span>
       </label>
       <p className="m-0 text-xs text-ws-ink3">
@@ -341,7 +351,7 @@ function Steps({ children }: { children: ReactNode }) {
 }
 
 /** Why Start is off for what the sheet shows, or null. The button and the ⌘↵ shortcut both ask this. */
-export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "phase" | "busy" | "changed" | "choice" | "repo" | "instruction" | "base" | "kind" | "item" | "pr"> & Partial<Pick<SetupViewProps, "ticketless" | "project" | "plan">>): string | null {
+export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "phase" | "busy" | "changed" | "choice" | "repo" | "instruction" | "base" | "kind" | "item" | "pr"> & Partial<Pick<SetupViewProps, "ticketless" | "project" | "plan" | "buildAccount">>): string | null {
   return startBlock({
     draft: !!p.review,
     review: p.review,
@@ -352,7 +362,7 @@ export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "pha
     noClone: p.choice && p.choice.clones.length === 0 ? `No clone of ${p.repo} found` : null,
     repoMissing: !p.repo,
     kindBlock: kindBlock(p.kind, p.item, p.pr),
-    typed: { instruction: p.instruction, base: p.base, plan: p.review?.plan ? (p.plan ?? p.review.plan) : undefined },
+    typed: { instruction: p.instruction, base: p.base, plan: p.review?.plan ? (p.plan ?? p.review.plan) : undefined, buildAccount: p.review?.buildAccount ? (p.buildAccount ?? p.review.buildAccount) : undefined },
     ticketless: p.ticketless ? { project: !!p.project } : undefined,
   });
 }
@@ -435,7 +445,7 @@ export function RunSetupView(p: SetupViewProps) {
           review={review}
           prs={p.prs}
           initialQuery={p.item?.key ?? ""}
-          disabled={!p.kindEditable || phase !== "ready" || p.busy}
+          disabled={!p.kindEditable || phase !== "ready" || p.busy || !!review?.spec.buildFromRun}
           onSearch={on.searchPrs}
           onChoose={on.choosePr}
         />
@@ -454,6 +464,7 @@ export function RunSetupView(p: SetupViewProps) {
               onBlur: on.commit,
               onReset: p.onReset,
               plan: review.plan ? { text: p.plan ?? review.plan, disabled: phase !== "ready" || p.busy, onChange: p.onPlan ?? (() => {}), onBlur: on.commit, onRefresh: on.refreshPlan ?? (() => {}), onRemove: on.removePlan ?? (() => {}) } : undefined,
+              account: review.buildAccount ? { text: p.buildAccount ?? review.buildAccount, disabled: phase !== "ready" || p.busy, onChange: p.onBuildAccount ?? (() => {}), onBlur: on.commit, onRefresh: on.refreshBuildAccount ?? (() => {}), onRemove: on.removeBuildAccount ?? (() => {}) } : undefined,
             }}
           />
         ) : (
@@ -508,6 +519,9 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
   const [plan, setPlan] = useState("");
   const savedPlan = s.review?.plan ?? "";
   useEffect(() => setPlan(savedPlan), [savedPlan]);
+  const [buildAccount, setBuildAccount] = useState("");
+  const savedAccount = s.review?.buildAccount ?? "";
+  useEffect(() => setBuildAccount(savedAccount), [savedAccount]);
   const saved = s.review?.instruction ?? "";
   const savedBase = s.review?.spec.base ?? "";
   useEffect(() => setInstruction(saved), [saved]);
@@ -518,6 +532,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     if (s.review && instruction !== saved && instruction.trim()) edit.instruction = instruction;
     if (s.review && base.trim() && base.trim() !== savedBase) edit.base = base;
     if (s.review?.plan && plan.trim() && plan !== savedPlan) edit.plan = plan;
+    if (s.review?.buildAccount && buildAccount.trim() && buildAccount !== savedAccount) edit.buildAccount = buildAccount;
     if (Object.keys(edit).length) await useRunSetup.getState().saveEdit(edit);
   };
   const githubConnected = useWorkspace((w) => w.connections.some((c) => c.kind === "github"));
@@ -555,6 +570,8 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     onBase: setBase,
     plan,
     onPlan: setPlan,
+    buildAccount,
+    onBuildAccount: setBuildAccount,
     wide,
     onWide: () => setWide((w) => !w),
     on: {
@@ -578,6 +595,8 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
       setAllowPush: (on) => void useRunSetup.getState().saveEdit({ allowPush: on }),
       refreshPlan: () => void useRunSetup.getState().refreshPlan(),
       removePlan: () => void useRunSetup.getState().saveEdit({ plan: "" }),
+      refreshBuildAccount: () => void useRunSetup.getState().refreshBuildAccount(),
+      removeBuildAccount: () => void useRunSetup.getState().saveEdit({ buildAccount: "" }),
     },
   };
 
@@ -586,7 +605,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     if (setupBlock(view)) return;
     await commit();
     const now = useRunSetup.getState();
-    if (now.error || !savedAsTyped(now.review, { instruction, base, plan })) return;
+    if (now.error || !savedAsTyped(now.review, { instruction, base, plan, buildAccount })) return;
     await now.start();
   }
 

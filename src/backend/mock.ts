@@ -527,6 +527,10 @@ export class MockBackend implements Backend {
     return this.runs.refreshPlan(id);
   }
 
+  async runsRefreshBuildAccount(id: string) {
+    return this.runs.refreshBuildAccount(id);
+  }
+
   async runsDraftTicket(id: string) {
     return this.runs.draftTicket(id);
   }

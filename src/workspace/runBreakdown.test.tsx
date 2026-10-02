@@ -163,7 +163,7 @@ describe("Pip and a breakdown in the sample", () => {
 });
 
 describe("the breakdown on the sheet, the card and Activity", () => {
-  const on: ResultActions = { draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn() };
+  const on: ResultActions = { draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() };
   const triage = (): Run => ({ ...new MockBackend().runs.list().find((r) => r.state === "done" && r.item)!, result: SCRIPTED_RESULT.triage });
   const outcome = (over: Partial<RunOutcome>): RunOutcome => ({ note: { text: "Size 8.", fromMarker: true }, keys: [], change: null, draft: null, ticket: null, ticketDraft: null, subtasks: ["First", "Second"], subtasksDraft: null, ...over });
   const view = (o: RunOutcome) => renderToStaticMarkup(<Found run={triage()} outcome={o} tickets={[]} pickBlocker={false} drafting={false} on={on} />);

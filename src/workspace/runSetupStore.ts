@@ -34,6 +34,8 @@ interface SetupState {
   pr: number | null;
   /** The plan run a build is made from; the backend reads its answer. */
   planFromRun: string | null;
+  /** The build run a review is made from; the backend reads its answer. */
+  buildFromRun: string | null;
   prs: PrSearch;
   item: ItemRef | null;
   /** What the ticket is called, for naming the worktree. */
@@ -66,9 +68,11 @@ interface SetupState {
   initialInstruction: string | null;
   reloadRepos(): Promise<void>;
   /** `repo` says where `pr` is, so a review opens in that repository. */
-  begin(opts: { item?: ItemRef | null; proposalId?: string; kind?: RunKind; pr?: number; repo?: string; planFromRun?: string }): Promise<void>;
+  begin(opts: { item?: ItemRef | null; proposalId?: string; kind?: RunKind; pr?: number; repo?: string; planFromRun?: string; buildFromRun?: string }): Promise<void>;
   /** Reads the plan again from its run, replacing what was edited. Only this changes it. */
   refreshPlan(): Promise<void>;
+  /** Reads the builder's account again from its run, replacing what was edited. Only this changes it. */
+  refreshBuildAccount(): Promise<void>;
   chooseKind(kind: RunKind): Promise<void>;
   searchPrs(query: string): Promise<void>;
   choosePr(number: number): Promise<void>;
@@ -88,6 +92,7 @@ const closed = {
   kind: "investigate" as RunKind,
   pr: null,
   planFromRun: null as string | null,
+  buildFromRun: null as string | null,
   prs: NO_PRS,
   item: null,
   title: null,
@@ -172,7 +177,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
   };
 
   const prepare = async (mine: number) => {
-    const { backend, item, repo, kind, pr, title, proposalId, ownDraft, planFromRun } = get();
+    const { backend, item, repo, kind, pr, title, proposalId, ownDraft, planFromRun, buildFromRun } = get();
     if (!backend || !repo) return;
     set({ phase: "preparing", error: null, cloneError: null, cloning: false, choice: null, review: null, preflight: null, busy: false });
     try {
@@ -193,7 +198,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
       const project = ticketlessShape(item, kind) ? await projectFor(backend, repo) : null;
       if (!current(mine)) return;
       set({ project });
-      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: false, plan: null, planFromRun: kind === "build" ? planFromRun : null, project };
+      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: kind === "build", plan: null, planFromRun: kind === "build" ? planFromRun : null, buildAccount: null, buildFromRun: kind === "review" ? buildFromRun : null, project };
       const draft = await backend.runsDraft(spec, item);
       if (!current(mine)) return void backend.proposalsSkip(draft.id).catch(() => {});
       set({ proposalId: draft.id, ownDraft: true });
@@ -209,12 +214,12 @@ export const useRunSetup = create<SetupState>((set, get) => {
     ...closed,
     backend: null,
 
-    async begin({ item = null, proposalId, kind = "investigate", pr, repo: wanted, planFromRun = null }) {
+    async begin({ item = null, proposalId, kind = "investigate", pr, repo: wanted, planFromRun = null, buildFromRun = null }) {
       const backend = useWorkspace.getState().backend;
       if (!backend || !useRuns.getState().ensureAgentsIntro()) return;
       const mine = ++run;
       useRuns.getState().closeSheet();
-      set({ ...closed, open: true, backend, kind, pr: pr ?? null, planFromRun, item, phase: "preparing" });
+      set({ ...closed, open: true, backend, kind, pr: pr ?? null, planFromRun, buildFromRun, item, phase: "preparing" });
       latestWatched = [];
       stopWatching?.();
       stopWatching = backend.onWatchChanged(() => void loadRepos(run, true));
@@ -222,7 +227,8 @@ export const useRunSetup = create<SetupState>((set, get) => {
       try {
         await loadRepos(mine);
         if (!current(mine)) return;
-        const waiting = planFromRun ? Object.values(workspace.proposals).find((p) => p.state.type === "pending" && p.intent.type === "startRun" && p.intent.spec.planFromRun === planFromRun) : findRunDraft(workspace.proposals, item, kind, pr);
+        const carried = (p: Proposal) => p.state.type === "pending" && p.intent.type === "startRun" && (planFromRun ? p.intent.spec.planFromRun === planFromRun : p.intent.spec.buildFromRun === buildFromRun);
+        const waiting = planFromRun || buildFromRun ? Object.values(workspace.proposals).find(carried) : findRunDraft(workspace.proposals, item, kind, pr);
         // A ticketless draft from before projects existed would end as a comment with nowhere to go.
         const reusable = waiting?.intent.type === "startRun" && ticketlessShape(item, kind) && !waiting.intent.spec.project ? undefined : waiting;
         const id = proposalId ?? reusable?.id;
@@ -232,7 +238,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
           if (draft?.intent.type !== "startRun" || draft.state.type !== "pending") throw new Error("that draft can't be started any more");
           const { spec, item: of } = draft.intent;
           const ticket = of ? workspace.items[itemKey(of)] : undefined;
-          set({ item: of, kind: spec.kind, pr: spec.pr ?? null, planFromRun: spec.planFromRun ?? null, title: ticket?.title ?? null, repo: spec.repo, project: spec.project ?? null, projectChosen: true, repos: repoChoices(latestWatched, useRuns.getState().runs), proposalId: id, ownDraft: false, fromPip: draft.createdBy === "pip", choice: await backend.runsClones(spec.repo) });
+          set({ item: of, kind: spec.kind, pr: spec.pr ?? null, planFromRun: spec.planFromRun ?? null, buildFromRun: spec.buildFromRun ?? null, title: ticket?.title ?? null, repo: spec.repo, project: spec.project ?? null, projectChosen: true, repos: repoChoices(latestWatched, useRuns.getState().runs), proposalId: id, ownDraft: false, fromPip: draft.createdBy === "pip", choice: await backend.runsClones(spec.repo) });
           await refresh(mine);
           if (current(mine)) set({ phase: "ready", initialInstruction: get().review?.instruction ?? null });
           return;
@@ -272,7 +278,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
     async chooseKind(kind) {
       const { kind: was, proposalId, ownDraft, repo } = get();
       if (kind === was || (proposalId && !ownDraft)) return;
-      set({ kind, pr: null, prs: NO_PRS, error: null, ...(kind === "build" ? {} : { planFromRun: null }) });
+      set({ kind, pr: null, prs: NO_PRS, error: null, ...(kind === "build" ? {} : { planFromRun: null }), ...(kind === "review" ? {} : { buildFromRun: null }) });
       if (repo) await prepare(++run);
     },
 
@@ -351,6 +357,21 @@ export const useRunSetup = create<SetupState>((set, get) => {
       set({ busy: true, error: null });
       try {
         await backend.runsRefreshPlan(proposalId);
+        await refresh(mine);
+      } catch (e) {
+        if (current(mine)) set({ error: messageOf(e) });
+      } finally {
+        if (current(mine)) set({ busy: false });
+      }
+    },
+
+    async refreshBuildAccount() {
+      const { backend, proposalId } = get();
+      if (!backend || !proposalId) return;
+      const mine = run;
+      set({ busy: true, error: null });
+      try {
+        await backend.runsRefreshBuildAccount(proposalId);
         await refresh(mine);
       } catch (e) {
         if (current(mine)) set({ error: messageOf(e) });
