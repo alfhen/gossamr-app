@@ -240,7 +240,7 @@ fn field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     rest.strip_prefix(':').map(|after| after.trim_start_matches(['*', '_', '`', ' ', '\t']))
 }
 
-fn sanitize(raw: &str) -> String {
+pub(crate) fn sanitize(raw: &str) -> String {
     let text = strip_ansi(&redact(raw)).replace("\r\n", "\n");
     let text: String = text.chars().filter(|c| matches!(c, '\n' | '\t') || !(c.is_control() || is_direction_mark(*c))).collect();
     let mut text = without_markers(&text);

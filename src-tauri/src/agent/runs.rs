@@ -841,7 +841,9 @@ mod tests {
         assert_eq!(spec.clone_path, r.clone);
         assert!(spec.name.starts_with("ca-1-fix-cart-"));
         assert_eq!(spec.instruction, INVESTIGATE_INSTRUCTION);
-        assert!(spec.ticket_block.as_deref().unwrap().starts_with("CA-1: Ticket 1"));
+        let block = spec.ticket_block.as_deref().unwrap();
+        assert!(block.starts_with("CA-1: Ticket 1"));
+        assert!(block.contains("Comments (oldest first, newest last):") && block.contains("[Sam, 2026-09-28 08:00 UTC]"), "{block}");
         assert_eq!((spec.focus.as_deref(), spec.focus_from_run.as_deref()), (Some("Look at the retry loop"), Some(seen.id.as_str())));
         assert!(draft.basis.is_some());
 
