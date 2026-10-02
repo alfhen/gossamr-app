@@ -1,6 +1,7 @@
 import type { Run } from "../types";
 import { needsPerson, runTitle, stateView } from "./agentsLogic";
 import type { Nudge } from "./nudges";
+import type { AgentsSuggestionScene } from "./suggestions";
 
 /** What the "What are my agents doing?" chip asks. Pip answers from its list_runs tool. */
 export const runSummaryPrompt = () => "What are my agents doing?";
@@ -45,3 +46,10 @@ export function stripRuns(runs: readonly Run[]): Run[] {
 
 /** The open run in words for "What I can see right now", such as "Investigate CA-1 · Working". */
 export const describeRun = (run: Run, ticketTitle: string | null | undefined, now: number) => `${runTitle(run, ticketTitle)} · ${stateView(run, now).label}`;
+
+/** The runs as the suggestion chips see them, with the open run's stage. */
+export function agentsSuggestionScene(runs: readonly Run[], openRun: string | null): AgentsSuggestionScene {
+  const run = openRun ? runs.find((r) => r.id === openRun) : undefined;
+  const stage = !run ? null : needsPerson(run) ? "needs" : run.state === "failed" ? "failed" : run.state === "done" ? "done" : GOING.has(run.state) ? "going" : "ended";
+  return { runs: runs.length, waiting: runs.filter(needsPerson).length, open: run && stage ? { stage, ticket: !!run.item } : null };
+}

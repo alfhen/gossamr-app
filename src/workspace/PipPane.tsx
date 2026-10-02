@@ -19,9 +19,9 @@ import { chipCount, currentContext, unassignedIn, useItemScene, useScreen } from
 import { appliedState, usePip, type AppliedState } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { buildScreenContext, contextLabel, contextLines } from "./screenContext";
-import { suggestionsFor } from "./suggestions";
+import { placeholderFor, suggestionsFor } from "./suggestions";
 import { useAgentsEnabled } from "./agentsFlag";
-import { describeRun, runSummaryPrompt } from "./pipRuns";
+import { agentsSuggestionScene, describeRun, runSummaryPrompt } from "./pipRuns";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { draftsForItem, pendingDrafts, useWorkspace } from "../workspaceStore";
@@ -228,7 +228,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
   useEffect(() => {
     if (openRef) useDev.getState().ensure([openRef]);
   }, [openRef?.connectionId, openRef?.externalId]);
-  const { kind, label } = contextLabel(context, quote, words.titleOf);
+  const { kind, label } = contextLabel(context, quote, words.titleOf, words.runOf);
   const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
   const agentsOn = useAgentsEnabled();
   const hasRuns = runs.length > 0;
@@ -242,8 +242,9 @@ export function PipPane({ onClose }: { onClose(): void }) {
     unassignedInView: unassignedIn(screen.shown),
     shown: screen.shown.length,
     filtered: chipCount(screen) > 0,
+    agents: agentsOn ? agentsSuggestionScene(runs, screen.agents?.openRun ?? null) : undefined,
   });
-  const chips = agentsOn && hasRuns && screen.route !== "settings" && !quote ? [...base, runSummaryPrompt()] : base;
+  const chips = agentsOn && hasRuns && screen.route !== "settings" && !quote && !base.includes(runSummaryPrompt()) ? [...base, runSummaryPrompt()] : base;
 
   useEffect(() => {
     document.getElementById(PIP_INPUT_ID)?.focus();
@@ -344,7 +345,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
             void attached.add(files);
           }}
           aria-label="Ask Pip"
-          placeholder={attached.images.length ? "Say what to look at, or just ask…" : quote ? "Ask about the selected text…" : itemScene ? `Ask about ${itemScene.key}…` : "Ask about what you're looking at…"}
+          placeholder={placeholderFor({ images: attached.images.length > 0, quote: !!quote, itemKey: itemScene?.key ?? null, route: screen.route, runOpen: !!context.run })}
           autoComplete="off"
           className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 outline-none focus:border-ws-pip"
         />

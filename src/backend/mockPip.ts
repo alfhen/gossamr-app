@@ -1,7 +1,7 @@
 import { and } from "../lib/filter";
 import { docFromText, docText } from "../lib/docs";
 import type { Intent, ItemRef, Proposal, Run, ScreenContext, WorkFilter } from "../types";
-import { needsPerson, stateView } from "../workspace/agentsLogic";
+import { needsPerson, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
 import type { AskRequest, ClaudeEvent } from "./claude";
@@ -257,6 +257,17 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       draft: null,
     };
   }
+  const openRun = context.run ? runs.find((r) => r.id === context.run) : undefined;
+  if (openRun) {
+    const doing = openRun.needs ?? openRun.lastDetail ?? resultHeadline(openRun.result);
+    return {
+      steps: ["Read the run"],
+      text: `You have **${runTitle(openRun, null)}** open. It is ${stateView(openRun, now).label.toLowerCase()}${doing ? `: ${doing}` : "."}`,
+      filter: null,
+      draft: null,
+    };
+  }
+  if (context.view?.startsWith("Agents")) return { steps: ["Looked at your agents"], text: agentSummary(runs, now), filter: null, draft: null };
   const where = context.view ?? "the workspace";
   const open = context.item ? ` and **${context.item.key}** is open` : "";
   return {

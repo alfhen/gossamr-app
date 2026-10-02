@@ -73,6 +73,15 @@ describe("screen context by route", () => {
     expect(buildScreenContext(s)).toEqual({ view: "Settings", item: null, filter: null, selection: [] });
   });
 
+  it("names the runs on Agents, sends no board filter or ticked cards, and keeps a ticket peeked over it", () => {
+    const agents = { openRun: null, waiting: 0, runs: [], filters: { lane: "all", repo: "all", ticket: "all" } as const, earlierOpen: false, now: 0 };
+    const s = { ...screen(tab, "mock:DEVOPS-471", ["mock:DEVOPS-471", "mock:DEVOPS-473"], "agents"), agents };
+    const ctx = buildScreenContext(s);
+    expect(ctx.view).toBe("Agents · All · 0 runs");
+    expect(ctx.item?.key).toBe("DEVOPS-471");
+    expect(ctx).toMatchObject({ filter: null, selection: [] });
+  });
+
   it("names the feed filter and project on Activity and keeps the open item", () => {
     const devops = Object.values(ws().containers).find((c) => c.key === "DEVOPS")!;
     const s = { ...screen(tab, "mock:DEVOPS-471", ["mock:DEVOPS-473"], "activity"), activity: { chip: "mentions" as const, container: devops.ref } };
