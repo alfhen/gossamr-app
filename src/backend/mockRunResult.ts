@@ -132,7 +132,7 @@ const indentOf = (line: string) => line.length - line.trimStart().length;
 /** The summaries in a result's `Subtasks:` section, as `subtask_proposals` in `runs/result.rs` reads them. */
 export function subtaskProposals(result: string): string[] {
   const lines = result.replace(/\r\n/g, "\n").split("\n");
-  const start = lines.findIndex((l) => headingRest(l, "subtasks") !== null);
+  const start = headingOutsideFences(lines, "subtasks");
   if (start < 0) return [];
   let section = [headingRest(lines[start], "subtasks") ?? ""];
   for (const l of lines.slice(start + 1)) {
