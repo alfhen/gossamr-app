@@ -34,7 +34,13 @@ const KEY = /\b([A-Z][A-Z0-9]+-\d+)\b/;
 const finishes = /new ticket draft (\S+), drafted from agent run (\S+?)\./i;
 const talksBreakdown = /breakdown draft (\S+) on \S+, drafted from agent run (\S+?)\./i;
 const proposesBreakdown = /propose subtasks for \S+ from run (\S+?):/i;
-const asksForFewer = /\b(fewer|shorter|shorten|tighten|trim|merge)\b/;
+const asksForFewer = /\b(fewer|merge|combine)\b/;
+
+/** A sample shortening of a summary's wording: it stops at "when" or after six words. */
+const shortened = (summary: string) => {
+  const cut = summary.split(" when ")[0].split(/\s+/);
+  return cut.slice(0, 6).join(" ");
+};
 const discusses = /comment draft (\S+) on \S+, drafted from agent run (\S+?)\./i;
 const asksToRevise = /\b(shorten|shorter|tighten|trim|rewrite|reword|rephrase|revise)\b/;
 const asksForShorter = /\b(shorten|shorter|tighten|trim)\b/;
@@ -95,20 +101,22 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     if (!left) return { steps: [], text: "I can't find that breakdown draft any more, or it has been decided already, so there is nothing to discuss.", filter: null, draft: null };
     return {
       steps: ["Read the run", "Read the rest of its result", "Looked at the breakdown"],
-      text: `I read the whole run and checked it against draft ${left.id}. Tell me what to change, for example "fewer", and I'll revise the summaries. Nothing is created in Jira until you approve it.`,
+      text: `I read the whole run and checked it against draft ${left.id}. Tell me what to change, for example "fewer" or "shorter", and I'll revise the summaries. Nothing is created in Jira until you approve it.`,
       filter: null,
       draft: null,
       discussed: left.id,
     };
   }
   const discussedBreakdown = breakdown(discussed);
-  if (discussedBreakdown?.intent.type === "subtasks" && asksForFewer.test(q)) {
+  if (discussedBreakdown?.intent.type === "subtasks" && (asksForFewer.test(q) || asksForShorter.test(q))) {
+    const fewer = asksForFewer.test(q);
+    const summaries = discussedBreakdown.intent.summaries;
     return {
       steps: ["Read the run's full result", "Revised the breakdown"],
-      text: "I kept the three tasks that matter most. It isn't created; read it and approve, edit or skip it.",
+      text: `${fewer ? "I kept the three tasks that matter most." : "I shortened the wording of each task and kept them all."} It isn't created; read it and approve, edit or skip it.`,
       filter: null,
       draft: null,
-      revise: { id: discussedBreakdown.id, summaries: discussedBreakdown.intent.summaries.slice(0, 3) },
+      revise: { id: discussedBreakdown.id, summaries: fewer ? summaries.slice(0, 3) : summaries.map(shortened) },
     };
   }
   const proposed = proposesBreakdown.exec(q)?.[1];

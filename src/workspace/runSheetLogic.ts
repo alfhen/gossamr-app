@@ -379,6 +379,15 @@ export function runBreakdownDraftOf(proposals: Record<string, Proposal> | readon
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
+/** A breakdown waiting on `item` that isn't linked to a run, such as the one Pip drafted when asked from the run sheet. */
+export function pendingBreakdownOn(proposals: Record<string, Proposal> | readonly Proposal[], item: ItemRef | null): Proposal | undefined {
+  if (!item) return undefined;
+  const all = Array.isArray(proposals) ? proposals : Object.values(proposals);
+  return all
+    .filter((p) => p.state.type === "pending" && p.intent.type === "subtasks" && p.intent.parent.connectionId === item.connectionId && p.intent.parent.externalId === item.externalId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
 /** What the sheet says about the breakdown a run proposed. */
 export function breakdownStatus(outcome: Pick<RunOutcome, "subtasksDraft"> | null): "none" | "waiting" | "created" | "skipped" | "retired" {
   const state = outcome?.subtasksDraft?.state.type;

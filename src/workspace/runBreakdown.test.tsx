@@ -10,7 +10,7 @@ import type { Intent, Proposal, Run, RunKind, RunOutcome, RunSpec, ScreenContext
 import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
 import { Found, type ResultActions } from "./RunResult";
-import { breakdownStatus, breakdownWithPipPrompt, runBreakdownDraftOf } from "./runSheetLogic";
+import { breakdownStatus, breakdownWithPipPrompt, pendingBreakdownOn, runBreakdownDraftOf } from "./runSheetLogic";
 
 const blank: ScreenContext = { view: null, item: null, filter: null, selection: [] };
 
@@ -30,6 +30,14 @@ describe("the sample parser agrees with the shared subtask fixtures it can read"
   const plain = subtaskFixtures.filter((c) => !/hostile/.test(c.name));
   it.each(plain.map((c) => [c.name, c] as const))("%s", (_name, c) => {
     expect(subtaskProposals(c.input)).toEqual(c.expected);
+  });
+
+  it("reads a negative answer as no breakdown", () => {
+    for (const no of ["No subtasks needed.", "None", "N/A", "Not applicable here", "No breakdown: it fits", "- No need to split this"]) {
+      expect(subtaskProposals(`Subtasks:\n${no.startsWith("-") ? no : `- ${no}`}`), no).toEqual([]);
+    }
+    expect(subtaskProposals("Subtasks:\nNo subtasks needed.\n\nFor Jira: one piece.")).toEqual([]);
+    expect(subtaskProposals("Subtasks:\n- None of the retries back off: add a cap")).toHaveLength(1);
   });
 
   it("is not read out of the For Jira note", () => {
@@ -109,6 +117,21 @@ describe("Pip and a breakdown in the sample", () => {
     expect(second.revise).toEqual({ id: draft.id, summaries: (draft.intent as Extract<Intent, { type: "subtasks" }>).summaries.slice(0, 3) });
   });
 
+  it("shortens the wording of every summary when asked for shorter, and only cuts the list when asked for fewer", async () => {
+    const { run, draft } = await draftOf();
+    const all = (draft.intent as Extract<Intent, { type: "subtasks" }>).summaries;
+    for (const ask of ["shorter please", "can you shorten these", "tighten it"]) {
+      const out = scriptPip(ask, blank, [], [run], Date.now(), [draft], draft.id);
+      const summaries = out.revise?.summaries ?? [];
+      expect(summaries, ask).toHaveLength(all.length);
+      expect(summaries.every((t, i) => t.length <= all[i].length && t.split(" ").length <= 6), ask).toBe(true);
+      expect(out.text).toContain("kept them all");
+    }
+    for (const ask of ["fewer", "merge a couple", "combine them"]) {
+      expect(scriptPip(ask, blank, [], [run], Date.now(), [draft], draft.id).revise?.summaries, ask).toEqual(all.slice(0, 3));
+    }
+  });
+
   it("drafts the breakdown itself when asked to and there is none, and says so when the run proposes none", async () => {
     const { run, backend } = await draftOf();
     const asked = scriptPip(breakdownWithPipPrompt(run), blank, [], [run], Date.now(), []);
@@ -151,6 +174,25 @@ describe("the breakdown on the sheet, the card and Activity", () => {
     expect(view(outcome({ subtasksDraft: { id: "s1", state: { type: "skipped" } } }))).toContain("You skipped its breakdown.");
     expect(view(outcome({ subtasksDraft: { id: "s1", state: { type: "applied" } } }))).toContain("Its subtasks were created.");
     expect(view(outcome({ subtasksDraft: { id: "s1", state: { type: "retired", reason: "x" } as never } }))).toContain("out of date");
+  });
+
+  it("points at a breakdown that waits on the ticket but came from nobody's run, such as Pip's", () => {
+    const html = renderToStaticMarkup(<Found run={triage()} outcome={outcome({})} tickets={[]} pickBlocker={false} waitingBreakdown drafting={false} on={on} />);
+    expect(html).toContain("A breakdown is already waiting on");
+    expect(html).not.toContain("It isn&#x27;t drafted");
+    expect(html.match(/Open the draft/g)).toHaveLength(1);
+    const decided = renderToStaticMarkup(<Found run={triage()} outcome={outcome({ subtasksDraft: { id: "s1", state: { type: "skipped" } } })} tickets={[]} pickBlocker={false} waitingBreakdown drafting={false} on={on} />);
+    expect(decided).not.toContain("already waiting");
+  });
+
+  it("finds a pending breakdown on a ticket whatever its origin, and only on that ticket", () => {
+    const item = itemRef("CA-412");
+    const made = (id: string, key: string, state: "pending" | "skipped", type: "subtasks" | "comment" = "subtasks") =>
+      ({ id, createdAt: id, state: { type: state }, origin: { type: "chat", requestId: "q" }, intent: { type, parent: itemRef(key) } }) as unknown as Proposal;
+    const all = [made("a", "CA-412", "skipped"), made("b", "CA-412", "pending"), made("c", "CA-9", "pending"), made("d", "CA-412", "pending", "comment")];
+    expect(pendingBreakdownOn(all, item)?.id).toBe("b");
+    expect(pendingBreakdownOn(all, itemRef("CA-1"))).toBeUndefined();
+    expect(pendingBreakdownOn(all, null)).toBeUndefined();
   });
 
   it("shows nothing for a run that proposes no breakdown", () => {

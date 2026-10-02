@@ -138,7 +138,14 @@ export function ticketFromAnswer(result: string): TicketProposal | null {
 }
 
 export const SUBTASK_MAX = 8;
-const NO_SUBTASKS = ["none", "n/a", "na", "nothing", "no subtasks", "not needed", "not applicable"];
+const NO_SUBTASKS = ["none", "n/a", "na", "nothing"];
+const NO_SUBTASKS_PREFIXES = ["no subtask", "no breakdown", "no need", "nothing to split", "not needed", "not required", "not necessary", "not applicable"];
+
+/** An answer that declines the breakdown rather than naming a task, as `declines_breakdown` in `runs/result.rs`. */
+const declinesBreakdown = (text: string) => {
+  const lower = text.replace(/[.!]+$/, "").toLowerCase();
+  return NO_SUBTASKS.includes(lower) || NO_SUBTASKS_PREFIXES.some((p) => lower.startsWith(p));
+};
 
 const listText = (line: string): string | null => /^\s*(?:[-*+•]|\d{1,3}[.)])[ \t]+(.*)$/.exec(line)?.[1] ?? null;
 const indentOf = (line: string) => line.length - line.trimStart().length;
@@ -149,9 +156,10 @@ export function subtaskProposals(result: string): string[] {
   const start = headingOutsideFences(lines, "subtasks");
   if (start < 0) return [];
   let section = [headingRest(lines[start], "subtasks") ?? ""];
+  const inside = fenceTracker();
   for (const l of lines.slice(start + 1)) {
     const t = l.trim();
-    if (t.startsWith("```") || endsSection(t) || headingRest(t, "new ticket") !== null) break;
+    if (inside(l) || endsSection(t) || headingRest(t, "new ticket") !== null) break;
     section.push(l);
   }
   const listed = section.filter((l) => listText(l) !== null);
@@ -162,7 +170,7 @@ export function subtaskProposals(result: string): string[] {
   const out: string[] = [];
   for (const line of section) {
     const text = oneLine((listText(line) ?? line.trim()).replace(/^(\[ \]|\[[xX]\])/, ""));
-    if (!text || text.startsWith("#") || text.endsWith(":") || NO_SUBTASKS.includes(text.replace(/\.+$/, "").toLowerCase()) || out.some((o) => o.toLowerCase() === text.toLowerCase())) continue;
+    if (!text || text.startsWith("#") || text.endsWith(":") || declinesBreakdown(text) || out.some((o) => o.toLowerCase() === text.toLowerCase())) continue;
     out.push(titleCut(text));
     if (out.length === SUBTASK_MAX) break;
   }

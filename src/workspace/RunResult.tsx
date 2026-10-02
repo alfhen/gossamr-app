@@ -28,6 +28,8 @@ export interface ResultProps {
   tickets: readonly { key: string; title: string }[];
   pickBlocker: boolean;
   drafting: boolean;
+  /** A breakdown is waiting on the run's ticket that no run made, for example one Pip drafted from the sheet. */
+  waitingBreakdown?: boolean;
   on: ResultActions;
 }
 
@@ -175,10 +177,11 @@ export function Found(props: ResultProps) {
 }
 
 /** The subtasks a Triage proposed. They are drafted on the ticket, and nothing is created until the person approves them. */
-function Breakdown({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "on">) {
+function Breakdown({ run, outcome, drafting, waitingBreakdown = false, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "waitingBreakdown" | "on">) {
   const summaries = outcome?.subtasks ?? [];
   const status = breakdownStatus(outcome);
-  if (summaries.length === 0 && status === "none") return null;
+  const elsewhere = status === "none" && waitingBreakdown;
+  if (summaries.length === 0 && !elsewhere && status === "none") return null;
   const key = run.item?.key ?? "the ticket";
   return (
     <div data-breakdown={status} className="grid gap-2 rounded-md border border-ws-sep bg-ws-bar p-2.5">
@@ -196,9 +199,14 @@ function Breakdown({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "ou
       {status === "created" && <p className="m-0 text-sm text-ws-ink2">Its subtasks were created.</p>}
       {status === "skipped" && <p className="m-0 text-sm text-ws-ink3">You skipped its breakdown.</p>}
       {status === "retired" && <p className="m-0 text-sm text-ws-ink3">Its breakdown is out of date.</p>}
-      {status === "none" && <p className="m-0 text-sm text-ws-ink3">It isn&apos;t drafted. Pip can draft it from the run.</p>}
+      {status === "none" && !elsewhere && <p className="m-0 text-sm text-ws-ink3">It isn&apos;t drafted. Pip can draft it from the run.</p>}
+      {elsewhere && (
+        <p role="status" className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm">
+          <b className="font-semibold text-ws-pip">A breakdown is already waiting on {key}.</b> Open it to edit the list, then approve it or skip it.
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-2">
-        {status === "waiting" ? (
+        {status === "waiting" || elsewhere ? (
           <>
             <Btn tone="primary" icon="ext" onClick={on.openDraft}>
               Open the draft
@@ -217,7 +225,7 @@ function Breakdown({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "ou
   );
 }
 
-function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, on }: ResultProps) {
+function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingBreakdown, on }: ResultProps) {
   const text = run.result?.trim();
   const note = outcome?.note;
   const comment = commentControl(run);
@@ -248,7 +256,7 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, on }: Re
             <p className="selectable m-0 whitespace-pre-wrap text-[13.5px] text-ws-ink2 [overflow-wrap:anywhere]">{text}</p>
           </Details>
         )}
-        <Breakdown run={run} outcome={outcome} drafting={drafting} on={on} />
+        <Breakdown run={run} outcome={outcome} drafting={drafting} waitingBreakdown={waitingBreakdown} on={on} />
         {draft && (
           <p data-draft="ready" role="status" className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm">
             <b className="font-semibold text-ws-pip">A comment is drafted on {run.item?.key ?? "the ticket"}.</b> Read it, edit it or skip it. Nothing is posted until you approve it.
