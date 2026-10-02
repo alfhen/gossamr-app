@@ -22,6 +22,7 @@ pub(crate) mod code;
 mod drafts;
 mod run_results;
 mod pip_runs;
+mod ticket_context;
 pub use pip_runs::PipRunAsk;
 mod watch;
 

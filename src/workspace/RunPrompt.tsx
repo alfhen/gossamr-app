@@ -112,7 +112,7 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
         </Box>
       )}
       {ticket && (
-        <Details summary={`Ticket text from Jira · ${ticket.length.toLocaleString("en")} characters, sent as data`}>
+        <Details summary={`Ticket from Jira, with its comments · ${ticket.length.toLocaleString("en")} characters, sent as data`}>
           <TicketText text={ticket} />
         </Details>
       )}

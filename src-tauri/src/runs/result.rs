@@ -110,13 +110,17 @@ pub fn ticket_from_answer(result: &str) -> Option<TicketProposal> {
 /// At most this many subtasks are proposed, each up to `TITLE_LIMIT` characters.
 pub const SUBTASK_MAX: usize = 8;
 
-const NO_SUBTASKS: [&str; 4] = ["none", "n/a", "na", "nothing"];
-const NO_SUBTASKS_PREFIXES: [&str; 8] = ["no subtask", "no breakdown", "no need", "nothing to split", "not needed", "not required", "not necessary", "not applicable"];
+const BARE_REFUSALS: [&str; 4] = ["none", "n/a", "na", "nothing"];
+const REFUSAL_OPENERS: [&str; 10] = ["no subtasks", "no subtask", "no breakdown", "no need", "nothing to split", "not needed", "not required", "not necessary", "not applicable", "not worth"];
 
-/// An answer that declines the breakdown rather than naming a task, such as "None." or "No subtasks needed".
+/// An answer that declines the breakdown rather than naming a task. "None", "N/A" and "Nothing" only decline on their
+/// own or before a dash, colon, comma, full stop or bracket, so a task such as "None of the retries back off" stays.
 fn declines_breakdown(text: &str) -> bool {
-    let lower = text.trim_end_matches(['.', '!']).to_lowercase();
-    NO_SUBTASKS.contains(&lower.as_str()) || NO_SUBTASKS_PREFIXES.iter().any(|p| lower.starts_with(p))
+    let lower = text.to_lowercase();
+    let lower = lower.trim();
+    let at_boundary = |rest: &str| rest.chars().next().is_none_or(|c| !c.is_alphanumeric());
+    REFUSAL_OPENERS.iter().any(|p| lower.strip_prefix(p).is_some_and(at_boundary))
+        || BARE_REFUSALS.iter().any(|p| lower.strip_prefix(p).is_some_and(|rest| matches!(rest.trim_start().chars().next(), None | Some('-' | '–' | '—' | ':' | '.' | ',' | ';' | '!' | '('))))
 }
 
 /// The summaries in the `Subtasks:` section, in order. Only list lines are read when the section has any (nested ones
@@ -143,10 +147,11 @@ pub fn subtask_proposals(result: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for line in wanted {
         let text = one_line(unchecked(list_marker(line).unwrap_or(line.trim())));
+        let text = title_cut(&text);
         if text.is_empty() || text.starts_with('#') || text.ends_with(':') || declines_breakdown(&text) || out.iter().any(|o| o.to_lowercase() == text.to_lowercase()) {
             continue;
         }
-        out.push(title_cut(&text));
+        out.push(text);
         if out.len() == SUBTASK_MAX {
             break;
         }
@@ -169,8 +174,8 @@ fn list_marker(line: &str) -> Option<&str> {
     rest.strip_prefix(['.', ')']).filter(|r| r.starts_with([' ', '\t'])).map(str::trim_start)
 }
 
-/// Follows fenced code blocks line by line as CommonMark does: a run of three or more backticks or tildes opens one
-/// (a backtick fence's info string has no backticks), and only a run of the same character at least as long, with
+/// Follows fenced code blocks line by line as CommonMark does: a run of three or more backticks or tildes, indented at
+/// most three spaces, opens one (a backtick fence's info string has no backticks), and only a run of the same character at least as long, with
 /// nothing after it, closes it. A fence left open runs to the end.
 #[derive(Default)]
 struct Fences {
@@ -180,8 +185,9 @@ struct Fences {
 impl Fences {
     /// Feeds the next line; true when it is a fence marker or inside a fence.
     fn inside(&mut self, line: &str) -> bool {
-        let t = line.trim_start();
-        let marker = t.chars().next().filter(|c| matches!(c, '`' | '~'));
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let t = &line[indent..];
+        let marker = t.chars().next().filter(|c| matches!(c, '`' | '~') && indent <= 3);
         let run = marker.map_or(0, |m| t.chars().take_while(|c| *c == m).count());
         let rest = t.get(run..).unwrap_or_default();
         match (self.open, marker) {
@@ -240,7 +246,7 @@ fn field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     rest.strip_prefix(':').map(|after| after.trim_start_matches(['*', '_', '`', ' ', '\t']))
 }
 
-fn sanitize(raw: &str) -> String {
+pub(crate) fn sanitize(raw: &str) -> String {
     let text = strip_ansi(&redact(raw)).replace("\r\n", "\n");
     let text: String = text.chars().filter(|c| matches!(c, '\n' | '\t') || !(c.is_control() || is_direction_mark(*c))).collect();
     let mut text = without_markers(&text);

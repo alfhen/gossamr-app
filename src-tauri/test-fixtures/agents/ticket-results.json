@@ -140,5 +140,19 @@
     "name": "a fence that is never closed runs to the end",
     "input": "```\nNew ticket:\nTitle: Never closed",
     "expected": null
+  },
+  {
+    "name": "a fence marker indented four spaces is code, not a fence",
+    "input": "    ```\nNew ticket:\nTitle: The real one\nBody.",
+    "expected": {
+      "title": "The real one",
+      "kind": "task",
+      "body": "Body."
+    }
+  },
+  {
+    "name": "a closing marker indented four spaces does not close the fence",
+    "input": "```\nNew ticket:\nTitle: In a fence\n    ```\nNew ticket:\nTitle: Still in it",
+    "expected": null
   }
 ]
