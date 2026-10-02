@@ -53,18 +53,24 @@ pub fn plan_answer(result: &str) -> String {
     sanitize(result).trim().to_string()
 }
 
-/// The plan without its closing `For Jira:` note, which goes to the ticket on its own. An answer that is only the note
-/// is returned whole.
+/// The plan without its closing `For Jira:` note, which goes to the ticket on its own. Only a note that ends the answer
+/// is removed: the last `For Jira:` heading outside a code fence, with nothing after it that starts another section or
+/// a code block. Anything else, such as a step that mentions `For Jira:`, leaves the plan whole.
 pub fn plan_without_note(result: &str) -> String {
     let clean = sanitize(result);
+    let whole = || clean.trim().to_string();
     let lines: Vec<&str> = clean.lines().collect();
-    let Some((at, _)) = heading_outside_fences(&lines, "for jira") else { return clean.trim().to_string() };
+    let Some(at) = last_heading_outside_fences(&lines, "for jira") else { return whole() };
+    let mut after = Fences::default();
+    if lines[at + 1..].iter().any(|l| after.inside(l) || ends_section(l)) {
+        return whole();
+    }
     let mut before = lines[..at].to_vec();
     while before.last().is_some_and(|l| l.trim().is_empty() || is_rule(l.trim())) {
         before.pop();
     }
     if before.is_empty() {
-        clean.trim().to_string()
+        whole()
     } else {
         before.join("\n")
     }
@@ -270,6 +276,18 @@ impl Fences {
 fn heading_outside_fences<'a>(lines: &[&'a str], name: &str) -> Option<(usize, &'a str)> {
     let mut fences = Fences::default();
     lines.iter().enumerate().find_map(|(i, line)| if fences.inside(line) { None } else { heading_rest(line, name).map(|rest| (i, rest)) })
+}
+
+/// The last line that is the `name` heading and not inside a code fence.
+fn last_heading_outside_fences(lines: &[&str], name: &str) -> Option<usize> {
+    let mut fences = Fences::default();
+    let mut found = None;
+    for (i, line) in lines.iter().enumerate() {
+        if !fences.inside(line) && heading_rest(line, name).is_some() {
+            found = Some(i);
+        }
+    }
+    found
 }
 
 fn title_cut(title: &str) -> String {
@@ -721,6 +739,26 @@ mod tests {
         assert_eq!(plan_without_note("For Jira:\nOnly a note."), "For Jira:\nOnly a note.");
         let fenced = "Plan.\n\n```\nFor Jira:\nin a fence\n```\n\nMore plan.";
         assert_eq!(plan_without_note(fenced), fenced, "a heading inside a code fence isn't the note");
+    }
+
+    #[test]
+    fn a_for_jira_heading_in_the_middle_of_a_plan_is_part_of_the_plan() {
+        let mid = "## Steps\n\n1. Do the work.\nFor Jira: say what changed here.\n2. Add the test.\n\n## Risks\n\nNone known.";
+        assert_eq!(plan_without_note(mid), mid, "plan content follows it");
+        let heading = "## Steps\n\nFor Jira:\nA step that is called that.\n\n## Risks\n\nNone known.";
+        assert_eq!(plan_without_note(heading), heading);
+        let code_after = "Plan.\n\nFor Jira:\nSee the example:\n```\nlet x = 1;\n```";
+        assert_eq!(plan_without_note(code_after), code_after, "code after it isn't a closing note");
+    }
+
+    #[test]
+    fn only_the_last_for_jira_heading_ends_a_plan_and_it_must_end_the_answer() {
+        let two = "## Steps\n\nFor Jira: mention the work in the ticket.\n\n## Risks\n\nNone known.\n\nFor Jira:\nThe plan is attached.";
+        assert_eq!(plan_without_note(two), "## Steps\n\nFor Jira: mention the work in the ticket.\n\n## Risks\n\nNone known.");
+        let after_fence = "Plan.\n\n```\nFor Jira:\nfenced\n```\n\nFor Jira:\nReal note.";
+        assert_eq!(plan_without_note(after_fence), "Plan.\n\n```\nFor Jira:\nfenced\n```");
+        let list_note = "Plan.\n\nFor Jira:\n- Summary line\n- Plan attached to the run";
+        assert_eq!(plan_without_note(list_note), "Plan.");
     }
 
     #[test]
