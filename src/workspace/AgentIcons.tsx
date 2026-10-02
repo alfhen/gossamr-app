@@ -16,6 +16,7 @@ const PATHS = {
   funnel: "M4 5.5h16l-6 7.5v5l-4 1.5V13z",
   code: "m8.5 8-4 4 4 4M15.5 8l4 4-4 4M13.5 5.5l-3 13",
   eye: "M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12zM12 9.3a2.7 2.7 0 1 0 0 5.4 2.7 2.7 0 0 0 0-5.4z",
+  plan: "M9 4.5h6a1 1 0 0 1 1 1V6h1.5A1.5 1.5 0 0 1 19 7.5v12a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5v-12A1.5 1.5 0 0 1 6.5 6H8v-.5a1 1 0 0 1 1-1zM8.5 12.5l1.5 1.5 2.5-3M14 13.5h2.5M8.5 17.5h8",
   verify: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM8.5 12.3l2.4 2.4 4.6-4.9",
   grid: "M6 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM15 4h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-3a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM15 14h3a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-3a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2z",
   list: "M8 6.5h12M8 12h12M8 17.5h12M4 6.5h.01M4 12h.01M4 17.5h.01",
@@ -42,4 +43,4 @@ export function Icon({ name, className = "size-[13px]" }: { name: IconName; clas
 
 export const STATE_ICON: Record<RunIcon, IconName> = { hand: "hand", spark: "spark", check: "check", clock: "clock", alert: "alert", stop: "stop", lock: "lock", help: "help" };
 
-export const KIND_ICON: Record<RunKind, IconName> = { investigate: "search", triage: "funnel", build: "code", review: "eye", verify: "verify" };
+export const KIND_ICON: Record<RunKind, IconName> = { investigate: "search", triage: "funnel", plan: "plan", build: "code", review: "eye", verify: "verify" };

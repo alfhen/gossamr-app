@@ -165,11 +165,12 @@ export function ticketCommands(items: readonly WorkItem[], query: string, jump: 
 const AGENT_VERBS: { kind: RunKind; words: RegExp; label: string }[] = [
   { kind: "investigate", words: /\b(?:investigate|investigation)\b/i, label: "Investigate" },
   { kind: "triage", words: /^\s*triage\b/i, label: "Triage" },
+  { kind: "plan", words: /^\s*plan\b/i, label: "Plan" },
   { kind: "build", words: /^\s*build\b/i, label: "Build" },
   { kind: "review", words: /^\s*review\b/i, label: "Review the PR on" },
   { kind: "verify", words: /^\s*(?:verify|check)\b/i, label: "Verify" },
 ];
-const AGENT_WORDS = /\b(?:investigate|investigation|triage|build|review|verify|check|agent|start)\b/gi;
+const AGENT_WORDS = /\b(?:investigate|investigation|triage|plan|build|review|verify|check|agent|start)\b/gi;
 
 /**
  * "Investigate <ticket>" entries for a query that asks for one: it names the action, and the rest of the words find

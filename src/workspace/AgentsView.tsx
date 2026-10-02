@@ -14,7 +14,7 @@ import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
-import { breakdownTarget, commentControl, runBreakdownDraftOf, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
+import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, runBreakdownDraftOf, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
@@ -98,6 +98,7 @@ export interface AgentsActions {
   open(id: string): void;
   attach(id: string): void;
   draftComment(id: string): void;
+  buildFromPlan(run: Run): void;
   /** Shows the comment draft a finished run left on its ticket. */
   openDraft?(run: Run): void;
   openBreakdown?(run: Run): void;
@@ -215,6 +216,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     breakdownReady: !!breakdownReady?.(run),
     onOpenDraft: on.openDraft ? () => on.openDraft?.(run) : undefined,
     onOpenBreakdown: on.openBreakdown ? () => on.openBreakdown?.(run) : undefined,
+    onBuildFromPlan: buildFromPlanControl(run).enabled ? () => on.buildFromPlan(run) : undefined,
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
     failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
   });
@@ -294,6 +296,7 @@ const actions: AgentsActions = {
   open: (id) => useRuns.getState().openRun(id),
   attach: (id) => void useRuns.getState().attach(id),
   draftComment: (id) => void useRuns.getState().draftComment(id),
+  buildFromPlan: (run) => void useRunSetup.getState().begin(buildFromPlanOptions(run)),
   openDraft: (run) => {
     if (run.item) return useRuns.getState().showDraft(run.item);
     const draft = runTicketDraftOf(useWorkspace.getState().proposals, run.id);

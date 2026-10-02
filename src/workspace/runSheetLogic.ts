@@ -1,6 +1,6 @@
 import { answerProblem } from "../lib/answer";
 import { containerKey, itemKey } from "../lib/filter";
-import type { CodeChange, ContainerRef, DevLink, ItemRef, Preflight, Proposal, Run, RunKind, RunOutcome, RunReview, RunSpec, WorkContainer } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type Run, type RunKind, type RunOutcome, type RunReview, type RunSpec, type WorkContainer } from "../types";
 import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
@@ -49,10 +49,13 @@ export function startSteps(ticketless: boolean): readonly string[] {
 }
 
 export interface PromptPart {
-  id: "base" | "template" | "extra" | "focus" | "ticket" | "all";
+  id: "base" | "template" | "extra" | "focus" | "plan" | "ticket" | "all";
   label: string;
   text: string;
 }
+
+/** Starts the plan part of a build's prompt: the sentence about following it, then the plan between its markers. As `PLAN_FOLLOW` in `domain/run.rs`. */
+export const PLAN_INTRO = "A person read, edited and approved the plan below.";
 
 /**
  * Cuts the prompt the backend rendered into the parts the person reads. The parts are slices of that prompt, so
@@ -73,16 +76,22 @@ export function splitPrompt(review: Pick<RunReview, "prompt" | "instruction">): 
     const i = rest.indexOf(`\n\n${marker}`);
     return i < 0 ? -1 : i + 2;
   };
-  const ticketAt = find("Ticket (data from Jira");
+  const planAt = find(PLAN_INTRO);
+  // The plan is carried between its own markers, which its text can't contain, so what follows them is the ticket.
+  const planEnd = planAt >= 0 ? rest.indexOf("\nPLAN>>>", planAt) : -1;
+  const afterPlan = planEnd >= 0 ? planEnd + "\nPLAN>>>".length : 0;
+  const ticketFound = find("Ticket (data from Jira");
+  const ticketAt = planAt >= 0 && planEnd < 0 ? -1 : ticketFound >= afterPlan ? ticketFound : -1;
   const focusFound = find("Focus from Pip (");
-  const focusAt = focusFound >= 0 && (ticketAt < 0 || focusFound < ticketAt) ? focusFound : -1;
-  const firstData = [focusAt, ticketAt].filter((i) => i >= 0);
+  const focusAt = focusFound >= 0 && (planAt < 0 || focusFound < planAt) && (ticketAt < 0 || focusFound < ticketAt) ? focusFound : -1;
+  const firstData = [focusAt, planAt, ticketAt].filter((i) => i >= 0);
   const extra = rest.slice(0, firstData.length ? Math.min(...firstData) : undefined).trim();
   const parts: PromptPart[] = [];
   if (base) parts.push({ id: "base", label: "Which branch it starts from", text: base });
   parts.push({ id: "template", label: "What to do", text: instruction });
   if (extra) parts.push({ id: "extra", label: "Added for this run", text: extra });
-  if (focusAt >= 0) parts.push({ id: "focus", label: "Focus", text: rest.slice(focusAt, ticketAt > focusAt ? ticketAt : undefined).trim() });
+  if (focusAt >= 0) parts.push({ id: "focus", label: "Focus", text: rest.slice(focusAt, planAt > focusAt ? planAt : ticketAt > focusAt ? ticketAt : undefined).trim() });
+  if (planAt >= 0) parts.push({ id: "plan", label: "Plan", text: rest.slice(planAt, ticketAt > planAt ? ticketAt : undefined).trim() });
   if (ticketAt >= 0) parts.push({ id: "ticket", label: "Ticket", text: rest.slice(ticketAt).trim() });
   const joined = parts.map((p) => p.text).join("\n\n");
   return joined === prompt ? parts : whole;
@@ -141,8 +150,8 @@ export function startBlock(s: {
   repoMissing?: boolean;
   /** What the chosen kind still needs, from `kindBlock`. */
   kindBlock?: string | null;
-  /** What is typed in the instruction and base fields, when they can differ from the saved draft. */
-  typed?: { instruction: string; base: string };
+  /** What is typed in the instruction, base and plan fields, when they can differ from the saved draft. */
+  typed?: { instruction: string; base: string; plan?: string };
   /** Set for an investigation with no ticket: it needs the person's own question and a project for the ticket. */
   ticketless?: { project: boolean };
 }): string | null {
@@ -158,6 +167,7 @@ export function startBlock(s: {
   if (s.ticketless && !s.ticketless.project) return "Choose the project for the ticket first";
   if (!written) return "Write what it should do first";
   if (s.typed && !s.typed.base.trim()) return "Name the branch it starts from first";
+  if (s.review.plan && s.typed?.plan !== undefined && !s.typed.plan.trim()) return "Write the plan first, or remove it";
   if (!s.preflight) return "Checking that it can start…";
   const red = s.preflight.rows.find((r) => r.level === "red");
   if (red) return red.text;
@@ -165,8 +175,9 @@ export function startBlock(s: {
 }
 
 /** Whether the draft stored in the backend is what is typed in the fields, so approving it approves what the person sees. */
-export function savedAsTyped(review: Pick<RunReview, "instruction" | "spec"> | null, typed: { instruction: string; base: string }): boolean {
-  return !!review && !!typed.instruction.trim() && typed.instruction === review.instruction && typed.base.trim() === review.spec.base;
+export function savedAsTyped(review: Pick<RunReview, "instruction" | "spec" | "plan"> | null, typed: { instruction: string; base: string; plan?: string }): boolean {
+  const plan = !review?.plan || typed.plan === undefined || typed.plan === review.plan;
+  return !!review && !!typed.instruction.trim() && typed.instruction === review.instruction && typed.base.trim() === review.spec.base && plan;
 }
 
 export interface StopControl {
@@ -330,6 +341,37 @@ export function runDraftOf(proposals: Record<string, Proposal> | readonly Propos
   return all
     .filter((p) => p.state.type === "pending" && p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === runId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+type PlanRun = Pick<Run, "spec" | "item" | "state" | "result" | "resultComplete">;
+
+function planRunControl(run: PlanRun, words: { noTicket: string; summary: string }): DraftControl {
+  const no = (reason: string): DraftControl => ({ enabled: false, reason });
+  if (run.spec.kind !== "plan") return no("Only a plan run has a plan.");
+  if (run.state !== "done") return no("The plan isn't finished yet.");
+  if (!run.item) return no(words.noTicket);
+  if (!run.result?.trim()) return no("It finished without a written answer, so there is no plan.");
+  if (run.resultComplete === false) return no(words.summary);
+  return { enabled: true, reason: null };
+}
+
+/** "Build from this plan" needs a finished plan run on a ticket whose whole answer was read. */
+export const buildFromPlanControl = (run: PlanRun): DraftControl =>
+  planRunControl(run, { noTicket: "A build needs a ticket, and this plan isn't about one.", summary: `${SUMMARY_ONLY} A build can only follow a plan Gossamr has read in full.` });
+
+/** Drafting the whole plan as a comment: the same conditions, and the comment is the person's to edit. */
+export const planCommentControl = (run: PlanRun): DraftControl => planRunControl(run, { noTicket: "This plan isn't about a ticket, so there is nothing to comment on.", summary: `${SUMMARY_ONLY} There is no plan to draft.` });
+
+/** What opens the Build draft for a finished plan run: the same ticket and repository, carrying the run's plan. */
+export function buildFromPlanOptions(run: Pick<Run, "id" | "item" | "spec">) {
+  return { item: run.item, kind: "build" as const, repo: run.spec.repo, planFromRun: run.id };
+}
+
+/** What "Draft the plan as a comment" tells the person: the comment holds the whole plan, and says when it was cut. */
+export function planCommentMessage(made: { cut: boolean; total: number }): string {
+  return made.cut
+    ? `Plan comment drafted, but the plan is ${made.total.toLocaleString("en")} characters and a Jira comment holds less, so it is cut at the end of a sentence and says so. Nothing is posted until you approve it.`
+    : "Plan comment drafted. Nothing is posted until you approve it.";
 }
 
 /** Drafting a ticket needs a run that finished with no ticket of its own and something the agent wrote. */

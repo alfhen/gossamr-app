@@ -519,6 +519,14 @@ export class MockBackend implements Backend {
     return this.runs.draftComment(id);
   }
 
+  async runsDraftPlanComment(id: string) {
+    return this.runs.draftPlanComment(id);
+  }
+
+  async runsRefreshPlan(id: string) {
+    return this.runs.refreshPlan(id);
+  }
+
   async runsDraftTicket(id: string) {
     return this.runs.draftTicket(id);
   }

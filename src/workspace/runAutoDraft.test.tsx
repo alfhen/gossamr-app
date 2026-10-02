@@ -280,7 +280,7 @@ describe("what the person sees", () => {
 
   it("shows the draft on the run sheet with Open the draft and Discuss with Pip instead of drafting again", () => {
     const run = new MockBackend().runs.list().find((r) => r.state === "done" && r.item)!;
-    const on = { draftComment: vi.fn(), askPip: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), openDraft: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn() };
+    const on = { draftComment: vi.fn(), askPip: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), openDraft: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn() };
     const view = (draft: { id: string; state: Proposal["state"] } | null) =>
       renderToStaticMarkup(<Found run={run} outcome={{ note: { text: "Do x.", fromMarker: true }, keys: [], change: null, draft, ticket: null, ticketDraft: null, subtasks: [], subtasksDraft: null }} tickets={[]} pickBlocker={false} drafting={false} on={on} />);
     const waiting = view({ id: "d1", state: { type: "pending" } });

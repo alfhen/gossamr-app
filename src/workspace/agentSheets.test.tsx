@@ -20,7 +20,7 @@ const seeded = () => new MockBackend().runs.list();
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 212_000, result: null, error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
 
-const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn() });
+const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn() });
 
 const sheet = (r: Run, over: Partial<RunSheetViewProps> = {}) =>
   renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="Retry failed payment webhooks" place={{ index: 2, total: 8 }} wide={false} onWide={vi.fn()} events={[]} disk={null} brief={null} confirmStop={false} outcome={null} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={actions()} {...over} />);
@@ -408,10 +408,10 @@ describe("the setup sheet", () => {
     const kinds = (html: string) => /role="group" aria-label="Kind of work"[\s\S]*?<\/div>/.exec(html)![0];
     const pressed = (html: string, kind: string) => new RegExp(`aria-pressed="(true|false)"[^>]*>(?:(?!</button>)[\\s\\S])*?<b[^>]*>${kind}</b>`).exec(html)?.[1];
 
-    it("offers all five kinds, none marked as coming later, with the chosen one pressed", () => {
+    it("offers all six kinds, none marked as coming later, with the chosen one pressed", () => {
       const html = setup();
       expect(html).not.toContain("Coming later");
-      expect(kinds(html).match(/<button[^>]*aria-pressed/g)).toHaveLength(5);
+      expect(kinds(html).match(/<button[^>]*aria-pressed/g)).toHaveLength(6);
       expect(pressed(kinds(html), "Investigate")).toBe("true");
       expect(pressed(kinds(html), "Triage")).toBe("false");
       expect(kinds(html)).not.toContain('disabled=""');
@@ -425,7 +425,7 @@ describe("the setup sheet", () => {
 
     it("locks the kinds the person didn't pick when the draft isn't this sheet's own", () => {
       const html = kinds(setup({ kindEditable: false }));
-      expect(html.match(/<button[^>]*disabled=""/g)).toHaveLength(4);
+      expect(html.match(/<button[^>]*disabled=""/g)).toHaveLength(5);
       expect(pressed(html, "Investigate")).toBe("true");
     });
 

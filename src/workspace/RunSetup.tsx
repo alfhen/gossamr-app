@@ -15,6 +15,7 @@ import { allContainers, useWorkspace } from "../workspaceStore";
 const KINDS: { kind: RunKind; note: string }[] = [
   { kind: "investigate", note: "Read the code and logs, change nothing, report" },
   { kind: "triage", note: "Size it up, find owners and duplicates" },
+  { kind: "plan", note: "Write a plan for you to edit and approve" },
   { kind: "build", note: "Make the change on its own branch" },
   { kind: "review", note: "Read a pull request, change nothing" },
   { kind: "verify", note: "Check that a change works" },
@@ -39,6 +40,8 @@ export interface SetupActions {
   searchPrs(query: string): void;
   choosePr(number: number): void;
   setAllowPush(on: boolean): void;
+  refreshPlan?(): void;
+  removePlan?(): void;
 }
 
 export interface SetupViewProps {
@@ -75,6 +78,9 @@ export interface SetupViewProps {
   onReset?(): void;
   base: string;
   onBase(text: string): void;
+  /** The plan text as typed, for a build made from a plan. */
+  plan?: string;
+  onPlan?(text: string): void;
   wide: boolean;
   onWide(): void;
   on: SetupActions;
@@ -234,6 +240,11 @@ function Heading({ p }: { p: SetupViewProps }) {
         {p.ticketless ? "Investigate something (no ticket)" : `${KIND_LABEL[p.kind]} ${p.item ? `${p.item.key}${p.ticketTitle ? `: ${p.ticketTitle}` : ""}` : "a task"}`}
       </h2>
       <p className="m-0 text-ws-ink2">Nothing runs until you press Start. You can stop it once it&apos;s working.</p>
+      {p.review?.spec.planFromRun && p.review.plan && (
+        <p className="m-0 text-ws-ink2">
+          This build follows the plan from run {p.review.spec.planFromRun}. The plan is its own part of the prompt below, in full, and you can edit it before you start. If the plan turns out to be wrong, the agent is told to stop and say so instead of working around it.
+        </p>
+      )}
     </div>
   );
 }
@@ -330,7 +341,7 @@ function Steps({ children }: { children: ReactNode }) {
 }
 
 /** Why Start is off for what the sheet shows, or null. The button and the ⌘↵ shortcut both ask this. */
-export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "phase" | "busy" | "changed" | "choice" | "repo" | "instruction" | "base" | "kind" | "item" | "pr"> & Partial<Pick<SetupViewProps, "ticketless" | "project">>): string | null {
+export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "phase" | "busy" | "changed" | "choice" | "repo" | "instruction" | "base" | "kind" | "item" | "pr"> & Partial<Pick<SetupViewProps, "ticketless" | "project" | "plan">>): string | null {
   return startBlock({
     draft: !!p.review,
     review: p.review,
@@ -341,7 +352,7 @@ export function setupBlock(p: Pick<SetupViewProps, "review" | "preflight" | "pha
     noClone: p.choice && p.choice.clones.length === 0 ? `No clone of ${p.repo} found` : null,
     repoMissing: !p.repo,
     kindBlock: kindBlock(p.kind, p.item, p.pr),
-    typed: { instruction: p.instruction, base: p.base },
+    typed: { instruction: p.instruction, base: p.base, plan: p.review?.plan ? (p.plan ?? p.review.plan) : undefined },
     ticketless: p.ticketless ? { project: !!p.project } : undefined,
   });
 }
@@ -435,7 +446,15 @@ export function RunSetupView(p: SetupViewProps) {
         {review ? (
           <PromptParts
             review={review}
-            editor={{ question: p.ticketless, text: p.instruction, disabled: phase === "starting", onChange: p.onInstruction, onBlur: on.commit, onReset: p.onReset }}
+            editor={{
+              question: p.ticketless,
+              text: p.instruction,
+              disabled: phase === "starting",
+              onChange: p.onInstruction,
+              onBlur: on.commit,
+              onReset: p.onReset,
+              plan: review.plan ? { text: p.plan ?? review.plan, disabled: phase !== "ready" || p.busy, onChange: p.onPlan ?? (() => {}), onBlur: on.commit, onRefresh: on.refreshPlan ?? (() => {}), onRemove: on.removePlan ?? (() => {}) } : undefined,
+            }}
           />
         ) : (
           <p role="status" className="m-0 text-ws-ink3">
@@ -486,6 +505,9 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
   const [wide, setWide] = useState(false);
   const [instruction, setInstruction] = useState("");
   const [base, setBase] = useState("");
+  const [plan, setPlan] = useState("");
+  const savedPlan = s.review?.plan ?? "";
+  useEffect(() => setPlan(savedPlan), [savedPlan]);
   const saved = s.review?.instruction ?? "";
   const savedBase = s.review?.spec.base ?? "";
   useEffect(() => setInstruction(saved), [saved]);
@@ -495,6 +517,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     const edit: RunEditFields = {};
     if (s.review && instruction !== saved && instruction.trim()) edit.instruction = instruction;
     if (s.review && base.trim() && base.trim() !== savedBase) edit.base = base;
+    if (s.review?.plan && plan.trim() && plan !== savedPlan) edit.plan = plan;
     if (Object.keys(edit).length) await useRunSetup.getState().saveEdit(edit);
   };
   const githubConnected = useWorkspace((w) => w.connections.some((c) => c.kind === "github"));
@@ -511,7 +534,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     repos: s.repos,
     shortage: repoShortage({ repos: s.repos, loading: s.reposStatus === "loading", failed: s.reposStatus === "failed", githubConnected }),
     reposError: s.reposError,
-    repoEditable: s.ownDraft || !s.proposalId,
+    repoEditable: (s.ownDraft || !s.proposalId) && !s.planFromRun,
     ticketless: ticketlessShape(s.item, s.kind),
     project: s.project,
     projects,
@@ -530,6 +553,8 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     onReset: s.initialInstruction && instruction !== s.initialInstruction ? () => setInstruction(s.initialInstruction!) : undefined,
     base,
     onBase: setBase,
+    plan,
+    onPlan: setPlan,
     wide,
     onWide: () => setWide((w) => !w),
     on: {
@@ -551,6 +576,8 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
       searchPrs: (query) => void useRunSetup.getState().searchPrs(query),
       choosePr: (number) => void useRunSetup.getState().choosePr(number),
       setAllowPush: (on) => void useRunSetup.getState().saveEdit({ allowPush: on }),
+      refreshPlan: () => void useRunSetup.getState().refreshPlan(),
+      removePlan: () => void useRunSetup.getState().saveEdit({ plan: "" }),
     },
   };
 
@@ -559,7 +586,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     if (setupBlock(view)) return;
     await commit();
     const now = useRunSetup.getState();
-    if (now.error || !savedAsTyped(now.review, { instruction, base })) return;
+    if (now.error || !savedAsTyped(now.review, { instruction, base, plan })) return;
     await now.start();
   }
 

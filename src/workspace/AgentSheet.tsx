@@ -160,9 +160,9 @@ export function CodeBox({ text, what, wrap = false, onCopied }: { text: string; 
   );
 }
 
-export function Details({ summary, children, onToggle }: { summary: ReactNode; children: ReactNode; onToggle?(open: boolean): void }) {
+export function Details({ summary, children, onToggle, open }: { summary: ReactNode; children: ReactNode; onToggle?(open: boolean): void; open?: boolean }) {
   return (
-    <details className="group" onToggle={onToggle ? (ev) => onToggle((ev.currentTarget as HTMLDetailsElement).open) : undefined}>
+    <details className="group" open={open} onToggle={onToggle ? (ev) => onToggle((ev.currentTarget as HTMLDetailsElement).open) : undefined}>
       <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-ws-ink2 marker:hidden [&::-webkit-details-marker]:hidden">
         <svg aria-hidden viewBox="0 0 16 16" className="size-3 shrink-0 fill-none stroke-current transition-transform group-open:rotate-90 motion-reduce:transition-none" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
           <path d="M6 4l4 4-4 4" />
