@@ -79,7 +79,7 @@ export function stateView(run: Pick<Run, "state" | "lastProgressAt">, now: numbe
   return quietMinutes(run, now) === null ? view : { ...view, tone: "warn", live: false };
 }
 
-export const KIND_LABEL: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", build: "Build", review: "Review", verify: "Verify" };
+export const KIND_LABEL: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
 
 export function quietText(minutes: number): string {
   if (minutes < 120) return `Quiet for ${minutes} min`;

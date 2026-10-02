@@ -9,6 +9,7 @@ import type {
   Intent,
   ItemRef,
   Person,
+  PlanComment,
   Preflight,
   Proposal,
   ProposalEdit,
@@ -210,6 +211,10 @@ export interface Backend {
   runsOutcome(id: string): Promise<RunOutcome>;
   /** Drafts a comment from the result. A draft only: nothing is posted until it is approved. */
   runsDraftComment(id: string): Promise<Proposal>;
+  /** Drafts the whole plan of a finished Plan run as a comment, cut at a sentence with a note when it is too long for Jira. A draft only. */
+  runsDraftPlanComment(id: string): Promise<PlanComment>;
+  /** Reads a pending build draft's plan again from its plan run, replacing the person's edits. Only this changes the plan. */
+  runsRefreshPlan(id: string): Promise<Proposal>;
   /** Drafts a new ticket from a finished run that has no ticket: the one its `New ticket:` section proposes, else its answer for the person to edit. A draft only; a run gets one. */
   runsDraftTicket(id: string): Promise<Proposal>;
   /** The watched project the tickets linked to this repository's pull requests most recently belong to, if any. */

@@ -210,6 +210,11 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
               {p.createdBy === "pip" && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Proposed by Pip</span>}
             </p>
             <p className="m-0 line-clamp-3 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{intent.spec.instruction}</p>
+            {intent.spec.plan?.trim() && intent.spec.planFromRun && (
+              <p data-plan-from className="m-0 text-sm text-ws-ink2">
+                Follows the plan from run <b className="font-mono font-semibold">{intent.spec.planFromRun}</b> ({intent.spec.plan.length.toLocaleString("en")} characters, shown whole in the prompt).
+              </p>
+            )}
             {intent.spec.focus?.trim() && (
               <p className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2 py-1 text-sm [overflow-wrap:anywhere]">
                 <b className="font-semibold text-ws-pip">Focus from Pip{intent.spec.focusFromRun ? `, after reading run ${intent.spec.focusFromRun}` : ""}:</b> {intent.spec.focus.trim()}

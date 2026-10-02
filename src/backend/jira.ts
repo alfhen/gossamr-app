@@ -10,6 +10,7 @@ import type {
   Intent,
   ItemRef,
   Person,
+  PlanComment,
   Preflight,
   Proposal,
   ProposalEdit,
@@ -379,6 +380,14 @@ export class JiraBackend implements Backend {
 
   runsDraftComment(id: string) {
     return invoke<Proposal>("runs_draft_comment", { id });
+  }
+
+  runsDraftPlanComment(id: string) {
+    return invoke<PlanComment>("runs_draft_plan_comment", { id });
+  }
+
+  runsRefreshPlan(id: string) {
+    return invoke<Proposal>("runs_refresh_plan", { id });
   }
 
   runsDraftTicket(id: string) {

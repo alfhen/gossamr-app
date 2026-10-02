@@ -22,6 +22,7 @@ export interface AgentMenuProps {
 const ENTRIES: { kind: RunKind; label: string; note: string }[] = [
   { kind: "investigate", label: "Investigate this ticket", note: "Reads the code and logs, changes nothing, reports back" },
   { kind: "triage", label: "Triage this ticket", note: "Sizes it, finds likely owners and duplicates, changes nothing" },
+  { kind: "plan", label: "Plan this ticket", note: "Writes an implementation plan for you to read, edit and approve, changes nothing" },
   { kind: "build", label: "Build this", note: "Makes the change on its own branch; pushing is off unless you allow it" },
   { kind: "review", label: "Review the PR", note: "Reads the linked pull request, comments to you, changes nothing" },
   { kind: "verify", label: "Verify the change", note: "Checks the change works by reading code and running read-only commands" },

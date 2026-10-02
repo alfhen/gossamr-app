@@ -18,6 +18,8 @@ export interface AgentItemProps {
   onAttach(): void;
   /** Present on a finished run that has something to post. */
   onDraftComment?(): void;
+  /** Present on a finished plan run that can be built from. */
+  onBuildFromPlan?(): void;
   /** A comment draft from this run is waiting. */
   draftReady?: boolean;
   /** A breakdown into subtasks from this run is waiting; opening it shows the ticket's drafts. */
@@ -38,7 +40,7 @@ export function onActivate(open: () => void) {
   };
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, failure }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, onBuildFromPlan, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -100,6 +102,17 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
               Draft comment
             </button>
           )
+        )}
+        {onBuildFromPlan && (
+          <button
+            type="button"
+            onClick={(ev) => (ev.stopPropagation(), onBuildFromPlan())}
+            onKeyDown={(ev) => ev.stopPropagation()}
+            title="Opens a Build draft that carries this plan, for you to read and edit. Nothing starts."
+            className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
+          >
+            Build from plan
+          </button>
         )}
         {breakdownReady && onOpenBreakdown && (
           <button

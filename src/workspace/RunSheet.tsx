@@ -15,7 +15,7 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { MAY_TOUCH, answerable, breakdownWithPipPrompt, canStartNow, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
+import { MAY_TOUCH, answerable, breakdownWithPipPrompt, buildFromPlanOptions, canStartNow, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { Changes, Found, type ResultActions } from "./RunResult";
@@ -23,6 +23,7 @@ import { openOnGithub } from "./githubUi";
 import { askPip } from "./askPip";
 import { followOutcome } from "./followOutcome";
 import { useRuns } from "./runsStore";
+import { useRunSetup } from "./runSetupStore";
 
 export interface RunSheetActions extends ResultActions {
   close(): void;
@@ -427,6 +428,12 @@ export function RunSheet({ id }: { id: string }) {
     cancelBlocker: () => setPickBlocker(false),
     draftBlocker: (key) => void store.draftBlocker(id, key),
     draftTicket: () => void store.draftTicket(id),
+    buildFromPlan: () => {
+      store.closeSheet();
+      void useRunSetup.getState().begin(buildFromPlanOptions(run));
+    },
+    draftPlanComment: () => void store.draftPlanComment(id),
+    openPlanDraft: () => store.showDraft(run.item),
     openTicketDraft: () => {
       if (!outcome?.ticketDraft) return;
       store.closeSheet();

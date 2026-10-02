@@ -220,7 +220,7 @@ describe("mock runs of every kind", () => {
   it("can add one scripted run of each other kind, with the build's pull request", async () => {
     const backend = new MockBackend({ runs: { seed: "kinds" } });
     const runs = await backend.runsList();
-    expect(new Set(runs.map((r) => r.spec.kind))).toEqual(new Set(["investigate", "triage", "build", "review", "verify"]));
+    expect(new Set(runs.map((r) => r.spec.kind))).toEqual(new Set(["investigate", "triage", "plan", "build", "review", "verify"]));
     const build = runs.find((r) => r.spec.kind === "build")!;
     expect((await backend.runsOutcome(build.id)).change).toMatchObject({ kind: "pullRequest" });
     expect(runs.find((r) => r.spec.kind === "review")!.spec.pr).toBe(331);

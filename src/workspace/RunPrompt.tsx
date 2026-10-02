@@ -44,6 +44,8 @@ export interface InstructionEditor {
   onBlur(): void;
   /** Present when the text differs from the first draft. */
   onReset?(): void;
+  /** A build made from a plan: the plan is its own part, shown in full and editable here. */
+  plan?: { text: string; disabled: boolean; onChange(text: string): void; onBlur(): void; onRefresh(): void; onRemove(): void };
 }
 
 function Part({ label, aside, children }: { label: string; aside?: ReactNode; children: ReactNode }) {
@@ -64,6 +66,8 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
   const extra = parts.find((p) => p.id === "extra");
   const whole = parts.length === 1 && parts[0].id === "all";
   const focus = review.focus?.trim();
+  const plan = review.plan?.trim() ? review.plan : null;
+  const planFrom = review.spec.planFromRun;
   const ticket = review.ticketBlock?.trim();
   return (
     <div className="grid gap-3">
@@ -110,6 +114,40 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
             Sent apart from the instruction, as data, not instructions. {focus.length} of 300 characters.
           </p>
         </Box>
+      )}
+      {plan && planFrom && (
+        <Part
+          label={`Plan from run ${planFrom}`}
+          aside={
+            editor?.plan && (
+              <span className="flex gap-1">
+                <button type="button" disabled={editor.plan.disabled} onClick={editor.plan.onRefresh} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
+                  Read the plan again
+                </button>
+                <button type="button" disabled={editor.plan.disabled} onClick={editor.plan.onRemove} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
+                  Build without it
+                </button>
+              </span>
+            )
+          }
+        >
+          <p className="m-0 text-xs text-ws-ink2">
+            The plan a person approved from run {planFrom}, sent whole and as data. {editor?.plan ? "Edit it before you approve; what is here is exactly what the agent gets. It is read again from the run only when you press the button." : ""} {plan.length.toLocaleString("en")} characters.
+          </p>
+          {editor?.plan ? (
+            <textarea
+              aria-label={`Plan from run ${planFrom}`}
+              rows={14}
+              value={editor.plan.text}
+              disabled={editor.plan.disabled}
+              onChange={(ev) => editor.plan?.onChange(ev.target.value)}
+              onBlur={editor.plan.onBlur}
+              className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2.5 py-1.5 font-mono text-sm leading-normal text-ws-ink outline-offset-2 disabled:opacity-60"
+            />
+          ) : (
+            <pre data-plan className={`${MONO_BLOCK} max-h-none`}>{plan}</pre>
+          )}
+        </Part>
       )}
       {ticket && (
         <Details summary={`Ticket from Jira, with its comments · ${ticket.length.toLocaleString("en")} characters, sent as data`}>

@@ -188,10 +188,65 @@ export const ticketKeys = (text: string): string[] => [...new Set((text.match(KE
 
 /** The comment as the backend first drafts it, for the sample data. */
 export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false): string {
-  const parts = [kind === "investigate" ? "Looked into this with an agent (it was asked to only read code and change nothing)." : "An agent worked on this."];
+  const intro: Partial<Record<RunKind, string>> = {
+    investigate: "Looked into this with an agent (it was asked to only read code and change nothing).",
+    plan: "Planned this with an agent (it was asked to only read code and change nothing).",
+  };
+  const parts = [intro[kind] ?? "An agent worked on this."];
   if (summaryOnly) parts.push(SUMMARY_ONLY);
   else if (!note.fromMarker) parts.push("The agent didn't mark anything for Jira, so this is its whole answer, shortened:");
   parts.push(note.text);
   if (change?.kind === "pullRequest") parts.push(`Pull request: ${change.url}`);
   return parts.join("\n\n");
+}
+
+/** Jira refuses comments of about 32,000 characters; as `PLAN_COMMENT_LIMIT` in `runs/result.rs`. */
+export const PLAN_COMMENT_LIMIT = 24_000;
+
+/** A plan run's answer with control characters and our data markers dropped, markdown kept; a sample of `plan_answer`. */
+export function planAnswer(result: string): string {
+  const clean = result.replace(/\r\n/g, "\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "");
+  let out = clean;
+  while (/<<<(?:TICKET|FOCUS|PLAN|AGENT_OUTPUT)|(?:TICKET|FOCUS|PLAN|AGENT_OUTPUT)>>>/.test(out)) out = out.replace(/<<<(?:TICKET|FOCUS|PLAN|AGENT_OUTPUT)|(?:TICKET|FOCUS|PLAN|AGENT_OUTPUT)>>>/g, "");
+  return out.trim();
+}
+
+/** The plan without its closing `For Jira:` note, as `plan_without_note` in `runs/result.rs`: only the last such heading outside a code fence, and only when nothing after it starts a section or a code block. */
+export function planWithoutNote(result: string): string {
+  const clean = planAnswer(result);
+  const lines = clean.split("\n");
+  const inside = fenceTracker();
+  let at = -1;
+  lines.forEach((l, i) => {
+    if (!inside(l) && headingRest(l, "for jira") !== null) at = i;
+  });
+  if (at < 0) return clean;
+  const after = fenceTracker();
+  if (lines.slice(at + 1).some((l) => after(l) || endsSection(l))) return clean;
+  const before = lines.slice(0, at);
+  while (before.length && (!before[before.length - 1].trim() || /^([-*_])\1{2,}$/.test(before[before.length - 1].trim()))) before.pop();
+  return before.length ? before.join("\n") : clean;
+}
+
+export interface Fitted {
+  text: string;
+  total: number;
+  cut: boolean;
+}
+
+/** `text` within `limit` characters, cut at the end of a paragraph, then a sentence, then a word, with `note` after it. */
+export function fit(text: string, limit: number, note: (total: number) => string): Fitted {
+  const chars = [...text];
+  const total = chars.length;
+  if (total <= limit) return { text, total, cut: false };
+  const tail = note(total);
+  const room = Math.max(0, limit - [...tail].length);
+  const window = chars.slice(0, room).join("");
+  const floor = Math.floor(room / 2);
+  const paragraph = window.lastIndexOf("\n\n");
+  let sentence = -1;
+  for (const m of window.matchAll(/[.!?](?=\s)/g)) if ([...window.slice(0, m.index)].length >= floor) sentence = m.index + 1;
+  const word = Math.max(window.lastIndexOf(" "), window.lastIndexOf("\n"));
+  const cutAt = [paragraph, sentence, word].find((i) => i >= 0 && [...window.slice(0, i)].length >= floor) ?? window.length;
+  return { text: `${window.slice(0, cutAt).trimEnd()}\n\n${tail}`, total, cut: true };
 }

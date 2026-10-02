@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { SUMMARY_ONLY, type CodeChange, type Run, type RunOutcome } from "../types";
 import { Box, Btn, CopyButton, Details, Sec } from "./AgentSheet";
-import { blockerChoices, blockerControl, breakdownStatus, changeSummary, commentControl, createdFrom, ticketControl, ticketStatus } from "./runSheetLogic";
+import { blockerChoices, blockerControl, breakdownStatus, buildFromPlanControl, changeSummary, commentControl, createdFrom, planCommentControl, ticketControl, ticketStatus } from "./runSheetLogic";
 
 export interface ResultActions {
   draftComment(): void;
@@ -20,6 +20,11 @@ export interface ResultActions {
   openCreated(): void;
   /** Opens Pip on the run, and on its breakdown draft when one is waiting. */
   askPipBreakdown(): void;
+  /** Opens a Build draft for the plan run's ticket that carries its plan. */
+  buildFromPlan(): void;
+  /** Drafts the whole plan as a comment on the ticket. */
+  draftPlanComment(): void;
+  openPlanDraft(): void;
 }
 
 export interface ResultProps {
@@ -225,6 +230,59 @@ function Breakdown({ run, outcome, drafting, waitingBreakdown = false, on }: Pic
   );
 }
 
+/** What a Plan run wrote: the plan itself, to read, and the two things to do with it. Neither posts anything. */
+function PlanBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "on">) {
+  const text = run.result?.trim();
+  const build = buildFromPlanControl(run);
+  const comment = planCommentControl(run);
+  const waiting = outcome?.planDraft?.state.type === "pending" ? outcome.planDraft : null;
+  const decided = outcome?.planDraft && !waiting ? outcome.planDraft.state.type : null;
+  return (
+    <div data-plan-box className="grid gap-2 rounded-md border border-ws-sep bg-ws-bar p-2.5">
+      <p className="m-0 text-xs font-semibold text-ws-ink3">The plan</p>
+      {text ? (
+        <Details summary={`${text.length.toLocaleString("en")} characters, as the agent wrote it`} open>
+          <p data-plan="text" className="selectable m-0 max-h-96 overflow-auto text-[13.5px] whitespace-pre-wrap [overflow-wrap:anywhere]">
+            {text}
+          </p>
+        </Details>
+      ) : (
+        <p className="m-0 text-ws-ink3">It finished without a written answer.</p>
+      )}
+      {waiting && (
+        <p data-plan-draft="ready" role="status" className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm">
+          <b className="font-semibold text-ws-pip">The plan is drafted as a comment on {run.item?.key ?? "the ticket"}.</b> Read it, edit it or skip it. Nothing is posted until you approve it.
+        </p>
+      )}
+      {decided && (
+        <p data-plan-draft={decided} className="m-0 text-sm text-ws-ink3">
+          {decided === "applied" ? "Its plan comment was posted." : decided === "skipped" ? "You skipped its plan comment." : "Its plan comment is out of date."}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <Btn tone="primary" icon="code" disabled={!build.enabled || drafting} title={build.reason ?? "Opens a Build draft that carries this plan, for you to read and edit before it starts"} onClick={on.buildFromPlan}>
+          Build from this plan
+        </Btn>
+        {waiting ? (
+          <Btn icon="ext" onClick={on.openPlanDraft}>
+            Open the plan comment
+          </Btn>
+        ) : (
+          <Btn icon="ext" disabled={!comment.enabled || drafting} title={comment.reason ?? "Makes a draft of the whole plan as a comment, for you to read and edit"} onClick={on.draftPlanComment}>
+            Draft the plan as a comment
+          </Btn>
+        )}
+      </div>
+      {(!build.enabled || !comment.enabled) && build.reason && (
+        <p role="note" className="m-0 text-sm text-ws-ink3">
+          {build.reason}
+        </p>
+      )}
+      <p className="m-0 text-xs text-ws-ink3">The comment drafted when it finished holds only the short note for Jira. The whole plan goes to the ticket only if you draft it, and nothing is posted until you approve a draft.</p>
+    </div>
+  );
+}
+
 function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingBreakdown, on }: ResultProps) {
   const text = run.result?.trim();
   const note = outcome?.note;
@@ -234,8 +292,9 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingB
   const draft = outcome?.draft?.state.type === "pending" ? outcome.draft : null;
   const decided = outcome?.draft && !draft ? outcome.draft.state.type : null;
   return (
-    <Sec title="What it found">
+    <Sec title={run.spec.kind === "plan" ? "The plan it wrote" : "What it found"}>
       <Box>
+        {run.spec.kind === "plan" && <PlanBox run={run} outcome={outcome} drafting={drafting} on={on} />}
         {note?.text ? (
           <>
             <p className="m-0 flex flex-wrap items-center gap-2 text-xs font-semibold text-ws-ink3">

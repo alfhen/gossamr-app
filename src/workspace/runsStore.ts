@@ -1,12 +1,13 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { targetOf } from "../lib/proposals";
-import type { CleanupResult, ItemRef, Proposal, Run, RunsEnvironment } from "../types";
+import type { CleanupResult, ItemRef, PlanComment, Proposal, Run, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, attentionCount, groupRuns, navOrder, stepRun, type AgentFilters } from "./agentsLogic";
 import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
+import { planCommentMessage } from "./runSheetLogic";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
@@ -77,6 +78,8 @@ interface RunsState {
   attach(id: string): Promise<void>;
   /** Drafts a comment from the run's result and takes the person to it. Nothing is posted. */
   draftComment(id: string): Promise<void>;
+  /** Drafts the whole plan of a plan run as a comment, and says when it had to be cut to fit. */
+  draftPlanComment(id: string): Promise<void>;
   /** Drafts a link saying the run's ticket is blocked by `blockerKey` and takes the person to it. Nothing is posted. */
   draftBlocker(id: string, blockerKey: string): Promise<void>;
   /** Drafts a new ticket from a finished run that has no ticket and opens the draft. Nothing is created. */
@@ -106,7 +109,7 @@ const READY = "Draft ready. Nothing is posted until you approve it.";
 const openDraftsOn = (target: ItemRef) => showMe(target, { peek: true }) || void openTicketByKey(target.key);
 
 /** Makes a draft from a run and shows it where it is approved: on the ticket it is about. */
-async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState>) => void, id: string, what: "comment" | "link", make: (backend: Backend) => Promise<Proposal>) {
+async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState>) => void, id: string, what: "comment" | "link", make: (backend: Backend) => Promise<Proposal>, ready: () => string = () => READY) {
   const { backend, drafting } = get();
   if (!backend || drafting) return;
   set({ drafting: id });
@@ -115,7 +118,7 @@ async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState
     await useWorkspace.getState().refreshProposals();
     const target = targetOf(draft.intent);
     get().closeSheet();
-    useToasts.getState().push(READY, "info", target ? { label: `Open ${target.key}`, run: () => openDraftsOn(target) } : undefined);
+    useToasts.getState().push(ready(), "info", target ? { label: `Open ${target.key}`, run: () => openDraftsOn(target) } : undefined);
     if (target) openDraftsOn(target);
   } catch (e) {
     useToasts.getState().push(`Couldn't draft the ${what === "comment" ? "comment" : "blocker"}: ${messageOf(e)}`);
@@ -311,6 +314,22 @@ export const useRuns = create<RunsState>((set, get) => ({
 
   async draftComment(id) {
     await draftFromRun(get, set, id, "comment", (backend) => backend.runsDraftComment(id));
+  },
+
+  async draftPlanComment(id) {
+    let made: PlanComment | null = null;
+    const message = () => (made ? planCommentMessage(made) : READY);
+    await draftFromRun(
+      get,
+      set,
+      id,
+      "comment",
+      async (backend) => {
+        made = await backend.runsDraftPlanComment(id);
+        return made.proposal;
+      },
+      message,
+    );
   },
 
   async draftBlocker(id, blockerKey) {

@@ -431,7 +431,7 @@ export type ProposalEdit =
   /** A new item's fields; the ones left out stay as they are. */
   | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef }
   /** A run draft's settings, as the person edits them; the ones left out stay as they are. */
-  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; project?: ContainerRef };
+  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; plan?: string; project?: ContainerRef };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
@@ -439,7 +439,7 @@ export interface ProposalsChanged {
 }
 
 /** Mirrors src-tauri/src/domain/run.rs. */
-export type RunKind = "investigate" | "triage" | "build" | "review" | "verify";
+export type RunKind = "investigate" | "triage" | "plan" | "build" | "review" | "verify";
 
 /** Everything that decides what an agent does, as the person approves it. */
 export interface RunSpec {
@@ -461,6 +461,10 @@ export interface RunSpec {
   pr?: number | null;
   /** The pull request's head commit when the draft was read; the backend fills it in. */
   prSha?: string | null;
+  /** For a build made from a plan run: the plan as the person read and edited it, sent as data apart from the instruction. */
+  plan?: string | null;
+  /** The plan run it came from. Set with `plan`, builds only. */
+  planFromRun?: string | null;
   /** Whether a build is told it may push and open a pull request. Builds only. */
   allowPush?: boolean;
   /** Where the draft ticket of an investigation with no ticket lands. Its presence makes the run end as a ticket; the agent never chooses it. */
@@ -553,6 +557,15 @@ export interface RunOutcome {
   subtasksDraft: { id: string; state: ProposalState } | null;
   /** The full answer couldn't be read, so `note` is only the one-line summary. */
   summaryOnly?: boolean;
+  /** For a Plan run: the draft of the whole plan as a comment, in whatever state it is in now. */
+  planDraft?: { id: string; state: ProposalState } | null;
+}
+
+/** The whole plan of a Plan run drafted as a comment, and whether it had to be cut to fit a Jira comment. */
+export interface PlanComment {
+  proposal: Proposal;
+  cut: boolean;
+  total: number;
 }
 
 /** What the person reads before approving; `digest` is sent back with the approval. */
@@ -562,6 +575,8 @@ export interface RunReview {
   instruction: string;
   focus: string | null;
   ticketBlock: string | null;
+  /** For a build made from a plan: the plan as it will be sent. */
+  plan?: string | null;
   guard: string;
   spec: RunSpec;
   /** The reviewed pull request, as GitHub names it now. */

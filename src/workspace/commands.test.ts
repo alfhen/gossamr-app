@@ -261,13 +261,15 @@ describe("agent commands", () => {
 
   it("offers the other kinds when the query starts with their word, and not for the same word in a title", () => {
     const run = vi.fn();
-    for (const [verb, kind, label] of [["triage", "triage", "Triage"], ["build", "build", "Build"], ["review", "review", "Review the PR on"], ["verify", "verify", "Verify"]] as const) {
+    for (const [verb, kind, label] of [["triage", "triage", "Triage"], ["plan", "plan", "Plan"], ["build", "build", "Build"], ["review", "review", "Review the PR on"], ["verify", "verify", "Verify"]] as const) {
       const found = agentCommands(items, `${verb} welcome`, run);
       expect(found[0].label.startsWith(`${label} `)).toBe(true);
       found[0].run();
       expect(run).toHaveBeenLastCalledWith(expect.anything(), kind);
     }
     expect(agentCommands(items, "welcome review", run)).toEqual([]);
+    expect(agentCommands(items, "welcome plan", run)).toEqual([]);
+    expect(agentCommands(items, "make a plan for welcome", run)).toEqual([]);
   });
 
   it("lists the latest tickets for a bare Investigate, and finds a key", () => {
