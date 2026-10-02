@@ -41,6 +41,7 @@ import type {
 } from "../types";
 import { fold, type Mention } from "../lib/mentions";
 import { docText } from "../lib/docs";
+import { ticketBlockText } from "./mockTicket";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
 import { targetOf } from "../lib/proposals";
 import { MockProposals } from "./mockProposals";
@@ -382,7 +383,8 @@ export class MockBackend implements Backend {
     this.runs = new MockRuns(this.proposals, options.runs);
     this.runs.ticketText = (ref) => {
       const w = this.connector.item(ref);
-      return w ? `${ref.key}: ${w.title}\n\n${docText(w.body)}`.trim() : null;
+      if (!w) return null;
+      return ticketBlockText({ item: w, comments: this.connector.comments(ref), people: this.connector.people, titleOf: (r) => this.connector.item(r)?.title ?? null, code: this.github.code.devLinks(ref) });
     };
     this.runs.pullRequest = (repo, number) => this.github.code.change(repo, number);
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));

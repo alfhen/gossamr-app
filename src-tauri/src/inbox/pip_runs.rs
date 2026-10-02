@@ -3,10 +3,11 @@
 
 use chrono::Utc;
 
+use super::ticket_context::snapshot;
 use super::Core;
 use crate::auth::Scope;
 use crate::domain::{
-    default_instruction, pip_kinds, ticket_snapshot, Basis, ClonePlan, CodeChangeKind, Intent, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery,
+    default_instruction, pip_kinds, Basis, ClonePlan, CodeChangeKind, Intent, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery,
     RunSpec, StateKind,
 };
 use crate::error::{Error, Result};
@@ -89,6 +90,7 @@ impl Core {
         self.require_watched_repo(&repo)?;
         let clone_path = self.resolve_clone(&plan.path)?;
         let item = Self::item(scope, key);
+        let links = self.ticket_dev_links(&item);
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
         self.with_db_for(scope, |db| {
@@ -102,7 +104,7 @@ impl Core {
                 instruction: instruction.into(),
                 focus,
                 focus_from_run: from_run,
-                ticket_block: Some(ticket_snapshot(&work)),
+                ticket_block: Some(snapshot(db, &work, &links)),
                 pr: None,
                 pr_sha: None,
                 allow_push: false,
