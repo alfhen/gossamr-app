@@ -138,6 +138,47 @@ export function ticketFromAnswer(result: string): TicketProposal | null {
   return first ? { title: titleCut(first), kind: "task", body: text.length > 3_000 ? `${text.slice(0, 3_000).trimEnd()}…` : text } : null;
 }
 
+export const SUBTASK_MAX = 8;
+const BARE_REFUSALS = ["none", "n/a", "na", "nothing"];
+const REFUSAL_OPENERS = ["no subtasks", "no subtask", "no breakdown", "no need", "nothing to split", "not needed", "not required", "not necessary", "not applicable", "not worth"];
+
+/** An answer that declines the breakdown rather than naming a task, as `declines_breakdown` in `runs/result.rs`. */
+const declinesBreakdown = (text: string) => {
+  const lower = text.toLowerCase().trim();
+  const boundary = (rest: string) => !/^[\p{L}\p{N}]/u.test(rest);
+  return REFUSAL_OPENERS.some((p) => lower.startsWith(p) && boundary(lower.slice(p.length))) || BARE_REFUSALS.some((p) => lower.startsWith(p) && /^(?:[-–—:.,;!(]|$)/.test(lower.slice(p.length).trimStart()));
+};
+
+const listText = (line: string): string | null => /^\s*(?:[-*+•]|\d{1,3}[.)])[ \t]+(.*)$/.exec(line)?.[1] ?? null;
+const indentOf = (line: string) => line.length - line.trimStart().length;
+
+/** The summaries in a result's `Subtasks:` section, as `subtask_proposals` in `runs/result.rs` reads them. */
+export function subtaskProposals(result: string): string[] {
+  const lines = result.replace(/\r\n/g, "\n").split("\n");
+  const start = headingOutsideFences(lines, "subtasks");
+  if (start < 0) return [];
+  let section = [headingRest(lines[start], "subtasks") ?? ""];
+  const inside = fenceTracker();
+  for (const l of lines.slice(start + 1)) {
+    const t = l.trim();
+    if (inside(l) || endsSection(t) || headingRest(t, "new ticket") !== null) break;
+    section.push(l);
+  }
+  const listed = section.filter((l) => listText(l) !== null);
+  if (listed.length) {
+    const least = Math.min(...listed.map(indentOf));
+    section = listed.filter((l) => indentOf(l) === least);
+  }
+  const out: string[] = [];
+  for (const line of section) {
+    const text = titleCut(oneLine((listText(line) ?? line.trim()).replace(/^(\[ \]|\[[xX]\])/, "")));
+    if (!text || text.startsWith("#") || text.endsWith(":") || declinesBreakdown(text) || out.some((o) => o.toLowerCase() === text.toLowerCase())) continue;
+    out.push(text);
+    if (out.length === SUBTASK_MAX) break;
+  }
+  return out;
+}
+
 /** What the backend adds under a ticket made from a run. */
 export const FOUND_BY = "Found by an agent that was asked to only read code and change nothing.";
 

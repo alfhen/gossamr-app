@@ -120,7 +120,7 @@ describe("following a run's outcome", () => {
 
 describe("following a run's outcome out of order", () => {
   it("ignores a slow earlier read that finishes after a newer one", async () => {
-    const later = (state: "pending" | "skipped") => ({ note: null, keys: [], change: null, draft: { id: "d1", state: { type: state } }, ticket: null, ticketDraft: null }) as RunOutcome;
+    const later = (state: "pending" | "skipped") => ({ note: null, keys: [], change: null, draft: { id: "d1", state: { type: state } }, ticket: null, ticketDraft: null, subtasks: [], subtasksDraft: null }) as RunOutcome;
     const waiting: ((o: RunOutcome) => void)[] = [];
     let changed = () => {};
     const backend = {
@@ -280,9 +280,9 @@ describe("what the person sees", () => {
 
   it("shows the draft on the run sheet with Open the draft and Discuss with Pip instead of drafting again", () => {
     const run = new MockBackend().runs.list().find((r) => r.state === "done" && r.item)!;
-    const on = { draftComment: vi.fn(), askPip: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), openDraft: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn() };
+    const on = { draftComment: vi.fn(), askPip: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), openDraft: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn() };
     const view = (draft: { id: string; state: Proposal["state"] } | null) =>
-      renderToStaticMarkup(<Found run={run} outcome={{ note: { text: "Do x.", fromMarker: true }, keys: [], change: null, draft, ticket: null, ticketDraft: null }} tickets={[]} pickBlocker={false} drafting={false} on={on} />);
+      renderToStaticMarkup(<Found run={run} outcome={{ note: { text: "Do x.", fromMarker: true }, keys: [], change: null, draft, ticket: null, ticketDraft: null, subtasks: [], subtasksDraft: null }} tickets={[]} pickBlocker={false} drafting={false} on={on} />);
     const waiting = view({ id: "d1", state: { type: "pending" } });
     expect(waiting).toContain("Open the draft");
     expect(waiting).toContain("Discuss with Pip");

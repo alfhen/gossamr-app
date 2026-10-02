@@ -15,7 +15,7 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { MAY_TOUCH, answerable, canStartNow, commentWithPipPrompt, finishWithPipPrompt, stopControl } from "./runSheetLogic";
+import { MAY_TOUCH, answerable, breakdownWithPipPrompt, canStartNow, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { Changes, Found, type ResultActions } from "./RunResult";
@@ -56,6 +56,8 @@ export interface RunSheetViewProps {
   /** Cached tickets the blocker picker searches. */
   tickets: readonly { key: string; title: string }[];
   pickBlocker: boolean;
+  /** A breakdown is waiting on the run's ticket that no run made. */
+  waitingBreakdown?: boolean;
   drafting: boolean;
   /** Its answer is on its way to the agent. */
   answering: boolean;
@@ -232,7 +234,7 @@ function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode 
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, drafting, answering, opened, cleanup = null, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, cleanup = null, on }: RunSheetViewProps) {
   const view = stateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -304,7 +306,7 @@ export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, event
       </div>
 
       {attention && <Attention run={run} opened={opened} answering={answering} on={on} />}
-      {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} drafting={drafting} on={on} />}
+      {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingBreakdown} drafting={drafting} on={on} />}
       {outcome?.change && <Changes change={outcome.change} on={on} />}
 
       <Sec title="What it did" count={events ? `${events.length} ${events.length === 1 ? "entry" : "entries"}` : undefined}>
@@ -350,6 +352,7 @@ export function RunSheet({ id }: { id: string }) {
   const [outcome, setOutcome] = useState<RunOutcome | null>(null);
   const [pickBlocker, setPickBlocker] = useState(false);
   const items = useWorkspace((s) => s.items);
+  const waitingOn = useWorkspace((s) => pendingBreakdownOn(s.proposals, run?.item ?? null)?.id ?? null);
   const drafting = useRuns((s) => s.drafting !== null);
   const answering = useRuns((s) => s.answering.has(id));
   const [now, setNow] = useState(() => Date.now());
@@ -436,6 +439,7 @@ export function RunSheet({ id }: { id: string }) {
       store.closeSheet();
       showDraft(draft.id);
     },
+    askPipBreakdown: () => (askPip(breakdownWithPipPrompt(run, outcome?.subtasksDraft?.state.type === "pending" ? outcome.subtasksDraft.id : waitingOn)), store.closeSheet()),
     openCreated: () => {
       if (!run.createdItem) return;
       store.closeSheet();
@@ -448,6 +452,6 @@ export function RunSheet({ id }: { id: string }) {
       backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
     },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} drafting={drafting} answering={answering} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} on={on} />;
 }
 

@@ -3,7 +3,7 @@ import { docFromText, docText } from "../lib/docs";
 import type { Intent, ItemRef, Proposal, Run, ScreenContext, WorkFilter } from "../types";
 import { needsPerson, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
-import { jiraNote } from "./mockRunResult";
+import { jiraNote, subtaskProposals } from "./mockRunResult";
 import type { AskRequest, ClaudeEvent } from "./claude";
 
 /** What the scripted Pip does for one question. */
@@ -14,8 +14,8 @@ export interface PipScript {
   draft: { intent: Intent; label: string | null } | null;
   /** An agent run to propose on a ticket, with an optional focus note. */
   runDraft?: { item: ItemRef; focus: string | null } | null;
-  /** A change to the text of a comment or new-ticket draft that came from a run. */
-  revise?: { id: string; body?: string; title?: string } | null;
+  /** A change to the text of a comment, new-ticket or breakdown draft that came from a run. */
+  revise?: { id: string; body?: string; title?: string; summaries?: string[] } | null;
   /** The draft this turn was about, remembered for the rest of the conversation. */
   discussed?: string;
 }
@@ -32,6 +32,15 @@ const asksAboutAgents = /\bmy agents\b|\bagents?\b.*\b(doing|up to|status|runnin
 const asksForAgent = /\b(start|launch|run|kick off)\b.*\b(agent|investigation)\b|\binvestigate\b/;
 const KEY = /\b([A-Z][A-Z0-9]+-\d+)\b/;
 const finishes = /new ticket draft (\S+), drafted from agent run (\S+?)\./i;
+const talksBreakdown = /breakdown draft (\S+) on \S+, drafted from agent run (\S+?)\./i;
+const proposesBreakdown = /propose subtasks for \S+ from run (\S+?):/i;
+const asksForFewer = /\b(fewer|merge|combine)\b/;
+
+/** A sample shortening of a summary's wording: it stops at "when" or after six words. */
+const shortened = (summary: string) => {
+  const cut = summary.split(" when ")[0].split(/\s+/);
+  return cut.slice(0, 6).join(" ");
+};
 const discusses = /comment draft (\S+) on \S+, drafted from agent run (\S+?)\./i;
 const asksToRevise = /\b(shorten|shorter|tighten|trim|rewrite|reword|rephrase|revise)\b/;
 const asksForShorter = /\b(shorten|shorter|tighten|trim)\b/;
@@ -83,6 +92,44 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       draft: null,
       discussed: left.id,
       revise: { id: left.id, ...tightenedTicket(left.intent.fields.title, docText(left.intent.fields.body)) },
+    };
+  }
+  const breakdownTalk = talksBreakdown.exec(prompt);
+  const breakdown = (id: string | null | undefined) =>
+    drafts.find((d) => d.id === id && d.state.type === "pending" && d.intent.type === "subtasks" && (d.createdBy === "pip" || (d.origin.type === "run" && d.createdBy === "user")));
+  if (breakdownTalk) {
+    const left = breakdown(breakdownTalk[1]);
+    if (!left) return { steps: [], text: "I can't find that breakdown draft any more, or it has been decided already, so there is nothing to discuss.", filter: null, draft: null };
+    return {
+      steps: ["Read the run", "Read the rest of its result", "Looked at the breakdown"],
+      text: `I read the whole run and checked it against draft ${left.id}. Tell me what to change, for example "fewer" or "shorter", and I'll revise the summaries. Nothing is created in Jira until you approve it.`,
+      filter: null,
+      draft: null,
+      discussed: left.id,
+    };
+  }
+  const discussedBreakdown = breakdown(discussed);
+  if (discussedBreakdown?.intent.type === "subtasks" && (asksForFewer.test(q) || asksForShorter.test(q))) {
+    const fewer = asksForFewer.test(q);
+    const summaries = discussedBreakdown.intent.summaries;
+    return {
+      steps: ["Read the run's full result", "Revised the breakdown"],
+      text: `${fewer ? "I kept the three tasks that matter most." : "I shortened the wording of each task and kept them all."} It isn't created; read it and approve, edit or skip it.`,
+      filter: null,
+      draft: null,
+      revise: { id: discussedBreakdown.id, summaries: fewer ? summaries.slice(0, 3) : summaries.map(shortened) },
+    };
+  }
+  const proposed = proposesBreakdown.exec(q)?.[1];
+  const breakdownRun = proposed ? runs.find((r) => r.id.toLowerCase() === proposed) : undefined;
+  if (breakdownRun?.item) {
+    const summaries = subtaskProposals(breakdownRun.result ?? "");
+    if (!summaries.length) return { steps: ["Read the run"], text: `The run doesn't propose a breakdown, so I left **${breakdownRun.item.key}** as one piece.`, filter: null, draft: null };
+    return {
+      steps: ["Read the run", `Drafted subtasks on ${breakdownRun.item.key}`],
+      text: `I drafted ${summaries.length} subtasks on **${breakdownRun.item.key}** from what the run proposed. Nothing is created; edit the list, then approve it or skip it.`,
+      filter: null,
+      draft: { intent: { type: "subtasks", parent: breakdownRun.item, summaries }, label: "From an agent run" },
     };
   }
   const talked = discusses.exec(prompt);
@@ -231,7 +278,7 @@ export interface PipDrafter {
   /** The drafts Pip can see. */
   pipDrafts(): Proposal[];
   /** Revises a comment or new-ticket draft that came from a run, the way `revise_proposal` does. */
-  pipRevise(id: string, change: string | { body?: string; title?: string }): Promise<unknown>;
+  pipRevise(id: string, change: string | { body?: string; title?: string; summaries?: string[] }): Promise<unknown>;
   /** Drafts a run the way propose_run does: Pip names the ticket and a focus note, the backend builds the rest. */
   pipRunDraft(item: ItemRef, focus: string | null, requestId: string): Promise<unknown>;
 }
@@ -271,7 +318,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       emit(req.requestId, { type: "tool", label });
     }
     if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
-    if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title });
+    if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, summaries: script.revise.summaries });
     if (!stopped && script.runDraft) await drafter?.pipRunDraft?.(script.runDraft.item, script.runDraft.focus, req.requestId);
     if (!stopped && script.filter) viewListeners.forEach((l) => l(req.requestId, script.filter!.filter, script.filter!.note));
     for (const word of script.text.match(/\S+\s*/g) ?? []) {

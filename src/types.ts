@@ -536,6 +536,10 @@ export interface RunOutcome {
   ticket: TicketProposal | null;
   /** The ticket draft made from this run, in whatever state it is in now. */
   ticketDraft: { id: string; state: ProposalState } | null;
+  /** For a Triage run on a ticket: the breakdown its `Subtasks:` section proposes. */
+  subtasks: string[];
+  /** The subtasks draft made from this run, in whatever state it is in now. */
+  subtasksDraft: { id: string; state: ProposalState } | null;
 }
 
 /** What the person reads before approving; `digest` is sent back with the approval. */

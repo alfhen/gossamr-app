@@ -604,7 +604,7 @@ export class MockBackend implements Backend {
     return this.proposals.list({ states: ["pending"] });
   }
 
-  async pipRevise(id: string, change: string | { body?: string; title?: string }) {
+  async pipRevise(id: string, change: string | { body?: string; title?: string; summaries?: string[] }) {
     return this.proposals.pipRevise(id, change);
   }
 

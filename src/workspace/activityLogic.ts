@@ -267,7 +267,7 @@ export function codeMatchesChip(chip: ActivityChip, e: Pick<CodeEntry, "kind" | 
 
 const firstLine = (text: string | null) => text?.trim().split(/\n+/)[0]?.trim() ?? "";
 
-function attention(run: Run, drafted: boolean): { kind: RunEntryKind; what: string; at: string; text: string } | null {
+function attention(run: Run, drafted: boolean, breakdown: boolean): { kind: RunEntryKind; what: string; at: string; text: string } | null {
   const kind = KIND_LABEL[run.spec.kind];
   switch (run.state) {
     case "needsAnswer":
@@ -281,7 +281,7 @@ function attention(run: Run, drafted: boolean): { kind: RunEntryKind; what: stri
         kind: "finished",
         what: "done",
         at: run.endedAt ?? run.lastProgressAt,
-        text: `${drafted && run.item ? `Draft ready on ${run.item.key}. ` : ""}${kind} agent finished: ${resultHeadline(run.result) ?? "it wrote no answer"}`,
+        text: `${breakdown && run.item ? `Breakdown proposed on ${run.item.key}. ` : drafted && run.item ? `Draft ready on ${run.item.key}. ` : ""}${kind} agent finished: ${resultHeadline(run.result) ?? "it wrote no answer"}`,
       };
     case "failed":
       return { kind: "failed", what: "failed", at: run.endedAt ?? run.lastProgressAt, text: `${kind} agent failed: ${firstLine(run.error) || "no reason was recorded"}` };
@@ -291,7 +291,7 @@ function attention(run: Run, drafted: boolean): { kind: RunEntryKind; what: stri
 }
 
 /** The rows runs add to the feed, newest first. Only what is true now is listed; an entry that stopped being true leaves. */
-export function toRunEntries(runs: readonly Run[], read: ReadonlySet<string>, now: number, drafted: ReadonlySet<string> = new Set()): RunEntry[] {
+export function toRunEntries(runs: readonly Run[], read: ReadonlySet<string>, now: number, drafted: ReadonlySet<string> = new Set(), breakdown: ReadonlySet<string> = new Set()): RunEntry[] {
   const seen = new Set<string>();
   const out: RunEntry[] = [];
   const add = (e: Omit<RunEntry, "source" | "mention" | "unread" | "needsYou"> & { watch: boolean }) => {
@@ -302,7 +302,7 @@ export function toRunEntries(runs: readonly Run[], read: ReadonlySet<string>, no
   };
   for (const run of runs) {
     if (run.launchedAt && run.shortId) add({ id: `run:${run.id}:started`, at: run.launchedAt, kind: "started", runId: run.id, item: run.item, text: `${KIND_LABEL[run.spec.kind]} agent started`, watch: false });
-    const now_ = attention(run, drafted.has(run.id));
+    const now_ = attention(run, drafted.has(run.id), breakdown.has(run.id));
     if (now_) add({ id: `run:${run.id}:${now_.what}`, at: now_.at, kind: now_.kind, runId: run.id, item: run.item, text: now_.text, watch: true });
   }
   return out.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : a.id.localeCompare(b.id)));

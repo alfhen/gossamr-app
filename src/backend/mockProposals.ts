@@ -140,17 +140,21 @@ export class MockProposals {
     throw new Error("that edit doesn't fit this draft");
   }
 
-  /** Pip's change to the text of its own pending comment, or of the pending comment or new ticket an agent run left for the person. A ticket may change its title and type too; its project never. */
-  pipRevise(id: string, change: string | { body?: string; title?: string; kind?: WorkItemKind }): Proposal {
-    const { body, title, kind } = typeof change === "string" ? { body: change, title: undefined, kind: undefined } : change;
+  /** Pip's change to the text of its own pending comment, or of the pending comment, new ticket or breakdown an agent run left for the person. A ticket may change its title and type too, its project never; a breakdown only its summaries. */
+  pipRevise(id: string, change: string | { body?: string; title?: string; kind?: WorkItemKind; summaries?: string[] }): Proposal {
+    const { body, title, kind, summaries } = typeof change === "string" ? { body: change, title: undefined, kind: undefined, summaries: undefined } : change;
     const p = this.pending(id);
-    const left = p.origin.type === "run" && (p.intent.type === "comment" || p.intent.type === "create") && p.createdBy === "user";
+    const left = p.origin.type === "run" && (p.intent.type === "comment" || p.intent.type === "create" || p.intent.type === "subtasks") && p.createdBy === "user";
     if (p.createdBy !== "pip" && !left) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
     let intent: Intent;
     if (p.intent.type === "comment") intent = { ...p.intent, body: docFromText(body ?? docText(p.intent.body)) };
     else if (p.intent.type === "create") {
       const fields = p.intent.fields;
       intent = { ...p.intent, fields: { ...fields, title: title?.trim() || fields.title, body: body === undefined ? fields.body : docFromText(body), kind: kind ?? fields.kind } };
+    } else if (p.intent.type === "subtasks") {
+      const next = (summaries ?? p.intent.summaries).map((s) => s.trim()).filter(Boolean);
+      if (!next.length) throw new Error("list at least one subtask, and none of them blank");
+      intent = { ...p.intent, summaries: next };
     } else throw new Error("this kind of draft can't be revised");
     return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
   }
