@@ -38,7 +38,7 @@ fn facts(db: &Db, work: &WorkItem, links: &[DevLink]) -> TicketFacts {
         assignee: cached.as_ref().and_then(|t| t.assignee.as_ref()).map(|p| p.name.clone()),
         reporter: cached.as_ref().and_then(|t| t.reporter.as_ref()).map(|p| p.name.clone()),
         labels: work.labels.clone(),
-        parent: work.parent.as_ref().map(&with_title),
+        parent: work.parent.as_ref().map(with_title),
         linked: work
             .links
             .iter()
