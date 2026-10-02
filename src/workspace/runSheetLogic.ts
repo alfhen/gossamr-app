@@ -379,6 +379,12 @@ export function runBreakdownDraftOf(proposals: Record<string, Proposal> | readon
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
+/** The ticket whose drafts hold the run's waiting breakdown, which is where the breakdown chip goes. */
+export function breakdownTarget(proposals: Record<string, Proposal> | readonly Proposal[], runId: string): ItemRef | null {
+  const draft = runBreakdownDraftOf(proposals, runId);
+  return draft?.intent.type === "subtasks" ? draft.intent.parent : null;
+}
+
 /** A breakdown waiting on `item` that isn't linked to a run, such as the one Pip drafted when asked from the run sheet. */
 export function pendingBreakdownOn(proposals: Record<string, Proposal> | readonly Proposal[], item: ItemRef | null): Proposal | undefined {
   if (!item) return undefined;

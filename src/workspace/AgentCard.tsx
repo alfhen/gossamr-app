@@ -23,6 +23,8 @@ export interface AgentItemProps {
   /** A breakdown into subtasks from this run is waiting; opening it shows the ticket's drafts. */
   breakdownReady?: boolean;
   onOpenDraft?(): void;
+  /** Opens the breakdown draft itself, apart from the comment or ticket draft. */
+  onOpenBreakdown?(): void;
   failure: FailureState;
 }
 
@@ -36,7 +38,7 @@ export function onActivate(open: () => void) {
   };
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, draftReady, breakdownReady, onOpenDraft, failure }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -99,10 +101,10 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
             </button>
           )
         )}
-        {breakdownReady && onOpenDraft && (
+        {breakdownReady && onOpenBreakdown && (
           <button
             type="button"
-            onClick={(ev) => (ev.stopPropagation(), onOpenDraft())}
+            onClick={(ev) => (ev.stopPropagation(), onOpenBreakdown())}
             onKeyDown={(ev) => ev.stopPropagation()}
             title="The subtasks are a draft. Nothing is created until you approve it."
             className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"

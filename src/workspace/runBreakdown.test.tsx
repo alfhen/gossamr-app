@@ -10,7 +10,7 @@ import type { Intent, Proposal, Run, RunKind, RunOutcome, RunSpec, ScreenContext
 import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
 import { Found, type ResultActions } from "./RunResult";
-import { breakdownStatus, breakdownWithPipPrompt, pendingBreakdownOn, runBreakdownDraftOf } from "./runSheetLogic";
+import { breakdownStatus, breakdownTarget, breakdownWithPipPrompt, pendingBreakdownOn, runBreakdownDraftOf } from "./runSheetLogic";
 
 const blank: ScreenContext = { view: null, item: null, filter: null, selection: [] };
 
@@ -219,10 +219,20 @@ describe("the breakdown on the sheet, the card and Activity", () => {
     expect(runBreakdownDraftOf(all, "r3")).toBeUndefined();
   });
 
+  it("sends the chip to the breakdown's own ticket even when a comment draft waits too", () => {
+    const parent = itemRef("CA-412");
+    const comment = { id: "c", createdAt: "2", state: { type: "pending" }, origin: { type: "run", runId: "r1", shortId: null }, intent: { type: "comment", item: itemRef("CA-1") } } as unknown as Proposal;
+    const breakdown = { id: "s", createdAt: "1", state: { type: "pending" }, origin: { type: "run", runId: "r1", shortId: null }, intent: { type: "subtasks", parent } } as unknown as Proposal;
+    expect(breakdownTarget([comment, breakdown], "r1")).toEqual(parent);
+    expect(breakdownTarget([comment], "r1")).toBeNull();
+    const only = renderToStaticMarkup(<AgentCard run={triage()} now={Date.now()} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} onOpenDraft={vi.fn()} draftReady breakdownReady failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    expect(only, "the chip needs its own handler").not.toContain("Breakdown proposed");
+  });
+
   it("puts a chip on the card and 'Breakdown proposed on KEY' in Activity", () => {
     const run = triage();
     const card = (breakdownReady: boolean) =>
-      renderToStaticMarkup(<AgentCard run={run} now={Date.now()} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} onOpenDraft={vi.fn()} draftReady breakdownReady={breakdownReady} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+      renderToStaticMarkup(<AgentCard run={run} now={Date.now()} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} onOpenDraft={vi.fn()} onOpenBreakdown={vi.fn()} draftReady breakdownReady={breakdownReady} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
     expect(card(true)).toContain("Breakdown proposed");
     expect(card(true)).toContain("Draft ready");
     expect(card(false)).not.toContain("Breakdown proposed");
