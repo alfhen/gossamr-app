@@ -139,13 +139,14 @@ export function ticketFromAnswer(result: string): TicketProposal | null {
 }
 
 export const SUBTASK_MAX = 8;
-const NO_SUBTASKS = ["none", "n/a", "na", "nothing"];
-const NO_SUBTASKS_PREFIXES = ["no subtask", "no breakdown", "no need", "nothing to split", "not needed", "not required", "not necessary", "not applicable"];
+const BARE_REFUSALS = ["none", "n/a", "na", "nothing"];
+const REFUSAL_OPENERS = ["no subtasks", "no subtask", "no breakdown", "no need", "nothing to split", "not needed", "not required", "not necessary", "not applicable", "not worth"];
 
 /** An answer that declines the breakdown rather than naming a task, as `declines_breakdown` in `runs/result.rs`. */
 const declinesBreakdown = (text: string) => {
-  const lower = text.replace(/[.!]+$/, "").toLowerCase();
-  return NO_SUBTASKS.includes(lower) || NO_SUBTASKS_PREFIXES.some((p) => lower.startsWith(p));
+  const lower = text.toLowerCase().trim();
+  const boundary = (rest: string) => !/^[\p{L}\p{N}]/u.test(rest);
+  return REFUSAL_OPENERS.some((p) => lower.startsWith(p) && boundary(lower.slice(p.length))) || BARE_REFUSALS.some((p) => lower.startsWith(p) && /^(?:[-–—:.,;!(]|$)/.test(lower.slice(p.length).trimStart()));
 };
 
 const listText = (line: string): string | null => /^\s*(?:[-*+•]|\d{1,3}[.)])[ \t]+(.*)$/.exec(line)?.[1] ?? null;
@@ -170,9 +171,9 @@ export function subtaskProposals(result: string): string[] {
   }
   const out: string[] = [];
   for (const line of section) {
-    const text = oneLine((listText(line) ?? line.trim()).replace(/^(\[ \]|\[[xX]\])/, ""));
+    const text = titleCut(oneLine((listText(line) ?? line.trim()).replace(/^(\[ \]|\[[xX]\])/, "")));
     if (!text || text.startsWith("#") || text.endsWith(":") || declinesBreakdown(text) || out.some((o) => o.toLowerCase() === text.toLowerCase())) continue;
-    out.push(titleCut(text));
+    out.push(text);
     if (out.length === SUBTASK_MAX) break;
   }
   return out;
