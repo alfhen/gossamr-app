@@ -64,8 +64,8 @@ pub struct TicketProposal {
 pub fn ticket_proposal(result: &str) -> Option<TicketProposal> {
     let clean = sanitize(result);
     let lines: Vec<&str> = clean.lines().collect();
-    let start = lines.iter().position(|l| heading_rest(l, "new ticket").is_some())?;
-    let mut section: Vec<&str> = vec![heading_rest(lines[start], "new ticket")?];
+    let (start, first) = heading_outside_fences(&lines, "new ticket")?;
+    let mut section: Vec<&str> = vec![first];
     let mut fenced = false;
     for line in &lines[start + 1..] {
         fenced ^= line.trim_start().starts_with("```");
@@ -118,7 +118,7 @@ const NO_SUBTASKS: [&str; 7] = ["none", "n/a", "na", "nothing", "no subtasks", "
 pub fn subtask_proposals(result: &str) -> Vec<String> {
     let clean = sanitize(result);
     let lines: Vec<&str> = clean.lines().collect();
-    let Some((start, inline)) = lines.iter().enumerate().find_map(|(i, l)| heading_rest(l, "subtasks").map(|rest| (i, rest))) else { return Vec::new() };
+    let Some((start, inline)) = heading_outside_fences(&lines, "subtasks") else { return Vec::new() };
     let mut section: Vec<&str> = vec![inline];
     for line in &lines[start + 1..] {
         let t = line.trim();
@@ -161,6 +161,18 @@ fn list_marker(line: &str) -> Option<&str> {
     let digits = t.chars().take_while(char::is_ascii_digit).count();
     let rest = t.get(digits..).filter(|_| (1..=3).contains(&digits))?;
     rest.strip_prefix(['.', ')']).filter(|r| r.starts_with([' ', '\t'])).map(str::trim_start)
+}
+
+/// The first line that is the `name` heading and not inside a code fence, with what follows it on that line.
+fn heading_outside_fences<'a>(lines: &[&'a str], name: &str) -> Option<(usize, &'a str)> {
+    let mut fenced = false;
+    lines.iter().enumerate().find_map(|(i, line)| {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            return None;
+        }
+        heading_rest(line, name).filter(|_| !fenced).map(|rest| (i, rest))
+    })
 }
 
 fn title_cut(title: &str) -> String {
@@ -545,5 +557,15 @@ mod tests {
     fn a_section_inside_a_code_fence_or_after_a_ticket_section_is_not_read_past() {
         assert_eq!(subtask_proposals("Subtasks:\n- A\n```\n- B\n```\n"), ["A"]);
         assert_eq!(subtask_proposals("Subtasks:\n- A\nNew ticket:\n- B"), ["A"]);
+    }
+
+    #[test]
+    fn a_heading_inside_a_code_fence_is_not_the_section() {
+        let fenced = "```\nSubtasks:\n- In a fence\n```\n\nSubtasks:\n- Real one";
+        assert_eq!(subtask_proposals(fenced), ["Real one"]);
+        assert!(subtask_proposals("```\nSubtasks:\n- Only in a fence\n```").is_empty());
+        let ticket = "```\nNew ticket:\nTitle: In a fence\n```\n\nNew ticket:\nTitle: The real one\nBody";
+        assert_eq!(ticket_proposal(ticket).unwrap().title, "The real one");
+        assert_eq!(ticket_proposal("```\nNew ticket:\nTitle: In a fence\n```"), None);
     }
 }
