@@ -384,7 +384,14 @@ pub struct Run {
     pub last_detail: Option<String>,
     pub tokens: Option<u64>,
     pub branch: Option<String>,
+    /// The agent's final answer when `result_complete`, else only `summary`.
     pub result: Option<String>,
+    /// Claude's own one-line summary of the run.
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Whether `result` is the agent's whole final answer rather than the summary standing in for it.
+    #[serde(default)]
+    pub result_complete: bool,
     pub error: Option<String>,
     /// Set with `error` when a launch fails; absent for failures the tracker saw after the session started.
     #[serde(default)]
@@ -432,6 +439,8 @@ impl Run {
             tokens: None,
             branch: None,
             result: None,
+            summary: None,
+            result_complete: false,
             error: None,
             failure: None,
             db_file,

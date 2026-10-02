@@ -70,6 +70,11 @@ pub struct Scripted {
     pub in_flight: usize,
     pub most_in_flight: usize,
     pub listings: usize,
+    /// What each session's transcript ends with, by session id; a read before `answer_misses` reads have been made finds none.
+    pub answers: HashMap<String, String>,
+    pub answer_misses: u32,
+    /// Every session id whose transcript was read, with the folders offered.
+    pub answer_reads: Vec<(String, Vec<PathBuf>)>,
     next: u32,
     moving: Vec<(String, std::path::PathBuf)>,
 }
@@ -101,6 +106,9 @@ impl FakeCli {
             in_flight: 0,
             most_in_flight: 0,
             listings: 0,
+            answers: HashMap::new(),
+            answer_misses: 0,
+            answer_reads: vec![],
             next: 0,
             moving: vec![],
         }))
@@ -147,7 +155,7 @@ impl ClaudeCli for FakeCli {
 
     async fn auth_status(&self) -> CliResult<AuthStatus> {
         let s = self.0.lock().unwrap();
-        Ok(AuthStatus { logged_in: s.logged_in, config_directory: Some(s.config_dir.clone()), ..AuthStatus::default() })
+        Ok(AuthStatus { logged_in: s.logged_in, config_directory: Some(s.config_dir.clone()), projects_directory: Some(s.config_dir.join("projects")), ..AuthStatus::default() })
     }
 
     async fn supports_bg(&self) -> CliResult<bool> {
@@ -254,6 +262,15 @@ impl ClaudeCli for FakeCli {
 
     async fn job(&self, _config_dir: &Path, id: &ShortId) -> CliResult<Option<JobInfo>> {
         Ok(self.0.lock().unwrap().jobs.get(id.as_str()).cloned())
+    }
+
+    async fn final_answer(&self, _projects: &Path, session_id: &str, cwds: &[PathBuf]) -> Option<String> {
+        let mut s = self.0.lock().unwrap();
+        s.answer_reads.push((session_id.to_owned(), cwds.to_vec()));
+        if (s.answer_reads.len() as u32) <= s.answer_misses {
+            return None;
+        }
+        s.answers.get(session_id).cloned()
     }
 
     fn binary(&self) -> Option<PathBuf> {

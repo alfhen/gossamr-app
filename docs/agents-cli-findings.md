@@ -62,6 +62,19 @@ Not run, because both need a signed-in session spending the person's own Claude 
 - `--` before the message is accepted, as with launch.
 - Not tested: a session stopped in the middle of a tool call, a resumed `needsPermission` session, and whether the guard text still applies after a conversation has been compacted.
 
+## A finished run's final answer (Claude Code 2.1.287)
+
+Seen on one real Triage run (CA-271) in the person's own config, reading structure and lengths only:
+
+- `jobs/<id>/state.json` `output` has the single key `result`: Claude's own one-line summary of the run (126 characters), not the agent's last message. Everything built on it (`For Jira:`, `New ticket:`, `Subtasks:`) therefore never saw the agent's sections.
+- `timeline.jsonl` had two lines. The `done` line's `text` was the full final message (3977 characters, byte-for-byte equal to the transcript's last assistant text); the `working` line had only a `detail`. Whether the done text is capped for much longer answers is not known.
+- The transcript is `<projectsDirectory>/<folder>/<sessionId>.jsonl`. `<folder>` is the session's worktree path (`worktreePath` in `state.json`, not `cwd`, which was the clone root) with every character outside `[A-Za-z0-9]` replaced by `-`, so `/.claude/` becomes `--claude-`. `sessionId` is the listing's `sessionId`. For a very long path Claude may shorten the folder name, so a missing computed path is followed by a look for `<sessionId>.jsonl` in each folder of `projects`.
+- One JSON object per line. Types seen: `user`, `assistant`, `attachment`, `system`, `last-prompt`, `file-history-snapshot` and several bookkeeping types. An assistant API message is written as one line per content block (`thinking`, `text`, `tool_use`), all with the same `message.id`; the final answer is the `text` block(s) of the last assistant message, followed only by `system` lines. Tool results are `user` lines. Subagent lines carry `isSidechain: true`.
+- Gossamr reads the last 2 MB of that one file, takes the text of the last assistant message and drops everything else; it never lists transcripts, and a symlinked transcript is not followed. If the transcript cannot be read it falls back to the timeline's `done` text (only when it differs from the summary), and failing both keeps the summary and says so (`Run.result_complete = false`).
+- No real-CLI test: a transcript with model output needs a signed-in session, and the real tests only use a signed-out scratch config. The path computation, the tail read and the message selection are covered with fixtures and by `fake-claude.sh` (`transcript=` in the scenario file writes a transcript the way Claude does).
+
+Timeline events: `claude` writes millisecond times (`2026-10-02T12:22:45.174Z`) and Gossamr stores whole seconds, so a line was never recognised as stored and was appended again on every poll (the run sheet showed one command eight times). Times are now cut to whole seconds before comparing.
+
 ## Cleanup check (PR 12a)
 
 `real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_work_is_refused` (scratch config, signed out) stops two sessions and removes them straight away. The clean one was removed on the first try (0 waits, 0.7 s): the lock refusal described above did not appear for a signed-out session that never did model work, so the retry loop is covered by the scripted CLI and was not seen firing for real in this run. The session with a commit that was never pushed was refused with stdout text ending in a suggestion to run `claude rm <id> --discard-unpushed`, and its worktree and branch were left in place. Gossamr returns that text unchanged and never passes the flag. Not checked: the lock refusal for a session that was doing model work when stopped.

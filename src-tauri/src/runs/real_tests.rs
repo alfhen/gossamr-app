@@ -328,6 +328,10 @@ impl ClaudeCli for SignedIn {
         self.0.job(config_dir, id).await
     }
 
+    async fn final_answer(&self, projects: &Path, session_id: &str, cwds: &[PathBuf]) -> Option<String> {
+        self.0.final_answer(projects, session_id, cwds).await
+    }
+
     fn binary(&self) -> Option<PathBuf> {
         Some(self.0.binary().to_path_buf())
     }

@@ -221,6 +221,19 @@ describe("drafting from a run", () => {
     expect(drafts().map((d) => d.intent.type)).toEqual(["comment"]);
   });
 
+  it("drafts honestly from a run that only has its summary, and never on its own", async () => {
+    const stuck = finished();
+    const summary = "Triage complete: small PR.\n\nFor Jira: a marker inside a summary.";
+    (backend.runs as unknown as { update(id: string, patch: Partial<Run>): Run }).update(stuck.id, { result: summary, summary, resultComplete: false });
+    const outcome = await backend.runsOutcome(stuck.id);
+    expect(outcome.summaryOnly).toBe(true);
+    const made = await backend.runsDraftComment(stuck.id);
+    const body = JSON.stringify(made.intent);
+    expect(body).toContain("could only read a one-line summary");
+    expect(body).not.toContain("didn't mark anything");
+    expect((await backend.runsOutcome(s().runs.find((r) => r.item?.key === "WEB-97")!.id)).summaryOnly).toBe(false);
+  });
+
   it("gives the sheet the note, the keys it names and the change the run made", async () => {
     const outcome = await backend.runsOutcome(finished().id);
     expect(outcome.note).toEqual({ text: "add a backoff to the consumer and close the alert.", fromMarker: true });

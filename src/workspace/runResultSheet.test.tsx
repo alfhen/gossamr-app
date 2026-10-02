@@ -87,6 +87,17 @@ describe("What it found", () => {
     expect(html).not.toContain("The full answer");
   });
 
+  it("says the full answer could not be read instead of claiming the agent marked nothing", () => {
+    const summary = "Triage complete: small PR, link fields already protected";
+    const html = sheet(run("done", { result: summary, summary, resultComplete: false }), { outcome: outcome({ note: { text: summary, fromMarker: false }, summaryOnly: true }) });
+    expect(html).toContain("Gossamr could only read a one-line summary of the run, not its full answer. Open the session to see the rest.");
+    expect(html).toContain("Summary only");
+    expect(html).toContain('data-note="summary"');
+    expect(html).not.toContain("Not parsed");
+    expect(html).not.toContain("so this is its whole answer");
+    expect(html).not.toContain("The full answer");
+  });
+
   it("falls back to the raw text until the note has loaded", () => {
     const html = sheet(run("done"), { outcome: null });
     expect(html).toContain("Found it.");

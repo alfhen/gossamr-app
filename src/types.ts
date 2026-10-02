@@ -497,7 +497,12 @@ export interface Run {
   lastDetail: string | null;
   tokens: number | null;
   branch: string | null;
+  /** The agent's final answer when `resultComplete`, else only `summary`. */
   result: string | null;
+  /** Claude's own one-line summary of the run. */
+  summary?: string | null;
+  /** Whether `result` is the whole final answer. Absent in sample data, which is always complete. */
+  resultComplete?: boolean;
   error: string | null;
   /** Set with `error` when a launch fails; absent for a run that stopped after it started. */
   failure?: RunFailure | null;
@@ -511,6 +516,9 @@ export interface Run {
   /** The ticket made from this run's draft once the person approved it. */
   createdItem?: ItemRef | null;
 }
+
+/** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */
+export const SUMMARY_ONLY = "Gossamr could only read a one-line summary of the run, not its full answer. Open the session to see the rest.";
 
 /** The part of a run's result meant for Jira. Without a `For Jira:` section it is the whole answer, shortened. */
 export interface JiraNote {
@@ -540,6 +548,8 @@ export interface RunOutcome {
   subtasks: string[];
   /** The subtasks draft made from this run, in whatever state it is in now. */
   subtasksDraft: { id: string; state: ProposalState } | null;
+  /** The full answer couldn't be read, so `note` is only the one-line summary. */
+  summaryOnly?: boolean;
 }
 
 /** What the person reads before approving; `digest` is sent back with the approval. */

@@ -93,6 +93,7 @@ const KIND_SEEDS: Seed[] = [
   { key: "CA-408", name: "ca-408-review-gateway-a7b8", state: "done", minutesAgo: 9, over: { ...kindOver("CA-408", "ca-408-review-gateway-a7b8", "review", { pr: 331, prSha: "a1b2c3d4e5f6" }), result: "1. The retry loop never backs off, so a slow upstream gets hammered.\n2. The new test doesn't cover the timeout path.\n\nFor Jira: review found one blocking issue.", tokens: 64_000 } },
   { key: "CA-411", name: "ca-411-shipping-estimate-c9d0", state: "done", minutesAgo: 4, over: { ...kindOver("CA-411", "ca-411-shipping-estimate-c9d0", "triage"), result: "About a day. It touches the estimate module and the checkout summary. I'm fairly sure: the module has one owner.\n\nFor Jira: size 3, owner is the checkout team.", tokens: 41_000 } },
   { key: "CA-413", name: "ca-413-coupon-stacking-e1f3", state: "done", minutesAgo: 210, over: { ...kindOver("CA-413", "ca-413-coupon-stacking-e1f3", "verify"), result: "The fix works for percentage coupons. I could not check fixed-amount coupons: they need the payment sandbox.", tokens: 98_000 } },
+  { key: "CA-271", name: "ca-271-translation-mask-6ef8", state: "done", minutesAgo: 14, over: { ...kindOver("CA-271", "ca-271-translation-mask-6ef8", "triage"), result: "Triage complete: small PR, likely prose-field URL leak; link fields already protected", summary: "Triage complete: small PR, likely prose-field URL leak; link fields already protected", resultComplete: false, tokens: 52_000 } },
 ];
 
 /** What a sample run writes when it finishes, for each kind: an answer that ends in a `For Jira:` section. */
@@ -103,6 +104,15 @@ export const SCRIPTED_RESULT: Record<RunKind, string> = {
   verify: "The fix works for percentage coupons.\n\nFor Jira:\nChecked percentage coupons: the totals are right and the tests pass. Fixed-amount coupons were not checked because they need the payment sandbox.",
   build: "Cached the category tree and committed it on the run's branch.\n\nFor Jira:\nThe category tree is now cached and the change is committed on the run's branch. It is not pushed. A person needs to review it and open the pull request.",
   review: "1. The retry loop never backs off.\n2. The new test doesn't cover the timeout path.\n\nFor Jira:\nReviewed the pull request. One blocking issue: the retry loop never backs off. The timeout path has no test. The author needs to fix both before it can merge.",
+};
+
+/** Claude's own one-line summary of a finished sample run, as `state.json` keeps it. */
+export const SCRIPTED_SUMMARY: Record<RunKind, string> = {
+  investigate: "Investigation complete: one consumer retries without backoff; add a backoff",
+  triage: "Triage complete: size 8, breakdown into four subtasks proposed",
+  verify: "Verification complete: percentage coupons work, fixed-amount coupons unchecked",
+  build: "Build complete: category tree cached and committed, not pushed",
+  review: "Review complete: one blocking issue, the retry loop never backs off",
 };
 
 /** What a sample investigation with no ticket writes: a `New ticket:` section the sample draft is made from. */
@@ -455,6 +465,8 @@ export class MockRuns {
     }
     if (to === "done") {
       patch.result = !run.item && run.spec.project ? SCRIPTED_TICKET_RESULT : SCRIPTED_RESULT[run.spec.kind];
+      patch.summary = SCRIPTED_SUMMARY[run.spec.kind];
+      patch.resultComplete = true;
       patch.endedAt = at;
     }
     const next = this.update(run.id, patch);
@@ -464,7 +476,7 @@ export class MockRuns {
 
   /** What the backend does when a run reaches Done: one comment draft from a marked `For Jira:` section, never a second. */
   private autoDraft(run: Run) {
-    if (!this.limits.draftOnFinish) return;
+    if (!this.limits.draftOnFinish || run.resultComplete === false) return;
     if (!run.item) {
       const proposal = run.spec.project ? ticketProposal(run.result ?? "") : null;
       if (proposal && !this.ticketDrafts(run.id).length) this.makeTicketDraft(run, proposal);
@@ -768,6 +780,7 @@ export class MockRuns {
       ticketDraft: ticketDraft ? { id: ticketDraft.id, state: ticketDraft.state } : null,
       subtasks: result && run.item && run.spec.kind === "triage" ? subtaskProposals(result) : [],
       subtasksDraft: subtasksDraft ? { id: subtasksDraft.id, state: subtasksDraft.state } : null,
+      summaryOnly: run.state === "done" && !!result && run.resultComplete === false,
     };
   }
 
@@ -788,7 +801,7 @@ export class MockRuns {
     const { run, item } = this.finished(id);
     const { note } = this.outcome(id);
     if (!note?.text) throw new Error("the run finished without a written answer, so there is nothing to draft");
-    const body = commentText(note, this.changes.get(id) ?? null, run.spec.kind);
+    const body = commentText(note, this.changes.get(id) ?? null, run.spec.kind, run.resultComplete === false);
     const same = this.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "comment" && p.intent.item.externalId === item.externalId && docText(p.intent.body) === body);
     if (same) throw new Error(`that comment is already waiting as a draft on ${item.key} (draft ${same.id})`);
     return this.proposals.fromRun({ type: "comment", item, body: docFromText(body) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));

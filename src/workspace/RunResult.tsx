@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { CodeChange, Run, RunOutcome } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type Run, type RunOutcome } from "../types";
 import { Box, Btn, CopyButton, Details, Sec } from "./AgentSheet";
 import { blockerChoices, blockerControl, breakdownStatus, changeSummary, commentControl, createdFrom, ticketControl, ticketStatus } from "./runSheetLogic";
 
@@ -102,8 +102,8 @@ function TicketFound({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "
         ) : text ? (
           <>
             <p className="m-0 flex flex-wrap items-center gap-2 text-xs font-semibold text-ws-ink3">
-              No 'New ticket:' section, so this is its whole answer
-              <span className="rounded-full bg-ws-warn/15 px-2 font-semibold text-ws-warn">Not parsed</span>
+              {outcome?.summaryOnly ? SUMMARY_ONLY : "No 'New ticket:' section, so this is its whole answer"}
+              <span className="rounded-full bg-ws-warn/15 px-2 font-semibold text-ws-warn">{outcome?.summaryOnly ? "Summary only" : "Not parsed"}</span>
             </p>
             <p data-ticket="answer" className="selectable m-0 whitespace-pre-wrap text-[13.5px] [overflow-wrap:anywhere]">
               {text}
@@ -239,10 +239,14 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingB
         {note?.text ? (
           <>
             <p className="m-0 flex flex-wrap items-center gap-2 text-xs font-semibold text-ws-ink3">
-              {note.fromMarker ? "For Jira, as the agent wrote it" : "No 'For Jira:' section, so this is its whole answer, shortened"}
-              {!note.fromMarker && <span className="rounded-full bg-ws-warn/15 px-2 font-semibold text-ws-warn">Not parsed</span>}
+              {outcome?.summaryOnly ? SUMMARY_ONLY : note.fromMarker ? "For Jira, as the agent wrote it" : "No 'For Jira:' section, so this is its whole answer, shortened"}
+              {outcome?.summaryOnly ? (
+                <span className="rounded-full bg-ws-warn/15 px-2 font-semibold text-ws-warn">Summary only</span>
+              ) : (
+                !note.fromMarker && <span className="rounded-full bg-ws-warn/15 px-2 font-semibold text-ws-warn">Not parsed</span>
+              )}
             </p>
-            <p data-note={note.fromMarker ? "section" : "whole"} className="selectable m-0 whitespace-pre-wrap text-[13.5px] [overflow-wrap:anywhere]">
+            <p data-note={outcome?.summaryOnly ? "summary" : note.fromMarker ? "section" : "whole"} className="selectable m-0 whitespace-pre-wrap text-[13.5px] [overflow-wrap:anywhere]">
               {note.text}
             </p>
           </>

@@ -281,7 +281,7 @@ function attention(run: Run, drafted: boolean, breakdown: boolean): { kind: RunE
         kind: "finished",
         what: "done",
         at: run.endedAt ?? run.lastProgressAt,
-        text: `${breakdown && run.item ? `Breakdown proposed on ${run.item.key}. ` : drafted && run.item ? `Draft ready on ${run.item.key}. ` : ""}${kind} agent finished: ${resultHeadline(run.result) ?? "it wrote no answer"}`,
+        text: `${breakdown && run.item ? `Breakdown proposed on ${run.item.key}. ` : drafted && run.item ? `Draft ready on ${run.item.key}. ` : ""}${kind} agent finished: ${resultHeadline(run.summary ?? run.result) ?? "it wrote no answer"}`,
       };
     case "failed":
       return { kind: "failed", what: "failed", at: run.endedAt ?? run.lastProgressAt, text: `${kind} agent failed: ${firstLine(run.error) || "no reason was recorded"}` };

@@ -95,6 +95,7 @@ pub struct RunService {
     pub(super) timing: Timing,
     pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
     pub(super) config_dir: Mutex<Option<PathBuf>>,
+    pub(super) projects_dir: Mutex<Option<PathBuf>>,
     /// Wakes the tracker when the window gains focus.
     pub focus: tokio::sync::Notify,
 }
@@ -174,6 +175,7 @@ impl RunService {
             timing: Timing::default(),
             misses: Mutex::new(std::collections::HashMap::new()),
             config_dir: Mutex::new(None),
+            projects_dir: Mutex::new(None),
             focus: tokio::sync::Notify::new(),
         }
     }

@@ -269,6 +269,7 @@ async fn seed_run(h: &Harness, n: u32, f: impl FnOnce(&mut Run)) -> Run {
     let p = core.draft_run(spec, Some(h.lx.fx.item("CA-1"))).await.unwrap();
     let mut run = core.runs_approve(&p.id, &core.runs_review(&p.id).await.unwrap().digest).await.unwrap();
     f(&mut run);
+    run.result_complete = run.result.is_some();
     core.save_run(&run).await.unwrap();
     run
 }

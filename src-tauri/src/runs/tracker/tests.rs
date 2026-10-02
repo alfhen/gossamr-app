@@ -11,6 +11,8 @@ use crate::runs::testing::FakeCli;
 
 const FAKE_TOKEN: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
 
+const SUMMARY: &str = "Triage complete: one line.";
+
 fn permission(entry: &mut AgentEntry) {
     entry.status = Some("waiting".into());
     entry.waiting_for = Some("permission prompt".into());
@@ -57,8 +59,11 @@ async fn a_run_follows_its_session_from_working_to_a_permission_prompt_and_back_
     let resumed = rig.get(&run).await;
     assert_eq!((resumed.state, resumed.needs), (RunState::Working, None));
 
+    rig.cli.with(|s| {
+        s.answers.insert("b0000001-0000-4000-8000-000000000000".into(), "It is the cart rounding.\nFor Jira: close as duplicate.".into());
+    });
     rig.job(&id, |j| {
-        j.result = Some("It is the cart rounding.\nFor Jira: close as duplicate.".into());
+        j.result = Some(SUMMARY.into());
         j.worktree_branch = Some("worktree-eng-1-fix-cart-0001".into());
         j.tokens = Some(578_000);
     });
@@ -70,6 +75,7 @@ async fn a_run_follows_its_session_from_working_to_a_permission_prompt_and_back_
     let done = rig.get(&run).await;
     assert_eq!(done.state, RunState::Done);
     assert_eq!(done.result.as_deref(), Some("It is the cart rounding.\nFor Jira: close as duplicate."));
+    assert_eq!((done.summary.as_deref(), done.result_complete), (Some(SUMMARY), true));
     assert_eq!((done.tokens, done.branch.as_deref()), (Some(578_000), Some("worktree-eng-1-fix-cart-0001")));
     assert!(done.ended_at.is_some());
     assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
@@ -478,8 +484,13 @@ async fn limits_of_zero_never_stop_a_run() {
     assert!(rig.cli.0.lock().unwrap().stops.is_empty());
 }
 
+/// The session ends with `result` as its last message and `state.json` holds only the one-line summary.
 fn finish_with(rig: &Rig, run: &Run, result: &str) {
-    rig.job(run.short_id.as_ref().unwrap(), |j| j.result = Some(result.into()));
+    let short = run.short_id.as_ref().unwrap();
+    rig.job(short, |j| j.result = Some(SUMMARY.into()));
+    rig.cli.with(|s| {
+        s.answers.insert(format!("{short}-0000-4000-8000-000000000000"), result.into());
+    });
     rig.session(run, |e| {
         e.state = Some("done".into());
         e.status = Some("idle".into());
@@ -654,4 +665,202 @@ async fn only_a_triage_with_a_subtasks_section_proposes_one_and_the_setting_appl
     finish_with(&rig, &triage, BREAKDOWN_ANSWER);
     rig.poll().await;
     assert!(subtask_drafts(&rig).await.is_empty() && comment_drafts(&rig).await.is_empty());
+}
+
+fn finish_without_a_transcript(rig: &Rig, run: &Run, summary: &str) {
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.result = Some(summary.into()));
+    rig.session(run, |e| {
+        e.state = Some("done".into());
+        e.status = Some("idle".into());
+    });
+}
+
+fn session_of(run: &Run) -> String {
+    format!("{}-0000-4000-8000-000000000000", run.short_id.as_ref().unwrap())
+}
+
+#[tokio::test]
+async fn a_run_whose_transcript_never_appears_keeps_the_summary_says_so_and_drafts_nothing() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    finish_without_a_transcript(&rig, &run, "Triage complete. For Jira:\nA marker inside a summary.");
+    rig.poll().await;
+    let done = rig.get(&run).await;
+    assert_eq!(done.state, RunState::Done);
+    assert_eq!((done.result.as_deref(), done.summary.as_deref(), done.result_complete), (done.summary.as_deref(), Some("Triage complete. For Jira:\nA marker inside a summary."), false));
+    assert_eq!(rig.cli.0.lock().unwrap().answer_reads.len(), 1, "one look at the transition, no sleeping while the tracker holds its lock");
+    assert!(comment_drafts(&rig).await.is_empty(), "a bare summary is never drafted from, whatever it says");
+    assert!(rig.drafted.lock().unwrap().is_empty());
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
+}
+
+#[tokio::test]
+async fn a_final_message_that_lands_after_the_session_is_listed_done_is_found_by_a_later_poll_and_drafted_then() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    rig.cli.with(|s| s.answer_misses = 2);
+    finish_with(&rig, &run, "Found it.\n\nFor Jira:\nAdd a backoff.");
+    rig.poll().await;
+    assert!(!rig.get(&run).await.result_complete && comment_drafts(&rig).await.is_empty());
+    rig.poll().await;
+    assert!(!rig.get(&run).await.result_complete);
+
+    rig.poll().await;
+    let done = rig.get(&run).await;
+    assert_eq!((done.result.as_deref(), done.result_complete), (Some("Found it.\n\nFor Jira:\nAdd a backoff."), true));
+    assert_eq!(done.summary.as_deref(), Some(SUMMARY));
+    assert_eq!(rig.cli.0.lock().unwrap().answer_reads.len(), 3);
+    assert_eq!(comment_drafts(&rig).await.len(), 1);
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
+}
+
+#[tokio::test]
+async fn the_transcript_is_looked_for_by_session_id_under_the_runs_worktree_and_reported_folder() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.worktree_path = Some("/reported/by/state/json".into()));
+    finish_with(&rig, &run, "Fine.");
+    rig.poll().await;
+    let reads = rig.cli.0.lock().unwrap().answer_reads.clone();
+    let [(session, folders), ..] = reads.as_slice() else { panic!("{reads:?}") };
+    assert_eq!(session, &session_of(&run));
+    assert!(folders.contains(&PathBuf::from("/reported/by/state/json")) && folders.contains(&run.expected_worktree), "{folders:?}");
+}
+
+#[tokio::test]
+async fn the_timelines_done_text_stands_in_when_the_transcript_cannot_be_read() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    let answer = "Done.\n\nFor Jira:\nThe consumer needs a backoff.";
+    rig.job(run.short_id.as_ref().unwrap(), |j| {
+        j.result = Some(SUMMARY.into());
+        j.timeline.push(line("2026-01-01T00:05:00Z", "done", answer));
+    });
+    rig.session(&run, |e| e.state = Some("done".into()));
+    rig.poll().await;
+    let done = rig.get(&run).await;
+    assert_eq!((done.result.as_deref(), done.result_complete), (Some(answer), true));
+    assert_eq!(comment_drafts(&rig).await.len(), 1);
+
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    rig.job(run.short_id.as_ref().unwrap(), |j| {
+        j.result = Some(SUMMARY.into());
+        j.timeline.push(line("2026-01-01T00:05:00Z", "done", SUMMARY));
+    });
+    rig.session(&run, |e| e.state = Some("done".into()));
+    rig.poll().await;
+    assert!(!rig.get(&run).await.result_complete, "a done line equal to the summary proves nothing");
+}
+
+#[tokio::test]
+async fn the_stored_answer_is_cleaned_like_any_other_agent_text() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    finish_with(&rig, &run, &format!("Found it. {FAKE_TOKEN}\n\nFor Jira:\nAdd a backoff."));
+    rig.poll().await;
+    let done = rig.get(&run).await;
+    let result = done.result.unwrap();
+    assert!(!result.contains(FAKE_TOKEN) && result.contains("Add a backoff."), "{result}");
+    let drafts = comment_drafts(&rig).await;
+    assert!(matches!(&drafts[0].intent, crate::domain::Intent::Comment { body, .. } if !body.plain_text().contains(FAKE_TOKEN)));
+}
+
+#[tokio::test]
+async fn a_very_long_answer_is_cut_to_the_stored_limit() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    finish_with(&rig, &run, &"word ".repeat(10_000));
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.result.unwrap().chars().count(), RESULT_KEPT);
+}
+
+#[tokio::test]
+async fn opening_a_run_that_finished_with_only_a_summary_fills_in_the_answer_once_it_can_be_read_and_drafts_nothing() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    finish_without_a_transcript(&rig, &run, SUMMARY);
+    rig.poll().await;
+    rig.set(&run, |r| r.ended_at = Some(Utc::now() - Span::hours(2))).await;
+    assert!(!rig.svc.refresh_result(&run.id).await, "nothing to read yet");
+    assert!(!rig.get(&run).await.result_complete);
+
+    rig.cli.with(|s| {
+        s.answers.insert(session_of(&run), "Found it.\n\nFor Jira:\nAdd a backoff.".into());
+    });
+    let told = rig.changes.lock().unwrap().len();
+    assert!(rig.svc.refresh_result(&run.id).await);
+    let healed = rig.get(&run).await;
+    assert_eq!((healed.result.as_deref(), healed.summary.as_deref(), healed.result_complete), (Some("Found it.\n\nFor Jira:\nAdd a backoff."), Some(SUMMARY), true));
+    assert_eq!(rig.changes.lock().unwrap().len(), told + 1, "the page is told to re-read the run");
+    assert!(comment_drafts(&rig).await.is_empty(), "an old run isn't drafted from behind the person's back");
+    assert!(!rig.svc.refresh_result(&run.id).await, "a complete result is left alone");
+}
+
+#[tokio::test]
+async fn a_run_stored_before_summaries_were_kept_separately_gets_its_old_result_as_the_summary() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    finish_without_a_transcript(&rig, &run, SUMMARY);
+    rig.poll().await;
+    rig.set(&run, |r| (r.summary, r.ended_at) = (None, Some(Utc::now() - Span::hours(1)))).await;
+    rig.cli.with(|s| {
+        s.answers.insert(session_of(&run), "Full.".into());
+    });
+    assert!(rig.svc.refresh_result(&run.id).await);
+    assert_eq!(rig.get(&run).await.summary.as_deref(), Some(SUMMARY));
+}
+
+#[tokio::test]
+async fn a_run_that_finished_a_moment_ago_is_polled_for_its_answer_and_then_drafted() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    finish_without_a_transcript(&rig, &run, SUMMARY);
+    rig.poll().await;
+    assert!(comment_drafts(&rig).await.is_empty());
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
+
+    rig.cli.with(|s| {
+        s.answers.insert(session_of(&run), "Found it.\n\nFor Jira:\nAdd a backoff.".into());
+    });
+    assert!(rig.svc.poll_at(Utc::now()).await.busy, "a run waiting for its answer keeps the next look soon");
+    assert!(rig.get(&run).await.result_complete);
+    assert_eq!(comment_drafts(&rig).await.len(), 1);
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
+
+    rig.poll().await;
+    assert_eq!(comment_drafts(&rig).await.len(), 1, "once complete it is left alone");
+}
+
+#[tokio::test]
+async fn a_run_stops_being_polled_for_its_answer_after_two_minutes() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    finish_without_a_transcript(&rig, &run, SUMMARY);
+    rig.poll().await;
+    rig.set(&run, |r| r.ended_at = Some(Utc::now() - Span::minutes(3))).await;
+    let reads = rig.cli.0.lock().unwrap().answer_reads.len();
+    assert!(!rig.svc.poll_at(Utc::now()).await.busy);
+    assert_eq!(rig.cli.0.lock().unwrap().answer_reads.len(), reads);
+}
+
+#[tokio::test]
+async fn timeline_lines_with_fractions_of_a_second_are_stored_once_however_often_the_run_is_polled() {
+    let (rig, run) = launched().await;
+    rig.job(run.short_id.as_ref().unwrap(), |j| {
+        j.timeline = vec![
+            TimelineLine { at: Some("2026-10-02T12:22:45.174Z".into()), state: Some("working".into()), detail: Some("Running git fetch origin main -q".into()), text: Some(String::new()) },
+            line("2026-10-02T12:22:46.900Z", "working", "Reading the cart module"),
+        ];
+    });
+    for _ in 0..5 {
+        rig.poll().await;
+    }
+    let texts: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    assert_eq!(texts, ["Running git fetch origin main -q", "Reading the cart module"]);
+
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.timeline.push(line("2026-10-02T12:23:09.612Z", "working", "Done reading")));
+    rig.poll().await;
+    rig.poll().await;
+    assert_eq!(rig.fx.core.run_events(&run.id).await.unwrap().len(), 3, "a new line is added once");
 }

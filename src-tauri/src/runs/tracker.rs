@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 
 use super::limits;
 use super::cli::{AgentEntry, JobInfo, ShortId};
@@ -29,7 +29,8 @@ const NEEDS_KEPT: usize = 500;
 const DETAIL_KEPT: usize = 500;
 const EVENT_TEXT_KEPT: usize = 500;
 const EVENT_DETAIL_KEPT: usize = 2_048;
-const RESULT_KEPT: usize = 20_000;
+pub(super) const RESULT_KEPT: usize = 20_000;
+const SUMMARY_KEPT: usize = 2_000;
 const REPLY_KEPT: usize = 1_000;
 
 /// Why a run is worth interrupting for. Being quiet is not one of them.
@@ -112,7 +113,7 @@ fn cut(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
-fn cleaned(s: &str, max: usize) -> Option<String> {
+pub(super) fn cleaned(s: &str, max: usize) -> Option<String> {
     let s = s.trim();
     (!s.is_empty()).then(|| cut(&redact(s), max))
 }
@@ -125,6 +126,8 @@ fn events_of(run: &Run, job: &JobInfo) -> Vec<RunEvent> {
         .filter_map(|line| {
             // A line without a time keeps the last line's, so the same timeline always gives the same events.
             at = line.at.as_deref().and_then(parse_at).unwrap_or(at);
+            // Stored times have whole seconds, so a line is only found again by its time when this one does too.
+            let at = at.with_nanosecond(0).unwrap_or(at);
             let main = line.text.as_deref().and_then(|t| cleaned(t, EVENT_TEXT_KEPT));
             let detail = line.detail.as_deref().and_then(|d| cleaned(d, EVENT_DETAIL_KEPT));
             let (text, detail) = match main {
@@ -176,11 +179,13 @@ impl RunService {
             RunState::Unknown,
         ];
         let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(unfinished.to_vec()), ..RunQuery::default() }).await else { return idle };
-        if runs.is_empty() {
+        let waiting = self.awaiting_answer(now).await;
+        if runs.is_empty() && waiting.is_empty() {
             return idle;
         }
-        let busy = runs.iter().any(|r| r.state != RunState::Queued);
+        let busy = runs.iter().any(|r| r.state != RunState::Queued) || !waiting.is_empty();
         let Ok(tc) = self.tools.get().await else { return Polled { busy } };
+        self.collect_answers(&tc, &waiting).await;
         let Ok(entries) = tc.cli.agents(true).await else { return Polled { busy } };
         let config_dir = self.claude_config_dir(&tc).await;
 
@@ -258,7 +263,10 @@ impl RunService {
             _ => None,
         };
         if seen.state == RunState::Done {
-            run.result = seen.result.as_deref().and_then(|r| cleaned(r, RESULT_KEPT));
+            run.summary = seen.result.as_deref().and_then(|r| cleaned(r, SUMMARY_KEPT));
+            let answer = self.read_answer(tc, &run, entry, job.as_ref()).await.and_then(|a| cleaned(&a, RESULT_KEPT));
+            run.result_complete = answer.is_some();
+            run.result = answer.or_else(|| run.summary.clone());
         }
         run.error = matches!(seen.state, RunState::Failed | RunState::Unknown).then(|| seen.error.clone()).flatten();
         let settings = self.settings();
@@ -321,7 +329,7 @@ impl RunService {
     /// The drafts a finished run leaves: a comment on its ticket and, for a Triage, its proposed breakdown; or a new
     /// ticket when it has none. `None` when nothing was made. A failure is only logged: the run's result is already
     /// saved, and the sheet's own button still drafts it.
-    async fn draft_for(&self, run: &Run) -> Option<Attention> {
+    pub(super) async fn draft_for(&self, run: &Run) -> Option<Attention> {
         let mut why = None;
         if run.item.is_some() {
             if self.logged(run, self.core.auto_draft_run_comment(&run.id).await) {

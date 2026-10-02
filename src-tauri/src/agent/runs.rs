@@ -11,6 +11,7 @@ use crate::auth::Scope;
 use crate::domain::{clip, default_instruction, pip_kinds, Intent, ItemRef, Run, RunKind, RunQuery, RunSpec, RunState, FOCUS_LIMIT};
 use crate::inbox::{Core, PipRunAsk};
 use crate::runs::redact::redact;
+use crate::inbox::SUMMARY_ONLY;
 use crate::runs::result::jira_note;
 use crate::tracker::Connection;
 
@@ -303,10 +304,14 @@ async fn get(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
         out.push(format!("Error: {error}"));
     }
     if let Some(result) = run.result.as_deref().filter(|t| !t.trim().is_empty()) {
-        let note = jira_note(result);
-        match note.from_marker.then(|| quoted(&note.text, NOTE_CHARS, false)).flatten() {
-            Some(section) => out.push(format!("For Jira section, as the run wrote it for the ticket: {section}")),
-            None => out.push("The run did not mark a For Jira section.".to_string()),
+        if !run.result_complete {
+            out.push(format!("{SUMMARY_ONLY} Do not tell the user what the run did or did not mark for Jira."));
+        } else {
+            let note = jira_note(result);
+            match note.from_marker.then(|| quoted(&note.text, NOTE_CHARS, false)).flatten() {
+                Some(section) => out.push(format!("For Jira section, as the run wrote it for the ticket: {section}")),
+                None => out.push("The run did not mark a For Jira section.".to_string()),
+            }
         }
         out.push(format!("Result: {}", result_page(result, 0, RESULT_FIRST_CHARS, &run.id)?));
     }
@@ -336,7 +341,8 @@ async fn get_result(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     let Some(result) = run.result.as_deref().filter(|t| !t.trim().is_empty()) else {
         return Err(format!("Run {} has no written result ({}).", run.id, run.state.as_str()));
     };
-    Ok(format!("{DATA_NOTE}\nRun {} result: {}", run.id, result_page(result, offset, RESULT_PAGE_CHARS, &run.id)?))
+    let caveat = if run.result_complete { String::new() } else { format!("\n{SUMMARY_ONLY}") };
+    Ok(format!("{DATA_NOTE}{caveat}\nRun {} result: {}", run.id, result_page(result, offset, RESULT_PAGE_CHARS, &run.id)?))
 }
 
 async fn get_events(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
@@ -553,6 +559,7 @@ mod tests {
             let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
             let mut run = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
             f(&mut run);
+            run.result_complete = run.result.is_some();
             self.fx.core.save_run(&run).await.unwrap();
             run
         }
@@ -711,6 +718,18 @@ mod tests {
     fn page_text(reply: &str) -> String {
         let (_, rest) = reply.split_once(&format!("{OPEN}\n")).unwrap();
         rest.split_once(&format!("\n{CLOSE}")).unwrap().0.to_string()
+    }
+
+    #[tokio::test]
+    async fn a_run_with_only_its_summary_says_so_instead_of_claiming_nothing_was_marked() {
+        let r = rig().await;
+        let run = r.seed(1, "CA-1", |run| (run.state, run.result) = (RunState::Done, Some("Triage complete: small PR.".into()))).await;
+        r.fx.core.save_run(&Run { result_complete: false, ..run.clone() }).await.unwrap();
+        for (tool, args) in [("get_run", json!({ "id": run.id })), ("get_run_result", json!({ "id": run.id }))] {
+            let reply = r.ok(tool, args).await;
+            assert!(reply.contains(SUMMARY_ONLY) && reply.contains("Triage complete: small PR."), "{tool}: {reply}");
+            assert!(!reply.contains("The run did not mark"), "{tool}: {reply}");
+        }
     }
 
     #[tokio::test]
