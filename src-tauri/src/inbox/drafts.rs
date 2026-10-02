@@ -219,7 +219,7 @@ impl Core {
         self.with_db_for(scope, |db| db.proposal(id)).await
     }
 
-    /// Pip's change to one of its pending drafts, or to a pending comment drafted from a run's result. Anyone else's,
+    /// Pip's change to one of its pending drafts, or to a pending comment, new ticket or breakdown drafted from a run's result. Anyone else's,
     /// and anything already decided, is refused here whatever the caller checked.
     pub async fn revise_as_pip(&self, scope: &Scope, id: &str, intent: Intent) -> Result<Proposal> {
         self.with_db_for(scope, |db| {

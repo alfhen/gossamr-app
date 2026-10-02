@@ -27,8 +27,16 @@ macro_rules! status_note {
     };
 }
 
+/// Triage's optional breakdown, ahead of the status note. The parser in `runs/result.rs` reads the `Subtasks:` section
+/// and a finished run drafts it as subtasks on its ticket.
+macro_rules! breakdown {
+    () => {
+        "If the work is genuinely too big for one person to do as one piece, put a section 'Subtasks:' before your final note: 3 to 8 lines, each a short summary of a task someone could pick up on its own, and say in your note that you propose a breakdown. If it fits as one piece, say so in your note and leave the section out. "
+    };
+}
+
 pub const INVESTIGATE_INSTRUCTION: &str = concat!("Investigate this work. Read the code and logs you need, and change nothing. Report what you found, how sure you are, and what you would do next. ", status_note!());
-pub const TRIAGE_INSTRUCTION: &str = concat!("Triage this work. Size it, say how sure you are, and name the areas of the code it touches and who likely owns them, going by the code and its history. List any duplicates you can find in the code or its notes. Change nothing. ", status_note!());
+pub const TRIAGE_INSTRUCTION: &str = concat!("Triage this work. Size it, say how sure you are, and name the areas of the code it touches and who likely owns them, going by the code and its history. List any duplicates you can find in the code or its notes. Change nothing. ", breakdown!(), status_note!());
 pub const VERIFY_INSTRUCTION: &str = concat!("Check that the change described here works. Read the code, and run the existing tests or commands that only read. Say exactly what you ran and what you could not check. Change nothing. ", status_note!());
 pub const BUILD_INSTRUCTION: &str = concat!("Make the change this work describes, on your worktree's branch. Keep it small and follow the repository's conventions. Run its tests and commit with a clear message; do not push and do not open a pull request unless a later sentence says you may. ", status_note!());
 pub const REVIEW_INSTRUCTION: &str = concat!("Review the pull request named below, at the commit named there. Fetch it with read-only commands such as `git fetch origin pull/<number>/head` or `gh pr view` and `gh pr diff`. Change nothing on the pull request and do not comment on it. Write your comments most important first. ", status_note!());
@@ -676,6 +684,17 @@ mod tests {
     }
 
     #[test]
+    fn only_triage_asks_for_a_breakdown_and_asks_for_it_ahead_of_the_note() {
+        for kind in [RunKind::Investigate, RunKind::Verify, RunKind::Build, RunKind::Review] {
+            assert!(!default_instruction(kind).contains("Subtasks:"), "{kind:?}");
+        }
+        let triage = default_instruction(RunKind::Triage);
+        let (breakdown, note) = (triage.find("'Subtasks:'").unwrap(), triage.find("'For Jira:'").unwrap());
+        assert!(breakdown < note && triage.contains("3 to 8") && triage.contains("fits as one piece, say so in your note and leave the section out"));
+        assert!(!render_prompt(&of_kind(RunKind::Triage, None, false)).contains("New ticket"));
+    }
+
+    #[test]
     fn a_spec_stored_before_the_new_fields_reads_with_their_defaults() {
         let mut json = serde_json::to_value(spec()).unwrap();
         json.as_object_mut().unwrap().remove("pr");
@@ -823,8 +842,9 @@ mod tests {
         assert_eq!(digests, GOLDEN_DIGESTS);
     }
 
+    /// Triage first: its digest changed when it started asking for a breakdown. The others are as they were.
     const GOLDEN_DIGESTS: [&str; 4] = [
-        "90b5a4c9ebaf270fa7e86733a578fed0721aa667921103d4ac47752a6841e5fe",
+        "2c01885cbcaa06fc4ef1f11100bee7261b8adfa07d8cd8ee7cc09c914b3fc94b",
         "0145b452701a5ad3b0148a4b40845b0c5d7d081aa1b16589f54f3e8fdff787bd",
         "f84cf09d7e585d6c48646d8bffa4dfcb42d133ad25213ada1e4ef48c38ff6002",
         "a985df10703fa779b63db5f757955b149b20a3d942af2c91c4f55859abfe8833",

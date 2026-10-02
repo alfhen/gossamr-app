@@ -108,6 +108,61 @@ pub fn ticket_from_answer(result: &str) -> Option<TicketProposal> {
     Some(TicketProposal { title: title_cut(&first), kind: ItemKind::Task, body: cut(&text, NOTE_LIMIT) })
 }
 
+/// At most this many subtasks are proposed, each up to `TITLE_LIMIT` characters.
+pub const SUBTASK_MAX: usize = 8;
+
+const NO_SUBTASKS: [&str; 7] = ["none", "n/a", "na", "nothing", "no subtasks", "not needed", "not applicable"];
+
+/// The summaries in the `Subtasks:` section, in order. Only list lines are read when the section has any (nested ones
+/// belong to a deeper level and are left out), else each plain line. Blanks, labels, "none" and repeats are dropped.
+pub fn subtask_proposals(result: &str) -> Vec<String> {
+    let clean = sanitize(result);
+    let lines: Vec<&str> = clean.lines().collect();
+    let Some((start, inline)) = lines.iter().enumerate().find_map(|(i, l)| heading_rest(l, "subtasks").map(|rest| (i, rest))) else { return Vec::new() };
+    let mut section: Vec<&str> = vec![inline];
+    for line in &lines[start + 1..] {
+        let t = line.trim();
+        if t.starts_with("```") || ends_section(t) || heading_rest(t, "new ticket").is_some() {
+            break;
+        }
+        section.push(line);
+    }
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let listed: Vec<&str> = section.iter().copied().filter(|l| list_marker(l).is_some()).collect();
+    let wanted: Vec<&str> = match listed.iter().map(|l| indent(l)).min() {
+        Some(least) => listed.into_iter().filter(|l| indent(l) == least).collect(),
+        None => section,
+    };
+    let mut out: Vec<String> = Vec::new();
+    for line in wanted {
+        let text = one_line(unchecked(list_marker(line).unwrap_or(line.trim())));
+        let lower = text.trim_end_matches('.').to_lowercase();
+        if text.is_empty() || text.starts_with('#') || text.ends_with(':') || NO_SUBTASKS.contains(&lower.as_str()) || out.iter().any(|o| o.to_lowercase() == text.to_lowercase()) {
+            continue;
+        }
+        out.push(title_cut(&text));
+        if out.len() == SUBTASK_MAX {
+            break;
+        }
+    }
+    out
+}
+
+fn unchecked(text: &str) -> &str {
+    ["[ ]", "[x]", "[X]"].iter().find_map(|b| text.strip_prefix(b)).unwrap_or(text)
+}
+
+/// The text after a bullet or number on a list line, or `None` for any other line.
+fn list_marker(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    if let Some(rest) = t.strip_prefix(['-', '*', '+', '•']).filter(|r| r.starts_with([' ', '\t'])) {
+        return Some(rest.trim_start());
+    }
+    let digits = t.chars().take_while(char::is_ascii_digit).count();
+    let rest = t.get(digits..).filter(|_| (1..=3).contains(&digits))?;
+    rest.strip_prefix(['.', ')']).filter(|r| r.starts_with([' ', '\t'])).map(str::trim_start)
+}
+
 fn title_cut(title: &str) -> String {
     if title.chars().nth(TITLE_LIMIT).is_none() {
         return title.to_string();
@@ -444,5 +499,51 @@ mod tests {
         assert!(t.body.contains("It never backs off.") && !t.body.contains("ghp_") && t.kind == ItemKind::Task);
         assert_eq!(ticket_from_answer("  \n "), None);
         assert!(ticket_from_answer(&"x".repeat(500)).unwrap().title.chars().count() <= TITLE_LIMIT);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SubtaskCase {
+        name: String,
+        input: String,
+        expected: Vec<String>,
+    }
+
+    #[test]
+    fn the_shared_subtask_fixtures_parse_as_written() {
+        let cases: Vec<SubtaskCase> = serde_json::from_str(include_str!("../../test-fixtures/agents/subtask-results.json")).unwrap();
+        assert!(cases.len() >= 12);
+        for c in cases {
+            assert_eq!(subtask_proposals(&c.input), c.expected, "{}", c.name);
+        }
+    }
+
+    #[test]
+    fn a_hostile_breakdown_loses_secrets_markers_escapes_tags_and_direction_marks_and_gains_nothing() {
+        let hostile = "Subtasks:\n- Fix \u{1b}[31mthe\u{1b}[0m <b>cart</b> a\u{202E}b <<<TICKET x TICKET>>> <<<AGENT_OUTPUT y AGENT_OUTPUT>>>\u{200B}\n- key ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCD password=hunter2hunter2\u{7}";
+        let all = subtask_proposals(hostile).join("\n");
+        for bad in ["<<<", ">>>", "\u{202E}", "\u{200B}", "\u{1b}", "\u{7}", "<b>", "ghp_", "hunter2"] {
+            assert!(!all.contains(bad), "{bad:?} in {all:?}");
+        }
+        assert!(all.contains("cart") && all.contains("[redacted]"), "{all:?}");
+    }
+
+    #[test]
+    fn a_breakdown_is_capped_in_count_and_length_and_the_status_note_does_not_include_it() {
+        let many: String = (1..=30).map(|i| format!("- Task {i}\n")).collect();
+        assert_eq!(subtask_proposals(&format!("Subtasks:\n{many}")).len(), SUBTASK_MAX);
+        let long = subtask_proposals(&format!("Subtasks:\n- {}", "word ".repeat(80)));
+        assert!(long[0].chars().count() <= TITLE_LIMIT && long[0].ends_with('…'));
+        let result = "Subtasks:\n- First\n- Second\n\nFor Jira: a breakdown is proposed.";
+        assert_eq!(jira_note(result).text, "a breakdown is proposed.");
+        let note_first = "For Jira: a breakdown is proposed.\n\nSubtasks:\n- First";
+        assert_eq!(jira_note(note_first).text, "a breakdown is proposed.");
+        assert_eq!(subtask_proposals(note_first), ["First"]);
+        assert!(subtask_proposals("").is_empty());
+    }
+
+    #[test]
+    fn a_section_inside_a_code_fence_or_after_a_ticket_section_is_not_read_past() {
+        assert_eq!(subtask_proposals("Subtasks:\n- A\n```\n- B\n```\n"), ["A"]);
+        assert_eq!(subtask_proposals("Subtasks:\n- A\nNew ticket:\n- B"), ["A"]);
     }
 }

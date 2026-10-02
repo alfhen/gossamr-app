@@ -593,3 +593,65 @@ async fn an_investigation_with_no_ticket_and_no_section_is_not_drafted_and_the_s
     rig.poll().await;
     assert!(ticket_drafts(&rig).await.is_empty());
 }
+
+async fn subtask_drafts(rig: &Rig) -> Vec<crate::domain::Proposal> {
+    let all = rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap();
+    all.into_iter().filter(|p| matches!(p.intent, crate::domain::Intent::Subtasks { .. })).collect()
+}
+
+const BREAKDOWN_ANSWER: &str = "Sizing: large.\n\nSubtasks:\n- Add a backoff to the consumer\n- Report the consumer lag\n- Survive a restart\n\nFor Jira:\nToo big for one piece; a breakdown is proposed below.";
+
+#[tokio::test]
+async fn a_triage_that_proposes_a_breakdown_leaves_subtasks_beside_its_comment_and_a_restart_does_not_make_another() {
+    let rig = ready().await;
+    let run = rig.launched_as(1, crate::domain::RunKind::Triage).await;
+    rig.poll().await;
+    finish_with(&rig, &run, BREAKDOWN_ANSWER);
+    rig.poll().await;
+    let drafts = subtask_drafts(&rig).await;
+    let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
+    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::User));
+    assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
+    assert!(matches!(&draft.intent, crate::domain::Intent::Subtasks { parent, summaries } if parent.key == "CA-1" && summaries == &["Add a backoff to the consumer", "Report the consumer lag", "Survive a restart"]));
+    assert_eq!(comment_drafts(&rig).await.len(), 1, "the status comment is still drafted");
+    assert!(rig.fx.tracker.intents().is_empty(), "nothing is created or posted");
+    assert_eq!(rig.drafted.lock().unwrap().len(), 1);
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Breakdown, RunState::Done)));
+    assert_eq!(notice_text(&rig.get(&run).await, Attention::Breakdown).title, "Breakdown proposed on CA-1");
+
+    rig.fx.core.skip_proposal(&draft.id).await.unwrap();
+    rig.fx.core.skip_proposal(&comment_drafts(&rig).await[0].id).await.unwrap();
+    rig.set(&run, |r| r.state = RunState::Working).await;
+    rig.session(&run, working);
+    rig.poll().await;
+    finish_with(&rig, &run, BREAKDOWN_ANSWER);
+    rig.poll().await;
+    assert_eq!(subtask_drafts(&rig).await.len(), 1, "a skipped breakdown is not proposed again when the run finishes again");
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
+}
+
+#[tokio::test]
+async fn only_a_triage_with_a_subtasks_section_proposes_one_and_the_setting_applies() {
+    let rig = ready().await;
+    let plain = rig.launched_as(1, crate::domain::RunKind::Triage).await;
+    rig.poll().await;
+    finish_with(&rig, &plain, "It fits as one piece.\n\nFor Jira:\nSmall; do it as one ticket.");
+    rig.poll().await;
+    assert!(subtask_drafts(&rig).await.is_empty());
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
+
+    let rig = ready().await;
+    let investigate = rig.launched(1).await;
+    rig.poll().await;
+    finish_with(&rig, &investigate, BREAKDOWN_ANSWER);
+    rig.poll().await;
+    assert!(subtask_drafts(&rig).await.is_empty(), "a breakdown is Triage's");
+
+    let rig = ready().await;
+    rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
+    let triage = rig.launched_as(1, crate::domain::RunKind::Triage).await;
+    rig.poll().await;
+    finish_with(&rig, &triage, BREAKDOWN_ANSWER);
+    rig.poll().await;
+    assert!(subtask_drafts(&rig).await.is_empty() && comment_drafts(&rig).await.is_empty());
+}

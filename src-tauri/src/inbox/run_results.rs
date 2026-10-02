@@ -7,11 +7,11 @@ use chrono::Utc;
 use serde::Serialize;
 
 use super::Core;
-use crate::domain::{CodeChange, CodeChangeKind, ContainerRef, CreatedBy, Doc, Intent, ItemRef, LinkKind, NewItem, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunState, StateKind};
+use crate::domain::{Basis, CodeChange, CodeChangeKind, ContainerRef, CreatedBy, Doc, Intent, ItemRef, LinkKind, NewItem, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunState, StateKind};
 use crate::error::{Error, Result};
 use crate::proposals::{self, Draft};
 use crate::runs::pr;
-use crate::runs::result::{jira_note, ticket_from_answer, ticket_keys, ticket_proposal, JiraNote, TicketProposal};
+use crate::runs::result::{jira_note, subtask_proposals, ticket_from_answer, ticket_keys, ticket_proposal, JiraNote, TicketProposal};
 use crate::tracker::{self, Connection};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -25,6 +25,10 @@ pub struct RunOutcome {
     pub ticket: Option<TicketProposal>,
     /// The ticket draft made from this run, in whatever state it is now.
     pub ticket_draft: Option<RunDraft>,
+    /// For a Triage run on a ticket: the breakdown its `Subtasks:` section proposes.
+    pub subtasks: Vec<String>,
+    /// The subtasks draft made from this run, in whatever state it is now.
+    pub subtasks_draft: Option<RunDraft>,
 }
 
 /// The comment draft made from a run, in whatever state it is now.
@@ -74,6 +78,10 @@ fn ticket_drafts(all: Vec<Proposal>, run_id: &str) -> Vec<Proposal> {
     all.into_iter().filter(|p| matches!((&p.origin, &p.intent), (Origin::Run { run_id: r, .. }, Intent::Create { .. }) if r == run_id)).collect()
 }
 
+fn subtask_drafts(all: Vec<Proposal>, run_id: &str) -> Vec<Proposal> {
+    all.into_iter().filter(|p| matches!((&p.origin, &p.intent), (Origin::Run { run_id: r, .. }, Intent::Subtasks { .. }) if r == run_id)).collect()
+}
+
 /// The ticket an approved draft made.
 fn ticket_made(draft: &Proposal) -> Option<&ItemRef> {
     draft.created.first().filter(|_| draft.state == ProposalState::Applied)
@@ -121,12 +129,21 @@ impl Core {
             draft: self.comment_drafts_of(&run).await?.into_iter().next().map(|p| RunDraft { id: p.id, state: p.state }),
             ticket: result.filter(|_| run.item.is_none()).and_then(ticket_proposal),
             ticket_draft: ticket_draft.map(|p| RunDraft { id: p.id, state: p.state }),
+            subtasks: result.filter(|_| run.spec.kind == RunKind::Triage && run.item.is_some()).map(subtask_proposals).unwrap_or_default(),
+            subtasks_draft: self.subtask_drafts_of(&run).await?.into_iter().next().map(|p| RunDraft { id: p.id, state: p.state }),
         })
     }
 
     /// Every ticket draft made from `run`, newest first, whether it is still waiting or was decided. A run has at most one.
     async fn ticket_drafts_of(&self, run: &Run) -> Result<Vec<Proposal>> {
         Ok(ticket_drafts(self.proposals(&ProposalQuery::default()).await?, &run.id))
+    }
+
+    /// Every subtasks draft made from `run`, whether it is still waiting or was decided. A run has at most one.
+    async fn subtask_drafts_of(&self, run: &Run) -> Result<Vec<Proposal>> {
+        let Some(item) = run.item.clone() else { return Ok(Vec::new()) };
+        let found = self.proposals(&ProposalQuery { item: Some(item), ..Default::default() }).await?;
+        Ok(subtask_drafts(found, &run.id))
     }
 
     /// Every comment draft made from `run`, newest first, whether it is still waiting or was decided.
@@ -191,6 +208,37 @@ impl Core {
         }
         let intent = self.comment_intent(&run, item, &note).await?;
         Ok(Some(self.draft_from_run(&run, intent, label_of(&run)).await?))
+    }
+
+    /// The breakdown a finished Triage run proposed, drafted as subtasks on its ticket. Never created in Jira until
+    /// approved. `None` when the run isn't a Triage on a ticket, has no `Subtasks:` section, or already has a draft in
+    /// any state, even a skipped one. Looking and storing happen under one lock, so two callers can't both make one.
+    pub async fn draft_run_subtasks(&self, id: &str) -> Result<Option<Proposal>> {
+        let Ok((run, item)) = self.finished_run(id).await else { return Ok(None) };
+        let summaries = subtask_proposals(run.result.as_deref().unwrap_or(""));
+        if run.spec.kind != RunKind::Triage || summaries.is_empty() {
+            return Ok(None);
+        }
+        let scope = self.scope().await?;
+        if item.connection_id != Connection::jira_id(&scope) {
+            return Err(refuse("that item belongs to another connection"));
+        }
+        let mut draft = Draft {
+            origin: Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) },
+            created_by: CreatedBy::User,
+            intent: Intent::Subtasks { parent: item.clone(), summaries },
+            label: Some(label_of(&run)),
+            basis: None,
+        };
+        self.with_db_for(&scope, |db| {
+            let found = db.proposals(&ProposalQuery { item: Some(item.clone()), ..Default::default() })?;
+            if !subtask_drafts(found, &run.id).is_empty() {
+                return Ok(None);
+            }
+            draft.basis = db.item(&item)?.as_ref().map(Basis::of);
+            Ok(Some(proposals::create(db, draft, Utc::now())?))
+        })
+        .await
     }
 
     async fn ticketless_run(&self, id: &str) -> Result<Run> {
@@ -731,5 +779,69 @@ mod tests {
         assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap().created_item, None);
         fx.core.run_outcome(&run.id).await.unwrap();
         assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap().created_item, Some(made));
+    }
+
+    const BREAKDOWN: &str = "Large.\n\nSubtasks:\n- Add a backoff\n- Report the lag\n- Survive a restart\n\nFor Jira:\nA breakdown is proposed.";
+
+    async fn triage_with(fx: &Fixture, result: &str) -> Run {
+        approved(fx, RunSpec { kind: RunKind::Triage, ..next_spec(fx) }, Some(fx.item("CA-1")), result, |_| {}).await
+    }
+
+    async fn subtask_drafts_in(fx: &Fixture) -> Vec<Proposal> {
+        fx.core.proposals(&ProposalQuery::default()).await.unwrap().into_iter().filter(|p| matches!(p.intent, Intent::Subtasks { .. })).collect()
+    }
+
+    #[tokio::test]
+    async fn a_triage_breakdown_is_drafted_once_as_subtasks_from_the_run_and_nothing_is_created() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = triage_with(&fx, BREAKDOWN).await;
+        let p = fx.core.draft_run_subtasks(&run.id).await.unwrap().unwrap();
+        assert_eq!((p.state.clone(), p.created_by), (ProposalState::Pending, CreatedBy::User));
+        assert_eq!(p.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+        assert_eq!(p.label, Some(format!("From agent run {}", run.short_id.as_ref().unwrap())));
+        assert!(matches!(&p.intent, Intent::Subtasks { parent, summaries } if *parent == fx.item("CA-1") && summaries == &["Add a backoff", "Report the lag", "Survive a restart"]));
+        assert!(fx.tracker.intents().is_empty());
+        assert!(fx.core.draft_run_subtasks(&run.id).await.unwrap().is_none(), "a second call makes no second draft");
+        assert_eq!(subtask_drafts_in(&fx).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn two_callers_at_once_make_one_breakdown_and_a_decided_one_is_never_made_again() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = triage_with(&fx, BREAKDOWN).await;
+        let (a, b) = tokio::join!(fx.core.draft_run_subtasks(&run.id), fx.core.draft_run_subtasks(&run.id));
+        assert_eq!([a.unwrap(), b.unwrap()].iter().flatten().count(), 1);
+        let only = subtask_drafts_in(&fx).await.remove(0);
+        fx.core.skip_proposal(&only.id).await.unwrap();
+        assert!(fx.core.draft_run_subtasks(&run.id).await.unwrap().is_none());
+        assert_eq!(subtask_drafts_in(&fx).await.len(), 1);
+        let other = triage_with(&fx, BREAKDOWN).await;
+        assert!(fx.core.draft_run_subtasks(&other.id).await.unwrap().is_some(), "another run's breakdown is its own");
+    }
+
+    #[tokio::test]
+    async fn no_breakdown_for_other_kinds_ticketless_runs_unfinished_runs_or_results_without_the_section() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let investigate = run_with(&fx, |r| r.result = Some(BREAKDOWN.into())).await;
+        assert!(fx.core.draft_run_subtasks(&investigate.id).await.unwrap().is_none());
+        let fits = triage_with(&fx, "Fits as one piece.\n\nFor Jira: small.").await;
+        assert!(fx.core.draft_run_subtasks(&fits.id).await.unwrap().is_none());
+        let working = approved(&fx, RunSpec { kind: RunKind::Triage, ..next_spec(&fx) }, Some(fx.item("CA-1")), BREAKDOWN, |r| r.state = RunState::Working).await;
+        assert!(fx.core.draft_run_subtasks(&working.id).await.unwrap().is_none());
+        assert!(fx.core.draft_run_subtasks("missing").await.unwrap().is_none());
+        assert!(subtask_drafts_in(&fx).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_outcome_names_the_proposed_breakdown_and_its_draft() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = triage_with(&fx, BREAKDOWN).await;
+        let before = fx.core.run_outcome(&run.id).await.unwrap();
+        assert_eq!((before.subtasks.as_slice(), before.subtasks_draft), (["Add a backoff", "Report the lag", "Survive a restart"].map(String::from).as_slice(), None));
+        let p = fx.core.draft_run_subtasks(&run.id).await.unwrap().unwrap();
+        let after = fx.core.run_outcome(&run.id).await.unwrap();
+        assert_eq!(after.subtasks_draft, Some(RunDraft { id: p.id, state: ProposalState::Pending }));
+        let plain = run_with(&fx, |r| r.result = Some(BREAKDOWN.into())).await;
+        assert!(fx.core.run_outcome(&plain.id).await.unwrap().subtasks.is_empty(), "only a Triage proposes a breakdown");
     }
 }

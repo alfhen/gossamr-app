@@ -420,6 +420,27 @@ pub async fn pip_revises_a_runs_new_ticket_but_never_one_the_person_wrote(h: &Ha
     (refused && !ok && revised && typed_after.as_ref() == Some(&typed) && h.lx.fx.tracker.intents().is_empty()).then_some(()).ok_or_else(|| format!("revising a run's ticket went wrong: {said}"))
 }
 
+pub async fn pip_revises_a_runs_breakdown_but_never_one_the_person_wrote(h: &Harness) -> std::result::Result<(), String> {
+    let core = &h.lx.fx.core;
+    let breakdown = |origin: Origin, first: &str| Draft {
+        origin,
+        created_by: CreatedBy::User,
+        intent: Intent::Subtasks { parent: h.lx.fx.item("CA-1"), summaries: vec![first.into(), "second".into()] },
+        label: None,
+        basis: None,
+    };
+    let left = core.propose(&h.lx.fx.scope, breakdown(Origin::Run { run_id: "probe".into(), short_id: None }, "from a run")).await.map_err(|e| e.to_string())?;
+    let typed = core.propose(&h.lx.fx.scope, breakdown(Origin::Board, "typed by the person")).await.map_err(|e| e.to_string())?;
+    let (_, refused) = h.tool("runs-breakdown", "revise_proposal", json!({ "id": typed.id, "summaries": ["hijacked"] })).await;
+    let (said, ok) = h.tool("runs-breakdown", "revise_proposal", json!({ "id": left.id, "summaries": ["reworked", "and more"] })).await;
+    let after = |id: String| async move { core.proposal_in(&h.lx.fx.scope, &id).await.ok().flatten() };
+    let (typed_after, left_after) = (after(typed.id.clone()).await, after(left.id.clone()).await);
+    let revised = left_after.as_ref().is_some_and(|p| {
+        matches!(&p.intent, Intent::Subtasks { parent, summaries } if *parent == h.lx.fx.item("CA-1") && summaries == &["reworked", "and more"]) && p.state == crate::domain::ProposalState::Pending
+    });
+    (refused && !ok && revised && typed_after.as_ref() == Some(&typed) && h.lx.fx.tracker.intents().is_empty()).then_some(()).ok_or_else(|| format!("revising a run's breakdown went wrong: {said}"))
+}
+
 pub async fn propose_run_never_starts_a_run(h: &Harness) -> std::result::Result<(), String> {
     let before = h.runs().await;
     let (reply, error) = h.tool("runs-propose", "propose_run", json!({ "key": "CA-1", "kind": "investigate", "focus": "the retry loop" })).await;
@@ -471,6 +492,7 @@ pub async fn check_run_tools(h: &Harness) -> std::result::Result<(), String> {
     a_whole_result_can_be_read_through_the_tools(h).await?;
     pip_revises_a_runs_comment_but_never_one_the_person_wrote(h).await?;
     pip_revises_a_runs_new_ticket_but_never_one_the_person_wrote(h).await?;
+    pip_revises_a_runs_breakdown_but_never_one_the_person_wrote(h).await?;
     propose_run_never_starts_a_run(h).await?;
     over_long_focus_is_rejected(h).await
 }

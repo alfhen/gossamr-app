@@ -41,6 +41,8 @@ pub enum Attention {
     Drafted,
     /// Finished, and a new ticket from its result is waiting as a draft.
     DraftedTicket,
+    /// Finished, and a breakdown into subtasks is waiting as a draft.
+    Breakdown,
     Failed,
     /// Gossamr stopped it for passing a limit.
     Limit,
@@ -73,6 +75,7 @@ pub fn notice_text(run: &Run, why: Attention) -> Notice {
         }
         Attention::Limit => Notice { title: format!("{topic} was stopped"), body: run.error.clone().unwrap_or_else(|| "It passed a limit".into()) },
         Attention::Drafted => Notice { title: format!("Draft ready on {topic}"), body: "An agent finished. Read its comment before anything is posted".into() },
+        Attention::Breakdown => Notice { title: format!("Breakdown proposed on {topic}"), body: "An agent finished. Read the subtasks before anything is created".into() },
         Attention::DraftedTicket => Notice { title: "Draft ticket ready".into(), body: format!("An agent finished in {topic}. Read the ticket before anything is created") },
         Attention::Done => Notice { title: format!("{topic} finished"), body: "Open it to see what it found".into() },
         Attention::Failed => {
@@ -315,25 +318,33 @@ impl RunService {
         Ok(touched.then(|| run.connection_id.clone()))
     }
 
-    /// The draft a finished run leaves: a comment on its ticket, or a new ticket when it has none. `None` when nothing
-    /// was made. A failure is only logged: the run's result is already saved, and the sheet's own button still drafts it.
+    /// The drafts a finished run leaves: a comment on its ticket and, for a Triage, its proposed breakdown; or a new
+    /// ticket when it has none. `None` when nothing was made. A failure is only logged: the run's result is already
+    /// saved, and the sheet's own button still drafts it.
     async fn draft_for(&self, run: &Run) -> Option<Attention> {
-        let (made, why) = if run.item.is_some() {
-            (self.core.auto_draft_run_comment(&run.id).await, Attention::Drafted)
-        } else {
-            (self.core.auto_draft_run_ticket(&run.id).await, Attention::DraftedTicket)
-        };
-        match made {
-            Ok(Some(_)) => {
-                (self.drafted)(&run.connection_id);
-                Some(why)
+        let mut why = None;
+        if run.item.is_some() {
+            if self.logged(run, self.core.auto_draft_run_comment(&run.id).await) {
+                why = Some(Attention::Drafted);
             }
-            Ok(None) => None,
-            Err(e) => {
-                eprintln!("couldn't draft from run {}: {e}", run.id);
-                None
+            if self.logged(run, self.core.draft_run_subtasks(&run.id).await) {
+                why = Some(Attention::Breakdown);
             }
+        } else if self.logged(run, self.core.auto_draft_run_ticket(&run.id).await) {
+            why = Some(Attention::DraftedTicket);
         }
+        if why.is_some() {
+            (self.drafted)(&run.connection_id);
+        }
+        why
+    }
+
+    fn logged(&self, run: &Run, made: crate::error::Result<Option<crate::domain::Proposal>>) -> bool {
+        made.unwrap_or_else(|e| {
+            eprintln!("couldn't draft from run {}: {e}", run.id);
+            None
+        })
+        .is_some()
     }
 
     pub async fn events(&self, run_id: &str) -> crate::error::Result<Vec<RunEvent>> {
