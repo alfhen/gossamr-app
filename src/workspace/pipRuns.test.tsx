@@ -6,6 +6,7 @@ import type { AskRequest, ClaudeEvent } from "../backend/claude";
 import type { Run, RunState, ScreenContext } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { NUDGE_GAP_MS, nudgeCandidates, pickNudge, type NudgeScene } from "./nudges";
+import { NO_FILTERS } from "./agentsLogic";
 import { useAgentsFlag } from "./agentsFlag";
 import { PipRunCard, PipRunStripView } from "./PipRunCard";
 import { STRIP_SHOWN, describeRun, runNudgeId, runNudges, runStatesNow, runSummaryPrompt, stripRuns } from "./pipRuns";
@@ -124,7 +125,7 @@ describe("what Pip is told about agents", () => {
   };
 
   it("includes the open run and how many agents wait while agents are on, and neither when they are off", () => {
-    const on = buildScreenContext(screen({ openRun: "r1", waiting: 2 }));
+    const on = buildScreenContext(screen({ openRun: "r1", waiting: 2, runs: [], filters: NO_FILTERS, earlierOpen: false, now: NOW }));
     expect([on.run, on.runsWaiting]).toEqual(["r1", 2]);
     const off = buildScreenContext(screen());
     expect("run" in off || "runsWaiting" in off).toBe(false);

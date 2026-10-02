@@ -244,6 +244,8 @@ export interface ScreenContext {
   run?: string | null;
   /** How many agents wait on the person. */
   runsWaiting?: number;
+  /** The runs the Agents view lists, by state, such as "1 needs you · 2 running". */
+  runsSummary?: string;
 }
 
 export type WorkFilter =

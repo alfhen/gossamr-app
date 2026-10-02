@@ -13,16 +13,17 @@ import { activeTab, useTabs } from "./tabsStore";
 
 const peekedItems = (p: ReturnType<typeof useWorkspace.getState>["peeked"]) => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.item]));
 
-/** The screen as it is right now, read when a question is asked so it is about what is on screen then. */
-const agentsIn = (on: boolean, sheet: ReturnType<typeof useRuns.getState>["sheet"], runs: ReturnType<typeof useRuns.getState>["runs"]): Screen["agents"] =>
-  on ? { openRun: sheet?.type === "run" ? sheet.id : null, waiting: runs.filter(needsPerson).length } : undefined;
+type RunsState = ReturnType<typeof useRuns.getState>;
 
+const agentsIn = (on: boolean, { sheet, runs, filters, earlierOpen }: Pick<RunsState, "sheet" | "runs" | "filters" | "earlierOpen">): Screen["agents"] =>
+  on ? { openRun: sheet?.type === "run" ? sheet.id : null, waiting: runs.filter(needsPerson).length, runs, filters, earlierOpen, now: Date.now() } : undefined;
+
+/** The screen as it is right now, read when a question is asked so it is about what is on screen then. */
 export function readScreen(): Screen {
   const tabs = useTabs.getState();
   const ws = useWorkspace.getState();
   const tab = activeTab(tabs);
   const { chip, container } = useActivity.getState();
-  const { sheet, runs } = useRuns.getState();
   return {
     route: tabs.route,
     tab,
@@ -33,7 +34,7 @@ export function readScreen(): Screen {
     selected: tabs.selected,
     marked: tabs.marked,
     activity: { chip, container },
-    agents: agentsIn(useAgentsFlag.getState().enabled, sheet, runs),
+    agents: agentsIn(useAgentsFlag.getState().enabled, useRuns.getState()),
   };
 }
 
@@ -55,7 +56,9 @@ export function useScreen(): Screen {
   const enabled = useAgentsFlag((s) => s.enabled);
   const sheet = useRuns((s) => s.sheet);
   const runs = useRuns((s) => s.runs);
-  const agents = useMemo(() => agentsIn(enabled, sheet, runs), [enabled, sheet, runs]);
+  const filters = useRuns((s) => s.filters);
+  const earlierOpen = useRuns((s) => s.earlierOpen);
+  const agents = useMemo(() => agentsIn(enabled, { sheet, runs, filters, earlierOpen }), [enabled, sheet, runs, filters, earlierOpen]);
   return useMemo(
     () => ({ route, tab, shown, items, peeked, containers, selected, marked, activity: { chip, container }, agents }),
     [route, tab, shown, items, peeked, containers, selected, marked, chip, container, agents],

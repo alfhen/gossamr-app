@@ -22,6 +22,8 @@ pub struct ScreenContext {
     pub run: Option<String>,
     /// How many agents wait on the person, as the page counts them.
     pub runs_waiting: usize,
+    /// The runs the Agents view lists, by state, as the page counts them.
+    pub runs_summary: Option<String>,
     /// Set by Core, not the page: the open item is in a project the user doesn't watch.
     #[serde(skip)]
     pub unwatched_item: bool,
@@ -58,6 +60,9 @@ impl ScreenContext {
         if let Some(run) = self.run.as_deref().and_then(|id| runs.iter().find(|r| r.id == id)) {
             let key = run.item.as_ref().map_or("no ticket", |i| i.key.as_str());
             lines.push(format!("Open agent run: {} {key} {}", run.id, run.state.as_str()));
+        }
+        if let Some(summary) = &self.runs_summary {
+            lines.push(format!("Runs shown: {summary}"));
         }
         if self.runs_waiting > 0 {
             lines.push(format!("Agents waiting on the person: {}", self.runs_waiting));
@@ -113,6 +118,9 @@ pub fn system_prompt(reads_code: bool) -> String {
          list_watched_repos names them. They only read, and only in watched repositories: when one is refused, ask the user \
          to watch that repository rather than guessing. When you say what was done on a ticket, link the pull requests you \
          found, by their URL, and say when a result was cut short. \
+         When the screen is Agents, the person is looking at their agent runs and not at a board: there is no ticket list \
+         or ticked ticket. The Agents screen line counts the runs after the person's filter, while the agent runs block \
+         can list runs outside it. Use list_runs and get_run for the run ids in the block. \
          You can see the user's agent runs: list_runs, get_run, get_run_result and get_run_events only read them. get_run shows the start of a result and the part the run marked for Jira; before you write or change anything from a run, read the rest with get_run_result (it says where the next page starts) and never say a result was cut off while more can be fetched. When a run has left a comment or a new-ticket draft for the user, you may change its text (a ticket's title, description and type) with revise_proposal if they ask; they still approve it. propose_run saves a draft that starts \
          an agent only after the user reads the exact prompt and approves it; you give it a ticket, a kind and at most a short \
          focus note, and the prompt and ticket text are not yours to write. Never say a run has started, finished or found \
@@ -449,6 +457,19 @@ mod tests {
         let none = compose(&ScreenContext { run: Some("gone".into()), ..Default::default() }, None, &[], &[], &runs, "hi");
         assert!(!none.contains("Open agent run") && !none.contains("waiting on the person"));
         assert!(none.contains("[Agent runs: your agents."), "{none}");
+    }
+
+    #[test]
+    fn an_agents_screen_names_the_runs_shown_and_the_prompt_says_it_is_not_a_board() {
+        let runs = [a_run("r1", crate::domain::RunState::Working), a_run("r2", crate::domain::RunState::NeedsAnswer)];
+        let ctx: ScreenContext = serde_json::from_str(r#"{"view":"Agents · Needs you · 1 run","runsSummary":"1 needs you","runsWaiting":1,"selection":[]}"#).unwrap();
+        let p = compose(&ctx, None, &[], &[], &runs, "hi");
+        assert!(p.contains("View: Agents · Needs you · 1 run\nRuns shown: 1 needs you\nAgents waiting on the person: 1"), "{p}");
+        assert!(!p.contains("Applied filter") && !p.contains("Selected:") && !p.contains("Open item"));
+        assert!(p.contains("[Agent runs: your agents.") && p.contains("r1") && p.contains("r2"), "{p}");
+        let prompt = system_prompt(false);
+        assert!(prompt.contains("When the screen is Agents") && prompt.contains("not at a board") && prompt.contains("run ids in the block") && prompt.contains("outside it"));
+        assert!(system_prompt(true).contains("When the screen is Agents"));
     }
 
     #[test]
