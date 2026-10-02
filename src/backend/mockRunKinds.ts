@@ -43,6 +43,20 @@ export function withoutMarkers(text: string): string {
   return out;
 }
 
+/** The most of a ticketless run's instruction Pip may write, as `PIP_PROMPT_LIMIT` in `domain/run.rs`. */
+export const PIP_PROMPT_LIMIT = 2_000;
+
+/** Pip's question for a run with no ticket as the run takes it, or why it is refused; as `valid_prompt` in `agent/runs.rs`. */
+export function pipPrompt(text: string): { prompt: string } | { problem: string } {
+  const prompt = withoutMarkers(text.replace(/\r\n/g, "\n")).trim();
+  if (!prompt) return { problem: "prompt is empty; write the question the agent should look into" };
+  const length = [...prompt].length;
+  if (length > PIP_PROMPT_LIMIT) return { problem: `prompt is ${length} characters; the most is ${PIP_PROMPT_LIMIT}. Shorten it to the question itself.` };
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(prompt)) return { problem: "prompt must be plain text" };
+  return { prompt };
+}
+
 export const planLabel = (from: string) => `Plan from run ${withoutMarkers(from).trim()}`;
 
 export const buildAccountLabel = (from: string) => `What the builder says it did (run ${withoutMarkers(from).trim()})`;

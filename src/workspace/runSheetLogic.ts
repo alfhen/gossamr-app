@@ -258,12 +258,12 @@ export type TimelineTone = "find" | "ask" | "err" | "plain";
 
 export const timelineTone = (kind: string): TimelineTone => (kind === "done" ? "find" : kind === "ask" ? "ask" : kind === "error" ? "err" : "plain");
 
-/** A pending run draft for the same ticket and kind, so choosing Investigate twice opens one draft. */
+/** A pending run draft for the same ticket and kind, so choosing Investigate twice opens one draft. With no ticket only the person's own draft is reused: Pip's question is its own, reached from where it was proposed. */
 export function findRunDraft(proposals: Record<string, Proposal> | readonly Proposal[], item: ItemRef | null, kind: RunKind, pr?: number): Proposal | undefined {
   const all = Array.isArray(proposals) ? proposals : Object.values(proposals);
   const wanted = item ? itemKey(item) : null;
   return all
-    .filter((p) => p.state.type === "pending" && p.intent.type === "startRun" && p.intent.spec.kind === kind && (pr === undefined || p.intent.spec.pr === pr) && (p.intent.item ? itemKey(p.intent.item) : null) === wanted)
+    .filter((p) => p.state.type === "pending" && p.intent.type === "startRun" && p.intent.spec.kind === kind && (pr === undefined || p.intent.spec.pr === pr) && (p.intent.item ? itemKey(p.intent.item) : null) === wanted && (wanted !== null || p.createdBy !== "pip"))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 

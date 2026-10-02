@@ -245,6 +245,7 @@ function Heading({ p }: { p: SetupViewProps }) {
         {p.ticketless ? "Investigate something (no ticket)" : `${KIND_LABEL[p.kind]} ${p.item ? `${p.item.key}${p.ticketTitle ? `: ${p.ticketTitle}` : ""}` : "a task"}`}
       </h2>
       <p className="m-0 text-ws-ink2">Nothing runs until you press Start. You can stop it once it&apos;s working.</p>
+      {p.fromPip && p.ticketless && <p className="m-0 text-ws-ink2">Pip wrote the question below because no ticket covers it. It is the prompt in full, and you can change it before you start.</p>}
       {p.review?.spec.buildFromRun && p.review.buildAccount && (
         <p className="m-0 text-ws-ink2">
           This review follows build run {p.review.spec.buildFromRun}, pinned to the pull request&apos;s commit as GitHub has it now. What the builder says it did is its own part of the prompt below, in full, and you can edit it before you start. The reviewer is told to check it against the diff and the ticket, not to believe it.

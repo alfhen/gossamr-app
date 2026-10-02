@@ -22,6 +22,11 @@ const HEADER: Record<Proposal["state"]["type"], string> = {
 };
 
 /** A few lines of what approving would do. */
+const clipText = (text: string) => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat;
+};
+
 export function draftPreviewBody(p: Proposal, statusName: string | null): string {
   const i = p.intent;
   switch (i.type) {
@@ -38,7 +43,7 @@ export function draftPreviewBody(p: Proposal, statusName: string | null): string
     case "link":
       return linkSentence(i);
     case "startRun":
-      return `Start an agent: ${i.item?.key ?? i.spec.repo}\n${i.spec.focus?.trim() ? `Focus from Pip: ${i.spec.focus.trim()}\n` : ""}Read the exact prompt, then start it. Nothing runs before that.`;
+      return `Start an agent: ${i.item?.key ?? `${i.spec.repo}, no ticket`}\n${!i.item && i.spec.instruction.trim() ? `${clipText(i.spec.instruction)}\n` : ""}${i.spec.focus?.trim() ? `Focus from Pip: ${i.spec.focus.trim()}\n` : ""}Read the exact prompt, then start it. Nothing runs before that.`;
     default:
       return unreachable(i);
   }
