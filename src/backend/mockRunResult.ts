@@ -15,15 +15,16 @@ function headingRest(line: string, name: string): string | null {
 const afterHeading = (line: string) => headingRest(line, "for jira");
 
 /**
- * Follows fenced code blocks line by line as `Fences` in `runs/result.rs` does: three or more backticks or tildes open
- * one, only the same character at least as long with nothing after it closes it, and one left open runs to the end.
+ * Follows fenced code blocks line by line as `Fences` in `runs/result.rs` does: three or more backticks or tildes,
+ * indented at most three spaces, open one, only the same character at least as long with nothing after it closes it, and one left open runs to the end.
  * The returned function is true for a fence marker or a line inside a fence.
  */
 function fenceTracker(): (line: string) => boolean {
   let open: { ch: string; len: number } | null = null;
   return (line) => {
-    const t = line.trimStart();
-    const ch = t[0] === "`" || t[0] === "~" ? t[0] : null;
+    const indent = /^ */.exec(line)![0].length;
+    const t = line.slice(indent);
+    const ch = indent <= 3 && (t[0] === "`" || t[0] === "~") ? t[0] : null;
     let run = 0;
     while (ch && t[run] === ch) run++;
     const rest = t.slice(run);

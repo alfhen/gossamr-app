@@ -112,5 +112,23 @@
     "input": "Answer.\n```\nFor Jira: never closed",
     "text": "Answer.\n```\nFor Jira: never closed",
     "fromMarker": false
+  },
+  {
+    "name": "a fence marker indented four spaces is code, not a fence",
+    "input": "Intro.\n    ```\nFor Jira:\nThe real note.",
+    "text": "The real note.",
+    "fromMarker": true
+  },
+  {
+    "name": "a fence marker indented three spaces still opens one",
+    "input": "   ```\nFor Jira: inside\n   ```\n\nFor Jira:\nThe real note.",
+    "text": "The real note.",
+    "fromMarker": true
+  },
+  {
+    "name": "a closing marker indented four spaces does not close the fence",
+    "input": "```\nFor Jira: inside\n    ```\nFor Jira: still inside",
+    "text": "```\nFor Jira: inside\n    ```\nFor Jira: still inside",
+    "fromMarker": false
   }
 ]
