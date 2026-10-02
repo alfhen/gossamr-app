@@ -109,5 +109,17 @@
       "Rotate [redacted] now",
       "Use Vec<String> where a < b"
     ]
+  },
+  {
+    "name": "a Subtasks line inside a code fence is not the section",
+    "input": "```\nSubtasks:\n- In a fence\n```\n\nSubtasks:\n- Real one",
+    "expected": [
+      "Real one"
+    ]
+  },
+  {
+    "name": "a Subtasks line only inside a code fence is no breakdown",
+    "input": "```\nSubtasks:\n- Only in a fence\n```",
+    "expected": []
   }
 ]

@@ -14,6 +14,18 @@ function headingRest(line: string, name: string): string | null {
 
 const afterHeading = (line: string) => headingRest(line, "for jira");
 
+/** The first line that is the `name` heading and not inside a code fence, or -1. */
+function headingOutsideFences(lines: string[], name: string): number {
+  let fenced = false;
+  return lines.findIndex((l) => {
+    if (l.trimStart().startsWith("```")) {
+      fenced = !fenced;
+      return false;
+    }
+    return !fenced && headingRest(l, name) !== null;
+  });
+}
+
 function endsSection(raw: string): boolean {
   const t = raw.trim();
   const label = /^\p{Lu}[^:]{0,39}:$/u.test(t) && t.split(/\s+/).length <= 5;
@@ -37,7 +49,7 @@ function plain(text: string): string {
 /** A small stand-in for the backend's parser of a result's `For Jira:` section, enough for the sample data. */
 export function jiraNote(result: string): JiraNote {
   const lines = result.replace(/\r\n/g, "\n").split("\n");
-  const start = lines.findIndex((l) => afterHeading(l) !== null);
+  const start = headingOutsideFences(lines, "for jira");
   if (start >= 0) {
     const kept = [afterHeading(lines[start]) ?? ""];
     for (const l of lines.slice(start + 1)) {
@@ -71,7 +83,7 @@ function field(line: string, name: string): string | null {
 /** The ticket in a result's `New ticket:` section, as `ticket_proposal` in `runs/result.rs` reads it. */
 export function ticketProposal(result: string): TicketProposal | null {
   const lines = result.replace(/\r\n/g, "\n").split("\n");
-  const start = lines.findIndex((l) => headingRest(l, "new ticket") !== null);
+  const start = headingOutsideFences(lines, "new ticket");
   if (start < 0) return null;
   const section = [headingRest(lines[start], "new ticket") ?? ""];
   let fenced = false;
