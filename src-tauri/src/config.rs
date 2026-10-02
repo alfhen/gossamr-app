@@ -29,11 +29,13 @@ pub struct AgentSettings {
     pub wall_clock_minutes: u32,
     pub token_cap: u64,
     pub terminal: TerminalChoice,
+    /// Draft a Jira comment on the run's ticket when it finishes with a `For Jira:` section.
+    pub draft_on_finish: bool,
 }
 
 impl Default for AgentSettings {
     fn default() -> Self {
-        Self { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal }
+        Self { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal, draft_on_finish: true }
     }
 }
 
@@ -44,6 +46,7 @@ impl AgentSettings {
             wall_clock_minutes: self.wall_clock_minutes.min(MAX_MINUTES),
             token_cap: self.token_cap.min(MAX_TOKENS),
             terminal: self.terminal,
+            draft_on_finish: self.draft_on_finish,
         }
     }
 }
@@ -131,7 +134,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gossamr-config-limits-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal });
+        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal, draft_on_finish: true });
+        std::fs::write(dir.join(FILE), r#"{"agents":{"draftOnFinish":false}}"#).unwrap();
+        assert!(!AppConfig::load(&dir).agents.draft_on_finish);
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2}}"#).unwrap();
+        assert!(AppConfig::load(&dir).agents.draft_on_finish, "an older config keeps the default");
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":99,"wallClockMinutes":4294967295,"tokenCap":0,"terminal":"iTerm"}}"#).unwrap();
         let loaded = AppConfig::load(&dir).agents;
         assert_eq!((loaded.max_runs, loaded.wall_clock_minutes, loaded.token_cap, loaded.terminal), (6, MAX_MINUTES, 0, TerminalChoice::ITerm));

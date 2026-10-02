@@ -1,4 +1,4 @@
-import type { CodeChange, JiraNote } from "../types";
+import type { CodeChange, JiraNote, RunKind } from "../types";
 
 const KEY = /\b[A-Za-z][A-Za-z0-9_]*-\d+\b/g;
 
@@ -45,8 +45,8 @@ export function jiraNote(result: string): JiraNote {
 export const ticketKeys = (text: string): string[] => [...new Set((text.match(KEY) ?? []).map((k) => k.toUpperCase()))];
 
 /** The comment as the backend first drafts it, for the sample data. */
-export function commentText(note: JiraNote, change: CodeChange | null): string {
-  const parts = ["Looked into this with an agent (it was asked to only read code and change nothing)."];
+export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate"): string {
+  const parts = [kind === "investigate" ? "Looked into this with an agent (it was asked to only read code and change nothing)." : "An agent worked on this."];
   if (!note.fromMarker) parts.push("The agent didn't mark anything for Jira, so this is its whole answer, shortened:");
   parts.push(note.text);
   if (change?.kind === "pullRequest") parts.push(`Pull request: ${change.url}`);

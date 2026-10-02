@@ -72,7 +72,7 @@ async fn a_run_follows_its_session_from_working_to_a_permission_prompt_and_back_
     assert_eq!(done.result.as_deref(), Some("It is the cart rounding.\nFor Jira: close as duplicate."));
     assert_eq!((done.tokens, done.branch.as_deref()), (Some(578_000), Some("worktree-eng-1-fix-cart-0001")));
     assert!(done.ended_at.is_some());
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
     assert!(rig.svc.index.live().is_empty(), "a finished run leaves the index's live list");
     assert!(!rig.changes.lock().unwrap().is_empty());
 
@@ -476,4 +476,67 @@ async fn limits_of_zero_never_stop_a_run() {
     rig.svc.poll_at(Utc::now() + Span::days(3)).await;
     assert_eq!(rig.get(&run).await.state, RunState::Working);
     assert!(rig.cli.0.lock().unwrap().stops.is_empty());
+}
+
+fn finish_with(rig: &Rig, run: &Run, result: &str) {
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.result = Some(result.into()));
+    rig.session(run, |e| {
+        e.state = Some("done".into());
+        e.status = Some("idle".into());
+    });
+}
+
+async fn comment_drafts(rig: &Rig) -> Vec<crate::domain::Proposal> {
+    let all = rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap();
+    all.into_iter().filter(|p| matches!(p.intent, crate::domain::Intent::Comment { .. })).collect()
+}
+
+#[tokio::test]
+async fn a_finished_run_with_a_for_jira_section_leaves_one_comment_draft_and_a_restart_does_not_make_another() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    finish_with(&rig, &run, "Found the cause.\n\nFor Jira:\nThe consumer retries without a backoff.");
+    rig.poll().await;
+    let drafts = comment_drafts(&rig).await;
+    let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
+    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::User));
+    assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
+    assert!(matches!(&draft.intent, crate::domain::Intent::Comment { body, .. } if body.plain_text().contains("The consumer retries without a backoff.")));
+    assert!(rig.fx.tracker.intents().is_empty(), "a draft writes nothing to Jira");
+    assert_eq!(rig.drafted.lock().unwrap().len(), 1);
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
+    assert_eq!(notice_text(&rig.get(&run).await, Attention::Drafted).title, "Draft ready on CA-1");
+
+    rig.poll().await;
+    assert_eq!(comment_drafts(&rig).await.len(), 1);
+    rig.fx.core.skip_proposal(&draft.id).await.unwrap();
+    rig.set(&run, |r| r.state = RunState::Working).await;
+    rig.session(&run, working);
+    rig.poll().await;
+    finish_with(&rig, &run, "Found the cause.\n\nFor Jira:\nThe consumer retries without a backoff.");
+    rig.poll().await;
+    assert_eq!(comment_drafts(&rig).await.len(), 1, "a skipped draft is not made again when the run finishes again");
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
+}
+
+#[tokio::test]
+async fn a_result_without_a_for_jira_section_is_not_drafted() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    finish_with(&rig, &run, "It is the rounding, nothing marked for Jira.");
+    rig.poll().await;
+    assert!(comment_drafts(&rig).await.is_empty());
+    assert!(rig.drafted.lock().unwrap().is_empty());
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
+}
+
+#[tokio::test]
+async fn turning_the_setting_off_stops_the_automatic_draft() {
+    let (rig, run) = launched().await;
+    rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
+    rig.poll().await;
+    finish_with(&rig, &run, "For Jira: done.");
+    rig.poll().await;
+    assert!(comment_drafts(&rig).await.is_empty());
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
 }

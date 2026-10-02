@@ -13,7 +13,7 @@ import { failureAction } from "./failureActions";
 import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
-import { commentControl } from "./runSheetLogic";
+import { commentControl, runDraftOf } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
@@ -97,6 +97,8 @@ export interface AgentsActions {
   open(id: string): void;
   attach(id: string): void;
   draftComment(id: string): void;
+  /** Shows the comment draft a finished run left on its ticket. */
+  openDraft?(run: Run): void;
   filter(patch: Partial<AgentFilters>): void;
   clearFilters(): void;
   setView(view: AgentsViewMode): void;
@@ -183,11 +185,13 @@ export interface AgentsScreenProps {
   opened: ReadonlySet<string>;
   now: number;
   ticketTitle(run: Run): string | null;
+  /** Whether a finished run has a comment draft waiting. */
+  draftReady?(run: Run): boolean;
   on: AgentsActions;
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, opened, now, ticketTitle, on }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, opened, now, ticketTitle, draftReady, on }: AgentsScreenProps) {
   const footer = useFooterHeight();
   const groups = useMemo(() => groupRuns(runs, filters, now), [runs, filters, now]);
   const order = useMemo(() => navOrder(groups, earlierOpen, filters), [groups, earlierOpen, filters]);
@@ -203,6 +207,8 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     ticketTitle: ticketTitle(run),
     onOpen: () => on.open(run.id),
     onAttach: () => on.attach(run.id),
+    draftReady: !!draftReady?.(run),
+    onOpenDraft: on.openDraft ? () => on.openDraft?.(run) : undefined,
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
     failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
   });
@@ -282,6 +288,7 @@ const actions: AgentsActions = {
   open: (id) => useRuns.getState().openRun(id),
   attach: (id) => void useRuns.getState().attach(id),
   draftComment: (id) => void useRuns.getState().draftComment(id),
+  openDraft: (run) => useRuns.getState().showDraft(run.item),
   filter: (patch) => useRuns.getState().setFilter(patch),
   clearFilters: () => useRuns.getState().clearFilters(),
   setView: (view) => usePrefs.getState().setAgentsView(view),
@@ -315,6 +322,7 @@ export function AgentsView() {
   const view = usePrefs((s) => s.agentsView);
   const introSeen = usePrefs((s) => s.agentsIntroSeen);
   const items = useWorkspace((s) => s.items);
+  const proposals = useWorkspace((s) => s.proposals);
   const now = useNow();
 
   const order = useMemo(() => navOrder(groupRuns(runs, filters, now), earlierOpen, filters), [runs, filters, earlierOpen, now]);
@@ -366,6 +374,7 @@ export function AgentsView() {
       opened={opened}
       now={now}
       ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
+      draftReady={(run) => !!runDraftOf(proposals, run.id)}
       on={actions}
     />
   );

@@ -8,6 +8,8 @@ import type { Person, Proposal, ProposalEdit } from "../types";
 import { draftStatus } from "./boardLogic";
 import { showMe } from "./jump";
 import { KIND_LABEL } from "./agentsLogic";
+import { askPip } from "./askPip";
+import { commentWithPipPrompt } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
@@ -86,11 +88,13 @@ export interface DraftCardProps {
   onShow?(): void;
   /** Opens the agent run a draft was made from. */
   onOpenRun?(runId: string): void;
+  /** Present on a comment made from a run's result: opens Pip on the run and this draft. */
+  onDiscuss?(): void;
 }
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
 
-export function DraftCard({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun }: DraftCardProps) {
+export function DraftCard({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss }: DraftCardProps) {
   const intent = p.intent;
   const key = targetOf(intent)?.key ?? "";
   const stored = intent.type === "comment" ? docText(intent.body) : "";
@@ -243,6 +247,11 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
             )}
             {open && (
               <>
+                {onDiscuss && (
+                  <button type="button" disabled={working} onClick={onDiscuss} title="Pip reads the whole run and this draft, and changes the draft if you ask" className={button}>
+                    Discuss with Pip
+                  </button>
+                )}
                 {intent.type === "comment" && (
                   <button type="button" disabled={working} onClick={() => setEditing(!editing)} className={button}>
                     {editing ? "Done editing" : "Edit"}
@@ -300,6 +309,8 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
     }
   };
 
+  const discuss = () => p.origin.type === "run" && askPip(commentWithPipPrompt({ id: p.origin.runId, item: target ?? null }, p.id));
+
   return (
     <DraftCard
       proposal={p}
@@ -310,6 +321,7 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
       onShow={jump && target && item ? () => showMe(target) : undefined}
       onSkip={() => void run(() => useWorkspace.getState().skip(p.id))}
       onOpenRun={(id) => useRuns.getState().openRun(id)}
+      onDiscuss={p.origin.type === "run" && p.intent.type === "comment" ? discuss : undefined}
       onReview={p.intent.type === "startRun" ? () => void useRunSetup.getState().begin({ proposalId: p.id }) : undefined}
       onApprove={(edit) =>
         void run(async () => {

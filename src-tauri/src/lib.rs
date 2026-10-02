@@ -915,6 +915,7 @@ pub fn run() {
 
             let config = config::AppConfig::load(&core.data_dir());
             let runs_handle = app.handle().clone();
+            let drafted_handle = app.handle().clone();
             let open_on_focus = Arc::new(runs::tracker::OpenOnFocus::default());
             app.manage(open_on_focus.clone());
             let service = Arc::new(
@@ -926,6 +927,7 @@ pub fn run() {
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
                 .with_notifier(Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus }))
+                .with_drafted(Arc::new(move |connection_id| proposals_changed(&drafted_handle, connection_id)))
                 .with_settings(config.agents)
                 .enabled(config.agents_enabled),
             );

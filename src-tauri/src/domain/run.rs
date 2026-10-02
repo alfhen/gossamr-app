@@ -19,11 +19,19 @@ const INSTRUCTION_LIMIT: usize = 20_000;
 pub const FOCUS_LIMIT: usize = 300;
 pub const TICKET_BLOCK_LIMIT: usize = 4_000;
 
-pub const INVESTIGATE_INSTRUCTION: &str = "Investigate this work. Read the code and logs you need, and change nothing. Report what you found, how sure you are, and what you would do next. If you have anything for the tracker, put it under 'For Jira:'.";
-pub const TRIAGE_INSTRUCTION: &str = "Triage this work. Size it, say how sure you are, and name the areas of the code it touches and who likely owns them, going by the code and its history. List any duplicates you can find in the code or its notes. Change nothing. Put anything for the tracker under 'For Jira:'.";
-pub const VERIFY_INSTRUCTION: &str = "Check that the change described here works. Read the code, and run the existing tests or commands that only read. Say exactly what you ran and what you could not check. Change nothing. Put anything for the tracker under 'For Jira:'.";
-pub const BUILD_INSTRUCTION: &str = "Make the change this work describes, on your worktree's branch. Keep it small and follow the repository's conventions. Run its tests and commit with a clear message; do not push and do not open a pull request unless a later sentence says you may. Put anything for the tracker under 'For Jira:'.";
-pub const REVIEW_INSTRUCTION: &str = "Review the pull request named below, at the commit named there. Fetch it with read-only commands such as `git fetch origin pull/<number>/head` or `gh pr view` and `gh pr diff`. Change nothing on the pull request and do not comment on it. Write your comments most important first, and put anything for the tracker under 'For Jira:'.";
+/// The closing sentence of every kind's instruction. The parser in `runs/result.rs` reads what follows 'For Jira:'
+/// and a finished run drafts it as a comment on its ticket.
+macro_rules! status_note {
+    () => {
+        "Finish your answer with a short, factual note for the ticket under 'For Jira:': what you did or found, what state things are in, a link to the pull request if there is one, and what a person needs to do next."
+    };
+}
+
+pub const INVESTIGATE_INSTRUCTION: &str = concat!("Investigate this work. Read the code and logs you need, and change nothing. Report what you found, how sure you are, and what you would do next. ", status_note!());
+pub const TRIAGE_INSTRUCTION: &str = concat!("Triage this work. Size it, say how sure you are, and name the areas of the code it touches and who likely owns them, going by the code and its history. List any duplicates you can find in the code or its notes. Change nothing. ", status_note!());
+pub const VERIFY_INSTRUCTION: &str = concat!("Check that the change described here works. Read the code, and run the existing tests or commands that only read. Say exactly what you ran and what you could not check. Change nothing. ", status_note!());
+pub const BUILD_INSTRUCTION: &str = concat!("Make the change this work describes, on your worktree's branch. Keep it small and follow the repository's conventions. Run its tests and commit with a clear message; do not push and do not open a pull request unless a later sentence says you may. ", status_note!());
+pub const REVIEW_INSTRUCTION: &str = concat!("Review the pull request named below, at the commit named there. Fetch it with read-only commands such as `git fetch origin pull/<number>/head` or `gh pr view` and `gh pr diff`. Change nothing on the pull request and do not comment on it. Write your comments most important first. ", status_note!());
 const PUSH_ALLOWED: &str = "You may push your branch and open a pull request. Say what you pushed.";
 
 const MARKERS: [&str; 4] = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>"];
@@ -630,6 +638,16 @@ mod tests {
         assert_ne!(review.digest(), RunSpec { pr: Some(13), ..review.clone() }.digest());
         for kind in [RunKind::Triage, RunKind::Verify, RunKind::Build, RunKind::Review] {
             assert!(default_instruction(kind).contains("'For Jira:'"), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn every_kind_ends_by_asking_for_the_same_status_note_for_jira() {
+        let note = status_note!();
+        for kind in [RunKind::Investigate, RunKind::Triage, RunKind::Verify, RunKind::Build, RunKind::Review] {
+            let text = default_instruction(kind);
+            assert!(text.ends_with(note), "{kind:?}");
+            assert_eq!(text.matches("'For Jira:'").count(), 1, "{kind:?} asks once");
         }
     }
 

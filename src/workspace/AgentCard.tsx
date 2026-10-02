@@ -18,6 +18,9 @@ export interface AgentItemProps {
   onAttach(): void;
   /** Present on a finished run that has something to post. */
   onDraftComment?(): void;
+  /** A comment draft from this run is waiting. */
+  draftReady?: boolean;
+  onOpenDraft?(): void;
   failure: FailureState;
 }
 
@@ -31,7 +34,7 @@ export function onActivate(open: () => void) {
   };
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, failure }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, draftReady, onOpenDraft, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -70,18 +73,32 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
         </span>
       </p>
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
-      {onDraftComment && (
+      {draftReady && onOpenDraft ? (
         <div>
           <button
             type="button"
-            onClick={(ev) => (ev.stopPropagation(), onDraftComment())}
+            onClick={(ev) => (ev.stopPropagation(), onOpenDraft())}
             onKeyDown={(ev) => ev.stopPropagation()}
-            title="Makes a draft you read and edit. Nothing is posted."
-            className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
+            title="The comment is a draft. Nothing is posted until you approve it."
+            className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >
-            Draft comment
+            Draft ready
           </button>
         </div>
+      ) : (
+        onDraftComment && (
+          <div>
+            <button
+              type="button"
+              onClick={(ev) => (ev.stopPropagation(), onDraftComment())}
+              onKeyDown={(ev) => ev.stopPropagation()}
+              title="Makes a draft you read and edit. Nothing is posted."
+              className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
+            >
+              Draft comment
+            </button>
+          </div>
+        )
       )}
       <div className="flex items-center gap-3 text-sm text-ws-ink3 tabular-nums">
         {tokens && <span>{tokens}</span>}

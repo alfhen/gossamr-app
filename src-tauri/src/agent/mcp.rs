@@ -230,7 +230,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "revise_proposal",
-            "Change one of YOUR OWN pending drafts (never anyone else's). Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title and/or description for a new item, focus and/or kind for an agent run.",
+            "Change one of YOUR OWN pending drafts, or the pending comment an agent run drafted for the user from its result (body only). Never anything else the user made. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title and/or description for a new item, focus and/or kind for an agent run.",
             json!({ "id": id, "body": { "type": "string" }, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "focus": { "type": "string" }, "kind": { "type": "string" } }),
             &["id"],
         ),
@@ -469,7 +469,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
         "revise_proposal" => {
             let id = required(args, "id")?;
             let p = core.proposal_in(scope, id).await.map_err(|e| e.to_string())?.ok_or("no draft with that id; call list_proposals")?;
-            proposals::require_pip_pending(&p).map_err(|e| e.to_string())?;
+            proposals::require_pip_may_revise(&p).map_err(|e| e.to_string())?;
             let intent = match &p.intent {
                 Intent::Comment { item, .. } => Intent::Comment { item: item.clone(), body: Doc::from_text(required(args, "body")?, &[]) },
                 Intent::Transition { item, .. } => transition(st, scope, &item.key, required(args, "status_id")?).await?.0,
@@ -677,8 +677,12 @@ mod tests {
         }
 
         async fn draft_by(&self, by: CreatedBy, body: &str) -> Proposal {
+            self.draft_from(Origin::Board, by, body).await
+        }
+
+        async fn draft_from(&self, origin: Origin, by: CreatedBy, body: &str) -> Proposal {
             let draft = Draft {
-                origin: Origin::Board,
+                origin,
                 created_by: by,
                 intent: Intent::Comment { item: self.fx.item("CA-1"), body: Doc::from_text(body, &[]) },
                 label: None,
@@ -948,6 +952,55 @@ mod tests {
         assert!(r.fx.core.revise_as_pip(&r.fx.scope, &users.id, intent).await.is_err());
         assert!(r.fx.core.retire_as_pip(&r.fx.scope, &users.id, "x").await.is_err());
         assert_eq!(r.stored(&users.id).await, users);
+    }
+
+    fn from_run() -> Origin {
+        Origin::Run { run_id: "r1".into(), short_id: Some("ab12cd34".into()) }
+    }
+
+    #[tokio::test]
+    async fn pip_may_revise_the_pending_comment_a_run_left_but_nothing_else_the_person_made() {
+        let r = rig().await;
+        let left = r.draft_from(from_run(), CreatedBy::User, "From the run").await;
+        let by_hand = r.draft_by(CreatedBy::User, "typed by the person").await;
+        let by_autopilot = r.draft_from(from_run(), CreatedBy::Autopilot, "autopilot's").await;
+        let before = (r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await);
+
+        let reply = r.ok("revise_proposal", json!({ "id": left.id, "body": "Reworked with the full result" })).await;
+        assert!(reply.contains("not been applied") && reply.contains("approve"), "{reply}");
+        let revised = r.stored(&left.id).await;
+        assert!(matches!(&revised.intent, Intent::Comment { body, item } if body.plain_text() == "Reworked with the full result" && item.key == "CA-1"));
+        assert_eq!((revised.created_by, revised.origin.clone(), revised.state.clone()), (CreatedBy::User, from_run(), ProposalState::Pending));
+        assert_eq!(revised.revisions.last().unwrap().note, "Revised by Pip");
+        assert!(r.fx.tracker.intents().is_empty(), "nothing is posted");
+
+        for other in [&by_hand.id, &by_autopilot.id] {
+            assert!(r.err("revise_proposal", json!({ "id": other, "body": "hijacked" })).await.contains("wasn't made by Pip"));
+        }
+        assert_eq!((r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await), before);
+        assert!(r.err("retire_proposal", json!({ "id": left.id })).await.contains("wasn't made by Pip"), "it may be revised, not withdrawn");
+
+        r.fx.core.skip_proposal(&left.id).await.unwrap();
+        assert!(r.err("revise_proposal", json!({ "id": left.id, "body": "late" })).await.contains("skipped"));
+    }
+
+    #[tokio::test]
+    async fn only_a_comment_from_a_run_is_open_to_pip_not_the_other_drafts_a_run_leaves() {
+        let r = rig().await;
+        r.fx.add_item(2).await;
+        let link = r
+            .fx
+            .core
+            .propose(
+                &r.fx.scope,
+                Draft { origin: from_run(), created_by: CreatedBy::User, intent: Intent::Link { from: r.fx.item("CA-2"), to: r.fx.item("CA-1"), kind: crate::domain::LinkKind::Blocks }, label: None, basis: None },
+            )
+            .await
+            .unwrap();
+        assert!(r.err("revise_proposal", json!({ "id": link.id, "body": "x" })).await.contains("wasn't made by Pip"));
+        let intent = Intent::Comment { item: r.fx.item("CA-1"), body: Doc::paragraph("x") };
+        assert!(r.fx.core.revise_as_pip(&r.fx.scope, &link.id, intent).await.is_err());
+        assert_eq!(r.stored(&link.id).await, link);
     }
 
     #[tokio::test]

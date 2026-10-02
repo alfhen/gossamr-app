@@ -16,6 +16,7 @@ import { ProjectSwitcher } from "./FilterBar";
 import { projectOf, withProject } from "./filters";
 import { useActiveTab } from "./hooks";
 import { showMe } from "./jump";
+import { runDraftOf } from "./runSheetLogic";
 import { useTabs } from "./tabsStore";
 import { StrayNotices } from "./WatchNotices";
 
@@ -335,7 +336,7 @@ export function ActivityView() {
   useEffect(() => {
     if (source !== shownSource) useActivity.getState().setSource(shownSource);
   }, [source, shownSource]);
-  const runEntries = useMemo(() => (agentsOn ? toRunEntries(runs, runRead, Date.now()) : []), [agentsOn, runs, runRead]);
+  const runEntries = useMemo(() => (agentsOn ? toRunEntries(runs, runRead, Date.now(), new Set(runs.filter((r) => runDraftOf(proposals, r.id)).map((r) => r.id))) : []), [agentsOn, runs, runRead, proposals]);
   const inProject = (item: ItemRef | null) => !project || (!!item && items[itemKey(item)]?.container.connectionId === project.connectionId && items[itemKey(item)]?.container.externalId === project.externalId);
   const agentUnread = runEntries.filter((e) => e.unread && inProject(e.item)).length;
   const unread = shownSource === "jira" ? jiraUnread : shownSource === "github" ? codeUnread : shownSource === "agents" ? agentUnread : jiraUnread + codeUnread + agentUnread;

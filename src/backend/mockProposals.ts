@@ -135,6 +135,16 @@ export class MockProposals {
     throw new Error("that edit doesn't fit this draft");
   }
 
+  /** Pip's change to the text of its own pending comment, or of the pending comment an agent run left for the person. */
+  pipRevise(id: string, body: string): Proposal {
+    const p = this.pending(id);
+    const left = p.origin.type === "run" && p.intent.type === "comment" && p.createdBy === "user";
+    if (p.createdBy !== "pip" && !left) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
+    if (p.intent.type !== "comment") throw new Error("this kind of draft can't be revised");
+    const intent = { ...p.intent, body: docFromText(body) };
+    return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
+  }
+
   async skip(id: string) {
     const p = this.get(id);
     if (p?.state.type === "skipped") return p;

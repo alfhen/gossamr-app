@@ -291,9 +291,24 @@ export function commentControl(run: Pick<Run, "item" | "result">): DraftControl 
   return { enabled: true, reason: null };
 }
 
-/** What "Draft with Pip" sends. Pip reads the run itself, so the prompt names it and never carries its text. */
-export function commentWithPipPrompt(run: Pick<Run, "id" | "item">): string {
-  return `Draft a Jira comment from run ${run.id}: read it with get_run, then propose a short comment on ${run.item?.key ?? "its ticket"}. Quote only what the run found, and don't say anything has been posted.`;
+/**
+ * What "Discuss with Pip" and "Draft with Pip" send. Pip reads the run itself, all of it, so the prompt names the run
+ * and the draft and never carries their text.
+ */
+export function commentWithPipPrompt(run: { id: string; item: { key: string } | null }, draftId: string | null = null): string {
+  const key = run.item?.key ?? "its ticket";
+  if (draftId) {
+    return `Let's talk about the comment draft ${draftId} on ${key}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then check the draft against it and tell me what you would change. Edit the draft only if I ask you to, and don't say anything has been posted.`;
+  }
+  return `Draft a Jira comment from run ${run.id}: read the whole run with get_run and then get_run_result until it says that is the end, then propose a short comment on ${key}. Quote only what the run found, and don't say anything has been posted.`;
+}
+
+/** The comment draft a run left, if it is still waiting: the one the person can open, discuss or approve. */
+export function runDraftOf(proposals: Record<string, Proposal> | readonly Proposal[], runId: string): Proposal | undefined {
+  const all = Array.isArray(proposals) ? proposals : Object.values(proposals);
+  return all
+    .filter((p) => p.state.type === "pending" && p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === runId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
 export function blockerControl(run: Pick<Run, "item">): DraftControl {
