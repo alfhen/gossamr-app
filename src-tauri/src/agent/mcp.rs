@@ -230,7 +230,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "revise_proposal",
-            "Change one of YOUR OWN pending drafts, or the pending comment or new ticket an agent run drafted for the user from its result (its text, and for a ticket its type). Never anything else the user made. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, focus and/or kind (investigate, triage or verify) for an agent run.",
+            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, focus and/or kind (investigate, triage or verify) for an agent run.",
             json!({ "id": id, "body": { "type": "string" }, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "focus": { "type": "string" }, "kind": { "type": "string" } }),
             &["id"],
         ),
@@ -987,6 +987,47 @@ mod tests {
 
         r.fx.core.skip_proposal(&left.id).await.unwrap();
         assert!(r.err("revise_proposal", json!({ "id": left.id, "body": "late" })).await.contains("skipped"));
+    }
+
+    async fn subtasks_from(r: &Rig, origin: Origin, by: CreatedBy) -> Proposal {
+        let summaries = vec!["Add a backoff".to_string(), "Report the lag".to_string()];
+        let draft = Draft { origin, created_by: by, intent: Intent::Subtasks { parent: r.fx.item("CA-1"), summaries }, label: None, basis: None };
+        r.fx.core.propose(&r.fx.scope, draft).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn pip_may_revise_the_summaries_of_the_pending_breakdown_a_run_left_and_nothing_else_of_it() {
+        let r = rig().await;
+        let left = subtasks_from(&r, from_run(), CreatedBy::User).await;
+        let reply = r.ok("revise_proposal", json!({ "id": left.id, "summaries": ["Add a backoff", "Report the lag", "Survive a restart"], "title": "ignored" })).await;
+        assert!(reply.contains("not been applied"), "{reply}");
+        let revised = r.stored(&left.id).await;
+        assert!(matches!(&revised.intent, Intent::Subtasks { parent, summaries } if parent.key == "CA-1" && summaries.len() == 3 && summaries[2] == "Survive a restart"));
+        assert_eq!((revised.created_by, revised.origin.clone(), revised.state.clone()), (CreatedBy::User, from_run(), ProposalState::Pending));
+        assert_eq!(revised.revisions.last().unwrap().note, "Revised by Pip");
+        assert!(r.err("revise_proposal", json!({ "id": left.id, "summaries": [] })).await.contains("at least one subtask"));
+        assert!(r.err("retire_proposal", json!({ "id": left.id })).await.contains("wasn't made by Pip"), "it may be revised, not withdrawn");
+        assert!(r.fx.tracker.intents().is_empty(), "nothing is created");
+
+        r.fx.core.skip_proposal(&left.id).await.unwrap();
+        assert!(r.err("revise_proposal", json!({ "id": left.id, "summaries": ["late"] })).await.contains("skipped"));
+        let applied = subtasks_from(&r, from_run(), CreatedBy::User).await;
+        r.fx.core.approve_proposal(&applied.id).await.unwrap();
+        assert!(r.err("revise_proposal", json!({ "id": applied.id, "summaries": ["late"] })).await.contains("applied"));
+    }
+
+    #[tokio::test]
+    async fn a_breakdown_the_person_or_autopilot_made_stays_off_limits_even_with_a_run_origin_next_door() {
+        let r = rig().await;
+        let by_hand = subtasks_from(&r, Origin::Board, CreatedBy::User).await;
+        let by_autopilot = subtasks_from(&r, from_run(), CreatedBy::Autopilot).await;
+        let before = (r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await);
+        for other in [&by_hand.id, &by_autopilot.id] {
+            assert!(r.err("revise_proposal", json!({ "id": other, "summaries": ["hijacked"] })).await.contains("wasn't made by Pip"));
+        }
+        let intent = Intent::Subtasks { parent: r.fx.item("CA-1"), summaries: vec!["x".into()] };
+        assert!(r.fx.core.revise_as_pip(&r.fx.scope, &by_hand.id, intent).await.is_err(), "the rule lives in Core too");
+        assert_eq!((r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await), before);
     }
 
     async fn new_ticket_from(r: &Rig, origin: Origin, by: CreatedBy) -> Proposal {

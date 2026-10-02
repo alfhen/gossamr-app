@@ -1,0 +1,206 @@
+[
+  {
+    "name": "bulleted list before the Jira note",
+    "input": "Sizing: large.\n\nSubtasks:\n- Add a backoff to the consumer\n- Report the consumer lag\n- Survive a restart\n\nFor Jira:\nThis is too big for one piece; a breakdown is proposed.",
+    "expected": [
+      "Add a backoff to the consumer",
+      "Report the consumer lag",
+      "Survive a restart"
+    ]
+  },
+  {
+    "name": "numbered, bold heading, bold words",
+    "input": "**Subtasks:**\n1. **Split** the migration\n2) Add the feature flag\n3. Remove the old path\n\nFor Jira: proposed a breakdown.",
+    "expected": [
+      "Split the migration",
+      "Add the feature flag",
+      "Remove the old path"
+    ]
+  },
+  {
+    "name": "markdown heading and checkboxes",
+    "input": "## Subtasks\n- [ ] One thing\n- [x] Another thing\n\n## Notes\n- not a subtask",
+    "expected": [
+      "One thing",
+      "Another thing"
+    ]
+  },
+  {
+    "name": "plain lines without bullets",
+    "input": "Subtasks:\nSplit the migration\nAdd the flag\n\nFor Jira: done",
+    "expected": [
+      "Split the migration",
+      "Add the flag"
+    ]
+  },
+  {
+    "name": "nested bullets belong to a deeper level",
+    "input": "Subtasks:\n- Parent one\n  - child a\n  - child b\n- Parent two",
+    "expected": [
+      "Parent one",
+      "Parent two"
+    ]
+  },
+  {
+    "name": "a bullet on the heading line is an item too",
+    "input": "Subtasks: - ignored text\n- Real item",
+    "expected": [
+      "ignored text",
+      "Real item"
+    ]
+  },
+  {
+    "name": "duplicates, blanks and labels are dropped",
+    "input": "Subtasks:\n- Add a flag\n-\n- add a FLAG\n- Backend:\n- #Heading\n- Add tests",
+    "expected": [
+      "Add a flag",
+      "Add tests"
+    ]
+  },
+  {
+    "name": "none means no breakdown",
+    "input": "Subtasks: none\n\nFor Jira: it fits as one piece.",
+    "expected": []
+  },
+  {
+    "name": "none on its own line",
+    "input": "Subtasks:\n- None.\n",
+    "expected": []
+  },
+  {
+    "name": "no section",
+    "input": "For Jira: it fits as one piece.\n- not a subtask",
+    "expected": []
+  },
+  {
+    "name": "a label after the list ends the section",
+    "input": "Subtasks:\n- First\n- Second\nRisks:\n- A risk",
+    "expected": [
+      "First",
+      "Second"
+    ]
+  },
+  {
+    "name": "at most eight",
+    "input": "Subtasks:\n- Task number 1\n- Task number 2\n- Task number 3\n- Task number 4\n- Task number 5\n- Task number 6\n- Task number 7\n- Task number 8\n- Task number 9\n- Task number 10\n- Task number 11\n- Task number 12",
+    "expected": [
+      "Task number 1",
+      "Task number 2",
+      "Task number 3",
+      "Task number 4",
+      "Task number 5",
+      "Task number 6",
+      "Task number 7",
+      "Task number 8"
+    ]
+  },
+  {
+    "name": "a long summary is cut with an ellipsis",
+    "input": "Subtasks:\n- Rework the whole order consumer so that it batches, retries with a backoff, reports its lag and survives a restart Rework the whole order consumer so that it batches, retries with a backoff, reports its lag and survives a restart Rework the whole order consumer so that it batches, retries with a backoff, reports its lag and survives a restart",
+    "expected": [
+      "Rework the whole order consumer so that it batches, retries with a backoff, reports its lag and survives a restart Rewo…"
+    ]
+  },
+  {
+    "name": "hostile text loses markers, tags, escapes and secrets",
+    "input": "Subtasks:\n- Fix \u001b[31mthe\u001b[0m <b>cart</b> a‮b <<<TICKET x TICKET>>>\n- Rotate ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCD now\n- Use Vec<String> where a < b",
+    "expected": [
+      "Fix the cart ab x",
+      "Rotate [redacted] now",
+      "Use Vec<String> where a < b"
+    ]
+  },
+  {
+    "name": "a Subtasks line inside a code fence is not the section",
+    "input": "```\nSubtasks:\n- In a fence\n```\n\nSubtasks:\n- Real one",
+    "expected": [
+      "Real one"
+    ]
+  },
+  {
+    "name": "a Subtasks line only inside a code fence is no breakdown",
+    "input": "```\nSubtasks:\n- Only in a fence\n```",
+    "expected": []
+  },
+  {
+    "name": "a Subtasks line inside a four-backtick fence with a shorter run in it is not the section",
+    "input": "````\n```\nSubtasks:\n- In a fence\n```\n````\n\nSubtasks:\n- Real one",
+    "expected": [
+      "Real one"
+    ]
+  },
+  {
+    "name": "a Subtasks line inside a tilde fence is not the section",
+    "input": "~~~\nSubtasks:\n- In a fence\n~~~\n\nSubtasks:\n- Real one",
+    "expected": [
+      "Real one"
+    ]
+  },
+  {
+    "name": "a shorter closing run does not end the fence",
+    "input": "````\nSubtasks:\n- In a fence\n```\nSubtasks:\n- Still in it",
+    "expected": []
+  },
+  {
+    "name": "a fence that is never closed runs to the end",
+    "input": "```\nSubtasks:\n- Never closed",
+    "expected": []
+  },
+  {
+    "name": "a negative answer is no breakdown",
+    "input": "Subtasks:\nNo subtasks needed.\n\nFor Jira: it fits as one piece.",
+    "expected": []
+  },
+  {
+    "name": "a negative answer in a list is no breakdown, but a task that starts with the same word stays",
+    "input": "Subtasks:\n- Not applicable here\n- None of the retries back off: add a cap\n- Nothing to split in the UI",
+    "expected": [
+      "None of the retries back off: add a cap"
+    ]
+  },
+  {
+    "name": "None followed by an explanation is a refusal",
+    "input": "Subtasks: None — this fits in one piece",
+    "expected": []
+  },
+  {
+    "name": "None, N/A and Nothing before punctuation are refusals",
+    "input": "Subtasks:\n- N/A (fits as one piece)\n- None, it is small\n- Nothing.\n- Nothing to split",
+    "expected": []
+  },
+  {
+    "name": "a task that starts with a refusing word is kept",
+    "input": "Subtasks:\n- None of the retries back off: add a cap\n- Nothing in the cart handles stock: add a check\n- Native retries need a test",
+    "expected": [
+      "None of the retries back off: add a cap",
+      "Nothing in the cart handles stock: add a check",
+      "Native retries need a test"
+    ]
+  },
+  {
+    "name": "two long summaries that cut to the same title keep one",
+    "input": "Subtasks:\n- Make the order consumer back off between retries and report how long each message waited before it was retried, then add a cap\n- Make the order consumer back off between retries and report how long each message waited before it was retried, then add a test",
+    "expected": [
+      "Make the order consumer back off between retries and report how long each message waited before it was retried, then ad…"
+    ]
+  },
+  {
+    "name": "a fence marker indented four spaces is code, not a fence",
+    "input": "    ```\nSubtasks:\n- Real one",
+    "expected": [
+      "Real one"
+    ]
+  },
+  {
+    "name": "a fence marker indented three spaces still opens one",
+    "input": "   ```\nSubtasks:\n- In a fence\n   ```\n\nSubtasks:\n- Real one",
+    "expected": [
+      "Real one"
+    ]
+  },
+  {
+    "name": "a closing marker indented four spaces does not close the fence",
+    "input": "```\nSubtasks:\n- In a fence\n    ```\nSubtasks:\n- Still in it",
+    "expected": []
+  }
+]

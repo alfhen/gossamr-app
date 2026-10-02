@@ -138,7 +138,7 @@ pub fn draft_line(p: &Proposal) -> String {
     let pending = p.state == ProposalState::Pending;
     let mine = match &p.origin {
         _ if p.created_by == CreatedBy::Pip && pending => " · yours to revise or retire".to_string(),
-        Origin::Run { run_id, .. } if matches!(p.intent, Intent::Comment { .. } | Intent::Create { .. }) => {
+        Origin::Run { run_id, .. } if matches!(p.intent, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. }) => {
             let may = if pending && p.created_by == CreatedBy::User { "; you may revise its text but not retire it" } else { "" };
             format!(" · drafted from run {run_id}{may}")
         }
@@ -262,6 +262,16 @@ mod tests {
         left.state = ProposalState::Skipped;
         let line = draft_line(&left);
         assert!(line.contains("drafted from run run-9 · comment") && !line.contains("you may"), "{line}");
+    }
+
+    #[test]
+    fn a_breakdown_left_by_a_run_is_marked_revisable_only_while_it_waits() {
+        let mut left = draft("s1", CreatedBy::User, ProposalState::Pending);
+        left.intent = Intent::Subtasks { parent: left.intent.target().cloned().unwrap(), summaries: vec!["a".into()] };
+        left.origin = Origin::Run { run_id: "run-9".into(), short_id: None };
+        assert!(draft_line(&left).contains("drafted from run run-9; you may revise its text but not retire it"));
+        left.state = ProposalState::Applied;
+        assert!(!draft_line(&left).contains("you may"));
     }
 
     #[test]

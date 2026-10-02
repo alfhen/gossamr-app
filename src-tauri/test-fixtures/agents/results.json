@@ -76,5 +76,59 @@
     "input": "For Jira: keep this\n---\nnot this",
     "text": "keep this",
     "fromMarker": true
+  },
+  {
+    "name": "a For Jira line inside a code fence is not the section",
+    "input": "Notes first.\n```\nFor Jira: not this\n```\n\nFor Jira:\nThe real note.",
+    "text": "The real note.",
+    "fromMarker": true
+  },
+  {
+    "name": "a For Jira line only inside a code fence leaves the whole answer",
+    "input": "Answer.\n```\nFor Jira: in a fence\n```",
+    "text": "Answer.\n```\nFor Jira: in a fence\n```",
+    "fromMarker": false
+  },
+  {
+    "name": "a For Jira line inside a four-backtick fence with a shorter run in it is not the section",
+    "input": "````\n```\nFor Jira: inside\n```\n````\n\nFor Jira:\nThe real note.",
+    "text": "The real note.",
+    "fromMarker": true
+  },
+  {
+    "name": "a For Jira line inside a tilde fence is not the section",
+    "input": "~~~\nFor Jira: inside\n~~~\n\nFor Jira:\nThe real note.",
+    "text": "The real note.",
+    "fromMarker": true
+  },
+  {
+    "name": "a shorter closing run does not end the fence",
+    "input": "````\nFor Jira: inside\n```\nFor Jira: still inside",
+    "text": "````\nFor Jira: inside\n```\nFor Jira: still inside",
+    "fromMarker": false
+  },
+  {
+    "name": "a fence that is never closed runs to the end",
+    "input": "Answer.\n```\nFor Jira: never closed",
+    "text": "Answer.\n```\nFor Jira: never closed",
+    "fromMarker": false
+  },
+  {
+    "name": "a fence marker indented four spaces is code, not a fence",
+    "input": "Intro.\n    ```\nFor Jira:\nThe real note.",
+    "text": "The real note.",
+    "fromMarker": true
+  },
+  {
+    "name": "a fence marker indented three spaces still opens one",
+    "input": "   ```\nFor Jira: inside\n   ```\n\nFor Jira:\nThe real note.",
+    "text": "The real note.",
+    "fromMarker": true
+  },
+  {
+    "name": "a closing marker indented four spaces does not close the fence",
+    "input": "```\nFor Jira: inside\n    ```\nFor Jira: still inside",
+    "text": "```\nFor Jira: inside\n    ```\nFor Jira: still inside",
+    "fromMarker": false
   }
 ]

@@ -160,10 +160,10 @@ pub fn require_pip_pending(p: &Proposal) -> Result<()> {
     Ok(())
 }
 
-/// What Pip may revise: its own pending drafts, and a pending comment or new ticket the person's agent run left for
-/// them. The person made none of these by hand, and all stay theirs to approve.
+/// What Pip may revise: its own pending drafts, and a pending comment, new ticket or breakdown into subtasks the
+/// person's agent run left for them. The person made none of these by hand, and all stay theirs to approve.
 pub fn require_pip_may_revise(p: &Proposal) -> Result<()> {
-    let from_run = matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. })) && p.created_by == CreatedBy::User;
+    let from_run = matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. })) && p.created_by == CreatedBy::User;
     if p.created_by != CreatedBy::Pip && !from_run {
         return Err(refuse("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it"));
     }

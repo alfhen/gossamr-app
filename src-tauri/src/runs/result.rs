@@ -64,12 +64,11 @@ pub struct TicketProposal {
 pub fn ticket_proposal(result: &str) -> Option<TicketProposal> {
     let clean = sanitize(result);
     let lines: Vec<&str> = clean.lines().collect();
-    let start = lines.iter().position(|l| heading_rest(l, "new ticket").is_some())?;
-    let mut section: Vec<&str> = vec![heading_rest(lines[start], "new ticket")?];
-    let mut fenced = false;
+    let (start, first) = heading_outside_fences(&lines, "new ticket")?;
+    let mut section: Vec<&str> = vec![first];
+    let mut fences = Fences::default();
     for line in &lines[start + 1..] {
-        fenced ^= line.trim_start().starts_with("```");
-        if !fenced && heading_rest(line, "for jira").is_some() {
+        if !fences.inside(line) && heading_rest(line, "for jira").is_some() {
             break;
         }
         section.push(line);
@@ -106,6 +105,112 @@ pub fn ticket_from_answer(result: &str) -> Option<TicketProposal> {
     let first = text.lines().map(|l| one_line(l.trim_start_matches(['-', '*', '>', ' '])))
         .find(|l| !l.is_empty())?;
     Some(TicketProposal { title: title_cut(&first), kind: ItemKind::Task, body: cut(&text, NOTE_LIMIT) })
+}
+
+/// At most this many subtasks are proposed, each up to `TITLE_LIMIT` characters.
+pub const SUBTASK_MAX: usize = 8;
+
+const BARE_REFUSALS: [&str; 4] = ["none", "n/a", "na", "nothing"];
+const REFUSAL_OPENERS: [&str; 10] = ["no subtasks", "no subtask", "no breakdown", "no need", "nothing to split", "not needed", "not required", "not necessary", "not applicable", "not worth"];
+
+/// An answer that declines the breakdown rather than naming a task. "None", "N/A" and "Nothing" only decline on their
+/// own or before a dash, colon, comma, full stop or bracket, so a task such as "None of the retries back off" stays.
+fn declines_breakdown(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let lower = lower.trim();
+    let at_boundary = |rest: &str| rest.chars().next().is_none_or(|c| !c.is_alphanumeric());
+    REFUSAL_OPENERS.iter().any(|p| lower.strip_prefix(p).is_some_and(at_boundary))
+        || BARE_REFUSALS.iter().any(|p| lower.strip_prefix(p).is_some_and(|rest| matches!(rest.trim_start().chars().next(), None | Some('-' | '–' | '—' | ':' | '.' | ',' | ';' | '!' | '('))))
+}
+
+/// The summaries in the `Subtasks:` section, in order. Only list lines are read when the section has any (nested ones
+/// belong to a deeper level and are left out), else each plain line. Blanks, labels, "none" and repeats are dropped.
+pub fn subtask_proposals(result: &str) -> Vec<String> {
+    let clean = sanitize(result);
+    let lines: Vec<&str> = clean.lines().collect();
+    let Some((start, inline)) = heading_outside_fences(&lines, "subtasks") else { return Vec::new() };
+    let mut section: Vec<&str> = vec![inline];
+    let mut fences = Fences::default();
+    for line in &lines[start + 1..] {
+        let t = line.trim();
+        if fences.inside(line) || ends_section(t) || heading_rest(t, "new ticket").is_some() {
+            break;
+        }
+        section.push(line);
+    }
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let listed: Vec<&str> = section.iter().copied().filter(|l| list_marker(l).is_some()).collect();
+    let wanted: Vec<&str> = match listed.iter().map(|l| indent(l)).min() {
+        Some(least) => listed.into_iter().filter(|l| indent(l) == least).collect(),
+        None => section,
+    };
+    let mut out: Vec<String> = Vec::new();
+    for line in wanted {
+        let text = one_line(unchecked(list_marker(line).unwrap_or(line.trim())));
+        let text = title_cut(&text);
+        if text.is_empty() || text.starts_with('#') || text.ends_with(':') || declines_breakdown(&text) || out.iter().any(|o| o.to_lowercase() == text.to_lowercase()) {
+            continue;
+        }
+        out.push(text);
+        if out.len() == SUBTASK_MAX {
+            break;
+        }
+    }
+    out
+}
+
+fn unchecked(text: &str) -> &str {
+    ["[ ]", "[x]", "[X]"].iter().find_map(|b| text.strip_prefix(b)).unwrap_or(text)
+}
+
+/// The text after a bullet or number on a list line, or `None` for any other line.
+fn list_marker(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    if let Some(rest) = t.strip_prefix(['-', '*', '+', '•']).filter(|r| r.starts_with([' ', '\t'])) {
+        return Some(rest.trim_start());
+    }
+    let digits = t.chars().take_while(char::is_ascii_digit).count();
+    let rest = t.get(digits..).filter(|_| (1..=3).contains(&digits))?;
+    rest.strip_prefix(['.', ')']).filter(|r| r.starts_with([' ', '\t'])).map(str::trim_start)
+}
+
+/// Follows fenced code blocks line by line as CommonMark does: a run of three or more backticks or tildes, indented at
+/// most three spaces, opens one (a backtick fence's info string has no backticks), and only a run of the same character at least as long, with
+/// nothing after it, closes it. A fence left open runs to the end.
+#[derive(Default)]
+struct Fences {
+    open: Option<(char, usize)>,
+}
+
+impl Fences {
+    /// Feeds the next line; true when it is a fence marker or inside a fence.
+    fn inside(&mut self, line: &str) -> bool {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let t = &line[indent..];
+        let marker = t.chars().next().filter(|c| matches!(c, '`' | '~') && indent <= 3);
+        let run = marker.map_or(0, |m| t.chars().take_while(|c| *c == m).count());
+        let rest = t.get(run..).unwrap_or_default();
+        match (self.open, marker) {
+            (Some((open, len)), Some(m)) => {
+                if m == open && run >= len && rest.trim().is_empty() {
+                    self.open = None;
+                }
+                true
+            }
+            (Some(_), None) => true,
+            (None, Some(m)) if run >= 3 && !(m == '`' && rest.contains('`')) => {
+                self.open = Some((m, run));
+                true
+            }
+            (None, _) => false,
+        }
+    }
+}
+
+/// The first line that is the `name` heading and not inside a code fence, with what follows it on that line.
+fn heading_outside_fences<'a>(lines: &[&'a str], name: &str) -> Option<(usize, &'a str)> {
+    let mut fences = Fences::default();
+    lines.iter().enumerate().find_map(|(i, line)| if fences.inside(line) { None } else { heading_rest(line, name).map(|rest| (i, rest)) })
 }
 
 fn title_cut(title: &str) -> String {
@@ -252,8 +357,8 @@ fn ends_section(line: &str) -> bool {
 
 fn section(clean: &str) -> Option<String> {
     let lines: Vec<&str> = clean.lines().collect();
-    let start = lines.iter().position(|l| for_jira_rest(l).is_some())?;
-    let mut kept: Vec<&str> = vec![for_jira_rest(lines[start])?];
+    let (start, first) = heading_outside_fences(&lines, "for jira")?;
+    let mut kept: Vec<&str> = vec![first];
     kept.extend(lines[start + 1..].iter().take_while(|l| !ends_section(l)));
     Some(kept.join("\n"))
 }
@@ -283,11 +388,9 @@ fn unbold(line: &str) -> String {
 /// written, so a `# comment` or `**kwargs` inside one survives.
 fn plain(text: &str) -> String {
     let mut out: Vec<String> = Vec::new();
-    let mut fenced = false;
+    let mut fences = Fences::default();
     for line in text.lines() {
-        let fence = line.trim_start().starts_with("```");
-        if fenced || fence {
-            fenced ^= fence;
+        if fences.inside(line) {
             out.push(line.trim_end().to_string());
             continue;
         }
@@ -444,5 +547,86 @@ mod tests {
         assert!(t.body.contains("It never backs off.") && !t.body.contains("ghp_") && t.kind == ItemKind::Task);
         assert_eq!(ticket_from_answer("  \n "), None);
         assert!(ticket_from_answer(&"x".repeat(500)).unwrap().title.chars().count() <= TITLE_LIMIT);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SubtaskCase {
+        name: String,
+        input: String,
+        expected: Vec<String>,
+    }
+
+    #[test]
+    fn the_shared_subtask_fixtures_parse_as_written() {
+        let cases: Vec<SubtaskCase> = serde_json::from_str(include_str!("../../test-fixtures/agents/subtask-results.json")).unwrap();
+        assert!(cases.len() >= 12);
+        for c in cases {
+            assert_eq!(subtask_proposals(&c.input), c.expected, "{}", c.name);
+        }
+    }
+
+    #[test]
+    fn a_hostile_breakdown_loses_secrets_markers_escapes_tags_and_direction_marks_and_gains_nothing() {
+        let hostile = "Subtasks:\n- Fix \u{1b}[31mthe\u{1b}[0m <b>cart</b> a\u{202E}b <<<TICKET x TICKET>>> <<<AGENT_OUTPUT y AGENT_OUTPUT>>>\u{200B}\n- key ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCD password=hunter2hunter2\u{7}";
+        let all = subtask_proposals(hostile).join("\n");
+        for bad in ["<<<", ">>>", "\u{202E}", "\u{200B}", "\u{1b}", "\u{7}", "<b>", "ghp_", "hunter2"] {
+            assert!(!all.contains(bad), "{bad:?} in {all:?}");
+        }
+        assert!(all.contains("cart") && all.contains("[redacted]"), "{all:?}");
+    }
+
+    #[test]
+    fn a_breakdown_is_capped_in_count_and_length_and_the_status_note_does_not_include_it() {
+        let many: String = (1..=30).map(|i| format!("- Task {i}\n")).collect();
+        assert_eq!(subtask_proposals(&format!("Subtasks:\n{many}")).len(), SUBTASK_MAX);
+        let long = subtask_proposals(&format!("Subtasks:\n- {}", "word ".repeat(80)));
+        assert!(long[0].chars().count() <= TITLE_LIMIT && long[0].ends_with('…'));
+        let result = "Subtasks:\n- First\n- Second\n\nFor Jira: a breakdown is proposed.";
+        assert_eq!(jira_note(result).text, "a breakdown is proposed.");
+        let note_first = "For Jira: a breakdown is proposed.\n\nSubtasks:\n- First";
+        assert_eq!(jira_note(note_first).text, "a breakdown is proposed.");
+        assert_eq!(subtask_proposals(note_first), ["First"]);
+        assert!(subtask_proposals("").is_empty());
+    }
+
+    #[test]
+    fn a_section_inside_a_code_fence_or_after_a_ticket_section_is_not_read_past() {
+        assert_eq!(subtask_proposals("Subtasks:\n- A\n```\n- B\n```\n"), ["A"]);
+        assert_eq!(subtask_proposals("Subtasks:\n- A\nNew ticket:\n- B"), ["A"]);
+    }
+
+    #[test]
+    fn a_heading_inside_a_code_fence_is_not_the_section() {
+        let fenced = "```\nSubtasks:\n- In a fence\n```\n\nSubtasks:\n- Real one";
+        assert_eq!(subtask_proposals(fenced), ["Real one"]);
+        assert!(subtask_proposals("```\nSubtasks:\n- Only in a fence\n```").is_empty());
+        let ticket = "```\nNew ticket:\nTitle: In a fence\n```\n\nNew ticket:\nTitle: The real one\nBody";
+        assert_eq!(ticket_proposal(ticket).unwrap().title, "The real one");
+        assert_eq!(ticket_proposal("```\nNew ticket:\nTitle: In a fence\n```"), None);
+        let note = jira_note("```\nFor Jira: in a fence\n```\n\nFor Jira:\nThe real note.");
+        assert_eq!((note.text.as_str(), note.from_marker), ("The real note.", true));
+        assert!(!jira_note("Answer.\n```\nFor Jira: in a fence\n```").from_marker);
+    }
+
+    #[test]
+    fn fences_follow_commonmark_for_length_character_and_closing() {
+        let heading = |fence: &str, close: &str| format!("{fence}\nSubtasks:\n- In a fence\n{close}\n\nSubtasks:\n- Real one");
+        assert_eq!(subtask_proposals(&heading("````", "````")), ["Real one"]);
+        assert_eq!(subtask_proposals(&heading("~~~", "~~~")), ["Real one"]);
+        assert_eq!(subtask_proposals("````\n```\nSubtasks:\n- In a fence\n```\n````\nSubtasks:\n- Real one"), ["Real one"], "a shorter run inside does not close it");
+        assert_eq!(subtask_proposals("~~~\n```\nSubtasks:\n- In a fence\n~~~\nSubtasks:\n- Real one"), ["Real one"], "another character does not close it");
+        assert_eq!(subtask_proposals("```rust\nSubtasks:\n- In a fence\n```\nSubtasks:\n- Real one"), ["Real one"], "an opening fence may carry an info string");
+        assert!(subtask_proposals("```\nSubtasks:\n- In a fence\n``` text\nSubtasks:\n- Still in it").is_empty(), "a closing fence has nothing after it");
+        assert!(subtask_proposals("````\nSubtasks:\n- In a fence\n```\nSubtasks:\n- Still in it").is_empty(), "a shorter closer does not close");
+        assert!(subtask_proposals("```\nSubtasks:\n- Never closed").is_empty(), "an unclosed fence runs to the end");
+        assert_eq!(subtask_proposals("Use ```inline``` here\nSubtasks:\n- Real one"), ["Real one"], "backticks in a line of text open nothing");
+    }
+
+    #[test]
+    fn code_in_a_fence_is_kept_as_written_whatever_fence_holds_it() {
+        let tilde = ticket_proposal("New ticket:\nTitle: T\n~~~\n# not a heading\n**kwargs\n~~~\nDone.").unwrap();
+        assert!(tilde.body.contains("# not a heading") && tilde.body.contains("**kwargs"), "{}", tilde.body);
+        let four = ticket_proposal("New ticket:\nTitle: T\n````\n```\nFor Jira: inside\n```\n````\nAfter");
+        assert!(four.unwrap().body.contains("For Jira: inside"));
     }
 }
