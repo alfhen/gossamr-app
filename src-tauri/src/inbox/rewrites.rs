@@ -42,7 +42,7 @@ impl Core {
     pub async fn rewrite_intent(&self, scope: &Scope, key: &str, title: Option<&str>, description: Option<&str>) -> Result<Intent> {
         let item = self.work_item(scope, key).await?;
         let ticket = ticket_of(&item)?;
-        if item.body.blocks.is_empty() && !ticket.description.trim().is_empty() {
+        if description.is_some() && item.body.blocks.is_empty() && !ticket.description.trim().is_empty() {
             return Err(refuse(format!("{key}'s description isn't stored in a form that can be edited yet; open the ticket in Gossamr so it refreshes, then try again")));
         }
         let title = title
@@ -159,6 +159,10 @@ mod tests {
         fx.core.with_db_for(&fx.scope, |db| db.upsert_items(&[item], "2026-09-29T13:00:00Z").map(|_| ())).await.unwrap();
         let err = fx.core.rewrite_intent(&fx.scope, "CA-1", None, Some("New")).await.unwrap_err();
         assert!(err.to_string().contains("isn't stored in a form that can be edited"), "{err}");
+        let err = fx.core.rewrite_intent(&fx.scope, "CA-1", Some("New title"), Some("New")).await.unwrap_err();
+        assert!(err.to_string().contains("isn't stored in a form that can be edited"), "{err}");
+        let Intent::Rewrite { title, body, .. } = fx.core.rewrite_intent(&fx.scope, "CA-1", Some("New title"), None).await.unwrap() else { panic!() };
+        assert_eq!((title.unwrap().to.as_str(), body), ("New title", None), "a title-only rewrite doesn't touch the description");
         assert_eq!(fx.core.ticket_for_pip(&fx.scope, "CA-1").await.unwrap().1.description, "Old plain description");
     }
 
