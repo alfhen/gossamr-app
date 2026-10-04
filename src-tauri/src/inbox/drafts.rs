@@ -131,7 +131,7 @@ impl Edit {
                 }
                 if let Some(v) = body {
                     let change = changed_body.as_mut().ok_or_else(|| Error::Proposal("this draft doesn't change the description".into()))?;
-                    change.to = Doc::from_markdown(v.trim(), &change.from.mentioned());
+                    change.to = Doc::from_markdown_like(v.trim(), &change.from);
                 }
                 Ok(Intent::Rewrite { item: item.clone(), title: changed_title, body: changed_body, flattened: flattened.clone() })
             }

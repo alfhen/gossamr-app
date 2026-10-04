@@ -523,8 +523,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                         return Err("this draft doesn't change that field; retire it and propose a new one".into());
                     }
                     let to_title = wants.0.map(|t| crate::runs::result::scrub(t).split_whitespace().collect::<Vec<_>>().join(" "));
-                    let people = body.as_ref().map(|b| b.from.mentioned()).unwrap_or_default();
-                    let to_body = wants.1.map(|d| Doc::from_markdown(crate::runs::result::scrub(d).trim(), &people));
+                    let to_body = wants.1.zip(body.as_ref()).map(|(d, b)| Doc::from_markdown_like(crate::runs::result::scrub(d).trim(), &b.from));
                     Intent::Rewrite {
                         item: item.clone(),
                         title: title.clone().map(|t| crate::domain::TitleChange { to: to_title.clone().unwrap_or(t.to), ..t }),
@@ -1421,5 +1420,28 @@ mod tests {
         let p = r.fx.core.propose(&r.fx.scope, draft).await.unwrap();
         let refused = r.err("revise_proposal", json!({ "id": p.id, "description": "Pip's text" })).await;
         assert!(refused.contains("wasn't made by Pip"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_link_the_ticket_already_has_survives_pips_edit_and_its_revision_but_a_new_non_web_link_does_not() {
+        use crate::domain::{Block, Inline};
+        let r = rig().await;
+        let held = "ftp://files.example.com/a";
+        r.fx.edit_item("CA-1", |item| {
+            item.body = Doc { blocks: vec![Block::Paragraph { content: vec![Inline::Text { text: "See ".into(), marks: vec![] }, Inline::Link { href: held.into(), text: "the files".into() }] }] };
+        })
+        .await;
+        let read: Value = serde_json::from_str(r.ok("get_item", json!({ "key": "CA-1" })).await.split("\n\nOpen drafts").next().unwrap()).unwrap();
+        assert_eq!(read["description"], format!("See [the files]({held})"));
+        let id = id_in(&r.ok("propose_description_edit", json!({ "key": "CA-1", "description": format!("See [the files]({held}) first.\n\nThen [x](javascript:alert(1)).") })).await);
+        let hrefs = |p: Proposal| match p.intent {
+            Intent::Rewrite { body: Some(b), .. } => b.to.hrefs(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(hrefs(r.stored(&id).await), [held]);
+        r.ok("revise_proposal", json!({ "id": id, "description": format!("Again: [the files]({held}) and [y](ftp://new.example.com/z) and [z](https://example.com)") })).await;
+        assert_eq!(hrefs(r.stored(&id).await), [held, "https://example.com"]);
+        let unchanged = r.err("propose_description_edit", json!({ "key": "CA-1", "description": format!("See [the files]({held})") })).await;
+        assert!(unchanged.contains("identical") || unchanged.contains("nothing to draft"), "{unchanged}");
     }
 }

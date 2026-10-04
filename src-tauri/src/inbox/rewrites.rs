@@ -49,10 +49,9 @@ impl Core {
             .map(|t| scrub(t).split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|t| !t.is_empty() && *t != item.title.trim())
             .map(|to| TitleChange { from: item.title.clone(), to });
-        let people = item.body.mentioned();
         let body = description
             .map(|d| scrub(d).trim().to_string())
-            .map(|d| Doc::from_markdown(&d, &people))
+            .map(|d| Doc::from_markdown_like(&d, &item.body))
             .filter(|to| to.to_markdown() != item.body.to_markdown() || (to.blocks.is_empty() && !item.body.blocks.is_empty()))
             .map(|to| BodyChange { from: item.body.clone(), to });
         if title.is_none() && body.is_none() {
@@ -169,5 +168,43 @@ mod tests {
         assert!(fx.core.can_edit_text(&fx.scope).unwrap());
         fx.tracker.cannot_edit_text.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(!fx.core.can_edit_text(&fx.scope).unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_link_the_description_already_has_survives_a_rewrite_whatever_its_scheme_and_a_new_one_does_not_get_in() {
+        let fx = fixture().await;
+        let link = |href: &str| serde_json::json!({ "type": "text", "text": "the files", "marks": [{ "type": "link", "attrs": { "href": href } }] });
+        let held = "ftp://files.example.com/a";
+        let doc = adf(serde_json::json!([serde_json::json!({ "type": "paragraph", "content": [{ "type": "text", "text": "See " }, link(held)] })]));
+        with_description(&fx, doc).await;
+        let (_, seen) = fx.core.ticket_for_pip(&fx.scope, "CA-1").await.unwrap();
+        assert_eq!(seen.description, format!("See [the files]({held})"));
+
+        let edited = format!("{}\n\nA new paragraph with [more](ftp://elsewhere.example.com/b) and [web](https://example.com).", seen.description);
+        let Intent::Rewrite { body, .. } = fx.core.rewrite_intent(&fx.scope, "CA-1", None, Some(&edited)).await.unwrap() else { panic!() };
+        let body = body.unwrap();
+        assert_eq!(body.to.hrefs(), [held, "https://example.com"], "the held link stays, the new ftp link is text, the web link is a link");
+        assert!(body.to.plain_text().contains("[more](ftp://elsewhere.example.com/b)"));
+        assert_eq!(body.from.hrefs(), [held]);
+
+        let same = fx.core.rewrite_intent(&fx.scope, "CA-1", None, Some(&seen.description)).await.unwrap_err();
+        assert!(same.to_string().contains("nothing to draft"), "keeping the link unchanged is no change: {same}");
+        let moved = fx.core.rewrite_intent(&fx.scope, "CA-1", None, Some("See [the files](ftp://files.example.com/b)")).await.unwrap();
+        let Intent::Rewrite { body, .. } = moved else { panic!() };
+        assert!(body.unwrap().to.hrefs().is_empty(), "a held link whose address Pip changed is not kept as a link");
+    }
+
+    #[tokio::test]
+    async fn the_persons_edit_keeps_a_held_link_too() {
+        use crate::inbox::Edit;
+        let fx = fixture().await;
+        let held = "ftp://files.example.com/a";
+        let doc = adf(serde_json::json!([{ "type": "paragraph", "content": [{ "type": "text", "text": "See " }, { "type": "text", "text": "the files", "marks": [{ "type": "link", "attrs": { "href": held } }] }] }]));
+        with_description(&fx, doc).await;
+        let intent = fx.core.rewrite_intent(&fx.scope, "CA-1", None, Some(&format!("See [the files]({held}), reworded"))).await.unwrap();
+        let drafted = fx.core.propose(&fx.scope, crate::proposals::Draft::from_pip("r", intent, None)).await.unwrap();
+        let edited = fx.core.edit_proposal(&drafted.id, &Edit::Rewrite { title: None, body: Some(format!("See [the files]({held}), reworded by me, and [x](ftp://new.example.com)")) }).await.unwrap();
+        let Intent::Rewrite { body, .. } = edited.intent else { panic!() };
+        assert_eq!(body.unwrap().to.hrefs(), [held]);
     }
 }

@@ -7,7 +7,12 @@
 use super::{push_line, Block, Doc, Inline, Mark};
 use crate::domain::PersonRef;
 
-type Mentions<'a> = [&'a (PersonRef, String)];
+/// What the parser knows beyond the text: who can be mentioned, and which link targets to keep even though they are not web
+/// or mail addresses (the ones the document being rewritten already holds).
+struct Context<'a> {
+    mentions: Vec<&'a (PersonRef, String)>,
+    hrefs: &'a [String],
+}
 
 impl Doc {
     pub fn to_markdown(&self) -> String {
@@ -17,11 +22,46 @@ impl Doc {
     /// The document `text` stands for. `@Name` for each of `mentions` becomes a mention. Only http, https and mailto
     /// links are kept as links.
     pub fn from_markdown(text: &str, mentions: &[(PersonRef, String)]) -> Self {
+        Self::parse_markdown(text, mentions, &[])
+    }
+
+    /// The document `text` stands for when it is a rewrite of `source`: whoever `source` mentions can be mentioned, and a
+    /// link `source` already holds stays a link whatever its scheme, while one that is new must still be a web or mail address.
+    pub fn from_markdown_like(text: &str, source: &Doc) -> Self {
+        Self::parse_markdown(text, &source.mentioned(), &source.hrefs())
+    }
+
+    fn parse_markdown(text: &str, mentions: &[(PersonRef, String)], hrefs: &[String]) -> Self {
         let mut by_length: Vec<&(PersonRef, String)> = mentions.iter().collect();
         by_length.sort_by_key(|(_, name)| std::cmp::Reverse(name.chars().count()));
         let normalised = text.replace("\r\n", "\n").replace('\r', "\n");
         let lines: Vec<&str> = normalised.lines().collect();
-        Doc { blocks: parse_blocks(&lines, &by_length) }
+        Doc { blocks: parse_blocks(&lines, &Context { mentions: by_length, hrefs }) }
+    }
+
+    /// Where the document's links point, once each.
+    pub fn hrefs(&self) -> Vec<String> {
+        fn walk(blocks: &[Block], out: &mut Vec<String>) {
+            for b in blocks {
+                match b {
+                    Block::Paragraph { content } | Block::Heading { content, .. } => {
+                        for i in content {
+                            if let Inline::Link { href, .. } = i {
+                                if !out.contains(href) {
+                                    out.push(href.clone());
+                                }
+                            }
+                        }
+                    }
+                    Block::List { items, .. } => items.iter().for_each(|i| walk(i, out)),
+                    Block::Quote { content } => walk(content, out),
+                    Block::Code { .. } | Block::Rule => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.blocks, &mut out);
+        out
     }
 
     /// Everyone mentioned in the document, once each.
@@ -106,7 +146,7 @@ fn inlines_markdown(content: &[Inline], single_line: bool) -> String {
     for i in &merged {
         match i {
             Inline::Text { text, marks } => out.push_str(&marked(text, marks)),
-            Inline::Link { href, text } => out.push_str(&format!("[{}]({})", escape(text), href.replace(')', "%29").replace(' ', "%20"))),
+            Inline::Link { href, text } => out.push_str(&format!("[{}]({})", escape(text), destination(href))),
             Inline::Mention { name, .. } => {
                 out.push('@');
                 out.push_str(name);
@@ -118,6 +158,16 @@ fn inlines_markdown(content: &[Inline], single_line: bool) -> String {
         out.replace('\n', " ")
     } else {
         out
+    }
+}
+
+/// A link target as written: bare when it can be, otherwise in angle brackets, so it reads back exactly.
+fn destination(href: &str) -> String {
+    let encoded = href.replace('<', "%3C").replace('>', "%3E").replace('\n', "%0A").replace('\r', "%0D");
+    if encoded.contains([' ', '\t', '(', ')']) {
+        format!("<{encoded}>")
+    } else {
+        encoded
     }
 }
 
@@ -240,7 +290,7 @@ fn indent_of(line: &str) -> usize {
     line.chars().take_while(|c| *c == ' ').count()
 }
 
-fn parse_blocks(lines: &[&str], mentions: &Mentions) -> Vec<Block> {
+fn parse_blocks(lines: &[&str], cx: &Context) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut i = 0;
     while i < lines.len() {
@@ -263,7 +313,7 @@ fn parse_blocks(lines: &[&str], mentions: &Mentions) -> Vec<Block> {
             }
             blocks.push(Block::Code { language: (!language.is_empty()).then(|| language.to_string()), text: body.join("\n") });
         } else if let Some((level, text)) = heading(trimmed) {
-            blocks.push(Block::Heading { level, content: inlines(text, mentions) });
+            blocks.push(Block::Heading { level, content: inlines(text, cx) });
             i += 1;
         } else if is_rule(trimmed) {
             blocks.push(Block::Rule);
@@ -274,9 +324,9 @@ fn parse_blocks(lines: &[&str], mentions: &Mentions) -> Vec<Block> {
                 i += 1;
             }
             let inner: Vec<&str> = lines[start..i].iter().map(|l| l.trim_start().trim_start_matches('>').strip_prefix(' ').unwrap_or_else(|| l.trim_start().trim_start_matches('>'))).collect();
-            blocks.push(Block::Quote { content: parse_blocks(&inner, mentions) });
+            blocks.push(Block::Quote { content: parse_blocks(&inner, cx) });
         } else if let Some((ordered, _)) = list_marker(trimmed) {
-            let (list, next) = parse_list(lines, i, ordered, mentions);
+            let (list, next) = parse_list(lines, i, ordered, cx);
             blocks.push(list);
             i = next;
         } else {
@@ -290,7 +340,7 @@ fn parse_blocks(lines: &[&str], mentions: &Mentions) -> Vec<Block> {
                 if !first {
                     content.push(Inline::LineBreak);
                 }
-                content.extend(inlines(lines[i].trim_end(), mentions));
+                content.extend(inlines(lines[i].trim_end(), cx));
                 first = false;
                 i += 1;
             }
@@ -300,7 +350,7 @@ fn parse_blocks(lines: &[&str], mentions: &Mentions) -> Vec<Block> {
     blocks
 }
 
-fn parse_list(lines: &[&str], start: usize, ordered: bool, mentions: &Mentions) -> (Block, usize) {
+fn parse_list(lines: &[&str], start: usize, ordered: bool, cx: &Context) -> (Block, usize) {
     let base = indent_of(lines[start]);
     let mut items = Vec::new();
     let mut i = start;
@@ -333,24 +383,24 @@ fn parse_list(lines: &[&str], start: usize, ordered: bool, mentions: &Mentions) 
                 break;
             }
         }
-        items.push(parse_blocks(&inner, mentions));
+        items.push(parse_blocks(&inner, cx));
     }
     (Block::List { ordered, items }, i)
 }
 
-fn inlines(text: &str, mentions: &Mentions) -> Vec<Inline> {
+fn inlines(text: &str, cx: &Context) -> Vec<Inline> {
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
-    spans(&chars, &[], mentions, &mut out);
+    spans(&chars, &[], cx, &mut out);
     out
 }
 
-fn push_plain(plain: &mut String, marks: &[Mark], mentions: &Mentions, out: &mut Vec<Inline>) {
+fn push_plain(plain: &mut String, marks: &[Mark], cx: &Context, out: &mut Vec<Inline>) {
     if plain.is_empty() {
         return;
     }
     let mut parts = Vec::new();
-    push_line(plain, mentions, &mut parts);
+    push_line(plain, &cx.mentions, &mut parts);
     plain.clear();
     out.extend(parts.into_iter().map(|p| match p {
         Inline::Text { text, .. } => Inline::Text { text, marks: marks.to_vec() },
@@ -389,7 +439,7 @@ fn find_closing(chars: &[char], from: usize, pat: &[char]) -> Option<usize> {
     }
 }
 
-fn spans(chars: &[char], marks: &[Mark], mentions: &Mentions, out: &mut Vec<Inline>) {
+fn spans(chars: &[char], marks: &[Mark], cx: &Context, out: &mut Vec<Inline>) {
     let mut plain = String::new();
     let mut i = 0;
     let with = |m: Mark| {
@@ -410,7 +460,7 @@ fn spans(chars: &[char], marks: &[Mark], mentions: &Mentions, out: &mut Vec<Inli
             let fence = vec!['`'; ticks];
             match chars[i + ticks..].windows(ticks).position(|w| w == fence.as_slice()).filter(|p| chars.get(i + ticks + p + ticks) != Some(&'`')) {
                 Some(p) => {
-                    push_plain(&mut plain, marks, mentions, out);
+                    push_plain(&mut plain, marks, cx, out);
                     let code: String = chars[i + ticks..i + ticks + p].iter().collect();
                     let padded = code.len() >= 3 && code.starts_with(' ') && code.ends_with(' ') && (code[1..].starts_with('`') || code[..code.len() - 1].ends_with('`'));
                     let code = if padded { code[1..code.len() - 1].to_string() } else { code };
@@ -426,8 +476,8 @@ fn spans(chars: &[char], marks: &[Mark], mentions: &Mentions, out: &mut Vec<Inli
             let pat: Vec<char> = pat.chars().collect();
             match find_closing(chars, i + pat.len(), &pat) {
                 Some(end) => {
-                    push_plain(&mut plain, marks, mentions, out);
-                    spans(&chars[i + pat.len()..end], &with(mark), mentions, out);
+                    push_plain(&mut plain, marks, cx, out);
+                    spans(&chars[i + pat.len()..end], &with(mark), cx, out);
                     i = end + pat.len();
                 }
                 None => {
@@ -436,9 +486,9 @@ fn spans(chars: &[char], marks: &[Mark], mentions: &Mentions, out: &mut Vec<Inli
                 }
             }
         } else if c == '[' {
-            match link_at(chars, i) {
+            match link_at(chars, i, cx.hrefs) {
                 Some((text, href, next)) => {
-                    push_plain(&mut plain, marks, mentions, out);
+                    push_plain(&mut plain, marks, cx, out);
                     out.push(Inline::Link { href, text });
                     i = next;
                 }
@@ -452,19 +502,43 @@ fn spans(chars: &[char], marks: &[Mark], mentions: &Mentions, out: &mut Vec<Inli
             i += 1;
         }
     }
-    push_plain(&mut plain, marks, mentions, out);
+    push_plain(&mut plain, marks, cx, out);
 }
 
-fn link_at(chars: &[char], start: usize) -> Option<(String, String, usize)> {
+fn link_at(chars: &[char], start: usize, known: &[String]) -> Option<(String, String, usize)> {
     let close = find(chars, start + 1, &[']'])?;
     if chars.get(close + 1) != Some(&'(') {
         return None;
     }
-    let end = chars[close + 2..].iter().position(|c| *c == ')')? + close + 2;
-    let href: String = chars[close + 2..end].iter().collect();
-    let href = href.trim().to_string();
+    let from = close + 2;
+    let (href, end) = if chars.get(from) == Some(&'<') {
+        let at = chars[from + 1..].iter().position(|c| matches!(c, '>' | '\n'))? + from + 1;
+        if chars[at] != '>' {
+            return None;
+        }
+        let after = chars[at + 1..].iter().position(|c| !c.is_whitespace())? + at + 1;
+        if chars[after] != ')' {
+            return None;
+        }
+        (chars[from + 1..at].iter().collect::<String>(), after)
+    } else {
+        let mut depth = 0usize;
+        let mut at = from;
+        loop {
+            match chars.get(at)? {
+                '(' => depth += 1,
+                ')' if depth == 0 => break,
+                ')' => depth -= 1,
+                c if c.is_whitespace() => return None,
+                _ => {}
+            }
+            at += 1;
+        }
+        (chars[from..at].iter().collect::<String>(), at)
+    };
     let lower = href.to_ascii_lowercase();
-    if !(lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")) || href.chars().any(char::is_whitespace) {
+    let web = lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:");
+    if href.is_empty() || !(web || known.contains(&href)) {
         return None;
     }
     let label: String = chars[start + 1..close].iter().collect();
@@ -562,6 +636,62 @@ mod tests {
         let Block::Paragraph { content } = &doc.blocks[0] else { panic!() };
         assert_eq!(content.iter().filter(|i| matches!(i, Inline::Link { .. })).count(), 2);
         assert!(doc.plain_text().contains("[x](javascript:alert(1)"));
+    }
+
+    fn link_to(href: &str) -> Doc {
+        Doc { blocks: vec![Block::Paragraph { content: vec![Inline::Text { text: "See ".into(), marks: vec![] }, Inline::Link { href: href.into(), text: "the files".into() }] }] }
+    }
+
+    fn links_of(doc: &Doc) -> Vec<String> {
+        doc.hrefs()
+    }
+
+    #[test]
+    fn a_link_the_source_already_holds_stays_a_link_whatever_its_scheme() {
+        for href in ["ftp://files.example.com/a", "javascript:void(0)", "file:///srv/share", "slack://channel?id=1"] {
+            let source = link_to(href);
+            let md = source.to_markdown();
+            let back = Doc::from_markdown_like(&md, &source);
+            assert_eq!(back, source, "{href}: {md}");
+            assert_eq!(back.to_markdown(), md, "an unchanged rewrite is no change");
+            assert_ne!(Doc::from_markdown(&md, &[]), source, "{href}: without the source it is only text");
+        }
+    }
+
+    #[test]
+    fn a_new_or_changed_non_web_link_is_still_text() {
+        let source = link_to("ftp://files.example.com/a");
+        for (text, why) in [
+            ("See [x](ftp://elsewhere.example.com/b)", "a new ftp link"),
+            ("See [x](javascript:alert(1))", "a new javascript link"),
+            ("See [the files](ftp://files.example.com/b)", "the held link's address changed"),
+            ("See [x](file:///etc/passwd)", "a new file link"),
+        ] {
+            let doc = Doc::from_markdown_like(text, &source);
+            assert!(doc.hrefs().is_empty(), "{why}: {:?}", doc.blocks);
+            assert!(doc.plain_text().contains(&text["See ".len()..]), "{why}: it stays visible as text: {:?}", doc.plain_text());
+        }
+        let moved = Doc::from_markdown_like("See [the files](https://files.example.com/b)", &source);
+        assert_eq!(links_of(&moved), ["https://files.example.com/b"], "a changed address that is a web link is allowed");
+        let both = Doc::from_markdown_like("[a](ftp://files.example.com/a) and [b](ftp://files.example.com/b) and [c](https://c.test)", &source);
+        assert_eq!(links_of(&both), ["ftp://files.example.com/a", "https://c.test"]);
+        assert!(links_of(&Doc::from_markdown_like("[a](ftp://files.example.com/a)", &Doc::default())).is_empty(), "nothing held, nothing kept");
+    }
+
+    #[test]
+    fn link_targets_with_spaces_or_parentheses_read_back_exactly() {
+        for href in ["https://en.wikipedia.org/wiki/Rust_(programming_language)", "https://a.test/a b", "https://a.test/(x)(y)", "https://a.test/x)y", "https://a.test/<x>"] {
+            let doc = link_to(href);
+            let md = doc.to_markdown();
+            let back = Doc::from_markdown(&md, &[]);
+            let expect = href.replace('<', "%3C").replace('>', "%3E");
+            assert_eq!(links_of(&back), std::slice::from_ref(&expect), "{href}: {md}");
+            assert_eq!(back.to_markdown(), Doc::from_markdown(&back.to_markdown(), &[]).to_markdown());
+        }
+        assert_eq!(links_of(&Doc::from_markdown("[x](https://a.test/p_(q)) and [y](https://b.test)", &[])), ["https://a.test/p_(q)", "https://b.test"]);
+        assert!(links_of(&Doc::from_markdown("[x](https://a.test/ not closed", &[])).is_empty());
+        assert!(links_of(&Doc::from_markdown("[x](<https://a.test/ no end", &[])).is_empty());
+        assert!(links_of(&Doc::from_markdown("[x]()", &[])).is_empty());
     }
 
     #[test]
