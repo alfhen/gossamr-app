@@ -115,7 +115,7 @@ function findings(runs: readonly Run[]): string {
 function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
   const attached =
     new RegExp(`\\b${ANY_KEY}(?:'s|\u2019s)?\\s+(?:description|title)\\b`, "i").exec(prompt)?.[1] ??
-    new RegExp(`\\b(?:description|title)s?\\s+(?:of|for|on|in|at)\\s+(?:the\\s+)?${TICKET_WORDS}${ANY_KEY}\\b`, "i").exec(prompt)?.[1];
+    new RegExp(`\\b(?:description|title)s?(?:\\s+(?:update|edit|rewrite|revision|change))?\\s+(?:of|for|on|in|at)\\s+(?:the\\s+)?${TICKET_WORDS}${ANY_KEY}\\b`, "i").exec(prompt)?.[1];
   const key = (attached ?? (context.item ? null : new RegExp(`\\b${ANY_KEY}\\b`).exec(prompt)?.[1]))?.toUpperCase();
   if (!key) return context.item;
   if (context.item?.key.toUpperCase() === key) return context.item;

@@ -193,6 +193,17 @@ describe("the scripted Pip and a description edit", () => {
     expect(scriptPip(prompt, { ...context, item: null }).rewrite?.item.key).toBe(key);
   });
 
+  it.each([
+    "Draft a description update for DEVOPS-473",
+    "Draft a title update for ticket DEVOPS-473",
+    "Draft a description edit for DEVOPS-473",
+    "Draft a title rewrite for devops-473",
+    "Draft a description rewrite on DEVOPS-473",
+  ])("targets the key after an update, edit or rewrite phrase, not the open ticket: %s", (prompt) => {
+    expect(scriptPip(prompt, context).rewrite?.item.key).toBe("DEVOPS-473");
+    expect(scriptPip(prompt, { ...context, item: null }).rewrite?.item.key).toBe("DEVOPS-473");
+  });
+
   it("keeps the open ticket when the only other key is mentioned in passing, and falls back to it when none is open", () => {
     const prompt = "Update the description to follow what CA-271 found";
     expect(scriptPip(prompt, context).rewrite?.item).toBe(context.item);
