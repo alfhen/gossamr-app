@@ -105,7 +105,7 @@ impl Harness {
         self.server.runs.lock().unwrap().insert(run_id.into(), super::mcp::PipRun::new(self.lx.fx.scope.clone()));
         AgentRequest {
             run_id: run_id.into(),
-            system: super::context::system_prompt(false),
+            system: super::context::system_prompt(false, true),
             prompt: prompt.into(),
             mcp: self.server.endpoint(run_id).unwrap(),
             sandbox: self.sandbox.clone(),

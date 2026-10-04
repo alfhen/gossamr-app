@@ -203,6 +203,35 @@ pub fn with_files(mut doc: Value, files: &[crate::model::Uploaded]) -> Value {
     doc
 }
 
+/// What a rewrite built from `to_doc` would turn into plain text, by name: parts of the description the portable
+/// document keeps only the words of.
+pub fn flattened(doc: &Value) -> Vec<String> {
+    fn find(node: &Value, out: &mut Vec<&'static str>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let what = match node["type"].as_str().unwrap_or_default() {
+            "media" | "mediaSingle" | "mediaGroup" | "mediaInline" => Some("images and attachments"),
+            "table" => Some("tables"),
+            "panel" => Some("panels"),
+            "expand" | "nestedExpand" => Some("collapsible sections"),
+            "taskList" | "decisionList" => Some("task and decision lists"),
+            "extension" | "bodiedExtension" | "inlineExtension" => Some("macros"),
+            "status" => Some("status lozenges"),
+            _ => None,
+        };
+        if let Some(w) = what.filter(|w| !out.contains(w)) {
+            out.push(w);
+        }
+        for child in node.get("content").and_then(Value::as_array).into_iter().flatten() {
+            find(child, out, depth + 1);
+        }
+    }
+    let mut out = Vec::new();
+    find(doc, &mut out, 0);
+    out.into_iter().map(String::from).collect()
+}
+
 /// The portable form of an ADF document. Nodes it has no place for (media, tables, panels) keep their text but lose
 /// their shape.
 pub fn to_doc(doc: &Value, connection_id: &str) -> Doc {
@@ -631,5 +660,19 @@ mod tests {
         assert_eq!(to_text(&adf), "");
         assert!(to_doc(&adf, "c").plain_text().is_empty());
         assert!(mentions(&adf).is_empty());
+    }
+
+    #[test]
+    fn names_what_a_rewrite_would_flatten() {
+        let doc = json!({ "type": "doc", "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "plain" }] },
+            { "type": "mediaSingle", "content": [{ "type": "media", "attrs": { "id": "1" } }] },
+            { "type": "table", "content": [{ "type": "tableRow", "content": [] }] },
+            { "type": "panel", "content": [{ "type": "paragraph", "content": [] }] },
+            { "type": "mediaSingle", "content": [] }
+        ] });
+        assert_eq!(flattened(&doc), ["images and attachments", "tables", "panels"]);
+        assert!(flattened(&json!({ "type": "doc", "content": [{ "type": "bulletList", "content": [] }] })).is_empty());
+        assert!(flattened(&json!("a plain string")).is_empty());
     }
 }

@@ -56,6 +56,7 @@ The Jira adapter was written against the REST v3 documentation and tested with r
 - Reading a project's statuses (`project/{key}/statuses`) and the project list (`project/search`) for board columns.
 - Approving a move: the status id on the card is matched to Jira's transition id at approval time, and Jira may refuse it if the workflow has required fields.
 - Reading comments from the API (`issue/{key}/comment`) for the peek sheet, and rendering their formatting; media and some panels show as plain text.
+- Rewriting a ticket's title and description (`PUT issue/{key}`) from a draft you approve. The description goes to Jira as ADF built from Markdown, so images, tables, panels and macros in the old one become plain text (the draft says so, and Jira keeps the old text in the issue history). The ticket is read again just before the write, and one edited in Jira since the draft was made is refused. Jira can't make the write conditional, so an edit made in the moment between that read and the write can still be overwritten.
 - Pip narrowing the view (`pip-view`, `set_view_filter`) and the nudge bubble.
 - Bulk moves offer every status and rely on Jira refusing the ones a ticket can't reach.
 
@@ -63,7 +64,7 @@ The Jira adapter was written against the REST v3 documentation and tested with r
 
 Press `⌘J` on a ticket to ask Claude about it. The app runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription. It does not load your CLAUDE.md, memory, skills, hooks, plugins or other MCP servers. It runs in an empty folder inside the app's data directory, and follow-ups continue the session Pip started there. It runs Sonnet at medium effort, whatever your Claude Code default is.
 
-Claude can read the ticket through a local MCP server the app runs, and nothing else: no built-in Claude Code tools, so it can't read local files, run commands, browse the web or write files. It can't change Jira either: comments, transitions and subtasks come back as cards you approve, edit or skip.
+Claude can read the ticket through a local MCP server the app runs, and nothing else: no built-in Claude Code tools, so it can't read local files, run commands, browse the web or write files. It can't change Jira either: comments, transitions, subtasks, new tickets and new titles or descriptions for a ticket come back as cards you approve, edit or skip. A description edit shows as a before-and-after diff, and Autopilot can never make one.
 
 ## Development
 

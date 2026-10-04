@@ -22,8 +22,10 @@ pub(crate) mod code;
 mod drafts;
 mod run_results;
 mod pip_runs;
+mod rewrites;
 mod ticket_context;
 pub use pip_runs::PipRunAsk;
+pub use rewrites::TextSeen;
 mod watch;
 
 pub use code::{CodeRef, CodeService};
@@ -566,11 +568,16 @@ impl Core {
 
     /// The cached ticket, or a fresh read from Jira when it isn't cached.
     pub async fn ticket(&self, scope: &Scope, key: &str) -> Result<CachedTicket> {
+        ticket_of(&self.work_item(scope, key).await?)
+    }
+
+    /// The cached item, or a fresh read from Jira when it isn't cached.
+    pub async fn work_item(&self, scope: &Scope, key: &str) -> Result<WorkItem> {
         let item = Self::item(scope, key);
         let (cached, last_sync) = self.with_db_for(scope, |db| Ok((db.item(&item)?, db.meta(LAST_SYNC)?))).await?;
         match cached {
-            Some(item) => ticket_of(&item),
-            None => ticket_of(&self.tracker(scope)?.item(&item, &unread_cutoff(last_sync.as_deref())).await?),
+            Some(item) => Ok(item),
+            None => self.tracker(scope)?.item(&item, &unread_cutoff(last_sync.as_deref())).await,
         }
     }
 
@@ -978,6 +985,14 @@ pub(crate) mod testing {
             item.container.external_id = container.into();
             item.title = format!("Ticket {key}");
             self.core.with_db_for(&self.scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
+        }
+
+        /// Changes the cached item `key`, as a sync of an edited ticket would.
+        pub async fn edit_item(&self, key: &str, f: impl FnOnce(&mut WorkItem)) {
+            let at = self.item(key);
+            let mut item = self.core.with_db_for(&self.scope, |db| db.item(&at)).await.unwrap().unwrap();
+            f(&mut item);
+            self.core.with_db_for(&self.scope, |db| db.upsert_items(&[item], "2026-09-29T13:00:00Z").map(|_| ())).await.unwrap();
         }
 
         /// Adds `CA-<n>` (a copy of the sample ticket) to the cache.

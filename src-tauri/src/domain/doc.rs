@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use super::PersonRef;
 
+mod markdown;
+
 /// Portable rich text. Connector formats (ADF, Markdown) convert to this at the edge.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Doc {

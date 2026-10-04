@@ -219,6 +219,26 @@ async fn a_comment_posts_its_body_as_adf() {
 }
 
 #[tokio::test]
+async fn a_rewrite_puts_only_the_fields_it_changes_the_description_as_adf() {
+    use crate::domain::{BodyChange, TitleChange};
+    let server = serve(vec![("/ex/jira/site/rest/api/3/issue/CA-1", vec![Reply::status(204, ""), Reply::status(204, "")])]).await;
+    let body = BodyChange { from: Doc::paragraph("old"), to: Doc::from_markdown("# Scope\n\n- one\n- two", &[]) };
+    let both = Intent::Rewrite { item: item("CA-1"), title: Some(TitleChange { from: "Old".into(), to: " New title ".into() }), body: Some(body.clone()), flattened: vec![] };
+    tracker(&server).apply(&both).await.unwrap();
+    let only_title = Intent::Rewrite { item: item("CA-1"), title: Some(TitleChange { from: "Old".into(), to: "Newer".into() }), body: None, flattened: vec![] };
+    tracker(&server).apply(&only_title).await.unwrap();
+    let seen = server.seen.lock().unwrap().clone();
+    assert!(seen.iter().all(|s| s.method == "PUT" && s.target == "/ex/jira/site/rest/api/3/issue/CA-1"));
+    let first: Value = serde_json::from_str(&seen[0].body).unwrap();
+    assert_eq!(first["fields"]["summary"], "New title");
+    assert_eq!(first["fields"]["description"]["type"], "doc");
+    assert_eq!(first["fields"]["description"]["content"][0]["type"], "heading");
+    assert_eq!(first["fields"]["description"]["content"][1]["type"], "bulletList");
+    let second: Value = serde_json::from_str(&seen[1].body).unwrap();
+    assert_eq!(second, json!({ "fields": { "summary": "Newer" } }), "a title-only rewrite can't touch the description");
+}
+
+#[tokio::test]
 async fn a_deleted_or_unreadable_issue_reads_as_gone_not_as_raw_json() {
     let body = r#"{"errorMessages":["Issue does not exist or you do not have permission to see it."],"errors":{}}"#;
     let server = serve(vec![("/ex/jira/site/rest/api/3/issue/CA-9", vec![Reply::status(404, body)])]).await;

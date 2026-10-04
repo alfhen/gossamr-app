@@ -324,6 +324,11 @@ fn field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
 }
 
 pub(crate) fn sanitize(raw: &str) -> String {
+    strip_tags(&scrub(raw))
+}
+
+/// `sanitize` without the removal of HTML-like tags, for text that is going into a ticket and may legitimately name them.
+pub(crate) fn scrub(raw: &str) -> String {
     let text = strip_ansi(&redact(raw)).replace("\r\n", "\n");
     let text: String = text.chars().filter(|c| matches!(c, '\n' | '\t') || !(c.is_control() || is_direction_mark(*c))).collect();
     let mut text = without_markers(&text);
@@ -332,7 +337,7 @@ pub(crate) fn sanitize(raw: &str) -> String {
             text = text.replace(marker, "");
         }
     }
-    strip_tags(&text)
+    text
 }
 
 fn is_direction_mark(c: char) -> bool {

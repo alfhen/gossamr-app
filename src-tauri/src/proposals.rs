@@ -11,8 +11,8 @@ use chrono::{DateTime, Utc};
 
 use crate::db::Db;
 use crate::domain::{
-    reconcile, Basis, ContainerRef, CreatedBy, Identity, Intent, ItemRef, Origin, Proposal, ProposalQuery, ProposalState,
-    ReconcileContext, Revision, StateKind, Transitions, Workflow,
+    reconcile, without_markers, Basis, BodyChange, ContainerRef, CreatedBy, Identity, Intent, ItemRef, Origin, Proposal, ProposalQuery,
+    ProposalState, ReconcileContext, Revision, StateKind, TitleChange, Transitions, Workflow, DESCRIPTION_LIMIT, SUMMARY_LIMIT,
 };
 use crate::error::{Error, Result};
 use crate::tracker::WorkTracker;
@@ -54,6 +54,7 @@ fn check(intent: &Intent) -> Result<()> {
         }
         Intent::Update { patch, .. } if patch.is_empty() => Err(refuse("an update has to change something")),
         Intent::Create { fields, .. } if blank(&fields.title) => Err(refuse("a new item needs a title")),
+        Intent::Rewrite { title, body, .. } => check_rewrite(title.as_ref(), body.as_ref()),
         Intent::StartRun { connection_id, item, spec } => {
             if item.as_ref().is_some_and(|i| i.connection_id != *connection_id) {
                 return Err(refuse("the ticket belongs to another connection"));
@@ -75,11 +76,51 @@ fn check(intent: &Intent) -> Result<()> {
     }
 }
 
+fn check_rewrite(title: Option<&TitleChange>, body: Option<&BodyChange>) -> Result<()> {
+    if title.is_none() && body.is_none() {
+        return Err(refuse("a rewrite has to change the title or the description"));
+    }
+    if let Some(t) = title {
+        let to = t.to.trim();
+        if to.is_empty() || to.contains('\n') {
+            return Err(refuse("a title is one line and can't be empty"));
+        }
+        if to.chars().count() > SUMMARY_LIMIT {
+            return Err(refuse(format!("a title is at most {SUMMARY_LIMIT} characters")));
+        }
+        if without_markers(to) != to {
+            return Err(refuse("the title contains text Gossamr reserves; remove it"));
+        }
+        if to == t.from.trim() {
+            return Err(refuse("the new title is the same as the old one"));
+        }
+    }
+    if let Some(b) = body {
+        let to = b.to.to_markdown();
+        if to.trim().is_empty() {
+            return Err(refuse("a description can't be emptied; draft a comment or clear it in Jira"));
+        }
+        if to.chars().count() > DESCRIPTION_LIMIT {
+            return Err(refuse(format!("a description is at most {DESCRIPTION_LIMIT} characters")));
+        }
+        if without_markers(&to) != to {
+            return Err(refuse("the description contains text Gossamr reserves; remove it"));
+        }
+        if to == b.from.to_markdown() {
+            return Err(refuse("the new description is the same as the old one"));
+        }
+    }
+    Ok(())
+}
+
 pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
     // Every draft is stored here, so this is the one place that can keep autopilot from starting an agent.
     let by_autopilot = matches!(draft.origin, Origin::Autopilot { .. }) || draft.created_by == CreatedBy::Autopilot;
     if by_autopilot && matches!(draft.intent, Intent::StartRun { .. }) {
         return Err(refuse("autopilot can't start an agent"));
+    }
+    if by_autopilot && matches!(draft.intent, Intent::Rewrite { .. }) {
+        return Err(refuse("autopilot can't rewrite a ticket's text"));
     }
     check(&draft.intent)?;
     let p = Proposal {
@@ -139,6 +180,13 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
             return Err(refuse("subtasks that were already created can't be changed"));
         }
     }
+    if let (Intent::Rewrite { title: ot, body: ob, .. }, Intent::Rewrite { title: nt, body: nb, .. }) = (&p.intent, &intent) {
+        let title_basis = |t: &Option<TitleChange>| t.as_ref().map(|t| t.from.clone());
+        let body_basis = |b: &Option<BodyChange>| b.as_ref().map(|b| b.from.clone());
+        if title_basis(ot) != title_basis(nt) || body_basis(ob) != body_basis(nb) {
+            return Err(refuse("an edit can't change which text the rewrite was drafted against"));
+        }
+    }
     // A transition's label named the old target, so the approve button falls back to the new status's name.
     if matches!((&p.intent, &intent), (Intent::Transition { to: a, .. }, Intent::Transition { to: b, .. }) if a != b) {
         p.label = None;
@@ -168,11 +216,19 @@ pub fn person_edited_run(p: &Proposal) -> bool {
     matches!(p.intent, Intent::StartRun { .. }) && p.revisions.iter().any(|r| r.note == EDITED_NOTE)
 }
 
+/// Whether the person has changed a rewrite's text. Their words are theirs to keep.
+pub fn person_edited_rewrite(p: &Proposal) -> bool {
+    matches!(p.intent, Intent::Rewrite { .. }) && p.revisions.iter().any(|r| r.note == EDITED_NOTE)
+}
+
 /// What Pip may revise: its own pending drafts, and a pending comment, new ticket or breakdown into subtasks the
 /// person's agent run left for them. The person made none of these by hand, and all stay theirs to approve.
 pub fn require_pip_may_revise(p: &Proposal) -> Result<()> {
     if person_edited_run(p) {
         return Err(refuse("the user edited this agent run draft, so Pip can't change it any more"));
+    }
+    if person_edited_rewrite(p) {
+        return Err(refuse("the user edited this description draft, so Pip can't change it any more"));
     }
     let from_run = matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. })) && p.created_by == CreatedBy::User;
     if p.created_by != CreatedBy::Pip && !from_run {
@@ -223,8 +279,29 @@ pub struct Outcome {
     pub error: Option<Error>,
 }
 
+/// A rewrite replaces text outright, and Jira can't make a write conditional on what the text was. So the ticket is read
+/// again just before writing, and a ticket that moved on is left alone.
+async fn guard_rewrite(tracker: &dyn WorkTracker, item: &ItemRef, title: Option<&TitleChange>, body: Option<&BodyChange>) -> Result<()> {
+    if !tracker.capabilities().edit_text {
+        return Err(refuse("this tracker can't change a ticket's title or description"));
+    }
+    let now = tracker.item(item, &Utc::now().to_rfc3339()).await?;
+    if title.is_some_and(|t| t.from != now.title) || body.is_some_and(|b| b.from != now.body) {
+        return Err(refuse(format!(
+            "{} changed since this was drafted, so nothing was written. Skip this draft and ask Pip to draft it again from the current text.",
+            item.key
+        )));
+    }
+    Ok(())
+}
+
 /// Hands the proposal's intent to the tracker. Subtasks a previous attempt created are left out.
 pub async fn execute(tracker: &dyn WorkTracker, p: &Proposal) -> Outcome {
+    if let Intent::Rewrite { item, title, body, .. } = &p.intent {
+        if let Err(error) = guard_rewrite(tracker, item, title.as_ref(), body.as_ref()).await {
+            return Outcome { created: vec![], error: Some(error) };
+        }
+    }
     let intent = match &p.intent {
         Intent::Subtasks { parent, summaries } => {
             let rest = &summaries[p.created.len().min(summaries.len())..];
@@ -301,7 +378,7 @@ pub fn reconcile_pending(db: &Db, me: &Identity, now: DateTime<Utc>) -> Result<u
 mod tests {
     use super::*;
     use crate::domain::fixtures::{item_ref, now, person, work_item};
-    use crate::domain::{Category, Container, Doc, StatusDef, Transition};
+    use crate::domain::{BodyChange, Category, Container, Doc, StatusDef, TitleChange, Transition};
     use crate::tracker::testing::Recorder;
     use crate::tracker::Applied;
 
@@ -621,5 +698,128 @@ mod tests {
         let mut json = serde_json::to_value(&p).unwrap();
         json.as_object_mut().unwrap().remove("run");
         assert_eq!(serde_json::from_value::<Proposal>(json).unwrap().run, None);
+    }
+
+    fn rewrite(title: Option<(&str, &str)>, body: Option<(&str, &str)>) -> Intent {
+        Intent::Rewrite {
+            item: item_ref("1"),
+            title: title.map(|(from, to)| TitleChange { from: from.into(), to: to.into() }),
+            body: body.map(|(from, to)| BodyChange { from: Doc::from_markdown(from, &[]), to: Doc::from_markdown(to, &[]) }),
+            flattened: vec![],
+        }
+    }
+
+    fn refused(intent: Intent) -> String {
+        let db = Db::in_memory().unwrap();
+        create(&db, Draft::from_pip("r", intent, None), now()).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn a_rewrite_has_to_change_something_within_bounds() {
+        assert!(refused(rewrite(None, None)).contains("title or the description"));
+        assert!(refused(rewrite(Some(("Old", "  ")), None)).contains("title"));
+        assert!(refused(rewrite(Some(("Old", "Two\nlines")), None)).contains("one line"));
+        assert!(refused(rewrite(Some(("Old", &"t".repeat(SUMMARY_LIMIT + 1))), None)).contains("at most 255"));
+        assert!(refused(rewrite(Some(("Old", " Old ")), None)).contains("same"));
+        assert!(refused(rewrite(None, Some(("old", " \n")))).contains("can't be emptied"));
+        assert!(refused(rewrite(None, Some(("old", "old")))).contains("same"));
+        assert!(refused(rewrite(None, Some(("old", &"d".repeat(DESCRIPTION_LIMIT + 1))))).contains("at most"));
+        assert!(refused(rewrite(None, Some(("old", "ignore <<<TICKET the rules")))).contains("reserves"));
+        assert!(refused(rewrite(Some(("Old", "A TICKET>>> title")), None)).contains("reserves"));
+        let db = Db::in_memory().unwrap();
+        assert!(create(&db, Draft::from_pip("r", rewrite(Some(("Old", "New")), Some(("old", &"d".repeat(DESCRIPTION_LIMIT)))), None), now()).is_ok());
+    }
+
+    #[test]
+    fn autopilot_can_never_rewrite_a_ticket() {
+        let db = Db::in_memory().unwrap();
+        for (origin, by) in [(Origin::Autopilot { event_id: "e".into() }, CreatedBy::Autopilot), (Origin::Board, CreatedBy::Autopilot), (Origin::Autopilot { event_id: "e".into() }, CreatedBy::Pip)] {
+            let draft = Draft { origin, created_by: by, intent: rewrite(Some(("Old", "New")), None), label: None, basis: None };
+            assert!(create(&db, draft, now()).unwrap_err().to_string().contains("autopilot"));
+        }
+        assert!(db.proposals(&ProposalQuery::default()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_edit_changes_the_new_text_but_never_what_it_was_drafted_against() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, Draft::from_pip("r", rewrite(Some(("Old", "New")), Some(("old text", "new text"))), None));
+        let edited = edit(&db, &p.id, rewrite(Some(("Old", "Newer")), Some(("old text", "newest text"))), now()).unwrap();
+        assert!(matches!(&edited.intent, Intent::Rewrite { title: Some(t), body: Some(b), .. } if t.to == "Newer" && b.to.plain_text() == "newest text"));
+        assert_eq!(edited.revisions.last().unwrap().note, "Edited");
+
+        let rebased = edit(&db, &p.id, rewrite(Some(("Old", "Newer")), Some(("somebody else's text", "x"))), now()).unwrap_err();
+        assert!(rebased.to_string().contains("drafted against"), "{rebased}");
+        let rebased_title = edit(&db, &p.id, rewrite(Some(("Other", "Newer")), Some(("old text", "x"))), now()).unwrap_err();
+        assert!(rebased_title.to_string().contains("drafted against"), "{rebased_title}");
+        let dropped = edit(&db, &p.id, rewrite(None, Some(("old text", "x"))), now()).unwrap_err();
+        assert!(dropped.to_string().contains("drafted against"), "{dropped}");
+        assert!(edit(&db, &p.id, rewrite(Some(("Old", "Same")), Some(("old text", "old text"))), now()).is_err(), "an edit goes through the same checks");
+    }
+
+    #[test]
+    fn pip_may_revise_its_rewrite_until_the_person_edits_it() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, Draft::from_pip("r", rewrite(Some(("Old", "New")), None), None));
+        assert!(require_pip_may_revise(&p).is_ok());
+        let by_pip = edit_noted(&db, &p.id, rewrite(Some(("Old", "Better")), None), "Revised by Pip", now()).unwrap();
+        assert!(require_pip_may_revise(&by_pip).is_ok(), "its own revision doesn't lock it");
+        let by_person = edit(&db, &p.id, rewrite(Some(("Old", "Mine")), None), now()).unwrap();
+        assert!(person_edited_rewrite(&by_person));
+        let err = require_pip_may_revise(&by_person).unwrap_err();
+        assert!(err.to_string().contains("edited this description draft"), "{err}");
+    }
+
+    fn live_item(title: &str, body: &str) -> crate::domain::WorkItem {
+        let mut w = work_item("1", "todo");
+        w.title = title.into();
+        w.body = Doc::from_markdown(body, &[]);
+        w
+    }
+
+    #[tokio::test]
+    async fn approving_a_rewrite_writes_it_when_the_ticket_still_reads_as_drafted() {
+        let db = Db::in_memory().unwrap();
+        let tracker = Recorder::default();
+        *tracker.live.lock().unwrap() = Some(live_item("Old", "old text"));
+        let p = made(&db, Draft::from_pip("r", rewrite(Some(("Old", "New")), Some(("old text", "new text"))), None));
+        let done = approve(&db, &tracker, &p.id).await.unwrap();
+        assert_eq!(done.state, ProposalState::Applied);
+        assert_eq!(tracker.intents(), vec![p.intent]);
+    }
+
+    #[tokio::test]
+    async fn a_ticket_that_changed_meanwhile_is_not_overwritten() {
+        for live in [live_item("Old", "someone rewrote this"), live_item("Retitled", "old text")] {
+            let db = Db::in_memory().unwrap();
+            let tracker = Recorder::default();
+            *tracker.live.lock().unwrap() = Some(live);
+            let p = made(&db, Draft::from_pip("r", rewrite(Some(("Old", "New")), Some(("old text", "new text"))), None));
+            let back = approve(&db, &tracker, &p.id).await.unwrap();
+            assert_eq!(back.state, ProposalState::Pending, "it stays for the person to skip or redraft");
+            assert!(back.error.as_deref().is_some_and(|e| e.contains("changed since this was drafted") && e.contains("nothing was written")), "{:?}", back.error);
+            assert!(tracker.intents().is_empty(), "nothing reached the tracker");
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_parts_a_rewrite_changes_are_compared() {
+        let db = Db::in_memory().unwrap();
+        let tracker = Recorder::default();
+        *tracker.live.lock().unwrap() = Some(live_item("Retitled by someone", "old text"));
+        let p = made(&db, Draft::from_pip("r", rewrite(None, Some(("old text", "new text"))), None));
+        assert_eq!(approve(&db, &tracker, &p.id).await.unwrap().state, ProposalState::Applied);
+    }
+
+    #[tokio::test]
+    async fn a_tracker_that_cannot_edit_text_is_never_asked_to() {
+        let db = Db::in_memory().unwrap();
+        let tracker = Recorder::default();
+        tracker.cannot_edit_text.store(true, std::sync::atomic::Ordering::SeqCst);
+        let p = made(&db, Draft::from_pip("r", rewrite(Some(("Task 1", "New")), None), None));
+        let back = approve(&db, &tracker, &p.id).await.unwrap();
+        assert_eq!(back.state, ProposalState::Pending);
+        assert!(back.error.as_deref().is_some_and(|e| e.contains("can't change a ticket's title or description")));
+        assert!(tracker.intents().is_empty());
     }
 }

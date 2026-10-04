@@ -47,6 +47,13 @@ pub enum Edit {
         #[serde(default)]
         container: Option<ContainerRef>,
     },
+    /// A ticket text rewrite's new title and description as Markdown; the ones left out stay as they are.
+    Rewrite {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        body: Option<String>,
+    },
     /// A run's settings; the ones left out stay as they are. Only the person edits these.
     #[serde(rename_all = "camelCase")]
     Run {
@@ -115,6 +122,18 @@ impl Edit {
                     fields.kind = *kind;
                 }
                 Ok(Intent::Create { container, fields, link: link.clone() })
+            }
+            (Edit::Rewrite { title, body }, Intent::Rewrite { item, title: was_title, body: was_body, flattened }) => {
+                let mut changed_title = was_title.clone();
+                let mut changed_body = was_body.clone();
+                if let Some(v) = title {
+                    changed_title.as_mut().ok_or_else(|| Error::Proposal("this draft doesn't change the title".into()))?.to = v.split_whitespace().collect::<Vec<_>>().join(" ");
+                }
+                if let Some(v) = body {
+                    let change = changed_body.as_mut().ok_or_else(|| Error::Proposal("this draft doesn't change the description".into()))?;
+                    change.to = Doc::from_markdown_like(v.trim(), &change.from);
+                }
+                Ok(Intent::Rewrite { item: item.clone(), title: changed_title, body: changed_body, flattened: flattened.clone() })
             }
             (Edit::Run { instruction, base, clone_path, kind, name, pr, allow_push, plan, build_account, project }, Intent::StartRun { connection_id, item, spec }) => {
                 let mut spec = spec.clone();
@@ -1190,5 +1209,88 @@ mod tests {
         }
         let prompt = fx.core.runs_review(&p.id).await.unwrap().prompt;
         assert_eq!((prompt.matches("<<<TICKET").count(), prompt.matches("TICKET>>>").count()), (1, 1));
+    }
+
+    async fn pips_rewrite(fx: &crate::inbox::testing::Fixture, title: Option<&str>, description: Option<&str>) -> Proposal {
+        let intent = fx.core.rewrite_intent(&fx.scope, "CA-1", title, description).await.unwrap();
+        fx.core.propose(&fx.scope, Draft::from_pip("r", intent, None)).await.unwrap()
+    }
+
+    async fn jira_now(fx: &crate::inbox::testing::Fixture, f: impl FnOnce(&mut crate::domain::WorkItem)) {
+        let key = fx.item("CA-1");
+        let mut live = fx.core.with_db_for(&fx.scope, |db| db.item(&key)).await.unwrap().unwrap();
+        f(&mut live);
+        *fx.tracker.live.lock().unwrap() = Some(live);
+    }
+
+    #[tokio::test]
+    async fn approving_a_rewrite_writes_it_through_the_tracker_after_reading_the_ticket_again() {
+        let fx = crate::inbox::testing::fixture().await;
+        let drafted = pips_rewrite(&fx, Some("A clearer title"), Some("Hi there,\n\n- scope one\n- scope two")).await;
+        assert_eq!((drafted.created_by, drafted.state.clone()), (CreatedBy::Pip, ProposalState::Pending));
+        assert!(fx.tracker.intents().is_empty(), "a draft writes nothing");
+        jira_now(&fx, |_| {}).await;
+        let done = fx.core.approve_proposal(&drafted.id).await.unwrap();
+        assert_eq!(done.state, ProposalState::Applied);
+        assert_eq!(fx.tracker.intents(), vec![drafted.intent]);
+    }
+
+    #[tokio::test]
+    async fn a_rewrite_is_refused_and_stays_pending_when_jira_moved_on_since_it_was_drafted() {
+        let fx = crate::inbox::testing::fixture().await;
+        let drafted = pips_rewrite(&fx, None, Some("My rewrite")).await;
+        jira_now(&fx, |live| live.body = Doc::paragraph("Edited by a colleague a minute ago")).await;
+        let back = fx.core.approve_proposal(&drafted.id).await.unwrap();
+        assert_eq!(back.state, ProposalState::Pending);
+        assert!(back.error.as_deref().is_some_and(|e| e.contains("changed since this was drafted")), "{:?}", back.error);
+        assert!(fx.tracker.intents().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_sync_that_brings_in_someone_elses_edit_retires_the_rewrite() {
+        let fx = crate::inbox::testing::fixture().await;
+        let drafted = pips_rewrite(&fx, None, Some("My rewrite")).await;
+        edit_cached_ticket(&fx, |item, _| item.body = Doc::paragraph("A colleague's version")).await;
+        assert_eq!(fx.core.reconcile_proposals(&fx.scope).await.unwrap(), 1);
+        let now = fx.core.proposal(&drafted.id).await.unwrap().unwrap();
+        assert!(matches!(&now.state, ProposalState::Retired(why) if why.contains("text changed")), "{:?}", now.state);
+        assert!(fx.core.approve_proposal(&drafted.id).await.is_err(), "a retired draft can't be approved");
+        assert!(fx.tracker.intents().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_person_edits_a_rewrites_text_as_markdown_and_it_keeps_what_it_was_drafted_against() {
+        let fx = crate::inbox::testing::fixture().await;
+        let drafted = pips_rewrite(&fx, Some("Pip's title"), Some("Pip's text")).await;
+        let edited = fx.core.edit_proposal(&drafted.id, &Edit::Rewrite { title: Some(" My\ntitle ".into()), body: Some("# Mine\n\n1. first".into()) }).await.unwrap();
+        let Intent::Rewrite { title, body, .. } = &edited.intent else { panic!() };
+        assert_eq!(title.as_ref().unwrap().to, "My title");
+        assert_eq!((body.as_ref().unwrap().to.to_markdown().as_str(), body.as_ref().unwrap().from.plain_text().as_str()), ("# Mine\n\n1. first", "Hi"));
+        let Intent::Rewrite { title: was, .. } = &drafted.intent else { panic!() };
+        assert_eq!(title.as_ref().unwrap().from, was.as_ref().unwrap().from);
+
+        let marked = fx.core.edit_proposal(&drafted.id, &Edit::Rewrite { title: None, body: Some("x <<<TICKET y".into()) }).await.unwrap_err();
+        assert!(marked.to_string().contains("reserves"), "{marked}");
+        let blank = fx.core.edit_proposal(&drafted.id, &Edit::Rewrite { title: None, body: Some("  ".into()) }).await.unwrap_err();
+        assert!(blank.to_string().contains("can't be emptied"), "{blank}");
+    }
+
+    #[test]
+    fn a_rewrite_edit_names_only_what_the_draft_changes_and_keeps_mentions() {
+        let sam = crate::domain::PersonRef { connection_id: "c".into(), account_id: "sam".into() };
+        let from = Doc::from_markdown("Ask @Sam Holt", &[(sam.clone(), "Sam Holt".into())]);
+        let current = Intent::Rewrite {
+            item: item_ref("1"),
+            title: None,
+            body: Some(crate::domain::BodyChange { from: from.clone(), to: from }),
+            flattened: vec!["tables".into()],
+        };
+        let Intent::Rewrite { body, flattened, .. } = Edit::Rewrite { title: None, body: Some("Ask @Sam Holt about **this**".into()) }.apply_to(&current).unwrap() else { panic!() };
+        assert!(format!("{:?}", body.unwrap().to).contains("Mention"));
+        assert_eq!(flattened, ["tables"]);
+        let err = Edit::Rewrite { title: Some("New".into()), body: None }.apply_to(&current).unwrap_err();
+        assert!(err.to_string().contains("doesn't change the title"), "{err}");
+        assert!(Edit::Rewrite { title: None, body: Some("x".into()) }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
+        assert!(matches!(serde_json::from_str::<Edit>(r#"{"type":"rewrite","body":"x"}"#).unwrap(), Edit::Rewrite { title: None, body: Some(_) }));
     }
 }
