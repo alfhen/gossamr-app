@@ -5,6 +5,7 @@ import type { Intent, ProposalEdit } from "../types";
 export type Rewrite = Extract<Intent, { type: "rewrite" }>;
 
 const MARK = { add: "+", del: "−", same: " " } as const;
+const SAID = { add: "Added: ", del: "Removed: ", same: "Unchanged: " } as const;
 const TONE = { add: "bg-ws-done-soft text-ws-ink", del: "bg-ws-blocked-soft text-ws-ink2 line-through decoration-ws-blocked/50", same: "text-ws-ink3" } as const;
 
 function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
@@ -20,7 +21,10 @@ function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
             <span aria-hidden className="w-3 shrink-0 select-none text-center">
               {MARK[r.kind]}
             </span>
-            <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{r.text || " "}</span>
+            <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
+              <span className="sr-only">{SAID[r.kind]}</span>
+              {r.text || " "}
+            </span>
           </div>
         ),
       )}

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Intent, ItemRef } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
-import { bodyChange, markdownOf } from "./mockMarkdown";
+import { bodyChange, docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { scriptPip } from "./mockPip";
 
 const KEY = "DEVOPS-471";
@@ -26,6 +26,17 @@ describe("a description edit in the sample build", () => {
     const now = backend.connector.item(ref())!;
     expect(now.title).toBe("A scoped title");
     expect(now.body.blocks.map((b) => b.type)).toEqual(["heading", "list"]);
+  });
+
+  it("keeps a code block in the description as code when Pip drafts against it", async () => {
+    const backend = new MockBackend();
+    backend.connector.rewrite(ref(), { body: docFromMarkdown("Run it:\n\n```sh\n# build\n- not a list\nmake\n```") });
+    const p = (await backend.pipRewrite(ref(), "description", "req-2")) as Awaited<ReturnType<typeof backend.proposals.draft>>;
+    if (p.intent.type !== "rewrite" || !p.intent.body) throw new Error("not a description rewrite");
+    expect(p.intent.body.to.blocks.map((b) => b.type)).toEqual(["paragraph", "code", "heading", "list"]);
+    expect(p.intent.body.to.blocks[1]).toEqual({ type: "code", language: "sh", text: "# build\n- not a list\nmake" });
+    await backend.proposalsApprove(p.id);
+    expect(backend.connector.item(ref())!.body.blocks[1]).toMatchObject({ type: "code", text: "# build\n- not a list\nmake" });
   });
 
   it("leaves the title alone when the draft changes only the description", async () => {

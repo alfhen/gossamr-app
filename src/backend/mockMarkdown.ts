@@ -34,8 +34,12 @@ function block(b: WorkBlock): string {
         .split("\n")
         .map((l) => (l ? `> ${l}` : ">"))
         .join("\n");
-    case "code":
-      return `\`\`\`${b.language ?? ""}\n${b.text}\n\`\`\``;
+    case "code": {
+      // The parser closes a block at a line that is only backticks once trimmed, so the fence must outrun every such run.
+      const longest = Math.max(0, ...b.text.split("\n").map((l) => /^\s*(`*)/.exec(l)![1].length));
+      const fence = "`".repeat(Math.max(3, longest + 1));
+      return `${fence}${b.language ?? ""}\n${b.text}\n${fence}`;
+    }
     case "rule":
       return "---";
   }
@@ -44,6 +48,17 @@ function block(b: WorkBlock): string {
 export const markdownOf = (doc: WorkDoc): string => doc.blocks.map(block).join("\n\n").trim();
 
 const para = (lines: string[]): WorkBlock => docFromText(lines.join("\n")).blocks[0];
+
+/** Leading whitespace in columns, a tab advancing to the next multiple of four. */
+const columns = (line: string) => {
+  let n = 0;
+  for (const ch of line) {
+    if (ch === " ") n++;
+    else if (ch === "\t") n += 4 - (n % 4);
+    else break;
+  }
+  return n;
+};
 
 export function docFromMarkdown(text: string): WorkDoc {
   const blocks: WorkBlock[] = [];
@@ -55,7 +70,24 @@ export function docFromMarkdown(text: string): WorkDoc {
     run = [];
     list = null;
   };
-  for (const line of text.replace(/\r\n/g, "\n").trim().split("\n")) {
+  const lines = text.replace(/\r\n/g, "\n").trim().split("\n");
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at];
+    const fence = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      flush();
+      const [mark, size] = [fence[1][0], fence[1].length];
+      const body: string[] = [];
+      for (at++; at < lines.length; at++) {
+        const closing = lines[at].trim();
+        // A closing fence is indented by at most three columns; four make it code.
+        if (columns(lines[at]) <= 3 && closing.length >= size && [...closing].every((c) => c === mark)) break;
+        body.push(lines[at]);
+      }
+      const language = fence[2].trim();
+      blocks.push({ type: "code", language: language || null, text: body.join("\n") });
+      continue;
+    }
     const heading = /^(#{1,6}) (.*)$/.exec(line);
     const item = /^(?:([-*+])|(\d+)[.)]) (.*)$/.exec(line);
     if (!line.trim()) flush();

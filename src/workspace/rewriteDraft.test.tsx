@@ -39,7 +39,7 @@ const draft = (i: Rewrite = intent(), over: Partial<Proposal> = {}): Proposal =>
 });
 
 const props = (p: Proposal) => ({ proposal: p, statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() });
-const lines = (html: string, kind: string) => [...html.matchAll(new RegExp(`data-line="${kind}"[^>]*>.*?<span class="min-w-0[^>]*>(.*?)</span>`, "g"))].map((m) => m[1]);
+const lines = (html: string, kind: string) => [...html.matchAll(new RegExp(`data-line="${kind}"[^>]*>.*?<span class="min-w-0[^>]*><span class="sr-only">[^<]*</span>(.*?)</span>`, "g"))].map((m) => m[1]);
 
 describe("a description edit draft", () => {
   beforeEach(() => {
@@ -70,6 +70,15 @@ describe("a description edit draft", () => {
     expect(html).toContain(">Edit<");
     expect(html).toContain(">Skip<");
     expect(html).not.toContain("data-flattened");
+  });
+
+  it("tells a screen reader which lines were added, removed or left alone, apart from the visible markers", () => {
+    const html = renderToStaticMarkup(<DraftCard {...props(draft())} />);
+    expect(html).toContain('<span class="sr-only">Removed: </span>Retries back off.');
+    expect(html).toContain('<span class="sr-only">Added: </span>Retries back off and cap at five attempts.');
+    expect(html).toContain('<span class="sr-only">Unchanged: </span>Backoff starts at two seconds.');
+    expect(html.match(/<span aria-hidden="true" class="w-3[^>]*>[+−]<\/span>/g)?.length).toBeGreaterThan(0);
+    expect(html).toMatch(/role="group" aria-label="description changes"/);
   });
 
   it("shows only the part it changes", () => {

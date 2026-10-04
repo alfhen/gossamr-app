@@ -10,7 +10,7 @@ import { Sparkle } from "./icons";
 import { Markdown } from "./Markdown";
 import { MentionTextarea } from "./MentionTextarea";
 import { StatusPill } from "./primitives";
-import { RewriteView, rewriteWhat } from "../workspace/RewriteDiff";
+import { RewriteView, rewriteBlocked, rewriteEdit, rewriteWhat } from "../workspace/RewriteDiff";
 
 function suggestions(t: Ticket): string[] {
   return [
@@ -236,6 +236,17 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
     setBody(linked.text);
     setMentions(linked.mentions);
   }, [people]);
+  const rewrite = intent.type === "rewrite" ? intent : null;
+  const [newTitle, setNewTitle] = useState(rewrite?.title?.to ?? "");
+  const [newText, setNewText] = useState(rewrite?.body?.toText ?? "");
+  const [editingRewrite, setEditingRewrite] = useState(false);
+  const rewriteEdited = useRef(false);
+  // Pip may revise its draft while the drawer is open; follow it until the person types.
+  useEffect(() => {
+    if (rewriteEdited.current) return;
+    setNewTitle(rewrite?.title?.to ?? "");
+    setNewText(rewrite?.body?.toText ?? "");
+  }, [rewrite?.title?.to, rewrite?.body?.toText]);
   const summaries = intent.type === "subtasks" ? intent.summaries : [];
   const made = p.created.length;
   const [picked, setPicked] = useState<boolean[]>(summaries.map(() => true));
@@ -255,6 +266,10 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
     if (intent.type === "subtasks") {
       const wanted = summaries.filter((_, i) => i < made || picked[i]);
       return wanted.length === summaries.length ? p : backend.proposalsEdit(p.id, { type: "subtasks", summaries: wanted });
+    }
+    if (rewrite) {
+      const edit = rewriteEdit(rewrite, newTitle, newText);
+      return edit ? backend.proposalsEdit(p.id, edit) : p;
     }
     return p;
   };
@@ -278,7 +293,9 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
             ? `Commented on ${key}`
             : intent.type === "transition"
               ? `${key}: ${p.label ?? status.name}`
-              : `Created ${done.created.map((c) => c.key).join(", ")}`,
+              : intent.type === "rewrite"
+                ? `Updated ${key}`
+                : `Created ${done.created.map((c) => c.key).join(", ")}`,
         );
       }
     } catch (e) {
@@ -354,7 +371,17 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
             {docText(intent.fields.body) && <div className="whitespace-pre-wrap text-ink-2">{docText(intent.fields.body)}</div>}
           </div>
         )}
-        {intent.type === "rewrite" && <RewriteView intent={intent} title={intent.title?.to ?? ""} body={intent.body?.toText ?? ""} editing={false} disabled onTitle={() => {}} onBody={() => {}} />}
+        {rewrite && (
+          <RewriteView
+            intent={rewrite}
+            title={newTitle}
+            body={newText}
+            editing={editingRewrite}
+            disabled={!open}
+            onTitle={(v) => ((rewriteEdited.current = true), setNewTitle(v))}
+            onBody={(v) => ((rewriteEdited.current = true), setNewText(v))}
+          />
+        )}
         {intent.type === "subtasks" &&
           summaries.map((s, i) => (
             <label key={i} className="flex items-start gap-2">
@@ -374,12 +401,17 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
         {error && <div className="text-sm text-blocked">{error}</div>}
         {open && (
           <div className="flex justify-end gap-2">
+            {rewrite && (
+              <button type="button" disabled={working} onClick={() => setEditingRewrite(!editingRewrite)} className="rounded-md border border-field-border px-3 py-1 disabled:opacity-45">
+                {editingRewrite ? "Done editing" : "Edit"}
+              </button>
+            )}
             <button type="button" disabled={working} onClick={skip} className="rounded-md border border-field-border px-3 py-1 disabled:opacity-45">
               Skip
             </button>
             <button
               type="button"
-              disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0)}
+              disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || (!!rewrite && rewriteBlocked(rewrite, newTitle, newText))}
               onClick={() => void approve()}
               className="rounded-md bg-accent px-3 py-1 font-semibold text-white disabled:opacity-45"
             >
