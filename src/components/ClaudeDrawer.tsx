@@ -10,6 +10,7 @@ import { Sparkle } from "./icons";
 import { Markdown } from "./Markdown";
 import { MentionTextarea } from "./MentionTextarea";
 import { StatusPill } from "./primitives";
+import { RewriteView, rewriteWhat } from "../workspace/RewriteDiff";
 
 function suggestions(t: Ticket): string[] {
   return [
@@ -301,7 +302,9 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
           ? `Subtasks under ${key}`
           : intent.type === "create"
             ? `New ${intent.fields.kind}`
-            : "Draft";
+            : intent.type === "rewrite"
+              ? `Update the ${rewriteWhat(intent)} of ${key}`
+              : "Draft";
   const action =
     intent.type === "comment"
       ? "Post comment"
@@ -309,7 +312,9 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
         ? (p.label ?? `Move to ${status.name}`)
         : intent.type === "create"
           ? `Create ${intent.fields.kind}`
-          : `Create ${remaining} subtasks`;
+          : intent.type === "rewrite"
+            ? `Update ${rewriteWhat(intent)}`
+            : `Create ${remaining} subtasks`;
   const revision = p.revisions[p.revisions.length - 1];
   const error = problem ?? p.error;
   const badge = { applied: "Done", skipped: "Skipped", retired: "Out of date", pending: "Needs your approval", applying: "Working…" }[state];
@@ -349,6 +354,7 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
             {docText(intent.fields.body) && <div className="whitespace-pre-wrap text-ink-2">{docText(intent.fields.body)}</div>}
           </div>
         )}
+        {intent.type === "rewrite" && <RewriteView intent={intent} title={intent.title?.to ?? ""} body={intent.body?.toText ?? ""} editing={false} disabled onTitle={() => {}} onBody={() => {}} />}
         {intent.type === "subtasks" &&
           summaries.map((s, i) => (
             <label key={i} className="flex items-start gap-2">

@@ -346,8 +346,23 @@ export type Intent =
   | { type: "update"; item: ItemRef; patch: WorkPatch }
   | { type: "link"; from: ItemRef; to: ItemRef; kind: WorkLink["kind"] }
   | { type: "subtasks"; parent: ItemRef; summaries: string[] }
+  /** A new title and/or description, each with the text it was drafted against; an approval refuses when the ticket no longer reads that way. */
+  | { type: "rewrite"; item: ItemRef; title: TitleChange | null; body: BodyChange | null; /** What the old description holds that this turns into plain text, such as `tables`. */ flattened: string[] }
   /** Never applied with `proposalsApprove`; `runsApprove` starts it, bound to the digest the person read. */
   | { type: "startRun"; connectionId: string; item: ItemRef | null; spec: RunSpec };
+
+export interface TitleChange {
+  from: string;
+  to: string;
+}
+
+/** A description as it read when drafted and as it would read; the Markdown forms are written by the backend. */
+export interface BodyChange {
+  from: WorkDoc;
+  to: WorkDoc;
+  fromText: string;
+  toText: string;
+}
 
 export interface NewWorkItem {
   title: string;
@@ -428,6 +443,8 @@ export interface ProposalQuery {
 export type ProposalEdit =
   | { type: "comment"; body: string; mentions: { accountId: string; name: string }[]; /** A comment being answered, quoted after the first paragraph. */ quote?: string }
   | { type: "subtasks"; summaries: string[] }
+  /** A rewrite's new title and description as Markdown; the ones left out stay as they are. */
+  | { type: "rewrite"; title?: string; body?: string }
   /** A new item's fields; the ones left out stay as they are. */
   | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef }
   /** A run draft's settings, as the person edits them; the ones left out stay as they are. */

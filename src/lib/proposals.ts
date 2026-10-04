@@ -11,6 +11,7 @@ export function targetOf(intent: Intent): ItemRef | null {
     case "comment":
     case "transition":
     case "update":
+    case "rewrite":
       return intent.item;
     case "link":
       return intent.from;

@@ -606,6 +606,14 @@ export class MockConnector {
     this.onChange({ connectionId: MOCK_CONNECTION });
   }
 
+  /** Replaces the item's title and/or description. */
+  rewrite(ref: ItemRef, change: { title?: string; body?: WorkDoc }) {
+    const item = this.item(ref);
+    if (!item) throw new Error(`${ref.key} isn't in the sample data`);
+    this.items.set(ref.externalId, { ...item, ...(change.title !== undefined ? { title: change.title } : {}), ...(change.body ? { body: change.body } : {}), updated: new Date().toISOString() });
+    this.onChange({ connectionId: MOCK_CONNECTION });
+  }
+
   /** Links two items, which then list the link on both ends as Jira does. Linking the same pair twice changes nothing. */
   link(from: ItemRef, to: ItemRef, kind: WorkLink["kind"]) {
     const ends = [this.item(from), this.item(to)];

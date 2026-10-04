@@ -1,9 +1,33 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT } from "./mockRunKinds";
 import { targetOf } from "../lib/proposals";
+import { bodyChange, markdownOf } from "./mockMarkdown";
 import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, WorkItemKind } from "../types";
 
 const CONNECTION = "mock";
+const SUMMARY_LIMIT = 255;
+const DESCRIPTION_LIMIT = 30_000;
+const RESERVED = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>", "<<<PLAN", "PLAN>>>", "<<<BUILD", "BUILD>>>"];
+
+/** The backend's checks on a rewrite, in the same words. */
+function rewriteProblem(i: Extract<Intent, { type: "rewrite" }>): string | null {
+  if (!i.title && !i.body) return "a rewrite has to change the title or the description";
+  if (i.title) {
+    const to = i.title.to.trim();
+    if (!to || to.includes("\n")) return "a title is one line and can't be empty";
+    if ([...to].length > SUMMARY_LIMIT) return `a title is at most ${SUMMARY_LIMIT} characters`;
+    if (RESERVED.some((m) => to.includes(m))) return "the title contains text Gossamr reserves; remove it";
+    if (to === i.title.from.trim()) return "the new title is the same as the old one";
+  }
+  if (i.body) {
+    const to = markdownOf(i.body.to);
+    if (!to.trim()) return "a description can't be emptied; draft a comment or clear it in Jira";
+    if ([...to].length > DESCRIPTION_LIMIT) return `a description is at most ${DESCRIPTION_LIMIT} characters`;
+    if (RESERVED.some((m) => to.includes(m))) return "the description contains text Gossamr reserves; remove it";
+    if (to === i.body.fromText) return "the new description is the same as the old one";
+  }
+  return null;
+}
 
 /** Drafts held in memory for the sample-data backend. `apply` performs an approved intent and returns what it created. */
 export class MockProposals {
@@ -18,6 +42,8 @@ export class MockProposals {
 
   /** Stores a draft the way the assistant would. */
   draft(intent: Intent, label: string | null = null, requestId = "sample"): Proposal {
+    const problem = intent.type === "rewrite" ? rewriteProblem(intent) : null;
+    if (problem) throw new Error(problem);
     return this.store(intent, label, { type: "chat", requestId }, "pip");
   }
 
@@ -28,6 +54,8 @@ export class MockProposals {
       if (intent.container.connectionId !== CONNECTION) return Promise.reject(new Error("that item belongs to another connection"));
     } else if (intent.type !== "startRun" && !targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
     if (intent.type === "transition" && !intent.to.trim()) return Promise.reject(new Error("a transition needs a target status"));
+    const problem = intent.type === "rewrite" ? rewriteProblem(intent) : null;
+    if (problem) return Promise.reject(new Error(problem));
     return Promise.resolve(this.store(intent, label, { type: "board" }, "user"));
   }
 
@@ -95,7 +123,8 @@ export class MockProposals {
   }
 
   async edit(id: string, edit: ProposalEdit) {
-    const { intent } = this.pending(id);
+    const p = this.pending(id);
+    const { intent } = p;
     if (edit.type === "comment" && intent.type === "comment") {
       if (!edit.body.trim()) throw new Error("a comment can't be empty");
       return this.set(id, { intent: { ...intent, body: edit.quote?.trim() ? quoteAfterFirst(docFromText(edit.body), edit.quote.trim()) : docFromText(edit.body) }, error: null });
@@ -114,6 +143,17 @@ export class MockProposals {
         ...(edit.kind ? { kind: edit.kind } : {}),
       };
       return this.set(id, { intent: { ...intent, container: edit.container ?? intent.container, fields }, error: null });
+    }
+    if (edit.type === "rewrite" && intent.type === "rewrite") {
+      if ((edit.title !== undefined && !intent.title) || (edit.body !== undefined && !intent.body)) throw new Error(`this draft doesn't change the ${edit.title !== undefined ? "title" : "description"}`);
+      const next: Intent = {
+        ...intent,
+        title: intent.title && edit.title !== undefined ? { ...intent.title, to: edit.title.split(/\s+/).filter(Boolean).join(" ") } : intent.title,
+        body: intent.body && edit.body !== undefined ? bodyChange(intent.body.from, edit.body.trim()) : intent.body,
+      };
+      const problem = rewriteProblem(next as Extract<Intent, { type: "rewrite" }>);
+      if (problem) throw new Error(problem);
+      return this.set(id, { intent: next, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Edited", intent: next }], error: null });
     }
     if (edit.type === "run" && intent.type === "startRun") {
       if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
@@ -147,9 +187,23 @@ export class MockProposals {
   }
 
   /** Pip's change to the text of its own pending comment, or of the pending comment, new ticket or breakdown an agent run left for the person. A ticket may change its title and type too, its project never; a breakdown only its summaries. */
-  pipRevise(id: string, change: string | { body?: string; title?: string; kind?: WorkItemKind; summaries?: string[] }): Proposal {
-    const { body, title, kind, summaries } = typeof change === "string" ? { body: change, title: undefined, kind: undefined, summaries: undefined } : change;
+  pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; kind?: WorkItemKind; summaries?: string[] }): Proposal {
+    const { body, title, description, kind, summaries } = typeof change === "string" ? { body: change, title: undefined, description: undefined, kind: undefined, summaries: undefined } : change;
     const p = this.pending(id);
+    if (p.intent.type === "rewrite") {
+      if (p.createdBy !== "pip") throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
+      if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this description draft, so Pip can't change it any more");
+      const was = p.intent;
+      if ((title !== undefined && !was.title) || (description !== undefined && !was.body)) throw new Error("this draft doesn't change that field; retire it and propose a new one");
+      const intent: Intent = {
+        ...was,
+        title: was.title && title !== undefined ? { ...was.title, to: title.split(/\s+/).filter(Boolean).join(" ") } : was.title,
+        body: was.body && description !== undefined ? bodyChange(was.body.from, description.trim()) : was.body,
+      };
+      const problem = rewriteProblem(intent as Extract<Intent, { type: "rewrite" }>);
+      if (problem) throw new Error(problem);
+      return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
+    }
     const left = p.origin.type === "run" && (p.intent.type === "comment" || p.intent.type === "create" || p.intent.type === "subtasks") && p.createdBy === "user";
     if (p.createdBy !== "pip" && !left) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
     let intent: Intent;

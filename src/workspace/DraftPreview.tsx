@@ -4,12 +4,12 @@ import { targetOf, unreachable } from "../lib/proposals";
 import type { Proposal } from "../types";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { draftStatus } from "./boardLogic";
-import { draftTitle, linkSentence } from "./DraftCard";
+import { draftSummary, draftTitle, linkSentence } from "./DraftCard";
 import { showDraft } from "./draftTicket";
 import { showMe } from "./jump";
 import { useRunSetup } from "./runSetupStore";
 
-const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", link: "✦", startRun: "▶" };
+const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶" };
 
 const STATE: Record<Proposal["state"]["type"], string> = { pending: "Draft", applying: "Working…", applied: "Done", skipped: "Skipped", retired: "Out of date" };
 
@@ -40,6 +40,8 @@ export function draftPreviewBody(p: Proposal, statusName: string | null): string
       return [i.fields.title, docText(i.fields.body)].filter(Boolean).join("\n");
     case "update":
       return "Change fields";
+    case "rewrite":
+      return draftSummary(p, statusName).split("; ").join("\n");
     case "link":
       return linkSentence(i);
     case "startRun":

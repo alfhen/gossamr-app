@@ -65,7 +65,7 @@ describe("suggestion chips", () => {
   });
 
   it("follows the open ticket's state", () => {
-    expect(suggestionsFor({ ...base, item })).toEqual(["What do I need to do here?", "Draft a comment on this one", "Break into subtasks", "Create a follow-up ticket"]);
+    expect(suggestionsFor({ ...base, item })).toEqual(["What do I need to do here?", "Draft a comment on this one", "Break into subtasks", "Draft a description update", "Create a follow-up ticket"]);
     const busy = suggestionsFor({ ...base, itemDrafts: 1, item: { ...item, waitingOn: "Byron", blockedBy: "X-1", unassigned: true } });
     expect(busy).toContain("Draft a reply");
     expect(busy).toContain("Show the dependency chain");
@@ -73,6 +73,8 @@ describe("suggestion chips", () => {
     expect(busy.length).toBeLessThanOrEqual(6);
     expect(suggestionsFor({ ...base, item: { ...item, staleDays: 8 } })).toContain("Draft a nudge");
     expect(suggestionsFor({ ...base, item: { ...item, open: false } })).not.toContain("Break into subtasks");
+    expect(suggestionsFor({ ...base, item: { ...item, open: false } })).not.toContain("Draft a description update");
+    expect(busy).not.toContain("Draft a description update");
   });
 
   it("switches to questions about selected text, the feed, settings and ticked cards", () => {
