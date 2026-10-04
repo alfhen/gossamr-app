@@ -44,6 +44,7 @@ export function suggestionsFor(s: SuggestionScene): string[] {
       ...(i.unassigned ? ["Suggest an owner"] : []),
       ...(i.open ? ["Break into subtasks"] : []),
       ...(s.itemDrafts > 0 ? ["Is my draft here good to post?"] : []),
+      ...(i.open ? ["Draft a description update"] : []),
       "Create a follow-up ticket",
     ];
     return chips.slice(0, MOST);

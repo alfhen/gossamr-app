@@ -446,6 +446,12 @@ export function breakdownWithPipPrompt(run: { id: string; item: { key: string } 
   return `Propose subtasks for ${key} from run ${run.id}: read the whole run with get_run and then get_run_result until it says that is the end, then propose 3 to 8 short subtasks with propose_subtasks, only if the ticket is too big for one piece. Don't say anything has been created.`;
 }
 
+/** What "Draft a description update with Pip" sends. Pip reads the run and the ticket itself, so the prompt names them and never carries their text. */
+export function descriptionWithPipPrompt(run: { id: string; item: { key: string } | null }): string {
+  const key = run.item?.key ?? "its ticket";
+  return `Draft an update to the description of ${key} so it follows what run ${run.id} found. Read the whole run first: get_run, then get_run_result until it says that is the end. Then read ${key} with get_item and propose the complete revised description with propose_description_edit, keeping everything the run doesn't change word for word. Don't say anything has been changed in Jira.`;
+}
+
 /** The breakdown draft a run left, if it is still waiting: the one the person can open, discuss or approve. */
 export function runBreakdownDraftOf(proposals: Record<string, Proposal> | readonly Proposal[], runId: string): Proposal | undefined {
   const all = Array.isArray(proposals) ? proposals : Object.values(proposals);

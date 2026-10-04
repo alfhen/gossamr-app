@@ -10,6 +10,7 @@ import { Sparkle } from "./icons";
 import { Markdown } from "./Markdown";
 import { MentionTextarea } from "./MentionTextarea";
 import { StatusPill } from "./primitives";
+import { RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "../workspace/RewriteDiff";
 
 function suggestions(t: Ticket): string[] {
   return [
@@ -235,6 +236,24 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
     setBody(linked.text);
     setMentions(linked.mentions);
   }, [people]);
+  const rewrite = intent.type === "rewrite" ? intent : null;
+  const [newTitle, setNewTitle] = useState(rewriteFields(rewrite).title);
+  const [newText, setNewText] = useState(rewriteFields(rewrite).text);
+  const [editingRewrite, setEditingRewrite] = useState(false);
+  const rewriteEdited = useRef(false);
+  // Pip may revise its draft while the drawer is open; follow it until the person types.
+  useEffect(() => {
+    if (!takesBackendText(rewriteEdited.current, false)) return;
+    setNewTitle(rewriteFields(rewrite).title);
+    setNewText(rewriteFields(rewrite).text);
+  }, [rewrite?.title?.to, rewrite?.body?.toText]);
+  // The backend normalises what it saves (a title is one line, with whitespace collapsed), so take its text back.
+  const adopt = (saved: Proposal) => {
+    if (saved.intent.type !== "rewrite") return;
+    rewriteEdited.current = false;
+    setNewTitle(rewriteFields(saved.intent).title);
+    setNewText(rewriteFields(saved.intent).text);
+  };
   const summaries = intent.type === "subtasks" ? intent.summaries : [];
   const made = p.created.length;
   const [picked, setPicked] = useState<boolean[]>(summaries.map(() => true));
@@ -255,6 +274,10 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
       const wanted = summaries.filter((_, i) => i < made || picked[i]);
       return wanted.length === summaries.length ? p : backend.proposalsEdit(p.id, { type: "subtasks", summaries: wanted });
     }
+    if (rewrite) {
+      const edit = rewriteEdit(rewrite, newTitle, newText);
+      return edit ? backend.proposalsEdit(p.id, edit) : p;
+    }
     return p;
   };
 
@@ -268,16 +291,19 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
     setWorking(true);
     setProblem(null);
     try {
-      await save();
+      adopt(await save());
       const done = await backend.proposalsApprove(p.id);
       putProposal(done);
+      adopt(done);
       if (done.state.type === "applied") {
         showToast(
           intent.type === "comment"
             ? `Commented on ${key}`
             : intent.type === "transition"
               ? `${key}: ${p.label ?? status.name}`
-              : `Created ${done.created.map((c) => c.key).join(", ")}`,
+              : intent.type === "rewrite"
+                ? `Updated ${key}`
+                : `Created ${done.created.map((c) => c.key).join(", ")}`,
         );
       }
     } catch (e) {
@@ -301,7 +327,9 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
           ? `Subtasks under ${key}`
           : intent.type === "create"
             ? `New ${intent.fields.kind}`
-            : "Draft";
+            : intent.type === "rewrite"
+              ? `Update the ${rewriteWhat(intent)} of ${key}`
+              : "Draft";
   const action =
     intent.type === "comment"
       ? "Post comment"
@@ -309,7 +337,9 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
         ? (p.label ?? `Move to ${status.name}`)
         : intent.type === "create"
           ? `Create ${intent.fields.kind}`
-          : `Create ${remaining} subtasks`;
+          : intent.type === "rewrite"
+            ? `Update ${rewriteWhat(intent)}`
+            : `Create ${remaining} subtasks`;
   const revision = p.revisions[p.revisions.length - 1];
   const error = problem ?? p.error;
   const badge = { applied: "Done", skipped: "Skipped", retired: "Out of date", pending: "Needs your approval", applying: "Working…" }[state];
@@ -349,6 +379,17 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
             {docText(intent.fields.body) && <div className="whitespace-pre-wrap text-ink-2">{docText(intent.fields.body)}</div>}
           </div>
         )}
+        {rewrite && (
+          <RewriteView
+            intent={rewrite}
+            title={newTitle}
+            body={newText}
+            editing={editingRewrite}
+            disabled={!open}
+            onTitle={(v) => ((rewriteEdited.current = true), setNewTitle(v))}
+            onBody={(v) => ((rewriteEdited.current = true), setNewText(v))}
+          />
+        )}
         {intent.type === "subtasks" &&
           summaries.map((s, i) => (
             <label key={i} className="flex items-start gap-2">
@@ -368,12 +409,17 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
         {error && <div className="text-sm text-blocked">{error}</div>}
         {open && (
           <div className="flex justify-end gap-2">
+            {rewrite && (
+              <button type="button" disabled={working} onClick={() => setEditingRewrite(!editingRewrite)} className="rounded-md border border-field-border px-3 py-1 disabled:opacity-45">
+                {editingRewrite ? "Done editing" : "Edit"}
+              </button>
+            )}
             <button type="button" disabled={working} onClick={skip} className="rounded-md border border-field-border px-3 py-1 disabled:opacity-45">
               Skip
             </button>
             <button
               type="button"
-              disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0)}
+              disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || (!!rewrite && rewriteBlocked(rewrite, newTitle, newText))}
               onClick={() => void approve()}
               className="rounded-md bg-accent px-3 py-1 font-semibold text-white disabled:opacity-45"
             >

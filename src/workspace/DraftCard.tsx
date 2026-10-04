@@ -14,6 +14,7 @@ import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { itemKey } from "../lib/filter";
+import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
   pending: "Needs your approval",
@@ -41,6 +42,8 @@ export function draftTitle(p: Proposal): string {
       return `New ${i.fields.kind}`;
     case "update":
       return `Update ${i.item.key}`;
+    case "rewrite":
+      return `Update the ${rewriteWhat(i)} of ${i.item.key}`;
     case "link":
       return `Link ${i.from.key}`;
     case "startRun":
@@ -64,6 +67,10 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
       return i.fields.title;
     case "update":
       return "Change fields";
+    case "rewrite": {
+      const size = i.body ? bodyChangeSize(i.body.fromText, i.body.toText) : null;
+      return [i.title ? `Title: ${i.title.from} → ${i.title.to}` : null, size ? `Description: ${size.added} added, ${size.removed} removed` : null].filter(Boolean).join("; ");
+    }
     case "link":
       return linkSentence(i);
     case "startRun":
@@ -103,6 +110,21 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
   const [mentions, setMentions] = useState<Mention[]>(linked.mentions);
   const [editing, setEditing] = useState(false);
   const edited = useRef(false);
+  const rewrite = intent.type === "rewrite" ? intent : null;
+  const [newTitle, setNewTitle] = useState(rewriteFields(rewrite).title);
+  const [newText, setNewText] = useState(rewriteFields(rewrite).text);
+  const rewriteEdited = useRef(false);
+  const attempting = useRef(working);
+  attempting.current = working;
+  // Pip may revise its draft while the card is open; follow it until the person types. Text that changes during an approval is
+  // the person's own edit coming back from the backend, which normalises it (a title is one line, whitespace collapsed), so take it too.
+  useEffect(() => {
+    if (!takesBackendText(rewriteEdited.current, attempting.current)) return;
+    rewriteEdited.current = false;
+    setNewTitle(rewriteFields(rewrite).title);
+    setNewText(rewriteFields(rewrite).text);
+  }, [rewrite?.title?.to, rewrite?.body?.toText]);
+  const rewriteBlock = !!rewrite && rewriteBlocked(rewrite, newTitle, newText);
   const summaries = intent.type === "subtasks" ? intent.summaries : [];
   const made = p.created.length;
   const [picked, setPicked] = useState<boolean[]>(summaries.map(() => true));
@@ -122,6 +144,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
 
   const edit = (): ProposalEdit | null => {
     if (intent.type === "comment" && edited.current) return { type: "comment", body, mentions: liveMentions(body, mentions) };
+    if (rewrite && rewriteEdited.current) return rewriteEdit(rewrite, newTitle, newText);
     if (intent.type === "subtasks") {
       const wanted = summaries.filter((_, i) => i < made || picked[i]);
       return wanted.length === summaries.length ? null : { type: "subtasks", summaries: wanted };
@@ -141,7 +164,9 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
             ? `Create ${remaining} subtask${remaining === 1 ? "" : "s"}`
             : intent.type === "link"
               ? "Create link"
-              : "Apply";
+              : rewrite
+                ? `Update ${rewriteWhat(rewrite)}`
+                : "Apply";
 
   return (
     <article
@@ -183,6 +208,17 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
             <b>{intent.fields.title}</b>
             {docText(intent.fields.body) && <div className="whitespace-pre-wrap text-ws-ink2">{docText(intent.fields.body)}</div>}
           </div>
+        )}
+        {rewrite && (
+          <RewriteView
+            intent={rewrite}
+            title={newTitle}
+            body={newText}
+            editing={editing}
+            disabled={!open}
+            onTitle={(v) => ((rewriteEdited.current = true), setNewTitle(v))}
+            onBody={(v) => ((rewriteEdited.current = true), setNewText(v))}
+          />
         )}
         {intent.type === "link" && (
           <p className="m-0">
@@ -267,7 +303,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
                     Discuss with Pip
                   </button>
                 )}
-                {intent.type === "comment" && (
+                {(intent.type === "comment" || rewrite) && (
                   <button type="button" disabled={working} onClick={() => setEditing(!editing)} className={button}>
                     {editing ? "Done editing" : "Edit"}
                   </button>
@@ -283,7 +319,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
                 {!runDraft && (
                   <button
                     type="button"
-                    disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0)}
+                    disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock}
                     onClick={() => onApprove(edit())}
                     className="rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45"
                   >

@@ -20,6 +20,8 @@ export interface ResultActions {
   openCreated(): void;
   /** Opens Pip on the run, and on its breakdown draft when one is waiting. */
   askPipBreakdown(): void;
+  /** Asks Pip to draft a description update for the run's ticket from what the run found. */
+  askPipDescription?(): void;
   /** Opens a Build draft for the plan run's ticket that carries its plan. */
   buildFromPlan(): void;
   /** Drafts the whole plan as a comment on the ticket. */
@@ -376,6 +378,11 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingB
                 Draft with Pip
               </Btn>
             </>
+          )}
+          {run.spec.kind === "triage" && on.askPipDescription && (
+            <Btn icon="spark" disabled={!comment.enabled || drafting} title={comment.reason ?? "Pip reads the whole run and the ticket, and drafts a new description for you to review as a diff"} onClick={on.askPipDescription}>
+              Draft a description update
+            </Btn>
           )}
           <Btn icon="branch" disabled={!blocker.enabled || drafting} aria-expanded={pickBlocker} title={blocker.reason ?? undefined} onClick={pickBlocker ? on.cancelBlocker : on.pickBlocker}>
             Draft a blocker

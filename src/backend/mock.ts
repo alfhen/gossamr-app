@@ -42,6 +42,7 @@ import type {
 import { fold, type Mention } from "../lib/mentions";
 import { docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
+import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
 import { targetOf } from "../lib/proposals";
 import { MockProposals } from "./mockProposals";
@@ -608,6 +609,19 @@ export class MockBackend implements Backend {
     return this.proposals.draft(intent, label, requestId);
   }
 
+  /** Drafts a text edit the way propose_description_edit does: against the ticket as it reads now, with a sample revision. */
+  async pipRewrite(item: ItemRef, part: "title" | "description", requestId: string) {
+    const now = this.connector.item(item);
+    if (!now) throw new Error(`${item.key} isn't in the sample data`);
+    const from = markdownOf(now.body);
+    const scope = "## Scope\n- In: what this ticket describes\n- Out: anything it doesn't name";
+    const intent: Intent =
+      part === "title"
+        ? { type: "rewrite", item, title: { from: now.title, to: `${now.title} (scoped)` }, body: null, flattened: [] }
+        : { type: "rewrite", item, title: null, body: bodyChange(now.body, from ? `${from}\n\n${scope}` : scope), flattened: [] };
+    return this.proposals.draft(intent, null, requestId);
+  }
+
   pipRuns() {
     return this.runs.list();
   }
@@ -616,7 +630,7 @@ export class MockBackend implements Backend {
     return this.proposals.list({ states: ["pending"] });
   }
 
-  async pipRevise(id: string, change: string | { body?: string; title?: string; summaries?: string[] }) {
+  async pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[] }) {
     return this.proposals.pipRevise(id, change);
   }
 
@@ -685,6 +699,14 @@ export class MockBackend implements Backend {
       case "link":
         this.connector.link(intent.from, intent.to, intent.kind);
         return true;
+      case "rewrite": {
+        const now = this.connector.item(intent.item)!;
+        if ((intent.title && intent.title.from !== now.title) || (intent.body && intent.body.fromText !== markdownOf(now.body))) {
+          throw new Error(`${intent.item.key} changed since this was drafted, so nothing was written. Skip this draft and ask Pip to draft it again from the current text.`);
+        }
+        this.connector.rewrite(intent.item, { title: intent.title?.to, body: intent.body?.to });
+        return true;
+      }
       case "startRun":
         throw new Error("A run is approved with its own button");
       default:
