@@ -14,7 +14,7 @@ import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { itemKey } from "../lib/filter";
-import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteWhat } from "./RewriteDiff";
+import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
   pending: "Needs your approval",
@@ -111,14 +111,18 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
   const [editing, setEditing] = useState(false);
   const edited = useRef(false);
   const rewrite = intent.type === "rewrite" ? intent : null;
-  const [newTitle, setNewTitle] = useState(rewrite?.title?.to ?? "");
-  const [newText, setNewText] = useState(rewrite?.body?.toText ?? "");
+  const [newTitle, setNewTitle] = useState(rewriteFields(rewrite).title);
+  const [newText, setNewText] = useState(rewriteFields(rewrite).text);
   const rewriteEdited = useRef(false);
-  // Pip may revise its draft while the card is open; follow it until the person types.
+  const attempting = useRef(working);
+  attempting.current = working;
+  // Pip may revise its draft while the card is open; follow it until the person types. Text that changes during an approval is
+  // the person's own edit coming back from the backend, which normalises it (a title is one line, whitespace collapsed), so take it too.
   useEffect(() => {
-    if (rewriteEdited.current) return;
-    setNewTitle(rewrite?.title?.to ?? "");
-    setNewText(rewrite?.body?.toText ?? "");
+    if (!takesBackendText(rewriteEdited.current, attempting.current)) return;
+    rewriteEdited.current = false;
+    setNewTitle(rewriteFields(rewrite).title);
+    setNewText(rewriteFields(rewrite).text);
   }, [rewrite?.title?.to, rewrite?.body?.toText]);
   const rewriteBlock = !!rewrite && rewriteBlocked(rewrite, newTitle, newText);
   const summaries = intent.type === "subtasks" ? intent.summaries : [];

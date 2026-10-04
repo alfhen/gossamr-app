@@ -6,7 +6,7 @@ import { bodyChange, docFromMarkdown } from "../backend/mockMarkdown";
 import type { Proposal } from "../types";
 import { DraftCard, draftSummary, draftTitle } from "./DraftCard";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
-import { rewriteBlocked, rewriteEdit, type Rewrite } from "./RewriteDiff";
+import { oneLine, rewriteBlocked, rewriteEdit, rewriteFields, takesBackendText, type Rewrite } from "./RewriteDiff";
 import { targetOf } from "../lib/proposals";
 
 const OLD = "Retries back off.\n\nBackoff starts at two seconds.\n\nOpen question: who owns the alert?";
@@ -134,6 +134,35 @@ describe("what the person's edit sends", () => {
     expect(rewriteBlocked(i, i.title!.from, i.body!.fromText)).toBe(true);
     expect(rewriteBlocked(i, i.title!.from, "changed")).toBe(false);
     expect(rewriteBlocked(intent({ body: null }), i.title!.from, "")).toBe(true);
+  });
+
+  it("compares a title as the backend will store it, so whitespace alone is not a change", () => {
+    const same = intent({ body: null, title: { from: "A B", to: "A B and more" } });
+    expect(rewriteBlocked(same, "A  B", "")).toBe(true);
+    expect(rewriteBlocked(same, " A\tB\n", "")).toBe(true);
+    expect(rewriteBlocked(same, "A  B  C", "")).toBe(false);
+    expect(rewriteBlocked(same, " \t ", "")).toBe(true);
+    expect(rewriteBlocked(intent({ body: null, title: { from: "A  B", to: "x" } }), "A  B", "")).toBe(false);
+    expect(oneLine("  A \n  B\t C ")).toBe("A B C");
+  });
+});
+
+describe("what the fields show after the backend saved the person's edit", () => {
+  it("follows the backend's text while typing is not in the way, and during an approval, but not over unsaved typing", () => {
+    expect(takesBackendText(false, false)).toBe(true);
+    expect(takesBackendText(true, true)).toBe(true);
+    expect(takesBackendText(true, false)).toBe(false);
+  });
+
+  it("is the normalised title and the Markdown the backend kept, not what was typed", async () => {
+    const backend = new MockBackend();
+    const now = backend.connector.item(itemRef("DEVOPS-471"))!;
+    const p = backend.proposals.draft({ type: "rewrite", item: now.item, title: { from: now.title, to: "Pip's title" }, body: bodyChange(now.body, "Pip's text"), flattened: [] });
+    expect(rewriteFields(p.intent as Rewrite)).toEqual({ title: "Pip's title", text: "Pip's text" });
+    const saved = await backend.proposalsEdit(p.id, { type: "rewrite", title: "  My   title\n", body: "  My text  " });
+    expect(rewriteFields(saved.intent as Rewrite)).toEqual({ title: "My title", text: "My text" });
+    expect(rewriteFields(null)).toEqual({ title: "", text: "" });
+    expect(rewriteFields(intent({ title: null }))).toEqual({ title: "", text: NEW });
   });
 });
 

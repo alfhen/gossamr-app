@@ -10,7 +10,7 @@ import { Sparkle } from "./icons";
 import { Markdown } from "./Markdown";
 import { MentionTextarea } from "./MentionTextarea";
 import { StatusPill } from "./primitives";
-import { RewriteView, rewriteBlocked, rewriteEdit, rewriteWhat } from "../workspace/RewriteDiff";
+import { RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "../workspace/RewriteDiff";
 
 function suggestions(t: Ticket): string[] {
   return [
@@ -237,16 +237,23 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
     setMentions(linked.mentions);
   }, [people]);
   const rewrite = intent.type === "rewrite" ? intent : null;
-  const [newTitle, setNewTitle] = useState(rewrite?.title?.to ?? "");
-  const [newText, setNewText] = useState(rewrite?.body?.toText ?? "");
+  const [newTitle, setNewTitle] = useState(rewriteFields(rewrite).title);
+  const [newText, setNewText] = useState(rewriteFields(rewrite).text);
   const [editingRewrite, setEditingRewrite] = useState(false);
   const rewriteEdited = useRef(false);
   // Pip may revise its draft while the drawer is open; follow it until the person types.
   useEffect(() => {
-    if (rewriteEdited.current) return;
-    setNewTitle(rewrite?.title?.to ?? "");
-    setNewText(rewrite?.body?.toText ?? "");
+    if (!takesBackendText(rewriteEdited.current, false)) return;
+    setNewTitle(rewriteFields(rewrite).title);
+    setNewText(rewriteFields(rewrite).text);
   }, [rewrite?.title?.to, rewrite?.body?.toText]);
+  // The backend normalises what it saves (a title is one line, with whitespace collapsed), so take its text back.
+  const adopt = (saved: Proposal) => {
+    if (saved.intent.type !== "rewrite") return;
+    rewriteEdited.current = false;
+    setNewTitle(rewriteFields(saved.intent).title);
+    setNewText(rewriteFields(saved.intent).text);
+  };
   const summaries = intent.type === "subtasks" ? intent.summaries : [];
   const made = p.created.length;
   const [picked, setPicked] = useState<boolean[]>(summaries.map(() => true));
@@ -284,9 +291,10 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
     setWorking(true);
     setProblem(null);
     try {
-      await save();
+      adopt(await save());
       const done = await backend.proposalsApprove(p.id);
       putProposal(done);
+      adopt(done);
       if (done.state.type === "applied") {
         showToast(
           intent.type === "comment"

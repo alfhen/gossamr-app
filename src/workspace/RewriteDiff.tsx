@@ -42,10 +42,22 @@ export function rewriteEdit(i: Rewrite, title: string, body: string): ProposalEd
   return Object.keys({ ...t, ...b }).length ? { type: "rewrite", ...t, ...b } : null;
 }
 
+/** The editable text of a rewrite as the backend holds it. */
+export const rewriteFields = (i: Rewrite | null) => ({ title: i?.title?.to ?? "", text: i?.body?.toText ?? "" });
+
+/**
+ * Whether the fields take the backend's text when it changes: always, until the person types; and while an approval is under way,
+ * because that text is their own edit coming back normalised.
+ */
+export const takesBackendText = (edited: boolean, approving: boolean) => !edited || approving;
+
+/** A title as the backend stores it: one line, runs of whitespace collapsed. */
+export const oneLine = (title: string) => title.split(/\s+/).filter(Boolean).join(" ");
+
 /** Why approving would do nothing or harm: a part left blank, or no part that differs from what the ticket says now. */
 export function rewriteBlocked(i: Rewrite, title: string, body: string): boolean {
-  const blank = (!!i.title && !title.trim()) || (!!i.body && !body.trim());
-  const changes = (!!i.title && title.trim() !== i.title.from.trim()) || (!!i.body && body.trim() !== i.body.fromText.trim());
+  const blank = (!!i.title && !oneLine(title)) || (!!i.body && !body.trim());
+  const changes = (!!i.title && oneLine(title) !== i.title.from.trim()) || (!!i.body && body.trim() !== i.body.fromText.trim());
   return blank || !changes;
 }
 

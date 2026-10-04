@@ -38,7 +38,8 @@ function block(b: WorkBlock): string {
       // The parser closes a block at a line that is only backticks once trimmed, so the fence must outrun every such run.
       const longest = Math.max(0, ...b.text.split("\n").map((l) => /^\s*(`*)/.exec(l)![1].length));
       const fence = "`".repeat(Math.max(3, longest + 1));
-      return `${fence}${b.language ?? ""}\n${b.text}\n${fence}`;
+      const info = b.language && !/[`\n]/.test(b.language) ? b.language : "";
+      return `${fence}${info}\n${b.text}\n${fence}`;
     }
     case "rule":
       return "---";
@@ -70,11 +71,13 @@ export function docFromMarkdown(text: string): WorkDoc {
     run = [];
     list = null;
   };
-  const lines = text.replace(/\r\n/g, "\n").trim().split("\n");
+  // Leading blank lines go, but not the indentation of the first line: it decides whether a fence opens.
+  const lines = text.replace(/\r\n/g, "\n").replace(/^(?:[ \t]*\n)+/, "").trimEnd().split("\n");
   for (let at = 0; at < lines.length; at++) {
     const line = lines[at];
-    const fence = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
-    if (fence) {
+    // An opening fence sits within three columns, and a backtick fence's info string holds no backtick.
+    const fence = columns(line) <= 3 ? /^\s*(`{3,}|~{3,})(.*)$/.exec(line) : null;
+    if (fence && !(fence[1][0] === "`" && fence[2].includes("`"))) {
       flush();
       const [mark, size] = [fence[1][0], fence[1].length];
       const body: string[] = [];

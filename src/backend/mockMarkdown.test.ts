@@ -33,6 +33,16 @@ describe("the sample build's Markdown", () => {
     expect(code("```\nnever closed\n# still code")).toEqual([{ type: "code", language: null, text: "never closed\n# still code" }]);
   });
 
+  it("opens a fence only within three columns and, for backticks, without a backtick in the info string", () => {
+    const kinds = (text: string) => docFromMarkdown(text).blocks.map((b) => b.type);
+    expect(kinds("    ```\nnot code\n    ```")).toEqual(["paragraph"]);
+    expect(kinds("\t~~~\nnot code")).toEqual(["paragraph"]);
+    expect(kinds("```a`b\nnot code")).toEqual(["paragraph"]);
+    expect(docFromMarkdown("~~~a`b\ncode\n~~~").blocks).toEqual([{ type: "code", language: "a`b", text: "code" }]);
+    expect(docFromMarkdown("   ```rust\ncode\n```").blocks).toEqual([{ type: "code", language: "rust", text: "code" }]);
+    expect(markdownOf({ blocks: [{ type: "code", language: "a`b", text: "x" }] })).toBe("```\nx\n```");
+  });
+
   it("writes a longer fence around code that holds backtick lines, so they come back as code", () => {
     for (const text of ["  ```", "    `````", "a\n  ````\nb", "~~~"]) {
       const doc = { blocks: [{ type: "code" as const, language: null, text }] };
