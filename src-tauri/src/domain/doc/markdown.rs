@@ -71,7 +71,8 @@ fn block_markdown(block: &Block) -> String {
             .join("\n"),
         Block::Quote { content } => blocks_markdown(content).lines().map(|l| if l.is_empty() { ">".to_string() } else { format!("> {l}") }).collect::<Vec<_>>().join("\n"),
         Block::Code { language, text } => {
-            let longest = text.lines().map(|l| l.chars().take_while(|c| *c == '`').count()).max().unwrap_or(0);
+            // The parser closes a block at any line that is only backticks once trimmed, so count them past leading spaces too.
+            let longest = text.lines().map(|l| l.trim_start().chars().take_while(|c| *c == '`').count()).max().unwrap_or(0);
             let fence = "`".repeat((longest + 1).max(3));
             format!("{fence}{}\n{text}\n{fence}", language.as_deref().unwrap_or(""))
         }
@@ -173,7 +174,12 @@ fn escape_line_starts(text: &str) -> String {
 }
 
 fn is_block_start(line: &str) -> bool {
-    heading(line).is_some() || line.starts_with('>') || line.starts_with("```") || is_rule(line) || list_marker(line).is_some()
+    heading(line).is_some() || line.starts_with('>') || fence_char(line).is_some() || is_rule(line) || list_marker(line).is_some()
+}
+
+/// The character a line opens a fenced code block with: three or more backticks or tildes.
+fn fence_char(line: &str) -> Option<char> {
+    ['`', '~'].into_iter().find(|c| line.chars().take_while(|x| x == c).count() >= 3)
 }
 
 fn heading(line: &str) -> Option<(u8, &str)> {
@@ -219,14 +225,14 @@ fn parse_blocks(lines: &[&str], mentions: &Mentions) -> Vec<Block> {
         let trimmed = line.trim_start();
         if trimmed.trim().is_empty() {
             i += 1;
-        } else if let Some(fence) = trimmed.strip_prefix("```") {
-            let ticks = 3 + fence.chars().take_while(|c| *c == '`').count();
-            let language = fence.trim_start_matches('`').trim();
+        } else if let Some(mark) = fence_char(trimmed) {
+            let ticks = trimmed.chars().take_while(|c| *c == mark).count();
+            let language = trimmed[ticks..].trim();
             let mut body = Vec::new();
             i += 1;
             while i < lines.len() {
                 let closing = lines[i].trim();
-                if closing.len() >= ticks && closing.chars().all(|c| c == '`') {
+                if closing.len() >= ticks && closing.chars().all(|c| c == mark) {
                     i += 1;
                     break;
                 }
@@ -554,6 +560,30 @@ mod tests {
         let md = doc.to_markdown();
         assert!(md.starts_with("````"), "{md}");
         assert_eq!(Doc::from_markdown(&md, &[]), doc);
+    }
+
+    #[test]
+    fn code_with_indented_or_longer_backtick_lines_survives_a_round_trip() {
+        for text in ["  ```", "    `````", "```\nx", "a\n  ````\nb", "~~~", "  ~~~~\n```\n``` js", "trailing  \n```   "] {
+            let doc = Doc { blocks: vec![Block::Code { language: Some("rust".into()), text: text.into() }, Block::Paragraph { content: vec![Inline::Text { text: "after".into(), marks: vec![] }] }] };
+            let md = doc.to_markdown();
+            assert_eq!(Doc::from_markdown(&md, &[]), doc, "{text:?} -> {md:?}");
+        }
+    }
+
+    #[test]
+    fn code_inside_a_list_item_keeps_its_backtick_lines() {
+        let doc = Doc { blocks: vec![Block::List { ordered: false, items: vec![vec![Block::Code { language: None, text: "  ```\nend".into() }]] }] };
+        assert_eq!(Doc::from_markdown(&doc.to_markdown(), &[]), doc, "{}", doc.to_markdown());
+    }
+
+    #[test]
+    fn tilde_fences_open_and_close_a_code_block_and_do_not_close_a_backtick_one() {
+        let doc = Doc::from_markdown("~~~sh\nls\n```\n~~~\n\nafter", &[]);
+        assert_eq!(doc.blocks[0], Block::Code { language: Some("sh".into()), text: "ls\n```".into() });
+        assert_eq!(doc.blocks.len(), 2);
+        let mixed = Doc::from_markdown("```\n~~~\n```", &[]);
+        assert_eq!(mixed.blocks, vec![Block::Code { language: None, text: "~~~".into() }]);
     }
 
     #[test]
