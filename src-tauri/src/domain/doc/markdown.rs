@@ -74,7 +74,9 @@ fn block_markdown(block: &Block) -> String {
             // The parser closes a block at any line that is only backticks once trimmed, so count them past leading spaces too.
             let longest = text.lines().map(|l| l.trim_start().chars().take_while(|c| *c == '`').count()).max().unwrap_or(0);
             let fence = "`".repeat((longest + 1).max(3));
-            format!("{fence}{}\n{text}\n{fence}", language.as_deref().unwrap_or(""))
+            // An info string with a backtick would stop the line from reading back as a fence.
+            let info = language.as_deref().filter(|l| !l.contains(['`', '\n'])).unwrap_or("");
+            format!("{fence}{info}\n{text}\n{fence}")
         }
         Block::Rule => "---".into(),
     }
@@ -174,12 +176,20 @@ fn escape_line_starts(text: &str) -> String {
 }
 
 fn is_block_start(line: &str) -> bool {
-    heading(line).is_some() || line.starts_with('>') || fence_char(line).is_some() || is_rule(line) || list_marker(line).is_some()
+    heading(line).is_some() || line.starts_with('>') || is_rule(line) || list_marker(line).is_some()
 }
 
-/// The character a line opens a fenced code block with: three or more backticks or tildes.
-fn fence_char(line: &str) -> Option<char> {
-    ['`', '~'].into_iter().find(|c| line.chars().take_while(|x| x == c).count() >= 3)
+/// How a line opens a fenced code block, as `(mark, length, info string)`: indented by at most three columns, then three
+/// or more backticks or tildes. The info string of a backtick fence holds no backtick, or the line is not a fence.
+fn fence_open(line: &str) -> Option<(char, usize, &str)> {
+    if columns_of(line) > 3 {
+        return None;
+    }
+    let rest = line.trim_start();
+    let mark = ['`', '~'].into_iter().find(|c| rest.chars().take_while(|x| x == c).count() >= 3)?;
+    let length = rest.chars().take_while(|c| *c == mark).count();
+    let info = rest[length..].trim();
+    (mark != '`' || !info.contains('`')).then_some((mark, length, info))
 }
 
 fn heading(line: &str) -> Option<(u8, &str)> {
@@ -238,9 +248,7 @@ fn parse_blocks(lines: &[&str], mentions: &Mentions) -> Vec<Block> {
         let trimmed = line.trim_start();
         if trimmed.trim().is_empty() {
             i += 1;
-        } else if let Some(mark) = fence_char(trimmed) {
-            let ticks = trimmed.chars().take_while(|c| *c == mark).count();
-            let language = trimmed[ticks..].trim();
+        } else if let Some((mark, ticks, language)) = fence_open(line) {
             let mut body = Vec::new();
             i += 1;
             while i < lines.len() {
@@ -276,7 +284,7 @@ fn parse_blocks(lines: &[&str], mentions: &Mentions) -> Vec<Block> {
             let mut first = true;
             while i < lines.len() {
                 let t = lines[i].trim_start();
-                if t.trim().is_empty() || (!first && is_block_start(t)) {
+                if t.trim().is_empty() || (!first && (is_block_start(t) || fence_open(lines[i]).is_some())) {
                     break;
                 }
                 if !first {
@@ -609,6 +617,31 @@ mod tests {
         }
         let three = Doc::from_markdown("~~~\ncode\n   ~~~\nafter", &[]);
         assert_eq!((three.blocks.len(), &three.blocks[0]), (2, &Block::Code { language: None, text: "code".into() }));
+    }
+
+    #[test]
+    fn a_line_that_cannot_open_a_fence_is_text() {
+        for (text, why) in [("    ```\nnot code\n    ```", "four spaces"), ("\t~~~\nnot code", "a tab"), ("```a`b\nnot code", "a backtick in the info string")] {
+            let doc = Doc::from_markdown(text, &[]);
+            assert!(matches!(doc.blocks.as_slice(), [Block::Paragraph { .. }]), "{why}: {:?}", doc.blocks);
+        }
+        let tilde = Doc::from_markdown("~~~a`b\ncode\n~~~", &[]);
+        assert_eq!(tilde.blocks, vec![Block::Code { language: Some("a`b".into()), text: "code".into() }], "a tilde fence may carry a backtick in its info string");
+        let three = Doc::from_markdown("   ```rust\ncode\n```", &[]);
+        assert_eq!(three.blocks, vec![Block::Code { language: Some("rust".into()), text: "code".into() }]);
+    }
+
+    #[test]
+    fn a_fence_line_after_a_paragraph_line_interrupts_it_only_when_it_could_open_one() {
+        assert!(matches!(Doc::from_markdown("text\n```\ncode\n```", &[]).blocks.as_slice(), [Block::Paragraph { .. }, Block::Code { .. }]));
+        assert!(matches!(Doc::from_markdown("text\n    ```\nmore", &[]).blocks.as_slice(), [Block::Paragraph { .. }]));
+    }
+
+    #[test]
+    fn a_language_the_parser_would_not_read_back_is_left_out_of_the_fence() {
+        let doc = Doc { blocks: vec![Block::Code { language: Some("a`b".into()), text: "x".into() }] };
+        assert_eq!(doc.to_markdown(), "```\nx\n```");
+        assert_eq!(Doc::from_markdown(&doc.to_markdown(), &[]).blocks, vec![Block::Code { language: None, text: "x".into() }]);
     }
 
     #[test]
