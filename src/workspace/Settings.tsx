@@ -13,6 +13,8 @@ import { keyInitials } from "./projects";
 import { disconnectGithub, useGithubUi } from "./githubUi";
 import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
+import { ManagerPrototypeSwitch, ManagerSettingsSection } from "./ManagerSettings";
+import { useManagerOn } from "./managerProto";
 
 export function connectionsOf(containers: { ref: { connectionId: string } }[]): { id: string; name: string; projects: number }[] {
   const counts = new Map<string, number>();
@@ -221,6 +223,8 @@ export function Settings() {
   const containers = useWorkspace((s) => s.containers);
   const connections = useWorkspace((s) => s.connections);
   const section = useTabs((s) => s.settingsSection);
+  const manager = useManagerOn();
+  const sample = useWorkspace((s) => s.backend?.kind === "mock");
   useEffect(() => {
     if (!section) return;
     document.getElementById(`settings-${section}`)?.scrollIntoView({ block: "start" });
@@ -263,6 +267,18 @@ export function Settings() {
         {isTauri() && (
           <Section title="Agents">
             <AgentsSwitch enabled={agents.enabled} pending={agents.pending} error={agents.error} note={agents.note} onChange={(on) => void agents.set(on)} />
+          </Section>
+        )}
+
+        {manager && (
+          <Section title="Pip as manager" id="settings-manager">
+            <ManagerSettingsSection />
+          </Section>
+        )}
+
+        {sample && (
+          <Section title="Prototype">
+            <ManagerPrototypeSwitch />
           </Section>
         )}
 

@@ -15,6 +15,8 @@ export interface Turn {
   looking?: string;
   /** Text the question was about; the assistant is given it after the prompt. */
   quote?: string;
+  /** Set when the app, not the person, wrote the prompt: what the pane shows in its place. */
+  notice?: { heading: string; body: string };
   /** Pictures sent with the question. Shown from memory; a follow-up in the same session does not attach them again. */
   images?: ShownImage[];
 }
@@ -31,7 +33,7 @@ interface ClaudeState {
   /** Every draft the backend holds. The chat cards read from here, so drafts outlive the conversation that made them. */
   proposals: Proposal[];
   setOpen(open: boolean): void;
-  ask(ticketKey: string, prompt: string, sessionId: string | null, context?: ScreenContext, extra?: { looking?: string; quote?: string; images?: PipImage[] }): Promise<void>;
+  ask(ticketKey: string, prompt: string, sessionId: string | null, context?: ScreenContext, extra?: { looking?: string; quote?: string; notice?: Turn["notice"]; images?: PipImage[] }): Promise<void>;
   cancel(ticketKey: string): void;
   /** Puts a draft the backend just returned in place, ahead of the `proposals-changed` refresh. */
   putProposal(p: Proposal): void;

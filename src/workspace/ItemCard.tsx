@@ -7,6 +7,8 @@ import { daysQuiet } from "./boardLogic";
 import { AgeChip, AttentionDot, Avatar, StatusPill } from "./CanvasBits";
 import { PrBadge } from "./DevBits";
 import { selectHow, showsAge } from "./canvasShared";
+import { CardBadges } from "./ManagerBadges";
+import { useManagerOn } from "./managerProto";
 
 export interface CardDraft {
   id: string;
@@ -58,6 +60,7 @@ export function ItemCard(p: ItemCardProps) {
   const priority = item.priority ? PRIORITY[item.priority] : undefined;
   const shownLabels = item.labels.slice(0, 2);
   const menuRef = useRef<HTMLDivElement>(null);
+  const manager = useManagerOn();
 
   useEffect(() => {
     if (!p.menuOpen) return;
@@ -156,7 +159,7 @@ export function ItemCard(p: ItemCardProps) {
         <Avatar name={p.assignee} />
         {p.showStatus && <StatusPill status={item.status} />}
         {p.blocked && <span className="text-xs text-ws-blocked">⛓ blocked</span>}
-        {p.moreDrafts > 0 && (
+        {p.moreDrafts > 0 && !manager && (
           <span className="text-xs text-ws-pip" title="Drafts waiting on this ticket">
             ✦ {p.moreDrafts}
           </span>
@@ -164,6 +167,7 @@ export function ItemCard(p: ItemCardProps) {
         <PrBadge summary={p.code} />
         {showsAge(item, days) && <AgeChip days={days} className="ml-auto" />}
       </div>
+      <CardBadges itemKey={item.item.key} />
       {p.draft && <DraftLine draft={p.draft} onApprove={p.onApprove} onSkip={p.onSkip} />}
       {p.marked && <span className="sr-only">Ticked for a bulk action</span>}
       {p.menuOpen && (

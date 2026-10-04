@@ -17,6 +17,7 @@ export function targetOf(intent: Intent): ItemRef | null {
     case "subtasks":
       return intent.parent;
     case "startRun":
+    case "followUp":
       return intent.item;
     case "create":
       return null;

@@ -46,6 +46,7 @@ const projectName = (containers: Screen["containers"], project: ContainerRef | n
 /** What the person is looking at, as a line: "Board · DEVOPS · 12 items", "Activity · Mentions · DEVOPS", "Agents · Needs you · 3 runs" or "Settings". */
 export function screenLine(s: Pick<Screen, "route" | "tab" | "shown" | "containers" | "activity" | "agents">): string {
   if (s.route === "settings") return "Settings";
+  if (s.route === "manager") return "Waiting for you";
   if (s.route === "agents") return s.agents ? `Agents · ${agentsFilterText(s.agents.filters)} · ${plural(runsShown(s.agents).length, "run")}` : "Agents";
   if (s.route === "activity") return `Activity · ${CHIP_LABEL[s.activity.chip]} · ${projectName(s.containers, s.activity.container)}`;
   return `${VIEW_LABEL[s.tab.view]} · ${projectName(s.containers, projectOf(s.tab.filter))} · ${plural(s.shown.length)}`;

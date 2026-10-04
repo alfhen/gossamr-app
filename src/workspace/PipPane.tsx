@@ -21,6 +21,8 @@ import { usePrefs } from "./prefs";
 import { buildScreenContext, contextLabel, contextLines } from "./screenContext";
 import { placeholderFor, suggestionsFor } from "./suggestions";
 import { useAgentsEnabled } from "./agentsFlag";
+import { LiveDraftCard } from "./DraftCard";
+import { useManagerOn } from "./managerProto";
 import { agentsSuggestionScene, describeRun, runSummaryPrompt } from "./pipRuns";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -103,16 +105,38 @@ function LiveApplied({ requestId }: { requestId: string }) {
   return <AppliedCard note={applied.note} state={state} onAct={() => (state === "applied" ? usePip.getState().undoApplied(requestId) : usePip.getState().redoApplied(requestId))} />;
 }
 
+/** What the app told Pip, shown as the app's own message so it never reads as something the person said. */
+export function AppNotice({ notice }: { notice: NonNullable<Turn["notice"]> }) {
+  return (
+    <div role="note" data-app-notice className="grid gap-0.5 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 text-sm">
+      <span className="flex items-center gap-1.5 text-xs font-semibold tracking-[0.05em] text-ws-ink3 uppercase">
+        <span aria-hidden>◆</span>
+        Gossamr told Pip
+      </span>
+      <b className="font-semibold text-ws-ink">{notice.heading}</b>
+      <span className="text-ws-ink2 [overflow-wrap:anywhere]">{notice.body}</span>
+    </div>
+  );
+}
+
+/** With the prototype on, a draft Pip made for a finished run is decided right here instead of only previewed. */
+const DECIDED_IN_PANE = new Set<Proposal["intent"]["type"]>(["comment", "subtasks", "followUp"]);
+
 function TurnView({ turn, proposals }: { turn: Turn; proposals: Proposal[] }) {
   const drafts = draftsForTurn(proposals, turn.requestId);
   const working = turn.status === "running" && !turn.text;
+  const manager = useManagerOn();
   return (
     <div className="grid gap-2">
       {turn.images && <TurnImages images={turn.images} />}
-      <div className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
-        {turn.prompt}
-        {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{turn.quote}</blockquote>}
-      </div>
+      {turn.notice ? (
+        <AppNotice notice={turn.notice} />
+      ) : (
+        <div className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
+          {turn.prompt}
+          {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{turn.quote}</blockquote>}
+        </div>
+      )}
       {(turn.steps.length > 0 || working) && (
         <ul className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
           {turn.steps.map((s, i) => (
@@ -130,9 +154,7 @@ function TurnView({ turn, proposals }: { turn: Turn; proposals: Proposal[] }) {
         </div>
       )}
       <LiveApplied requestId={turn.requestId} />
-      {drafts.map((p) => (
-        <LiveDraftPreview key={p.id} proposal={p} />
-      ))}
+      {drafts.map((p) => (manager && DECIDED_IN_PANE.has(p.intent.type) ? <LiveDraftCard key={p.id} proposal={p} jump={false} /> : <LiveDraftPreview key={p.id} proposal={p} />))}
       {turn.status === "failed" && (
         <p role="alert" className="m-0 rounded-md bg-ws-blocked-soft px-3 py-2 text-ws-blocked">
           {turn.error ?? "Pip stopped"}

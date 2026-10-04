@@ -4,6 +4,8 @@ import type { Intent, ItemRef, Proposal, Run, ScreenContext, WorkFilter } from "
 import { needsPerson, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
+import { managerSettings, useManager } from "../workspace/managerProto";
+import { MANAGER_REPO, ROUNDING_PROMPT, ROUNDING_QUESTION, managerReply, parseNotice, type ManagerDraft } from "./mockManager";
 import type { AskRequest, ClaudeEvent } from "./claude";
 
 /** What the scripted Pip does for one question. */
@@ -20,7 +22,22 @@ export interface PipScript {
   revise?: { id: string; body?: string; title?: string; summaries?: string[] } | null;
   /** The draft this turn was about, remembered for the rest of the conversation. */
   discussed?: string;
+  /** Prototype: several drafts for one finished run, and what Pip decided about it. */
+  drafts?: ManagerDraft[];
+  verdict?: { runId: string; verdict: Run["pip"] & object };
 }
+
+/** What the prototype lets Pip do on its own, as the person set it. */
+export interface PipPolicy {
+  on: boolean;
+  proposeFromChat: boolean;
+}
+
+const currentPolicy = (): PipPolicy => ({ on: useManager.getState().on, proposeFromChat: managerSettings().proposeFromChat });
+export const MANAGER_ON_NOTICE = "[Gossamr notice] Manager mode is on.";
+const MANAGER_ON = /^\[Gossamr notice\] Manager mode is on\./;
+const asksToLookInto = /^(?:please\s+)?(?:can you\s+)?(?:look into|dig into|find out why|figure out why)\b/;
+const asksWhatWaits = /\b(waiting|inbox)\b|what do i need/;
 
 const FILTERS: { pattern: RegExp; filter: WorkFilter; note: string }[] = [
   { pattern: /\b(stale|quiet|old)\b/, filter: { type: "stale", days: 5 }, note: "Tickets untouched for 5 days or more" },
@@ -99,8 +116,41 @@ function findings(runs: readonly Run[]): string {
 }
 
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
-export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null): PipScript {
+export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, policy: PipPolicy = currentPolicy()): PipScript {
   const q = prompt.toLowerCase();
+  if (MANAGER_ON.test(prompt)) return { steps: [], text: "Manager mode is on. I will read each finished run, draft what is useful and stay quiet when there is nothing to do. I only draft; you approve. Builds, pushes and Jira writes always ask you.", filter: null, draft: null };
+  const notice = parseNotice(prompt);
+  if (notice) {
+    const reply = managerReply(notice);
+    if (!reply) return { steps: [], text: "", filter: null, draft: null };
+    return { steps: reply.steps, text: reply.text, filter: null, draft: null, drafts: reply.drafts, verdict: { runId: notice.runId, verdict: reply.verdict } };
+  }
+  if (policy.on && asksToLookInto.test(q) && !KEY.test(prompt)) {
+    if (!policy.proposeFromChat) {
+      return { steps: [], text: "I could propose a read-only investigation for that, but **Pip proposes runs from chat** is off. Turn it on in Settings and ask again.", filter: null, draft: null };
+    }
+    const ask = ticketlessQuestion(prompt);
+    if (ask) {
+      return {
+        steps: ["Drafted an agent run"],
+        text: `I can look into that. No ticket covers it yet, so I propose a read-only investigation in **${ask.repo ?? "your repository"}**. Read the prompt and change anything you like. Nothing runs until you start it, and I will report back when it finishes.`,
+        filter: null,
+        draft: null,
+        ticketlessRun: { repo: ask.repo ?? MANAGER_REPO, prompt: ROUNDING_QUESTION.test(prompt) ? ROUNDING_PROMPT : ask.prompt },
+      };
+    }
+  }
+  if (policy.on && asksWhatWaits.test(q)) {
+    const waiting = drafts.filter((d) => d.state.type === "pending");
+    const asking = runs.filter((r) => r.state === "needsAnswer" || r.state === "needsPermission");
+    const total = waiting.length + asking.length;
+    return {
+      steps: ["Looked at your inbox"],
+      text: total ? `**${total} ${total === 1 ? "item is" : "items are"}** waiting for you: ${waiting.length} ${waiting.length === 1 ? "draft" : "drafts"} and ${asking.length} ${asking.length === 1 ? "run" : "runs"} that need an answer. They are all in the Waiting for you view.` : "Nothing is waiting for you.",
+      filter: null,
+      draft: null,
+    };
+  }
   const finishing = finishes.exec(prompt);
   if (finishing) {
     const left = drafts.find((d) => d.id === finishing[1] && d.state.type === "pending" && d.origin.type === "run" && d.intent.type === "create");
@@ -323,7 +373,11 @@ type ViewListener = (requestId: string, filter: WorkFilter, note: string) => voi
 
 /** The parts of a backend the scripted Pip writes to; only the sample backend has them. */
 export interface PipDrafter {
-  pipDraft(intent: Intent, label: string | null, requestId: string): Promise<unknown>;
+  pipDraft(intent: Intent, label: string | null, requestId: string, revision?: { note: string; was: string }): Promise<unknown>;
+  /** Prototype: records what Pip decided about a finished run. */
+  managerVerdict(runId: string, verdict: NonNullable<Run["pip"]>): Promise<unknown>;
+  /** Prototype: approves a draft Pip was allowed to act on by itself. */
+  pipApprove(id: string): Promise<unknown>;
   /** The runs Pip can read. */
   pipRuns(): Run[];
   /** The drafts Pip can see. */
@@ -371,6 +425,12 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       emit(req.requestId, { type: "tool", label });
     }
     if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
+    if (!stopped && script.verdict) await drafter?.managerVerdict?.(script.verdict.runId, script.verdict.verdict);
+    for (const d of script.drafts ?? []) {
+      if (stopped) break;
+      const made = (await drafter?.pipDraft?.(d.intent, d.label, req.requestId, d.revision)) as { id: string } | undefined;
+      if (made && d.sendsItself) await drafter?.pipApprove?.(made.id);
+    }
     if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, summaries: script.revise.summaries });
     if (!stopped && script.runDraft) await drafter?.pipRunDraft?.(script.runDraft.item, script.runDraft.focus, req.requestId);
     if (!stopped && script.ticketlessRun) await drafter?.pipTicketlessRunDraft?.(script.ticketlessRun.repo, script.ticketlessRun.prompt, req.requestId);

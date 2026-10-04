@@ -8,10 +8,10 @@ export const VIEW_MODES = ["board", "list", "map", "age"] as const;
 export type ViewMode = (typeof VIEW_MODES)[number];
 export const VIEW_LABEL: Record<ViewMode, string> = { board: "Board", list: "List", map: "Map", age: "Age" };
 
-export type Route = "workspace" | "activity" | "agents" | "settings";
+export type Route = "workspace" | "activity" | "agents" | "manager" | "settings";
 
 /** A part of Settings that something else can open directly. */
-export type SettingsSection = "watching";
+export type SettingsSection = "watching" | "manager";
 
 export interface Tab {
   id: string;

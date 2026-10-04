@@ -1,6 +1,7 @@
 import type { Run } from "../types";
 import { Icon, STATE_ICON } from "./AgentIcons";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
+import { RunVerdictChip } from "./ManagerBadges";
 import { createdFrom } from "./runSheetLogic";
 import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, stateView, type Tone } from "./agentsLogic";
 
@@ -17,10 +18,13 @@ export function StateChip({ run, now }: { run: Run; now: number }) {
   const v = stateView(run, now);
   const t = TONE[v.tone];
   return (
-    <span data-state={run.state} className={`inline-flex items-center gap-1 rounded-full px-2 text-xs leading-[1.6] font-semibold whitespace-nowrap ${t.soft} ${t.text}`}>
-      <Icon name={STATE_ICON[v.icon]} className="size-[11px]" />
-      {v.label}
-    </span>
+    <>
+      <span data-state={run.state} className={`inline-flex items-center gap-1 rounded-full px-2 text-xs leading-[1.6] font-semibold whitespace-nowrap ${t.soft} ${t.text}`}>
+        <Icon name={STATE_ICON[v.icon]} className="size-[11px]" />
+        {v.label}
+      </span>
+      <RunVerdictChip run={run} />
+    </>
   );
 }
 

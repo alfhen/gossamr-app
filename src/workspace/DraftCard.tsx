@@ -45,6 +45,8 @@ export function draftTitle(p: Proposal): string {
       return `Link ${i.from.key}`;
     case "startRun":
       return `Start an agent: ${i.item?.key ?? `${i.spec.repo}, no ticket`}`;
+    case "followUp":
+      return `Follow-up for run ${i.item?.key ?? i.run}`;
     default:
       return unreachable(i);
   }
@@ -68,6 +70,8 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
       return linkSentence(i);
     case "startRun":
       return `${i.spec.kind} in ${i.spec.repo}`;
+    case "followUp":
+      return i.message;
     default:
       return unreachable(i);
   }
@@ -141,7 +145,9 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
             ? `Create ${remaining} subtask${remaining === 1 ? "" : "s"}`
             : intent.type === "link"
               ? "Create link"
-              : "Apply";
+              : intent.type === "followUp"
+                ? "Send back"
+                : "Apply";
 
   return (
     <article
@@ -233,6 +239,18 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
             <p className="m-0 text-sm text-ws-ink3">Runs as you, with your Claude settings, in a new worktree of {intent.spec.clonePath}. Read the exact prompt and checks, then start it. Nothing runs before that.</p>
           </div>
         )}
+        {intent.type === "followUp" && (
+          <div data-follow-up className="grid gap-1.5">
+            <p className="m-0 text-ws-ink2">Message that goes to the run, word for word:</p>
+            <blockquote className="m-0 border-l-2 border-ws-pip pl-2.5 whitespace-pre-wrap [overflow-wrap:anywhere]">{intent.message}</blockquote>
+            <p className="m-0 flex flex-wrap items-center gap-x-3 text-sm text-ws-ink3">
+              <span className="font-semibold text-ws-ink2">
+                Pass {intent.pass} of {intent.max}
+              </span>
+              <span>Reason: {intent.reason}</span>
+            </p>
+          </div>
+        )}
         {p.origin.type === "run" && (
           <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
             From agent run{" "}
@@ -247,7 +265,12 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
           </p>
         )}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}
-        {open && revision && !shownError && <p className="m-0 text-sm text-ws-ink3">{revision.note}</p>}
+        {open && revision && !shownError && (
+          <p className="m-0 grid gap-0.5 text-sm text-ws-ink3">
+            <span>{revision.note}</span>
+            {revision.was && <span data-was>Was: {revision.was}</span>}
+          </p>
+        )}
         {shownError && (
           <p role="alert" className="m-0 text-sm text-ws-blocked">
             {shownError}
