@@ -54,7 +54,14 @@ const shortened = (summary: string) => {
   return cut.slice(0, 6).join(" ");
 };
 const discusses = /comment draft (\S+) on \S+, drafted from agent run (\S+?)\./i;
-const asksForTextEdit = /\b(update|rewrite|revise|redraft|reword|edit|draft)\b.*\b(description|title)\b|\b(description|title)\b.*\b(update|rewrite|revise|edit)\b/;
+const EDIT_VERBS = "update|rewrite|revise|redraft|reword|edit|draft|write|fix|improve|tighten";
+/** A verb that edits text, a few words on, and the description or title it edits: "draft an update to the ticket description". */
+const asksForTextEdit = new RegExp(`\\b(?:${EDIT_VERBS})\\b(?:\\s+\\S+){0,6}?\\s+(?:the\\s+|this\\s+|its\\s+|that\\s+)?(?:description|title)\\b|\\b(?:description|title)\\b.*\\b(?:update|rewrite|revise|edit)\\b`);
+/** A request whose object is a comment: the verb is followed, past only articles and adjectives, by "comment". Merely mentioning one is not. */
+const COMMENT_VERBS = "draft|write|post|leave|add|make|compose|send|create|edit|revise|rewrite|update|reply|nudge|ping";
+const actsOnComment = new RegExp(`\\b(?:${COMMENT_VERBS})\\b(?:\\s+(?:an?|the|my|this|that|your|jira|short|quick|brief|new|follow-?up|small)){0,3}\\s+comment\\b`);
+const ANY_KEY = "([A-Za-z][A-Za-z0-9]+-\\d+)";
+const TICKET_WORDS = "(?:ticket\\s+|issue\\s+)?";
 const asksToRevise = /\b(shorten|shorter|tighten|trim|rewrite|reword|rephrase|revise)\b/;
 const asksForShorter = /\b(shorten|shorter|tighten|trim)\b/;
 
@@ -99,6 +106,20 @@ function findings(runs: readonly Run[]): string {
   if (!done.length) return "No agent has finished yet.";
   const line = (r: Run) => `- **${r.item?.key ?? r.spec.repo}** ${resultHeadline(jiraNote(r.result ?? "").text) ?? "finished without a written answer"}`;
   return `${done.length} ${done.length === 1 ? "run has" : "runs have"} finished:\n${done.slice(0, FINDINGS_SHOWN).map(line).join("\n")}${done.length > FINDINGS_SHOWN ? `\n…and ${done.length - FINDINGS_SHOWN} more.` : ""}`;
+}
+
+/**
+ * The ticket a text edit is for: the one the request attaches to the description or title ("description of CA-401", "CA-401's title"),
+ * else the open one, else the first key written anywhere. A key mentioned in passing ("since CA-271 found") doesn't take the edit from the open ticket.
+ */
+function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
+  const attached =
+    new RegExp(`\\b${ANY_KEY}(?:'s|\u2019s)?\\s+(?:description|title)\\b`, "i").exec(prompt)?.[1] ??
+    new RegExp(`\\b(?:description|title)s?\\s+(?:of|for|on|in|at)\\s+(?:the\\s+)?${TICKET_WORDS}${ANY_KEY}\\b`, "i").exec(prompt)?.[1];
+  const key = (attached ?? (context.item ? null : new RegExp(`\\b${ANY_KEY}\\b`).exec(prompt)?.[1]))?.toUpperCase();
+  if (!key) return context.item;
+  if (context.item?.key.toUpperCase() === key) return context.item;
+  return { connectionId: context.item?.connectionId ?? context.selection[0]?.connectionId ?? "mock", externalId: key, key };
 }
 
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
@@ -165,14 +186,8 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       discussed: talked[1],
     };
   }
-  if (asksForTextEdit.test(q) && !/\bcomment\b/.test(q)) {
-    const named = KEY.exec(prompt)?.[1];
-    // A ticket the request names wins over the one that happens to be open.
-    const target: ItemRef | null = named
-      ? context.item?.key === named
-        ? context.item
-        : { connectionId: context.item?.connectionId ?? context.selection[0]?.connectionId ?? "mock", externalId: named, key: named }
-      : context.item;
+  if (asksForTextEdit.test(q) && !actsOnComment.test(q)) {
+    const target = rewriteTarget(prompt, context);
     if (!target) {
       return { steps: [], text: "Which ticket? Open it and ask again, and I'll draft the new text for you to review.", filter: null, draft: null };
     }

@@ -155,6 +155,51 @@ describe("the scripted Pip and a description edit", () => {
     expect(backend.connector.item(ref())!.body).toEqual(open.body);
   });
 
+  it.each([
+    "Update the description to address the reviewer's comment",
+    "update the description to include the reviewer comment",
+    "Rewrite the description so it answers the comment from Sam",
+    "Revise the title to match what the last comment says",
+  ])("edits the text when a comment is only mentioned: %s", (prompt) => {
+    const s = scriptPip(prompt, context);
+    expect(s.rewrite?.item).toBe(context.item);
+    expect(s.draft).toBeNull();
+  });
+
+  it.each([
+    "Draft a comment about the description",
+    "Leave a comment on the title",
+    "Write a short comment saying the description is outdated",
+    "Add a comment to update the description",
+    "Post a Jira comment about the title",
+    "Edit the comment on this ticket",
+  ])("leaves a request that acts on a comment on the comment path: %s", (prompt) => {
+    const s = scriptPip(prompt, context);
+    expect(s.rewrite).toBeUndefined();
+  });
+
+  it("answers a plain comment request with a comment draft", () => {
+    for (const prompt of ["Draft a comment about the description", "Leave a comment on the title"]) expect(scriptPip(prompt, context).draft?.intent.type, prompt).toBe("comment");
+  });
+
+  it.each([
+    ["Update the description of CA-401 since CA-271 found a gap", "CA-401"],
+    ["Update CA-401's description since CA-271 found a gap", "CA-401"],
+    ["Rewrite the title for ticket ca-401 now that CA-271 landed", "CA-401"],
+    ["update the description of devops-473", "DEVOPS-473"],
+    ["Update the description on issue DEVOPS-473 because DEVOPS-471 changed", "DEVOPS-473"],
+  ])("takes the key attached to the edit, in any case, over one mentioned in passing: %s", (prompt, key) => {
+    expect(scriptPip(prompt, context).rewrite?.item.key).toBe(key);
+    expect(scriptPip(prompt, { ...context, item: null }).rewrite?.item.key).toBe(key);
+  });
+
+  it("keeps the open ticket when the only other key is mentioned in passing, and falls back to it when none is open", () => {
+    const prompt = "Update the description to follow what CA-271 found";
+    expect(scriptPip(prompt, context).rewrite?.item).toBe(context.item);
+    expect(scriptPip(prompt, { ...context, item: null }).rewrite?.item.key).toBe("CA-271");
+    expect(scriptPip("Update the description of devops-471", context).rewrite?.item).toBe(context.item);
+  });
+
   it("leaves comment requests alone", () => {
     const s = scriptPip("Draft a comment about the description", context);
     expect(s.rewrite).toBeUndefined();
