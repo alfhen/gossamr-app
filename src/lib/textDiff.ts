@@ -1,3 +1,6 @@
+/** The most cells of the matching table a diff may fill; a pair of descriptions that would need more is shown as everything removed and everything added. */
+export const MAX_DIFF_CELLS = 4_000_000;
+
 export type DiffLine = { kind: "same" | "add" | "del"; text: string };
 export type DiffRow = DiffLine | { kind: "gap"; count: number };
 
@@ -11,6 +14,14 @@ export function diffLines(from: string, to: string): DiffLine[] {
   while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
   const x = a.slice(head, a.length - tail);
   const y = b.slice(head, b.length - tail);
+  if ((x.length + 1) * (y.length + 1) > MAX_DIFF_CELLS) {
+    return [
+      ...a.slice(0, head).map((text): DiffLine => ({ kind: "same", text })),
+      ...x.map((text): DiffLine => ({ kind: "del", text })),
+      ...y.map((text): DiffLine => ({ kind: "add", text })),
+      ...a.slice(a.length - tail).map((text): DiffLine => ({ kind: "same", text })),
+    ];
+  }
   const width = y.length + 1;
   const table = new Uint32Array((x.length + 1) * width);
   for (let i = x.length - 1; i >= 0; i--) {

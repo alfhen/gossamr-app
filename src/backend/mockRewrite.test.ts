@@ -135,6 +135,26 @@ describe("the scripted Pip and a description edit", () => {
     expect(s.rewrite?.item.key).toBe("DEVOPS-473");
   });
 
+  it("drafts for the ticket the request names, not the one that happens to be open", () => {
+    const other = ref("DEVOPS-473");
+    expect(scriptPip("Update the description of DEVOPS-473 to match the scope findings", context).rewrite?.item).toEqual(other);
+    expect(scriptPip("Update the description of DEVOPS-473", { ...context, item: null }).rewrite?.item).toEqual(other);
+    expect(scriptPip(`Update the description of ${KEY}`, context).rewrite?.item).toBe(context.item);
+    expect(scriptPip("Update the description", context).rewrite?.item).toBe(context.item);
+    expect(scriptPip("Update the description of DEVOPS-473", context).text).toContain("DEVOPS-473");
+  });
+
+  it("is drafted on, and approving changes, the named ticket", async () => {
+    const backend = new MockBackend();
+    const open = backend.connector.item(ref())!;
+    const named = backend.connector.item(ref("DEVOPS-473"))!;
+    const p = (await backend.pipRewrite(scriptPip("Update the description of DEVOPS-473", context).rewrite!.item, "description", "r3")) as Awaited<ReturnType<typeof backend.proposals.draft>>;
+    expect(p.intent.type === "rewrite" && p.intent.item.key).toBe("DEVOPS-473");
+    await backend.proposalsApprove(p.id);
+    expect(backend.connector.item(ref("DEVOPS-473"))!.body).not.toEqual(named.body);
+    expect(backend.connector.item(ref())!.body).toEqual(open.body);
+  });
+
   it("leaves comment requests alone", () => {
     const s = scriptPip("Draft a comment about the description", context);
     expect(s.rewrite).toBeUndefined();

@@ -167,7 +167,12 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   }
   if (asksForTextEdit.test(q) && !/\bcomment\b/.test(q)) {
     const named = KEY.exec(prompt)?.[1];
-    const target: ItemRef | null = context.item ?? (named ? { connectionId: context.selection[0]?.connectionId ?? "mock", externalId: named, key: named } : null);
+    // A ticket the request names wins over the one that happens to be open.
+    const target: ItemRef | null = named
+      ? context.item?.key === named
+        ? context.item
+        : { connectionId: context.item?.connectionId ?? context.selection[0]?.connectionId ?? "mock", externalId: named, key: named }
+      : context.item;
     if (!target) {
       return { steps: [], text: "Which ticket? Open it and ask again, and I'll draft the new text for you to review.", filter: null, draft: null };
     }
