@@ -26,6 +26,9 @@ import { useRuns } from "./runsStore";
 import { Rail } from "./Rail";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
+import { ManagerBar } from "./ManagerBar";
+import { ManagerInbox } from "./ManagerInbox";
+import { useManagerOn } from "./managerProto";
 import { ConnectGithubDialog } from "./ConnectGithub";
 import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
@@ -91,6 +94,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   const choiceConnection = useWorkspace((s) => s.connections.find((c) => c.id === choice?.connectionId));
   const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const agentsEnabled = useAgentsEnabled();
+  const manager = useManagerOn();
   useGlobalKeys();
   usePipView();
 
@@ -178,12 +182,14 @@ export function Workspace({ backend }: { backend: Backend }) {
             {route === "workspace" && <Canvas />}
             {route === "activity" && <ActivityView />}
             {route === "agents" && agentsEnabled && <AgentsView />}
+            {route === "manager" && manager && <ManagerInbox />}
             {route === "settings" && <Settings />}
           </div>
           <PeekSheet />
           {agentsEnabled && <AgentSheets />}
           {!pipOpen && <PipLauncher />}
           <SelectionAsk />
+          {manager && <ManagerBar />}
         </main>
         {pipOpen && <PipPane onClose={() => setPipOpen(false)} />}
         {paletteOpen && <Palette />}

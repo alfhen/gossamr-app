@@ -3,6 +3,7 @@ import { containerRef, itemRef } from "./mockConnector";
 import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, subtaskProposals, ticketBody, ticketFromAnswer, ticketKeys, ticketProposal } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
 import { docFromText, docText } from "../lib/docs";
+import { MANAGER_REPO, MANAGER_SEEDS, SECOND_PASS_TRAIL, type Finish } from "./mockManager";
 import type { MockProposals } from "./mockProposals";
 import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, planLabel, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
 
@@ -88,6 +89,15 @@ const SEEDS: Seed[] = [
   { key: "CA-377", name: "ca-377-stock-sync-d6e7", state: "working", minutesAgo: 70, quietMinutes: 40, over: { lastDetail: "Running the integration tests", tokens: 802_000 } },
   { key: "SUP-9", name: "sup-9-export-timeout-f8a9", state: "failed", minutesAgo: 30, over: untrusted("/Users/sample/Code/storefront") },
 ];
+
+/** The five runs of the Pip-as-manager prototype, all working. */
+const MANAGER_RUNS: Seed[] = MANAGER_SEEDS.map((m) => ({
+  key: m.key,
+  name: m.name,
+  state: "working",
+  minutesAgo: m.minutesAgo,
+  over: { spec: specFor(m.key, m.name, MANAGER_REPO, m.kind), lastDetail: m.last, tokens: m.tokens },
+}));
 
 /** A sample plan run's answer: the plan a person reads, edits and approves, then the note for the ticket. */
 export const SCRIPTED_PLAN_RESULT = `## Approach
@@ -300,6 +310,14 @@ export interface MockRunsOptions {
   cap?: number;
   /** Starts with a run draft Pip proposed, carrying a focus note, for the setup sheet's Pip box. */
   pipRun?: boolean;
+  /** The Pip-as-manager prototype: five working runs that the scenario finishes one by one. */
+  manager?: boolean;
+}
+
+interface TrailEntry {
+  kind: string;
+  text: string;
+  detail?: string | null;
 }
 
 /** Where the sample clones are, by repository; `acme/ops` has none, to show the blocked state. */
@@ -330,6 +348,8 @@ export class MockRuns {
   private openListeners = new Set<(runId: string) => void>();
   private seq = 0;
   private tick = 0;
+  /** What the prototype's runs did and what happened to them, in order; a run listed here has this as its timeline. */
+  private trail = new Map<string, TrailEntry[]>();
   /** Run ids passed to `attach`, for tests. */
   readonly attached: string[] = [];
 
@@ -360,8 +380,9 @@ export class MockRuns {
     this.claude = o.environment ?? "ok";
     this.limits = { ...this.limits, maxRuns: o.cap ?? 6 };
     this.pipRun = !!o.pipRun;
-    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : SEEDS;
+    const seeds = o.manager ? MANAGER_RUNS : o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
+    if (o.manager) this.runs.forEach((r, i) => this.trail.set(r.id, MANAGER_SEEDS[i].trail.map(([kind, text]) => ({ kind, text }))));
     this.proposals.onApplied = (p) => p.origin.type === "run" && p.intent.type === "create" && this.changed();
     for (const r of this.runs) {
       if (r.state === "done" && r.branch && (r.item?.key === "DEVOPS-455" || r.spec.kind === "build")) this.changes.set(r.id, sampleChange(r.spec, "pullRequest"));
@@ -611,6 +632,56 @@ export class MockRuns {
     const problem = answerProblem(text);
     if (problem) throw new Error(problem);
     const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now() });
+    this.note(id, { kind: "you", text: "You answered", detail: text });
+    this.changed();
+    return next;
+  }
+
+  private note(id: string, entry: TrailEntry) {
+    const trail = this.trail.get(id);
+    if (trail) this.trail.set(id, [...trail, entry]);
+  }
+
+  /** Prototype: ends a run with a scripted answer. The backend's own draft on finish is left to Pip. */
+  finishScripted(id: string, f: Finish): Run {
+    const at = this.now();
+    const next = this.update(id, { state: "done", result: f.result, summary: f.summary, resultComplete: true, tokens: f.tokens, endedAt: at, lastProgressAt: at, needs: null, suggestedReply: null, lastDetail: null });
+    this.note(id, { kind: "done", text: "Wrote up what it found", detail: f.result });
+    this.changed();
+    return next;
+  }
+
+  /** Prototype: stops a run on a question for the person. */
+  askScripted(id: string, question: string, options: string[], f: Finish): Run {
+    const at = this.now();
+    const next = this.update(id, { state: "needsAnswer", needs: question, suggestedReply: options[0] ?? null, tokens: f.tokens, lastProgressAt: at, lastDetail: "Waiting for an answer" });
+    this.note(id, { kind: "ask", text: "Is waiting for an answer", detail: question });
+    this.changed();
+    return next;
+  }
+
+  /** Prototype: sends a finished run back for another pass with Pip's message. */
+  sendBack(id: string, send: { reason: string; message: string; pass: number }): Run {
+    const run = this.get(id);
+    if (run?.state !== "done") throw new Error("only a finished run can be sent back");
+    const at = this.now();
+    const next = this.update(id, { state: "working", result: null, summary: null, endedAt: null, lastProgressAt: at, lastDetail: "Starting another pass", pip: null, passes: (run.passes ?? 0) + 1 });
+    this.note(id, { kind: "pass", text: `Pip asked for another pass: ${send.reason}`, detail: send.message });
+    this.changed();
+    return next;
+  }
+
+  /** Prototype: the work a second pass does, once the person has approved the send-back. */
+  secondPass(id: string) {
+    for (const [kind, text] of SECOND_PASS_TRAIL) this.note(id, { kind, text });
+    this.update(id, { lastDetail: "Running the fixed-amount coupon checks", tokens: (this.get(id)?.tokens ?? 0) + 20_000 });
+    this.changed();
+  }
+
+  /** Prototype: what Pip decided about a finished run. */
+  setVerdict(id: string, verdict: Run["pip"]): Run {
+    const next = this.update(id, { pip: verdict });
+    if (verdict) this.note(id, { kind: "pip", text: verdict.kind === "nothing" ? "Pip checked the result: nothing to do" : verdict.text });
     this.changed();
     return next;
   }
@@ -907,6 +978,8 @@ export class MockRuns {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
     const at = (n: number) => new Date(Date.parse(run.queuedAt) + n * MINUTE).toISOString();
+    const trail = this.trail.get(id);
+    if (trail) return trail.map((t, i) => ({ runId: id, seq: i + 1, at: at(i * 2), kind: t.kind, text: t.text, detail: t.detail ?? null }));
     const started: [string, string, string | null] = ["start", "Created the worktree and started", `git worktree add ${run.expectedWorktree}`];
     if (run.state === "queued") return [];
     if (run.state === "launching") return [{ runId: id, seq: 1, at: at(0), kind: started[0], text: started[1], detail: started[2] }];

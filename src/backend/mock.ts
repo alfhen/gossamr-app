@@ -31,6 +31,7 @@ import type {
   RunSpec,
   RunsChanged,
   RunsEnabledChange,
+  RunVerdict,
   AgentSettings,
   Snapshot,
   Status,
@@ -47,6 +48,7 @@ import { targetOf } from "../lib/proposals";
 import { MockProposals } from "./mockProposals";
 import { MockRuns } from "./mockRuns";
 import { seedDrafts } from "./mockDrafts";
+import type { Finish, ManagerApi } from "./mockManager";
 import type { MockOptions } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
 import type { Backend, ReadScope } from "./types";
@@ -363,7 +365,7 @@ function withFiles(body: string, files: Uploaded[]): AdfNode {
   return { type: "doc", content: [...paragraphs, ...media] };
 }
 
-export class MockBackend implements Backend {
+export class MockBackend implements Backend, ManagerApi {
   readonly kind = "mock" as const;
   private snap = sampleSnapshot();
   private listeners = new Set<(s: Snapshot) => void>();
@@ -380,7 +382,7 @@ export class MockBackend implements Backend {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined);
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
-    this.runs = new MockRuns(this.proposals, options.runs);
+    this.runs = new MockRuns(this.proposals, options.manager ? { ...options.runs, manager: true } : options.runs);
     this.runs.ticketText = (ref) => {
       const w = this.connector.item(ref);
       if (!w) return null;
@@ -411,6 +413,9 @@ export class MockBackend implements Backend {
       }
       case "create":
         return [this.connector.createItem(intent.container, intent.fields)];
+      case "followUp":
+        this.runs.sendBack(intent.run, intent);
+        return [];
       case "startRun":
         throw new Error("A run is approved with its own button");
       default:
@@ -604,8 +609,38 @@ export class MockBackend implements Backend {
   }
 
   /** Stores a draft the way the assistant would, for the scripted Pip. */
-  async pipDraft(intent: Intent, label: string | null, requestId: string) {
-    return this.proposals.draft(intent, label, requestId);
+  async pipDraft(intent: Intent, label: string | null, requestId: string, revision?: { note: string; was: string }) {
+    return this.proposals.draft(intent, label, requestId, revision);
+  }
+
+  managerRun(key: string) {
+    return this.runs.list().find((r) => r.item?.key === key) ?? null;
+  }
+
+  async managerFinish(runId: string, finish: Finish) {
+    return this.runs.finishScripted(runId, finish);
+  }
+
+  async managerAsk(runId: string, question: string, options: string[], finish: Finish) {
+    return this.runs.askScripted(runId, question, options, finish);
+  }
+
+  async managerAdvance(runId: string) {
+    this.runs.advance(runId);
+    return this.runs.get(runId);
+  }
+
+  async managerVerdict(runId: string, verdict: RunVerdict) {
+    return this.runs.setVerdict(runId, verdict);
+  }
+
+  async managerSecondPass(runId: string) {
+    this.runs.secondPass(runId);
+  }
+
+  /** Approves a draft Pip was allowed to act on by itself. */
+  async pipApprove(id: string) {
+    return this.proposals.approve(id);
   }
 
   pipRuns() {
@@ -684,6 +719,9 @@ export class MockBackend implements Backend {
         return true;
       case "link":
         this.connector.link(intent.from, intent.to, intent.kind);
+        return true;
+      case "followUp":
+        this.runs.sendBack(intent.run, intent);
         return true;
       case "startRun":
         throw new Error("A run is approved with its own button");

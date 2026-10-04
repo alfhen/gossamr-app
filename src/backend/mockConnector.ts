@@ -113,6 +113,13 @@ function catalogOf(size: number): Project[] {
   ];
 }
 
+/** The prototype's campaigns project: the same key, with the workflow the scenario's tickets move through. */
+const MANAGER_CA: Project = {
+  key: "CA",
+  name: "Webshop checkout",
+  statuses: [["To Do", "todo"], ["In Progress", "active"], ["In Review", "active"], ["Blocked", "active"], ["Done", "done"]],
+};
+
 const CATALOG_PAGE = 50;
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-");
@@ -192,6 +199,30 @@ const ROWS: Row[] = [
   row("SUP-13", "task", "Change delivery address", "Resolved", "klara", 3),
   row("SUP-14", "bug", "Tracking link gives a 404", "Investigating", "byron", 10, { labels: ["bug"] }),
   row("SUP-15", "task", "Wholesale account request", "New", undefined, 6),
+];
+
+/** The Pip-as-manager prototype's tickets. They replace the sample campaigns so the keys read as one project. */
+const MANAGER_ROWS: Row[] = [
+  row("CA-271", "bug", "Percentage coupons stop applying after a cart edit", "In Progress", "mette", 1, { priority: "high", labels: ["checkout", "coupons"], body: "Customers report that a percentage coupon (for example SPRING10) stops applying after they change a quantity in the cart.\n\nSeen on the web shop only.\n\nFix it." }),
+  row("CA-401", "bug", "Shipping estimate ignores the free-shipping threshold", "To Do", "sam", 3, { labels: ["shipping"], body: "Customers with a 460 DKK cart see a shipping cost in the estimate widget although free shipping should apply." }),
+  row("CA-355", "bug", "Category page still shows deleted products", "In Progress", "jonas", 20, { priority: "low", labels: ["catalog"], body: "Category pages still list a product after it was deleted in the PIM. Reported by support on 12 September." }),
+  row("CA-388", "bug", "Guest checkout address validation times out", "In Progress", "priya", 4, { priority: "high", labels: ["checkout", "performance"], body: "Guest checkout times out at the address validation step under load (p95 12 s). Needs a decision on which endpoint to keep." }),
+  row("CA-412", "task", "Verify fixed-amount coupons after the fix", "To Do", "me", 1, { labels: ["coupons", "qa"], body: "Verify percentage and fixed-amount coupons once the CA-271 fix is in." }),
+  row("CA-420", "story", "Back off and retry when Klaviyo returns 429", "In Review", "jonas", 3, { priority: "high", labels: ["klaviyo"], body: "Overnight rollouts fail when Klaviyo returns 429. Batches should back off and retry instead of failing the whole campaign." }),
+  row("CA-409", "task", "Update the size guide table on product pages", "Done", "priya", 6, { priority: "low", labels: ["pdp"], body: "Replace the size guide table with the 2026 measurements." }),
+  row("CA-433", "task", "Cart drawer buttons have no accessible names", "To Do", "sam", 2, { labels: ["a11y"], body: "The quantity and remove buttons in the cart drawer are announced as \"button\"." }),
+  row("CA-396", "task", "Move product images to the new CDN host", "In Review", "mette", 5, { labels: ["infra"], body: "Point product image URLs at the new CDN host and keep the old one as a fallback for a week." }),
+  row("CA-440", "bug", "Payment sandbox credentials expired", "Blocked", "me", 1, { priority: "highest", labels: ["payments"], body: "The payment sandbox credentials expired on 1 October. Blocks sandbox checks such as CA-412." }),
+];
+
+const MANAGER_COMMENTS: [key: string, author: PersonId, minutesAgo: number, text: string][] = [
+  ["CA-271", "mette", 60 * 24 * 2, "Reproduced with SPRING10 on the web shop. Only after changing a quantity."],
+  ["CA-271", "sam", 60 * 24, "Could be the price cache. I asked an agent to look."],
+  ["CA-401", "ida", 60 * 24 * 3, "Seen on three support tickets this week."],
+  ["CA-355", "priya", 60 * 24, "I could not reproduce it on production today."],
+  ["CA-388", "klara", 60 * 24 * 4, "Timeouts started with the Black Week traffic."],
+  ["CA-420", "priya", 60 * 3, "Looks good, one question on the jitter."],
+  ["CA-440", "mette", 60 * 24, "Waiting on the PSP to reissue them."],
 ];
 
 const LINKS: [string, string, WorkLink["kind"]][] = [
@@ -299,13 +330,16 @@ export class MockConnector {
     private readonly onChange: (c: Change) => void = () => {},
     options: MockOptions = {},
   ) {
-    this.catalog = catalogOf(options.catalogSize ?? PROJECTS.length);
+    const manager = !!options.manager;
+    this.catalog = catalogOf(options.catalogSize ?? PROJECTS.length).map((p) => (manager && p.key === "CA" ? MANAGER_CA : p));
     this.watch = new MockWatch(MOCK_CONNECTION, this.catalog.length);
     this.containers = this.catalog.map((p) => ({ ref: containerRef(p.key), key: p.key, name: p.name, workflow: workflowOf(p) }));
     const at = (minutes: number) => new Date(this.now - minutes * 60_000).toISOString();
     const statusIn = (project: string, name: string) => this.containers.find((c) => c.key === project)!.workflow.statuses.find((s) => s.name === name)!;
 
-    for (const r of ROWS) {
+    const rows = manager ? [...ROWS.filter((r) => projectOf(r.key) !== "CA"), ...MANAGER_ROWS] : ROWS;
+    const known = (key: string) => rows.some((r) => r.key === key);
+    for (const r of rows) {
       const project = projectOf(r.key);
       const updated = at(r.age * 24 * 60);
       this.items.set(r.key, {
@@ -330,25 +364,25 @@ export class MockConnector {
       this.nextNumber[project] = Math.max(this.nextNumber[project] ?? 0, Number(r.key.split("-")[1]) + 1);
       this.record(r.key, "itemCreated", "mette", at((r.age + 30) * 24 * 60), null);
     }
-    for (const [key, author, minutes, to, quoted, text] of REPLIES) {
+    for (const [key, author, minutes, to, quoted, text] of REPLIES.filter(([k]) => known(k))) {
       const reply = replyDoc(to, PEOPLE[to], quoted, text);
       this.record(key, "commentAdded", author, at(minutes), { text: docText(reply), doc: reply });
       const item = this.items.get(key)!;
       item.commentCount += 1;
       item.lastCommenter = personRef(author);
     }
-    for (const [from, to, kind] of LINKS) {
+    for (const [from, to, kind] of LINKS.filter(([f, t]) => known(f) && known(t))) {
       const item = this.items.get(from)!;
       item.links = [...item.links, { from: itemRef(from), to: itemRef(to), kind }];
     }
-    for (const [key, author, minutes, text] of [...COMMENTS, ...MORE_COMMENTS]) {
+    for (const [key, author, minutes, text] of [...COMMENTS, ...MORE_COMMENTS, ...(manager ? MANAGER_COMMENTS : [])].filter(([k]) => known(k))) {
       this.record(key, "commentAdded", author, at(minutes), text.includes("@Alf") ? { text, mention: true } : { text });
       const item = this.items.get(key)!;
       item.commentCount += 1;
       item.lastCommenter = personRef(author);
     }
-    for (const [key, actor, minutes, from, to] of [...CHANGES, ...MORE_CHANGES]) this.record(key, "statusChanged", actor, at(minutes), { from, to, text: `${from} → ${to}` });
-    for (const [key, actor, minutes] of ASSIGNMENTS) this.record(key, "assigned", actor, at(minutes), { text: "Assigned to you" });
+    for (const [key, actor, minutes, from, to] of [...CHANGES, ...MORE_CHANGES].filter(([k]) => known(k))) this.record(key, "statusChanged", actor, at(minutes), { from, to, text: `${from} → ${to}` });
+    for (const [key, actor, minutes] of ASSIGNMENTS.filter(([k]) => known(k))) this.record(key, "assigned", actor, at(minutes), { text: "Assigned to you" });
   }
 
   private record(key: string, kind: WorkEvent["kind"], actor: string | null, at: string, payload: unknown) {

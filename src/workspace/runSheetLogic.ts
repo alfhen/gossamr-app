@@ -250,13 +250,16 @@ const TIMELINE_ICON: Record<string, IconName> = {
   done: "check",
   error: "alert",
   stop: "stop",
+  pass: "retry",
+  pip: "eye",
+  you: "check",
 };
 
 export const timelineIcon = (kind: string): IconName => TIMELINE_ICON[kind] ?? "spark";
 
 export type TimelineTone = "find" | "ask" | "err" | "plain";
 
-export const timelineTone = (kind: string): TimelineTone => (kind === "done" ? "find" : kind === "ask" ? "ask" : kind === "error" ? "err" : "plain");
+export const timelineTone = (kind: string): TimelineTone => (kind === "done" ? "find" : kind === "ask" || kind === "pass" || kind === "pip" ? "ask" : kind === "error" ? "err" : "plain");
 
 /** A pending run draft for the same ticket and kind, so choosing Investigate twice opens one draft. With no ticket only the person's own draft is reused: Pip's question is its own, reached from where it was proposed. */
 export function findRunDraft(proposals: Record<string, Proposal> | readonly Proposal[], item: ItemRef | null, kind: RunKind, pr?: number): Proposal | undefined {

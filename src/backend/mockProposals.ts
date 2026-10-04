@@ -17,8 +17,9 @@ export class MockProposals {
   constructor(private readonly apply: (intent: Intent, already: ItemRef[]) => Promise<ItemRef[]>) {}
 
   /** Stores a draft the way the assistant would. */
-  draft(intent: Intent, label: string | null = null, requestId = "sample"): Proposal {
-    return this.store(intent, label, { type: "chat", requestId }, "pip");
+  draft(intent: Intent, label: string | null = null, requestId = "sample", revision?: { note: string; was: string }): Proposal {
+    const made = this.store(intent, label, { type: "chat", requestId }, "pip");
+    return revision ? this.set(made.id, { revisions: [{ at: made.createdAt, note: revision.note, intent, was: revision.was }] }) : made;
   }
 
   /** Stores a draft the person made by hand. */

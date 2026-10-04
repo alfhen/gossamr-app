@@ -347,7 +347,9 @@ export type Intent =
   | { type: "link"; from: ItemRef; to: ItemRef; kind: WorkLink["kind"] }
   | { type: "subtasks"; parent: ItemRef; summaries: string[] }
   /** Never applied with `proposalsApprove`; `runsApprove` starts it, bound to the digest the person read. */
-  | { type: "startRun"; connectionId: string; item: ItemRef | null; spec: RunSpec };
+  | { type: "startRun"; connectionId: string; item: ItemRef | null; spec: RunSpec }
+  /** Prototype: Pip asks a finished run for another pass; approving sends `message` to the run word for word. */
+  | { type: "followUp"; run: string; item: ItemRef | null; message: string; reason: string; pass: number; max: number };
 
 export interface NewWorkItem {
   title: string;
@@ -395,6 +397,8 @@ export interface ProposalRevision {
   at: string;
   note: string;
   intent: Intent;
+  /** What the text said before Pip corrected it. */
+  was?: string;
 }
 
 export interface Proposal {
@@ -526,6 +530,15 @@ export interface Run {
   continuedAt?: string | null;
   /** The ticket made from this run's draft once the person approved it. */
   createdItem?: ItemRef | null;
+  /** Prototype: what Pip as manager decided about the finished run. */
+  pip?: RunVerdict | null;
+  /** Prototype: how many times Pip has sent the run back for another pass. */
+  passes?: number;
+}
+
+export interface RunVerdict {
+  kind: "nothing" | "drafted" | "asked" | "sentBack";
+  text: string;
 }
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */

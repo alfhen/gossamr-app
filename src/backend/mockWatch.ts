@@ -1,3 +1,4 @@
+import { managerOn } from "../workspace/managerProto";
 import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type WatchChange, type WatchMode, type WatchRow, type WatchState } from "../types";
 
 export interface MockOptions {
@@ -8,7 +9,9 @@ export interface MockOptions {
   /** How the device flow ends once the sample waits for it: authorised after `delayMs`, or refused or expired. */
   device?: { delayMs: number; outcome: "authorised" | "denied" | "expired" };
   /** Which scripted agent runs exist, and the moment their ages count back from. */
-  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean };
+  /** The Pip-as-manager prototype's tickets and runs, in place of the sample campaigns project. */
+  manager?: boolean;
+  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; manager?: boolean };
 }
 
 interface Stored {
@@ -90,13 +93,14 @@ export class MockWatch {
 
 /** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many` or `failures` changes the scripted agent runs, `?runsEnv=missing` or `signedOut` shows the Claude banners, `?runsCap=3` sets how many agents may run at once and `?pipRun=1` starts with a run draft from Pip. */
 export function mockOptionsFromUrl(): MockOptions {
-  if (!import.meta.env.DEV || typeof location === "undefined") return {};
+  const manager = managerOn();
+  if (!import.meta.env.DEV || typeof location === "undefined") return manager ? { manager, runs: { manager, epoch: Date.now() } } : {};
   const params = new URLSearchParams(location.search);
   const count = (name: string) => {
     const n = Number(params.get(name));
     return Number.isInteger(n) && n > 0 ? n : undefined;
   };
-  const options: MockOptions = {};
+  const options: MockOptions = manager ? { manager } : {};
   const projects = count("mockProjects");
   const repos = count("mockRepos");
   if (projects) options.catalogSize = projects;
@@ -112,6 +116,7 @@ export function mockOptionsFromUrl(): MockOptions {
     environment: environment === "missing" || environment === "signedOut" ? environment : "ok",
     cap: count("runsCap"),
     pipRun: params.get("pipRun") === "1",
+    manager,
   };
   return options;
 }

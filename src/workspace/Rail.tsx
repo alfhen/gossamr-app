@@ -10,10 +10,12 @@ import { usePopover } from "./Popover";
 import { projectColour, projectInitials } from "./projects";
 import { useAgentsEnabled } from "./agentsFlag";
 import { usePrefs } from "./prefs";
-import { useAttention } from "./runsStore";
+import { useAttention, useRuns } from "./runsStore";
 import { Icon } from "./AgentIcons";
 import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
+import { useManagerOn, useManager } from "./managerProto";
+import { waitingItems } from "./managerLogic";
 import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watchLogic";
 
 /** Fixed so the scrolling project list can't clip it. */
@@ -197,6 +199,39 @@ function ProjectsMenuButton({ rest, colourOf, noun }: Pick<ProjectsMenuPanelProp
   );
 }
 
+function InboxIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="size-[19px] fill-none stroke-current" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3.5 13.5 6 5.5h12l2.5 8" />
+      <path d="M3.5 13.5V18a1.5 1.5 0 0 0 1.5 1.5h14a1.5 1.5 0 0 0 1.5-1.5v-4.5h-5a3.5 3.5 0 0 1-7 0z" />
+    </svg>
+  );
+}
+
+/** How many things are waiting for the person, for the prototype's Waiting for you badge. */
+function useWaiting(): number {
+  const proposals = useWorkspace((s) => s.proposals);
+  const runs = useRuns((s) => s.runs);
+  const read = useManager((s) => s.read);
+  const reviewing = useManager((s) => s.reviewFinished);
+  return waitingItems(Object.values(proposals), runs, read, reviewing).length;
+}
+
+function WaitingButton({ route }: { route: string }) {
+  const waiting = useWaiting();
+  const label = waiting > 0 ? `Waiting for you, ${waiting}` : "Waiting for you";
+  return (
+    <RailButton label={label} current={route === "manager"} onClick={() => useTabs.getState().setRoute("manager")} className={`text-lg ${plain(route === "manager")}`}>
+      <InboxIcon />
+      {waiting > 0 && (
+        <span aria-label={`${waiting} waiting`} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
+          {waiting > 99 ? "99+" : waiting}
+        </span>
+      )}
+    </RailButton>
+  );
+}
+
 function BellIcon() {
   return (
     <svg aria-hidden viewBox="0 0 24 24" className="size-[19px] fill-none stroke-current" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
@@ -216,6 +251,7 @@ export function Rail() {
   const unread = useActivity((s) => s.unread + s.codeUnread);
   const agentsEnabled = useAgentsEnabled();
   const attention = useAttention();
+  const manager = useManagerOn();
   const pipOpen = usePrefs((s) => s.pipOpen);
   const setPipOpen = usePrefs((s) => s.setPipOpen);
   const setPaletteOpen = usePrefs((s) => s.setPaletteOpen);
@@ -268,6 +304,7 @@ export function Rail() {
             </span>
           )}
         </RailButton>
+        {manager && agentsEnabled && <WaitingButton route={route} />}
         {agentsEnabled && (
           <RailButton label={attention > 0 ? `Agents, ${attention} ${attention === 1 ? "needs" : "need"} you` : "Agents"} current={route === "agents"} onClick={() => setRoute("agents")} className={`text-lg ${plain(route === "agents")}`}>
             <Icon name="term" className="size-[19px]" />
