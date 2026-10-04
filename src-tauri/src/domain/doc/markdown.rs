@@ -232,7 +232,8 @@ fn parse_blocks(lines: &[&str], mentions: &Mentions) -> Vec<Block> {
             i += 1;
             while i < lines.len() {
                 let closing = lines[i].trim();
-                if closing.len() >= ticks && closing.chars().all(|c| c == mark) {
+                // A closing fence is indented by at most three spaces; four make it code.
+                if indent_of(lines[i]) <= 3 && closing.len() >= ticks && closing.chars().all(|c| c == mark) {
                     i += 1;
                     break;
                 }
@@ -584,6 +585,17 @@ mod tests {
         assert_eq!(doc.blocks.len(), 2);
         let mixed = Doc::from_markdown("```\n~~~\n```", &[]);
         assert_eq!(mixed.blocks, vec![Block::Code { language: None, text: "~~~".into() }]);
+    }
+
+    #[test]
+    fn a_fence_indented_four_spaces_does_not_close_the_block() {
+        for mark in ["~~~", "```"] {
+            let doc = Doc::from_markdown(&format!("{mark}\n    {mark}\nstill code\n{mark}\n\nafter"), &[]);
+            assert_eq!(doc.blocks[0], Block::Code { language: None, text: format!("    {mark}\nstill code") }, "{mark}");
+            assert_eq!(doc.blocks.len(), 2, "{mark}");
+        }
+        let three = Doc::from_markdown("~~~\ncode\n   ~~~\nafter", &[]);
+        assert_eq!((three.blocks.len(), &three.blocks[0]), (2, &Block::Code { language: None, text: "code".into() }));
     }
 
     #[test]
