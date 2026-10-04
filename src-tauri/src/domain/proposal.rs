@@ -37,6 +37,39 @@ impl Patch {
     }
 }
 
+/// The longest title and description a rewrite may set; Jira's own limits.
+pub const SUMMARY_LIMIT: usize = 255;
+pub const DESCRIPTION_LIMIT: usize = 30_000;
+
+/// A title as it read when the rewrite was drafted, and as it would read after.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TitleChange {
+    pub from: String,
+    pub to: String,
+}
+
+/// A description as it read when the rewrite was drafted, and as it would read after. The page gets both as Markdown
+/// next to the documents, so it can show a diff and edit the text without a converter of its own.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct BodyChange {
+    pub from: Doc,
+    pub to: Doc,
+}
+
+impl Serialize for BodyChange {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire<'a> {
+            from: &'a Doc,
+            to: &'a Doc,
+            from_text: String,
+            to_text: String,
+        }
+        Wire { from: &self.from, to: &self.to, from_text: self.from.to_markdown(), to_text: self.to.to_markdown() }.serialize(s)
+    }
+}
+
 /// A write, described neutrally. Only the approval layer hands one to a connector.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -47,6 +80,10 @@ pub enum Intent {
     Update { item: ItemRef, patch: Patch },
     Link { from: ItemRef, to: ItemRef, kind: LinkKind },
     Subtasks { parent: ItemRef, summaries: Vec<String> },
+    /// Replaces an item's title and/or description. Each change carries what it was drafted against, so an approval
+    /// can tell the text moved and refuse instead of overwriting someone else's edit. `flattened` names what the
+    /// description holds that a rewrite turns into plain text (images, tables, panels).
+    Rewrite { item: ItemRef, title: Option<TitleChange>, body: Option<BodyChange>, #[serde(default)] flattened: Vec<String> },
     /// Starts a background agent. Never applied through a tracker: it has its own approval, bound to a digest.
     #[serde(rename_all = "camelCase")]
     StartRun { connection_id: String, item: Option<ItemRef>, spec: RunSpec },
@@ -56,7 +93,7 @@ impl Intent {
     /// The existing item the intent was drafted against, if any.
     pub fn target(&self) -> Option<&ItemRef> {
         match self {
-            Intent::Comment { item, .. } | Intent::Transition { item, .. } | Intent::Update { item, .. } => Some(item),
+            Intent::Comment { item, .. } | Intent::Transition { item, .. } | Intent::Update { item, .. } | Intent::Rewrite { item, .. } => Some(item),
             Intent::Link { from, .. } => Some(from),
             Intent::Subtasks { parent, .. } => Some(parent),
             Intent::StartRun { item, .. } => item.as_ref(),
@@ -271,8 +308,22 @@ pub fn reconcile(proposal: &Proposal, items: &[WorkItem], ctx: &ReconcileContext
             let exists = current.links.iter().any(|l| l.kind == *kind && l.to == *to);
             if exists { retire("the link already exists") } else { Verdict::Keep }
         }
+        Intent::Rewrite { title, body, .. } => reconcile_rewrite(title.as_ref(), body.as_ref(), current),
         Intent::Subtasks { .. } | Intent::Create { .. } | Intent::StartRun { .. } => Verdict::Keep,
     }
+}
+
+/// A rewrite never absorbs someone else's edit into its basis: its text was written against the old one.
+fn reconcile_rewrite(title: Option<&TitleChange>, body: Option<&BodyChange>, current: &WorkItem) -> Verdict {
+    let title_done = title.is_none_or(|t| t.to == current.title);
+    let body_done = body.is_none_or(|b| b.to == current.body);
+    if title_done && body_done {
+        return retire("the ticket already reads that way");
+    }
+    if title.is_some_and(|t| t.from != current.title) || body.is_some_and(|b| b.from != current.body) {
+        return retire("the ticket's text changed since this was drafted");
+    }
+    Verdict::Keep
 }
 
 fn retire(reason: &str) -> Verdict {
@@ -556,5 +607,78 @@ mod tests {
         assert_eq!(json["spec"]["clonePath"], "/Users/me/Code/webshop");
         let back: Intent = serde_json::from_value(json).unwrap();
         assert_eq!(back.target(), Some(&item_ref("1")));
+    }
+
+    fn rewrite_of(item: &WorkItem, title: Option<&str>, body: Option<&str>) -> Proposal {
+        let intent = Intent::Rewrite {
+            item: item.item.clone(),
+            title: title.map(|to| TitleChange { from: item.title.clone(), to: to.into() }),
+            body: body.map(|to| BodyChange { from: item.body.clone(), to: Doc::from_markdown(to, &[]) }),
+            flattened: vec![],
+        };
+        proposal(intent, item)
+    }
+
+    #[test]
+    fn a_rewrite_is_kept_while_the_text_it_replaces_is_unchanged() {
+        let mut item = work_item("1", "todo");
+        item.body = Doc::paragraph("old");
+        let p = rewrite_of(&item, Some("New title"), Some("new"));
+        assert_eq!(run(&p, std::slice::from_ref(&item)), Verdict::Keep);
+        let mut elsewhere = item.clone();
+        elsewhere.status = crate::domain::fixtures::status("doing");
+        elsewhere.comment_count = 3;
+        assert_eq!(run(&p, &[elsewhere]), Verdict::Keep, "only the text it rewrites matters");
+    }
+
+    #[test]
+    fn a_rewrite_is_retired_when_someone_else_changed_the_text_it_replaces() {
+        let mut item = work_item("1", "todo");
+        item.body = Doc::paragraph("old");
+        let p = rewrite_of(&item, Some("New title"), Some("new"));
+        let mut retitled = item.clone();
+        retitled.title = "Someone else's title".into();
+        let mut reworded = item.clone();
+        reworded.body = Doc::paragraph("someone else's text");
+        for changed in [retitled, reworded] {
+            assert!(matches!(run(&p, &[changed]), Verdict::Retire { ref reason } if reason.contains("text changed")));
+        }
+        let only_body = rewrite_of(&item, None, Some("new"));
+        let mut retitled = item.clone();
+        retitled.title = "Other".into();
+        assert_eq!(run(&only_body, &[retitled]), Verdict::Keep, "a title nobody asked to change doesn't matter");
+    }
+
+    #[test]
+    fn a_rewrite_is_retired_once_the_ticket_already_reads_that_way() {
+        let mut item = work_item("1", "todo");
+        item.body = Doc::paragraph("old");
+        let p = rewrite_of(&item, None, Some("new"));
+        let mut done = item.clone();
+        done.body = Doc::from_markdown("new", &[]);
+        assert!(matches!(run(&p, &[done]), Verdict::Retire { ref reason } if reason.contains("already reads")));
+    }
+
+    #[test]
+    fn a_rewrite_serialises_with_markdown_beside_the_documents_and_reads_back() {
+        let item = work_item("1", "todo");
+        let mut with_body = item.clone();
+        with_body.body = Doc::from_markdown("# Old\n\n- a", &[]);
+        let intent = rewrite_of(&with_body, Some("New"), Some("# New\n\n- b")).intent;
+        let json = serde_json::to_value(&intent).unwrap();
+        assert_eq!(json["type"], "rewrite");
+        assert_eq!(json["title"], serde_json::json!({ "from": "Task 1", "to": "New" }));
+        assert_eq!(json["body"]["fromText"], "# Old\n\n- a");
+        assert_eq!(json["body"]["toText"], "# New\n\n- b");
+        assert_eq!(json["body"]["to"]["blocks"][0]["type"], "heading");
+        assert_eq!(json["flattened"], serde_json::json!([]));
+        assert_eq!(serde_json::from_value::<Intent>(json).unwrap(), intent);
+        assert_eq!(intent.target(), Some(&item_ref("1")));
+    }
+
+    #[test]
+    fn a_rewrite_stored_without_flattened_still_reads() {
+        let json = serde_json::json!({ "type": "rewrite", "item": item_ref("1"), "title": null, "body": { "from": { "blocks": [] }, "to": { "blocks": [] } } });
+        assert!(matches!(serde_json::from_value::<Intent>(json).unwrap(), Intent::Rewrite { flattened, .. } if flattened.is_empty()));
     }
 }

@@ -98,6 +98,8 @@ pub struct TrackerCaps {
     pub transitions: TransitionModel,
     pub grouping: Grouping,
     pub custom_workflows: bool,
+    /// Can replace an item's title and description.
+    pub edit_text: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -258,6 +260,14 @@ pub fn comments_from_ticket(connection: &Connection, t: &crate::model::CachedTic
     }
 }
 
+/// What replacing `t`'s description with a `Doc` would flatten to plain text, by name.
+pub fn flattened_by_rewrite(connection: &Connection, t: &crate::model::CachedTicket) -> Vec<String> {
+    match connection.kind {
+        ConnectionKind::Jira => t.description_doc.as_ref().map(jira::flattened).unwrap_or_default(),
+        ConnectionKind::Github => Vec::new(),
+    }
+}
+
 /// A plain-text comment as a document: blank lines separate paragraphs and `@Name` for each of `mentions` becomes a
 /// mention.
 pub fn comment_doc(text: &str, mentions: &[(crate::domain::PersonRef, String)]) -> Doc {
@@ -289,6 +299,10 @@ pub(crate) mod testing {
         pub footprint_calls: std::sync::atomic::AtomicUsize,
         /// What `assigned_outside` returns.
         pub strays: Mutex<Vec<Stray>>,
+        /// What `item` returns instead of the sample ticket, as Jira would after someone edited it.
+        pub live: Mutex<Option<WorkItem>>,
+        /// Makes the tracker say it can't edit text.
+        pub cannot_edit_text: std::sync::atomic::AtomicBool,
     }
 
     impl Recorder {
@@ -304,7 +318,8 @@ pub(crate) mod testing {
     #[async_trait]
     impl WorkTracker for Recorder {
         fn capabilities(&self) -> TrackerCaps {
-            unimplemented!()
+            let edit_text = !self.cannot_edit_text.load(std::sync::atomic::Ordering::SeqCst);
+            TrackerCaps { subtasks: true, mentions: true, attachments: true, transitions: TransitionModel::PerItem, grouping: Grouping::Epics, custom_workflows: true, edit_text }
         }
         async fn search(&self, _: &Filter, _: &SearchOptions) -> Result<Vec<WorkItem>> {
             unimplemented!()
@@ -319,6 +334,9 @@ pub(crate) mod testing {
             unimplemented!()
         }
         async fn item(&self, item: &ItemRef, _: &str) -> Result<WorkItem> {
+            if let Some(live) = self.live.lock().unwrap().clone() {
+                return Ok(live);
+            }
             let connection = Connection { id: item.connection_id.clone(), kind: ConnectionKind::Jira, workspace: "site".into(), account: "me".into(), display_name: "Site".into() };
             let mut fresh = item_from_ticket(&connection, &sample_ticket());
             fresh.item = item.clone();

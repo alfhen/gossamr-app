@@ -173,8 +173,14 @@ impl AgentService {
             handed.insert(r.key.to_uppercase());
             context.unwatched_item = !self.core.is_item_watched(&scope, &r.key).await?;
         }
+        let mut read = std::collections::HashMap::new();
         let item = match &context.item {
-            Some(r) => Some(mcp::describe(&self.core.ticket(&scope, &r.key).await?)),
+            Some(r) => {
+                let (ticket, seen) = self.core.ticket_for_pip(&scope, &r.key).await?;
+                let text = mcp::describe_with(&ticket, &seen.description);
+                read.insert(r.key.to_uppercase(), seen);
+                Some(text)
+            }
             None => None,
         };
         let links = match &context.item {
@@ -196,7 +202,7 @@ impl AgentService {
         let run_id = req.request_id.clone();
         let agent_req = AgentRequest {
             run_id: run_id.clone(),
-            system: context::system_prompt(provider.capabilities().reads_code),
+            system: context::system_prompt(provider.capabilities().reads_code, self.core.can_edit_text(&scope)?),
             prompt: context::compose(&context, item.as_deref(), &links, &drafts, &runs, &req.prompt),
             mcp: self.mcp.endpoint(&run_id)?,
             sandbox,
@@ -205,7 +211,7 @@ impl AgentService {
         };
 
         // Registered before the run starts, since the agent may call the tools straight away.
-        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), mcp::PipRun { scope, handed });
+        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), mcp::PipRun { scope, handed, read });
         self.running.lock().expect("lock poisoned").insert(run_id.clone(), provider.clone());
         let mut events = match provider.run(agent_req).await {
             Ok(e) => e,

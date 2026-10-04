@@ -27,7 +27,7 @@ pub use item::{
     PersonRef, Priority, WorkItem,
 };
 pub use proposal::{
-    reconcile, Basis, CreatedBy, Intent, NewItem, Origin, Patch, Proposal, ProposalQuery, ProposalState, ReconcileContext,
+    reconcile, Basis, BodyChange, CreatedBy, Intent, TitleChange, DESCRIPTION_LIMIT, SUMMARY_LIMIT, NewItem, Origin, Patch, Proposal, ProposalQuery, ProposalState, ReconcileContext,
     Revised, Revision, StateKind, Verdict,
 };
 pub use run::{

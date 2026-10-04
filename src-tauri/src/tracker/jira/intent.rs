@@ -4,7 +4,7 @@ use serde_json::{json, Map, Value};
 
 use super::adf;
 use super::client::{IssueType, RawTransition, RequiredField};
-use crate::domain::{ItemKind, ItemRef, LinkKind, NewItem, Patch, Priority};
+use crate::domain::{BodyChange, ItemKind, ItemRef, LinkKind, NewItem, Patch, Priority, TitleChange};
 
 fn priority_name(p: Priority) -> &'static str {
     match p {
@@ -40,6 +40,18 @@ pub(super) fn update_fields(patch: &Patch) -> Value {
     }
     if let Some(p) = patch.priority {
         fields.insert("priority".into(), json!({ "name": priority_name(p) }));
+    }
+    Value::Object(fields)
+}
+
+/// The fields a rewrite sets. Only what changed is sent, so a title-only rewrite can't touch the description.
+pub(super) fn rewrite_fields(title: Option<&TitleChange>, body: Option<&BodyChange>) -> Value {
+    let mut fields = Map::new();
+    if let Some(t) = title {
+        fields.insert("summary".into(), json!(t.to.trim()));
+    }
+    if let Some(b) = body {
+        fields.insert("description".into(), adf::from_doc(&b.to));
     }
     Value::Object(fields)
 }

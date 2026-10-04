@@ -39,6 +39,11 @@ pub(super) fn comments_from_ticket(connection_id: &str, t: &CachedTicket) -> Vec
     t.comments.iter().map(|c| convert::comment(connection_id, c)).collect()
 }
 
+/// What a description rewrite would flatten to plain text, by name.
+pub(super) fn flattened(doc: &serde_json::Value) -> Vec<String> {
+    adf::flattened(doc)
+}
+
 const CONTAINER_LIMIT: usize = 100;
 /// Rows read per footprint question; the picker needs a ranking, not a census.
 const FOOTPRINT_ROWS: usize = 500;
@@ -136,6 +141,7 @@ impl WorkTracker for JiraTracker {
             transitions: TransitionModel::PerItem,
             grouping: Grouping::Epics,
             custom_workflows: true,
+            edit_text: true,
         }
     }
 
@@ -313,6 +319,10 @@ impl WorkTracker for JiraTracker {
                 }
                 Ok(Applied::default())
             }
+            Intent::Rewrite { item, title, body, .. } => {
+                self.client.update_issue(scope, &item.external_id, intent::rewrite_fields(title.as_ref(), body.as_ref())).await?;
+                Ok(Applied::default())
+            }
             Intent::Link { from, to, kind } => {
                 let body = intent::link_body(from, to, *kind).ok_or_else(not_an_issue_link)?;
                 self.client.link_issues(scope, &body).await?;
@@ -390,7 +400,7 @@ mod tests {
     fn declares_what_jira_can_do() {
         let caps = tracker().capabilities();
         assert_eq!(caps.transitions, TransitionModel::PerItem);
-        assert!(caps.subtasks && caps.mentions && caps.attachments);
+        assert!(caps.subtasks && caps.mentions && caps.attachments && caps.edit_text);
     }
 
     #[tokio::test]
