@@ -213,6 +213,19 @@ fn list_marker(line: &str) -> Option<(bool, usize)> {
     }
 }
 
+/// Leading whitespace in columns, a tab advancing to the next multiple of four.
+fn columns_of(line: &str) -> usize {
+    let mut columns = 0;
+    for c in line.chars() {
+        match c {
+            ' ' => columns += 1,
+            '\t' => columns += 4 - columns % 4,
+            _ => break,
+        }
+    }
+    columns
+}
+
 fn indent_of(line: &str) -> usize {
     line.chars().take_while(|c| *c == ' ').count()
 }
@@ -233,7 +246,7 @@ fn parse_blocks(lines: &[&str], mentions: &Mentions) -> Vec<Block> {
             while i < lines.len() {
                 let closing = lines[i].trim();
                 // A closing fence is indented by at most three spaces; four make it code.
-                if indent_of(lines[i]) <= 3 && closing.len() >= ticks && closing.chars().all(|c| c == mark) {
+                if columns_of(lines[i]) <= 3 && closing.len() >= ticks && closing.chars().all(|c| c == mark) {
                     i += 1;
                     break;
                 }
@@ -596,6 +609,22 @@ mod tests {
         }
         let three = Doc::from_markdown("~~~\ncode\n   ~~~\nafter", &[]);
         assert_eq!((three.blocks.len(), &three.blocks[0]), (2, &Block::Code { language: None, text: "code".into() }));
+    }
+
+    #[test]
+    fn a_tab_counts_to_the_next_multiple_of_four_columns_so_a_tab_indented_fence_does_not_close() {
+        for mark in ["~~~", "```"] {
+            for lead in ["\t", " \t", "  \t", "   \t", "\t\t"] {
+                let doc = Doc::from_markdown(&format!("{mark}\n{lead}{mark}\nstill code\n{mark}\n\nafter"), &[]);
+                assert_eq!(doc.blocks[0], Block::Code { language: None, text: format!("{lead}{mark}\nstill code") }, "{mark} {lead:?}");
+                assert_eq!(doc.blocks.len(), 2, "{mark} {lead:?}");
+            }
+            let closes = Doc::from_markdown(&format!("{mark}\ncode\n   {mark}\nafter"), &[]);
+            assert_eq!(closes.blocks[0], Block::Code { language: None, text: "code".into() }, "{mark}");
+            assert_eq!(closes.blocks.len(), 2);
+        }
+        assert_eq!(columns_of("\t x"), 5);
+        assert_eq!(columns_of("  \t\tx"), 8);
     }
 
     #[test]
