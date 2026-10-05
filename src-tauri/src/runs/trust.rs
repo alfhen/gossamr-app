@@ -25,7 +25,7 @@ fn accepted(config: &Value, folder: &Path) -> bool {
 pub fn is_trusted(config_dir: &Path, folder: &Path) -> Option<bool> {
     let text = std::fs::read_to_string(config_file(config_dir)?).ok()?;
     let config: Value = serde_json::from_str(&text).ok()?;
-    config.get("projects")?;
+    config.get("projects")?.as_object()?;
     let real = folder.canonicalize().ok();
     Some(accepted(&config, folder) || real.is_some_and(|r| accepted(&config, &r)))
 }
@@ -76,6 +76,8 @@ mod tests {
         assert_eq!(is_trusted(&dir, &dir), None, "no file");
         write(&dir, "not json");
         assert_eq!(is_trusted(&dir, &dir), None);
+        write(&dir, r#"{"projects": null}"#);
+        assert_eq!(is_trusted(&dir, &dir), None, "projects that isn't an object");
         write(&dir, r#"{"numStartups": 3}"#);
         assert_eq!(is_trusted(&dir, &dir), None, "no projects at all: not a config this reads");
         let _ = std::fs::remove_dir_all(dir);
