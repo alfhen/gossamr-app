@@ -32,8 +32,10 @@ pub(super) enum Link {
     Nothing,
 }
 
+/// A finished run, or a stopped one with nothing waiting to be sent: a saved answer is only ever sent to the session it
+/// was written for, so a run that holds one stays with that session until it is sent.
 pub(super) fn at_rest(run: &Run) -> bool {
-    matches!(run.state, RunState::Done | RunState::Stopped)
+    run.state == RunState::Done || (run.state == RunState::Stopped && run.unsent_answer.is_none())
 }
 
 /// The listed sessions that could be `run` carried on. `taken` holds every session id any run has or had.
@@ -146,6 +148,9 @@ impl RunService {
         let id = ShortId::parse(session).ok_or_else(|| refuse("That isn't a session id."))?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
+        if run.state == RunState::Stopped && run.unsent_answer.is_some() {
+            return Err(refuse("This run has an answer waiting to be sent to its own session. Send that first."));
+        }
         if !at_rest(&run) {
             return Err(refuse(format!("This run is {}, so it has no other session to carry on in.", run.state.as_str())));
         }

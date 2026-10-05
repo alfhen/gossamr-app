@@ -278,3 +278,47 @@ async fn a_session_is_not_adopted_while_the_runs_own_has_come_back_to_life() {
     let chosen = rig.svc.adopt_session(&run.id, "c0000009").await.unwrap();
     assert_eq!(chosen.short_id.as_ref().map(ShortId::as_str), Some("c0000009"), "the normal case still adopts");
 }
+
+#[test]
+fn a_stopped_run_with_an_answer_waiting_is_not_at_rest_and_a_finished_one_is() {
+    let mut run = stopped_run();
+    assert!(at_rest(&run));
+    run.unsent_answer = Some("Use staging.".into());
+    assert!(!at_rest(&run));
+    run.state = RunState::Done;
+    assert!(at_rest(&run), "a finished run keeps no answer to send");
+    run.state = RunState::Working;
+    run.unsent_answer = None;
+    assert!(!at_rest(&run));
+}
+
+#[tokio::test]
+async fn a_run_holding_an_unsent_answer_keeps_it_and_is_neither_adopted_nor_offered_a_session() {
+    let (rig, run) = stopped().await;
+    add(&rig, &run, "c0000009", &run.expected_worktree);
+    rig.set(&run, |r| r.unsent_answer = Some("Use staging.".into())).await;
+
+    rig.svc.poll_at(later(2)).await;
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.short_id.clone(), after.unsent_answer.as_deref()), (RunState::Stopped, run.short_id.clone(), Some("Use staging.")));
+    assert!(after.possible_continuations.is_empty() && after.earlier_sessions.is_empty());
+
+    let why = rig.svc.adopt_session(&run.id, "c0000009").await.unwrap_err().to_string();
+    assert!(why.contains("answer waiting to be sent"), "{why}");
+    assert_eq!(rig.get(&run).await.unsent_answer.as_deref(), Some("Use staging."));
+
+    rig.set(&run, |r| r.unsent_answer = None).await;
+    rig.svc.poll_at(later(3)).await;
+    assert_eq!(rig.get(&run).await.short_id.as_ref().map(ShortId::as_str), Some("c0000009"), "without a pending answer the same session is adopted");
+}
+
+#[tokio::test]
+async fn a_pending_answer_can_still_be_sent_again_once_the_poller_has_left_the_run_alone() {
+    let (rig, run) = stopped().await;
+    add(&rig, &run, "c0000009", &run.expected_worktree);
+    rig.set(&run, |r| r.unsent_answer = Some("Use staging.".into())).await;
+    rig.svc.poll_at(later(2)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped);
+    let sent = rig.svc.answer(&run.id, "Use staging.").await.unwrap();
+    assert_eq!((sent.state, sent.unsent_answer), (RunState::Working, None), "the saved answer is still offered and goes to the run's own session");
+}
