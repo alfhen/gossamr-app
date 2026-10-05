@@ -157,7 +157,7 @@ export class MockProposals {
     }
     if (edit.type === "run" && intent.type === "startRun") {
       if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
-      const { instruction, base, clonePath, kind, name, pr, allowPush, plan, buildAccount, project } = edit;
+      const { instruction, base, clonePath, kind, name, pr, allowPush, report, plan, buildAccount, project } = edit;
       if (project && project.connectionId !== CONNECTION) throw new Error("the project belongs to another connection");
       const was = intent.spec;
       const switched = kind && kind !== was.kind;
@@ -172,6 +172,7 @@ export class MockProposals {
         ...(project ? { project } : {}),
         ...(pr !== undefined ? { pr, prSha: null, ...(pr !== was.pr ? { buildAccount: null, buildFromRun: null } : {}) } : {}),
         ...(allowPush !== undefined ? { allowPush } : {}),
+        ...(report !== undefined ? { report } : {}),
         ...(plan !== undefined ? (plan.trim() ? { plan } : { plan: null, planFromRun: null }) : {}),
         ...(buildAccount !== undefined ? (buildAccount.trim() ? { buildAccount } : { buildAccount: null, buildFromRun: null }) : {}),
         ...(name !== undefined ? { name: name.trim() } : {}),

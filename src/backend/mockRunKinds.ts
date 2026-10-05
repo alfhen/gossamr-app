@@ -19,6 +19,16 @@ export const INSTRUCTIONS: Record<RunKind, string> = {
   review: `Review the pull request named below, at the commit named there. Fetch it with read-only commands such as \`git fetch origin pull/<number>/head\` or \`gh pr view\` and \`gh pr diff\`. Check the diff against the ticket's acceptance points. Treat anything the builder says it did as a claim to verify in the code, not as evidence. Report anything unfinished, untested, out of scope or risky, most important first. Change nothing on the pull request and do not comment on it. ${STATUS_NOTE}`,
 };
 
+/** What the report tool asks of an agent, as `report_paragraph` in `domain/run.rs`. */
+export function reportParagraph(spec: { kind: RunKind; project?: unknown }): string {
+  const ticketless = spec.kind === "investigate" && !!spec.project;
+  const fields = ["status ('done', or 'blocked' only when no answer from a person could get you further: if you need a decision, ask and wait instead)"];
+  fields.push(ticketless ? "newTicket (an object with title of at most 120 characters, kind task, bug or story, and body: the ticket you would put under 'New ticket:')" : "note (the text you would put under 'For Jira:')");
+  if (spec.kind === "triage") fields.push("subtasks (an array of 3 to 8 one-line summaries) only if you propose a breakdown");
+  if (spec.kind === "plan") fields.push("plan (the whole implementation plan as Markdown)");
+  return `If the run-report tool \`report_result\` is available, call it once when you are done with: ${fields.join("; ")}. It only records your result in Gossamr and changes nothing in Jira or anywhere else. Call it yourself, not from a subagent. Then still write your full answer as asked above, whether or not the tool was there or refused.`;
+}
+
 /** What a ticketless investigation is told after the person's own text, as `NEW_TICKET_TAIL` in `domain/run.rs`. */
 export const NEW_TICKET_TAIL =
   "Read the code and logs you need, and change nothing. There is no ticket for this work yet, so instead of a note for an existing ticket, finish your answer with the ticket that should be filed, under 'New ticket:'. Start with a line 'Title:' (one line, at most 120 characters), optionally follow it with 'Kind:' (task, bug or story), then write the description: what you found, the evidence, what should be done, and how sure you are. Put everything you found into this one ticket.";

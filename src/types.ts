@@ -448,7 +448,7 @@ export type ProposalEdit =
   /** A new item's fields; the ones left out stay as they are. */
   | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef }
   /** A run draft's settings, as the person edits them; the ones left out stay as they are. */
-  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
+  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; report?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
@@ -490,6 +490,8 @@ export interface RunSpec {
   allowPush?: boolean;
   /** Where the draft ticket of an investigation with no ticket lands. Its presence makes the run end as a ticket; the agent never chooses it. */
   project?: ContainerRef | null;
+  /** Whether the agent is asked to report its result through Gossamr's run-report tool, when Gossamr offers it. */
+  report?: boolean;
 }
 
 export type RunState = "queued" | "launching" | "working" | "needsAnswer" | "needsPermission" | "systemBlocked" | "done" | "failed" | "stopped" | "unknown";
@@ -567,6 +569,26 @@ export interface TicketProposal {
   body: string;
 }
 
+/** How a run's result was read: from its report through the tool, its `For Jira:` section, the whole answer, or only the summary. */
+export type ResultSource = "structured" | "section" | "whole" | "summaryOnly";
+
+/** What came of offering a run the report tool. */
+export interface ReportView {
+  /** The session was given the tool when it launched. */
+  offered: boolean;
+  /** What the agent said about how it ended, when its report is the one in use. */
+  status: "done" | "blocked" | null;
+  revision: number;
+  calls: number;
+  rejections: number;
+  /** A report exists but was made before the person answered or carried on, so the written answer is used. */
+  stale: boolean;
+  /** The tool stopped taking calls for this run: too many, or too many refused. */
+  locked: boolean;
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
 /** What the run sheet shows about a result: the note, the other tickets it names, and the change the run produced. */
 export interface RunOutcome {
   note: JiraNote | null;
@@ -584,6 +606,10 @@ export interface RunOutcome {
   subtasksDraft: { id: string; state: ProposalState } | null;
   /** The full answer couldn't be read, so `note` is only the one-line summary. */
   summaryOnly?: boolean;
+  /** How `note` and the proposals were read. Null while there is no result. */
+  source?: ResultSource | null;
+  /** The report tool's part in this run; null when the run was never asked to use it. */
+  report?: ReportView | null;
   /** For a Plan run: the draft of the whole plan as a comment, in whatever state it is in now. */
   planDraft?: { id: string; state: ProposalState } | null;
   /** For a Plan run on a ticket: the description update that adds its plan, or why there is none. */
@@ -609,6 +635,8 @@ export interface RunReview {
   /** For a review made from a build: the builder's account as it will be sent. */
   buildAccount?: string | null;
   guard: string;
+  /** What the session is also given when the run asks for the result tool and Gossamr's server is running. */
+  report?: { allowed: string; guard: string } | null;
   spec: RunSpec;
   /** The reviewed pull request, as GitHub names it now. */
   prTitle?: string | null;
@@ -674,6 +702,8 @@ export interface AgentSettings {
   terminal: "terminal" | "iTerm";
   /** Draft a Jira comment on the run's ticket when it finishes with a `For Jira:` section. */
   draftOnFinish: boolean;
+  /** Offer new runs the run-report tool, through which an agent hands Gossamr its result as data. */
+  reportResult: boolean;
 }
 
 /** What `claude rm` said: it removed the worktree, or refused and explained in its own words. */

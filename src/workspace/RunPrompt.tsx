@@ -9,6 +9,20 @@ const MARK: Record<Flag, string> = {
   override: "rounded bg-ws-blocked-soft px-0.5 text-ws-blocked",
 };
 
+/** What a launch with the result tool adds beside the guard, said exactly: the one tool, its allow rule and the line added to the guard. */
+export function ReportExtras({ report }: { report?: RunReview["report"] }) {
+  if (!report) return null;
+  return (
+    <div data-report-extras className="grid gap-1.5">
+      <p className="m-0 text-ws-ink2">
+        When Gossamr&apos;s result tool is running, the session is also given one extra tool, <code className="font-mono">report_result</code>, allowed as <code className="font-mono">{report.allowed}</code>. Its address and a token for this run only are in a settings file that only you can read, never on the command line. This line is added to the text above:
+      </p>
+      <pre className={MONO_BLOCK}>{report.guard}</pre>
+      <p className="m-0 text-xs text-ws-ink3">If the tool isn&apos;t running or the setting is off, the agent starts without it and its written answer is read as usual.</p>
+    </div>
+  );
+}
+
 /** Ticket text with the shapes worth a second look marked. The marks are a weak guide and the text says so. */
 export function TicketText({ text }: { text: string }) {
   const spans = highlights(text);

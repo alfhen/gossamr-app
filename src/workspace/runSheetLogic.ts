@@ -1,6 +1,6 @@
 import { answerProblem } from "../lib/answer";
 import { containerKey, itemKey } from "../lib/filter";
-import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type Run, type RunKind, type RunOutcome, type RunReview, type RunSpec, type WorkContainer } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type ResultSource, type Run, type RunKind, type RunOutcome, type RunReview, type RunSpec, type WorkContainer } from "../types";
 import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
@@ -458,6 +458,30 @@ export function runTicketDraftOf(proposals: Record<string, Proposal> | readonly 
 
 /** What the card and the sheet say once the person approved the run's ticket, or null before. */
 export const createdFrom = (run: Pick<Run, "createdItem">) => (run.createdItem ? `Ticket ${run.createdItem.key} created from this` : null);
+
+/** How the result on the sheet was read, as a short chip: where it came from, and whether Gossamr understood its shape. */
+export const SOURCE_CHIP: Record<ResultSource, { label: string; warn: boolean }> = {
+  structured: { label: "Reported to Gossamr", warn: false },
+  section: { label: "Parsed from its For Jira section", warn: false },
+  whole: { label: "Not parsed", warn: true },
+  summaryOnly: { label: "Summary only", warn: true },
+};
+
+/** What the sheet says about the report tool's part in a run, one sentence each; empty when it was never asked to use it. */
+export function reportNotes(outcome: Pick<RunOutcome, "source" | "report"> | null): string[] {
+  const report = outcome?.report;
+  if (!report) return [];
+  const notes: string[] = [];
+  const structured = outcome?.source === "structured";
+  if (report.status === "blocked" && structured) notes.push("It reports it could not finish.");
+  if (!report.offered) notes.push("The report tool wasn't offered to this run (it was off, or its server wasn't running), so Gossamr read its written answer.");
+  else if (report.stale) notes.push("It reported before you answered or carried on, so that report isn't used and Gossamr read its written answer.");
+  else if (report.locked && !structured) notes.push("The tool stopped taking its reports (too many, or too many refused), so Gossamr read its written answer.");
+  else if (report.calls === 0) notes.push("It was given the report tool and didn't use it, so Gossamr read its written answer.");
+  else if (!structured) notes.push("Every report it made was refused, so Gossamr read its written answer.");
+  if (structured && (report.calls > 1 || report.rejections > 0)) notes.push(`It called the tool ${report.calls} times: ${report.rejections} refused, ${report.revision} recorded.`);
+  return notes;
+}
 
 /** What the sheet says about the ticket a run proposed. */
 export function ticketStatus(outcome: Pick<RunOutcome, "ticketDraft"> | null): "none" | "waiting" | "created" | "skipped" | "retired" {

@@ -10,7 +10,7 @@ import { KIND_LABEL, ageText, formatTokens, groupRuns, navOrder, permissionReque
 import { openTicketByKey } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { failureAction } from "./failureActions";
-import { PromptParts } from "./RunPrompt";
+import { PromptParts, ReportExtras } from "./RunPrompt";
 import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
@@ -231,6 +231,7 @@ function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode 
       <PromptParts review={brief} />
       <Details summary="What Gossamr added for the model">
         <pre className={MONO_BLOCK}>{brief.guard}</pre>
+        <ReportExtras report={brief.report} />
       </Details>
     </>
   );
