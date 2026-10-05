@@ -185,6 +185,8 @@ export interface Backend {
   runsStop(id: string): Promise<Run>;
   /** Answers a run that is asking a question: stops its session and wakes it with the answer. Also sends again an answer that was stopped on its way. */
   runsAnswer(id: string, text: string): Promise<Run>;
+  /** Takes a listed session over as the continuation of a stopped or finished run. */
+  runsAdoptSession(id: string, session: string): Promise<Run>;
   /** Stops every active run, across accounts. */
   runsStopAll(): Promise<{ stopped: number; failed: number }>;
   /** Opens Terminal attached to the run's session. */

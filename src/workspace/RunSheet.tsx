@@ -18,6 +18,7 @@ import { cleanupReason } from "./cleanupLogic";
 import { MAY_TOUCH, answerable, breakdownWithPipPrompt, planDescriptionWithPipPrompt, buildFromPlanOptions, canStartNow, descriptionWithPipPrompt, reviewThisControl, reviewThisOptions, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
+import { RunContinuation } from "./RunContinuation";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
 import { askPip } from "./askPip";
@@ -33,6 +34,7 @@ export interface RunSheetActions extends ResultActions {
   stop(): void;
   startNow(): void;
   answer(text: string): void;
+  adoptSession(session: string): Promise<void>;
   retry(): void;
   fix(act: FailureAct): void;
   copied(): void;
@@ -206,7 +208,7 @@ function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTit
         </span>
       )}
       <span>
-        {ended ? "Finished" : "Started"} <b className="font-semibold text-ws-ink">{ageText(run, now)}</b>
+        {run.state === "stopped" ? "Stopped" : ended ? "Finished" : "Started"} <b className="font-semibold text-ws-ink">{ageText(run, now)}</b>
       </span>
       {tokens && <span>{tokens}</span>}
       {run.item && (
@@ -306,6 +308,7 @@ export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, event
           ))}
       </div>
 
+      <RunContinuation key={run.id} run={run} adopt={on.adoptSession} />
       {attention && <Attention run={run} opened={opened} answering={answering} on={on} />}
       {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingBreakdown} drafting={drafting} on={on} />}
       {outcome?.change && <Changes change={outcome.change} on={on} />}
@@ -412,6 +415,7 @@ export function RunSheet({ id }: { id: string }) {
     stop: () => (setConfirmStop(false), void store.stop(id)),
     startNow: () => void store.startNow(id),
     answer: (text) => void store.answer(id, text),
+    adoptSession: (session) => store.adoptSession(id, session),
     retry: () => void store.retryLaunch(id),
     fix: (act) => failureAction(id, act),
     copied: () => store.noteCopied(id),

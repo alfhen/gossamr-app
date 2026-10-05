@@ -68,6 +68,17 @@ describe("the clean up section of the run sheet", () => {
     expect(view({ refused: "worktree has 2 unpushed commits" })).toContain("Claude kept it: worktree has 2 unpushed commits");
   });
 
+  it("offers to try again for an earlier session that was kept, once the worktree is gone", () => {
+    const kept = { worktreeRemovedAt: "2026-09-30T00:00:00Z", earlierSessions: [{ shortId: "a0000001", removed: true }, { shortId: "a0000002", removed: false }] };
+    const html = view({ run: kept, reason: null, refused: "worktree has 1 unpushed commit" });
+    expect(html).toContain("An earlier session of this run is still there.");
+    expect(html).toContain("Claude kept it: worktree has 1 unpushed commit");
+    expect(html).toContain("Try removing again");
+    expect(view({ run: { ...kept, earlierSessions: [{ shortId: "a0000001", removed: true }] }, reason: null })).not.toContain("Try removing again");
+    expect(cleanable(run("done", { worktreeRemovedAt: kept.worktreeRemovedAt, earlierSessions: kept.earlierSessions }))).toBe(true);
+    expect(cleanable(run("done", { worktreeRemovedAt: kept.worktreeRemovedAt, earlierSessions: [] }))).toBe(false);
+  });
+
   it("is absent when there is no reason, and a note once the worktree is gone", () => {
     expect(view({ reason: null })).toBe("");
     const gone = view({ run: { worktreeRemovedAt: "2026-09-30T00:00:00Z" }, reason: null });

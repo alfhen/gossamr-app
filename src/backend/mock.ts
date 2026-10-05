@@ -470,6 +470,10 @@ export class MockBackend implements Backend {
     return this.runs.answer(id, text);
   }
 
+  async runsAdoptSession(id: string, session: string) {
+    return this.runs.adoptSession(id, session);
+  }
+
   async runsStopAll() {
     return this.runs.stopAll();
   }

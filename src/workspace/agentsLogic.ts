@@ -45,7 +45,7 @@ export function laneOf(run: Run, now: number): LaneId {
     case "unknown":
       return "bad";
     case "stopped":
-      return "earlier";
+      return run.stoppedByLimit ? "bad" : "earlier";
   }
 }
 
@@ -74,9 +74,18 @@ const VIEWS: Record<RunState, StateView> = {
 };
 
 /** What a run is called and coloured, with the quiet colour taking over from the working one. */
-export function stateView(run: Pick<Run, "state" | "lastProgressAt">, now: number): StateView {
+export function stateView(run: Pick<Run, "state" | "lastProgressAt" | "stoppedByLimit">, now: number): StateView {
+  if (run.state === "stopped" && run.stoppedByLimit) return { label: "Stopped at limit", tone: "warn", icon: "stop", live: false };
   const view = VIEWS[run.state];
   return quietMinutes(run, now) === null ? view : { ...view, tone: "warn", live: false };
+}
+
+/** What a stopped run says it was left at: that Gossamr stopped it at a limit, that it may have carried on elsewhere, or where it stopped. */
+export function stoppedText(run: Pick<Run, "stoppedByLimit" | "error" | "lastDetail" | "possibleContinuations">): string {
+  const continued = run.possibleContinuations?.length ? "May have continued in another session" : null;
+  const limit = run.stoppedByLimit ? run.error?.trim() || "Stopped at its limit" : null;
+  if (continued && limit) return `${limit.replace(/\.+$/, "")}. ${continued}`;
+  return continued ?? limit ?? (run.lastDetail?.trim() || "Stopped before it finished");
 }
 
 export const KIND_LABEL: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };

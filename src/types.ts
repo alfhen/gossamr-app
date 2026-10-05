@@ -541,6 +541,12 @@ export interface Run {
   /** Set once `claude rm` has taken the worktree away; the run stays for its result. */
   worktreeRemovedAt?: string | null;
   continuedAt?: string | null;
+  /** Gossamr stopped the run for passing its time or token limit. It can be resumed. */
+  stoppedByLimit?: boolean;
+  /** Sessions this run left behind when it carried on under a new id. */
+  earlierSessions?: { shortId: string; sessionId?: string | null; removed?: boolean }[];
+  /** Listed sessions that may be this run carried on, offered when Gossamr can't be sure which one. */
+  possibleContinuations?: { shortId: string; sessionId?: string | null; startedAt?: string | null }[];
   /** The ticket made from this run's draft once the person approved it. */
   createdItem?: ItemRef | null;
 }

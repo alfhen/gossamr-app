@@ -330,6 +330,10 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_answer", { id, text });
   }
 
+  runsAdoptSession(id: string, session: string) {
+    return invoke<Run>("runs_adopt_session", { id, session });
+  }
+
   runsStopAll() {
     return invoke<{ stopped: number; failed: number }>("runs_stop_all");
   }

@@ -1,35 +1,41 @@
 import { useState } from "react";
 import type { Run } from "../types";
 import { Box, BoxTitle, Btn } from "./AgentSheet";
-import { ANSWER_REMINDER, answerDraft, canSendAnswer } from "./runSheetLogic";
+import { ANSWER_REMINDER, answerDraft, canSendAnswer, resumable } from "./runSheetLogic";
 
 export interface AnswerActions {
   answer(text: string): void;
   attach(): void;
 }
 
-/** The agent's question with a box to answer it in, or, for a run stopped with an answer that didn't get through, that answer to send again. */
+/** The agent's question with a box to answer it in; for a run stopped with an answer that didn't get through, that answer to send again; for a run Gossamr stopped at a limit, the words to resume it with. */
 export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean; on: AnswerActions }) {
   const [text, setText] = useState(() => answerDraft(run));
-  const again = run.state === "stopped";
+  const limit = resumable(run);
+  const again = run.state === "stopped" && !limit;
   const ready = canSendAnswer(text) && !answering;
   const send = () => ready && on.answer(text);
   return (
-    <Box tone="needs" label="Question from the agent">
-      <BoxTitle icon="hand" tone="needs">
-        {again ? "Your answer didn't get through" : "Claude is asking you"}
+    <Box tone="needs" label={limit ? "Stopped at its limit" : "Question from the agent"}>
+      <BoxTitle icon={limit ? "clock" : "hand"} tone="needs">
+        {limit ? "Gossamr stopped this agent at its limit" : again ? "Your answer didn't get through" : "Claude is asking you"}
       </BoxTitle>
-      {again ? (
+      {limit ? (
+        <p className="selectable m-0 text-ws-ink2 [overflow-wrap:anywhere]">
+          {(run.error?.trim() || "It passed its limit").replace(/\.*$/, ".")} Its conversation and worktree are kept, and it may have been waiting for you.
+          {run.lastDetail?.trim() ? ` It was at: ${run.lastDetail.trim()}` : ""}
+        </p>
+      ) : again ? (
         <p className="selectable m-0 text-ws-ink2 [overflow-wrap:anywhere]">{run.error?.trim() || "The agent was stopped before it could be woken."}</p>
       ) : (
         <q className="selectable block border-l-[3px] border-ws-sep2 py-0.5 pl-3 whitespace-pre-wrap text-ws-ink [quotes:none]">{run.needs?.trim() || "It is waiting for you"}</q>
       )}
       <textarea
-        aria-label="Your answer"
+        aria-label={limit ? "What to tell it" : "Your answer"}
         rows={3}
         value={text}
         disabled={answering}
-        placeholder="Your answer"
+        placeholder={limit ? "What to tell it" : "Your answer"}
         onChange={(ev) => setText(ev.target.value)}
         onKeyDown={(ev) => {
           if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) (ev.preventDefault(), send());
@@ -39,7 +45,7 @@ export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean
       <p className="m-0 text-xs text-ws-ink3">Added in front of your answer: {ANSWER_REMINDER}</p>
       <div className="flex flex-wrap items-center gap-2">
         <Btn tone="primary" icon="play" disabled={!ready} title={canSendAnswer(text) ? undefined : "Write an answer first"} onClick={send}>
-          {answering ? "Sending…" : again ? "Start it again with your answer" : "Send answer"}
+          {answering ? "Sending…" : limit ? "Resume" : again ? "Start it again with your answer" : "Send answer"}
         </Btn>
         {!again && (
           <Btn icon="term" disabled={answering} onClick={on.attach}>
@@ -47,7 +53,11 @@ export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean
           </Btn>
         )}
       </div>
-      <p className="m-0 text-xs text-ws-ink3">Gossamr stops the agent and wakes it with your answer, which takes a few seconds. Its conversation is kept.</p>
+      <p className="m-0 text-xs text-ws-ink3">
+        {limit
+          ? "Gossamr wakes the agent with the words above, which takes a few seconds. After a resume the limits no longer stop this run."
+          : "Gossamr stops the agent and wakes it with your answer, which takes a few seconds. Its conversation is kept."}
+      </p>
     </Box>
   );
 }

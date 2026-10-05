@@ -197,6 +197,31 @@ const FAILURE_SEEDS: Seed[] = [
   { key: "CA-416", name: "ca-416-export-csv-9c0d", state: "failed", minutesAgo: 85, over: { error: FAILED_TEXT.other, failure: { type: "other" } } },
 ];
 
+/** A run stopped at its limit while it waited for an answer, and two stopped runs whose conversation may have gone on in another session. */
+const STUCK_SEEDS: Seed[] = [
+  {
+    key: "CA-277",
+    name: "ca-277-hobbii-mcp-gateway-8e22",
+    state: "stopped",
+    minutesAgo: 150,
+    over: { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit", suggestedReply: "Go ahead and build it with the plan as written", lastDetail: "plan complete; awaiting PR #176 location + scope name confirmation", tokens: 2_772, ...kindOver("CA-277", "ca-277-hobbii-mcp-gateway-8e22", "plan") },
+  },
+  { key: "CA-278", name: "ca-278-cart-merge-1f2e", state: "stopped", minutesAgo: 200, over: { lastDetail: "Stopped before it finished", possibleContinuations: [{ shortId: "bbb748a7", sessionId: "bbb748a7-dca2-4f33-9da1-caa7f80584b8", startedAt: null }] } },
+  {
+    key: "CA-279",
+    name: "ca-279-vat-labels-3a4b",
+    state: "stopped",
+    minutesAgo: 240,
+    over: {
+      lastDetail: "Stopped before it finished",
+      possibleContinuations: [
+        { shortId: "c0de0001", sessionId: null, startedAt: null },
+        { shortId: "c0de0002", sessionId: null, startedAt: null },
+      ],
+    },
+  },
+];
+
 /** The pull request or branch a sample run produced, by the run's worktree name. */
 function sampleChange(spec: RunSpec, kind: "pullRequest" | "branch", over: Partial<CodeChange> = {}): CodeChange {
   const head = `worktree-${spec.name}`;
@@ -294,8 +319,8 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
 }
 
 export interface MockRunsOptions {
-  /** `busy` is the eight scripted runs and `kinds` adds one of each other kind; `many` is twenty-four; `failures` is one failed launch of each kind. */
-  seed?: "busy" | "kinds" | "empty" | "many" | "failures";
+  /** `busy` is the eight scripted runs and `kinds` adds one of each other kind; `many` is twenty-four; `failures` is one failed launch of each kind; `stuck` adds a run stopped at its limit and two that may have carried on elsewhere. */
+  seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck";
   /** The moment the scripted ages count back from. Fixed by default so tests stay deterministic. */
   epoch?: number;
   environment?: RunsEnvironment["claude"];
@@ -377,7 +402,7 @@ export class MockRuns {
     this.pipRun = !!o.pipRun;
     this.seedDescriptions = !!o.planDescription;
     this.untrustedClones = !!o.untrusted;
-    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : SEEDS;
+    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "stuck" ? [...SEEDS, ...STUCK_SEEDS] : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
     this.proposals.onApplied = (p) => p.origin.type === "run" && p.intent.type === "create" && this.changed();
     for (const r of this.runs) {
@@ -682,11 +707,24 @@ export class MockRuns {
   answer(id: string, text: string): Run {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
-    const again = run.state === "stopped" && !!run.unsentAnswer;
+    const again = run.state === "stopped" && (!!run.unsentAnswer || !!run.stoppedByLimit);
     if (run.state !== "needsAnswer" && !again) throw new Error(run.state === "needsPermission" ? "A permission prompt can only be answered in Terminal." : `This run is ${run.state}, so it isn't waiting for an answer.`);
     const problem = answerProblem(text);
     if (problem) throw new Error(problem);
-    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now() });
+    const resumed = run.stoppedByLimit ? { stoppedByLimit: false, continuedAt: this.now() } : {};
+    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), ...resumed });
+    this.changed();
+    return next;
+  }
+
+  adoptSession(id: string, session: string): Run {
+    const run = this.get(id);
+    if (!run) throw new Error("that run no longer exists");
+    if (run.state !== "stopped" && run.state !== "done") throw new Error(`This run is ${run.state}, so it has no other session to carry on in.`);
+    const offer = run.possibleContinuations?.find((c) => c.shortId === session);
+    if (!offer) throw new Error("That session doesn't look like this run's any more. Look again in a moment.");
+    const earlier = [...(run.earlierSessions ?? []), ...(run.shortId ? [{ shortId: run.shortId, sessionId: run.sessionId }] : [])];
+    const next = this.update(id, { shortId: session, sessionId: offer.sessionId ?? null, earlierSessions: earlier, possibleContinuations: [], state: "working", needs: null, suggestedReply: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: this.now(), lastProgressAt: this.now() });
     this.changed();
     return next;
   }
@@ -1109,7 +1147,8 @@ export class MockRuns {
     if (!run) throw new Error("that run no longer exists");
     if (!TERMINAL.includes(run.state)) throw new Error("This run is still going. Stop it first, then clean it up.");
     if (this.unpushed.has(id)) return { type: "refused", message: "The worktree has unpushed commits. Push them or discard them yourself, then try again." };
-    this.update(id, { worktreeRemovedAt: this.now(), lastDetail: "Worktree removed" });
+    const earlier = run.earlierSessions?.map((s) => ({ ...s, removed: true }));
+    this.update(id, { worktreeRemovedAt: run.worktreeRemovedAt ?? this.now(), lastDetail: "Worktree removed", ...(earlier ? { earlierSessions: earlier } : {}) });
     this.changed();
     return { type: "removed" };
   }
