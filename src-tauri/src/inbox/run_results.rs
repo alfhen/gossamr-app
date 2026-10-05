@@ -11,7 +11,8 @@ use crate::domain::{Basis, CodeChange, CodeChangeKind, ContainerRef, CreatedBy, 
 use crate::error::{Error, Result};
 use crate::proposals::{self, Draft};
 use crate::runs::pr;
-use crate::runs::result::{fit, jira_note, plan_answer, plan_without_note, PLAN_COMMENT_LIMIT, subtask_proposals, ticket_from_answer, ticket_keys, ticket_proposal, JiraNote, TicketProposal};
+use crate::runs::report::{resolve, ReportStatus, Resolved, ResultSource, StoredReport};
+use crate::runs::result::{fit, plan_answer, plan_without_note, PLAN_COMMENT_LIMIT, ticket_from_answer, ticket_keys, JiraNote, TicketProposal};
 use crate::tracker::{self, Connection};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -31,10 +32,53 @@ pub struct RunOutcome {
     pub subtasks_draft: Option<RunDraft>,
     /// The run's full answer couldn't be read, so `note` is only Claude's one-line summary of it.
     pub summary_only: bool,
+    /// How `note` and the proposals were read: from the agent's report through the tool, from the `For Jira:` section of
+    /// its written answer, from the whole answer, or from the summary alone. `None` when there is no result yet.
+    pub source: Option<ResultSource>,
+    /// What came of offering the run the report tool; `None` when it was never asked to use it.
+    pub report: Option<ReportView>,
     /// For a Plan run: the draft of the whole plan as a comment, in whatever state it is now.
     pub plan_draft: Option<RunDraft>,
     /// For a Plan run on a ticket: the description update that adds the plan, or why there is none.
     pub plan_description: Option<super::PlanDescription>,
+}
+
+/// How the run's report through the tool went, for the sheet.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportView {
+    /// The session was given the tool when it launched.
+    pub offered: bool,
+    /// What the agent said about how it ended, when its report is the one in use.
+    pub status: Option<ReportStatus>,
+    pub revision: u32,
+    pub calls: u32,
+    pub rejections: u32,
+    /// A report exists but was made before the person answered or carried on, so the written answer is used.
+    pub stale: bool,
+    /// The tool stopped taking calls: too many, or too many refused.
+    pub locked: bool,
+    pub first_at: Option<chrono::DateTime<Utc>>,
+    pub last_at: Option<chrono::DateTime<Utc>>,
+}
+
+fn report_view(run: &Run, stored: Option<&StoredReport>, resolved: &Resolved) -> Option<ReportView> {
+    if stored.is_none() && !run.spec.report {
+        return None;
+    }
+    let none = StoredReport { report: None, revision: 0, calls: 0, rejections: 0, stale: false, first_at: None, last_at: None };
+    let row = stored.unwrap_or(&none);
+    Some(ReportView {
+        offered: stored.is_some(),
+        status: resolved.status,
+        revision: row.revision,
+        calls: row.calls,
+        rejections: row.rejections,
+        stale: row.stale && row.report.is_some(),
+        locked: row.calls >= crate::runs::report::MAX_CALLS || row.rejections >= crate::runs::report::MAX_REJECTIONS,
+        first_at: row.first_at,
+        last_at: row.last_at,
+    })
 }
 
 /// A plan drafted as a comment, and whether the comment had to be cut to fit.
@@ -78,12 +122,15 @@ fn intro(kind: RunKind) -> &'static str {
 }
 
 /// The comment as it is first drafted. The person edits it before posting.
-pub fn comment_text(run: &Run, note: &JiraNote, change: Option<&CodeChange>) -> String {
+pub fn comment_text(run: &Run, resolved: &Resolved, note: &JiraNote, change: Option<&CodeChange>) -> String {
     let mut parts = vec![intro(run.spec.kind).to_string()];
-    if !run.result_complete {
-        parts.push(SUMMARY_ONLY.into());
-    } else if !note.from_marker {
-        parts.push("The agent didn't mark anything for Jira, so this is its whole answer, shortened:".into());
+    if resolved.status == Some(ReportStatus::Blocked) {
+        parts.push("The agent reports it could not finish.".into());
+    }
+    match resolved.source {
+        Some(ResultSource::SummaryOnly) => parts.push(SUMMARY_ONLY.into()),
+        Some(ResultSource::Whole) => parts.push("The agent didn't mark anything for Jira, so this is its whole answer, shortened:".into()),
+        _ => {}
     }
     parts.push(note.text.clone());
     if let Some(pull) = change.filter(|c| c.kind == CodeChangeKind::PullRequest) {
@@ -127,6 +174,29 @@ pub(super) fn label_of(run: &Run) -> String {
 }
 
 impl Core {
+    /// What a run's drafts and sheet are built from: its report through the tool when it has a current one, else its
+    /// written answer.
+    pub async fn resolved_of(&self, run: &Run) -> Result<Resolved> {
+        let stored = self.report_stored(&run.id).await?;
+        Ok(resolve(run, stored.as_ref()))
+    }
+
+    /// The text of a finished run to carry to another run as data: its written answer, or when that couldn't be read the
+    /// note it reported, never the summary.
+    fn account_of(run: &Run, resolved: &Resolved, what: &str, needs: &str) -> Result<String> {
+        let text = if run.result_complete {
+            plan_answer(run.result.as_deref().unwrap_or(""))
+        } else if resolved.source == Some(ResultSource::Structured) {
+            resolved.note.as_ref().map(|n| n.text.clone()).unwrap_or_default()
+        } else {
+            return Err(refuse(format!("{SUMMARY_ONLY} {needs}")));
+        };
+        if text.is_empty() {
+            return Err(refuse(format!("that {what} run finished without a written answer")));
+        }
+        Ok(text)
+    }
+
     fn change_of(&self, run: &Run) -> Result<Option<CodeChange>> {
         let branches = pr::branches_of(run);
         let mut found = Vec::new();
@@ -141,8 +211,8 @@ impl Core {
     /// or branch it produced as far as a sync has cached them.
     pub async fn run_outcome(&self, id: &str) -> Result<RunOutcome> {
         let run = self.run(id).await?.ok_or_else(|| refuse("that run no longer exists"))?;
-        let own = run.item.as_ref().map(|i| i.key.to_uppercase());
-        let result = run.result.as_deref().map(str::trim).filter(|r| !r.is_empty());
+        let stored = self.report_stored(&run.id).await?;
+        let resolved = resolve(&run, stored.as_ref());
         let ticket_draft = self.ticket_drafts_of(&run).await?.into_iter().next();
         if let Some(made) = ticket_draft.as_ref().and_then(ticket_made) {
             if let Err(e) = self.record_created_from_run(&run.id, made).await {
@@ -150,15 +220,17 @@ impl Core {
             }
         }
         Ok(RunOutcome {
-            note: result.map(jira_note),
-            keys: result.map(ticket_keys).unwrap_or_default().into_iter().filter(|k| Some(k) != own.as_ref()).collect(),
+            note: resolved.note.clone(),
+            keys: resolved.keys.clone(),
             change: self.change_of(&run)?,
             draft: self.comment_drafts_of(&run).await?.into_iter().next().map(|p| RunDraft { id: p.id, state: p.state }),
-            ticket: result.filter(|_| run.item.is_none()).and_then(ticket_proposal),
+            ticket: resolved.ticket.clone(),
             ticket_draft: ticket_draft.map(|p| RunDraft { id: p.id, state: p.state }),
-            subtasks: result.filter(|_| run.spec.kind == RunKind::Triage && run.item.is_some()).map(subtask_proposals).unwrap_or_default(),
+            subtasks: resolved.subtasks.clone(),
             subtasks_draft: self.subtask_drafts_of(&run).await?.into_iter().next().map(|p| RunDraft { id: p.id, state: p.state }),
-            summary_only: run.state == RunState::Done && result.is_some() && !run.result_complete,
+            summary_only: run.state == RunState::Done && resolved.source == Some(ResultSource::SummaryOnly),
+            source: resolved.source,
+            report: report_view(&run, stored.as_ref(), &resolved),
             plan_draft: self.plan_comment_drafts_of(&run).await?.into_iter().next().map(|p| RunDraft { id: p.id, state: p.state }),
             plan_description: self.plan_description_of(&run).await?,
         })
@@ -202,16 +274,14 @@ impl Core {
         if run.state != RunState::Done {
             return Err(refuse("that plan run hasn't finished"));
         }
-        if !run.result_complete {
-            return Err(refuse(format!("{SUMMARY_ONLY} A build can only follow a plan Gossamr has read in full.")));
-        }
+        let resolved = self.resolved_of(&run).await?;
         let same_ticket = run.item.as_ref().map(|i| (&i.connection_id, &i.external_id)) == item.map(|i| (&i.connection_id, &i.external_id));
+        let text = match resolved.plan.clone() {
+            Some(plan) => plan,
+            None => Self::account_of(&run, &resolved, "plan", "A build can only follow a plan Gossamr has read in full.")?,
+        };
         if !same_ticket || !run.spec.repo.eq_ignore_ascii_case(repo) {
             return Err(refuse("that plan is about another ticket or repository"));
-        }
-        let text = plan_answer(run.result.as_deref().unwrap_or(""));
-        if text.is_empty() {
-            return Err(refuse("that plan run finished without a written answer"));
         }
         let id = run.id.clone();
         let fitted = fit(&text, PLAN_LIMIT, |total| format!("[Cut here. The plan was {total} characters and a build carries at most {PLAN_LIMIT}. The whole of it is in run {id}.]"));
@@ -238,9 +308,8 @@ impl Core {
         if run.state != RunState::Done {
             return Err(refuse("that build run hasn't finished"));
         }
-        if !run.result_complete {
-            return Err(refuse(format!("{SUMMARY_ONLY} A review can only follow a build Gossamr has read in full.")));
-        }
+        let resolved = self.resolved_of(&run).await?;
+        let text = Self::account_of(&run, &resolved, "build", "A review can only follow a build Gossamr has read in full.")?;
         let same_ticket = run.item.as_ref().map(|i| (&i.connection_id, &i.external_id)) == item.map(|i| (&i.connection_id, &i.external_id));
         if !same_ticket || !run.spec.repo.eq_ignore_ascii_case(&spec.repo) {
             return Err(refuse("that build is about another ticket or repository"));
@@ -252,10 +321,6 @@ impl Core {
             .ok_or_else(|| refuse("that build has no pull request in this repository yet"))?;
         if spec.pr.is_some_and(|n| n != number) {
             return Err(refuse(format!("that build's pull request is #{number}, not #{}", spec.pr.unwrap_or_default())));
-        }
-        let text = plan_answer(run.result.as_deref().unwrap_or(""));
-        if text.is_empty() {
-            return Err(refuse("that build run finished without a written answer"));
         }
         let id = run.id.clone();
         let fitted = fit(&text, BUILD_ACCOUNT_LIMIT, |total| format!("[Cut here. The builder's answer was {total} characters and a review carries at most {BUILD_ACCOUNT_LIMIT}. The whole of it is in run {id}.]"));
@@ -313,10 +378,12 @@ impl Core {
         if run.spec.kind != RunKind::Plan {
             return Err(refuse("only a plan run has a plan to draft"));
         }
-        if !run.result_complete {
-            return Err(refuse(format!("{SUMMARY_ONLY} There is no plan to draft.")));
-        }
-        let plan = plan_without_note(run.result.as_deref().unwrap_or(""));
+        let resolved = self.resolved_of(&run).await?;
+        let plan = match resolved.plan.clone() {
+            Some(plan) => plan,
+            None if resolved.complete() => plan_without_note(run.result.as_deref().unwrap_or("")),
+            None => return Err(refuse(format!("{SUMMARY_ONLY} There is no plan to draft."))),
+        };
         if plan.is_empty() {
             return Err(refuse("the run finished without a written answer, so there is nothing to draft"));
         }
@@ -360,20 +427,18 @@ impl Core {
         Ok(waiting.into_iter().find(|p| same(&p.intent)))
     }
 
-    async fn comment_intent(&self, run: &Run, item: ItemRef, note: &JiraNote) -> Result<Intent> {
+    async fn comment_intent(&self, run: &Run, resolved: &Resolved, item: ItemRef, note: &JiraNote) -> Result<Intent> {
         let change = self.change_of(run)?;
-        let body = tracker::comment_doc(&comment_text(run, note, change.as_ref()), &[]);
+        let body = tracker::comment_doc(&comment_text(run, resolved, note, change.as_ref()), &[]);
         Ok(Intent::Comment { item, body })
     }
 
     /// A comment on the run's ticket made from the `For Jira:` part of its result. Built here, without Pip.
     pub async fn draft_run_comment(&self, id: &str) -> Result<Proposal> {
         let (run, item) = self.finished_run(id).await?;
-        let note = jira_note(run.result.as_deref().unwrap_or(""));
-        if note.text.is_empty() {
-            return Err(refuse("the run finished without a written answer, so there is nothing to draft"));
-        }
-        let intent = self.comment_intent(&run, item.clone(), &note).await?;
+        let resolved = self.resolved_of(&run).await?;
+        let note = resolved.note.clone().filter(|n| !n.text.is_empty()).ok_or_else(|| refuse("the run finished without a written answer, so there is nothing to draft"))?;
+        let intent = self.comment_intent(&run, &resolved, item.clone(), &note).await?;
         let same = |i: &Intent| matches!((i, &intent), (Intent::Comment { item: a, body: x }, Intent::Comment { item: b, body: y }) if a == b && x.plain_text() == y.plain_text());
         if let Some(existing) = self.pending_same(same).await? {
             return Err(refuse(format!("that comment is already waiting as a draft on {} (draft {})", item.key, existing.id)));
@@ -385,14 +450,12 @@ impl Core {
     /// run that already has a comment draft in any state, even a skipped one, gets no second.
     pub async fn auto_draft_run_comment(&self, id: &str) -> Result<Option<Proposal>> {
         let Ok((run, item)) = self.finished_run(id).await else { return Ok(None) };
-        if !run.result_complete {
+        let resolved = self.resolved_of(&run).await?;
+        let Some(note) = resolved.note.clone().filter(|n| resolved.complete() && n.from_marker && !n.text.is_empty()) else { return Ok(None) };
+        if !self.comment_drafts_of(&run).await?.is_empty() {
             return Ok(None);
         }
-        let note = jira_note(run.result.as_deref().unwrap_or(""));
-        if !note.from_marker || note.text.is_empty() || !self.comment_drafts_of(&run).await?.is_empty() {
-            return Ok(None);
-        }
-        let intent = self.comment_intent(&run, item, &note).await?;
+        let intent = self.comment_intent(&run, &resolved, item, &note).await?;
         Ok(Some(self.draft_from_run(&run, intent, label_of(&run)).await?))
     }
 
@@ -401,8 +464,9 @@ impl Core {
     /// any state, even a skipped one. Looking and storing happen under one lock, so two callers can't both make one.
     pub async fn draft_run_subtasks(&self, id: &str) -> Result<Option<Proposal>> {
         let Ok((run, item)) = self.finished_run(id).await else { return Ok(None) };
-        let summaries = subtask_proposals(run.result.as_deref().unwrap_or(""));
-        if !run.result_complete || run.spec.kind != RunKind::Triage || summaries.is_empty() {
+        let resolved = self.resolved_of(&run).await?;
+        let summaries = resolved.subtasks.clone();
+        if !resolved.complete() || run.spec.kind != RunKind::Triage || summaries.is_empty() {
             return Ok(None);
         }
         let scope = self.scope().await?;
@@ -475,8 +539,9 @@ impl Core {
     /// a ticket draft, even a skipped one, gets no second.
     pub async fn draft_run_ticket(&self, id: &str) -> Result<Proposal> {
         let run = self.ticketless_run(id).await?;
+        let resolved = self.resolved_of(&run).await?;
         let result = run.result.as_deref().unwrap_or("");
-        let proposal = ticket_proposal(result).or_else(|| ticket_from_answer(result)).ok_or_else(|| refuse("the run finished without a written answer, so there is nothing to draft"))?;
+        let proposal = resolved.ticket.clone().or_else(|| ticket_from_answer(result)).ok_or_else(|| refuse("the run finished without a written answer, so there is nothing to draft"))?;
         self.draft_ticket_once(&run, &proposal).await?.map_err(|existing| refuse(format!("that run already has a ticket draft ({}), {}", existing.id, state_words(&existing.state))))
     }
 
@@ -484,10 +549,8 @@ impl Core {
     /// `New ticket:` section and a title is used.
     pub async fn auto_draft_run_ticket(&self, id: &str) -> Result<Option<Proposal>> {
         let Ok(run) = self.ticketless_run(id).await else { return Ok(None) };
-        if !run.result_complete {
-            return Ok(None);
-        }
-        let Some(proposal) = run.spec.project.as_ref().and(run.result.as_deref()).and_then(ticket_proposal) else { return Ok(None) };
+        let resolved = self.resolved_of(&run).await?;
+        let Some(proposal) = resolved.ticket.clone().filter(|_| resolved.complete() && run.spec.project.is_some()) else { return Ok(None) };
         Ok(self.draft_ticket_once(&run, &proposal).await?.ok())
     }
 
@@ -576,13 +639,13 @@ pub(in crate::inbox) mod tests {
         RunSpec { clone_path: clone, name: format!("eng-1-fix-cart-{n:04x}"), ..run_spec() }
     }
 
-    async fn run_with(fx: &Fixture, edit: impl FnOnce(&mut Run)) -> Run {
+    pub(in crate::inbox) async fn run_with(fx: &Fixture, edit: impl FnOnce(&mut Run)) -> Run {
         approved(fx, next_spec(fx), Some(fx.item("CA-1")), RESULT, edit).await
     }
 
     const TICKET_RESULT: &str = "I read the consumer.\n\nNew ticket:\nTitle: Add a backoff to the order consumer\nKind: bug\nIt retries in a tight loop.";
 
-    async fn project(fx: &Fixture) -> ContainerRef {
+    pub(in crate::inbox) async fn project(fx: &Fixture) -> ContainerRef {
         fx.core.containers_in(&fx.scope).await.unwrap()[0].container_ref.clone()
     }
 
@@ -613,7 +676,7 @@ pub(in crate::inbox) mod tests {
         c
     }
 
-    fn body_of(p: &Proposal) -> String {
+    pub(in crate::inbox) fn body_of(p: &Proposal) -> String {
         match &p.intent {
             Intent::Comment { body, .. } => body.plain_text(),
             other => panic!("{other:?}"),
@@ -1150,7 +1213,7 @@ pub(in crate::inbox) mod tests {
         let p = fx.core.draft_run(build_from(&fx, &plan), Some(fx.item("CA-1"))).await.unwrap();
         let first = fx.core.runs_review(&p.id).await.unwrap();
 
-        let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: Some(text.into()), build_account: None, project: None };
+        let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: Some(text.into()), build_account: None, project: None };
         let edited = fx.core.edit_proposal(&p.id, &edit("My own plan.")).await.unwrap();
         assert_eq!(spec_in(&edited).plan.as_deref(), Some("My own plan."));
         let second = fx.core.runs_review(&p.id).await.unwrap();
@@ -1175,7 +1238,7 @@ pub(in crate::inbox) mod tests {
     async fn editing_a_plan_needs_one_clearing_it_drops_its_source_and_changing_kind_drops_both() {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let plan = plan_with(&fx, PLAN).await;
-        let edit = |plan: Option<&str>, kind: Option<RunKind>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr: None, allow_push: None, plan: plan.map(Into::into), build_account: None, project: None };
+        let edit = |plan: Option<&str>, kind: Option<RunKind>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr: None, allow_push: None, report: None, plan: plan.map(Into::into), build_account: None, project: None };
         let p = fx.core.draft_run(build_from(&fx, &plan), Some(fx.item("CA-1"))).await.unwrap();
         let cleared = spec_in(&fx.core.edit_proposal(&p.id, &edit(Some("  \n"), None)).await.unwrap());
         assert_eq!((cleared.plan, cleared.plan_from_run), (None, None));
@@ -1359,7 +1422,7 @@ pub(in crate::inbox) mod tests {
             let mut build = built(&fx).await;
             let p = fx.core.draft_run(review_from(&fx, &build), Some(fx.item("CA-1"))).await.unwrap();
             let first = fx.core.runs_review(&p.id).await.unwrap();
-            let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: None, build_account: Some(text.into()), project: None };
+            let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: None, build_account: Some(text.into()), project: None };
 
             let edited = fx.core.edit_proposal(&p.id, &edit("My own words about it.")).await.unwrap();
             assert_eq!(spec_in(&edited).build_account.as_deref(), Some("My own words about it."));
@@ -1384,7 +1447,7 @@ pub(in crate::inbox) mod tests {
         async fn clearing_drops_the_account_with_its_source_and_a_changed_pull_request_or_kind_drops_it_too() {
             let fx = draft_pr().await;
             let build = built(&fx).await;
-            let edit = |account: Option<&str>, kind: Option<RunKind>, pr: Option<u64>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr, allow_push: None, plan: None, build_account: account.map(Into::into), project: None };
+            let edit = |account: Option<&str>, kind: Option<RunKind>, pr: Option<u64>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr, allow_push: None, report: None, plan: None, build_account: account.map(Into::into), project: None };
             let draft = || async { fx.core.draft_run(review_from(&fx, &build), Some(fx.item("CA-1"))).await.unwrap() };
 
             let p = draft().await;
@@ -1409,10 +1472,10 @@ pub(in crate::inbox) mod tests {
         async fn editing_a_draft_into_a_build_turns_push_on_and_out_of_one_turns_it_off() {
             let fx = draft_pr().await;
             let p = fx.core.draft_run(RunSpec { instruction: String::new(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
-            let kind = |k| Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(k), name: None, pr: None, allow_push: None, plan: None, build_account: None, project: None };
+            let kind = |k| Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(k), name: None, pr: None, allow_push: None, report: None, plan: None, build_account: None, project: None };
             let build = spec_in(&fx.core.edit_proposal(&p.id, &kind(RunKind::Build)).await.unwrap());
             assert!(build.allow_push && build.kind == RunKind::Build);
-            let off = Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: Some(false), plan: None, build_account: None, project: None };
+            let off = Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: Some(false), report: None, plan: None, build_account: None, project: None };
             assert!(!spec_in(&fx.core.edit_proposal(&p.id, &off).await.unwrap()).allow_push, "the person can turn it off");
             let back = spec_in(&fx.core.edit_proposal(&p.id, &kind(RunKind::Verify)).await.unwrap());
             assert!(!back.allow_push);

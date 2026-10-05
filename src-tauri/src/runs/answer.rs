@@ -95,6 +95,9 @@ impl RunService {
                 limits::tick(&mut run, now);
                 self.remember(&run);
                 self.store(&run).await?;
+                if let Err(e) = self.core.report_stale(&run.id).await {
+                    eprintln!("couldn't mark the report of run {} as older than your answer: {e}", run.id);
+                }
                 let event = RunEvent { run_id: run.id.clone(), seq: 0, at: now, kind: "answered".into(), text: "You answered".into(), detail: None };
                 if let Err(e) = self.core.append_run_events(&run.id, &[event]).await {
                     eprintln!("couldn't record the answer: {e}");

@@ -828,7 +828,7 @@ mod through_the_real_spawner {
         let real = real().await;
         let run = real.rig.queued(1).await;
         let spec = &run.spec;
-        let request = LaunchRequest { cwd: spec.clone_path.clone(), name: "x".into(), worktree: spec.name.clone(), guard: GUARD.into(), prompt: "p".into() };
+        let request = LaunchRequest { cwd: spec.clone_path.clone(), name: "x".into(), worktree: spec.name.clone(), guard: GUARD.into(), prompt: "p".into(), report: None };
         let started = real.cli.launch(&request).await.unwrap();
         real.rig.set(&run, |r| {
             r.state = RunState::Failed;

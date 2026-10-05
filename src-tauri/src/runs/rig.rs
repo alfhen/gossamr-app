@@ -51,6 +51,11 @@ pub struct Rig {
 }
 
 pub async fn ready() -> Rig {
+    ready_with(|svc| svc).await
+}
+
+/// `ready`, with the service tuned before it is shared.
+pub async fn ready_with(tune: impl FnOnce(RunService) -> RunService) -> Rig {
     let fx = fixture_watching(&["acme/webshop"]).await;
     let clone = fx.home.join("webshop");
     clone_with_origin(&clone, "https://github.com/acme/webshop.git");
@@ -76,7 +81,7 @@ pub async fn ready() -> Rig {
     .with_notifier(notices.clone())
     .with_terminal(opened.clone())
     .with_home(fx.home.canonicalize().unwrap());
-    Rig { fx, svc: Arc::new(svc), cli, clone, notices, opened, changes, drafted }
+    Rig { fx, svc: Arc::new(tune(svc)), cli, clone, notices, opened, changes, drafted }
 }
 
 pub fn line(at: &str, state: &str, text: &str) -> TimelineLine {
@@ -91,6 +96,14 @@ impl Rig {
     /// Approved and launched through the scripted CLI: `Launching`, with a short id and a listed session.
     pub async fn launched(&self, n: u32) -> Run {
         let p = self.fx.core.draft_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap();
+        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
+        let queued = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        self.svc.start_now(&queued.id).await.unwrap()
+    }
+
+    /// Approved with the report tool asked for and launched; the service must have been built with `reporting`.
+    pub async fn launched_reporting(&self, n: u32, kind: crate::domain::RunKind) -> Run {
+        let p = self.fx.core.draft_run(RunSpec { kind, report: true, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
         let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
         let queued = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
         self.svc.start_now(&queued.id).await.unwrap()
@@ -148,5 +161,14 @@ impl Rig {
 
     pub async fn poll(&self) {
         self.svc.poll_at(Utc::now()).await;
+    }
+}
+
+/// A service that offers the report tool on a channel in `dir`, with the setting on.
+pub fn reporting(dir: &Path) -> impl FnOnce(RunService) -> RunService {
+    let channel = Arc::new(super::report::ReportChannel::new(4242, dir.join("report")));
+    move |svc| {
+        let settings = crate::config::AgentSettings { report_result: true, ..svc.settings() };
+        svc.with_settings(settings).with_report(channel)
     }
 }

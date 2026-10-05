@@ -151,6 +151,12 @@ pub(super) fn cleaned(s: &str, max: usize) -> Option<String> {
     (!s.is_empty()).then(|| cut(&redact(s), max))
 }
 
+/// A run's final answer, redacted and within `RESULT_KEPT`, with the sections drafts are made from kept whole.
+pub(super) fn cleaned_answer(s: &str) -> Option<String> {
+    let s = s.trim();
+    (!s.is_empty()).then(|| super::result::keep_within(&redact(s), RESULT_KEPT))
+}
+
 /// The timeline as events, in order. Redacted and cut here, so a line compares equal to the event stored from it.
 fn events_of(run: &Run, job: &JobInfo) -> Vec<RunEvent> {
     let mut at = run.launched_at.unwrap_or(run.queued_at);
@@ -336,7 +342,7 @@ impl RunService {
         };
         if seen.state == RunState::Done {
             run.summary = seen.result.as_deref().and_then(|r| cleaned(r, SUMMARY_KEPT));
-            let answer = self.read_answer(tc, &run, entry, job.as_ref()).await.and_then(|a| cleaned(&a, RESULT_KEPT));
+            let answer = self.read_answer(tc, &run, entry, job.as_ref()).await.and_then(|a| cleaned_answer(&a));
             run.result_complete = answer.is_some();
             run.result = answer.or_else(|| run.summary.clone());
         }
@@ -377,6 +383,11 @@ impl RunService {
         if run != before {
             self.core.save_run(&run).await?;
             touched = true;
+        }
+        if reopened {
+            if let Err(e) = self.core.report_stale(run_id).await {
+                eprintln!("couldn't mark the report of run {run_id} as older than the follow-up: {e}");
+            }
         }
         let drafted = if run.state == RunState::Done && before.state != RunState::Done && settings.draft_on_finish { self.draft_for(&run).await } else { None };
         if run.short_id != before.short_id || reopened {

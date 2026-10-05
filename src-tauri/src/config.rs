@@ -31,11 +31,13 @@ pub struct AgentSettings {
     pub terminal: TerminalChoice,
     /// Draft a Jira comment on the run's ticket when it finishes with a `For Jira:` section.
     pub draft_on_finish: bool,
+    /// Offer new runs the run-report tool, through which an agent hands Gossamr its result as data. Off until tried.
+    pub report_result: bool,
 }
 
 impl Default for AgentSettings {
     fn default() -> Self {
-        Self { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal, draft_on_finish: true }
+        Self { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal, draft_on_finish: true, report_result: false }
     }
 }
 
@@ -47,6 +49,7 @@ impl AgentSettings {
             token_cap: self.token_cap.min(MAX_TOKENS),
             terminal: self.terminal,
             draft_on_finish: self.draft_on_finish,
+            report_result: self.report_result,
         }
     }
 }
@@ -134,7 +137,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gossamr-config-limits-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal, draft_on_finish: true });
+        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal, draft_on_finish: true, report_result: false });
         std::fs::write(dir.join(FILE), r#"{"agents":{"draftOnFinish":false}}"#).unwrap();
         assert!(!AppConfig::load(&dir).agents.draft_on_finish);
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2}}"#).unwrap();

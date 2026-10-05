@@ -134,6 +134,7 @@ fn known_shapes(word: &str, base: usize, spans: &mut Vec<Range<usize>>) {
     for prefix in ["ghp_", "gho_", "ghu_", "ghs_", "ghr_"] {
         prefixed(word, base, prefix, 20, alnum, spans);
     }
+    prefixed(word, base, "gsr_", 32, |b| b.is_ascii_hexdigit(), spans);
     prefixed(word, base, "github_pat_", 20, |b| b.is_ascii_alphanumeric() || b == b'_', spans);
     for prefix in ["AKIA", "ASIA"] {
         prefixed(word, base, prefix, 16, |b| b.is_ascii_uppercase() || b.is_ascii_digit(), spans);
@@ -210,6 +211,15 @@ mod tests {
         assert_eq!(redact("curl 'https://x.test/a?id=1&access_token=s3cr3t&b=2'"), "curl 'https://x.test/a?id=1&access_token=[redacted]&b=2'");
         assert_eq!(redact("MY-API-KEY=k MYAPIKEY=k"), "MY-API-KEY=[redacted] MYAPIKEY=[redacted]");
         assert_eq!(redact("SECRET_SAUCE=ketchup"), "SECRET_SAUCE=[redacted]");
+    }
+
+    #[test]
+    fn a_run_report_token_is_masked_wherever_it_appears() {
+        let token = format!("gsr_{}", "0123456789abcdef".repeat(3));
+        gone(&format!("claude: invalid config, Authorization: Bearer {token}"), &token[4..]);
+        gone(&format!("--mcp-config {{\"headers\":{{\"Authorization\":\"Bearer {token}\"}}}}"), &token[4..]);
+        gone(&format!("see {token}."), &token[4..]);
+        assert_eq!(redact("gsr_ is a prefix and gsr_abc is short"), "gsr_ is a prefix and gsr_abc is short");
     }
 
     #[test]

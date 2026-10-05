@@ -1014,8 +1014,14 @@ pub fn run() {
             let drafted_handle = app.handle().clone();
             let open_on_focus = Arc::new(runs::tracker::OpenOnFocus::default());
             app.manage(open_on_focus.clone());
-            let service = Arc::new(
-                runs::service::RunService::new(
+            let report = match tauri::async_runtime::block_on(runs::report::ReportServer::start(core.clone(), runs::report::config_dir(&core.data_dir()))) {
+                Ok(server) => Some(server.channel),
+                Err(e) => {
+                    eprintln!("the run-report server couldn't start, so runs go without the report tool: {e}");
+                    None
+                }
+            };
+            let mut service = runs::service::RunService::new(
                     core.clone(),
                     Arc::new(runs::toolchain::SystemToolchain::default()),
                     runs::index::RunIndex::load(&core.data_dir()),
@@ -1025,8 +1031,11 @@ pub fn run() {
                 .with_notifier(Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus }))
                 .with_drafted(Arc::new(move |connection_id| proposals_changed(&drafted_handle, connection_id)))
                 .with_settings(config.agents)
-                .enabled(config.agents_enabled),
-            );
+                .enabled(config.agents_enabled);
+            if let Some(channel) = report {
+                service = service.with_report(channel);
+            }
+            let service = Arc::new(service);
             let handle = app.handle().clone();
             let view_handle = handle.clone();
             let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(

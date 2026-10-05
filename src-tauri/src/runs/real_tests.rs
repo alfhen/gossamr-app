@@ -67,6 +67,7 @@ impl Scratch {
             worktree: name.to_owned(),
             guard: "Do nothing.".into(),
             prompt: "Reply with OK and stop.".into(),
+            report: None,
         };
         let launched = self.cli.launch(&req).await.expect("launch");
         self.launched.push(launched.short_id.clone());
@@ -245,7 +246,7 @@ async fn real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_w
 async fn real_prefixed_session_name_is_listed_unchanged_and_the_worktree_keeps_the_slug() {
     let mut s = Scratch::new("prefix").await;
     let title = "Gossamr: CE-7 investigate";
-    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into() };
+    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None };
     let launched = s.cli.launch(&req).await.expect("launch");
     s.launched.push(launched.short_id.clone());
     assert_eq!(launched.name.as_deref(), Some(title), "stdout: {launched:?}");
@@ -554,6 +555,103 @@ async fn real_stop_then_resume_continues_same_session() {
     assert!(job.result.as_deref().is_some_and(|r| r.contains("OK")), "result: {:?}", job.result);
 }
 
+struct Calls(std::sync::Mutex<Vec<(String, serde_json::Value)>>);
+
+#[async_trait]
+impl super::report::ReportSink for Calls {
+    async fn call(&self, _run_id: &str, token_hash: &str, args: &serde_json::Value) -> super::report::Reply {
+        self.0.lock().unwrap().push((token_hash.to_owned(), args.clone()));
+        super::report::Reply::Recorded { revision: 1, notes: Vec::new() }
+    }
+}
+
+/// Settles three things nobody has seen: that a `--bg` session loads the `--mcp-config` server and calls its tool
+/// without a permission prompt, that its token is on no command line, and whether a `--resume` with no flags still has
+/// the tool. The last two are printed, not asserted, because either answer is workable: the feature degrades to the
+/// written answer when the tool is gone. Uses the person's real, signed-in config and `~/Code`, and does model work
+/// with two short prompts. Everything it starts is stopped and removed.
+#[tokio::test]
+#[ignore = "runs the real claude with the real config and does model work"]
+async fn real_report_tool_is_called_from_a_background_session_and_the_token_stays_off_every_command_line() {
+    use super::report::{new_token, token_hash, ReportServer};
+    let home = dirs::home_dir().expect("home");
+    let cwd = home.join("Code");
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let env = capture(&shell).await.expect("shell environment");
+    let binary = super::binary::find_claude().expect("claude is installed");
+    let cli = SystemCli::new(binary.clone(), Arc::new(env.clone()));
+    let config = cli.auth_status().await.unwrap().config_directory.expect("config directory");
+    let name = format!("gossamr-report-spike-{}", std::process::id());
+    let _cleanup = Cleanup { binary: binary.clone(), env: env.clone(), cwd: cwd.clone(), name: name.clone() };
+
+    let dir = std::env::temp_dir().join(format!("gossamr-report-real-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let calls = Arc::new(Calls(std::sync::Mutex::new(Vec::new())));
+    let server = ReportServer::start(calls.clone(), dir.join("report")).await.expect("server");
+    let token = new_token().unwrap();
+    let launch = server.channel.write_config("spike-run", &token).unwrap();
+    let allowed = format!("mcp__{}__{}", crate::domain::REPORT_SERVER, crate::domain::REPORT_TOOL);
+    let config_arg = launch.config.to_string_lossy().into_owned();
+    let prompt = "Call the report_result tool once with status done and note 'spike ok'. Then reply with the single word OK.";
+    let (ok, out) = claude_in(&env, &binary, &cwd, &["--bg", "--name", &name, "--mcp-config", &config_arg, "--allowedTools", &allowed, "--append-system-prompt", crate::domain::REPORT_GUARD, "--", prompt]);
+    assert!(ok, "launch: {out}");
+    let id = super::cli::parse_launch_stdout(&out).unwrap_or_else(|| panic!("no session id in: {out}"));
+
+    let (ps_ok, ps) = claude_in(&env, Path::new("/bin/ps"), &cwd, &["-axww", "-o", "command"]);
+    assert!(ps_ok && !ps.contains(&token[4..]), "the token is on a command line");
+
+    let seen = |n: usize| calls.0.lock().unwrap().len() >= n;
+    let wait_for = |what: &'static str, n: usize| {
+        let (cli, id, calls) = (&cli, &id, &calls);
+        async move {
+            let deadline = Instant::now() + Duration::from_secs(150);
+            while calls.0.lock().unwrap().len() < n {
+                let rows = cli.agents(true).await.unwrap();
+                if let Some(e) = rows.iter().find(|e| e.id.as_deref() == Some(id.as_str())) {
+                    assert_ne!(e.waiting_for.as_deref(), Some("permission prompt"), "the session stalled on a permission prompt: {e:?}");
+                }
+                assert!(Instant::now() < deadline, "timed out waiting for {what}");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    };
+    wait_for("the first call", 1).await;
+    {
+        let first = calls.0.lock().unwrap()[0].clone();
+        assert_eq!(first.0, token_hash(&token), "the call carried the token from the config file");
+        assert_eq!(first.1["status"], "done");
+        eprintln!("FIRST CALL OK, arguments: {}", first.1);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let session = loop {
+        let rows = cli.agents(true).await.unwrap();
+        if let Some(e) = rows.into_iter().find(|e| e.id.as_deref() == Some(id.as_str()) && e.state.as_deref() == Some("done")) {
+            break e.session_id.expect("session id");
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for done");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    let persisted: Vec<String> = walk(&config.join("jobs").join(id.as_str())).into_iter().filter(|f| std::fs::read(f).is_ok_and(|b| b.windows(token.len()).any(|w| w == token.as_bytes()))).map(|f| f.display().to_string()).collect();
+    eprintln!("TOKEN PERSISTED IN THE JOB FILES: {persisted:?}");
+
+    tokio::time::sleep(super::service::Timing::default().stop_settle).await;
+    let again = "Call the report_result tool once more with status done, note 'spike again' and revise true. Then reply with the single word OK. If you have no such tool, say NO TOOL.";
+    let said = cli.resume(&session, again, Some(&cwd)).await.expect("resume");
+    assert_eq!(said.short_id, id, "resume answered with another session: a copy was started");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !seen(2) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    eprintln!("A RESUME WITH NO FLAGS {} THE REPORT TOOL", if seen(2) { "KEPT" } else { "LOST" });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    entries.filter_map(Result::ok).flat_map(|e| if e.path().is_dir() { walk(&e.path()) } else { vec![e.path()] }).collect()
+}
+
 /// U5: trusting the clone's folder is enough for a session in one of its worktrees. Needs the network.
 #[tokio::test]
 #[ignore = "clones a small public repository from github.com and runs the real claude in a scratch config"]
@@ -564,7 +662,7 @@ async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_sta
     let path = super::fresh::ensure_clone(&super::repo::Git::new(s.env.clone()), &home, "octocat/Hello-World").await.expect("clone");
     assert_eq!(path, super::fresh::agents_root(&home).join("octocat/Hello-World"));
     assert!(path.join(".git").is_dir());
-    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into() };
+    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None };
 
     let refused = s.cli.launch(&request("fresh-0a1b")).await.unwrap_err();
     assert!(refused.stderr_mentions("Workspace not trusted"), "{refused}");

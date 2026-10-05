@@ -139,6 +139,27 @@ Nothing here was run against a real `claude`; the scripted CLI only proves the p
 - That repository hooks (`pre-push`, commit hooks) behave in a worktree and in the checkout a Review does (`git fetch origin pull/<n>/head`), and do not run code from the pull request with more reach than the person intended. A Review only reads, but a hook runs on whatever it checks out.
 - That a Review of a draft pull request works (`gh pr view` and `gh pr diff` on a draft), and that the pinned commit is still the pull request's head when the Review starts.
 
+## The run-report tool (off by default; nothing here was run against a real `claude`)
+
+An agent can hand Gossamr its result as data through one MCP tool, `report_result`, served on a loopback port by `runs/report`. Gossamr validates and cleans the call, stores it on that run (`run_reports`, apart from the run's own blob) and drafts from it exactly as it does from the written answer. It never writes to Jira or reaches another run.
+
+How it is offered: `claude --bg ... --mcp-config <file> --allowedTools mcp__run-report__report_result --append-system-prompt <guard + REPORT_GUARD> -- <prompt>`. `--strict-mcp-config` is not passed, so the person's own MCP servers stay. The file (`<app data>/report/<run id>.json`, folder 0700, file 0600) holds the server address and the run's token in an `Authorization` header; the token is on no command line and in no environment variable (the daemon that runs `--bg` sessions is shared, so a per-launch variable could not reach it). Resume is still `--bg --resume <id> -- <message>` with no flag, because any flag starts a copy.
+
+What is decided in code, not by the CLI:
+
+- A token is `gsr_` and 48 hex characters; only its SHA-256 is stored, with the run it was minted for and the tool version. `runs::redact` masks the shape, and a launch failure's text is redacted before it is stored.
+- Hashes are never deleted while the run exists, so a launch whose answer was lost and is later adopted by Retry can still report. Every launch of a run adds its own token, and all of them are valid for that run only.
+- Revocation is by state: a call is taken only while the run is launching, working, waiting for an answer, a permission or a sign-in, or unknown, checked in the same write transaction that stores the report. Done, failed, stopped and queued runs refuse. The config file is removed with the worktree, and a sweep removes the file of a failed run, a missing run, or a finished run six hours after it ended. Cleaning a run up drops its tokens.
+- The first report stands until a call says `revise: true`. A report made before the person answered or carried on is marked stale and the written answer is read instead; the woken session can report again without `revise`.
+- Twelve calls and five refusals per run, four requests in flight, 128 KiB per body, loopback Host and Origin only, 401 only for a missing or malformed bearer (anything else is a tool error, so a client does not start OAuth).
+
+To check by hand, with a signed-in Claude (`cargo test real_report -- --ignored --nocapture`, which starts a stub server, a real `--bg` session in `~/Code` and one resume, and stops and removes what it started):
+
+1. That a `--bg` session loads the `--mcp-config` file and calls the tool without a permission prompt. `claude agents --help` lists `--mcp-config` among the flags applied to dispatched sessions but not `--allowedTools`, so a permission prompt for the tool is possible: it would show as Needs permission and can only be answered in Terminal.
+2. That the token is on no command line (the test checks `ps`) and where Claude keeps the config: the test prints whether the token is in the job's files. If it is, any process of the same user can read it for as long as the job exists; the token only works for one run and only while it is live.
+3. Whether a `--resume` with no flag still has the tool. The test prints KEPT or LOST. Either is workable: the person's answer marks the earlier report stale, and the written answer is read when the resumed turn does not report again.
+4. Whether a session that started while Gossamr was restarting (the tool server rebinds the port it used last time, and a bind failure only disables the tool) reconnects to a server that was down, and whether Claude defers the tool's schema so the prompt's field list is what the agent calls it from.
+
 ## Cleanup check (PR 12a)
 
 `real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_work_is_refused` (scratch config, signed out) stops two sessions and removes them straight away. The clean one was removed on the first try (0 waits, 0.7 s): the lock refusal described above did not appear for a signed-out session that never did model work, so the retry loop is covered by the scripted CLI and was not seen firing for real in this run. The session with a commit that was never pushed was refused with stdout text ending in a suggestion to run `claude rm <id> --discard-unpushed`, and its worktree and branch were left in place. Gossamr returns that text unchanged and never passes the flag. Not checked: the lock refusal for a session that was doing model work when stopped.

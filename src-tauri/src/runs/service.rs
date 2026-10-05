@@ -15,6 +15,7 @@ use chrono::Utc;
 use serde::Serialize;
 
 use super::cli::{AgentEntry, LaunchRequest, ShortId};
+use super::redact::redact;
 use super::failure::Failure;
 use super::index::{Entry, RunIndex};
 use super::launcher::RunLauncher;
@@ -24,7 +25,7 @@ use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
-use crate::domain::{render_prompt, Run, RunKind, RunQuery, RunSpec, RunState, GUARD};
+use crate::domain::{render_prompt, Run, RunKind, RunQuery, RunSpec, RunState, GUARD, REPORT_GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 
@@ -92,6 +93,8 @@ pub struct RunService {
     /// One switch at a time: turning on reads the environment, which can take a while.
     pub(super) switching: tokio::sync::Mutex<()>,
     pub(super) settings: Mutex<AgentSettings>,
+    /// Where the run-report tool is served; absent when the server couldn't start.
+    pub(super) report: Option<Arc<super::report::ReportChannel>>,
     pub(super) timing: Timing,
     pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
     pub(super) idle_polls: Mutex<std::collections::HashMap<String, u32>>,
@@ -181,6 +184,7 @@ impl RunService {
             config_lock: Mutex::new(()),
             switching: tokio::sync::Mutex::new(()),
             settings: Mutex::new(AgentSettings { max_runs: MAX_CONCURRENT, ..AgentSettings::default() }),
+            report: None,
             timing: Timing::default(),
             misses: Mutex::new(std::collections::HashMap::new()),
             idle_polls: Mutex::new(std::collections::HashMap::new()),
@@ -230,7 +234,9 @@ impl RunService {
     }
 
     pub fn with_settings(self, settings: AgentSettings) -> Self {
-        *self.settings.lock().expect("settings lock poisoned") = settings.clamped();
+        let settings = settings.clamped();
+        self.core.set_report_enabled(settings.report_result);
+        *self.settings.lock().expect("settings lock poisoned") = settings;
         self
     }
 
@@ -285,7 +291,7 @@ impl RunService {
     async fn fail(&self, run: &mut Run, why: &Failure) -> Result<()> {
         let now = Utc::now();
         run.state = RunState::Failed;
-        run.error = Some(why.to_string());
+        run.error = Some(redact(&why.to_string()));
         run.failure = Some(why.into());
         run.ended_at = Some(now);
         run.last_progress_at = now;
@@ -386,13 +392,15 @@ impl RunService {
         self.store(run).await?;
         self.remember(run);
 
+        let report = self.offer_report(run).await;
         let spec = &run.spec;
         let request = LaunchRequest {
             cwd: spec.clone_path.clone(),
             name: title_of(run),
             worktree: spec.name.clone(),
-            guard: GUARD.into(),
+            guard: if report.is_some() { format!("{GUARD} {REPORT_GUARD}") } else { GUARD.into() },
             prompt: render_prompt(spec),
+            report,
         };
         self.in_flight.lock().expect("in-flight lock poisoned").insert(run.id.clone());
         let outcome = tc.cli.launch(&request).await;
@@ -497,6 +505,7 @@ impl RunService {
         for mut run in waiting {
             let _ = self.fail(&mut run, &why).await;
         }
+        self.sweep_report_files().await;
     }
 
     pub async fn preflight(&self, spec: Option<RunSpec>) -> Result<Preflight> {

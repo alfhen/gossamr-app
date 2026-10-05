@@ -16,6 +16,7 @@ impl From<rusqlite::Error> for Error {
 mod cache;
 mod code;
 mod proposals;
+mod reports;
 mod runs;
 mod schema;
 mod watch;
