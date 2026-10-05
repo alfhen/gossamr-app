@@ -1,10 +1,11 @@
 import { useState } from "react";
 import type { Run } from "../types";
 import { Box, Btn, Sec } from "./AgentSheet";
+import { leftoverSessions } from "./cleanupLogic";
 import { useRuns } from "./runsStore";
 
 export interface RunCleanupViewProps {
-  run: Pick<Run, "worktreeRemovedAt">;
+  run: Pick<Run, "worktreeRemovedAt" | "earlierSessions">;
   reason: string | null;
   asking: boolean;
   busy: boolean;
@@ -17,9 +18,27 @@ export interface RunCleanupViewProps {
 
 export function RunCleanupView({ run, reason, asking, busy, refused, onAsk, onCancel, onConfirm }: RunCleanupViewProps) {
   if (run.worktreeRemovedAt) {
+    const left = leftoverSessions(run);
     return (
       <Sec title="Clean up">
         <p className="m-0 text-ws-ink2">The worktree and its branch were removed. The result above is kept.</p>
+        {left > 0 && (
+          <Box>
+            <p className="m-0 text-ws-ink">
+              {left === 1 ? "An earlier session of this run is still there." : `${left} earlier sessions of this run are still there.`}
+            </p>
+            {refused && (
+              <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">
+                Claude kept it: {refused}
+              </p>
+            )}
+            <div>
+              <Btn icon="folder" disabled={busy} onClick={onConfirm}>
+                {busy ? "Removing…" : "Try removing again"}
+              </Btn>
+            </div>
+          </Box>
+        )}
       </Sec>
     );
   }
