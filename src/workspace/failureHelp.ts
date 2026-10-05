@@ -34,7 +34,7 @@ export function failureHelp(run: Run): FailureHelp | null {
       return {
         kind: "untrustedFolder",
         summary: "Claude asks you once per folder before it will work there.",
-        detail: `Claude hasn't been trusted in ${failure.path} yet, so it won't start an agent there. Terminal opens in that folder with Claude: accept its trust question, then close it and retry. Gossamr doesn't change Claude's settings for you.`,
+        detail: `Claude hasn't been trusted in ${failure.path} yet, so it won't start an agent there. Terminal opens in that folder with Claude: accept its trust question, then close it and retry. Claude asks because a cloned repository's own hooks, tools and settings run with the agent. Gossamr doesn't change Claude's settings for you.`,
         primary: { label: "Trust this folder in Terminal", act: "terminal" },
         command: { text: `cd ${shellQuote(failure.path)} && claude`, note: null },
         retryNeedsTerminal: true,

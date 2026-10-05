@@ -305,6 +305,8 @@ export interface MockRunsOptions {
   pipRun?: boolean;
   /** Starts with the description update each finished plan run would have left on its ticket. */
   planDescription?: boolean;
+  /** Claude refuses every clone until it is trusted: the pre-flight offers Trust this folder, and a started run fails a moment later. */
+  untrusted?: boolean;
 }
 
 /** Where the sample clones are, by repository; `acme/ops` has none, to show the blocked state. */
@@ -324,6 +326,8 @@ const freshCopy = (repo: string): FreshCopy => {
   return { path, command: `git clone https://github.com/${repo}.git ${path}`, ghFallback: true, occupied: false };
 };
 
+const REFUSAL_DELAY_MS = 600;
+
 const LIVE: RunState[] = ["queued", "launching", "working", "needsAnswer", "needsPermission", "systemBlocked"];
 
 const slugOf = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").slice(0, 3).join("-");
@@ -340,6 +344,7 @@ export class MockRuns {
 
   private readonly epoch: number;
   private readonly claude: RunsEnvironment["claude"];
+  private readonly untrustedClones: boolean;
   readonly pipRun: boolean;
   private picked = new Map<string, string>();
   /** Copies made in `~/Gossamr/agents` through `cloneFresh`. */
@@ -371,6 +376,7 @@ export class MockRuns {
     this.limits = { ...this.limits, maxRuns: o.cap ?? 6 };
     this.pipRun = !!o.pipRun;
     this.seedDescriptions = !!o.planDescription;
+    this.untrustedClones = !!o.untrusted;
     const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
     this.proposals.onApplied = (p) => p.origin.type === "run" && p.intent.type === "create" && this.changed();
@@ -507,6 +513,7 @@ export class MockRuns {
     this.proposals.applyRun(proposalId, run.id);
     this.runs = [run, ...this.runs];
     this.changed();
+    if (this.untrustedClones && !this.trusted.has(spec.clonePath)) setTimeout(() => this.refuse(run.id, spec.clonePath), REFUSAL_DELAY_MS);
     return run;
   }
 
@@ -710,6 +717,21 @@ export class MockRuns {
     this.terminals.push(id);
   }
 
+  /** Stands in for the launch Claude refuses in a folder it hasn't asked about yet. */
+  private refuse(id: string, path: string) {
+    const run = this.get(id);
+    if (run?.state !== "queued") return;
+    const at = this.now();
+    this.update(id, { state: "failed", endedAt: at, lastProgressAt: at, ...untrusted(path) });
+    this.changed();
+  }
+
+  /** Stands in for Terminal opened in a clone before any run: the folder counts as trusted from here. */
+  trustPath(path: string) {
+    if (!Object.values(CLONES).some((list) => list.some((c) => c.path === path)) && ![...this.fresh.values()].some((c) => c.path === path)) throw new Error(`${path} isn't in a place Gossamr looks for clones.`);
+    this.trusted.add(path);
+  }
+
   signIn(id: string) {
     this.failed(id, "notSignedIn", "Terminal can be opened to sign in only for a run that failed because Claude isn't signed in.");
     this.signedIn = true;
@@ -766,6 +788,9 @@ export class MockRuns {
       else if (clone.dirty) add("amber", `Clone: ${clone.path} on ${clone.branch}. It has uncommitted changes. The agent won't touch your files, but its worktree starts from your current HEAD (${clone.branch}).`);
       else if (clone.branch !== spec.base) add("amber", `Clone: ${clone.path} on ${clone.branch}. It is on ${clone.branch}, not ${spec.base}. The agent's worktree starts from your current HEAD and is told to switch to ${spec.base}.`);
       else add("green", `Clone: ${clone.path} on ${clone.branch}.`);
+      if (clone && this.untrustedClones && !this.trusted.has(clone.path)) {
+        rows.push({ level: "amber", text: `Claude hasn't been opened in ${clone.path} yet: trust it once. Claude asks before a repository's own settings, hooks and tools run with the agent, and the launch is refused until you accept.`, action: { type: "trustFolder", path: clone.path } });
+      }
     }
     if (claude !== "missing") add("green", "Agents run as you, in your permission mode: auto");
     if (spec?.planFromRun && spec.plan) add("green", `This build follows the plan from run ${spec.planFromRun} as written in the prompt (${[...spec.plan].length} characters). If the plan is wrong it is told to stop and say so.`);

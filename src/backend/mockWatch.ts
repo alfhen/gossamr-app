@@ -8,7 +8,7 @@ export interface MockOptions {
   /** How the device flow ends once the sample waits for it: authorised after `delayMs`, or refused or expired. */
   device?: { delayMs: number; outcome: "authorised" | "denied" | "expired" };
   /** Which scripted agent runs exist, and the moment their ages count back from. */
-  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; planDescription?: boolean };
+  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; planDescription?: boolean; untrusted?: boolean };
 }
 
 interface Stored {
@@ -88,7 +88,7 @@ export class MockWatch {
   }
 }
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many` or `failures` changes the scripted agent runs, `?runsEnv=missing` or `signedOut` shows the Claude banners, `?runsCap=3` sets how many agents may run at once and `?pipRun=1` starts with a run draft from Pip. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many` or `failures` changes the scripted agent runs, `?runsEnv=missing` or `signedOut` shows the Claude banners, `?runsCap=3` sets how many agents may run at once `?pipRun=1` starts with a run draft from Pip and `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -113,6 +113,7 @@ export function mockOptionsFromUrl(): MockOptions {
     cap: count("runsCap"),
     pipRun: params.get("pipRun") === "1",
     planDescription: true,
+    untrusted: params.get("runsUntrusted") === "1",
   };
   return options;
 }

@@ -191,6 +191,8 @@ export interface Backend {
   runsAttach(id: string): Promise<void>;
   /** Opens Terminal in the run's clone running `claude`, so the person can accept Claude's trust question. Rejects unless the run failed because its folder isn't trusted. */
   runsTrustFolder(id: string): Promise<void>;
+  /** Opens Terminal in a clone running `claude`, before any run exists, so the person can accept Claude's trust question. Rejects for a folder that isn't in a place Gossamr looks for clones. */
+  runsTrustPath(path: string): Promise<void>;
   /** Opens Terminal in the run's clone running `claude`, so the person can sign in. Rejects unless the run failed because Claude isn't signed in. */
   runsSignIn(id: string): Promise<void>;
   /** What a run would need and run as; with no spec, only the environment and capacity. */
