@@ -664,6 +664,15 @@ async fn runs_draft_plan_comment(app: AppHandle, core: State<'_, CoreState>, run
     Ok(made)
 }
 
+/// Drafts the ticket's description with the plan of a finished Plan run added. A draft only: the person reads the diff and approves it.
+#[tauri::command]
+async fn runs_draft_plan_description(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
+    runs.ensure_enabled()?;
+    let made = core.draft_run_plan_description(&id).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(made)
+}
+
 /// Reads a build draft's plan again from the plan run it came from, replacing the person's edits to it.
 #[tauri::command]
 async fn runs_refresh_plan(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
@@ -1078,6 +1087,7 @@ pub fn run() {
             runs_draft_comment,
             runs_draft_blocker,
             runs_draft_plan_comment,
+            runs_draft_plan_description,
             runs_refresh_plan,
             runs_refresh_build_account,
             runs_draft_ticket,

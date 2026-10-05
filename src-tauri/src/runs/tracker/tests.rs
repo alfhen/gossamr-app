@@ -668,6 +668,75 @@ async fn only_a_triage_with_a_subtasks_section_proposes_one_and_the_setting_appl
     assert!(subtask_drafts(&rig).await.is_empty() && comment_drafts(&rig).await.is_empty());
 }
 
+async fn description_drafts(rig: &Rig) -> Vec<crate::domain::Proposal> {
+    let all = rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap();
+    all.into_iter().filter(|p| matches!(p.intent, crate::domain::Intent::Rewrite { .. })).collect()
+}
+
+const PLAN_ANSWER: &str = "## Approach\n\nRound once.\n\n## Steps\n\n1. Fix cart.rs\n\nFor Jira:\nPlan attached to the run.";
+const SECOND_PLAN_ANSWER: &str = "## Approach\n\nRound twice.\n\nFor Jira:\nPlan attached to the run, revised.";
+
+#[tokio::test]
+async fn a_plan_that_finishes_leaves_its_status_comment_and_a_description_update_and_says_so_once() {
+    let rig = ready().await;
+    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    rig.poll().await;
+    finish_with(&rig, &run, PLAN_ANSWER);
+    rig.poll().await;
+    let drafts = description_drafts(&rig).await;
+    let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
+    assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
+    assert_eq!(draft.created_by, crate::domain::CreatedBy::User);
+    assert!(matches!(&draft.intent, crate::domain::Intent::Rewrite { body: Some(b), .. } if b.to.to_markdown().contains("## Gossamr Plan") && b.to.to_markdown().contains("Round once.") && !b.to.to_markdown().contains("For Jira")));
+    assert_eq!(comment_drafts(&rig).await.len(), 1, "the status comment is still drafted");
+    assert!(rig.fx.tracker.intents().is_empty(), "nothing is written");
+    assert_eq!(rig.drafted.lock().unwrap().len(), 1);
+    assert_eq!(rig.noticed(), [(Attention::PlanDrafted, RunState::Done)]);
+    let notice = notice_text(&rig.get(&run).await, Attention::PlanDrafted);
+    assert_eq!((notice.title.as_str(), notice.body.starts_with("Description update ready")), ("Plan finished on CA-1", true));
+    rig.poll().await;
+    assert_eq!(description_drafts(&rig).await.len(), 1, "polling again makes no second");
+}
+
+#[tokio::test]
+async fn a_continued_plan_that_finishes_again_replaces_the_waiting_description_update() {
+    let rig = ready().await;
+    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    rig.poll().await;
+    finish_with(&rig, &run, PLAN_ANSWER);
+    rig.poll().await;
+    rig.set(&run, |r| r.state = RunState::Working).await;
+    rig.session(&run, working);
+    rig.poll().await;
+    finish_with(&rig, &run, SECOND_PLAN_ANSWER);
+    rig.poll().await;
+    let drafts = description_drafts(&rig).await;
+    let waiting: Vec<_> = drafts.iter().filter(|p| p.state == crate::domain::ProposalState::Pending).collect();
+    let [now] = waiting.as_slice() else { panic!("{drafts:?}") };
+    assert!(matches!(&now.intent, crate::domain::Intent::Rewrite { body: Some(b), .. } if b.to.to_markdown().contains("Round twice.") && !b.to.to_markdown().contains("Round once.")));
+    assert_eq!(drafts.len(), 2, "the first was retired, not duplicated");
+}
+
+#[tokio::test]
+async fn a_plan_on_a_tracker_that_cannot_edit_text_notifies_like_any_other_and_the_setting_applies() {
+    let rig = ready().await;
+    rig.fx.tracker.cannot_edit_text.store(true, std::sync::atomic::Ordering::SeqCst);
+    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    rig.poll().await;
+    finish_with(&rig, &run, PLAN_ANSWER);
+    rig.poll().await;
+    assert!(description_drafts(&rig).await.is_empty());
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
+
+    let rig = ready().await;
+    rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
+    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    rig.poll().await;
+    finish_with(&rig, &run, PLAN_ANSWER);
+    rig.poll().await;
+    assert!(description_drafts(&rig).await.is_empty() && comment_drafts(&rig).await.is_empty());
+}
+
 fn finish_without_a_transcript(rig: &Rig, run: &Run, summary: &str) {
     rig.job(run.short_id.as_ref().unwrap(), |j| j.result = Some(summary.into()));
     rig.session(run, |e| {

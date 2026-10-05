@@ -221,8 +221,8 @@ pub fn person_edited_rewrite(p: &Proposal) -> bool {
     matches!(p.intent, Intent::Rewrite { .. }) && p.revisions.iter().any(|r| r.note == EDITED_NOTE)
 }
 
-/// What Pip may revise: its own pending drafts, and a pending comment, new ticket or breakdown into subtasks the
-/// person's agent run left for them. The person made none of these by hand, and all stay theirs to approve.
+/// What Pip may revise: its own pending drafts, and a pending comment, new ticket, breakdown into subtasks or description
+/// update the person's agent run left for them. The person made none of these by hand, and all stay theirs to approve.
 pub fn require_pip_may_revise(p: &Proposal) -> Result<()> {
     if person_edited_run(p) {
         return Err(refuse("the user edited this agent run draft, so Pip can't change it any more"));
@@ -230,7 +230,7 @@ pub fn require_pip_may_revise(p: &Proposal) -> Result<()> {
     if person_edited_rewrite(p) {
         return Err(refuse("the user edited this description draft, so Pip can't change it any more"));
     }
-    let from_run = matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. })) && p.created_by == CreatedBy::User;
+    let from_run = matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. } | Intent::Rewrite { .. })) && p.created_by == CreatedBy::User;
     if p.created_by != CreatedBy::Pip && !from_run {
         return Err(refuse("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it"));
     }

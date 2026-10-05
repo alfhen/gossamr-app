@@ -22,6 +22,7 @@ pub(crate) mod code;
 mod drafts;
 mod run_results;
 mod pip_runs;
+mod plan_description;
 mod rewrites;
 mod ticket_context;
 pub use pip_runs::PipRunAsk;
@@ -30,6 +31,7 @@ mod watch;
 
 pub use code::{CodeRef, CodeService};
 pub use drafts::Edit;
+pub use plan_description::PlanDescription;
 pub use run_results::{PlanComment, RunOutcome, SUMMARY_ONLY};
 pub use watch::{CatalogPage, WatchState};
 

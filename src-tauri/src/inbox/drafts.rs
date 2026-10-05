@@ -400,7 +400,7 @@ impl Core {
         let links = item.as_ref().map(|i| self.ticket_dev_links(i)).unwrap_or_default();
         let intent = self
             .with_db_for(&scope, |db| {
-                spec.ticket_block = item.as_ref().map(|i| db.item(i)).transpose()?.flatten().map(|w| snapshot(db, &w, &links));
+                spec.ticket_block = item.as_ref().map(|i| db.item(i)).transpose()?.flatten().map(|w| snapshot(db, &w, &links, spec.plan.is_some()));
                 Ok(Intent::StartRun { connection_id: connection_id.clone(), item: item.clone(), spec })
             })
             .await?;
@@ -429,7 +429,7 @@ impl Core {
             if p.state == ProposalState::Pending {
                 let mut fresh = spec.clone();
                 if let Some(work) = item.as_ref().map(|i| db.item(i)).transpose()?.flatten() {
-                    fresh.ticket_block = Some(snapshot(db, &work, &links));
+                    fresh.ticket_block = Some(snapshot(db, &work, &links, fresh.plan.is_some()));
                 }
                 if let Some(change) = &pr {
                     fresh.base = change.base_ref.clone().unwrap_or(fresh.base);
@@ -1150,7 +1150,7 @@ mod tests {
         let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let p = drafted_run(&fx).await;
         let item = fx.item("CA-1");
-        let direct = fx.core.with_db_for(&fx.scope, |db| Ok(snapshot(db, &db.item(&item)?.unwrap(), &[]))).await.unwrap();
+        let direct = fx.core.with_db_for(&fx.scope, |db| Ok(snapshot(db, &db.item(&item)?.unwrap(), &[], false))).await.unwrap();
         assert_eq!(spec_of(&p).ticket_block.as_deref(), Some(direct.as_str()));
         let first = fx.core.runs_review(&p.id).await.unwrap();
         assert_eq!(first.ticket_block.as_deref(), Some(direct.as_str()));

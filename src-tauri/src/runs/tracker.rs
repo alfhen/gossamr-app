@@ -17,7 +17,7 @@ use super::redact::redact;
 use super::service::{belongs_to, RunService};
 use super::state::{self, map_state, parse_at, progress_at};
 use super::toolchain::Toolchain;
-use crate::domain::{Run, RunEvent, RunQuery, RunState};
+use crate::domain::{Run, RunEvent, RunKind, RunQuery, RunState};
 use crate::notify::Notice;
 
 pub const POLL_BUSY: Duration = Duration::from_secs(4);
@@ -46,6 +46,8 @@ pub enum Attention {
     DraftedTicket,
     /// Finished, and a breakdown into subtasks is waiting as a draft.
     Breakdown,
+    /// A Plan run finished, and a description update that adds its plan is waiting as a draft.
+    PlanDrafted,
     Failed,
     /// Gossamr stopped it for passing a limit.
     Limit,
@@ -83,6 +85,7 @@ pub fn notice_text(run: &Run, why: Attention) -> Notice {
         }
         Attention::Limit => Notice { title: format!("{topic} was stopped"), body: run.error.clone().unwrap_or_else(|| "It passed a limit".into()) },
         Attention::Drafted => Notice { title: format!("Draft ready on {topic}"), body: "An agent finished. Read its comment before anything is posted".into() },
+        Attention::PlanDrafted => Notice { title: format!("Plan finished on {topic}"), body: "Description update ready. Read it before anything is written to the ticket".into() },
         Attention::Breakdown => Notice { title: format!("Breakdown proposed on {topic}"), body: "An agent finished. Read the subtasks before anything is created".into() },
         Attention::DraftedTicket => Notice { title: "Draft ticket ready".into(), body: format!("An agent finished in {topic}. Read the ticket before anything is created") },
         Attention::Done => Notice { title: format!("{topic} finished"), body: "Open it to see what it found".into() },
@@ -357,7 +360,8 @@ impl RunService {
         Ok(touched.then(|| run.connection_id.clone()))
     }
 
-    /// The drafts a finished run leaves: a comment on its ticket and, for a Triage, its proposed breakdown; or a new
+    /// The drafts a finished run leaves: a comment on its ticket and, for a Triage, its proposed breakdown, for a Plan the
+    /// description update that adds its plan; or a new
     /// ticket when it has none. `None` when nothing was made. A failure is only logged: the run's result is already
     /// saved, and the sheet's own button still drafts it.
     pub(super) async fn draft_for(&self, run: &Run) -> Option<Attention> {
@@ -368,6 +372,9 @@ impl RunService {
             }
             if self.logged(run, self.core.draft_run_subtasks(&run.id).await) {
                 why = Some(Attention::Breakdown);
+            }
+            if run.spec.kind == RunKind::Plan && self.logged(run, self.core.auto_draft_run_plan_description(&run.id).await) {
+                why = Some(Attention::PlanDrafted);
             }
         } else if self.logged(run, self.core.auto_draft_run_ticket(&run.id).await) {
             why = Some(Attention::DraftedTicket);

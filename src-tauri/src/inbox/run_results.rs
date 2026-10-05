@@ -33,6 +33,8 @@ pub struct RunOutcome {
     pub summary_only: bool,
     /// For a Plan run: the draft of the whole plan as a comment, in whatever state it is now.
     pub plan_draft: Option<RunDraft>,
+    /// For a Plan run on a ticket: the description update that adds the plan, or why there is none.
+    pub plan_description: Option<super::PlanDescription>,
 }
 
 /// A plan drafted as a comment, and whether the comment had to be cut to fit.
@@ -117,7 +119,7 @@ fn is_plan_comment(p: &Proposal) -> bool {
     p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_LABEL))
 }
 
-fn label_of(run: &Run) -> String {
+pub(super) fn label_of(run: &Run) -> String {
     match &run.short_id {
         Some(short) => format!("From agent run {short}"),
         None => "From an agent run".into(),
@@ -158,6 +160,7 @@ impl Core {
             subtasks_draft: self.subtask_drafts_of(&run).await?.into_iter().next().map(|p| RunDraft { id: p.id, state: p.state }),
             summary_only: run.state == RunState::Done && result.is_some() && !run.result_complete,
             plan_draft: self.plan_comment_drafts_of(&run).await?.into_iter().next().map(|p| RunDraft { id: p.id, state: p.state }),
+            plan_description: self.plan_description_of(&run).await?,
         })
     }
 
@@ -539,7 +542,7 @@ impl Core {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::inbox) mod tests {
     use chrono::Utc;
 
     use super::*;
@@ -550,7 +553,7 @@ mod tests {
 
     const RESULT: &str = "The lag comes from one consumer.\n\nFor Jira:\nAdd a backoff to the consumer.";
 
-    async fn approved(fx: &Fixture, spec: RunSpec, item: Option<ItemRef>, result: &str, edit: impl FnOnce(&mut Run)) -> Run {
+    pub(in crate::inbox) async fn approved(fx: &Fixture, spec: RunSpec, item: Option<ItemRef>, result: &str, edit: impl FnOnce(&mut Run)) -> Run {
         let p = fx.core.draft_run(spec, item).await.unwrap();
         let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
         let mut run = fx.core.runs_approve(&p.id, &digest).await.unwrap();
@@ -566,7 +569,7 @@ mod tests {
 
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
-    fn next_spec(fx: &Fixture) -> RunSpec {
+    pub(in crate::inbox) fn next_spec(fx: &Fixture) -> RunSpec {
         let clone = fx.home.join("webshop");
         std::fs::create_dir_all(clone.join(".git")).unwrap();
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1060,9 +1063,9 @@ mod tests {
         assert!(fx.core.run_outcome(&plain.id).await.unwrap().subtasks.is_empty(), "only a Triage proposes a breakdown");
     }
 
-    const PLAN: &str = "## Approach\n\nRound in one place.\n\n## Files\n\n- src/cart.rs\n\n## Steps\n\n1. Fix the rounding.\n2. Add a test.\n\nFor Jira:\nPlan attached to the run: round once, in cart.rs.";
+    pub(in crate::inbox) const PLAN: &str = "## Approach\n\nRound in one place.\n\n## Files\n\n- src/cart.rs\n\n## Steps\n\n1. Fix the rounding.\n2. Add a test.\n\nFor Jira:\nPlan attached to the run: round once, in cart.rs.";
 
-    async fn plan_with(fx: &Fixture, result: &str) -> Run {
+    pub(in crate::inbox) async fn plan_with(fx: &Fixture, result: &str) -> Run {
         approved(fx, RunSpec { kind: RunKind::Plan, ..next_spec(fx) }, Some(fx.item("CA-1")), result, |_| {}).await
     }
 
