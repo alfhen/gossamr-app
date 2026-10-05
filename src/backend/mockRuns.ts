@@ -596,9 +596,10 @@ export class MockRuns {
     const section = markdownOf(planSectionOf(to)!);
     const mine = this.planDescriptionDrafts(run.id).filter((p) => p.intent.type === "rewrite" && p.intent.body && markdownOf(planSectionOf(p.intent.body.to)!) === section);
     if (mine.some((p) => (p.state.type !== "pending" && (!manual || p.state.type === "applied")) || (p.state.type === "pending" && p.intent.type === "rewrite" && p.intent.body?.fromText === fromText))) return "have";
-    for (const older of this.proposals.list({ states: ["pending"], item })) {
-      if (older.origin.type === "run" && older.intent.type === "rewrite" && older.intent.body && planSectionOf(older.intent.body.to)) this.proposals.retire(older.id, "replaced by a newer plan");
-    }
+    const waiting = this.proposals.list({ states: ["pending"], item }).filter((p) => p.origin.type === "run" && p.intent.type === "rewrite" && p.intent.body && planSectionOf(p.intent.body.to));
+    const edited = waiting.find((p) => p.revisions.some((r) => r.note === "Edited"));
+    if (edited) return { unavailable: `A description update you edited is already waiting on ${item.key} (draft ${edited.id}). Approve or skip it, then draft the plan again.` };
+    for (const older of waiting) this.proposals.retire(older.id, "replaced by a newer plan");
     const intent: Intent = { type: "rewrite", item, title: null, body: { from, to, fromText, toText: markdownOf(to) }, flattened: [] };
     return this.proposals.fromRun(intent, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
   }

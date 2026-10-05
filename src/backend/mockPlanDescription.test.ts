@@ -124,6 +124,27 @@ describe("a finished plan run in the sample build", () => {
   });
 });
 
+describe("an edited description update in the sample build", () => {
+  it("is kept when a newer plan finishes, and the person is told why no second one is drafted", async () => {
+    const b = sample();
+    const run = planRun(b);
+    const [draft] = rewrites(b);
+    await b.proposalsEdit(draft.id, { type: "rewrite", body: "Hello\n\n## Gossamr Plan\n\nThe person's own words." });
+    await expect(b.runsDraftPlanDescription(run.id)).rejects.toThrow(/you edited/);
+    expect(rewrites(b)).toHaveLength(1);
+    expect(b.proposals.get(draft.id)?.state.type).toBe("pending");
+  });
+
+  it("is not in the way of an unedited one, which a newer plan retires", async () => {
+    const b = new MockBackend({ runs: { seed: "kinds", epoch: NOW } });
+    const run = planRun(b);
+    const first = await b.runsDraftPlanDescription(run.id);
+    b.runs.advance();
+    await b.proposalsSkip(first.id);
+    expect((await b.runsDraftPlanDescription(run.id)).state.type).toBe("pending");
+  });
+});
+
 describe("Pip and a plan's description draft", () => {
   const screen = { view: "Agents", selection: [], item: null, filter: null, run: null } as never;
   const ask = (b: MockBackend, text: string, discussed: string | null) => scriptPip(text, screen, [], b.runs.list(), NOW, b.proposals.list(), discussed);
