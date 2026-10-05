@@ -67,6 +67,21 @@ describe("a folder Claude has not been opened in", () => {
     expect(setup().rechecking).toBe(false);
   });
 
+  it("does not carry a check in flight over to a new draft", async () => {
+    await drafted();
+    let release: (p: Preflight) => void = () => {};
+    vi.spyOn(backend, "runsPreflight").mockImplementationOnce(() => new Promise<Preflight>((r) => (release = r)));
+    const pending = setup().recheck();
+    expect(setup().rechecking).toBe(true);
+    await setup().chooseRepo("acme/gateway");
+    expect(setup().rechecking).toBe(false);
+    const fresh = setup().preflight;
+    release({ blocking: true, rows: [{ level: "red", text: "stale" }] });
+    await pending;
+    expect(setup().preflight).toBe(fresh);
+    expect(setup().rechecking).toBe(false);
+  });
+
   it("says so when Terminal could not be opened", async () => {
     await drafted();
     vi.spyOn(backend, "runsTrustPath").mockRejectedValueOnce(new Error("nope"));

@@ -76,8 +76,10 @@ mod tests {
         assert_eq!(is_trusted(&dir, &dir), None, "no file");
         write(&dir, "not json");
         assert_eq!(is_trusted(&dir, &dir), None);
-        write(&dir, r#"{"projects": null}"#);
-        assert_eq!(is_trusted(&dir, &dir), None, "projects that isn't an object");
+        for odd in [r#"{"projects": null}"#, r#"{"projects": []}"#, r#"{"projects": "x"}"#] {
+            write(&dir, odd);
+            assert_eq!(is_trusted(&dir, &dir), None, "{odd}: projects that isn't an object");
+        }
         write(&dir, r#"{"numStartups": 3}"#);
         assert_eq!(is_trusted(&dir, &dir), None, "no projects at all: not a config this reads");
         let _ = std::fs::remove_dir_all(dir);
