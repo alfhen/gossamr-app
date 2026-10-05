@@ -682,6 +682,8 @@ export interface RunsEnabledChange {
 export interface PreflightRow {
   level: "green" | "amber" | "red";
   text: string;
+  /** A step the row offers: Terminal in this folder to trust it. */
+  action?: { type: "trustFolder"; path: string };
 }
 
 export interface Preflight {

@@ -480,6 +480,10 @@ export class MockBackend implements Backend {
     this.runs.trustFolder(id);
   }
 
+  async runsTrustPath(path: string) {
+    this.runs.trustPath(path);
+  }
+
   async runsSignIn(id: string) {
     this.runs.signIn(id);
   }

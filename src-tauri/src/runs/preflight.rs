@@ -1,6 +1,6 @@
 //! What the person sees, before approving, about whether a run can start and what it will run as.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -9,6 +9,7 @@ use super::failure::Failure;
 use super::index::RunIndex;
 use super::repo::{inspect, Git};
 use super::toolchain::ToolchainSource;
+use super::trust::is_trusted;
 use crate::domain::{CodeChange, RunKind, RunSpec};
 
 const PATH_SHOWN: usize = 300;
@@ -21,10 +22,19 @@ pub enum Level {
     Red,
 }
 
+/// A step the page offers beside a row.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum RowAction {
+    TrustFolder { path: PathBuf },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Row {
     pub level: Level,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<RowAction>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -38,7 +48,11 @@ struct Rows(Vec<Row>);
 
 impl Rows {
     fn add(&mut self, level: Level, text: impl Into<String>) {
-        self.0.push(Row { level, text: text.into() });
+        self.0.push(Row { level, text: text.into(), action: None });
+    }
+
+    fn add_with(&mut self, level: Level, text: impl Into<String>, action: RowAction) {
+        self.0.push(Row { level, text: text.into(), action: Some(action) });
     }
 
     fn red(&mut self, why: &Failure) {
@@ -100,6 +114,7 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
             rows.add(Level::Green, format!("Shell environment read ({} variables). Agents get this PATH: {path}", tc.env.len()));
             if let Some(spec) = spec {
                 clone_row(&mut rows, &Git::new(tc.env.clone()), spec).await;
+                trust_row(&mut rows, config_dir.as_deref(), &spec.clone_path);
             }
             let mode = config_dir.as_deref().and_then(default_mode);
             if let Some(mode) = &mode {
@@ -136,6 +151,17 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
     }
     let blocking = rows.0.iter().any(|r| r.level == Level::Red);
     Preflight { rows: rows.0, blocking }
+}
+
+/// Amber, not red: the config is read as Claude writes it today, and a folder it doesn't list may still be trusted.
+fn trust_row(rows: &mut Rows, config_dir: Option<&Path>, folder: &Path) {
+    if config_dir.and_then(|dir| is_trusted(dir, folder)) == Some(false) {
+        rows.add_with(
+            Level::Amber,
+            format!("Claude hasn't been opened in {} yet: trust it once. Claude asks before a repository's own settings, hooks and tools run with the agent, and the launch is refused until you accept.", folder.display()),
+            RowAction::TrustFolder { path: folder.to_path_buf() },
+        );
+    }
 }
 
 async fn clone_row(rows: &mut Rows, git: &Git, spec: &RunSpec) {

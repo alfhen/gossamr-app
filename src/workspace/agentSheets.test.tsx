@@ -372,7 +372,7 @@ describe("the setup sheet", () => {
       expect(html).toContain('data-copy="git clone https://github.com/acme/storefront.git /Users/sample/Gossamr/agents/acme/storefront"');
       expect(html).toContain("the repository&#x27;s own hooks don&#x27;t run");
       expect(html).toContain("gh repo clone");
-      expect(html).toContain("trust the folder once, in Terminal");
+      expect(html).toContain("trust it once: the checks below offer a button that opens Terminal there");
       expect(disabled(html, "Clone into ~/Gossamr/agents/acme/storefront")).toBe(false);
       expect(disabled(html, "Start agent")).toBe(true);
     });

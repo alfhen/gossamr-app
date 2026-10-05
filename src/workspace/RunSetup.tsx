@@ -40,6 +40,8 @@ export interface SetupActions {
   searchPrs(query: string): void;
   choosePr(number: number): void;
   setAllowPush(on: boolean): void;
+  trustFolder?(path: string): void;
+  recheck?(): void;
   refreshPlan?(): void;
   removePlan?(): void;
   refreshBuildAccount?(): void;
@@ -73,6 +75,7 @@ export interface SetupViewProps {
   error: string | null;
   cloning: boolean;
   cloneError: string | null;
+  rechecking?: boolean;
   changed: boolean;
   fromPip: boolean;
   instruction: string;
@@ -127,7 +130,7 @@ function FreshOffer({ p, fresh }: { p: SetupViewProps; fresh: FreshCopy }) {
           <CodeBox text={fresh.command} what="the clone command" wrap />
           <p className="m-0 text-xs text-ws-ink3">
             It signs in the way git does in your shell, and the repository&apos;s own hooks don&apos;t run.
-            {fresh.ghFallback && " If git can't sign in, it tries gh repo clone with your GitHub CLI login."} The first agent in a new folder needs you to trust the folder once, in Terminal.
+            {fresh.ghFallback && " If git can't sign in, it tries gh repo clone with your GitHub CLI login."} The first agent in a new folder needs you to trust it once: the checks below offer a button that opens Terminal there.
           </p>
         </>
       )}
@@ -482,7 +485,7 @@ export function RunSetupView(p: SetupViewProps) {
       </Sec>
 
       <Sec title="Before you approve">
-        <RunPreflight preflight={preflight} checking={phase === "preparing" || p.busy} />
+        <RunPreflight preflight={preflight} checking={phase === "preparing" || p.busy} steps={p.on.trustFolder && p.on.recheck ? { trust: p.on.trustFolder, recheck: p.on.recheck, rechecking: !!p.rechecking } : undefined} />
         <Box label="What agents can do">
           <p className="m-0 text-ws-ink">{COPY.runAsYou}</p>
           <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
@@ -562,6 +565,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     error: s.error,
     cloning: s.cloning,
     cloneError: s.cloneError,
+    rechecking: s.rechecking,
     changed: s.changed,
     fromPip: s.fromPip,
     instruction,
@@ -594,6 +598,8 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
       searchPrs: (query) => void useRunSetup.getState().searchPrs(query),
       choosePr: (number) => void useRunSetup.getState().choosePr(number),
       setAllowPush: (on) => void useRunSetup.getState().saveEdit({ allowPush: on }),
+      trustFolder: (path) => void useRunSetup.getState().trustFolder(path),
+      recheck: () => void useRunSetup.getState().recheck(),
       refreshPlan: () => void useRunSetup.getState().refreshPlan(),
       removePlan: () => void useRunSetup.getState().saveEdit({ plan: "" }),
       refreshBuildAccount: () => void useRunSetup.getState().refreshBuildAccount(),
@@ -609,6 +615,14 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     if (now.error || !savedAsTyped(now.review, { instruction, base, plan, buildAccount })) return;
     await now.start();
   }
+
+  const waitingOnTrust = s.preflight?.rows.some((r) => r.action?.type === "trustFolder") ?? false;
+  useEffect(() => {
+    if (!waitingOnTrust) return;
+    const back = () => void useRunSetup.getState().recheck();
+    window.addEventListener("focus", back);
+    return () => window.removeEventListener("focus", back);
+  }, [waitingOnTrust]);
 
   useEffect(() => {
     const frame = () => document.getElementById("agent-sheet");

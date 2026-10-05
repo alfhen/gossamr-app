@@ -321,7 +321,7 @@ const actions: AgentsActions = {
     useRuns.getState().setIntroOpen(false);
   },
   checkEnvironment: () => void useRuns.getState().checkEnvironment(),
-  retry: () => void useRuns.getState().reload(),
+  retry: () => useRuns.getState().recover(),
   fix: failureAction,
   retryLaunch: (id) => void useRuns.getState().retryLaunch(id),
   copied: (id) => useRuns.getState().noteCopied(id),
@@ -381,6 +381,11 @@ export function AgentsView() {
   orderRef.current = order;
 
   useEffect(() => useRuns.getState().markSeen(), [runs]);
+
+  // A store that lost its backend (a hot reload resets it) never loads by itself.
+  useEffect(() => {
+    if (status === "idle") useRuns.getState().recover();
+  }, [status]);
 
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
