@@ -223,7 +223,7 @@ export const resumable = (run: Pick<Run, "state" | "unsentAnswer" | "stoppedByLi
 
 export const RESUME_TEXT = "Please carry on from where you stopped.";
 
-export const answerDraft = (run: Pick<Run, "state" | "unsentAnswer" | "suggestedReply" | "stoppedByLimit">) => run.unsentAnswer ?? run.suggestedReply ?? (resumable(run) ? RESUME_TEXT : "");
+export const answerDraft = (run: Pick<Run, "state" | "unsentAnswer" | "suggestedReply" | "stoppedByLimit">) => run.unsentAnswer ?? (run.suggestedReply?.trim() ? run.suggestedReply : null) ?? (resumable(run) ? RESUME_TEXT : "");
 
 /** Stopped or finished runs that may have carried on in a session Gossamr could not be sure of. */
 export const offeredSessions = (run: Pick<Run, "state" | "possibleContinuations">) => (run.state === "stopped" || run.state === "done" ? (run.possibleContinuations ?? []) : []);

@@ -21,10 +21,23 @@ describe("a run Gossamr stopped at its limit", () => {
     expect(stoppedText(limit)).toBe("Stopped by Gossamr: it passed the 60 minute limit");
   });
 
+  it("says both when it may also have continued elsewhere, and each alone otherwise", () => {
+    const offer = [{ shortId: "bbb748a7", sessionId: null, startedAt: null }];
+    expect(stoppedText({ ...limit, possibleContinuations: offer })).toBe("Stopped by Gossamr: it passed the 60 minute limit. May have continued in another session");
+    expect(stoppedText({ ...limit, error: "  ", possibleContinuations: offer })).toBe("Stopped at its limit. May have continued in another session");
+    expect(stoppedText({ ...limit, possibleContinuations: [] })).toBe("Stopped by Gossamr: it passed the 60 minute limit");
+    expect(stoppedText(stopped({ possibleContinuations: offer }))).toBe("May have continued in another session");
+    expect(stoppedText(stopped({ lastDetail: "Reading the cart" }))).toBe("Reading the cart");
+  });
+
   it("is resumed with words of the person's, starting from what Claude suggested or a plain nudge", () => {
     expect(resumable(limit) && answerable(limit)).toBe(true);
     expect(answerDraft(limit)).toBe(RESUME_TEXT);
     expect(answerDraft({ ...limit, suggestedReply: "Go ahead" })).toBe("Go ahead");
+    expect(answerDraft({ ...limit, suggestedReply: "" })).toBe(RESUME_TEXT);
+    expect(answerDraft({ ...limit, suggestedReply: "  \n" })).toBe(RESUME_TEXT);
+    expect(answerDraft({ ...limit, suggestedReply: "", unsentAnswer: "Use staging." })).toBe("Use staging.");
+    expect(answerDraft({ ...stopped(), suggestedReply: "" })).toBe("");
     expect(resumable(stopped())).toBe(false);
     expect(resumable({ ...limit, unsentAnswer: "Yes" })).toBe(false);
     expect(answerable({ ...limit, unsentAnswer: "Yes" })).toBe(true);
@@ -74,6 +87,7 @@ describe("the sample backend and the store follow the same rules", () => {
     const after = s().runs.find((r) => r.id === offered.id)!;
     expect(after).toMatchObject({ state: "working", shortId: "bbb748a7", possibleContinuations: [] });
     expect(after.earlierSessions).toEqual([{ shortId: offered.shortId, sessionId: offered.sessionId }]);
+    expect(after.sessionId).toBe("bbb748a7-dca2-4f33-9da1-caa7f80584b8");
     expect(useToasts.getState().toasts).toHaveLength(0);
   });
 

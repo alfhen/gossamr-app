@@ -82,9 +82,10 @@ export function stateView(run: Pick<Run, "state" | "lastProgressAt" | "stoppedBy
 
 /** What a stopped run says it was left at: that Gossamr stopped it at a limit, that it may have carried on elsewhere, or where it stopped. */
 export function stoppedText(run: Pick<Run, "stoppedByLimit" | "error" | "lastDetail" | "possibleContinuations">): string {
-  if (run.possibleContinuations?.length) return "May have continued in another session";
-  if (run.stoppedByLimit) return run.error?.trim() || "Stopped at its limit";
-  return run.lastDetail?.trim() || "Stopped before it finished";
+  const continued = run.possibleContinuations?.length ? "May have continued in another session" : null;
+  const limit = run.stoppedByLimit ? run.error?.trim() || "Stopped at its limit" : null;
+  if (continued && limit) return `${limit.replace(/\.+$/, "")}. ${continued}`;
+  return continued ?? limit ?? (run.lastDetail?.trim() || "Stopped before it finished");
 }
 
 export const KIND_LABEL: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };

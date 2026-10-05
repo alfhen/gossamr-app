@@ -721,9 +721,10 @@ export class MockRuns {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
     if (run.state !== "stopped" && run.state !== "done") throw new Error(`This run is ${run.state}, so it has no other session to carry on in.`);
-    if (!run.possibleContinuations?.some((c) => c.shortId === session)) throw new Error("That session doesn't look like this run's any more. Look again in a moment.");
+    const offer = run.possibleContinuations?.find((c) => c.shortId === session);
+    if (!offer) throw new Error("That session doesn't look like this run's any more. Look again in a moment.");
     const earlier = [...(run.earlierSessions ?? []), ...(run.shortId ? [{ shortId: run.shortId, sessionId: run.sessionId }] : [])];
-    const next = this.update(id, { shortId: session, sessionId: null, earlierSessions: earlier, possibleContinuations: [], state: "working", needs: null, suggestedReply: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: this.now(), lastProgressAt: this.now() });
+    const next = this.update(id, { shortId: session, sessionId: offer.sessionId ?? null, earlierSessions: earlier, possibleContinuations: [], state: "working", needs: null, suggestedReply: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: this.now(), lastProgressAt: this.now() });
     this.changed();
     return next;
   }
