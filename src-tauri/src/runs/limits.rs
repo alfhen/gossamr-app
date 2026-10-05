@@ -4,7 +4,7 @@ use chrono::{DateTime, Duration, Utc};
 
 use super::service::RunService;
 use crate::config::AgentSettings;
-use crate::domain::{Run, RunState};
+use crate::domain::{Run, RunState, LIMIT_STOP};
 use crate::error::Result;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,8 +16,8 @@ pub enum Overrun {
 impl Overrun {
     pub fn reason(self, settings: &AgentSettings) -> String {
         match self {
-            Overrun::Wall => format!("Stopped by Gossamr: it passed the {} minute limit", settings.wall_clock_minutes),
-            Overrun::Tokens => format!("Stopped by Gossamr: it passed the {} token limit", grouped(settings.token_cap)),
+            Overrun::Wall => format!("{LIMIT_STOP}{} minute limit", settings.wall_clock_minutes),
+            Overrun::Tokens => format!("{LIMIT_STOP}{} token limit", grouped(settings.token_cap)),
         }
     }
 }
