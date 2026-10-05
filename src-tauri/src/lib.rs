@@ -609,6 +609,13 @@ async fn runs_trust_folder(runs: State<'_, RunsState>, id: String) -> Result<()>
     runs.open_claude(&id, runs::control::Purpose::Trust).await
 }
 
+/// Opens Terminal in a clone running `claude`, before any run, so the person can accept Claude's trust question. Only
+/// for a folder in a place Gossamr looks for clones.
+#[tauri::command]
+async fn runs_trust_path(runs: State<'_, RunsState>, path: std::path::PathBuf) -> Result<()> {
+    runs.trust_folder(&path).await
+}
+
 /// Opens Terminal in the run's clone running `claude`, so the person can sign in. Only for a run that failed because
 /// Claude isn't signed in.
 #[tauri::command]
@@ -907,6 +914,33 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
     });
 }
 
+const RELOAD_MENU_ID: &str = "reload-page";
+
+/// The default menu with View > Reload (⌘R) added: the webview has no reload shortcut of its own. It reloads the page
+/// only; nothing in the core restarts.
+fn add_reload_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, MenuItemKind};
+    let menu = Menu::default(app.handle())?;
+    let reload = MenuItem::with_id(app, RELOAD_MENU_ID, "Reload", true, Some("CmdOrCtrl+R"))?;
+    let view = menu.items()?.into_iter().find_map(|item| match item {
+        MenuItemKind::Submenu(sub) if sub.text().is_ok_and(|t| t == "View") => Some(sub),
+        _ => None,
+    });
+    match view {
+        Some(view) => view.insert(&reload, 0)?,
+        None => menu.append(&reload)?,
+    }
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id().as_ref() == RELOAD_MENU_ID {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval("location.reload()");
+            }
+        }
+    });
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -947,6 +981,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            add_reload_menu(app)?;
             let http = net::client();
             let auth = Arc::new(Auth::load(http.clone()));
             let registry = tracker::Registry::jira(http.clone(), auth.clone());
@@ -1068,6 +1103,7 @@ pub fn run() {
             runs_stop_all,
             runs_attach,
             runs_trust_folder,
+            runs_trust_path,
             runs_sign_in,
             runs_disk,
             runs_events,

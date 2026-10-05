@@ -18,6 +18,13 @@ All of them run with stdin from `/dev/null`, because the CLI otherwise reads std
 ## What the real run showed (scratch config, signed out)
 
 - A fresh `CLAUDE_CONFIG_DIR` is not logged in and refuses an untrusted folder: exit 1, stderr `Workspace not trusted. Run `claude` in <path> once and accept the trust prompt, then retry.` Trust is written to the scratch `<config>/.claude.json` as `projects.<path>.hasTrustDialogAccepted`, which the tests do and the app never will.
+
+## Folder trust (Gossamr never writes it)
+
+- Claude asks once per folder because a cloned repository's own hooks, MCP servers and settings run with the agent. Gossamr does not write `projects.<path>.hasTrustDialogAccepted` into `.claude.json`, or bypass the prompt in any other way; the person answers it in Terminal.
+- A refused launch is recognised from `Workspace not trusted` on stderr (exit 1) and stored as the run's `failure` `untrustedFolder` with the folder. Retry looks for a session first and launches the same approved run again, so the approved prompt and digest are unchanged.
+- Before approving, the checks read `.claude.json` read-only (`<config dir>/.claude.json`, or `.claude.json` beside a default `~/.claude`) and look for `hasTrustDialogAccepted: true` on the clone or a folder above it. A missing, unreadable or differently shaped file says nothing. A folder it doesn't list gets an amber row, never a red one, because the file's shape is Claude's to change: Start stays available, and the refused launch is the authority.
+- Trust this folder opens Terminal in the clone running plain `claude`, from a script named by a digest of the folder, only for a folder under `~/Code`, `~/Developer`, `~/src` or `~/Gossamr/agents`. Not yet checked against a real signed-in Claude: the shape of `~/.claude.json` as read by the checks, and that trust given to a clone covers worktree sessions started by Gossamr (the scratch test above covers the latter).
 - A signed-out session is listed as `state:"blocked"`, `status:"idle"` with a pid, and its `state.json` has `needs:"login required — run /login"` and `tempo:"blocked"`. `output` and `children` are `null`, so a null where a list or object is expected must be tolerated.
 - `state.json` also holds `intent`, `providerEnv`, `cwd`, `linkScanPath` and other internals. The wrapper reads only the whitelisted fields. `updatedAt` is an ISO string in 2.1.286; old fixtures use a number, so timestamps are kept as text.
 - `timeline.jsonl` lines are `{at, state, detail, text}`.

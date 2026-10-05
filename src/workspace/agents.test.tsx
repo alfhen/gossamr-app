@@ -330,11 +330,11 @@ describe("empty, first-run and errors", () => {
     expect(renderToStaticMarkup(<AgentsBanners environment={null} loadError={null} onCheckAgain={vi.fn()} onRetry={vi.fn()} />)).toBe("");
   });
 
-  it("shows why the runs could not be read, with Try again, and keeps what it had", () => {
+  it("shows why the runs could not be read, with Retry, and keeps what it had", () => {
     const out = screen({ status: "error", error: "runs_list failed: database is locked" });
     expect(out).toContain("load your agents");
     expect(out).toContain("database is locked");
-    expect(out).toContain("Try again");
+    expect(out).toContain("Retry");
     expect(articles(out)).toHaveLength(8);
   });
 });

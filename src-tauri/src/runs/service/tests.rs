@@ -642,6 +642,27 @@ mod preflight_rows {
     }
 
     #[tokio::test]
+    async fn a_folder_claude_has_not_accepted_is_an_amber_row_with_a_trust_step_and_nothing_is_written() {
+        let rig = ready().await;
+        let config = rig.fx.dir.join("claude-config");
+        std::fs::create_dir_all(&config).unwrap();
+        let file = config.join(".claude.json");
+        let text = serde_json::json!({ "projects": { "/somewhere/else": { "hasTrustDialogAccepted": true } } }).to_string();
+        std::fs::write(&file, &text).unwrap();
+        let p = rows(&rig, Some(rig.spec(1))).await;
+        let row = p.rows.iter().find(|r| r.text.contains("hasn't been opened")).expect("a trust row");
+        assert_eq!((row.level, row.action.clone()), (Level::Amber, Some(crate::runs::preflight::RowAction::TrustFolder { path: rig.clone.clone() })));
+        assert!(row.text.contains(&rig.clone.display().to_string()));
+        assert!(!p.blocking, "uncertain, so it warns and lets Start through");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), text, "the config is only read");
+
+        std::fs::write(&file, serde_json::json!({ "projects": { rig.clone.to_string_lossy(): { "hasTrustDialogAccepted": true } } }).to_string()).unwrap();
+        assert!(!rows(&rig, Some(rig.spec(1))).await.rows.iter().any(|r| r.text.contains("hasn't been opened")));
+        std::fs::remove_file(&file).unwrap();
+        assert!(!rows(&rig, Some(rig.spec(1))).await.rows.iter().any(|r| r.text.contains("hasn't been opened")), "no config, no claim");
+    }
+
+    #[tokio::test]
     async fn a_ready_machine_is_all_green_and_reads_the_permission_mode_without_writing() {
         let rig = ready().await;
         let config = rig.fx.dir.join("claude-config");

@@ -14,6 +14,8 @@ import { usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 
 const SEEN_KEY = "gossamr-runs-seen";
+/** How long the list is waited for before the view says so and offers Retry, rather than showing a spinner for good. */
+export const LOAD_LIMIT_MS = 15_000;
 const SEEN_KEPT = 500;
 
 const loadSeen = (): ReadonlySet<string> => {
@@ -44,12 +46,18 @@ interface RunsState {
   drafting: string | null;
   /** Runs whose answer is on its way to the agent. */
   answering: ReadonlySet<string>;
+  /** Runs the person just started and has not been told the outcome of: a launch that fails is announced and opened. */
+  launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
   /** The ticket picker for starting an agent without a ticket open. */
   picking: boolean;
   init(backend: Backend): void;
   dispose(): void;
   reload(): Promise<void>;
+  /** Loads again from wherever the store stands: from scratch when it has no backend (a hot reload resets it), else a re-read. */
+  recover(): void;
+  /** Watches a run just started until it leaves the queue; if it failed to launch, says why and opens it. */
+  watchLaunch(id: string): void;
   checkEnvironment(): Promise<void>;
   setFilter(patch: Partial<AgentFilters>): void;
   clearFilters(): void;
@@ -93,7 +101,7 @@ interface RunsState {
   setIntroOpen(open: boolean | null): void;
 }
 
-const idle = { runs: [] as Run[], status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, picking: false };
+const idle = { runs: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, picking: false };
 
 /** A run that was failed and is not any more starts over: if it fails again, the rail badge counts it again. */
 function forgetRecovered(seen: ReadonlySet<string>, runs: readonly Run[]): ReadonlySet<string> {
@@ -102,6 +110,27 @@ function forgetRecovered(seen: ReadonlySet<string>, runs: readonly Run[]): Reado
   const kept = new Set([...seen].filter((id) => !recovered.some((r) => r.id === id)));
   writeStored(SEEN_KEY, [...kept]);
   return kept;
+}
+
+/** A run the person started that failed before it got a session: say why, with the way on, and open it. Once it has moved on it is no longer watched. */
+function announceFailedLaunches(get: () => RunsState, set: (patch: Partial<RunsState>) => void) {
+  const { launching, runs } = get();
+  if (!launching.size) return;
+  const still = new Set<string>();
+  for (const id of launching) {
+    const run = runs.find((r) => r.id === id);
+    if (!run) continue;
+    if (run.state === "queued" || run.state === "launching") {
+      still.add(id);
+      continue;
+    }
+    if (run.state !== "failed") continue;
+    const reason = failureHelp(run)?.summary ?? run.error ?? "no reason was given";
+    const where = run.item?.key ? ` on ${run.item.key}` : "";
+    useToasts.getState().push(`The agent${where} didn't start. ${reason}`, "error", { label: "Fix it", run: () => get().openRun(id) });
+    if (!get().sheet) get().openRun(id);
+  }
+  set({ launching: still });
 }
 
 const READY = "Draft ready. Nothing is posted until you approve it.";
@@ -165,12 +194,34 @@ export const useRuns = create<RunsState>((set, get) => ({
     const { backend } = get();
     if (!backend) return;
     const mine = ++seq;
+    // Not a race on the call itself: an answer that arrives late still replaces the error.
+    const watchdog = setTimeout(() => {
+      if (mine === seq) set({ status: "error", error: "Reading your agents took too long." });
+    }, LOAD_LIMIT_MS);
     try {
       const runs = await backend.runsList();
-      if (mine === seq) set({ runs, status: "ready", error: null, seenFailed: forgetRecovered(get().seenFailed, runs) });
+      clearTimeout(watchdog);
+      if (mine === seq) {
+        set({ runs, status: "ready", error: null, seenFailed: forgetRecovered(get().seenFailed, runs) });
+        announceFailedLaunches(get, set);
+      }
     } catch (e) {
+      clearTimeout(watchdog);
       if (mine === seq) set({ status: "error", error: messageOf(e) });
     }
+  },
+
+  recover() {
+    const backend = get().backend ?? useWorkspace.getState().backend;
+    if (!backend) return;
+    if (get().backend !== backend) return get().init(backend);
+    set({ status: "loading", error: null });
+    void get().reload();
+    void get().checkEnvironment();
+  },
+
+  watchLaunch(id) {
+    set({ launching: new Set([...get().launching, id]) });
   },
 
   async checkEnvironment() {

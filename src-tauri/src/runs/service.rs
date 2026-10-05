@@ -79,7 +79,7 @@ pub struct RunService {
     /// Repositories being cloned into `~/Gossamr/agents` right now.
     cloning: Mutex<HashSet<String>>,
     clones: CloneCache,
-    roots: Vec<PathBuf>,
+    pub(super) roots: Vec<PathBuf>,
     pub(super) changed: Arc<dyn Fn(&str) + Send + Sync>,
     pub(super) notifier: Arc<dyn RunNotifier>,
     /// Told the connection when a finished run left a comment draft, so the page re-reads its drafts.
