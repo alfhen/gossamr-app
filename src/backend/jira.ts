@@ -342,6 +342,10 @@ export class JiraBackend implements Backend {
     return invoke<void>("runs_trust_folder", { id });
   }
 
+  runsTrustPath(path: string) {
+    return invoke<void>("runs_trust_path", { path });
+  }
+
   runsSignIn(id: string) {
     return invoke<void>("runs_sign_in", { id });
   }

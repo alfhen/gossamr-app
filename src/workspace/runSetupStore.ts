@@ -66,6 +66,10 @@ interface SetupState {
   changed: boolean;
   /** The instruction as first drafted, for resetting. */
   initialInstruction: string | null;
+  /** Terminal was opened to trust a folder, so the sheet checks again when the person comes back. */
+  trustOpened: boolean;
+  /** The checks are being made again. */
+  rechecking: boolean;
   reloadRepos(): Promise<void>;
   /** `repo` says where `pr` is, so a review opens in that repository. */
   begin(opts: { item?: ItemRef | null; proposalId?: string; kind?: RunKind; pr?: number; repo?: string; planFromRun?: string; buildFromRun?: string }): Promise<void>;
@@ -82,6 +86,10 @@ interface SetupState {
   cloneFresh(): Promise<void>;
   saveEdit(edit: RunEditFields): Promise<void>;
   dismissChanged(): void;
+  /** Opens Terminal in the folder with Claude, which asks its trust question there. Claude's own settings are never touched. */
+  trustFolder(path: string): Promise<void>;
+  /** Runs the checks again for the draft as it stands, without touching the draft. */
+  recheck(): Promise<void>;
   start(): Promise<Run | null>;
   discard(): Promise<void>;
   close(): void;
@@ -115,6 +123,8 @@ const closed = {
   cloneError: null,
   changed: false,
   initialInstruction: null,
+  trustOpened: false,
+  rechecking: false,
 };
 
 let run = 0;
@@ -382,6 +392,32 @@ export const useRunSetup = create<SetupState>((set, get) => {
 
     dismissChanged: () => set({ changed: false }),
 
+    async trustFolder(path) {
+      const { backend } = get();
+      if (!backend) return;
+      try {
+        await backend.runsTrustPath(path);
+        set({ trustOpened: true });
+      } catch (e) {
+        useToasts.getState().push(`Couldn't open Terminal: ${messageOf(e)}`);
+      }
+    },
+
+    async recheck() {
+      const { backend, review, rechecking, phase } = get();
+      if (!backend || !review || rechecking || phase !== "ready") return;
+      const mine = run;
+      set({ rechecking: true });
+      try {
+        const preflight = await backend.runsPreflight(review.spec);
+        if (current(mine)) set({ preflight });
+      } catch {
+        // The earlier checks stay on screen.
+      } finally {
+        if (current(mine)) set({ rechecking: false });
+      }
+    },
+
     async start() {
       const { backend, proposalId, review, phase, busy, item } = get();
       if (!backend || !proposalId || !review || phase === "starting" || busy) return null;
@@ -394,6 +430,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
         const runs = useRuns.getState();
         void runs.reload();
         void useWorkspace.getState().refreshProposals();
+        runs.watchLaunch(started.id);
         runs.select(started.id);
         useTabs.getState().setRoute("agents");
         useToasts.getState().push(`Agent started${item ? ` on ${item.key}` : ""}. It runs in the background.`, "info", { label: "Open", run: () => runs.openRun(started.id) });

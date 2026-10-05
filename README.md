@@ -38,7 +38,7 @@ Gossamr looks for the client in this order, and the setup screen is skipped when
 
 ## The workspace
 
-The app opens in the workspace, a board, list and age view over everything synced from Jira, with a rail of projects and saved views, tabs, a command palette (`⌘K`), a peek sheet for one ticket and Pip, the assistant, docked on the right (`⌘J`). Everything is read from the local cache, so it starts with the last data when offline. The assistant only proposes: dropping a card on a column, a comment written in the peek sheet and Pip's suggestions all become drafts, and nothing is written to Jira until you approve one.
+The app opens in the workspace, a board, list and age view over everything synced from Jira, with a rail of projects and saved views, tabs, a command palette (`⌘K`), a peek sheet for one ticket and Pip, the assistant, docked on the right (`⌘J`). `⌘R` (View > Reload) reloads the window; it only redraws the page and restarts nothing in the app. Everything is read from the local cache, so it starts with the last data when offline. The assistant only proposes: dropping a card on a column, a comment written in the peek sheet and Pip's suggestions all become drafts, and nothing is written to Jira until you approve one.
 
 - **Board:** one section per project with that project's own statuses. Jira only reveals the moves open to a ticket one ticket at a time, so when you pick a card up the app asks Jira where it can go and dims the other columns.
 - **Settings:** the Jira site and account, when it last synced, **Sync now**, and **Sign out**. The classic inbox is still reachable from there for now, and back again from its sidebar.
@@ -63,6 +63,8 @@ The Jira adapter was written against the REST v3 documentation and tested with r
 ## Ask Claude
 
 Press `⌘J` on a ticket to ask Claude about it. The app runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription. It does not load your CLAUDE.md, memory, skills, hooks, plugins or other MCP servers. It runs in an empty folder inside the app's data directory, and follow-ups continue the session Pip started there. It runs Sonnet at medium effort, whatever your Claude Code default is.
+
+Agents are Claude Code sessions. Claude asks once per folder whether to trust it, because a cloned repository's own hooks, MCP servers and settings run with the agent. Gossamr never edits Claude's config or answers that question for you. When a folder isn't trusted yet, the checks before you approve show a Trust this folder button that opens Terminal there with `claude`; accept the question, close Terminal, and the checks run again. If a launch is refused anyway, the run opens with the reason and the same button, and Retry starts the same approved run again.
 
 Claude can read the ticket through a local MCP server the app runs, and nothing else: no built-in Claude Code tools, so it can't read local files, run commands, browse the web or write files. It can't change Jira either: comments, transitions, subtasks, new tickets and new titles or descriptions for a ticket come back as cards you approve, edit or skip. A description edit shows as a before-and-after diff, and Autopilot can never make one.
 

@@ -25,6 +25,7 @@ pub mod state;
 pub mod toolchain;
 pub mod transcript;
 pub mod tracker;
+pub mod trust;
 
 #[cfg(test)]
 mod real_tests;

@@ -102,7 +102,7 @@ export function AgentsBanners({ environment, loadError, onCheckAgain, onRetry }:
           actions={
             <button type="button" onClick={onRetry} className={BUTTON}>
               <Icon name="retry" />
-              Try again
+              Retry
             </button>
           }
         >
