@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAutoHeight } from "../components/autoHeight";
 import { useBackend } from "../backend/useBackend";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { containerKey } from "../lib/filter";
 import type { Person, Proposal, WorkContainer, WorkItemKind } from "../types";
 import { allContainers, useWorkspace } from "../workspaceStore";
-import { createdItemKey, draftItem, draftKey, editFor, fieldsOf, ITEM_KINDS, type DraftFields } from "./draftTicket";
+import { createdItemKey, draftAfter, draftItem, draftKey, editFor, fieldsOf, ITEM_KINDS, placeOf, waitingCreates, type DraftFields, type DraftPlace } from "./draftTicket";
 import { askPip } from "./askPip";
 import { openTicketByKey } from "./jump";
 import { finishWithPipPrompt } from "./runSheetLogic";
@@ -18,7 +19,10 @@ const SAVE_DELAY_MS = 700;
 const HANDOVER_MS = 6000;
 
 const field = "rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-ws-ink disabled:opacity-60";
-const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
+const secondary = "rounded-lg border border-ws-sep2 bg-ws-win px-3.5 py-2 text-base hover:bg-ws-hover disabled:opacity-45";
+const KBD = "rounded border border-current/40 px-1 font-sans text-xs font-medium opacity-85";
+
+let stepped: "prev" | "next" | null = null;
 
 type Create = Proposal & { intent: Extract<Proposal["intent"], { type: "create" }> };
 
@@ -33,6 +37,9 @@ export interface DraftPeekViewProps extends Pick<PeekViewProps, "motion" | "wide
   onCommit(): void;
   onCreate(): void;
   onSkip(): void;
+  /** Where this draft stands among those waiting; the sheet offers stepping between them when there is more than one. */
+  place?: DraftPlace | null;
+  onStep?(id: string, how: "prev" | "next"): void;
   /** Present for a draft made from an agent run: opens that run. */
   onOpenRun?(): void;
   /** Present for a pending draft a run left: opens Pip on the run and this draft. */
@@ -41,7 +48,44 @@ export interface DraftPeekViewProps extends Pick<PeekViewProps, "motion" | "wide
 
 const CHIP_SELECT = `${field} py-0.5 font-semibold`;
 
-export function DraftPeekView({ proposal: p, fields, containers, people, working, error, onChange, onCommit, onCreate, onSkip, onOpenRun, onFinishWithPip, ...view }: DraftPeekViewProps) {
+function TitleField({ value, disabled, onChange, onBlur }: { value: string; disabled: boolean; onChange(value: string): void; onBlur(): void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useAutoHeight(ref, value);
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      aria-label="Title"
+      value={value}
+      disabled={disabled}
+      placeholder="Title"
+      onChange={(e) => onChange(e.target.value.replace(/\s*\n\s*/g, " "))}
+      onKeyDown={(e) => e.key === "Enter" && !e.metaKey && !e.ctrlKey && e.preventDefault()}
+      onBlur={onBlur}
+      className={`${field} block w-full resize-none overflow-hidden text-[20px] leading-tight font-semibold`}
+    />
+  );
+}
+
+const STEP = "rounded-md px-2 py-0.5 font-semibold text-ws-ink2 hover:bg-ws-hover disabled:opacity-40 disabled:hover:bg-transparent";
+
+function DraftNav({ place, onStep }: { place: DraftPlace; onStep(id: string, how: "prev" | "next"): void }) {
+  return (
+    <div role="group" aria-label={`Drafts waiting, ${place.position} of ${place.total}`} className="ml-auto flex shrink-0 items-center gap-0.5 text-sm">
+      <button type="button" data-step="prev" aria-label="Previous draft" disabled={!place.prev} onClick={() => place.prev && onStep(place.prev, "prev")} className={STEP}>
+        <span aria-hidden>‹ </span>Prev
+      </button>
+      <span className="px-1 font-semibold text-ws-ink tabular-nums">
+        {place.position} of {place.total}
+      </span>
+      <button type="button" data-step="next" aria-label="Next draft" disabled={!place.next} onClick={() => place.next && onStep(place.next, "next")} className={STEP}>
+        Next<span aria-hidden> ›</span>
+      </button>
+    </div>
+  );
+}
+
+export function DraftPeekView({ proposal: p, fields, containers, people, working, error, onChange, onCommit, onCreate, onSkip, place, onStep, onOpenRun, onFinishWithPip, ...view }: DraftPeekViewProps) {
   const { state } = p;
   const open = state.type === "pending";
   const created = state.type === "applied" ? (p.created[0]?.key ?? null) : null;
@@ -72,19 +116,10 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
           <span className="font-normal">· not created yet</span>
           <span className="ml-auto font-normal text-ws-ink3">{state.type === "applied" ? "Created" : state.type === "applying" ? "Creating…" : "Needs your approval"}</span>
         </div>
-        <p className="m-0 text-sm text-ws-ink3">{created ? `Created ${created}. Opening it…` : "Nothing is created until you choose Create task. Edit anything below first."}</p>
       </div>
     ),
     title: (
-      <input
-        aria-label="Title"
-        value={fields.title}
-        disabled={!open}
-        placeholder="Title"
-        onChange={(e) => onChange({ title: e.target.value })}
-        onBlur={onCommit}
-        className={`${field} w-full text-[20px] leading-tight font-semibold`}
-      />
+      <TitleField value={fields.title} disabled={!open} onChange={(title) => onChange({ title })} onBlur={onCommit} />
     ),
     meta: (
       <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-ws-ink2">
@@ -141,34 +176,64 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
         ticketKey=""
         people={people}
         placeholder="Describe the ticket"
-        className="rounded-md border border-ws-sep2 bg-ws-win"
+        fill
+        className="grow rounded-md border border-ws-sep2 bg-ws-win"
       />
     ) : (
       <p className="m-0 whitespace-pre-wrap text-ws-ink2">{fields.body || "No description."}</p>
     ),
+    nav: place && place.total > 1 && onStep ? <DraftNav place={place} onStep={onStep} /> : undefined,
     actions: (
       <>
-        {shownError ? (
-          <p role="alert" className="m-0 mr-auto min-w-0 text-sm text-ws-blocked [overflow-wrap:anywhere]">
-            {shownError}
-          </p>
-        ) : (
-          open && revision && <p className="m-0 mr-auto min-w-0 truncate text-sm text-ws-pip">↻ {revision.note}</p>
-        )}
+        <div className="grid min-w-0 flex-1 basis-56 gap-0.5 text-sm">
+          {shownError ? (
+            <p role="alert" className="m-0 font-semibold text-ws-blocked [overflow-wrap:anywhere]">
+              {shownError}
+            </p>
+          ) : created ? (
+            <p role="status" className="m-0 font-semibold text-ws-ink">
+              Created {created}. Opening it…
+            </p>
+          ) : (
+            <>
+              {open && revision && <p className="m-0 font-semibold text-ws-pip">↻ {revision.note}</p>}
+              <p id={`draft-reassure-${p.id}`} className="m-0 text-ws-ink2">
+                <b className="font-semibold text-ws-ink">Nothing is created until you choose Create {fields.kind}.</b>
+                {open && place && place.total > 1 ? " Either way, the next draft opens." : ""}
+              </p>
+            </>
+          )}
+        </div>
         {open || state.type === "applying" ? (
-          <>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {open && onFinishWithPip && (
-              <button type="button" disabled={working} onClick={onFinishWithPip} title="Pip reads the whole run and this draft, and tightens it if you ask" className={button}>
+              <button type="button" disabled={working} onClick={onFinishWithPip} title="Pip reads the whole run and this draft, and tightens it if you ask" className={secondary}>
                 Finish with Pip
               </button>
             )}
-            <button type="button" disabled={working} onClick={onSkip} className={button}>
+            <button type="button" disabled={working} onClick={onSkip} className={secondary}>
               Skip
             </button>
-            <button type="button" disabled={working || state.type === "applying" || !fields.title.trim()} onClick={onCreate} className="rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45">
-              {working || state.type === "applying" ? "Working…" : `Create ${fields.kind}`}
+            <button
+              type="button"
+              disabled={working || state.type === "applying" || !fields.title.trim()}
+              onClick={onCreate}
+              aria-keyshortcuts="Meta+Enter Control+Enter"
+              aria-describedby={`draft-reassure-${p.id}`}
+              className="inline-flex items-center gap-2 rounded-lg bg-ws-pip px-4 py-2 text-base font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45"
+            >
+              {working || state.type === "applying" ? (
+                "Working…"
+              ) : (
+                <>
+                  Create {fields.kind}
+                  <kbd aria-hidden className={KBD}>
+                    ⌘↵
+                  </kbd>
+                </>
+              )}
             </button>
-          </>
+          </div>
         ) : null}
       </>
     ),
@@ -265,24 +330,76 @@ function OpenDraft({ proposal: p, ...motion }: { proposal: Create } & Motion) {
   }, [fields, save]);
   useEffect(() => () => void save(), [save]);
 
+  const proposals = useWorkspace((s) => s.proposals);
+  const waiting = useMemo(() => waitingCreates(proposals), [proposals]);
+  const place = placeOf(waiting, p.id);
+  const step = (id: string, how: "prev" | "next") => {
+    stepped = how;
+    useTabs.getState().select(draftKey(id));
+  };
+
   const run = async (job: () => Promise<Proposal | null>) => {
     setWorking(true);
     setError(null);
     try {
       const done = await job();
       if (done?.error) setError(done.error);
+      return done && !done.error ? done : null;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return null;
     } finally {
       setWorking(false);
     }
   };
 
+  // Once this draft is decided, the next one waiting opens in its place.
+  const decided = async (job: () => Promise<Proposal | null>) => {
+    const next = draftAfter(waiting, p.id);
+    const done = await run(job);
+    if (!done || !next) return;
+    const made = done.created[0];
+    if (made) useToasts.getState().push(`Created ${made.key}.`, "info", { label: "Open", run: () => void openTicketByKey(made.key) });
+    useTabs.getState().select(draftKey(next));
+  };
+
+  useEffect(() => {
+    const how = stepped;
+    stepped = null;
+    const sheet = document.getElementById("peek-sheet");
+    const button = how && (sheet?.querySelector<HTMLElement>(`[data-step=${how}]:not(:disabled)`) ?? sheet?.querySelector<HTMLElement>("[data-step]:not(:disabled)"));
+    (button || sheet)?.focus({ preventScroll: true });
+  }, []);
+
+  const create = () =>
+    void decided(async () => {
+      await save();
+      return useWorkspace.getState().approve(p.id);
+    });
+  const createNow = useRef(create);
+  createNow.current = create;
+  const ready = p.state.type === "pending" && !working && !!fields.title.trim();
+  const readyNow = useRef(ready);
+  readyNow.current = ready;
+
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key !== "Escape" || ev.defaultPrevented || usePrefs.getState().paletteOpen) return;
+      if (ev.defaultPrevented && ev.key === "Escape") return;
+      if (usePrefs.getState().paletteOpen || document.getElementById("agent-sheet")) return;
       const focus = document.activeElement;
-      if (focus instanceof HTMLElement && (focus.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(focus.tagName))) return;
+      const typing = focus instanceof HTMLElement && (focus.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(focus.tagName));
+      const inside = !!focus?.closest("#peek-sheet");
+      if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && !ev.altKey) {
+        if (typing && !inside) return;
+        ev.preventDefault();
+        if (readyNow.current) createNow.current();
+        return;
+      }
+      if (ev.key !== "Escape") return;
+      if (typing) {
+        if (inside) (focus as HTMLElement).blur();
+        return;
+      }
       useTabs.getState().select(null);
     };
     window.addEventListener("keydown", onKey);
@@ -318,13 +435,10 @@ function OpenDraft({ proposal: p, ...motion }: { proposal: Create } & Motion) {
       error={error}
       onChange={(patch) => setFields((f) => ({ ...f, ...patch }))}
       onCommit={() => void save()}
-      onSkip={() => void run(() => useWorkspace.getState().skip(p.id))}
-      onCreate={() =>
-        void run(async () => {
-          await save();
-          return useWorkspace.getState().approve(p.id);
-        })
-      }
+      place={place}
+      onStep={step}
+      onSkip={() => void decided(() => useWorkspace.getState().skip(p.id))}
+      onCreate={create}
       onClose={() => useTabs.getState().select(null)}
       onOpenRun={p.origin.type === "run" ? () => openRunOf(p) : undefined}
       onFinishWithPip={p.origin.type === "run" && p.createdBy === "user" ? () => finishWithPip(p) : undefined}
