@@ -14,7 +14,7 @@ import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
-import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
+import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
@@ -102,6 +102,7 @@ export interface AgentsActions {
   /** Shows the comment draft a finished run left on its ticket. */
   openDraft?(run: Run): void;
   openBreakdown?(run: Run): void;
+  openDescription?(run: Run): void;
   filter(patch: Partial<AgentFilters>): void;
   clearFilters(): void;
   setView(view: AgentsViewMode): void;
@@ -192,13 +193,14 @@ export interface AgentsScreenProps {
   draftReady?(run: Run): boolean;
   /** Whether a finished run has a breakdown into subtasks waiting. */
   breakdownReady?(run: Run): boolean;
+  descriptionReady?(run: Run): boolean;
   /** What "Review this" does for a finished build whose pull request can be reviewed; absent for any other run. */
   reviewThis?(run: Run): (() => void) | undefined;
   on: AgentsActions;
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, opened, now, ticketTitle, draftReady, breakdownReady, reviewThis, on }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, opened, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, on }: AgentsScreenProps) {
   const footer = useFooterHeight();
   const groups = useMemo(() => groupRuns(runs, filters, now), [runs, filters, now]);
   const order = useMemo(() => navOrder(groups, earlierOpen, filters), [groups, earlierOpen, filters]);
@@ -218,6 +220,8 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     breakdownReady: !!breakdownReady?.(run),
     onOpenDraft: on.openDraft ? () => on.openDraft?.(run) : undefined,
     onOpenBreakdown: on.openBreakdown ? () => on.openBreakdown?.(run) : undefined,
+    descriptionReady: !!descriptionReady?.(run),
+    onOpenDescription: on.openDescription ? () => on.openDescription?.(run) : undefined,
     onBuildFromPlan: buildFromPlanControl(run).enabled ? () => on.buildFromPlan(run) : undefined,
     onReviewThis: reviewThis?.(run),
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
@@ -306,6 +310,9 @@ const actions: AgentsActions = {
     if (!draft) return;
     useRuns.getState().closeSheet();
     showTicketDraft(draft.id);
+  },
+  openDescription: (run) => {
+    if (run.item) useRuns.getState().showDraft(run.item);
   },
   openBreakdown: (run) => {
     const target = breakdownTarget(useWorkspace.getState().proposals, run.id);
@@ -432,6 +439,7 @@ export function AgentsView() {
       ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
       draftReady={(run) => !!runDraftOf(proposals, run.id) || !!runTicketDraftOf(proposals, run.id)}
       breakdownReady={(run) => !!runBreakdownDraftOf(proposals, run.id)}
+      descriptionReady={(run) => !!runDescriptionDraftOf(proposals, run.id)}
       reviewThis={(run) => {
         const change = changes[run.id] ?? null;
         return change && reviewThisControl(run, change).enabled ? () => void useRunSetup.getState().begin(reviewThisOptions(run, change)) : undefined;

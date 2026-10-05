@@ -69,7 +69,8 @@ impl Doc {
         blocks.push(Block::Heading { level, content: vec![Inline::Text { text: PLAN_HEADING.into(), marks: vec![] }] });
         blocks.extend(Doc::paragraph(intro).blocks);
         blocks.extend(plan.into_iter().map(|b| match b {
-            Block::Heading { level, content } => Block::Heading { level: (level + shift).min(6), content },
+            Block::Heading { level: at, content } if (at + shift).min(6) > level => Block::Heading { level: (at + shift).min(6), content },
+            Block::Heading { content, .. } => Block::Paragraph { content },
             other => other,
         }));
         blocks.extend(after);
@@ -120,6 +121,13 @@ mod tests {
         let with = md("x").with_plan_section("i", &md("## Gossamr Plan\n\n###### Deep"));
         assert_eq!(with.blocks.iter().filter(|b| marker_level(b).is_some()).count(), 1);
         assert!(with.to_markdown().contains("Gossamr Plan\n\n###### Deep"));
+    }
+
+    #[test]
+    fn a_heading_that_would_reach_the_sections_own_level_becomes_text_so_it_cannot_end_it() {
+        let with = md("###### Gossamr Plan\n\nold").with_plan_section("i", &md("###### Deep\n\ntext"));
+        assert_eq!(with.to_markdown(), "###### Gossamr Plan\n\ni\n\nDeep\n\ntext");
+        assert_eq!(with.plan_section().unwrap().to_markdown(), "i\n\nDeep\n\ntext");
     }
 
     #[test]

@@ -15,7 +15,7 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { MAY_TOUCH, answerable, breakdownWithPipPrompt, buildFromPlanOptions, canStartNow, descriptionWithPipPrompt, reviewThisControl, reviewThisOptions, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
+import { MAY_TOUCH, answerable, breakdownWithPipPrompt, planDescriptionWithPipPrompt, buildFromPlanOptions, canStartNow, descriptionWithPipPrompt, reviewThisControl, reviewThisOptions, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { Changes, Found, type ResultActions } from "./RunResult";
@@ -440,6 +440,14 @@ export function RunSheet({ id }: { id: string }) {
     },
     draftPlanComment: () => void store.draftPlanComment(id),
     openPlanDraft: () => store.showDraft(run.item),
+    draftPlanDescription: () => void store.draftPlanDescription(id),
+    openPlanDescription: () => store.showDraft(run.item),
+    discussPlanDescription: () => {
+      const draft = outcome?.planDescription?.draft;
+      if (draft?.state.type !== "pending") return;
+      askPip(planDescriptionWithPipPrompt(run, draft.id));
+      store.closeSheet();
+    },
     openTicketDraft: () => {
       if (!outcome?.ticketDraft) return;
       store.closeSheet();

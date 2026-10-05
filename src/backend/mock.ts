@@ -387,7 +387,9 @@ export class MockBackend implements Backend {
       if (!w) return null;
       return ticketBlockText({ item: w, comments: this.connector.comments(ref), people: this.connector.people, titleOf: (r) => this.connector.item(r)?.title ?? null, code: this.github.code.devLinks(ref) });
     };
+    this.runs.ticketDoc = (ref) => this.connector.item(ref)?.body ?? null;
     this.runs.pullRequest = (repo, number) => this.github.code.change(repo, number);
+    this.runs.seedPlanDescriptions();
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
   }
 
@@ -526,6 +528,10 @@ export class MockBackend implements Backend {
 
   async runsDraftPlanComment(id: string) {
     return this.runs.draftPlanComment(id);
+  }
+
+  async runsDraftPlanDescription(id: string) {
+    return this.runs.draftPlanDescription(id);
   }
 
   async runsRefreshPlan(id: string) {

@@ -29,6 +29,9 @@ export interface AgentItemProps {
   onOpenDraft?(): void;
   /** Opens the breakdown draft itself, apart from the comment or ticket draft. */
   onOpenBreakdown?(): void;
+  /** A description update that adds this plan to its ticket is waiting as a draft. */
+  descriptionReady?: boolean;
+  onOpenDescription?(): void;
   failure: FailureState;
 }
 
@@ -42,7 +45,7 @@ export function onActivate(open: () => void) {
   };
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, failure }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -125,6 +128,17 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
             className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
           >
             Review this
+          </button>
+        )}
+        {descriptionReady && onOpenDescription && (
+          <button
+            type="button"
+            onClick={(ev) => (ev.stopPropagation(), onOpenDescription())}
+            onKeyDown={(ev) => ev.stopPropagation()}
+            title="The ticket's description is drafted with this plan added. Nothing is written until you approve it."
+            className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
+          >
+            Description update ready
           </button>
         )}
         {breakdownReady && onOpenBreakdown && (

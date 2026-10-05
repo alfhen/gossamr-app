@@ -386,6 +386,10 @@ export class JiraBackend implements Backend {
     return invoke<Proposal>("runs_draft_comment", { id });
   }
 
+  runsDraftPlanDescription(id: string) {
+    return invoke<Proposal>("runs_draft_plan_description", { id });
+  }
+
   runsDraftPlanComment(id: string) {
     return invoke<PlanComment>("runs_draft_plan_comment", { id });
   }

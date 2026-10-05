@@ -215,6 +215,8 @@ export interface Backend {
   runsDraftComment(id: string): Promise<Proposal>;
   /** Drafts the whole plan of a finished Plan run as a comment, cut at a sentence with a note when it is too long for Jira. A draft only. */
   runsDraftPlanComment(id: string): Promise<PlanComment>;
+  /** Drafts the ticket's description with the plan of a finished Plan run added. A draft only. */
+  runsDraftPlanDescription(id: string): Promise<Proposal>;
   /** Reads a pending build draft's plan again from its plan run, replacing the person's edits. Only this changes the plan. */
   runsRefreshPlan(id: string): Promise<Proposal>;
   /** Reads a pending review draft's builder account again from its build run, replacing the person's edits. Only this changes it. */

@@ -191,7 +191,7 @@ export class MockProposals {
     const { body, title, description, kind, summaries } = typeof change === "string" ? { body: change, title: undefined, description: undefined, kind: undefined, summaries: undefined } : change;
     const p = this.pending(id);
     if (p.intent.type === "rewrite") {
-      if (p.createdBy !== "pip") throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
+      if (p.createdBy !== "pip" && !(p.origin.type === "run" && p.createdBy === "user")) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
       if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this description draft, so Pip can't change it any more");
       const was = p.intent;
       if ((title !== undefined && !was.title) || (description !== undefined && !was.body)) throw new Error("this draft doesn't change that field; retire it and propose a new one");
@@ -217,6 +217,12 @@ export class MockProposals {
       intent = { ...p.intent, summaries: next };
     } else throw new Error("this kind of draft can't be revised");
     return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
+  }
+
+  /** Withdraws a waiting draft that a newer one replaces. */
+  retire(id: string, reason: string): Proposal {
+    this.pending(id);
+    return this.set(id, { state: { type: "retired", reason } });
   }
 
   async skip(id: string) {

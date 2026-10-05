@@ -17,7 +17,7 @@ export interface PipScript {
   /** An investigation with no ticket to propose: a watched repository, when the request named one, and the question. */
   ticketlessRun?: { repo: string | null; prompt: string } | null;
   /** A change to the text of a comment, new-ticket or breakdown draft that came from a run. */
-  revise?: { id: string; body?: string; title?: string; summaries?: string[] } | null;
+  revise?: { id: string; body?: string; title?: string; description?: string; summaries?: string[] } | null;
   /** A new description or title to draft for a ticket, shown to the person as a diff. */
   rewrite?: { item: ItemRef; part: "title" | "description" } | null;
   /** The draft this turn was about, remembered for the rest of the conversation. */
@@ -53,6 +53,7 @@ const shortened = (summary: string) => {
   const cut = summary.split(" when ")[0].split(/\s+/);
   return cut.slice(0, 6).join(" ");
 };
+const talksDescription = /description update draft (\S+) on \S+, drafted from agent run (\S+?)\./i;
 const discusses = /comment draft (\S+) on \S+, drafted from agent run (\S+?)\./i;
 const EDIT_VERBS = "update|rewrite|revise|redraft|reword|edit|draft|write|fix|improve|tighten";
 /** A verb that edits text, a few words on, and the description or title it edits: "draft an update to the ticket description". */
@@ -72,6 +73,18 @@ const runDrafts = (drafts: readonly Proposal[]) => drafts.filter((d) => d.state.
 function tightenedTicket(title: string, body: string): { title: string; body: string } {
   const first = (paragraph: string) => /^.*?[.!?](?=\s|$)/s.exec(paragraph.trim())?.[0] ?? paragraph.trim();
   return { title: title.replace(/'s\s+\w+$/, ""), body: body.split(/\n{2,}|\n/).filter((p) => p.trim()).map(first).join("\n\n") };
+}
+
+/** A sample tightening of a description with a plan section: everything before it stays, and each line after the heading keeps its first sentence. */
+function shorterPlan(markdown: string): string {
+  const at = markdown.search(/^#{1,6} Gossamr Plan$/m);
+  if (at < 0) return markdown;
+  const first = (line: string) => /^.*?[.!?](?=\s|$)/.exec(line)?.[0] ?? line;
+  const plan = markdown
+    .slice(at)
+    .split("\n")
+    .map((l) => (/^#|^\s*$/.test(l) ? l : first(l)));
+  return `${markdown.slice(0, at)}${plan.join("\n")}`;
 }
 
 function revisedBody(text: string, shorter: boolean): string {
@@ -174,6 +187,29 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       text: `I drafted ${summaries.length} subtasks on **${breakdownRun.item.key}** from what the run proposed. Nothing is created; edit the list, then approve it or skip it.`,
       filter: null,
       draft: { intent: { type: "subtasks", parent: breakdownRun.item, summaries }, label: "From an agent run" },
+    };
+  }
+  const descriptionTalk = talksDescription.exec(prompt);
+  const description = (id: string | null | undefined) => drafts.find((d) => d.id === id && d.state.type === "pending" && d.origin.type === "run" && d.createdBy === "user" && d.intent.type === "rewrite" && !!d.intent.body);
+  if (descriptionTalk) {
+    const left = description(descriptionTalk[1]);
+    if (!left) return { steps: [], text: "I can't find that description draft any more, or it has been decided already, so there is nothing to discuss.", filter: null, draft: null };
+    return {
+      steps: ["Read the run", "Read the rest of its result", "Read the ticket", "Checked the draft"],
+      text: `I read the whole run and the ticket and checked draft ${left.id}: the ticket's description with the run's plan added under a "Gossamr Plan" heading. Tell me what to change, for example "shorter", and I'll revise it. Nothing is written to Jira until you approve it.`,
+      filter: null,
+      draft: null,
+      discussed: left.id,
+    };
+  }
+  const discussedDescription = description(discussed);
+  if (discussedDescription?.intent.type === "rewrite" && discussedDescription.intent.body && asksForShorter.test(q)) {
+    return {
+      steps: ["Read the run's full result", "Revised the description"],
+      text: "I kept the ticket's own text as it was and shortened each point in the plan to its first sentence. It isn't written to Jira; read the diff and approve, edit or skip it.",
+      filter: null,
+      draft: null,
+      revise: { id: discussedDescription.id, description: shorterPlan(discussedDescription.intent.body.toText) },
     };
   }
   const talked = discusses.exec(prompt);
@@ -367,7 +403,7 @@ export interface PipDrafter {
   /** The drafts Pip can see. */
   pipDrafts(): Proposal[];
   /** Revises a comment or new-ticket draft that came from a run, the way `revise_proposal` does. */
-  pipRevise(id: string, change: string | { body?: string; title?: string; summaries?: string[] }): Promise<unknown>;
+  pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[] }): Promise<unknown>;
   /** Drafts a title or description edit the way propose_description_edit does. */
   pipRewrite(item: ItemRef, part: "title" | "description", requestId: string): Promise<unknown>;
   /** Drafts a run the way propose_run does: Pip names the ticket and a focus note, the backend builds the rest. */
@@ -411,7 +447,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       emit(req.requestId, { type: "tool", label });
     }
     if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
-    if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, summaries: script.revise.summaries });
+    if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, description: script.revise.description, summaries: script.revise.summaries });
     if (!stopped && script.rewrite) await drafter?.pipRewrite?.(script.rewrite.item, script.rewrite.part, req.requestId);
     if (!stopped && script.runDraft) await drafter?.pipRunDraft?.(script.runDraft.item, script.runDraft.focus, req.requestId);
     if (!stopped && script.ticketlessRun) await drafter?.pipTicketlessRunDraft?.(script.ticketlessRun.repo, script.ticketlessRun.prompt, req.requestId);

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { SUMMARY_ONLY, type CodeChange, type Run, type RunOutcome } from "../types";
 import { Box, Btn, CopyButton, Details, Sec } from "./AgentSheet";
-import { blockerChoices, blockerControl, breakdownStatus, buildFromPlanControl, changeSummary, commentControl, createdFrom, planCommentControl, reviewThisControl, ticketControl, ticketStatus } from "./runSheetLogic";
+import { planDescriptionStatus, blockerChoices, blockerControl, breakdownStatus, buildFromPlanControl, changeSummary, commentControl, createdFrom, planCommentControl, reviewThisControl, ticketControl, ticketStatus } from "./runSheetLogic";
 
 export interface ResultActions {
   draftComment(): void;
@@ -27,6 +27,12 @@ export interface ResultActions {
   /** Drafts the whole plan as a comment on the ticket. */
   draftPlanComment(): void;
   openPlanDraft(): void;
+  /** Drafts the ticket's description with the plan added as a Gossamr Plan section. */
+  draftPlanDescription?(): void;
+  /** Opens the waiting description update as a diff, where it is approved, edited or skipped. */
+  openPlanDescription?(): void;
+  /** Opens Pip on the run and its description update, to talk the draft over before it is approved. */
+  discussPlanDescription?(): void;
   /** Opens a Review draft for the build's pull request that carries the builder's answer. */
   reviewThis(): void;
 }
@@ -258,7 +264,54 @@ function ReviewBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "ou
   );
 }
 
-/** What a Plan run wrote: the plan itself, to read, and the two things to do with it. Neither posts anything. */
+/** The description update a finished plan leaves on its ticket: the plan added as a `Gossamr Plan` section, for the person to read as a diff. Nothing is written until they approve it. */
+function PlanDescription({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "on">) {
+  const info = outcome?.planDescription;
+  if (!info) return null;
+  const status = planDescriptionStatus(outcome);
+  const key = run.item?.key ?? "the ticket";
+  return (
+    <div data-plan-description={status} className={`grid gap-2 rounded-md border p-2.5 ${status === "waiting" ? "border-ws-pip/60 bg-ws-pip-soft" : "border-ws-sep bg-ws-win"}`}>
+      <p className="m-0 text-xs font-semibold text-ws-ink3">Description update</p>
+      {status === "waiting" && (
+        <p role="status" className="m-0 text-sm">
+          <b className="font-semibold text-ws-pip">Description update ready: see the diff.</b> {key}&apos;s description is drafted with this plan added as a &ldquo;Gossamr Plan&rdquo; section, so other agents and people can see and check the agreed work. Approve it, edit it or skip it in the diff. Nothing is written to Jira until you approve it.
+        </p>
+      )}
+      {status === "applied" && <p className="m-0 text-sm text-ws-ink2">The plan was added to {key}&apos;s description.</p>}
+      {status === "skipped" && <p className="m-0 text-sm text-ws-ink3">You skipped its description update.</p>}
+      {status === "retired" && <p className="m-0 text-sm text-ws-ink3">Its description update is out of date: the ticket changed or a newer plan replaced it.</p>}
+      {status === "none" && !info.unavailable && <p className="m-0 text-sm text-ws-ink2">No description update is drafted yet. Gossamr can add this plan to {key}&apos;s description as a draft for you to read.</p>}
+      {status === "none" && info.unavailable && (
+        <p data-plan-description-why role="note" className="m-0 text-sm text-ws-ink2">
+          No description update: {info.unavailable}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {status === "waiting" ? (
+          <>
+            <Btn tone="primary" icon="ext" onClick={on.openPlanDescription}>
+              See the diff
+            </Btn>
+            <Btn icon="spark" disabled={drafting} title="Pip reads the whole run and the draft, and changes the draft if you ask" onClick={on.discussPlanDescription}>
+              Chat it over with Pip
+            </Btn>
+          </>
+        ) : status === "none" && !info.unavailable ? (
+          <Btn tone="primary" icon="ext" disabled={drafting} title="Makes a draft of the description with the plan added, for you to read as a diff" onClick={on.draftPlanDescription}>
+            Draft the description update
+          </Btn>
+        ) : status === "retired" || status === "skipped" ? (
+          <Btn icon="ext" disabled={drafting} title="Makes a new draft from the plan and the ticket as it reads now" onClick={on.draftPlanDescription}>
+            Draft it again
+          </Btn>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** What a Plan run wrote: the plan itself, to read, and the things to do with it. None of them posts anything. */
 function PlanBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "on">) {
   const text = run.result?.trim();
   const build = buildFromPlanControl(run);
@@ -267,6 +320,7 @@ function PlanBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outc
   const decided = outcome?.planDraft && !waiting ? outcome.planDraft.state.type : null;
   return (
     <div data-plan-box className="grid gap-2 rounded-md border border-ws-sep bg-ws-bar p-2.5">
+      <PlanDescription run={run} outcome={outcome} drafting={drafting} on={on} />
       <p className="m-0 text-xs font-semibold text-ws-ink3">The plan</p>
       {text ? (
         <Details summary={`${text.length.toLocaleString("en")} characters, as the agent wrote it`} open>
@@ -306,7 +360,7 @@ function PlanBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outc
           {build.reason}
         </p>
       )}
-      <p className="m-0 text-xs text-ws-ink3">The comment drafted when it finished holds only the short note for Jira. The whole plan goes to the ticket only if you draft it, and nothing is posted until you approve a draft.</p>
+      <p className="m-0 text-xs text-ws-ink3">The status comment drafted when it finished holds only the short note for Jira. The whole plan goes to the ticket as the description update above, or as a comment if you draft that too. Nothing is written until you approve a draft.</p>
     </div>
   );
 }

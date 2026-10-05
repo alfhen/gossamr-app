@@ -352,6 +352,27 @@ export function runDraftOf(proposals: Record<string, Proposal> | readonly Propos
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
+/** The description update a plan run left, if it is still waiting: the one the card points at and the sheet opens as a diff. */
+export function runDescriptionDraftOf(proposals: Record<string, Proposal> | readonly Proposal[], runId: string): Proposal | undefined {
+  const all = Array.isArray(proposals) ? proposals : Object.values(proposals);
+  return all
+    .filter((p) => p.state.type === "pending" && p.intent.type === "rewrite" && !!p.intent.body && p.origin.type === "run" && p.origin.runId === runId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+/** What the sheet says about a plan's description update. */
+export function planDescriptionStatus(outcome: Pick<RunOutcome, "planDescription"> | null): "none" | "waiting" | "applied" | "skipped" | "retired" {
+  const state = outcome?.planDescription?.draft?.state.type;
+  if (!state) return "none";
+  return state === "pending" || state === "applying" ? "waiting" : state === "applied" ? "applied" : state === "skipped" ? "skipped" : "retired";
+}
+
+/** What "Chat it over with Pip" sends. Pip reads the run and the ticket itself, so the prompt names them and never carries their text. */
+export function planDescriptionWithPipPrompt(run: { id: string; item: { key: string } | null }, draftId: string): string {
+  const key = run.item?.key ?? "its ticket";
+  return `Let's talk about the description update draft ${draftId} on ${key}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then read ${key} with get_item and check the draft against both: it is the ticket's description with the run's plan added as a 'Gossamr Plan' section. Tell me what you would change. Edit the draft only if I ask you to, with revise_proposal and the complete new description, keeping every part you aren't changing word for word and the 'Gossamr Plan' heading, and don't say anything has been changed in Jira.`;
+}
+
 type PlanRun = Pick<Run, "spec" | "item" | "state" | "result" | "resultComplete">;
 
 function planRunControl(run: PlanRun, words: { noTicket: string; summary: string }): DraftControl {
