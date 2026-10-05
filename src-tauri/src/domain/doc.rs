@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use super::PersonRef;
 
 mod markdown;
+mod plan;
+
+pub use plan::PLAN_HEADING;
 
 /// Portable rich text. Connector formats (ADF, Markdown) convert to this at the edge.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

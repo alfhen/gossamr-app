@@ -17,11 +17,12 @@ impl Core {
 }
 
 /// The text the agent is shown for `work`. `links` come from `Core::ticket_dev_links`, read before the database is locked.
-pub(super) fn snapshot(db: &Db, work: &WorkItem, links: &[DevLink]) -> String {
-    ticket_snapshot(&facts(db, work, links))
+/// `plan_followed` is set when the run is also given an approved plan, which the ticket's own plan section would repeat.
+pub(super) fn snapshot(db: &Db, work: &WorkItem, links: &[DevLink], plan_followed: bool) -> String {
+    ticket_snapshot(&facts(db, work, links, plan_followed))
 }
 
-fn facts(db: &Db, work: &WorkItem, links: &[DevLink]) -> TicketFacts {
+fn facts(db: &Db, work: &WorkItem, links: &[DevLink], plan_followed: bool) -> TicketFacts {
     // The cache keeps the whole ticket in `extra`, with the names the item itself only has as account ids.
     let cached: Option<CachedTicket> = serde_json::from_value(work.extra.clone()).ok();
     let title_of = |item: &ItemRef| db.item(item).ok().flatten().map(|w| w.title);
@@ -50,7 +51,9 @@ fn facts(db: &Db, work: &WorkItem, links: &[DevLink]) -> TicketFacts {
             })
             .collect(),
         code: links.iter().map(|l| change_line(&l.change)).collect(),
-        description: work.body.plain_text(),
+        description: work.body.without_plan_section().plain_text(),
+        plan: work.body.plan_section().map(|d| d.to_markdown()),
+        plan_followed,
         comments: cached.as_ref().map(|t| t.comments.iter().map(|c| SnapComment { author: c.author.name.clone(), at: parse_time(&c.created), text: c.body.clone() }).collect()),
     }
 }

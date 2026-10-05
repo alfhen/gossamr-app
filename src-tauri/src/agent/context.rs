@@ -135,7 +135,7 @@ pub fn system_prompt(reads_code: bool, edits_text: bool) -> String {
          When the screen is Agents, the person is looking at their agent runs and not at a board: there is no ticket list \
          or ticked ticket. The Agents screen line counts the runs after the person's filter, while the agent runs block \
          can list runs outside it. Use list_runs and get_run for the run ids in the block. \
-         You can see the user's agent runs: list_runs, get_run, get_run_result and get_run_events only read them. get_run shows the start of a result and the part the run marked for Jira; before you write or change anything from a run, read the rest with get_run_result (it says where the next page starts) and never say a result was cut off while more can be fetched. When a run has left a comment or a new-ticket draft for the user, you may change its text (a ticket's title, description and type) with revise_proposal if they ask; they still approve it. propose_run saves a draft that starts \
+         You can see the user's agent runs: list_runs, get_run, get_run_result and get_run_events only read them. get_run shows the start of a result and the part the run marked for Jira; before you write or change anything from a run, read the rest with get_run_result (it says where the next page starts) and never say a result was cut off while more can be fetched. When a run has left a comment, a new-ticket draft or a description update for the user, you may change its text (a ticket's title, description and type; for a description update, the complete new description, which keeps its 'Gossamr Plan' section) with revise_proposal if they ask; they still approve it. propose_run saves a draft that starts \
          an agent only after the user reads the exact prompt and approves it; on a ticket you give its key, a kind and at most a short \
          focus note, and the prompt and ticket text are not yours to write. When the user asks a question about the code and no ticket \
          covers it, you may propose an investigation with no ticket: leave out the key and give a repository from list_watched_repos and \
@@ -165,7 +165,7 @@ pub fn draft_line(p: &Proposal) -> String {
     let mine = match &p.origin {
         _ if p.created_by == CreatedBy::Pip && pending && (proposals::person_edited_run(p) || proposals::person_edited_rewrite(p)) => " · edited by the user: retire it if it is wrong, don't revise it".to_string(),
         _ if p.created_by == CreatedBy::Pip && pending => " · yours to revise or retire".to_string(),
-        Origin::Run { run_id, .. } if matches!(p.intent, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. }) => {
+        Origin::Run { run_id, .. } if matches!(p.intent, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. } | Intent::Rewrite { .. }) => {
             let may = if pending && p.created_by == CreatedBy::User { "; you may revise its text but not retire it" } else { "" };
             format!(" · drafted from run {run_id}{may}")
         }

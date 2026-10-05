@@ -166,7 +166,7 @@ impl Core {
                 instruction: instruction.into(),
                 focus,
                 focus_from_run: from_run,
-                ticket_block: Some(snapshot(db, &work, &links)),
+                ticket_block: Some(snapshot(db, &work, &links, false)),
                 pr: None,
                 pr_sha: None,
                 plan: None,

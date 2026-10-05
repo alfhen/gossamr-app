@@ -16,7 +16,7 @@ mod snapshot;
 mod watch;
 mod workflow;
 
-pub use doc::{Block, Doc, Inline, Mark};
+pub use doc::{Block, Doc, Inline, Mark, PLAN_HEADING};
 pub use code::{
     clip, ChangedFile, CheckState, CodeChange, CodeChangeKind, CodeChangeState, CodeFile, CodeHit, CommitInfo, CommitQuery, Notice, TreeEntry, TreeEntryKind, DevLink, LinkSource, PullRequestDetail, ReviewInfo, ReviewState, BODY_LIMIT,
 };
