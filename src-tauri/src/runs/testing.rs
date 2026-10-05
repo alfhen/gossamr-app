@@ -67,6 +67,8 @@ pub struct Scripted {
     pub rm_refusals: Vec<String>,
     /// Every id `claude rm` was run with.
     pub rms: Vec<String>,
+    /// What `claude rm` answers for one session id, every time, until the entry is removed.
+    pub rm_fails: HashMap<String, String>,
     pub in_flight: usize,
     pub most_in_flight: usize,
     pub listings: usize,
@@ -103,6 +105,7 @@ impl FakeCli {
             calls: vec![],
             rm_refusals: vec![],
             rms: vec![],
+            rm_fails: HashMap::new(),
             in_flight: 0,
             most_in_flight: 0,
             listings: 0,
@@ -253,6 +256,9 @@ impl ClaudeCli for FakeCli {
     async fn rm(&self, id: &ShortId) -> CliResult<()> {
         let mut s = self.0.lock().unwrap();
         s.rms.push(id.to_string());
+        if let Some(message) = s.rm_fails.get(id.as_str()) {
+            return Err(CliError::Failed { code: Some(1), stderr: message.clone() });
+        }
         if !s.rm_refusals.is_empty() {
             return Err(CliError::Failed { code: Some(1), stderr: s.rm_refusals.remove(0) });
         }

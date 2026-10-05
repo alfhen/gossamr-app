@@ -156,6 +156,53 @@ async fn a_resume_that_starts_a_copy_stops_the_copy_and_keeps_the_run_stopped() 
     assert_eq!(copy_state.as_deref(), Some("stopped"));
     let after = rig.get(&run).await;
     assert_eq!((after.state, after.unsent_answer.as_deref()), (RunState::Stopped, Some("Yes")));
+    let copies: Vec<_> = after.earlier_sessions.iter().map(|e| e.short_id.as_str()).collect();
+    assert!(matches!(copies.as_slice(), [copy] if copy.starts_with('c')), "the copy is remembered so it is never taken for another run's session: {copies:?}");
+}
+
+#[tokio::test]
+async fn a_run_stopped_for_a_limit_is_resumed_with_the_persons_words_and_the_limit_no_longer_applies() {
+    let (rig, run) = asking().await;
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 30, ..Default::default() }).unwrap();
+    rig.svc.poll_at(chrono::Utc::now() + chrono::Duration::minutes(31)).await;
+    rig.svc.poll_at(chrono::Utc::now() + chrono::Duration::minutes(90)).await;
+    let id = run.short_id.clone().unwrap();
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer, "it was waiting on the person, which the clock doesn't count");
+
+    rig.set(&run, |r| {
+        r.state = RunState::Stopped;
+        r.stopped_by_limit = true;
+        r.error = Some("Stopped by Gossamr: it passed the 30 minute limit".into());
+        r.ended_at = Some(chrono::Utc::now());
+    })
+    .await;
+    rig.session(&run, |e| e.state = Some("stopped".into()));
+    let resumed = rig.svc.answer(&run.id, "Go on with the plan").await.unwrap();
+    assert_eq!((resumed.state, resumed.error, resumed.unsent_answer, resumed.ended_at), (RunState::Working, None, None, None));
+    assert!(!resumed.stopped_by_limit && resumed.continued_at.is_some());
+    {
+        let cli = rig.cli.0.lock().unwrap();
+        assert_eq!(cli.calls, [format!("resume:{id}")], "it was already stopped, so there is no second stop");
+        assert_eq!(cli.resumes[0].message, format!("{REMINDER}\n\nGo on with the plan"));
+    }
+    rig.svc.poll_at(chrono::Utc::now() + chrono::Duration::hours(8)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+}
+
+#[tokio::test]
+async fn a_failed_resume_of_a_run_stopped_for_a_limit_keeps_the_words_and_the_limit_mark() {
+    let (rig, run) = asking().await;
+    rig.set(&run, |r| {
+        r.state = RunState::Stopped;
+        r.stopped_by_limit = true;
+    })
+    .await;
+    rig.session(&run, |e| e.state = Some("stopped".into()));
+    rig.cli.with(|s| s.resume = Resume::Exits);
+    assert!(rig.svc.answer(&run.id, "Carry on").await.is_err());
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.unsent_answer.as_deref(), after.stopped_by_limit), (RunState::Stopped, Some("Carry on"), true));
 }
 
 #[tokio::test]

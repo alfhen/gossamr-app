@@ -126,6 +126,9 @@ pub(super) fn belongs_to(entry: &AgentEntry, run: &Run) -> bool {
     if entry.kind.as_deref() == Some("interactive") {
         return false;
     }
+    if run.earlier_sessions.iter().any(|e| e.short_id == id) {
+        return false;
+    }
     run.short_id.as_ref() == Some(&id) || entry.cwd.as_deref().is_some_and(|cwd| real(Path::new(cwd)) == real(&run.expected_worktree))
 }
 
@@ -133,6 +136,11 @@ pub(super) fn belongs_to(entry: &AgentEntry, run: &Run) -> bool {
 /// take `spec.name`, and the spec (and so its digest) is left as approved.
 fn session_name(label: &str, kind: RunKind) -> String {
     format!("{SESSION_PREFIX}{label} {}", kind.as_str())
+}
+
+/// The title Gossamr gave the run's session when it launched it.
+pub(super) fn title_of(run: &Run) -> String {
+    session_name(run.item.as_ref().map_or("Agent", |i| i.key.as_str()), run.spec.kind)
 }
 
 const SESSION_PREFIX: &str = "Gossamr: ";
@@ -379,10 +387,9 @@ impl RunService {
         self.remember(run);
 
         let spec = &run.spec;
-        let label = run.item.as_ref().map_or("Agent", |i| i.key.as_str());
         let request = LaunchRequest {
             cwd: spec.clone_path.clone(),
-            name: session_name(label, spec.kind),
+            name: title_of(run),
             worktree: spec.name.clone(),
             guard: GUARD.into(),
             prompt: render_prompt(spec),

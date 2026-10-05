@@ -145,3 +145,75 @@ async fn the_live_session_the_listing_names_is_the_one_stopped_and_removed_not_t
     let cli = rig.cli.0.lock().unwrap();
     assert_eq!((cli.stops.clone(), cli.rms.clone()), (vec!["d0d0d0d0".to_owned()], vec!["d0d0d0d0".to_owned()]));
 }
+
+#[tokio::test]
+async fn a_run_that_carried_on_in_another_session_has_both_sessions_stopped_and_removed() {
+    let (rig, run) = stopped().await;
+    let old = run.short_id.clone().unwrap();
+    let new = crate::runs::cli::ShortId::parse("c0000009").unwrap();
+    rig.cli.with(|s| s.sessions.push(crate::runs::testing::FakeCli::session("c0000009", &run.expected_worktree)));
+    rig.set(&run, |r| {
+        r.earlier_sessions = vec![crate::domain::EarlierSession { short_id: old.clone(), session_id: r.session_id.clone(), removed: false }];
+        r.short_id = Some(new.clone());
+        r.session_id = None;
+    })
+    .await;
+    rig.cli.with(|s| s.sessions.push(crate::runs::testing::FakeCli::session("a0000001", &run.expected_worktree)));
+    rig.set(&run, |r| r.earlier_sessions.push(crate::domain::EarlierSession { short_id: crate::runs::cli::ShortId::parse("a0000001").unwrap(), session_id: None, removed: false })).await;
+
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    let cli = rig.cli.0.lock().unwrap();
+    assert!(cli.stops.contains(&"c0000009".to_owned()) && cli.stops.contains(&"a0000001".to_owned()), "a live session of either id is stopped first: {:?}", cli.stops);
+    assert_eq!(cli.rms.first().map(String::as_str), Some("c0000009"), "the current session is removed first");
+    assert!(cli.rms.contains(&old.to_string()) && cli.rms.contains(&"a0000001".to_owned()));
+}
+
+async fn with_earlier(ids: &[&str]) -> (Rig, Run) {
+    let (rig, run) = stopped().await;
+    rig.set(&run, |r| {
+        r.earlier_sessions = ids.iter().map(|id| crate::domain::EarlierSession { short_id: crate::runs::cli::ShortId::parse(id).unwrap(), session_id: None, removed: false }).collect();
+    })
+    .await;
+    (rig, run)
+}
+
+fn removed_flags(run: &Run) -> Vec<(String, bool)> {
+    run.earlier_sessions.iter().map(|e| (e.short_id.to_string(), e.removed)).collect()
+}
+
+#[tokio::test]
+async fn an_earlier_session_that_is_already_gone_counts_as_removed() {
+    let (rig, run) = with_earlier(&["a0000001"]).await;
+    rig.cli.with(|s| drop(s.rm_fails.insert("a0000001".into(), "No session a0000001".into())));
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    let after = rig.get(&run).await;
+    assert_eq!(removed_flags(&after), [("a0000001".to_owned(), true)]);
+    assert_eq!(after.last_detail.as_deref(), Some("Worktree removed"));
+    assert!(!cleanable(&after));
+    assert!(rig.svc.cleanup(&run.id).await.is_err());
+}
+
+#[tokio::test]
+async fn an_earlier_session_claude_keeps_is_remembered_and_retried_after_the_worktree_is_gone() {
+    let (rig, run) = with_earlier(&["a0000001", "a0000002"]).await;
+    rig.cli.with(|s| drop(s.rm_fails.insert("a0000002".into(), UNPUSHED.into())));
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed, "the worktree itself is removed");
+    let kept = rig.get(&run).await;
+    assert!(kept.worktree_removed_at.is_some());
+    assert_eq!(removed_flags(&kept), [("a0000001".to_owned(), true), ("a0000002".to_owned(), false)]);
+    assert!(kept.last_detail.as_deref().is_some_and(|d| d.contains("An earlier session was kept") && d.contains("unpushed")));
+    assert!(cleanable(&kept), "something is still there to remove");
+    let first_round = rig.cli.0.lock().unwrap().rms.clone();
+
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Refused { message: UNPUSHED.into() }, "still refused: nothing new was removed");
+    assert_eq!(rig.cli.0.lock().unwrap().rms[first_round.len()..], ["a0000002"], "only the one that was kept is tried again, not the current session");
+    assert!(rig.get(&run).await.last_detail.as_deref().is_some_and(|d| d.contains("kept")));
+
+    rig.cli.with(|s| s.rm_fails.clear());
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    let done = rig.get(&run).await;
+    assert_eq!(removed_flags(&done), [("a0000001".to_owned(), true), ("a0000002".to_owned(), true)]);
+    assert_eq!(done.last_detail.as_deref(), Some("Worktree removed"));
+    assert!(!cleanable(&done));
+    assert!(rig.svc.cleanup(&run.id).await.is_err(), "nothing left, so it is refused as before");
+}

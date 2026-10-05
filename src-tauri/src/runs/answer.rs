@@ -8,8 +8,9 @@ use std::path::PathBuf;
 use chrono::Utc;
 
 use super::cli::is_uuid;
+use super::limits;
 use super::service::{belongs_to, RunService};
-use crate::domain::{Run, RunEvent, RunState};
+use crate::domain::{EarlierSession, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
 
 pub const MAX_ANSWER_CHARS: usize = 4_000;
@@ -38,15 +39,16 @@ fn message(text: &str) -> String {
 }
 
 impl RunService {
-    /// Answers a run that is asking a question, or sends again an answer that was stopped on its way. The run carries
-    /// on under the same id. Once the session has been stopped, a failure leaves the run `Stopped` with the reason and
-    /// the answer kept on it, so nothing the person wrote is lost.
+    /// Answers a run that is asking a question, sends again an answer that was stopped on its way, or resumes a run
+    /// Gossamr stopped for passing a limit. The run carries on under the same id. Once the session has been stopped,
+    /// a failure leaves the run `Stopped` with the reason and the answer kept on it, so nothing the person wrote is
+    /// lost.
     pub async fn answer(&self, run_id: &str, text: &str) -> Result<Run> {
         self.ensure_enabled()?;
         let text = checked(text)?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
-        let again = run.state == RunState::Stopped && run.unsent_answer.is_some();
+        let again = run.state == RunState::Stopped && (run.unsent_answer.is_some() || run.stopped_by_limit);
         if run.state != RunState::NeedsAnswer && !again {
             return Err(refuse(match run.state {
                 RunState::NeedsPermission => "A permission prompt can only be answered in Terminal.".to_owned(),
@@ -75,7 +77,7 @@ impl RunService {
             self.store(&run).await?;
         }
 
-        let failure = self.wake(&tc, &run, &id, &session, text, !again).await;
+        let failure = self.wake(&tc, &mut run, &id, &session, text, !again).await;
         match failure {
             None => {
                 let now = Utc::now();
@@ -87,6 +89,10 @@ impl RunService {
                 run.failure = None;
                 run.ended_at = None;
                 run.last_progress_at = now;
+                if std::mem::take(&mut run.stopped_by_limit) {
+                    run.continued_at = Some(now);
+                }
+                limits::tick(&mut run, now);
                 self.remember(&run);
                 self.store(&run).await?;
                 let event = RunEvent { run_id: run.id.clone(), seq: 0, at: now, kind: "answered".into(), text: "You answered".into(), detail: None };
@@ -106,7 +112,7 @@ impl RunService {
 
     /// Waits for the session to be listed as stopped, gives its process a moment, and resumes it. `None` is success;
     /// otherwise what to tell the person.
-    async fn wake(&self, tc: &super::toolchain::Toolchain, run: &Run, id: &super::cli::ShortId, session: &str, text: &str, settle: bool) -> Option<String> {
+    async fn wake(&self, tc: &super::toolchain::Toolchain, run: &mut Run, id: &super::cli::ShortId, session: &str, text: &str, settle: bool) -> Option<String> {
         let deadline = std::time::Instant::now() + self.timing.stop_wait;
         loop {
             let listed = match tc.cli.agents(true).await {
@@ -130,6 +136,7 @@ impl RunService {
             Ok(copy) => {
                 let stopped = tc.cli.stop(&copy.short_id).await.is_ok();
                 let copy_note = if stopped { "it was stopped".to_owned() } else { format!("stop it with `claude stop {}`", copy.short_id) };
+                run.earlier_sessions.push(EarlierSession { short_id: copy.short_id.clone(), session_id: None, removed: false });
                 Some(format!("Claude started a copy ({}) instead of continuing this agent; {copy_note}.", copy.short_id))
             }
             Err(e) => Some(format!("Couldn't wake the agent: {e}.")),

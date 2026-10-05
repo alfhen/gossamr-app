@@ -24,6 +24,9 @@ pub const POLL_BUSY: Duration = Duration::from_secs(4);
 pub const POLL_IDLE: Duration = Duration::from_secs(30);
 /// A finished run is watched this long after it ended, in case its session is still open and the person carries on.
 const WATCH_FINISHED: chrono::Duration = chrono::Duration::hours(6);
+/// A stopped run's session is listed as stopped within seconds, but until then it can still look alive; it is not
+/// taken for a session that carried on before this long has passed.
+const STOPPED_SETTLE: chrono::Duration = chrono::Duration::seconds(60);
 /// Focusing the window this soon after a notification opens the run it was about.
 pub const OPEN_WINDOW: Duration = Duration::from_secs(30);
 
@@ -66,6 +69,26 @@ impl RunNotifier for NoNotices {
 /// A session whose process is alive and that is not at rest, the only kind a finished run can be taken up by again.
 fn is_active(entry: &AgentEntry) -> bool {
     entry.pid.is_some() && matches!(entry.state.as_deref(), Some("working" | "blocked")) && entry.status.as_deref() != Some("idle")
+}
+
+/// Whether the session listed for a run at rest has started working or asking again. A finished run only counts a
+/// session that is not at its prompt; a stopped one also counts a session waiting on a question, which Claude lists as
+/// idle. Gossamr's own answer in flight (`unsent_answer`) and a stop that is still settling don't count.
+pub(super) fn revived(entry: &AgentEntry, run: &Run, now: DateTime<Utc>) -> bool {
+    match run.state {
+        RunState::Done => is_active(entry),
+        RunState::Stopped => {
+            let settled = run.ended_at.is_some_and(|at| now - at >= STOPPED_SETTLE);
+            let alive = entry.pid.is_some()
+                && match entry.state.as_deref() {
+                    Some("blocked") => true,
+                    Some("working") => entry.status.as_deref() != Some("idle"),
+                    _ => false,
+                };
+            settled && alive && run.unsent_answer.is_none()
+        }
+        _ => false,
+    }
 }
 
 fn topic(run: &Run) -> &str {
@@ -169,12 +192,20 @@ pub struct Polled {
 
 impl RunService {
     pub async fn poll(&self) -> Polled {
-        self.poll_at(Utc::now()).await
+        self.poll_with(Utc::now).await
     }
 
-    /// One look at `claude agents` for every unfinished run of the signed-in account.
+    /// One look at `claude agents` for every unfinished run of the signed-in account, at the time `now`.
     pub async fn poll_at(&self, now: DateTime<Utc>) -> Polled {
+        self.poll_with(|| now).await
+    }
+
+    /// The listing is read and applied while holding the launch lock, with the time taken after the lock was won. A
+    /// listing read before waiting for it can predate an answer that stops and wakes a session, and applying it
+    /// afterwards puts the run back to `Stopped`.
+    async fn poll_with(&self, clock: impl Fn() -> DateTime<Utc>) -> Polled {
         let idle = Polled { busy: false };
+        let now = clock();
         if !self.is_enabled() {
             return idle;
         }
@@ -197,12 +228,16 @@ impl RunService {
         let mut busy = runs.iter().any(|r| r.state != RunState::Queued) || !waiting.is_empty();
         let Ok(tc) = self.tools.get().await else { return Polled { busy } };
         self.collect_answers(&tc, &waiting).await;
-        let Ok(entries) = tc.cli.agents(true).await else { return Polled { busy } };
-        busy |= finished.iter().any(|r| entries.iter().any(|e| belongs_to(e, r) && is_active(e)));
         let config_dir = self.claude_config_dir(&tc).await;
 
         let _turn = self.launching.lock().await;
+        let now = clock();
+        let Ok(entries) = tc.cli.agents(true).await else { return Polled { busy } };
+        busy |= finished.iter().any(|r| entries.iter().any(|e| belongs_to(e, r) && revived(e, r, now)));
         let mut changed = HashSet::new();
+        for id in self.adopt_continuations(&entries, &finished, now).await {
+            changed.insert(id);
+        }
         for listed in runs.iter().chain(&finished) {
             match self.track(&tc, config_dir.as_deref(), &entries, &listed.id, now).await {
                 Ok(Some(connection_id)) => {
@@ -216,9 +251,10 @@ impl RunService {
         Polled { busy }
     }
 
-    /// Runs that finished lately and still have a worktree: their session may be open at its prompt.
+    /// Runs that finished or were stopped lately and still have a worktree: their session may be open at its prompt, or
+    /// have been carried on.
     async fn recently_finished(&self, now: DateTime<Utc>) -> Vec<Run> {
-        let query = RunQuery { states: Some(vec![RunState::Done]), ..RunQuery::default() };
+        let query = RunQuery { states: Some(vec![RunState::Done, RunState::Stopped]), ..RunQuery::default() };
         let Ok(done) = self.core.runs_list(&query).await else { return Vec::new() };
         done.into_iter().filter(|r| r.short_id.is_some() && r.worktree_removed_at.is_none() && r.ended_at.is_some_and(|at| now - at <= WATCH_FINISHED)).collect()
     }
@@ -236,12 +272,12 @@ impl RunService {
     /// Applies one run's observation. Returns its connection when anything about it changed.
     async fn track(&self, tc: &Toolchain, config_dir: Option<&Path>, entries: &[AgentEntry], run_id: &str, now: DateTime<Utc>) -> crate::error::Result<Option<String>> {
         let Some(before) = self.core.run(run_id).await? else { return Ok(None) };
-        if matches!(before.state, RunState::Failed | RunState::Stopped) || before.worktree_removed_at.is_some() {
+        if before.state == RunState::Failed || before.worktree_removed_at.is_some() {
             return Ok(None);
         }
         let entry = entries.iter().find(|e| belongs_to(e, &before));
-        let finished = before.state == RunState::Done;
-        if finished && !entry.is_some_and(is_active) {
+        let finished = matches!(before.state, RunState::Done | RunState::Stopped);
+        if finished && !entry.is_some_and(|e| revived(e, &before, now)) {
             return Ok(None);
         }
         let short = before.short_id.clone().or_else(|| entry.and_then(|e| e.id.as_deref().and_then(ShortId::parse)));
@@ -286,7 +322,10 @@ impl RunService {
         if reopened {
             run.continued_at = Some(now);
             run.ended_at = None;
+            run.stopped_by_limit = false;
+            run.possible_continuations.clear();
         }
+        limits::tick(&mut run, now);
         run.needs = match seen.state {
             RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => seen.text.as_deref().and_then(|t| cleaned(t, NEEDS_KEPT)),
             _ => None,
@@ -311,7 +350,9 @@ impl RunService {
                     run.state = RunState::Stopped;
                     run.needs = None;
                     run.error.clone_from(&overrun);
+                    run.stopped_by_limit = true;
                     run.last_progress_at = now;
+                    limits::tick(&mut run, now);
                 }
                 Err(e) => eprintln!("couldn't stop run {run_id} for passing a limit: {e}"),
             }

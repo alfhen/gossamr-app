@@ -1176,3 +1176,166 @@ async fn the_second_answer_of_a_continued_session_is_read_from_its_newest_timeli
     polls(&rig, 2).await;
     assert_eq!(rig.get(&run).await.result.as_deref(), Some(SECOND_ANSWER));
 }
+
+fn asking(entry: &mut AgentEntry) {
+    entry.state = Some("blocked".into());
+    entry.status = None;
+    entry.pid = None;
+}
+
+/// A second start of the app: same accounts and listing, none of the first one's memory.
+fn restarted(rig: &Rig) -> RunService {
+    RunService::new(rig.fx.core.clone(), rig.svc.tools.clone(), RunIndex::load(&rig.fx.dir.join("index")), vec![], Arc::new(|_| {})).enabled(true).with_settings(rig.svc.settings())
+}
+
+#[tokio::test]
+async fn a_run_that_waits_three_hours_for_an_answer_and_then_works_ten_minutes_is_not_stopped_by_the_hour_limit() {
+    let (rig, run) = launched().await;
+    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 60, ..Default::default() }).unwrap();
+    let t0 = Utc::now();
+    let at = |minutes: i64| t0 + Span::minutes(minutes);
+    rig.poll().await;
+    rig.svc.poll_at(at(5)).await;
+
+    rig.session(&run, asking);
+    rig.svc.poll_at(at(6)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+
+    rig.svc.poll_at(at(60 + 6)).await;
+    rig.svc.poll_at(at(180)).await;
+    let waiting = rig.get(&run).await;
+    assert_eq!((waiting.state, waiting.error), (RunState::NeedsAnswer, None), "three hours of waiting is not three hours of work");
+    assert!(rig.cli.0.lock().unwrap().stops.is_empty());
+
+    let app = restarted(&rig);
+    let kept = rig.get(&run).await;
+    assert_eq!(kept.waiting_since.map(|s| (s - t0).num_minutes()), Some(6), "the wait is stored on the run, not in memory");
+    rig.session(&run, working);
+    app.poll_at(at(186)).await;
+    let back = rig.get(&run).await;
+    assert_eq!((back.state, back.waiting_since), (RunState::Working, None));
+    assert_eq!(back.waited_secs / 60, 180, "the wait was added to the run once it was back at work");
+
+    app.poll_at(at(196)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working, "15 minutes of work in 196");
+    app.poll_at(at(186 + 55)).await;
+    let over = rig.get(&run).await;
+    assert_eq!(over.state, RunState::Stopped, "an hour of work in 241 minutes");
+    assert_eq!(over.error.as_deref(), Some("Stopped by Gossamr: it passed the 60 minute limit"));
+    assert!(over.stopped_by_limit);
+}
+
+#[tokio::test]
+async fn waiting_for_a_permission_or_a_sign_in_pauses_the_clock_as_well() {
+    for waiting in [permission as fn(&mut AgentEntry), |e| {
+        e.state = Some("blocked".into());
+        e.needs = Some("login required \u{2014} run /login".into());
+    }] {
+        let (rig, run) = launched().await;
+        rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 30, ..Default::default() }).unwrap();
+        rig.poll().await;
+        rig.session(&run, waiting);
+        rig.svc.poll_at(Utc::now() + Span::minutes(1)).await;
+        rig.svc.poll_at(Utc::now() + Span::hours(5)).await;
+        let held = rig.get(&run).await;
+        assert!(matches!(held.state, RunState::NeedsPermission | RunState::SystemBlocked), "{:?}", held.state);
+    }
+}
+
+#[tokio::test]
+async fn a_listing_read_while_an_answer_is_in_flight_is_not_applied_over_the_answer() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    rig.session(&run, asking);
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+
+    let answering = rig.svc.launching.lock().await;
+    rig.session(&run, |e| e.state = Some("stopped".into()));
+    let svc = rig.svc.clone();
+    let polling = tokio::spawn(async move { svc.poll().await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    rig.set(&run, |r| {
+        r.state = RunState::Working;
+        r.needs = None;
+        r.ended_at = None;
+    })
+    .await;
+    rig.session(&run, working);
+    drop(answering);
+    polling.await.unwrap();
+
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.ended_at), (RunState::Working, None), "the poll read the listing after the answer finished");
+}
+
+async fn stopped_by_the_person() -> (Rig, Run) {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    rig.svc.stop(&run.id).await.unwrap();
+    let stopped = rig.get(&run).await;
+    assert_eq!(stopped.state, RunState::Stopped);
+    (rig, stopped)
+}
+
+#[tokio::test]
+async fn a_stopped_run_whose_session_is_live_again_is_picked_up_and_follows_it() {
+    let (rig, run) = stopped_by_the_person().await;
+    rig.svc.poll_at(Utc::now() + Span::minutes(5)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped, "a session listed as stopped stays stopped");
+
+    rig.session(&run, |e| {
+        e.state = Some("blocked".into());
+        e.status = Some("idle".into());
+        e.pid = Some(777);
+    });
+    rig.svc.poll_at(Utc::now() + Span::seconds(20)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped, "a stop is given a minute to settle before a live pid means anything");
+
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some("Which branch?".into()));
+    rig.svc.poll_at(Utc::now() + Span::minutes(2)).await;
+    let asking = rig.get(&run).await;
+    assert_eq!((asking.state, asking.needs.as_deref(), asking.ended_at), (RunState::NeedsAnswer, Some("Which branch?"), None));
+    assert!(asking.continued_at.is_some() && asking.error.is_none() && !asking.stopped_by_limit);
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Needs, RunState::NeedsAnswer)));
+    assert!(rig.svc.index.live().iter().any(|e| e.run_id == run.id));
+
+    rig.session(&run, working);
+    rig.svc.poll_at(Utc::now() + Span::minutes(3)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+}
+
+#[tokio::test]
+async fn a_stopped_run_is_not_picked_up_while_its_answer_is_unsent_or_it_was_removed() {
+    let (rig, run) = stopped_by_the_person().await;
+    rig.session(&run, working);
+    rig.set(&run, |r| r.unsent_answer = Some("Yes".into())).await;
+    rig.svc.poll_at(Utc::now() + Span::minutes(5)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped);
+    rig.set(&run, |r| {
+        r.unsent_answer = None;
+        r.worktree_removed_at = Some(Utc::now());
+    })
+    .await;
+    rig.svc.poll_at(Utc::now() + Span::minutes(5)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped);
+}
+
+#[tokio::test]
+async fn a_run_stopped_for_a_limit_is_picked_up_when_the_person_carries_on_and_is_then_theirs() {
+    let (rig, run) = launched().await;
+    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 30, ..Default::default() }).unwrap();
+    rig.poll().await;
+    rig.svc.poll_at(Utc::now() + Span::minutes(31)).await;
+    let stopped = rig.get(&run).await;
+    assert!(stopped.state == RunState::Stopped && stopped.stopped_by_limit);
+
+    rig.session(&run, working);
+    rig.svc.poll_at(Utc::now() + Span::minutes(40)).await;
+    let carried = rig.get(&run).await;
+    assert_eq!(carried.state, RunState::Working);
+    assert!(!carried.stopped_by_limit && carried.continued_at.is_some() && carried.error.is_none());
+    rig.svc.poll_at(Utc::now() + Span::hours(9)).await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working, "the limit doesn't stop it a second time");
+    assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 1);
+}

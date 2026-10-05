@@ -77,6 +77,11 @@ impl RunIndex {
         Ok(())
     }
 
+    /// Every session id of any run in the index, finished ones included.
+    pub fn short_ids(&self) -> std::collections::HashSet<ShortId> {
+        self.entries.lock().expect("run index poisoned").iter().filter_map(|e| e.short_id.clone()).collect()
+    }
+
     pub fn contains(&self, run_id: &str) -> bool {
         self.entries.lock().expect("run index poisoned").iter().any(|e| e.run_id == run_id)
     }
