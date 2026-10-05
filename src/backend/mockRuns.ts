@@ -1147,7 +1147,8 @@ export class MockRuns {
     if (!run) throw new Error("that run no longer exists");
     if (!TERMINAL.includes(run.state)) throw new Error("This run is still going. Stop it first, then clean it up.");
     if (this.unpushed.has(id)) return { type: "refused", message: "The worktree has unpushed commits. Push them or discard them yourself, then try again." };
-    this.update(id, { worktreeRemovedAt: this.now(), lastDetail: "Worktree removed" });
+    const earlier = run.earlierSessions?.map((s) => ({ ...s, removed: true }));
+    this.update(id, { worktreeRemovedAt: run.worktreeRemovedAt ?? this.now(), lastDetail: "Worktree removed", ...(earlier ? { earlierSessions: earlier } : {}) });
     this.changed();
     return { type: "removed" };
   }

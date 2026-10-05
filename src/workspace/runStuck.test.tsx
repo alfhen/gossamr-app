@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run } from "../types";
+import { renderToStaticMarkup } from "react-dom/server";
 import { laneOf, stateView, stoppedText } from "./agentsLogic";
+import { cleanable } from "./cleanupLogic";
+import { RunCleanupView } from "./RunCleanup";
 import { useRuns } from "./runsStore";
 import { answerable, answerDraft, offeredSessions, resumable, RESUME_TEXT } from "./runSheetLogic";
 import { useToasts } from "./toasts";
@@ -90,6 +93,24 @@ describe("the sample backend and the store follow the same rules", () => {
     expect(after.earlierSessions).toEqual([{ shortId: offered.shortId, sessionId: offered.sessionId }]);
     expect(after.sessionId).toBe("bbb748a7-dca2-4f33-9da1-caa7f80584b8");
     expect(useToasts.getState().toasts).toHaveLength(0);
+  });
+
+  it("removes the earlier session along with the worktree, so nothing is left to retry", async () => {
+    await settle();
+    const offered = s().runs.find((r) => r.possibleContinuations?.length === 1)!;
+    await s().adoptSession(offered.id, "bbb748a7");
+    backend.runs.advance(offered.id);
+    await settle();
+    const done = () => s().runs.find((r) => r.id === offered.id)!;
+    expect(done().state).toBe("done");
+    expect(cleanable(done())).toBe(true);
+    expect(await s().cleanup(offered.id)).toEqual({ type: "removed" });
+    await settle();
+    expect(done().earlierSessions).toEqual([expect.objectContaining({ shortId: offered.shortId, removed: true })]);
+    expect(cleanable(done())).toBe(false);
+    const view = renderToStaticMarkup(<RunCleanupView run={done()} reason={null} asking={false} busy={false} refused={null} onAsk={() => {}} onCancel={() => {}} onConfirm={() => {}} />);
+    expect(view).toContain("The worktree and its branch were removed");
+    expect(view).not.toContain("Try removing again");
   });
 
   it("refuses a session that was not offered, and says so", async () => {
