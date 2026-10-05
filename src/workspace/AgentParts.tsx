@@ -2,7 +2,7 @@ import type { Run } from "../types";
 import { Icon, STATE_ICON } from "./AgentIcons";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { createdFrom } from "./runSheetLogic";
-import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, stateView, type Tone } from "./agentsLogic";
+import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, stateView, stoppedText, type Tone } from "./agentsLogic";
 
 export const TONE: Record<Tone, { text: string; soft: string; color: string }> = {
   pip: { text: "text-ws-pip", soft: "bg-ws-pip-soft", color: "var(--color-ws-pip)" },
@@ -165,7 +165,7 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
       return (
         <p className="m-0 flex items-start gap-2 text-ws-ink3">
           <Dot tone="muted" live={false} />
-          <span className={`${clamp(2)} -mt-0.5 min-w-0`}>{run.lastDetail?.trim() || "Stopped before it finished"}</span>
+          <span className={`${clamp(2)} -mt-0.5 min-w-0`}>{stoppedText(run)}</span>
         </p>
       );
     default: {
@@ -210,7 +210,7 @@ export function rowText(run: Run, now: number): string {
     case "done":
       return createdFrom(run) ?? resultHeadline(run.summary ?? run.result) ?? "Finished";
     case "stopped":
-      return run.lastDetail?.trim() || "Stopped before it finished";
+      return stoppedText(run);
     default:
       return quiet !== null ? `${quietText(quiet)}. ${progressText(run)}` : progressText(run);
   }

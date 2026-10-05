@@ -8,7 +8,7 @@ export interface MockOptions {
   /** How the device flow ends once the sample waits for it: authorised after `delayMs`, or refused or expired. */
   device?: { delayMs: number; outcome: "authorised" | "denied" | "expired" };
   /** Which scripted agent runs exist, and the moment their ages count back from. */
-  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; planDescription?: boolean; untrusted?: boolean };
+  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; planDescription?: boolean; untrusted?: boolean };
 }
 
 interface Stored {
@@ -108,7 +108,7 @@ export function mockOptionsFromUrl(): MockOptions {
   options.runs = {
     // The scripted ages count back from now, so the runs look recent whenever the page is opened.
     epoch: Date.now(),
-    seed: seed === "empty" || seed === "many" || seed === "failures" || seed === "busy" ? seed : "kinds",
+    seed: seed === "empty" || seed === "many" || seed === "failures" || seed === "busy" || seed === "stuck" ? seed : "kinds",
     environment: environment === "missing" || environment === "signedOut" ? environment : "ok",
     cap: count("runsCap"),
     pipRun: params.get("pipRun") === "1",

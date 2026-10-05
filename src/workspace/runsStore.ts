@@ -77,6 +77,8 @@ interface RunsState {
   startNow(id: string): Promise<void>;
   /** Sends the person's answer to a run that is asking a question; the run carries on under the same id. */
   answer(id: string, text: string): Promise<void>;
+  /** Takes a listed session over as the continuation of a stopped or finished run, after the person chose it. */
+  adoptSession(id: string, session: string): Promise<void>;
   retryLaunch(id: string): Promise<void>;
   /** The step a failed launch needs the person for: Terminal to trust the folder or sign in, or the install page. */
   fix(id: string, act: Extract<FailureAct, "terminal" | "install">): Promise<void>;
@@ -305,6 +307,17 @@ export const useRuns = create<RunsState>((set, get) => ({
       set({ answering: new Set([...get().answering].filter((x) => x !== id)) });
       void get().reload();
     }
+  },
+
+  async adoptSession(id, session) {
+    const { backend } = get();
+    if (!backend) return;
+    try {
+      await backend.runsAdoptSession(id, session);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't adopt the session: ${messageOf(e)}`);
+    }
+    void get().reload();
   },
 
   async retryLaunch(id) {
