@@ -590,6 +590,12 @@ async fn runs_answer(runs: State<'_, RunsState>, id: String, text: String) -> Re
     runs.answer(&id, &text).await
 }
 
+/// Takes a listed session over as the continuation of a stopped or finished run, when it still passes every check.
+#[tauri::command]
+async fn runs_adopt_session(runs: State<'_, RunsState>, id: String, session: String) -> Result<Run> {
+    runs.adopt_session(&id, &session).await
+}
+
 /// Stops every run Gossamr started, in any account, and nothing else.
 #[tauri::command]
 async fn runs_stop_all(runs: State<'_, RunsState>) -> Result<runs::control::StopAll> {
@@ -1109,6 +1115,7 @@ pub fn run() {
             runs_suggest_name,
             runs_stop,
             runs_answer,
+            runs_adopt_session,
             runs_stop_all,
             runs_attach,
             runs_trust_folder,

@@ -44,11 +44,17 @@ impl Drop for Cleaning<'_> {
 }
 
 impl RunService {
-    /// The id the listing gives a finished run's session when it is still open at its prompt. It holds its worktree's
-    /// lock, which `claude rm` refuses until the session is stopped, and after a resume it can differ from the stored id.
-    async fn live_session(&self, tc: &super::toolchain::Toolchain, run: &Run) -> Option<ShortId> {
-        let entries = tc.cli.agents(true).await.ok()?;
-        entries.iter().find(|e| belongs_to(e, run) && e.pid.is_some()).and_then(|e| e.id.as_deref().and_then(ShortId::parse))
+    /// The ids the listing gives sessions of a finished run that are still open at their prompt. One holds the
+    /// worktree's lock, which `claude rm` refuses until it is stopped, and after a resume it can differ from the stored
+    /// id. The run's earlier sessions are looked at too.
+    async fn live_sessions(&self, tc: &super::toolchain::Toolchain, run: &Run) -> Vec<ShortId> {
+        let Ok(entries) = tc.cli.agents(true).await else { return Vec::new() };
+        let ours = run.session_ids();
+        entries
+            .iter()
+            .filter(|e| e.pid.is_some() && (belongs_to(e, run) || e.id.as_deref().and_then(ShortId::parse).is_some_and(|id| ours.contains(&id))))
+            .filter_map(|e| e.id.as_deref().and_then(ShortId::parse))
+            .collect()
     }
 
     /// Removes the run's worktree and branch. Never forces: unpushed work stays, and Claude says so.
@@ -69,13 +75,11 @@ impl RunService {
             }));
         };
         let tc = self.tools.get().await.map_err(|e| Error::Claude(Failure::from(e).to_string()))?;
-        let id = match self.live_session(&tc, &run).await {
-            Some(live) => {
-                tc.cli.stop(&live).await?;
-                live
-            }
-            None => id,
-        };
+        let live = self.live_sessions(&tc, &run).await;
+        for session in &live {
+            tc.cli.stop(session).await?;
+        }
+        let id = live.into_iter().find(|l| !run.earlier_sessions.iter().any(|e| e.short_id == *l)).unwrap_or(id);
         let mut tries = 0;
         loop {
             match tc.cli.rm(&id).await {
@@ -90,6 +94,10 @@ impl RunService {
                 }
                 Err(other) => return Err(other.into()),
             }
+        }
+        for earlier in run.earlier_sessions.iter().filter(|e| e.short_id != id) {
+            // The worktree is gone with the current session, so a refusal here only means there is nothing left to remove.
+            let _ = tc.cli.rm(&earlier.short_id).await;
         }
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;

@@ -5,6 +5,7 @@ pub mod answer;
 pub mod binary;
 pub mod cleanup;
 pub mod cli;
+mod continuation;
 pub mod control;
 pub mod enable;
 pub mod env;

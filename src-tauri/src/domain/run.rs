@@ -439,6 +439,28 @@ impl RunFailure {
     }
 }
 
+/// A session the run used before it carried on in another one. Kept so its id still finds the run, and so cleanup
+/// reaches it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EarlierSession {
+    pub short_id: ShortId,
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
+/// A listed session that may be this run's conversation carried on under a new id, offered to the person when
+/// Gossamr can't be sure.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Continuation {
+    pub short_id: ShortId,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
@@ -491,9 +513,29 @@ pub struct Run {
     /// The ticket made from this run's draft once the person approved it.
     #[serde(default)]
     pub created_item: Option<ItemRef>,
+    /// Seconds already spent waiting on the person (a question, a permission, a sign-in), which the time limit leaves out.
+    #[serde(default)]
+    pub waited_secs: u64,
+    /// When the wait now under way began; folded into `waited_secs` once the run is back at work.
+    #[serde(default)]
+    pub waiting_since: Option<DateTime<Utc>>,
+    /// Gossamr stopped the run for passing a limit; the person can resume it.
+    #[serde(default)]
+    pub stopped_by_limit: bool,
+    /// Sessions this run left behind when it carried on under a new id, oldest first.
+    #[serde(default)]
+    pub earlier_sessions: Vec<EarlierSession>,
+    /// Sessions that may be this run carried on, when more than one fits or the match isn't exact.
+    #[serde(default)]
+    pub possible_continuations: Vec<Continuation>,
 }
 
 impl Run {
+    /// Every session id this run has had, the current one first.
+    pub fn session_ids(&self) -> Vec<ShortId> {
+        self.short_id.iter().chain(self.earlier_sessions.iter().map(|e| &e.short_id)).cloned().collect()
+    }
+
     /// A failed run stored before `failure` existed gets the kind its message says.
     pub fn with_failure_filled(mut self) -> Self {
         if self.state == RunState::Failed && self.failure.is_none() {
@@ -534,6 +576,11 @@ impl Run {
             worktree_removed_at: None,
             continued_at: None,
             created_item: None,
+            waited_secs: 0,
+            waiting_since: None,
+            stopped_by_limit: false,
+            earlier_sessions: Vec::new(),
+            possible_continuations: Vec::new(),
         }
     }
 }

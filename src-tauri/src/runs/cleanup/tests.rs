@@ -145,3 +145,25 @@ async fn the_live_session_the_listing_names_is_the_one_stopped_and_removed_not_t
     let cli = rig.cli.0.lock().unwrap();
     assert_eq!((cli.stops.clone(), cli.rms.clone()), (vec!["d0d0d0d0".to_owned()], vec!["d0d0d0d0".to_owned()]));
 }
+
+#[tokio::test]
+async fn a_run_that_carried_on_in_another_session_has_both_sessions_stopped_and_removed() {
+    let (rig, run) = stopped().await;
+    let old = run.short_id.clone().unwrap();
+    let new = crate::runs::cli::ShortId::parse("c0000009").unwrap();
+    rig.cli.with(|s| s.sessions.push(crate::runs::testing::FakeCli::session("c0000009", &run.expected_worktree)));
+    rig.set(&run, |r| {
+        r.earlier_sessions = vec![crate::domain::EarlierSession { short_id: old.clone(), session_id: r.session_id.clone() }];
+        r.short_id = Some(new.clone());
+        r.session_id = None;
+    })
+    .await;
+    rig.cli.with(|s| s.sessions.push(crate::runs::testing::FakeCli::session("a0000001", &run.expected_worktree)));
+    rig.set(&run, |r| r.earlier_sessions.push(crate::domain::EarlierSession { short_id: crate::runs::cli::ShortId::parse("a0000001").unwrap(), session_id: None })).await;
+
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    let cli = rig.cli.0.lock().unwrap();
+    assert!(cli.stops.contains(&"c0000009".to_owned()) && cli.stops.contains(&"a0000001".to_owned()), "a live session of either id is stopped first: {:?}", cli.stops);
+    assert_eq!(cli.rms.first().map(String::as_str), Some("c0000009"), "the current session is removed first");
+    assert!(cli.rms.contains(&old.to_string()) && cli.rms.contains(&"a0000001".to_owned()));
+}
