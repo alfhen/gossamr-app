@@ -29,6 +29,15 @@ describe("the Gossamr Plan section of a description in the sample build", () => 
     expect(markdownOf(planSectionOf(next)!)).toBe("i\n\nDeep\n\ntext");
   });
 
+  it("keeps headings nested below the section, moves a plan that starts shallower than the marker, and turns only the ones that reach its level into text", () => {
+    const deep = withPlanSection(docFromMarkdown("### Gossamr Plan\n\nold"), "i", docFromMarkdown("# One\n\n## Two\n\ntext"));
+    expect(markdownOf(deep)).toBe("### Gossamr Plan\n\ni\n\n#### One\n\n##### Two\n\ntext");
+    const kept = withPlanSection(docFromMarkdown("## Gossamr Plan"), "i", docFromMarkdown("### Below\n\n#### Further"));
+    expect(markdownOf(kept)).toBe("## Gossamr Plan\n\ni\n\n### Below\n\n#### Further");
+    const capped = withPlanSection(docFromMarkdown("##### Gossamr Plan"), "i", docFromMarkdown("# A\n\n## B"));
+    expect(markdownOf(capped)).toBe("##### Gossamr Plan\n\ni\n\n###### A\n\n###### B");
+  });
+
   it("ends at the next heading of its own level or above and is found whatever its case", () => {
     const doc = docFromMarkdown("# gossamr plan:\n\nin\n\n## Inner\n\nalso in\n\n# Next\n\nout");
     expect(markdownOf(planSectionOf(doc)!)).toBe("in\n\n## Inner\n\nalso in");

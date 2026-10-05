@@ -611,7 +611,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       description={description}
       banner={readOnly ? <PeekNotice unwatched={!!item.unwatched} containerName={containerName} connectionId={ref.connectionId} containerId={item.container.externalId} /> : undefined}
       drafts={
-        !readOnly && drafts.length > 0 ? (
+        drafts.length > 0 ? (
           <SectionCard id="drafts" title="Drafts waiting" count={drafts.length}>
             {drafts.map((p) => (
               <LiveDraftCard key={p.id} proposal={p} jump={false} />
