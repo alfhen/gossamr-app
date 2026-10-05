@@ -1,5 +1,7 @@
-import { SUMMARY_ONLY, type AgentSettings, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal } from "../types";
+import { SUMMARY_ONLY, type AgentSettings, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal } from "../types";
 import { containerRef, itemRef } from "./mockConnector";
+import { assemblePlan, planSectionOf } from "./mockPlanSection";
+import { docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, subtaskProposals, ticketBody, ticketFromAnswer, ticketKeys, ticketProposal } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
 import { docFromText, docText } from "../lib/docs";
@@ -171,6 +173,7 @@ export const SCRIPTED_TICKET_RESULT =
 const REPO_PROJECTS: Record<string, string> = { "acme/storefront": "CA", "acme/payments": "SUP", "acme/webshop": "WEB", "acme/gateway": "DEVOPS" };
 
 const PLAN_LABEL = "Plan from agent run";
+const NO_EDIT = "This tracker can't change a ticket's description, so the plan can only go to the ticket as a comment.";
 
 const FAILED_TEXT = {
   notSignedIn: "Claude isn't signed in. Run `claude` in Terminal and sign in, then retry.",
@@ -300,6 +303,8 @@ export interface MockRunsOptions {
   cap?: number;
   /** Starts with a run draft Pip proposed, carrying a focus note, for the setup sheet's Pip box. */
   pipRun?: boolean;
+  /** Starts with the description update each finished plan run would have left on its ticket. */
+  planDescription?: boolean;
 }
 
 /** Where the sample clones are, by repository; `acme/ops` has none, to show the blocked state. */
@@ -348,6 +353,11 @@ export class MockRuns {
   readonly terminals: string[] = [];
   /** The ticket text a draft is snapshotted from; set by the backend that owns the tickets. */
   ticketText: (item: ItemRef) => string | null = () => null;
+  /** The description of a ticket as a document; set by the backend that owns the tickets. */
+  ticketDoc: (item: ItemRef) => WorkDoc | null = () => null;
+  /** Makes the tracker unable to edit descriptions, as a connection without that capability would be. */
+  cannotEditText = false;
+  private readonly seedDescriptions: boolean;
   /** The pull request a review reads, as GitHub has it; set by the backend that owns the code. */
   pullRequest: (repo: string, number: number) => CodeChange | null = () => null;
 
@@ -360,6 +370,7 @@ export class MockRuns {
     this.claude = o.environment ?? "ok";
     this.limits = { ...this.limits, maxRuns: o.cap ?? 6 };
     this.pipRun = !!o.pipRun;
+    this.seedDescriptions = !!o.planDescription;
     const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
     this.proposals.onApplied = (p) => p.origin.type === "run" && p.intent.type === "create" && this.changed();
@@ -545,6 +556,63 @@ export class MockRuns {
     if (summaries.length && !this.subtaskDrafts(run.id).length) {
       this.proposals.fromRun({ type: "subtasks", parent: run.item, summaries }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
     }
+    if (run.spec.kind === "plan") this.makePlanDescription(run, false);
+  }
+
+  /** The description update each finished sample plan run would have left, once the tickets are known. */
+  seedPlanDescriptions() {
+    if (!this.seedDescriptions) return;
+    for (const run of this.runs) if (run.spec.kind === "plan" && run.state === "done" && run.resultComplete !== false && !this.planDescriptionDrafts(run.id).length) this.makePlanDescription(run, false);
+  }
+
+  private planDescriptionDrafts(runId: string): Proposal[] {
+    return this.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === runId && p.intent.type === "rewrite" && !!p.intent.body && !!planSectionOf(p.intent.body.to));
+  }
+
+  private planDescriptionFor(run: Run): { item: ItemRef; from: WorkDoc; to: WorkDoc } | { unavailable: string } {
+    const item = run.item;
+    if (!item) return { unavailable: "This plan isn't about a ticket." };
+    if (this.cannotEditText) return { unavailable: NO_EDIT };
+    const from = this.ticketDoc(item);
+    if (!from) return { unavailable: `${item.key} isn't in the cache, so Gossamr can't read its description. Open the ticket so it refreshes.` };
+    const made = assemblePlan(run, from, docFromMarkdown);
+    return "problem" in made ? { unavailable: made.problem } : { item, from, to: made.to };
+  }
+
+  /** The one description draft of `run`, as `make_plan_description` does: none when the ticket already has the plan or this plan was drafted, a waiting draft for an older plan retired. */
+  private makePlanDescription(run: Run, manual: boolean): Proposal | { unavailable: string } | "have" {
+    const ready = this.planDescriptionFor(run);
+    if ("unavailable" in ready) return ready;
+    const { item, from, to } = ready;
+    const fromText = markdownOf(from);
+    if (markdownOf(to) === fromText) return "have";
+    const section = markdownOf(planSectionOf(to)!);
+    const mine = this.planDescriptionDrafts(run.id).filter((p) => p.intent.type === "rewrite" && p.intent.body && markdownOf(planSectionOf(p.intent.body.to)!) === section);
+    if (mine.some((p) => (p.state.type !== "pending" && (!manual || p.state.type === "applied")) || (p.state.type === "pending" && p.intent.type === "rewrite" && p.intent.body?.fromText === fromText))) return "have";
+    for (const older of this.proposals.list({ states: ["pending"], item })) {
+      if (older.origin.type === "run" && older.intent.type === "rewrite" && older.intent.body && planSectionOf(older.intent.body.to)) this.proposals.retire(older.id, "replaced by a newer plan");
+    }
+    const intent: Intent = { type: "rewrite", item, title: null, body: { from, to, fromText, toText: markdownOf(to) }, flattened: [] };
+    return this.proposals.fromRun(intent, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
+  }
+
+  /** The description update a person asks for from the sheet. */
+  async draftPlanDescription(id: string): Promise<Proposal> {
+    const { run } = this.finished(id);
+    if (run.spec.kind !== "plan") throw new Error("only a plan run has a plan to add to a description");
+    if (run.resultComplete === false) throw new Error(`${SUMMARY_ONLY} There is no plan to add.`);
+    if (!planWithoutNote(run.result ?? "")) throw new Error("the run finished without a written answer, so there is no plan to add");
+    const made = this.makePlanDescription(run, true);
+    if (made === "have") throw new Error(`${run.item?.key} already has this plan, or a draft of it is waiting`);
+    if ("unavailable" in made) throw new Error(made.unavailable);
+    return made;
+  }
+
+  private planDescription(run: Run): RunOutcome["planDescription"] {
+    if (!run.item || run.spec.kind !== "plan" || run.state !== "done") return null;
+    const draft = this.planDescriptionDrafts(run.id)[0];
+    const ready = !draft && run.resultComplete !== false && planWithoutNote(run.result ?? "") ? this.planDescriptionFor(run) : null;
+    return { draft: draft ? { id: draft.id, state: draft.state } : null, unavailable: ready && "unavailable" in ready ? ready.unavailable : null };
   }
 
   private subtaskDrafts(runId: string): Proposal[] {
@@ -944,6 +1012,7 @@ export class MockRuns {
       subtasksDraft: subtasksDraft ? { id: subtasksDraft.id, state: subtasksDraft.state } : null,
       summaryOnly: run.state === "done" && !!result && run.resultComplete === false,
       planDraft: planDraft ? { id: planDraft.id, state: planDraft.state } : null,
+      planDescription: this.planDescription(run),
     };
   }
 

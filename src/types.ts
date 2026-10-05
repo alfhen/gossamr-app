@@ -580,6 +580,8 @@ export interface RunOutcome {
   summaryOnly?: boolean;
   /** For a Plan run: the draft of the whole plan as a comment, in whatever state it is in now. */
   planDraft?: { id: string; state: ProposalState } | null;
+  /** For a Plan run on a ticket: the description update that adds its plan, or why there is none. */
+  planDescription?: { draft: { id: string; state: ProposalState } | null; unavailable: string | null } | null;
 }
 
 /** The whole plan of a Plan run drafted as a comment, and whether it had to be cut to fit a Jira comment. */

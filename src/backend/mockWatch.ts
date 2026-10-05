@@ -8,7 +8,7 @@ export interface MockOptions {
   /** How the device flow ends once the sample waits for it: authorised after `delayMs`, or refused or expired. */
   device?: { delayMs: number; outcome: "authorised" | "denied" | "expired" };
   /** Which scripted agent runs exist, and the moment their ages count back from. */
-  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean };
+  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; planDescription?: boolean };
 }
 
 interface Stored {
@@ -112,6 +112,7 @@ export function mockOptionsFromUrl(): MockOptions {
     environment: environment === "missing" || environment === "signedOut" ? environment : "ok",
     cap: count("runsCap"),
     pipRun: params.get("pipRun") === "1",
+    planDescription: true,
   };
   return options;
 }

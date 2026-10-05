@@ -80,6 +80,8 @@ interface RunsState {
   draftComment(id: string): Promise<void>;
   /** Drafts the whole plan of a plan run as a comment, and says when it had to be cut to fit. */
   draftPlanComment(id: string): Promise<void>;
+  /** Drafts the ticket's description with the plan added and opens the diff. Nothing is written. */
+  draftPlanDescription(id: string): Promise<void>;
   /** Drafts a link saying the run's ticket is blocked by `blockerKey` and takes the person to it. Nothing is posted. */
   draftBlocker(id: string, blockerKey: string): Promise<void>;
   /** Drafts a new ticket from a finished run that has no ticket and opens the draft. Nothing is created. */
@@ -109,7 +111,7 @@ const READY = "Draft ready. Nothing is posted until you approve it.";
 const openDraftsOn = (target: ItemRef) => showMe(target, { peek: true }) || void openTicketByKey(target.key);
 
 /** Makes a draft from a run and shows it where it is approved: on the ticket it is about. */
-async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState>) => void, id: string, what: "comment" | "link", make: (backend: Backend) => Promise<Proposal>, ready: () => string = () => READY) {
+async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState>) => void, id: string, what: "comment" | "link" | "description", make: (backend: Backend) => Promise<Proposal>, ready: () => string = () => READY) {
   const { backend, drafting } = get();
   if (!backend || drafting) return;
   set({ drafting: id });
@@ -121,7 +123,7 @@ async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState
     useToasts.getState().push(ready(), "info", target ? { label: `Open ${target.key}`, run: () => openDraftsOn(target) } : undefined);
     if (target) openDraftsOn(target);
   } catch (e) {
-    useToasts.getState().push(`Couldn't draft the ${what === "comment" ? "comment" : "blocker"}: ${messageOf(e)}`);
+    useToasts.getState().push(`Couldn't draft the ${what === "link" ? "blocker" : what}: ${messageOf(e)}`);
   } finally {
     set({ drafting: null });
   }
@@ -330,6 +332,10 @@ export const useRuns = create<RunsState>((set, get) => ({
       },
       message,
     );
+  },
+
+  async draftPlanDescription(id) {
+    await draftFromRun(get, set, id, "description", (backend) => backend.runsDraftPlanDescription(id), () => "Description update ready. Nothing is written to Jira until you approve it.");
   },
 
   async draftBlocker(id, blockerKey) {
