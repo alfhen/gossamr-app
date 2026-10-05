@@ -450,6 +450,9 @@ pub struct EarlierSession {
     pub short_id: ShortId,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// `claude rm` removed it, or found it already gone. One that is not stays listed so a later clean up retries it.
+    #[serde(default)]
+    pub removed: bool,
 }
 
 /// A listed session that may be this run's conversation carried on under a new id, offered to the person when
@@ -534,6 +537,11 @@ pub struct Run {
 }
 
 impl Run {
+    /// Earlier sessions `claude rm` has not yet removed.
+    pub fn leftover_sessions(&self) -> Vec<ShortId> {
+        self.earlier_sessions.iter().filter(|e| !e.removed).map(|e| e.short_id.clone()).collect()
+    }
+
     /// Every session id this run has had, the current one first.
     pub fn session_ids(&self) -> Vec<ShortId> {
         self.short_id.iter().chain(self.earlier_sessions.iter().map(|e| &e.short_id)).cloned().collect()

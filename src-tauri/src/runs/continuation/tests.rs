@@ -100,7 +100,7 @@ fn taking_over_keeps_the_old_session_as_an_alias_and_hands_the_state_to_the_list
     let now = Utc::now();
     take_over(&mut run, &to, now);
     assert_eq!((run.short_id.as_ref().map(ShortId::as_str), run.session_id.as_deref()), (Some("bbb748a7"), Some("bbb748a7-dca2-4f33-9da1-caa7f80584b8")));
-    assert_eq!(run.earlier_sessions, [EarlierSession { short_id: ShortId::parse("2afa0a22").unwrap(), session_id: Some("2afa0a22-11e6-47c8-924c-c779e6a25b5c".into()) }]);
+    assert_eq!(run.earlier_sessions, [EarlierSession { short_id: ShortId::parse("2afa0a22").unwrap(), session_id: Some("2afa0a22-11e6-47c8-924c-c779e6a25b5c".into()), removed: false }]);
     assert_eq!(run.session_ids().iter().map(ShortId::as_str).collect::<Vec<_>>(), ["bbb748a7", "2afa0a22"]);
     assert_eq!((run.state, run.error, run.ended_at, run.stopped_by_limit, run.continued_at), (RunState::Working, None, None, false, Some(now)));
     assert!(run.possible_continuations.is_empty());
@@ -111,7 +111,7 @@ fn an_earlier_session_still_listed_is_no_longer_the_runs_own() {
     let mut run = stopped_run();
     let old = listed(&run, "2afa0a22", &run.expected_worktree, ms(Span::hours(-2)));
     assert!(belongs_to(&old, &run));
-    run.earlier_sessions = vec![EarlierSession { short_id: ShortId::parse("2afa0a22").unwrap(), session_id: None }];
+    run.earlier_sessions = vec![EarlierSession { short_id: ShortId::parse("2afa0a22").unwrap(), session_id: None, removed: false }];
     run.short_id = ShortId::parse("bbb748a7");
     assert!(!belongs_to(&old, &run), "not by id and not by the worktree it shares");
     assert!(belongs_to(&listed(&run, "bbb748a7", &run.expected_worktree, 0), &run));
@@ -254,4 +254,27 @@ async fn a_run_whose_own_session_is_live_again_is_not_moved_to_another() {
     rig.svc.poll_at(later(2)).await;
     let after = rig.get(&run).await;
     assert_eq!((after.short_id, after.state), (run.short_id, RunState::Working));
+}
+
+#[tokio::test]
+async fn a_session_is_not_adopted_while_the_runs_own_has_come_back_to_life() {
+    let (rig, run) = stopped().await;
+    add(&rig, &run, "c0000009", &run.expected_worktree);
+    rig.session(&run, |e| {
+        e.state = Some("blocked".into());
+        e.status = Some("idle".into());
+        e.pid = Some(777);
+    });
+    rig.set(&run, |r| r.ended_at = Some(Utc::now() - Span::minutes(5))).await;
+    let why = rig.svc.adopt_session(&run.id, "c0000009").await.unwrap_err().to_string();
+    assert!(why.contains("own session is working again"), "{why}");
+    let after = rig.get(&run).await;
+    assert_eq!((after.short_id, after.earlier_sessions.len()), (run.short_id.clone(), 0));
+
+    rig.session(&run, |e| {
+        e.state = Some("stopped".into());
+        e.pid = None;
+    });
+    let chosen = rig.svc.adopt_session(&run.id, "c0000009").await.unwrap();
+    assert_eq!(chosen.short_id.as_ref().map(ShortId::as_str), Some("c0000009"), "the normal case still adopts");
 }

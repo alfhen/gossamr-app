@@ -136,7 +136,7 @@ impl RunService {
             Ok(copy) => {
                 let stopped = tc.cli.stop(&copy.short_id).await.is_ok();
                 let copy_note = if stopped { "it was stopped".to_owned() } else { format!("stop it with `claude stop {}`", copy.short_id) };
-                run.earlier_sessions.push(EarlierSession { short_id: copy.short_id.clone(), session_id: None });
+                run.earlier_sessions.push(EarlierSession { short_id: copy.short_id.clone(), session_id: None, removed: false });
                 Some(format!("Claude started a copy ({}) instead of continuing this agent; {copy_note}.", copy.short_id))
             }
             Err(e) => Some(format!("Couldn't wake the agent: {e}.")),

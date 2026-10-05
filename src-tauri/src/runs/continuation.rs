@@ -68,7 +68,7 @@ pub(super) fn link(mut found: Vec<Candidate>, launch_pending: bool) -> Link {
 /// The run carries on in `to`: the old session stays as an alias, and the state is the live session's from the next look.
 pub(super) fn take_over(run: &mut Run, to: &Candidate, now: DateTime<Utc>) {
     if let Some(old) = run.short_id.take().filter(|old| *old != to.short_id) {
-        run.earlier_sessions.push(EarlierSession { short_id: old, session_id: run.session_id.take() });
+        run.earlier_sessions.push(EarlierSession { short_id: old, session_id: run.session_id.take(), removed: false });
     }
     run.short_id = Some(to.short_id.clone());
     run.session_id.clone_from(&to.session_id);
@@ -82,6 +82,11 @@ pub(super) fn take_over(run: &mut Run, to: &Candidate, now: DateTime<Utc>) {
     run.continued_at = Some(now);
     run.last_progress_at = now;
     run.possible_continuations.clear();
+}
+
+/// The run's own session is live again, so there is nothing to hand over to another.
+fn carried_on(entries: &[AgentEntry], run: &Run, now: DateTime<Utc>) -> bool {
+    entries.iter().any(|e| e.id.as_deref() == run.short_id.as_ref().map(ShortId::as_str) && revived(e, run, now))
 }
 
 fn offered(found: &[Candidate]) -> Vec<Continuation> {
@@ -112,8 +117,7 @@ impl RunService {
         let Some((mut taken, launch_pending)) = self.taken_ids().await else { return changed };
         for listed in resting {
             let Ok(Some(mut run)) = self.core.run(&listed.id).await else { continue };
-            let carried_on = entries.iter().any(|e| e.id.as_deref() == run.short_id.as_ref().map(ShortId::as_str) && revived(e, &run, now));
-            if !at_rest(&run) || run.worktree_removed_at.is_some() || carried_on {
+            if !at_rest(&run) || run.worktree_removed_at.is_some() || carried_on(entries, &run, now) {
                 continue;
             }
             let found = candidates(&run, entries, &taken);
@@ -147,10 +151,14 @@ impl RunService {
         }
         let tc = self.toolchain().await?;
         let entries = tc.cli.agents(true).await?;
+        let now = Utc::now();
+        if carried_on(&entries, &run, now) {
+            return Err(refuse("This run's own session is working again, so it stays with that one."));
+        }
         let (taken, _) = self.taken_ids().await.ok_or_else(|| refuse("Couldn't read the runs to compare."))?;
         let chosen = candidates(&run, &entries, &taken).into_iter().find(|c| c.short_id == id);
         let chosen = chosen.ok_or_else(|| refuse("That session doesn't look like this run's any more. Look again in a moment."))?;
-        take_over(&mut run, &chosen, Utc::now());
+        take_over(&mut run, &chosen, now);
         self.reset_counts(&run.id);
         self.remember(&run);
         self.store(&run).await?;
