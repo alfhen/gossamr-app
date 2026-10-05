@@ -50,8 +50,9 @@ describe("a run that may have continued elsewhere", () => {
 
   it("is offered the sessions only when it is at rest, and says so in the list", () => {
     expect(offeredSessions(stopped({ possibleContinuations: offer }))).toEqual(offer);
-    expect(offeredSessions({ state: "done", possibleContinuations: offer })).toEqual(offer);
-    expect(offeredSessions({ state: "working", possibleContinuations: offer })).toEqual([]);
+    expect(offeredSessions({ state: "done", unsentAnswer: null, possibleContinuations: offer })).toEqual(offer);
+    expect(offeredSessions(stopped({ possibleContinuations: offer, unsentAnswer: "Use staging." }))).toEqual([]);
+    expect(offeredSessions({ state: "working", unsentAnswer: null, possibleContinuations: offer })).toEqual([]);
     expect(offeredSessions(stopped())).toEqual([]);
     expect(stoppedText(stopped({ possibleContinuations: offer }))).toBe("May have continued in another session");
   });

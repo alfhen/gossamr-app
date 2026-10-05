@@ -225,8 +225,8 @@ export const RESUME_TEXT = "Please carry on from where you stopped.";
 
 export const answerDraft = (run: Pick<Run, "state" | "unsentAnswer" | "suggestedReply" | "stoppedByLimit">) => run.unsentAnswer ?? (run.suggestedReply?.trim() ? run.suggestedReply : null) ?? (resumable(run) ? RESUME_TEXT : "");
 
-/** Stopped or finished runs that may have carried on in a session Gossamr could not be sure of. */
-export const offeredSessions = (run: Pick<Run, "state" | "possibleContinuations">) => (run.state === "stopped" || run.state === "done" ? (run.possibleContinuations ?? []) : []);
+/** Stopped or finished runs that may have carried on in a session Gossamr could not be sure of. A stopped run holding an answer to send stays with its own session until that is sent. */
+export const offeredSessions = (run: Pick<Run, "state" | "possibleContinuations" | "unsentAnswer">) => (run.state === "done" || (run.state === "stopped" && !run.unsentAnswer) ? (run.possibleContinuations ?? []) : []);
 
 export const canStartNow = (run: Pick<Run, "state">) => run.state === "queued";
 

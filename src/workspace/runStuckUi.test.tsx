@@ -73,6 +73,12 @@ describe("a run that may have continued in another session", () => {
     expect(html).toContain("couldn&#x27;t be sure which is the same conversation");
   });
 
+  it("is not offered while the run holds an answer to send: that goes to its own session first", () => {
+    const html = sheet(run("stopped", { unsentAnswer: "Use staging.", error: "Couldn't wake the agent: boom.", possibleContinuations: [{ shortId: "bbb748a7", sessionId: null, startedAt: null }] }));
+    expect(buttons(html).some((b) => b.startsWith("Adopt session"))).toBe(false);
+    expect(buttons(html)).toContain("Start it again with your answer");
+  });
+
   it("is shown for a finished run too, and not for one that is working or has nothing to offer", () => {
     expect(buttons(sheet(offered(["bbb748a7"], "done")))).toContain("Adopt session bbb748a7");
     expect(buttons(sheet(offered(["bbb748a7"], "working"))).some((b) => b.startsWith("Adopt session"))).toBe(false);
