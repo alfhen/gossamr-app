@@ -118,7 +118,7 @@ impl Core {
 
     /// Makes the one description draft of `run`, or says why not. Looking and storing happen under one lock, so two
     /// callers can't both make one. A pending draft from an earlier plan, this run's or another's, is retired when a
-    /// new one replaces it. `manual` is the person asking: a draft they skipped may be made again.
+    /// new one replaces it, except one the person edited: that stays, and no second draft is made beside it. `manual` is the person asking: a draft they skipped may be made again.
     async fn make_plan_description(&self, run: &Run, item: &ItemRef, plan: &str, manual: bool) -> Result<Made> {
         let scope = self.scope().await?;
         if item.connection_id != Connection::jira_id(&scope) {
@@ -144,8 +144,12 @@ impl Core {
             if decided_same || waiting_same {
                 return Ok(Made::Have);
             }
+            let waiting = |p: &&Proposal| p.state == ProposalState::Pending && is_plan_rewrite(p) && matches!(p.origin, Origin::Run { .. });
+            if let Some(edited) = found.iter().filter(waiting).find(|p| proposals::person_edited_rewrite(p)) {
+                return Ok(Made::Gap(format!("A description update you edited is already waiting on {} (draft {}). Approve or skip it, then draft the plan again.", item.key, edited.id)));
+            }
             let at = Utc::now();
-            for older in found.iter().filter(|p| p.state == ProposalState::Pending && is_plan_rewrite(p) && matches!(p.origin, Origin::Run { .. })) {
+            for older in found.iter().filter(waiting) {
                 proposals::retire(db, &older.id, "replaced by a newer plan", at)?;
             }
             let flattened = tracker::flattened_by_rewrite(&Connection::jira(&scope, ""), &ticket);
@@ -302,6 +306,49 @@ mod tests {
         assert_ne!(one.id, two.id);
         assert!(matches!(fx.core.proposal(&one.id).await.unwrap().unwrap().state, ProposalState::Retired(_)));
         assert_eq!(rewrites(&fx).await.iter().filter(|p| p.state == ProposalState::Pending).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_description_update_the_person_edited_is_kept_and_no_second_one_is_made_beside_it() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let mut run = plan_with(&fx, "1. First idea.").await;
+        let first = fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().unwrap();
+        let edited = fx.core.edit_proposal(&first.id, &Edit::Rewrite { title: None, body: Some("Hi\n\n## Gossamr Plan\n\nThe person's own words.".into()) }).await.unwrap();
+        run.result = Some("1. Second idea.".into());
+        fx.core.save_run(&run).await.unwrap();
+        assert!(fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().is_none());
+        let why = fx.core.draft_run_plan_description(&run.id).await.unwrap_err().to_string();
+        assert!(why.contains("you edited") && why.contains(&first.id), "{why}");
+        let later = plan_with(&fx, "1. Another run's idea.").await;
+        assert!(fx.core.auto_draft_run_plan_description(&later.id).await.unwrap().is_none(), "another run's plan doesn't replace it either");
+        let kept = fx.core.proposal(&first.id).await.unwrap().unwrap();
+        assert_eq!((kept.state.clone(), kept.intent.clone()), (ProposalState::Pending, edited.intent));
+        assert_eq!(rewrites(&fx).await.len(), 1);
+        assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().plan_description.unwrap().draft.map(|d| d.id), Some(first.id.clone()));
+
+        fx.core.skip_proposal(&first.id).await.unwrap();
+        let fresh = fx.core.auto_draft_run_plan_description(&later.id).await.unwrap().unwrap();
+        assert!(rewrite_of(&fresh).1.to_markdown().contains("Another run's idea."), "once the edited draft is decided the newer plan is drafted");
+    }
+
+    #[tokio::test]
+    async fn an_unedited_waiting_draft_is_replaced_by_a_newer_plan_but_a_decided_one_is_left_alone() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let first_run = plan_with(&fx, "1. First idea.").await;
+        let one = fx.core.auto_draft_run_plan_description(&first_run.id).await.unwrap().unwrap();
+        fx.core.skip_proposal(&one.id).await.unwrap();
+        let second_run = plan_with(&fx, "1. Second idea.").await;
+        let two = fx.core.auto_draft_run_plan_description(&second_run.id).await.unwrap().unwrap();
+        let third_run = plan_with(&fx, "1. Third idea.").await;
+        let three = fx.core.auto_draft_run_plan_description(&third_run.id).await.unwrap().unwrap();
+        let state = |id: &str| {
+            let core = &fx.core;
+            let id = id.to_string();
+            async move { core.proposal(&id).await.unwrap().unwrap().state }
+        };
+        assert_eq!(state(&one.id).await, ProposalState::Skipped);
+        assert!(matches!(state(&two.id).await, ProposalState::Retired(_)));
+        assert_eq!(state(&three.id).await, ProposalState::Pending);
     }
 
     #[tokio::test]
