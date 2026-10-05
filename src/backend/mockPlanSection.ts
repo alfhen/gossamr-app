@@ -43,7 +43,11 @@ export function withPlanSection(doc: WorkDoc, intro: string, plan: WorkDoc): Wor
   const levels = own.flatMap((b) => (b.type === "heading" ? [b.level] : []));
   const shallowest = levels.length ? Math.min(...levels) : null;
   const shift = shallowest !== null && shallowest <= level ? level + 1 - shallowest : 0;
-  const moved = own.map((b): WorkBlock => (b.type === "heading" ? { ...b, level: Math.min(6, b.level + shift) } : b));
+  const moved = own.map((b): WorkBlock => {
+    if (b.type !== "heading") return b;
+    const at = Math.min(6, b.level + shift);
+    return at <= level ? { type: "paragraph", content: b.content } : { ...b, level: at };
+  });
   const heading: WorkBlock = { type: "heading", level, content: [{ type: "text", text: PLAN_HEADING, marks: [] }] };
   return { blocks: [...before, heading, ...docFromText(intro).blocks, ...moved, ...after] };
 }

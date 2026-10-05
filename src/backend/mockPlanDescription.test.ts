@@ -22,6 +22,13 @@ describe("the Gossamr Plan section of a description in the sample build", () => 
     expect(PLAN_HEADING).toBe("Gossamr Plan");
   });
 
+  it("never lets a plan heading capped at the section's own level end the section", () => {
+    const doc = docFromMarkdown("Intro\n\n###### Gossamr Plan\n\nold");
+    const next = withPlanSection(doc, "i", docFromMarkdown("###### Deep\n\ntext"));
+    expect(markdownOf(next)).toBe("Intro\n\n###### Gossamr Plan\n\ni\n\nDeep\n\ntext");
+    expect(markdownOf(planSectionOf(next)!)).toBe("i\n\nDeep\n\ntext");
+  });
+
   it("ends at the next heading of its own level or above and is found whatever its case", () => {
     const doc = docFromMarkdown("# gossamr plan:\n\nin\n\n## Inner\n\nalso in\n\n# Next\n\nout");
     expect(markdownOf(planSectionOf(doc)!)).toBe("in\n\n## Inner\n\nalso in");
