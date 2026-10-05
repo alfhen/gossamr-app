@@ -96,6 +96,28 @@ pub fn fit(text: &str, limit: usize, note: impl Fn(usize) -> String) -> Fitted {
     Fitted { text: format!("{}\n\n{note}", at_boundary(text, room)), total, cut: true }
 }
 
+/// How much of a long answer's closing sections is kept when the middle has to go.
+const TAIL_KEPT: usize = 10_000;
+
+/// `text` within `limit` characters. The sections a run's drafts are built from (`For Jira:`, `New ticket:`, `Subtasks:`)
+/// are kept as written and the cut falls in what comes before the first of them, so a long answer never loses its note.
+/// An answer with no such section is cut at the end.
+pub fn keep_within(text: &str, limit: usize) -> String {
+    if text.chars().nth(limit).is_none() {
+        return text.to_string();
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let mut starts: Vec<usize> = ["for jira", "new ticket", "subtasks"].iter().filter_map(|name| heading_outside_fences(&lines, name).map(|(i, _)| i)).collect();
+    starts.sort_unstable();
+    let tail_of = |at: usize| lines[at..].join("\n");
+    let fits = |at: &usize| tail_of(*at).chars().nth(TAIL_KEPT).is_none();
+    let Some(at) = starts.iter().copied().find(fits).or_else(|| starts.last().copied()) else { return text.chars().take(limit).collect() };
+    let tail: String = tail_of(at).chars().take(TAIL_KEPT).collect();
+    let gap = "\n\n[Cut here: the middle of a long answer was left out. What follows is as written.]\n\n";
+    let room = limit.saturating_sub(tail.chars().count() + gap.chars().count());
+    format!("{}{gap}{tail}", at_boundary(&lines[..at].join("\n"), room))
+}
+
 /// The longest start of `text` of at most `room` characters that ends a paragraph, a sentence or at least a word, as far
 /// as the second half of that window allows; otherwise a plain cut.
 fn at_boundary(text: &str, room: usize) -> String {
@@ -116,7 +138,7 @@ pub fn ticket_keys(result: &str) -> Vec<String> {
 
 /// The one ticket a ticketless investigation proposes. Drafting it is the person's to approve, so what is here is only
 /// cleaned, never completed.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TicketProposal {
     pub title: String,
@@ -180,7 +202,7 @@ const REFUSAL_OPENERS: [&str; 10] = ["no subtasks", "no subtask", "no breakdown"
 
 /// An answer that declines the breakdown rather than naming a task. "None", "N/A" and "Nothing" only decline on their
 /// own or before a dash, colon, comma, full stop or bracket, so a task such as "None of the retries back off" stays.
-fn declines_breakdown(text: &str) -> bool {
+pub(crate) fn declines_breakdown(text: &str) -> bool {
     let lower = text.to_lowercase();
     let lower = lower.trim();
     let at_boundary = |rest: &str| rest.chars().next().is_none_or(|c| !c.is_alphanumeric());
@@ -290,7 +312,7 @@ fn last_heading_outside_fences(lines: &[&str], name: &str) -> Option<usize> {
     found
 }
 
-fn title_cut(title: &str) -> String {
+pub(crate) fn title_cut(title: &str) -> String {
     if title.chars().nth(TITLE_LIMIT).is_none() {
         return title.to_string();
     }
@@ -298,7 +320,7 @@ fn title_cut(title: &str) -> String {
     format!("{}…", kept.trim_end())
 }
 
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     let flat = unbold(text).split_whitespace().collect::<Vec<_>>().join(" ");
     flat.trim_matches(|c: char| matches!(c, '*' | '_' | '`') || c.is_whitespace()).to_string()
 }
@@ -468,7 +490,7 @@ fn unbold(line: &str) -> String {
 
 /// Headings lose their `#`s and bold pairs their `**`; blank runs shrink to one blank line. Code fences are kept as
 /// written, so a `# comment` or `**kwargs` inside one survives.
-fn plain(text: &str) -> String {
+pub(crate) fn plain(text: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut fences = Fences::default();
     for line in text.lines() {
@@ -487,7 +509,7 @@ fn plain(text: &str) -> String {
     out.join("\n").trim().to_string()
 }
 
-fn cut(text: &str, limit: usize) -> String {
+pub(crate) fn cut(text: &str, limit: usize) -> String {
     if text.chars().nth(limit).is_none() {
         return text.to_string();
     }
@@ -537,6 +559,62 @@ mod tests {
         assert_eq!(n.text, "first note\nstill first");
     }
 
+    fn long_answer(sections: &str) -> String {
+        format!("{}\n\n{sections}", "A long paragraph of findings, in full. ".repeat(900))
+    }
+
+    #[test]
+    fn a_long_answer_is_cut_in_the_middle_and_keeps_its_closing_note_whole() {
+        let text = long_answer("Subtasks:\n- First\n- Second\n\nFor Jira: close it, see CA-9.");
+        assert!(text.chars().count() > 20_000);
+        let kept = keep_within(&text, 20_000);
+        assert!(kept.chars().count() <= 20_000, "{}", kept.chars().count());
+        assert!(kept.starts_with("A long paragraph") && kept.contains("[Cut here: the middle of a long answer was left out."));
+        assert!(kept.ends_with("Subtasks:\n- First\n- Second\n\nFor Jira: close it, see CA-9."), "{}", &kept[kept.len() - 120..]);
+        assert_eq!(jira_note(&kept), JiraNote { text: "close it, see CA-9.".into(), from_marker: true });
+        assert_eq!(subtask_proposals(&kept), ["First", "Second"]);
+    }
+
+    #[test]
+    fn a_long_answer_with_a_new_ticket_keeps_that_section_too() {
+        let kept = keep_within(&long_answer("New ticket:\nTitle: Add a backoff\nKind: bug\nIt spins."), 20_000);
+        assert_eq!(ticket_proposal(&kept).unwrap().title, "Add a backoff");
+        assert!(kept.chars().count() <= 20_000);
+    }
+
+    #[test]
+    fn a_short_answer_is_left_alone_and_a_long_one_with_no_section_is_cut_at_the_end() {
+        assert_eq!(keep_within("Short.\n\nFor Jira: x", 20_000), "Short.\n\nFor Jira: x");
+        let plain = "word ".repeat(6_000);
+        let kept = keep_within(&plain, 20_000);
+        assert_eq!((kept.chars().count(), kept.as_str()), (20_000, &plain[..20_000]));
+        let exact = "é".repeat(20_000);
+        assert_eq!(keep_within(&exact, 20_000), exact);
+    }
+
+    #[test]
+    fn a_heading_inside_a_code_fence_is_not_the_note_to_keep() {
+        let text = format!("{}\n```\nFor Jira: in a fence\n```\n{}\nFor Jira: the real one", "x ".repeat(3_000), "tail ".repeat(8_000));
+        let kept = keep_within(&text, 20_000);
+        assert!(kept.ends_with("For Jira: the real one"), "{}", &kept[kept.len().saturating_sub(60)..]);
+        assert_eq!(jira_note(&kept).text, "the real one");
+    }
+
+    #[test]
+    fn a_closing_section_longer_than_the_room_for_it_is_cut_at_its_own_end_with_the_heading_kept() {
+        let text = long_answer(&format!("For Jira: {}", "n".repeat(15_000)));
+        let kept = keep_within(&text, 20_000);
+        assert!(kept.chars().count() <= 20_000 && kept.contains("For Jira: nnn"));
+        assert!(jira_note(&kept).from_marker);
+    }
+
+    #[test]
+    fn cutting_never_splits_a_character() {
+        let text = format!("{}\nFor Jira: {}", "é".repeat(30_000), "ö".repeat(100));
+        let kept = keep_within(&text, 20_000);
+        assert!(kept.chars().count() <= 20_000 && kept.ends_with(&"ö".repeat(100)));
+    }
+
     #[test]
     fn long_text_is_cut_on_a_character_boundary_with_an_ellipsis() {
         let n = jira_note(&format!("For Jira: {}", "é".repeat(5_000)));
@@ -578,19 +656,6 @@ mod tests {
         name: String,
         input: String,
         expected: Option<TicketProposal>,
-    }
-
-    impl<'de> serde::Deserialize<'de> for TicketProposal {
-        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-            #[derive(serde::Deserialize)]
-            struct Raw {
-                title: String,
-                kind: ItemKind,
-                body: String,
-            }
-            let Raw { title, kind, body } = Raw::deserialize(d)?;
-            Ok(TicketProposal { title, kind, body })
-        }
     }
 
     #[test]

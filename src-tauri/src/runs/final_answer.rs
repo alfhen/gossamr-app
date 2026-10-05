@@ -11,7 +11,7 @@ use super::cli::{AgentEntry, JobInfo};
 use super::service::{real, RunService};
 use super::state::turn_finished;
 use super::toolchain::Toolchain;
-use super::tracker::{cleaned, RESULT_KEPT};
+use super::tracker::cleaned_answer;
 use crate::domain::{Run, RunQuery, RunState};
 
 /// A finished run is looked at again for its answer for this long after it ended.
@@ -42,7 +42,7 @@ fn folders(run: &Run, entry: Option<&AgentEntry>, job: Option<&JobInfo>) -> Vec<
 /// Stores `answer` as the run's result, keeping what it replaces as the summary. False when nothing usable is left
 /// after cleaning.
 fn adopt(run: &mut Run, answer: &str) -> bool {
-    let Some(text) = cleaned(answer, RESULT_KEPT) else { return false };
+    let Some(text) = cleaned_answer(answer) else { return false };
     run.summary = run.summary.take().or_else(|| run.result.take());
     run.result = Some(text);
     run.result_complete = true;

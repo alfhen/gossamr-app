@@ -89,6 +89,7 @@ impl RunService {
         let mut live = self.settings.lock().expect("settings lock poisoned");
         self.update_config(|config| config.agents = settings)?;
         *live = settings;
+        self.core.set_report_enabled(settings.report_result);
         Ok(settings)
     }
 }

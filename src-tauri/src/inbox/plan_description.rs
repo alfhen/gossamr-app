@@ -106,10 +106,12 @@ impl Core {
             return Err(refuse("that run hasn't finished"));
         }
         let item = run.item.clone().ok_or_else(|| refuse("that run isn't about a ticket"))?;
-        if !run.result_complete {
-            return Err(refuse(format!("{} There is no plan to add.", super::SUMMARY_ONLY)));
-        }
-        let plan = plan_without_note(run.result.as_deref().unwrap_or(""));
+        let resolved = self.resolved_of(&run).await?;
+        let plan = match resolved.plan.clone() {
+            Some(plan) => plan,
+            None if resolved.complete() => plan_without_note(run.result.as_deref().unwrap_or("")),
+            None => return Err(refuse(format!("{} There is no plan to add.", super::SUMMARY_ONLY))),
+        };
         if plan.is_empty() {
             return Err(refuse("the run finished without a written answer, so there is no plan to add"));
         }
@@ -191,7 +193,7 @@ impl Core {
         let Some(item) = run.item.clone().filter(|_| run.spec.kind == RunKind::Plan && run.state == RunState::Done) else { return Ok(None) };
         let found = self.proposals(&ProposalQuery { item: Some(item.clone()), ..Default::default() }).await?;
         let draft = found.into_iter().find(|p| from_run(p, &run.id)).map(|p| RunDraft { id: p.id, state: p.state });
-        let unavailable = match (&draft, run.result_complete) {
+        let unavailable = match (&draft, self.resolved_of(run).await?.complete()) {
             (None, true) => match self.plan_description_for(&run.id).await {
                 Ok((run, item, plan)) => self.probe_plan_description(&run, &item, &plan).await?,
                 Err(_) => None,

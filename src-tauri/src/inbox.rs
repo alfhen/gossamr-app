@@ -23,6 +23,7 @@ mod drafts;
 mod run_results;
 mod pip_runs;
 mod plan_description;
+mod report;
 mod rewrites;
 mod ticket_context;
 pub use pip_runs::PipRunAsk;
@@ -153,6 +154,9 @@ pub struct Core {
     schedules: Mutex<HashMap<String, Schedule>>,
     /// When each connection was last checked for work assigned outside what it watches.
     radar: Mutex<HashMap<String, chrono::DateTime<Utc>>>,
+    /// Whether a run may be asked to report through the run-report tool; the Agents setting, kept here so a draft can
+    /// be refused without a round trip to the service.
+    report_enabled: AtomicBool,
     /// Ask for a sync now, whatever the schedule says.
     pub wake: Notify,
     /// The window gained focus: sync if it has been a while and no failure is being waited out.
@@ -184,9 +188,18 @@ impl Core {
             syncing: AtomicBool::new(false),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
+            report_enabled: AtomicBool::new(false),
             wake: Notify::new(),
             focus: Notify::new(),
         }
+    }
+
+    pub fn set_report_enabled(&self, on: bool) {
+        self.report_enabled.store(on, Ordering::SeqCst);
+    }
+
+    pub fn report_enabled(&self) -> bool {
+        self.report_enabled.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]

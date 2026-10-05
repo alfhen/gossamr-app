@@ -504,6 +504,23 @@ async fn comment_drafts(rig: &Rig) -> Vec<crate::domain::Proposal> {
 }
 
 #[tokio::test]
+async fn an_answer_over_the_limit_keeps_its_closing_note_and_the_draft_is_made_from_it() {
+    let (rig, run) = launched().await;
+    rig.poll().await;
+    let long = format!("{}\n\nFor Jira:\nClose it as a duplicate of CA-9.", "Findings, at length. ".repeat(1_500));
+    assert!(long.chars().count() > RESULT_KEPT);
+    finish_with(&rig, &run, &long);
+    rig.poll().await;
+    let done = rig.get(&run).await;
+    let result = done.result.as_deref().unwrap();
+    assert!(result.chars().count() <= RESULT_KEPT && result.ends_with("For Jira:\nClose it as a duplicate of CA-9."), "{}", &result[result.len() - 80..]);
+    assert!(done.result_complete);
+    let drafts = comment_drafts(&rig).await;
+    let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
+    assert!(matches!(&draft.intent, crate::domain::Intent::Comment { body, .. } if body.plain_text().contains("Close it as a duplicate of CA-9.")), "the note survived the cut");
+}
+
+#[tokio::test]
 async fn a_finished_run_with_a_for_jira_section_leaves_one_comment_draft_and_a_restart_does_not_make_another() {
     let (rig, run) = launched().await;
     rig.poll().await;

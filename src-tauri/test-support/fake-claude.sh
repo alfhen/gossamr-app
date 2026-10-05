@@ -110,6 +110,7 @@ while [ $# -gt 0 ]; do
     --name) name=$2; shift ;;
     --worktree) wt=$2; shift ;;
     --append-system-prompt) shift ;;
+    --mcp-config|--allowedTools) shift ;;
     --resume) resume=$2; shift ;;
     --) shift; prompt=${1-}; break ;;
     *) prompt=$1 ;;

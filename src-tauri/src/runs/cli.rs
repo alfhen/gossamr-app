@@ -164,6 +164,8 @@ pub struct LaunchRequest {
     pub worktree: String,
     pub guard: String,
     pub prompt: String,
+    /// Offers the session the run-report tool.
+    pub report: Option<super::report::ReportLaunch>,
 }
 
 fn text(v: &Value, key: &str) -> Option<String> {
@@ -380,7 +382,14 @@ impl ClaudeCli for SystemCli {
 
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched> {
         // `--` keeps a prompt that starts with a dash from being read as a flag.
-        let args = ["--bg", "--name", &req.name, "--worktree", &req.worktree, "--append-system-prompt", &req.guard, "--", &req.prompt];
+        let mut args: Vec<&str> = vec!["--bg", "--name", &req.name, "--worktree", &req.worktree];
+        // Both flags take a list, so each is followed by another flag; the token is in the file, never on the command line.
+        let config = req.report.as_ref().map(|r| r.config.to_string_lossy().into_owned());
+        let allowed = format!("mcp__{}__{}", crate::domain::REPORT_SERVER, crate::domain::REPORT_TOOL);
+        if let Some(config) = &config {
+            args.extend(["--mcp-config", config, "--allowedTools", &allowed]);
+        }
+        args.extend(["--append-system-prompt", &req.guard, "--", &req.prompt]);
         let out = self.run(&args, Some(&req.cwd), LAUNCH).await?;
         if !out.ok {
             return Err(out.failure());
@@ -664,6 +673,7 @@ mod tests {
                     worktree: name.to_string(),
                     guard: "guard text".into(),
                     prompt: "-- look at it; \"quoted\" $(not run) `nor this`".into(),
+                    report: None,
                 }
             }
 
@@ -788,6 +798,36 @@ mod tests {
             let shell_added: BTreeSet<String> = ["PWD", "SHLVL", "_", "OLDPWD"].map(String::from).into();
             assert!(captured.is_subset(&seen));
             assert!(seen.difference(&captured).all(|k| shell_added.contains(k)), "unexpected variables: {seen:?}");
+        }
+
+        #[tokio::test]
+        async fn offering_the_report_tool_adds_a_config_path_and_one_allow_rule_and_never_the_token() {
+            let rig = Rig::new("report", "");
+            let mut req = rig.request("ce-4-x-aa11");
+            req.report = Some(crate::runs::report::ReportLaunch { config: PathBuf::from("/data/report/run-1.json") });
+            rig.cli.launch(&req).await.unwrap();
+            let calls = rig.calls();
+            let args: Vec<&str> = calls.lines().skip(2).collect();
+            assert_eq!(
+                args,
+                [
+                    "--bg",
+                    "--name",
+                    "ce-4-x-aa11 investigate",
+                    "--worktree",
+                    "ce-4-x-aa11",
+                    "--mcp-config",
+                    "/data/report/run-1.json",
+                    "--allowedTools",
+                    "mcp__run-report__report_result",
+                    "--append-system-prompt",
+                    "guard text",
+                    "--",
+                    "-- look at it; \"quoted\" $(not run) `nor this`",
+                ],
+                "each list flag is followed by another flag, and the person's own MCP servers are not replaced"
+            );
+            assert!(!calls.contains("--strict-mcp-config") && !calls.contains("gsr_") && !calls.contains("Bearer"));
         }
 
         #[tokio::test]

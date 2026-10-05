@@ -18,6 +18,8 @@ pub enum Outcome {
     Exits,
     /// A session starts but the output has no `backgrounded` line.
     Garbled,
+    /// Exit 1 with a message that echoes a report token, as a CLI that printed its bad `--mcp-config` would.
+    Leaks,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,6 +181,7 @@ impl ClaudeCli for FakeCli {
         match s.outcome {
             Outcome::Untrusted => return Err(CliError::Failed { code: Some(1), stderr: "Workspace not trusted. Run `claude` in the folder once and accept the trust prompt, then retry.".into() }),
             Outcome::Exits => return Err(CliError::Failed { code: Some(1), stderr: "something broke".into() }),
+            Outcome::Leaks => return Err(CliError::Failed { code: Some(1), stderr: "bad --mcp-config: Authorization Bearer gsr_0123456789abcdef0123456789abcdef0123456789abcdef".into() }),
             Outcome::Starts | Outcome::Garbled => {}
         }
         s.next += 1;

@@ -212,7 +212,28 @@ CREATE TABLE run_events (
   PRIMARY KEY (run_id, seq)
 ) WITHOUT ROWID;";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS];
+/// What an agent reported through the run-report tool, apart from the run's own blob so a tracker poll that rewrites the
+/// run can't lose it. A token's hash is never deleted while its run exists: revocation is by the run's state, and a
+/// launch whose answer was lost can still be adopted with the token it was given.
+const RUN_REPORTS: &str = "
+CREATE TABLE run_reports (
+  run_id TEXT PRIMARY KEY,
+  report TEXT,
+  revision INTEGER NOT NULL DEFAULT 0,
+  calls INTEGER NOT NULL DEFAULT 0,
+  rejections INTEGER NOT NULL DEFAULT 0,
+  stale INTEGER NOT NULL DEFAULT 0,
+  first_at TEXT, last_at TEXT
+) WITHOUT ROWID;
+CREATE TABLE run_report_tokens (
+  token_hash TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  tool_version INTEGER NOT NULL,
+  minted_at TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX run_report_tokens_run ON run_report_tokens(run_id);";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -239,7 +260,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
-        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links", "runs", "run_events"] {
+        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links", "runs", "run_events", "run_reports", "run_report_tokens"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
@@ -369,14 +390,36 @@ mod tests {
         for t in ["proposals", "item_links"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 7);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 8);
     }
 
     #[test]
-    fn a_fresh_file_is_at_version_seven() {
+    fn a_fresh_file_is_at_version_eight() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 7);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 8);
+    }
+
+    #[test]
+    fn a_file_with_runs_gains_the_report_tables_and_keeps_every_run() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..7] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        conn.execute(
+            "INSERT INTO runs (id, proposal_id, connection_id, kind, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES ('r1', 'p1', 'c', 'investigate', 'a/b', '/w', 'done', 't', 't', '{}')",
+            [],
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        for t in ["run_reports", "run_report_tokens"] {
+            assert!(tables(&conn).contains(&t.to_string()), "missing {t}");
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
+        }
+        assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
 
     #[test]

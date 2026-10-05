@@ -152,6 +152,7 @@ impl RunService {
             if let Err(e) = self.index.forget(&run.id) {
                 eprintln!("couldn't update the run index: {e}");
             }
+            self.forget_report(&run.id).await;
         }
         Ok(Cleanup::Removed)
     }
