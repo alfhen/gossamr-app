@@ -5,7 +5,8 @@ import { docFromText } from "../lib/docs";
 import type { ContainerRef, Proposal, WorkContainer } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftPeekView, type DraftPeekViewProps } from "./DraftPeek";
-import { createdItemKey, docMentions, draftIdOf, draftItem, draftKey, draftSections, editFor, fieldsOf, showsAsDraftTicket } from "./draftTicket";
+import { collapsible, createdItemKey, docMentions, draftAfter, draftFacts, draftIdOf, draftItem, draftKey, draftSections, editFor, fieldsOf, placeOf, showsAsDraftTicket, waitingCreates } from "./draftTicket";
+import { DraftPreview } from "./DraftPreview";
 import { useTabs } from "./tabsStore";
 
 const container = (id: string): ContainerRef => ({ connectionId: "mock", externalId: id });
@@ -142,7 +143,7 @@ describe("the draft ticket in the peek sheet", () => {
 
   it("prefills the title, description, project and type from the proposal", () => {
     const out = view();
-    expect(out).toMatch(/aria-label="Title"[^>]*value="Rotate the keys"|value="Rotate the keys"[^>]*aria-label="Title"/);
+    expect(out).toMatch(/<textarea[^>]*aria-label="Title"[^>]*>Rotate the keys<\/textarea>/);
     expect(out).toContain("Do it before Friday.");
     expect(out).toMatch(/<option value="mock:DEVOPS" selected="">DEVOPS · DevOps<\/option>/);
     expect(out).toMatch(/<option value="task" selected="">task<\/option>/);
@@ -164,6 +165,29 @@ describe("the draft ticket in the peek sheet", () => {
   it("shows the error and the last revision note", () => {
     expect(view(create(), { error: "Couldn't save" })).toContain("Couldn&#x27;t save");
     expect(view(create({ revisions: [{ at: "2026-09-30T10:05:00Z", note: "Revised by Pip", intent: create().intent }] }))).toContain("Revised by Pip");
+  });
+
+  it("keeps the actions in a bar of their own, with the approval shortcut shown and announced", () => {
+    const out = view();
+    expect(out).toMatch(/border-t-2 border-ws-pip[^"]*"><div[^>]*><p id="draft-reassure-p1"/);
+    expect(out).toContain("Nothing is created until you choose Create task.");
+    expect(out).toMatch(/<button[^>]*aria-keyshortcuts="Meta\+Enter Control\+Enter"[^>]*aria-describedby="draft-reassure-p1"[^>]*>Create task<kbd aria-hidden="true"[^>]*>⌘↵<\/kbd>/);
+  });
+
+  it("lets the description and title grow with their text instead of scrolling inside a box", () => {
+    const out = view();
+    expect(out).toMatch(/<textarea[^>]*aria-label="Title"[^>]*class="[^"]*resize-none/);
+    expect(out).toMatch(/<textarea id="draft-body-p1"[^>]*class="[^"]*grow resize-none/);
+  });
+
+  it("steps between the drafts waiting only when there is more than one", () => {
+    const p = create();
+    expect(view(p, { place: placeOf(["p1"], "p1"), onStep: vi.fn() })).not.toContain("Previous draft");
+    const out = view(p, { place: placeOf(["p0", "p1", "p2"], "p1"), onStep: vi.fn() });
+    expect(out).toContain('aria-label="Drafts waiting, 2 of 3"');
+    expect(out).not.toContain('disabled=""');
+    expect(out).toContain("Either way, the next draft opens.");
+    expect(view(p, { place: placeOf(["p1", "p2"], "p1"), onStep: vi.fn() })).toMatch(/data-step="prev"[^>]*disabled=""/);
   });
 
   it("locks the fields and drops the buttons once it is created", () => {
@@ -191,5 +215,81 @@ describe("approving a draft ticket in the sample backend", () => {
     expect(done.created).toHaveLength(1);
     const items = await backend.cacheSearch({ type: "and", filters: [] });
     expect(items.find((i) => i.item.key === done.created[0].key)).toMatchObject({ title: "Rotate the API keys", kind: "bug" });
+  });
+});
+
+describe("stepping through the drafts waiting", () => {
+  const at = (id: string, createdAt: string, state: Proposal["state"] = { type: "pending" }) => create({ id, createdAt, state });
+  const comment = { ...create({ id: "c" }), intent: { type: "comment", item: { connectionId: "mock", externalId: "X-1", key: "X-1" }, body: docFromText("hi") } } as Proposal;
+
+  it("lists pending new-ticket drafts newest first, as the Pip pane does", () => {
+    const proposals = Object.fromEntries(
+      [at("a", "2026-09-30T10:00:00Z"), at("b", "2026-09-30T11:00:00Z"), at("done", "2026-09-30T12:00:00Z", { type: "applied" }), at("skipped", "2026-09-30T12:30:00Z", { type: "skipped" }), comment].map((p) => [p.id, p]),
+    );
+    expect(waitingCreates(proposals)).toEqual(["b", "a"]);
+  });
+
+  it("breaks ties by the order the ids were handed out, not alphabetically", () => {
+    const stamp = "2026-09-30T10:00:00Z";
+    const proposals = Object.fromEntries(["mock-9", "mock-10", "mock-8"].map((id) => [id, at(id, stamp)]));
+    expect(waitingCreates(proposals)).toEqual(["mock-10", "mock-9", "mock-8"]);
+  });
+
+  it("places a draft among the others", () => {
+    expect(placeOf(["a", "b", "c"], "b")).toEqual({ position: 2, total: 3, prev: "a", next: "c" });
+    expect(placeOf(["a", "b", "c"], "a")).toMatchObject({ prev: null, next: "b" });
+    expect(placeOf(["a", "b", "c"], "c")).toMatchObject({ prev: "b", next: null });
+    expect(placeOf(["a"], "zzz")).toBeNull();
+  });
+
+  it("moves to the next draft once one is decided, else the one before, else none", () => {
+    expect(draftAfter(["a", "b", "c"], "a")).toBe("b");
+    expect(draftAfter(["a", "b", "c"], "b")).toBe("c");
+    expect(draftAfter(["a", "b", "c"], "c")).toBe("b");
+    expect(draftAfter(["a"], "a")).toBeNull();
+    expect(draftAfter(["a"], "other")).toBeNull();
+  });
+});
+
+describe("a new-ticket draft's facts", () => {
+  it("names the type, parent, priority and project, and leaves out what isn't set", () => {
+    expect(draftFacts(create())).toEqual(["Task", "in DEVOPS"]);
+    const p = create();
+    p.intent.fields = { ...p.intent.fields, kind: "bug", parent: { connectionId: "mock", externalId: "CA-114", key: "CA-114" }, priority: "high" };
+    expect(draftFacts(p)).toEqual(["Bug", "Parent CA-114", "Priority high", "in DEVOPS"]);
+  });
+});
+
+describe("when a card's text gets a Show more", () => {
+  it("leaves a few lines alone and folds long text, counting wrapped lines as lines", () => {
+    expect(collapsible("Short.")).toBe(false);
+    expect(collapsible(Array.from({ length: 8 }, () => "line").join("\n"))).toBe(false);
+    expect(collapsible(Array.from({ length: 9 }, () => "line").join("\n"))).toBe(true);
+    expect(collapsible("word ".repeat(70))).toBe(false);
+    expect(collapsible("word ".repeat(100))).toBe(true);
+  });
+});
+
+describe("a new-ticket draft in the Pip pane", () => {
+  const card = (p: Proposal) => renderToStaticMarkup(<DraftPreview proposal={p} statusName={null} targetTitle={null} onOpen={vi.fn()} />);
+  const long = create();
+  long.intent.fields = { ...long.intent.fields, body: docFromText(Array.from({ length: 12 }, (_, i) => `Step ${i + 1} of the plan`).join("\n")), parent: { connectionId: "mock", externalId: "CA-114", key: "CA-114" } };
+
+  it("shows the title, its facts and a Review draft button", () => {
+    const out = card(long);
+    expect(out).toContain("Rotate the keys");
+    expect(out).toContain("Task · Parent CA-114 · in DEVOPS");
+    expect(out).toMatch(/<button[^>]*bg-ws-pip[^>]*>Review draft →<\/button>/);
+  });
+
+  it("folds a long description behind a Show more that says what it controls", () => {
+    const out = card(long);
+    expect(out).toMatch(/<button[^>]*aria-expanded="false"[^>]*aria-controls="draft-body-p1"[^>]*>Show more<\/button>/);
+    expect(out).toContain("Step 12 of the plan");
+    expect(out).not.toContain("…");
+  });
+
+  it("has no Show more for a short description", () => {
+    expect(card(create())).not.toContain("Show more");
   });
 });

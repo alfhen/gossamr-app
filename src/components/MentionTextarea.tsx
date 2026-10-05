@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { filesIn } from "../lib/attachments";
 import { activeQuery, insertMention, rankPeople, segments, type ActiveQuery, type Mention } from "../lib/mentions";
 import { useBackend } from "../backend/useBackend";
+import { useAutoHeight } from "./autoHeight";
 import type { Person } from "../types";
 import { Avatar } from "./primitives";
 
@@ -23,6 +24,7 @@ export function MentionTextarea({
   onPasteFiles,
   onBlur,
   disabled,
+  fill,
   className = "",
 }: {
   id: string;
@@ -38,6 +40,8 @@ export function MentionTextarea({
   onPasteFiles?: (files: File[]) => void;
   onBlur?: () => void;
   disabled?: boolean;
+  /** Grows with its text, and with the room its container has, instead of scrolling inside a fixed box. */
+  fill?: boolean;
   className?: string;
 }) {
   const backend = useBackend();
@@ -49,6 +53,7 @@ export function MentionTextarea({
   const [remote, setRemote] = useState<{ ticketKey: string; people: Person[] }>({ ticketKey, people: [] });
   const [index, setIndex] = useState(0);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  useAutoHeight(ref, value, !!fill);
 
   const suggestions = useMemo(() => {
     if (!query) return [];
@@ -137,7 +142,7 @@ export function MentionTextarea({
   const box = "px-3 py-2.5 font-[inherit] text-base leading-[1.45] whitespace-pre-wrap break-words";
 
   return (
-    <div className={`relative ${className}`}>
+    <div className={`relative ${fill ? "flex flex-col" : ""} ${className}`}>
       <div ref={mirror} aria-hidden className={`pointer-events-none absolute inset-0 overflow-hidden text-transparent ${box}`}>
         {renderMirror(parts, query?.start ?? null, anchor)}
         {"​"}
@@ -171,7 +176,7 @@ export function MentionTextarea({
         aria-expanded={open}
         aria-controls={`${id}-people`}
         aria-autocomplete="list"
-        className={`relative block min-h-[62px] w-full resize-y bg-transparent outline-none ${box}`}
+        className={`relative block min-h-[62px] w-full bg-transparent outline-none ${fill ? "grow resize-none overflow-hidden" : "resize-y"} ${box}`}
       />
       {open && pos && (
         <ul

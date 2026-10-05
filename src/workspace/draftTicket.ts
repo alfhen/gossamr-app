@@ -101,3 +101,51 @@ export function editFor(p: Proposal & { intent: Created }, next: DraftFields): P
 
 /** Whether the real ticket of an applied draft is in the cache yet, by the key it was given. */
 export const createdItemKey = (p: Proposal): string | null => (p.created[0] ? itemKey(p.created[0]) : null);
+
+/** The pending new-ticket drafts newest first, as the Pip pane lists them, which is the order the sheet steps through them. */
+export const waitingCreates = (proposals: Record<string, Proposal>): string[] =>
+  Object.values(proposals)
+    .filter((p) => isCreate(p) && p.state.type === "pending")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id, undefined, { numeric: true }))
+    .map((p) => p.id);
+
+export interface DraftPlace {
+  /** One-based. */
+  position: number;
+  total: number;
+  prev: string | null;
+  next: string | null;
+}
+
+/** Where `id` stands among the waiting drafts; null when it is not one of them. */
+export function placeOf(ids: readonly string[], id: string): DraftPlace | null {
+  const at = ids.indexOf(id);
+  if (at < 0) return null;
+  return { position: at + 1, total: ids.length, prev: ids[at - 1] ?? null, next: ids[at + 1] ?? null };
+}
+
+/** The draft to show once `id` is decided: the one after it, else the one before, else none. */
+export const draftAfter = (ids: readonly string[], id: string): string | null => {
+  const place = placeOf(ids, id);
+  return place ? (place.next ?? place.prev) : null;
+};
+
+/** The one-line facts a new-ticket draft carries, such as `Task · Parent CA-114 · Priority high`. */
+export function draftFacts(p: Proposal & { intent: Created }): string[] {
+  const { fields, container } = p.intent;
+  return [
+    fields.kind[0].toUpperCase() + fields.kind.slice(1),
+    ...(fields.parent ? [`Parent ${fields.parent.key}`] : []),
+    ...(fields.priority ? [`Priority ${fields.priority}`] : []),
+    `in ${container.externalId}`,
+  ];
+}
+
+const COLLAPSE_LINES = 8;
+const LINE_CHARS = 52;
+
+/** Whether text runs past the lines a card shows before offering Show more. */
+export function collapsible(text: string): boolean {
+  const lines = text.split("\n").reduce((n, line) => n + Math.max(1, Math.ceil(line.length / LINE_CHARS)), 0);
+  return lines > COLLAPSE_LINES;
+}

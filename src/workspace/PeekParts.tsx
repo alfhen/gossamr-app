@@ -33,11 +33,13 @@ export interface SectionCardProps {
   collapsed?: boolean;
   onToggle?(): void;
   tone?: "plain" | "discussion";
+  /** Takes the height the sheet has left, for a body that should use it. */
+  fill?: boolean;
   children: ReactNode;
 }
 
 /** A titled region with a header bar that stays under the section nav while its body scrolls. */
-export function SectionCard({ id, title, count, collapsed = false, onToggle, tone = "plain", children }: SectionCardProps) {
+export function SectionCard({ id, title, count, collapsed = false, onToggle, tone = "plain", fill = false, children }: SectionCardProps) {
   const icon = id in ICON ? <SectionIcon id={id as PeekSectionId} /> : null;
   const bar = `sticky top-9 z-[5] flex w-full items-center gap-2 bg-ws-bar px-3 py-2 text-left text-ws-ink2 ${collapsed ? "rounded-lg" : "rounded-t-lg"}`;
   const label = (
@@ -51,7 +53,7 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
     <section
       id={`peek-${id}`}
       data-section={id}
-      className="grid rounded-lg border border-ws-sep2 bg-ws-win"
+      className={`grid rounded-lg border border-ws-sep2 bg-ws-win ${fill ? "min-h-64 shrink-0 grow grid-rows-[auto_1fr]" : ""}`}
     >
       {onToggle ? (
         <button type="button" aria-expanded={!collapsed} aria-controls={`peek-${id}-body`} onClick={onToggle} className={`${bar} hover:brightness-95`}>

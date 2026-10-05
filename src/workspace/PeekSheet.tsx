@@ -45,6 +45,8 @@ export interface DraftSlots {
   title: ReactNode;
   meta: ReactNode;
   description: ReactNode;
+  /** Steps between the drafts waiting; shown in the sheet's header. */
+  nav?: ReactNode;
   actions: ReactNode;
 }
 
@@ -117,6 +119,7 @@ export function PeekView(p: PeekViewProps) {
       id="peek-sheet"
       aria-label={draft ? "Details for a new ticket draft" : `Details for ${item.item.key}`}
       onAnimationEnd={(ev) => ev.target === ev.currentTarget && p.onMotionEnd?.()}
+      tabIndex={draft ? -1 : undefined}
       className={`selectable ws-legacy absolute inset-y-0 right-0 z-20 flex flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] max-w-full motion-safe:transition-[width] motion-safe:duration-200 ws-sized ${
         p.wide ? "w-full" : ""
       } ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""} ${MOTION[p.motion ?? "none"]}`}
@@ -136,6 +139,7 @@ export function PeekView(p: PeekViewProps) {
             </>
           )}
         </span>
+        {draft?.nav}
         {p.onWide && (
           <button
             type="button"
@@ -143,7 +147,7 @@ export function PeekView(p: PeekViewProps) {
             aria-pressed={!!p.wide}
             title={p.wide ? "Shrink" : "Expand"}
             onClick={p.onWide}
-            className="ml-auto grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover"
+            className={`${draft?.nav ? "" : "ml-auto "}grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover`}
           >
             {p.wide ? "⤡" : "⤢"}
           </button>
@@ -152,12 +156,12 @@ export function PeekView(p: PeekViewProps) {
           type="button"
           aria-label="Close details"
           onClick={p.onClose}
-          className={`${p.onWide ? "" : "ml-auto "}grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover`}
+          className={`${p.onWide || draft?.nav ? "" : "ml-auto "}grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover`}
         >
           ×
         </button>
       </div>
-      <div className={`grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] ${draft ? "pt-4 pb-6" : "scroll-pt-11 pb-24"}`}>
+      <div className={`min-h-0 flex-1 gap-5 overflow-auto px-[22px] ${draft ? "flex flex-col pt-4 pb-5" : "grid content-start scroll-pt-11 pb-24"}`}>
         {!draft && <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length, development: p.developmentCount })} onJump={p.onJump} />}
         <div className="grid gap-2.5">
           {draft?.banner}
@@ -245,8 +249,8 @@ export function PeekView(p: PeekViewProps) {
         {p.drafts}
         {!draft && p.agents}
 
-        <SectionCard id="description" title="Description" {...section("description")}>
-          <div className="min-w-0 [overflow-wrap:anywhere]">{draft ? draft.description : p.description}</div>
+        <SectionCard id="description" title="Description" fill={!!draft} {...section("description")}>
+          <div className={`min-w-0 [overflow-wrap:anywhere] ${draft ? "flex flex-col" : ""}`}>{draft ? draft.description : p.description}</div>
         </SectionCard>
 
         {!draft && p.subtasks && p.subtasks.rows.length > 0 && (
@@ -325,7 +329,7 @@ export function PeekView(p: PeekViewProps) {
           </SectionCard>
         )}
       </div>
-      {draft && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-[22px] py-2.5">{draft.actions}</div>}
+      {draft && <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-2.5 border-t-2 border-ws-pip bg-ws-pip-soft px-[22px] py-3 shadow-[0_-6px_16px_rgb(0_0_0/0.06)]">{draft.actions}</div>}
     </aside>
   );
 }

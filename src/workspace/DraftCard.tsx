@@ -100,6 +100,7 @@ export interface DraftCardProps {
 }
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
+const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45";
 
 export function DraftCard({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss }: DraftCardProps) {
   const intent = p.intent;
@@ -172,7 +173,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
     <article
       aria-label={draftTitle(p)}
       data-draft={p.id}
-      className={`ws-legacy overflow-hidden rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
+      className={`ws-legacy overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
         <span aria-hidden>✦</span>
@@ -290,7 +291,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
           </p>
         )}
         {(open || onShow) && (
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
             {onShow && (
               <button type="button" onClick={onShow} className="mr-auto text-sm text-ws-pip hover:underline">
                 Show me
@@ -312,7 +313,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
                   Skip
                 </button>
                 {runDraft && onReview && (
-                  <button type="button" disabled={working} onClick={onReview} className="rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45">
+                  <button type="button" disabled={working} onClick={onReview} className={primary}>
                     Review and start
                   </button>
                 )}
@@ -321,7 +322,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
                     type="button"
                     disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock}
                     onClick={() => onApprove(edit())}
-                    className="rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45"
+                    className={primary}
                   >
                     {working || state === "applying" ? "Working…" : action}
                   </button>
