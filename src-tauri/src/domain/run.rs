@@ -586,6 +586,24 @@ pub struct Run {
 }
 
 impl Run {
+    /// Why this run can't be sent back for another pass, or `None` when it can: it has finished its job (or stopped at
+    /// a limit) and has a session to resume. A run waiting on a question is answered by the person instead.
+    pub fn follow_up_blocker(&self) -> Option<String> {
+        match self.state {
+            RunState::Done => {}
+            RunState::Stopped if self.stopped_by_limit && self.unsent_answer.is_none() => {}
+            RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => {
+                return Some("it is waiting on the person, who answers it themselves".into())
+            }
+            RunState::Stopped if self.unsent_answer.is_some() => return Some("an answer of the person's is still waiting to be sent to it".into()),
+            other => return Some(format!("it is {}, so it hasn't finished", other.as_str())),
+        }
+        if self.short_id.is_none() || self.session_id.is_none() {
+            return Some("it has no session to resume".into());
+        }
+        None
+    }
+
     /// Earlier sessions `claude rm` has not yet removed.
     pub fn leftover_sessions(&self) -> Vec<ShortId> {
         self.earlier_sessions.iter().filter(|e| !e.removed).map(|e| e.short_id.clone()).collect()

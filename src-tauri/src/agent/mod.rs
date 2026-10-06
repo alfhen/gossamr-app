@@ -212,7 +212,7 @@ impl AgentService {
         };
 
         // Registered before the run starts, since the agent may call the tools straight away.
-        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), mcp::PipRun { scope, handed, read });
+        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), mcp::PipRun { scope, handed, read, read_runs: Default::default() });
         self.running.lock().expect("lock poisoned").insert(run_id.clone(), provider.clone());
         let mut events = match provider.run(agent_req).await {
             Ok(e) => e,

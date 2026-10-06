@@ -115,18 +115,24 @@ impl RunService {
 
     /// Waits for the session to be listed as stopped, gives its process a moment, and resumes it. `None` is success;
     /// otherwise what to tell the person.
-    async fn wake(&self, tc: &super::toolchain::Toolchain, run: &mut Run, id: &super::cli::ShortId, session: &str, text: &str, settle: bool) -> Option<String> {
+    pub(super) async fn wake(&self, tc: &super::toolchain::Toolchain, run: &mut Run, id: &super::cli::ShortId, session: &str, text: &str, settle: bool) -> Option<String> {
+        self.wake_from(tc, run, id, session, text, settle, &["stopped"]).await
+    }
+
+    /// `wake`, waiting for the session to be listed in any of the `at_rest` states.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn wake_from(&self, tc: &super::toolchain::Toolchain, run: &mut Run, id: &super::cli::ShortId, session: &str, text: &str, settle: bool, at_rest: &[&str]) -> Option<String> {
         let deadline = std::time::Instant::now() + self.timing.stop_wait;
         loop {
             let listed = match tc.cli.agents(true).await {
                 Ok(listed) => listed,
                 Err(e) => return Some(format!("Couldn't check that the session stopped: {e}.")),
             };
-            if listed.iter().find(|e| e.id.as_deref() == Some(id.as_str())).is_some_and(|e| e.state.as_deref() == Some("stopped")) {
+            if listed.iter().find(|e| e.id.as_deref() == Some(id.as_str())).is_some_and(|e| e.state.as_deref().is_some_and(|s| at_rest.contains(&s))) {
                 break;
             }
             if std::time::Instant::now() >= deadline {
-                return Some("The session didn't show as stopped, so it wasn't woken.".into());
+                return Some("The session didn't show as stopped or finished, so it wasn't woken.".into());
             }
             tokio::time::sleep(self.timing.poll).await;
         }

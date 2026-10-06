@@ -590,6 +590,17 @@ async fn runs_answer(runs: State<'_, RunsState>, id: String, text: String) -> Re
     runs.answer(&id, &text).await
 }
 
+/// Approves a follow-up the person has read: sends the finished agent back for another pass with its message.
+#[tauri::command]
+async fn runs_send_follow_up(app: AppHandle, runs: State<'_, RunsState>, proposal_id: String) -> Result<Run> {
+    let result = runs.send_follow_up(&proposal_id).await;
+    if let Ok(run) = &result {
+        proposals_changed(&app, &run.connection_id);
+        runs_changed(&app, &run.connection_id);
+    }
+    result
+}
+
 /// Takes a listed session over as the continuation of a stopped or finished run, when it still passes every check.
 #[tauri::command]
 async fn runs_adopt_session(runs: State<'_, RunsState>, id: String, session: String) -> Result<Run> {
@@ -1124,6 +1135,7 @@ pub fn run() {
             runs_suggest_name,
             runs_stop,
             runs_answer,
+            runs_send_follow_up,
             runs_adopt_session,
             runs_stop_all,
             runs_attach,

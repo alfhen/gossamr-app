@@ -276,7 +276,7 @@ impl Core {
         self.propose(&scope, draft).await
     }
 
-    async fn with_proposals<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+    pub(super) async fn with_proposals<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
         let scope = self.scope().await?;
         self.with_db_for(&scope, f).await
     }

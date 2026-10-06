@@ -190,3 +190,60 @@ impl Core {
         .await
     }
 }
+
+impl Core {
+    /// Marks a follow-up as sent: applied, with the run it resumed.
+    pub async fn follow_up_sent(&self, id: &str, run_id: &str) -> Result<Proposal> {
+        self.with_proposals(|db| {
+            let mut p = db.proposal(id)?.ok_or_else(|| refuse("that draft no longer exists"))?;
+            p.state = crate::domain::ProposalState::Applied;
+            p.run = Some(run_id.to_string());
+            p.error = None;
+            p.updated_at = Utc::now();
+            db.save_proposal(&p)?;
+            Ok(p)
+        })
+        .await
+    }
+
+    /// Keeps a follow-up pending with the reason sending it failed, so the person can try again.
+    pub async fn follow_up_failed(&self, id: &str, why: &str) -> Result<()> {
+        self.with_proposals(|db| {
+            if let Some(mut p) = db.proposal(id)? {
+                p.error = Some(why.to_string());
+                p.updated_at = Utc::now();
+                db.save_proposal(&p)?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// A follow-up Pip proposes for a finished run while answering `request_id`: the exact message the person will read,
+    /// edit and send. Nothing is sent; approving the draft resumes the run. Refused unless the run belongs to the
+    /// account and can be sent back, and when one is already waiting for it.
+    pub async fn propose_follow_up_as_pip(&self, scope: &Scope, request_id: &str, run_id: &str, message: &str, reason: Option<&str>) -> Result<Proposal> {
+        let message = crate::runs::result::scrub(message).trim().to_string();
+        let flat = |t: &str| crate::runs::result::scrub(t).split_whitespace().collect::<Vec<_>>().join(" ");
+        let reason = match reason.map(flat).filter(|r| !r.is_empty()) {
+            Some(r) => r.chars().take(proposals::FOLLOW_UP_REASON_LIMIT).collect(),
+            None => flat(message.lines().next().unwrap_or_default()).chars().take(proposals::FOLLOW_UP_REASON_LIMIT).collect(),
+        };
+        let run = self.run_in(scope, run_id).await?.ok_or_else(|| refuse(format!("there is no run {run_id} for this account")))?;
+        if let Some(why) = run.follow_up_blocker() {
+            return Err(refuse(format!("Run {run_id} can't be sent back: {why}.")));
+        }
+        let connection_id = Connection::jira_id(scope);
+        let intent = Intent::FollowUp { connection_id, run_id: run.id.clone(), item: run.item.clone(), message, reason };
+        let at = Utc::now();
+        self.with_db_for(scope, |db| {
+            let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
+            let open = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::FollowUp { run_id: r, .. } if *r == run.id));
+            if let Some(open) = open {
+                return Err(refuse(format!("A follow-up for run {} is already waiting (proposal {}). Revise it or leave it to the user; see list_proposals.", run.id, open.id)));
+            }
+            proposals::create(db, Draft::from_pip(request_id, intent, None), at)
+        })
+        .await
+    }
+}

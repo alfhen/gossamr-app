@@ -45,12 +45,14 @@ pub struct PipRun {
     /// The title and description of each ticket (key upper-cased) the run was shown or read. A rewrite starts from
     /// what Pip saw, so one drafted without a read, or after the ticket moved on, is refused.
     pub read: std::collections::HashMap<String, TextSeen>,
+    /// Runs whose whole result Pip has been shown in this request, which a follow-up for them requires.
+    pub read_runs: std::collections::HashSet<String>,
 }
 
 impl PipRun {
     #[cfg(test)]
     pub fn new(scope: Scope) -> Self {
-        Self { scope, handed: Default::default(), read: Default::default() }
+        Self { scope, handed: Default::default(), read: Default::default(), read_runs: Default::default() }
     }
 }
 
@@ -244,7 +246,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "revise_proposal",
-            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket, subtask breakdown or description update an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries; for a description update only the description, as the complete new text). Never anything else the user made. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, title and/or description (the complete new text) for a ticket text edit, focus and/or kind (investigate, triage, plan or verify) for an agent run on a ticket, prompt for an investigation with no ticket. An agent run the user has edited is theirs and can't be revised.",
+            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket, subtask breakdown or description update an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries; for a description update only the description, as the complete new text). Never anything else the user made. Pass the field that fits its kind: body for a comment or the message of a follow-up for a run, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, title and/or description (the complete new text) for a ticket text edit, focus and/or kind (investigate, triage, plan or verify) for an agent run on a ticket, prompt for an investigation with no ticket. An agent run the user has edited is theirs and can't be revised.",
             json!({ "id": id, "body": { "type": "string" }, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "focus": { "type": "string" }, "kind": { "type": "string" }, "prompt": { "type": "string" } }),
             &["id"],
         ),
@@ -534,6 +536,13 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                     }
                 }
                 Intent::StartRun { connection_id, item, spec } => super::runs::revised(connection_id, item, spec, args)?,
+                Intent::FollowUp { connection_id, run_id, item, reason, .. } => Intent::FollowUp {
+                    connection_id: connection_id.clone(),
+                    run_id: run_id.clone(),
+                    item: item.clone(),
+                    message: crate::runs::result::scrub(required(args, "body")?).trim().to_string(),
+                    reason: reason.clone(),
+                },
                 _ => return Err("this kind of draft can't be revised".into()),
             };
             let revised = core.revise_as_pip(scope, id, intent).await.map_err(|e| e.to_string())?;
