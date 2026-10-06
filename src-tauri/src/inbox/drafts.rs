@@ -54,6 +54,10 @@ pub enum Edit {
         #[serde(default)]
         body: Option<String>,
     },
+    /// The message a follow-up sends.
+    FollowUp {
+        message: String,
+    },
     /// A run's settings; the ones left out stay as they are. Only the person edits these.
     #[serde(rename_all = "camelCase")]
     Run {
@@ -126,6 +130,13 @@ impl Edit {
                 }
                 Ok(Intent::Create { container, fields, link: link.clone() })
             }
+            (Edit::FollowUp { message }, Intent::FollowUp { connection_id, run_id, item, reason, .. }) => Ok(Intent::FollowUp {
+                connection_id: connection_id.clone(),
+                run_id: run_id.clone(),
+                item: item.clone(),
+                message: message.trim().to_string(),
+                reason: reason.clone(),
+            }),
             (Edit::Rewrite { title, body }, Intent::Rewrite { item, title: was_title, body: was_body, flattened }) => {
                 let mut changed_title = was_title.clone();
                 let mut changed_body = was_body.clone();

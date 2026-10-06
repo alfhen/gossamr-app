@@ -574,6 +574,9 @@ pub struct Run {
     /// Gossamr stopped the run for passing a limit; the person can resume it.
     #[serde(default)]
     pub stopped_by_limit: bool,
+    /// How many times the agent has been given the job: 1 for the first, one more for each follow-up sent back.
+    #[serde(default = "first_pass")]
+    pub passes: u32,
     /// Sessions this run left behind when it carried on under a new id, oldest first.
     #[serde(default)]
     pub earlier_sessions: Vec<EarlierSession>,
@@ -640,10 +643,15 @@ impl Run {
             waited_secs: 0,
             waiting_since: None,
             stopped_by_limit: false,
+            passes: 1,
             earlier_sessions: Vec::new(),
             possible_continuations: Vec::new(),
         }
     }
+}
+
+fn first_pass() -> u32 {
+    1
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

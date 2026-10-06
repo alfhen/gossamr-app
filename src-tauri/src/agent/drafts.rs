@@ -111,6 +111,10 @@ fn body_of(p: &Proposal) -> String {
             }
             out.join("\n\n")
         }
+        Intent::FollowUp { run_id, item, message, reason, .. } => {
+            let on = item.as_ref().map_or("no ticket", |i| i.key.as_str());
+            format!("Follow-up for run {run_id} on {on}. Approving sends the agent back for another pass with exactly this message.\n\nWhy: {reason}\n\nMessage:\n{message}")
+        }
         Intent::Update { item, patch } => format!("Triage update on {}: {}", item.key, serde_json::to_string(patch).unwrap_or_default()),
         Intent::Link { from, to, kind } => format!("Link {} to {} ({kind:?})", from.key, to.key),
     }

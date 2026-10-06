@@ -197,6 +197,7 @@ fn intent_summary(p: &Proposal) -> String {
             format!("rewrite of {}: {}", item.key, parts.into_iter().flatten().collect::<Vec<_>>().join("; "))
         }
         Intent::Link { from, to, .. } => format!("link {} to {}", from.key, to.key),
+        Intent::FollowUp { run_id, reason, .. } => format!("follow-up for run {run_id}: “{}”", clip(reason)),
         Intent::StartRun { item, spec, .. } => match item {
             Some(item) => format!("start an agent on {} in {}", item.key, spec.repo),
             None => format!("start an agent in {} with no ticket: “{}”", spec.repo, clip(&spec.instruction)),
