@@ -115,6 +115,11 @@ pub(super) fn quoted(text: &str, limit: usize, one_line: bool) -> Option<String>
     Some(if one_line { format!("{OPEN} {cut}{more} {CLOSE}") } else { format!("{OPEN}\n{cut}{more}\n{CLOSE}") })
 }
 
+/// One line of text from a model or agent for use outside the data markers: secrets masked, markers stripped, cut short.
+pub(super) fn plain_line(text: &str, limit: usize) -> String {
+    clip(&defang(&redact(text)).split_whitespace().collect::<Vec<_>>().join(" "), limit)
+}
+
 /// A page of an agent's text from character `offset`, cleaned like `quoted`, in its own markers. The line after the
 /// markers is ours, not the agent's: it says where the rest is, so the model knows nothing was dropped silently.
 fn result_page(text: &str, offset: usize, limit: usize, id: &str) -> std::result::Result<String, String> {

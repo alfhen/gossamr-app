@@ -49,10 +49,10 @@ fn header(p: &Proposal) -> String {
         ProposalState::Applying => "being applied".into(),
         ProposalState::Applied => "applied".into(),
         ProposalState::Skipped => "skipped".into(),
-        ProposalState::Retired(why) => format!("retired: {why}"),
+        ProposalState::Retired(why) => format!("retired: {}", super::runs::plain_line(why, 300)),
     };
     let origin = match &p.origin {
-        Origin::Run { run_id, .. } => format!("drafted from the result of run {run_id}"),
+        Origin::Run { run_id, .. } => format!("drafted from the result of run {}", super::runs::plain_line(run_id, 80)),
         Origin::Chat { .. } => "from a chat with Pip".into(),
         Origin::Board => "from the board".into(),
         Origin::Autopilot { .. } => "from autopilot".into(),
