@@ -1,7 +1,7 @@
 use super::*;
 use crate::runs::answer::REMINDER;
 use crate::domain::{Origin, Proposal};
-use crate::proposals::Draft;
+use crate::proposals::{self, Draft};
 use crate::runs::rig::{ready, Rig};
 use crate::runs::service::Timing;
 use crate::runs::testing::{Resume, ResumeCall};
@@ -42,7 +42,7 @@ async fn a_finished_run_is_resumed_with_the_reminder_and_the_message_and_nothing
     let (rig, run) = finished().await;
     let p = follow_up(&rig, &run, CreatedBy::Pip, "Answer both open questions.").await;
     std::fs::create_dir_all(&run.expected_worktree).unwrap();
-    let sent = rig.svc.send_follow_up(&p.id).await.unwrap();
+    let sent = rig.svc.send_follow_up(&p.id, "Answer both open questions.").await.unwrap();
 
     let id = run.short_id.clone().unwrap();
     assert_eq!((sent.state, sent.passes, sent.ended_at, sent.unsent_answer.clone()), (RunState::Working, 2, None, None));
@@ -63,7 +63,7 @@ async fn a_session_that_is_still_alive_is_stopped_first() {
     let (rig, run) = finished().await;
     rig.session(&run, |e| e.state = Some("idle".into()));
     let p = follow_up(&rig, &run, CreatedBy::Pip, "More please.").await;
-    rig.svc.send_follow_up(&p.id).await.unwrap();
+    rig.svc.send_follow_up(&p.id, "More please.").await.unwrap();
     let id = run.short_id.unwrap();
     assert_eq!(calls(&rig), [format!("stop:{id}"), format!("resume:{id}")]);
 }
@@ -74,7 +74,7 @@ async fn a_run_waiting_on_a_question_or_still_working_is_not_sent_back() {
     let p = follow_up(&rig, &run, CreatedBy::Pip, "More please.").await;
     for state in [RunState::NeedsAnswer, RunState::Working, RunState::Failed] {
         rig.set(&run, |r| r.state = state).await;
-        let why = rig.svc.send_follow_up(&p.id).await.unwrap_err().to_string();
+        let why = rig.svc.send_follow_up(&p.id, "More please.").await.unwrap_err().to_string();
         assert!(why.contains("can't be sent back"), "{state:?}: {why}");
     }
     assert!(calls(&rig).is_empty());
@@ -86,7 +86,7 @@ async fn a_failed_resume_keeps_the_draft_pending_with_the_reason_and_the_run_as_
     let (rig, run) = finished().await;
     rig.cli.with(|s| s.resume = Resume::Exits);
     let p = follow_up(&rig, &run, CreatedBy::Pip, "More please.").await;
-    assert!(rig.svc.send_follow_up(&p.id).await.is_err());
+    assert!(rig.svc.send_follow_up(&p.id, "More please.").await.is_err());
     let stored = rig.fx.core.proposal(&p.id).await.unwrap().unwrap();
     assert_eq!(stored.state, crate::domain::ProposalState::Pending);
     assert!(stored.error.is_some());
@@ -99,7 +99,7 @@ async fn a_copy_that_claude_starts_instead_is_reported_and_the_draft_stays_pendi
     let (rig, run) = finished().await;
     rig.cli.with(|s| s.resume = Resume::Copies);
     let p = follow_up(&rig, &run, CreatedBy::Pip, "More please.").await;
-    let why = rig.svc.send_follow_up(&p.id).await.unwrap_err().to_string();
+    let why = rig.svc.send_follow_up(&p.id, "More please.").await.unwrap_err().to_string();
     assert!(why.contains("started a copy"), "{why}");
     assert_eq!(rig.get(&run).await.passes, 1);
     assert_eq!(rig.fx.core.proposal(&p.id).await.unwrap().unwrap().state, crate::domain::ProposalState::Pending);
@@ -110,9 +110,62 @@ async fn a_decided_follow_up_is_not_sent_twice_and_nothing_is_sent_with_agents_o
     let (rig, run) = finished().await;
     let p = follow_up(&rig, &run, CreatedBy::Pip, "More please.").await;
     rig.svc.set_flag(false);
-    assert!(rig.svc.send_follow_up(&p.id).await.is_err());
+    assert!(rig.svc.send_follow_up(&p.id, "More please.").await.is_err());
     rig.svc.set_flag(true);
-    rig.svc.send_follow_up(&p.id).await.unwrap();
-    assert!(rig.svc.send_follow_up(&p.id).await.unwrap_err().to_string().contains("already been decided"));
+    rig.svc.send_follow_up(&p.id, "More please.").await.unwrap();
+    assert!(rig.svc.send_follow_up(&p.id, "More please.").await.unwrap_err().to_string().contains("already been decided"));
     assert_eq!(rig.cli.0.lock().unwrap().resumes.len(), 1);
+}
+
+#[tokio::test]
+async fn a_message_that_changed_after_the_person_read_it_is_not_sent() {
+    let (rig, run) = finished().await;
+    let p = follow_up(&rig, &run, CreatedBy::Pip, "Pip revised this after you read it.").await;
+    let why = rig.svc.send_follow_up(&p.id, "The text you read.").await.unwrap_err().to_string();
+    assert!(why.contains("changed after you read it"), "{why}");
+    assert!(calls(&rig).is_empty());
+    assert_eq!(rig.get(&run).await.passes, 1);
+    rig.svc.send_follow_up(&p.id, "  Pip revised this after you read it.\n").await.unwrap();
+}
+
+#[tokio::test]
+async fn an_edited_message_is_sent_on_the_retry_of_a_send_that_failed_after_the_session_was_stopped() {
+    let (rig, run) = finished().await;
+    rig.session(&run, |e| e.state = Some("idle".into()));
+    rig.cli.with(|s| s.resume = Resume::Exits);
+    let p = follow_up(&rig, &run, CreatedBy::Pip, "First words.").await;
+    assert!(rig.svc.send_follow_up(&p.id, "First words.").await.is_err());
+    let stopped = rig.get(&run).await;
+    assert_eq!((stopped.state, stopped.unsent_answer.as_deref()), (RunState::Stopped, Some("First words.")));
+
+    let edited = rig.fx.core.edit_proposal(&p.id, &crate::inbox::Edit::FollowUp { message: "Better words.".into() }).await.unwrap();
+    assert!(edited.revisions.iter().any(|r| r.note == proposals::SEND_FAILED_NOTE));
+    rig.cli.with(|s| s.resume = Resume::Wakes);
+    rig.session(&run, |e| e.state = Some("stopped".into()));
+    let sent = rig.svc.send_follow_up(&p.id, "Better words.").await.unwrap();
+    assert_eq!((sent.state, sent.passes, sent.unsent_answer), (RunState::Working, 2, None));
+    assert_eq!(rig.cli.0.lock().unwrap().resumes.last().unwrap().message, format!("{REMINDER}\n\nBetter words."));
+}
+
+#[tokio::test]
+async fn another_stopped_run_with_an_unsent_answer_is_not_taken_for_a_retry() {
+    let (rig, run) = finished().await;
+    let p = follow_up(&rig, &run, CreatedBy::Pip, "More please.").await;
+    rig.set(&run, |r| {
+        r.state = RunState::Stopped;
+        r.unsent_answer = Some("More please.".into());
+    })
+    .await;
+    let why = rig.svc.send_follow_up(&p.id, "More please.").await.unwrap_err().to_string();
+    assert!(why.contains("can't be sent back"), "{why}");
+}
+
+#[tokio::test]
+async fn a_copy_started_instead_is_remembered_on_a_finished_run() {
+    let (rig, run) = finished().await;
+    rig.cli.with(|s| s.resume = Resume::Copies);
+    let p = follow_up(&rig, &run, CreatedBy::Pip, "More please.").await;
+    assert!(rig.svc.send_follow_up(&p.id, "More please.").await.is_err());
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.earlier_sessions.len()), (RunState::Done, 1));
 }

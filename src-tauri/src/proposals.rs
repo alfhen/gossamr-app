@@ -45,6 +45,8 @@ pub(crate) fn new_id() -> Result<String> {
 }
 
 pub const FOLLOW_UP_REASON_LIMIT: usize = 200;
+/// Marks the revision that records which message a failed send left on its run.
+pub const SEND_FAILED_NOTE: &str = "The send failed; the message is kept";
 
 fn check_follow_up(message: &str, reason: &str) -> Result<()> {
     if message.trim().is_empty() {

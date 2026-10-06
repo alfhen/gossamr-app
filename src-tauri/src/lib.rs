@@ -590,10 +590,10 @@ async fn runs_answer(runs: State<'_, RunsState>, id: String, text: String) -> Re
     runs.answer(&id, &text).await
 }
 
-/// Approves a follow-up the person has read: sends the finished agent back for another pass with its message.
+/// Approves a follow-up the person has read (`message` is what they saw; a draft that changed since is refused): sends the finished agent back for another pass with its message.
 #[tauri::command]
-async fn runs_send_follow_up(app: AppHandle, runs: State<'_, RunsState>, proposal_id: String) -> Result<Run> {
-    let result = runs.send_follow_up(&proposal_id).await;
+async fn runs_send_follow_up(app: AppHandle, runs: State<'_, RunsState>, proposal_id: String, message: String) -> Result<Run> {
+    let result = runs.send_follow_up(&proposal_id, &message).await;
     if let Ok(run) = &result {
         proposals_changed(&app, &run.connection_id);
         runs_changed(&app, &run.connection_id);

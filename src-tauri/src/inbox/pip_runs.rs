@@ -206,10 +206,14 @@ impl Core {
         .await
     }
 
-    /// Keeps a follow-up pending with the reason sending it failed, so the person can try again.
-    pub async fn follow_up_failed(&self, id: &str, why: &str) -> Result<()> {
+    /// Keeps a follow-up pending with the reason sending it failed, so the person can try again. `kept_on_run` says the
+    /// message now waits on the stopped run, which is what lets a retry (even of an edited message) go ahead.
+    pub async fn follow_up_failed(&self, id: &str, why: &str, kept_on_run: bool) -> Result<()> {
         self.with_proposals(|db| {
             if let Some(mut p) = db.proposal(id)? {
+                if kept_on_run {
+                    p.revisions.push(crate::domain::Revision { at: Utc::now(), note: proposals::SEND_FAILED_NOTE.into(), intent: p.intent.clone() });
+                }
                 p.error = Some(why.to_string());
                 p.updated_at = Utc::now();
                 db.save_proposal(&p)?;

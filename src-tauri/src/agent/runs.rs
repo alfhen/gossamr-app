@@ -104,6 +104,11 @@ pub(super) fn label(name: &str) -> Option<String> {
     )
 }
 
+/// The length `page_of` pages over: the text after redaction, marker stripping and trimming.
+fn clean_len(text: &str) -> usize {
+    defang(&redact(text)).trim().chars().count()
+}
+
 /// Marker strings in agent text are removed until none are left, so the text can't close the block it sits in.
 fn defang(text: &str) -> String {
     let mut out = text.to_string();
@@ -296,19 +301,29 @@ async fn visible_run(st: &McpState, pip: &PipRun, args: &Value) -> std::result::
     Ok(run)
 }
 
-const WHOLE: &str = "That is the whole result.";
-const END: &str = "That is the end of the result.";
-
-fn note_read(st: &McpState, request_id: &str, run_id: &str) {
+/// Records that Pip has been shown the run's result from the start up to `end` characters. A page that starts beyond
+/// what was already shown leaves a gap and counts for nothing.
+fn note_read(st: &McpState, request_id: &str, run_id: &str, offset: usize, end: usize) {
     if let Some(pip) = st.runs.lock().expect("runs lock poisoned").get_mut(request_id) {
-        pip.read_runs.insert(run_id.to_string());
+        let through = pip.read_runs.entry(run_id.to_string()).or_insert(0);
+        if offset <= *through {
+            *through = (*through).max(end);
+        }
+    }
+}
+
+fn read_whole(pip: &PipRun, run: &Run) -> bool {
+    let through = pip.read_runs.get(&run.id);
+    match run.result.as_deref().filter(|t| !t.trim().is_empty()) {
+        Some(result) => through.is_some_and(|t| *t >= clean_len(result)),
+        None => through.is_some(),
     }
 }
 
 async fn propose_follow_up(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Reply {
     let scope = &pip.scope;
     let run = visible_run(st, pip, &json!({ "id": args["run_id"] })).await?;
-    let read = st.runs.lock().expect("runs lock poisoned").get(request_id).is_some_and(|p| p.read_runs.contains(&run.id));
+    let read = st.runs.lock().expect("runs lock poisoned").get(request_id).is_some_and(|p| read_whole(p, &run));
     if !read {
         return Err(format!("Read the whole result of run {} first, with get_run and then get_run_result until it says that is the end, so the message answers what the run actually left.", run.id));
     }
@@ -374,14 +389,12 @@ async fn get(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Rep
         }
         if let Some(result) = result {
             let page = result_page(result, 0, RESULT_FIRST_CHARS, &run.id)?;
-            if page.ends_with(WHOLE) {
-                note_read(st, request_id, &run.id);
-            }
+            note_read(st, request_id, &run.id, 0, RESULT_FIRST_CHARS.min(clean_len(result)));
             out.push(format!("Result: {page}"));
         }
     }
     if result.is_none() {
-        note_read(st, request_id, &run.id);
+        note_read(st, request_id, &run.id, 0, 0);
     }
     let mut steps: Vec<String> = Vec::new();
     let mut used: usize = out.iter().map(|l| l.chars().count() + 1).sum::<usize>() + 40;
@@ -411,9 +424,7 @@ async fn get_result(st: &McpState, pip: &PipRun, request_id: &str, args: &Value)
     };
     let caveat = if run.result_complete { String::new() } else { format!("\n{SUMMARY_ONLY}") };
     let page = result_page(result, offset, RESULT_PAGE_CHARS, &run.id)?;
-    if page.ends_with(WHOLE) || page.ends_with(END) {
-        note_read(st, request_id, &run.id);
-    }
+    note_read(st, request_id, &run.id, offset, (offset + RESULT_PAGE_CHARS).min(clean_len(result)));
     Ok(format!("{DATA_NOTE}{caveat}\nRun {} result: {page}", run.id))
 }
 
@@ -1467,6 +1478,8 @@ mod tests {
         r.ok("get_run", json!({ "id": run.id })).await;
         let args = json!({ "run_id": run.id, "message": "More." });
         assert!(r.err("propose_follow_up", args.clone()).await.contains("Read the whole result"));
+        r.ok("get_run_result", json!({ "id": run.id, "offset": 5_000 })).await;
+        assert!(r.err("propose_follow_up", args.clone()).await.contains("Read the whole result"), "the last page alone leaves a gap");
         r.ok("get_run_result", json!({ "id": run.id })).await;
         assert!(r.err("propose_follow_up", args.clone()).await.contains("Read the whole result"));
         r.ok("get_run_result", json!({ "id": run.id, "offset": 5_000 })).await;

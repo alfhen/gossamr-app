@@ -11,6 +11,7 @@ use super::limits;
 use super::service::{belongs_to, RunService};
 use crate::domain::{CreatedBy, Intent, ProposalState, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
+use crate::proposals;
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
@@ -20,7 +21,7 @@ impl RunService {
     /// Approves a pending follow-up: resumes its run with the message and marks the draft applied. A failure keeps the
     /// draft pending with the reason, and a session that was stopped on the way keeps the message on the run, so
     /// approving again sends it.
-    pub async fn send_follow_up(&self, proposal_id: &str) -> Result<Run> {
+    pub async fn send_follow_up(&self, proposal_id: &str, read: &str) -> Result<Run> {
         self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let p = self.core.proposal(proposal_id).await?.ok_or_else(|| refuse("that draft no longer exists"))?;
@@ -28,11 +29,15 @@ impl RunService {
         if p.state != ProposalState::Pending {
             return Err(refuse("that follow-up has already been decided"));
         }
+        if read.trim() != message.trim() {
+            return Err(refuse("The message changed after you read it. Read it again."));
+        }
         let mut run = self.load(run_id).await?;
         if run.connection_id != *connection_id {
             return Err(refuse("that run belongs to another connection"));
         }
-        let again = run.state == RunState::Stopped && run.unsent_answer.as_deref() == Some(message.as_str());
+        let kept = |r: &crate::domain::Revision| r.note == proposals::SEND_FAILED_NOTE && matches!(&r.intent, Intent::FollowUp { message: m, .. } if Some(m.as_str()) == run.unsent_answer.as_deref());
+        let again = run.state == RunState::Stopped && p.revisions.iter().any(kept);
         if !again {
             if let Some(why) = run.follow_up_blocker() {
                 return Err(refuse(format!("This run can't be sent back: {why}.")));
@@ -93,12 +98,13 @@ impl RunService {
                 Ok(run)
             }
             Some(why) => {
-                if run.state == RunState::Stopped {
+                let stopped = run.state == RunState::Stopped;
+                if stopped {
                     run.error = Some(why.clone());
                     run.unsent_answer = Some(message.clone());
-                    self.store(&run).await?;
                 }
-                if let Err(e) = self.core.follow_up_failed(proposal_id, &why).await {
+                self.store(&run).await?;
+                if let Err(e) = self.core.follow_up_failed(proposal_id, &why, stopped).await {
                     eprintln!("couldn't note why the follow-up failed: {e}");
                 }
                 Err(Error::Claude(format!("{why} The follow-up is kept.")))
