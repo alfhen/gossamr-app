@@ -66,6 +66,42 @@ const TICKET_WORDS = "(?:ticket\\s+|issue\\s+)?";
 const asksToRevise = /\b(shorten|shorter|tighten|trim|rewrite|reword|rephrase|revise)\b/;
 const asksForShorter = /\b(shorten|shorter|tighten|trim)\b/;
 
+const asksToSeeDraft = /\b(can|could|do|will) you (?:still )?(?:see|read|open|view)\b.*\b(?:draft|proposal)\b|\bwhat does (?:the|its|that|this) draft (?:say|contain)\b/i;
+
+/** The lines under an "Open questions" heading (or after an "Open questions:" lead-in), or null when the text has none. */
+export function openQuestions(markdown: string): string | null {
+  const lines = markdown.split("\n");
+  const at = lines.findIndex((l) => /^\s*(?:#{1,6}\s*|\*\*)?open questions\b/i.test(l));
+  if (at < 0) return null;
+  const inline = lines[at].replace(/^\s*(?:#{1,6}\s*|\*\*)?open questions[^:\n]*:?\**\s*/i, "").trim();
+  const rest: string[] = inline ? [inline] : [];
+  for (const l of lines.slice(at + 1)) {
+    if (/^\s*#{1,6}\s/.test(l)) break;
+    rest.push(l);
+  }
+  const text = rest.join("\n").trim();
+  return text || null;
+}
+
+/** The pending draft a question is about: the one discussed, else the only one on the open ticket. */
+function draftInQuestion(drafts: readonly Proposal[], context: ScreenContext, discussed: string | null): Proposal | undefined {
+  const pending = drafts.filter((d) => d.state.type === "pending");
+  if (discussed) return pending.find((d) => d.id === discussed);
+  const here = pending.filter((d) => d.intent.type !== "startRun" && "item" in d.intent && d.intent.item.externalId === context.item?.externalId && d.intent.item.connectionId === context.item?.connectionId);
+  return here.length === 1 ? here[0] : undefined;
+}
+
+const draftText = (d: Proposal): string | null => {
+  switch (d.intent.type) {
+    case "rewrite":
+      return d.intent.body?.toText ?? d.intent.title?.to ?? null;
+    case "comment":
+      return docText(d.intent.body);
+    default:
+      return null;
+  }
+};
+
 /** The comment a run left for the person, newest first, that Pip may revise. */
 const runDrafts = (drafts: readonly Proposal[]) => drafts.filter((d) => d.state.type === "pending" && d.origin.type === "run" && d.intent.type === "comment");
 
@@ -187,6 +223,20 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       text: `I drafted ${summaries.length} subtasks on **${breakdownRun.item.key}** from what the run proposed. Nothing is created; edit the list, then approve it or skip it.`,
       filter: null,
       draft: { intent: { type: "subtasks", parent: breakdownRun.item, summaries }, label: "From an agent run" },
+    };
+  }
+  if (asksToSeeDraft.test(prompt)) {
+    const seen = draftInQuestion(drafts, context, discussed);
+    const text = seen && draftText(seen);
+    if (!seen || !text) return { steps: [], text: "Which draft do you mean? Open its ticket or use Discuss with Pip on it, and I'll read it in full.", filter: null, draft: null };
+    const questions = openQuestions(text);
+    const open = questions ? ` It has open questions:\n\n${questions}` : " It has no open questions.";
+    return {
+      steps: ["Read the draft in full"],
+      text: `Yes, I read draft ${seen.id} in full, all ${text.split("\n").length} lines of it.${open}\n\nTell me what you want done and I'll revise it or send the agent back.`,
+      filter: null,
+      draft: null,
+      discussed: seen.id,
     };
   }
   const descriptionTalk = talksDescription.exec(prompt);

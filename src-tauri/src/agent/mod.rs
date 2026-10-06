@@ -2,6 +2,7 @@
 //! neutral events; `AgentService` prepares each run's prompt and screen context and routes events to the page.
 
 pub mod context;
+mod drafts;
 mod github;
 pub mod images;
 pub mod mcp;
