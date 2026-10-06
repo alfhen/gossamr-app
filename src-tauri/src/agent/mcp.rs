@@ -45,8 +45,9 @@ pub struct PipRun {
     /// The title and description of each ticket (key upper-cased) the run was shown or read. A rewrite starts from
     /// what Pip saw, so one drafted without a read, or after the ticket moved on, is refused.
     pub read: std::collections::HashMap<String, TextSeen>,
-    /// Runs whose whole result Pip has been shown in this request, which a follow-up for them requires.
-    pub read_runs: std::collections::HashSet<String>,
+    /// How far into each run's result (characters from the start, with no gap) Pip has been shown in this request. A
+    /// follow-up for the run needs it to reach the end.
+    pub read_runs: std::collections::HashMap<String, usize>,
 }
 
 impl PipRun {
