@@ -416,6 +416,8 @@ export class MockBackend implements Backend {
         return [this.connector.createItem(intent.container, intent.fields)];
       case "startRun":
         throw new Error("A run is approved with its own button");
+      case "followUp":
+        throw new Error("A follow-up is sent back with its own button");
       default:
         throw new Error("the sample data can't apply that");
     }
@@ -464,6 +466,10 @@ export class MockBackend implements Backend {
 
   async runsStop(id: string) {
     return this.runs.stop(id);
+  }
+
+  async runsSendFollowUp(proposalId: string) {
+    return this.runs.sendFollowUp(proposalId);
   }
 
   async runsAnswer(id: string, text: string) {
@@ -652,6 +658,10 @@ export class MockBackend implements Backend {
     return this.runs.pipDraft(item, focus, requestId);
   }
 
+  pipFollowUp(runId: string, message: string, reason: string, requestId: string) {
+    return this.runs.pipFollowUp(runId, message, reason, requestId);
+  }
+
   pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string) {
     return this.runs.pipTicketlessDraft(repo, prompt, requestId);
   }
@@ -723,6 +733,8 @@ export class MockBackend implements Backend {
       }
       case "startRun":
         throw new Error("A run is approved with its own button");
+      case "followUp":
+        throw new Error("A follow-up is sent back with its own button");
       default:
         throw new Error("the sample data can't apply that");
     }

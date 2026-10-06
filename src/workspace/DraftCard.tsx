@@ -14,6 +14,7 @@ import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { itemKey } from "../lib/filter";
+import { FOLLOW_UP_LIMIT, followUpProblem, followUpTitle, nextPass } from "./followUp";
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
@@ -48,6 +49,8 @@ export function draftTitle(p: Proposal): string {
       return `Link ${i.from.key}`;
     case "startRun":
       return `Start an agent: ${i.item?.key ?? `${i.spec.repo}, no ticket`}`;
+    case "followUp":
+      return followUpTitle(i);
     default:
       return unreachable(i);
   }
@@ -75,6 +78,8 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
       return linkSentence(i);
     case "startRun":
       return `${i.spec.kind} in ${i.spec.repo}`;
+    case "followUp":
+      return i.reason;
     default:
       return unreachable(i);
   }
@@ -97,12 +102,16 @@ export interface DraftCardProps {
   onOpenRun?(runId: string): void;
   /** Present on a comment made from a run's result: opens Pip on the run and this draft. */
   onDiscuss?(): void;
+  /** For a follow-up, the pass the agent would be on once it is sent. */
+  pass?: number;
+  /** Sends a follow-up back to its run, after saving the edit. */
+  onSendBack?(edit: ProposalEdit | null): void;
 }
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
 const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45";
 
-export function DraftCard({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss }: DraftCardProps) {
+export function DraftCard({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss, pass, onSendBack }: DraftCardProps) {
   const intent = p.intent;
   const key = targetOf(intent)?.key ?? "";
   const stored = intent.type === "comment" ? docText(intent.body) : "";
@@ -126,6 +135,15 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
     setNewText(rewriteFields(rewrite).text);
   }, [rewrite?.title?.to, rewrite?.body?.toText]);
   const rewriteBlock = !!rewrite && rewriteBlocked(rewrite, newTitle, newText);
+  const followUp = intent.type === "followUp" ? intent : null;
+  const [message, setMessage] = useState(followUp?.message ?? "");
+  const messageEdited = useRef(false);
+  useEffect(() => {
+    if (!takesBackendText(messageEdited.current, attempting.current)) return;
+    messageEdited.current = false;
+    setMessage(followUp?.message ?? "");
+  }, [followUp?.message]);
+  const messageProblem = followUp ? followUpProblem(message) : null;
   const summaries = intent.type === "subtasks" ? intent.summaries : [];
   const made = p.created.length;
   const [picked, setPicked] = useState<boolean[]>(summaries.map(() => true));
@@ -146,6 +164,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
   const edit = (): ProposalEdit | null => {
     if (intent.type === "comment" && edited.current) return { type: "comment", body, mentions: liveMentions(body, mentions) };
     if (rewrite && rewriteEdited.current) return rewriteEdit(rewrite, newTitle, newText);
+    if (followUp && messageEdited.current) return { type: "followUp", message };
     if (intent.type === "subtasks") {
       const wanted = summaries.filter((_, i) => i < made || picked[i]);
       return wanted.length === summaries.length ? null : { type: "subtasks", summaries: wanted };
@@ -270,6 +289,48 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
             <p className="m-0 text-sm text-ws-ink3">Runs as you, with your Claude settings, in a new worktree of {intent.spec.clonePath}. Read the exact prompt and checks, then start it. Nothing runs before that.</p>
           </div>
         )}
+        {followUp && (
+          <div className="grid gap-1.5" data-follow-up>
+            <p className="m-0 flex flex-wrap items-baseline gap-2 font-semibold">
+              Send the agent back for another pass
+              <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Pass {pass ?? 2}</span>
+              {p.createdBy === "pip" && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Proposed by Pip</span>}
+            </p>
+            <p className="m-0 text-sm text-ws-ink2">
+              Why: {followUp.reason}
+              {onOpenRun && (
+                <>
+                  {" · "}
+                  <button type="button" onClick={() => onOpenRun(followUp.runId)} className="text-ws-pip hover:underline">
+                    Open the run
+                  </button>
+                </>
+              )}
+            </p>
+            <label className="grid gap-1 text-sm font-semibold" htmlFor={`follow-up-${p.id}`}>
+              Message the agent will get
+              <textarea
+                id={`follow-up-${p.id}`}
+                value={message}
+                disabled={!open || working}
+                rows={Math.min(14, Math.max(5, message.split("\n").length + 1))}
+                maxLength={FOLLOW_UP_LIMIT}
+                onChange={(e) => {
+                  messageEdited.current = true;
+                  setMessage(e.target.value);
+                }}
+                className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2 py-1.5 text-base font-normal [overflow-wrap:anywhere]"
+              />
+            </label>
+            <p className="m-0 text-sm text-ws-ink3">
+              {open
+                ? "Gossamr puts its standing reminder in front, then resumes the agent in its worktree with this message. Nothing is sent before you press Send back."
+                : state === "applied"
+                  ? "Sent back."
+                  : "Not sent."}
+            </p>
+          </div>
+        )}
         {p.origin.type === "run" && (
           <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
             From agent run{" "}
@@ -317,7 +378,12 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
                     Review and start
                   </button>
                 )}
-                {!runDraft && (
+                {followUp && (
+                  <button type="button" disabled={working || state === "applying" || !!messageProblem} title={messageProblem ?? undefined} onClick={() => (onSendBack ?? onApprove)(edit())} className={`${primary} px-5 py-2 text-base`}>
+                    {working || state === "applying" ? "Sending…" : "Send back"}
+                  </button>
+                )}
+                {!runDraft && !followUp && (
                   <button
                     type="button"
                     disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock}
@@ -361,6 +427,7 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
     }
   };
 
+  const pass = useRuns((s) => (p.intent.type === "followUp" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
   const discuss = () => p.origin.type === "run" && askPip(commentWithPipPrompt({ id: p.origin.runId, item: target ?? null }, p.id));
 
   return (
@@ -374,6 +441,14 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
       onSkip={() => void run(() => useWorkspace.getState().skip(p.id))}
       onOpenRun={(id) => useRuns.getState().openRun(id)}
       onDiscuss={p.origin.type === "run" && p.intent.type === "comment" ? discuss : undefined}
+      pass={pass}
+      onSendBack={(edit) =>
+        void run(async () => {
+          if (edit && backend) await backend.proposalsEdit(p.id, edit);
+          await useWorkspace.getState().sendFollowUp(p.id);
+          return null;
+        })
+      }
       onReview={p.intent.type === "startRun" ? () => void useRunSetup.getState().begin({ proposalId: p.id }) : undefined}
       onApprove={(edit) =>
         void run(async () => {

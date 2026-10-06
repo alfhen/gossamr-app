@@ -1,4 +1,6 @@
 import { and } from "../lib/filter";
+import { targetOf } from "../lib/proposals";
+import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import type { Intent, ItemRef, Proposal, Run, ScreenContext, WorkFilter } from "../types";
 import { needsPerson, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
@@ -20,6 +22,8 @@ export interface PipScript {
   revise?: { id: string; body?: string; title?: string; description?: string; summaries?: string[] } | null;
   /** A new description or title to draft for a ticket, shown to the person as a diff. */
   rewrite?: { item: ItemRef; part: "title" | "description" } | null;
+  /** A follow-up to propose for a finished run, the way propose_follow_up does. */
+  followUp?: { runId: string; message: string; reason: string } | null;
   /** The draft this turn was about, remembered for the rest of the conversation. */
   discussed?: string;
 }
@@ -83,11 +87,34 @@ export function openQuestions(markdown: string): string | null {
   return text || null;
 }
 
+const asksToSendBack = /another pass|second pass|\bsend (?:it|them|that|the agent|the run) back\b/i;
+
+/** What Pip does when asked to send a finished run back: only a run that left open questions gets a follow-up, and only one at a time. */
+function sendBack(context: ScreenContext, runs: readonly Run[], drafts: readonly Proposal[], discussed: string | null): PipScript {
+  const none = (text: string): PipScript => ({ steps: [], text, filter: null, draft: null });
+  const from = drafts.find((d) => d.id === discussed)?.origin;
+  const run = (from?.type === "run" ? runs.find((r) => r.id === from.runId) : undefined) ?? runs.find((r) => r.state === "done" && !!r.item && r.item.externalId === context.item?.externalId);
+  if (!run) return none("Which run do you mean? Open the ticket it ran on, or use Discuss with Pip on one of its drafts, and ask again.");
+  const blocker = followUpBlocker(run);
+  if (blocker) return none(`I can't send run ${run.shortId ?? run.id} back: ${blocker}.`);
+  const waiting = drafts.find((d) => d.state.type === "pending" && d.intent.type === "followUp" && d.intent.runId === run.id);
+  if (waiting) return none(`A follow-up for run ${run.shortId ?? run.id} is already waiting for you (draft ${waiting.id}). Read it, edit it if you like, and send it back.`);
+  const questions = openQuestions(run.result ?? "");
+  if (!questions) return { steps: ["Read the run", "Read the rest of its result"], text: `I read the whole result of run ${run.shortId ?? run.id}: it did its job and left nothing open, so I won't send it back.`, filter: null, draft: null };
+  return {
+    steps: ["Read the run", "Read the rest of its result", "Drafted a follow-up"],
+    text: `Run ${run.shortId ?? run.id} left open questions, so I drafted a follow-up with the exact message. Nothing is sent: read it, change it if you like, and press Send back.`,
+    filter: null,
+    draft: null,
+    followUp: { runId: run.id, message: `Please settle the open questions you left in your plan, then update the plan to match.\n\nOpen questions:\n${questions}\n\nKeep everything else in the plan as it is.`, reason: "the plan left open questions" },
+  };
+}
+
 /** The pending draft a question is about: the one discussed, else the only one on the open ticket. */
 function draftInQuestion(drafts: readonly Proposal[], context: ScreenContext, discussed: string | null): Proposal | undefined {
   const pending = drafts.filter((d) => d.state.type === "pending");
   if (discussed) return pending.find((d) => d.id === discussed);
-  const here = pending.filter((d) => d.intent.type !== "startRun" && "item" in d.intent && d.intent.item.externalId === context.item?.externalId && d.intent.item.connectionId === context.item?.connectionId);
+  const here = pending.filter((d) => d.intent.type !== "startRun" && d.intent.type !== "followUp" && targetOf(d.intent)?.externalId === context.item?.externalId && targetOf(d.intent)?.connectionId === context.item?.connectionId);
   return here.length === 1 ? here[0] : undefined;
 }
 
@@ -174,6 +201,7 @@ function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null): PipScript {
   const q = prompt.toLowerCase();
+  if (asksToSendBack.test(prompt)) return sendBack(context, runs, drafts, discussed);
   const finishing = finishes.exec(prompt);
   if (finishing) {
     const left = drafts.find((d) => d.id === finishing[1] && d.state.type === "pending" && d.origin.type === "run" && d.intent.type === "create");
@@ -456,6 +484,8 @@ export interface PipDrafter {
   pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[] }): Promise<unknown>;
   /** Drafts a title or description edit the way propose_description_edit does. */
   pipRewrite(item: ItemRef, part: "title" | "description", requestId: string): Promise<unknown>;
+  /** Drafts a follow-up for a finished run the way propose_follow_up does. */
+  pipFollowUp(runId: string, message: string, reason: string, requestId: string): Promise<unknown>;
   /** Drafts a run the way propose_run does: Pip names the ticket and a focus note, the backend builds the rest. */
   pipRunDraft(item: ItemRef, focus: string | null, requestId: string): Promise<unknown>;
   /** Drafts an investigation with no ticket the way propose_run does: Pip gives a repository and a prompt, the backend builds the rest. */
@@ -499,6 +529,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
     if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
     if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, description: script.revise.description, summaries: script.revise.summaries });
     if (!stopped && script.rewrite) await drafter?.pipRewrite?.(script.rewrite.item, script.rewrite.part, req.requestId);
+    if (!stopped && script.followUp) await drafter?.pipFollowUp?.(script.followUp.runId, script.followUp.message, script.followUp.reason, req.requestId);
     if (!stopped && script.runDraft) await drafter?.pipRunDraft?.(script.runDraft.item, script.runDraft.focus, req.requestId);
     if (!stopped && script.ticketlessRun) await drafter?.pipTicketlessRunDraft?.(script.ticketlessRun.repo, script.ticketlessRun.prompt, req.requestId);
     if (!stopped && script.filter) viewListeners.forEach((l) => l(req.requestId, script.filter!.filter, script.filter!.note));

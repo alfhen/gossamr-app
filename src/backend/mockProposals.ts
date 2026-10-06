@@ -1,6 +1,7 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT } from "./mockRunKinds";
 import { targetOf } from "../lib/proposals";
+import { followUpProblem } from "../workspace/followUp";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, WorkItemKind } from "../types";
 
@@ -52,7 +53,8 @@ export class MockProposals {
     if (intent.type === "create") {
       if (!intent.fields.title.trim()) return Promise.reject(new Error("a new item needs a title"));
       if (intent.container.connectionId !== CONNECTION) return Promise.reject(new Error("that item belongs to another connection"));
-    } else if (intent.type !== "startRun" && !targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
+    } else if (intent.type === "followUp") return Promise.reject(new Error("only Pip proposes a follow-up"));
+    else if (intent.type !== "startRun" && !targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
     if (intent.type === "transition" && !intent.to.trim()) return Promise.reject(new Error("a transition needs a target status"));
     const problem = intent.type === "rewrite" ? rewriteProblem(intent) : null;
     if (problem) return Promise.reject(new Error(problem));
@@ -155,6 +157,12 @@ export class MockProposals {
       if (problem) throw new Error(problem);
       return this.set(id, { intent: next, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Edited", intent: next }], error: null });
     }
+    if (edit.type === "followUp" && intent.type === "followUp") {
+      const problem = followUpProblem(edit.message);
+      if (problem) throw new Error(problem);
+      const next: Intent = { ...intent, message: edit.message.trim() };
+      return this.set(id, { intent: next, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Edited", intent: next }], error: null });
+    }
     if (edit.type === "run" && intent.type === "startRun") {
       if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
       const { instruction, base, clonePath, kind, name, pr, allowPush, report, plan, buildAccount, project } = edit;
@@ -205,6 +213,14 @@ export class MockProposals {
       if (problem) throw new Error(problem);
       return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
     }
+    if (p.intent.type === "followUp") {
+      if (p.createdBy !== "pip") throw new Error("that draft wasn't made by Pip, so Pip can't change it");
+      if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this follow-up, so Pip can't change it any more");
+      const problem = followUpProblem(body ?? "");
+      if (problem) throw new Error(problem);
+      const intent: Intent = { ...p.intent, message: (body ?? "").trim() };
+      return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
+    }
     const left = p.origin.type === "run" && (p.intent.type === "comment" || p.intent.type === "create" || p.intent.type === "subtasks") && p.createdBy === "user";
     if (p.createdBy !== "pip" && !left) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
     let intent: Intent;
@@ -242,6 +258,7 @@ export class MockProposals {
   async approve(id: string) {
     const p = this.pending(id);
     if (p.intent.type === "startRun") throw new Error("A run is approved with its own button");
+    if (p.intent.type === "followUp") throw new Error("A follow-up is sent back with its own button");
     this.set(id, { state: { type: "applying" } });
     try {
       const created = await this.apply(p.intent, p.created);

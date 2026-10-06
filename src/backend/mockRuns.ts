@@ -4,6 +4,7 @@ import { assemblePlan, planSectionOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
+import { followUpBlocker, followUpProblem } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import type { MockProposals } from "./mockProposals";
 import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
@@ -135,6 +136,15 @@ I read all four. I did not open the Klaviyo flow definitions, which live outside
 
 For Jira:
 Plan for the welcome flow refresh: three emails move to the shared layout, subjects and delays come from one config, six steps, tests included. Two questions need an answer before building: whether Klaviyo sets its own subjects, and whether the second email keeps its delay. The full plan is attached to the run.`;
+
+/** What the sample plan run writes on its second pass, once the person has sent it back with the open questions. */
+export const SCRIPTED_PLAN_ANSWERED = `${SCRIPTED_PLAN_RESULT.split("## Open questions for a person")[0]}## Decisions on the open questions
+
+- Subject lines: the flows keep setting their own subjects in Klaviyo, so the shared config only holds delays.
+- Second email: it keeps its two-day delay; the config reads it from one place.
+
+For Jira:
+Plan for the welcome flow refresh, second pass: the open questions are settled (Klaviyo keeps its own subjects, the second email keeps its two-day delay) and the plan is updated to match.`;
 
 const PLAN_SUMMARY = "Plan complete: welcome emails move to the shared layout, subjects in one config, six steps, two open questions";
 
@@ -365,7 +375,7 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
     expectedWorktree: worktreeOf(spec),
     state: seed.state,
     shortId: failed ? null : (0x1000a000 + i * 0x111).toString(16).padStart(8, "0"),
-    sessionId: null,
+    sessionId: failed ? null : `${(0x1000a000 + i * 0x111).toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`,
     needs: null,
     suggestedReply: null,
     unsentAnswer: null,
@@ -440,6 +450,7 @@ export class MockRuns {
   private readonly untrustedClones: boolean;
   readonly pipRun: boolean;
   private picked = new Map<string, string>();
+  private followUps = new Map<string, { text: string; detail: string }[]>();
   /** Copies made in `~/Gossamr/agents` through `cloneFresh`. */
   private fresh = new Map<string, LocalClone>();
   /** Pull requests and branches by run id, standing in for what a sync would have cached. */
@@ -661,11 +672,12 @@ export class MockRuns {
     if (to === "launching") patch.launchedAt = at;
     if (to === "working") {
       patch.shortId = run.shortId ?? (0x2000b000 + this.runs.length * 0x37).toString(16).padStart(8, "0");
+      patch.sessionId = run.sessionId ?? `${patch.shortId}-0000-4000-8000-000000000000`;
       patch.lastDetail = "Reading the code";
       patch.tokens = (run.tokens ?? 0) + 12_000;
     }
     if (to === "done") {
-      patch.result = !run.item && run.spec.project ? SCRIPTED_TICKET_RESULT : SCRIPTED_RESULT[run.spec.kind];
+      patch.result = !run.item && run.spec.project ? SCRIPTED_TICKET_RESULT : (run.passes ?? 1) > 1 && run.spec.kind === "plan" ? SCRIPTED_PLAN_ANSWERED : SCRIPTED_RESULT[run.spec.kind];
       patch.summary = SCRIPTED_SUMMARY[run.spec.kind];
       patch.resultComplete = true;
       patch.endedAt = at;
@@ -1129,6 +1141,39 @@ export class MockRuns {
     return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item: null, spec }, null, requestId));
   }
 
+  /** A follow-up Pip proposes for a finished run, with the backend's checks. */
+  pipFollowUp(runId: string, message: string, reason: string, requestId: string): Promise<Proposal> {
+    const run = this.get(runId);
+    if (!run) return Promise.reject(new Error(`there is no run ${runId} for this account`));
+    const blocker = followUpBlocker(run);
+    if (blocker) return Promise.reject(new Error(`Run ${runId} can't be sent back: ${blocker}.`));
+    const problem = followUpProblem(message);
+    if (problem) return Promise.reject(new Error(problem));
+    const open = this.proposals.list({ states: ["pending", "applying"] }).find((p) => p.intent.type === "followUp" && p.intent.runId === runId);
+    if (open) return Promise.reject(new Error(`A follow-up for run ${runId} is already waiting (proposal ${open.id}). Revise it or leave it to the user.`));
+    const intent: Intent = { type: "followUp", connectionId: CONNECTION, runId, shortId: run.shortId, item: run.item, message: message.trim(), reason };
+    return Promise.resolve(this.proposals.draft(intent, null, requestId));
+  }
+
+  /** Sends the run back for another pass with the draft's message, as the backend does: Working again, one more pass, and a line on its timeline. */
+  sendFollowUp(proposalId: string): Run {
+    const p = this.proposals.get(proposalId);
+    if (p?.intent.type !== "followUp") throw new Error("that draft isn't a follow-up");
+    if (p.state.type !== "pending") throw new Error("that follow-up has already been decided");
+    const run = this.get(p.intent.runId);
+    if (!run) throw new Error("that run no longer exists");
+    const blocker = followUpBlocker(run);
+    if (blocker) throw new Error(`This run can't be sent back: ${blocker}.`);
+    const passes = (run.passes ?? 1) + 1;
+    const by = p.createdBy === "pip" ? "Pip" : "You";
+    this.followUps.set(run.id, [...(this.followUps.get(run.id) ?? []), { text: `${by} asked for another pass: ${p.intent.reason}`, detail: `Pass ${passes}. Approved by you.` }]);
+    const next = this.update(run.id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: this.now(), lastProgressAt: this.now(), lastDetail: "Reading your message" });
+    this.proposals.applyRun(proposalId, run.id);
+    this.markStale(run.id);
+    this.changed();
+    return next;
+  }
+
   startNow(id: string): Run {
     const run = this.get(id);
     if (run?.state !== "queued") throw new Error("only a queued run can be started");
@@ -1160,6 +1205,7 @@ export class MockRuns {
     if (run.state === "failed") lines.splice(1, 3, ["error", run.error ?? "It didn't start", null]);
     if (run.state === "done") lines.push(["done", "Wrote up what it found", run.result]);
     if (run.state === "stopped") lines.push(["stop", "Stopped", null]);
+    for (const f of this.followUps.get(id) ?? []) lines.splice(lines.length - (run.state === "done" ? 1 : 0), 0, ["follow_up", f.text, f.detail]);
     return lines.map(([kind, text, detail], i) => ({ runId: id, seq: i + 1, at: at(i * 2), kind, text, detail }));
   }
 
