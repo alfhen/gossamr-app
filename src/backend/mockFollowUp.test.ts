@@ -71,3 +71,12 @@ describe("a finished plan run with open questions in the sample build", () => {
     await expect(b.runsSendFollowUp(draft.id)).rejects.toThrow("already been decided");
   });
 });
+
+describe("the chip on an open finished run", () => {
+  it("asks about the run that is open in the sheet, whatever ticket is on screen", async () => {
+    const b = sample();
+    const run = planRun(b);
+    await mockAsk({ requestId: "chip", prompt: "Send it back for another pass", context: { view: "agents", item: null, run: run.id } as never, images: [], sessionId: undefined } as never, b, 0);
+    expect(followUps(b)).toHaveLength(1);
+  });
+});

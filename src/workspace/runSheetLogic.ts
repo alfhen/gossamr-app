@@ -258,6 +258,7 @@ const TIMELINE_ICON: Record<string, IconName> = {
   done: "check",
   error: "alert",
   stop: "stop",
+  follow_up: "retry",
 };
 
 export const timelineIcon = (kind: string): IconName => TIMELINE_ICON[kind] ?? "spark";

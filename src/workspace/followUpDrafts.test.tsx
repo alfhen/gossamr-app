@@ -96,3 +96,41 @@ describe("follow-up rules the page mirrors", () => {
     expect(nextPass({ passes: 50 })).toBe(51);
   });
 });
+
+describe("the run sheet after a follow-up", () => {
+  it("shows the pass count only once the agent has been sent back and draws the timeline line with the retry icon", async () => {
+    const { MockBackend } = await import("../backend/mock");
+    const { RunSheetView } = await import("./RunSheet");
+    const { timelineIcon } = await import("./runSheetLogic");
+    const base = new MockBackend().runs.list()[0];
+    const render = (passes: number | undefined) =>
+      renderToStaticMarkup(
+        <RunSheetView
+          run={{ ...base, state: "done", passes } as Run}
+          now={Date.parse("2026-09-30T12:00:00Z")}
+          ticketTitle={null}
+          place={null}
+          wide={false}
+          onWide={vi.fn()}
+          events={[{ runId: base.id, seq: 1, at: "2026-09-30T11:00:00Z", kind: "follow_up", text: "Pip asked for another pass: the plan left open questions", detail: "Pass 2. Approved by you." }]}
+          disk={null}
+          brief={null}
+          confirmStop={false}
+          outcome={null}
+          tickets={[]}
+          pickBlocker={false}
+          drafting={false}
+          answering={false}
+          opened={false}
+          on={new Proxy({}, { get: () => vi.fn() }) as never}
+        />,
+      );
+    expect(render(undefined)).not.toContain("data-passes");
+    expect(render(1)).not.toContain("data-passes");
+    const two = render(2);
+    expect(two).toContain("data-passes");
+    expect(two).toMatch(/Pass <b[^>]*>2<\/b>/);
+    expect(two).toContain("Pip asked for another pass: the plan left open questions");
+    expect(timelineIcon("follow_up")).toBe("retry");
+  });
+});

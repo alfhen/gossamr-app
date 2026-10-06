@@ -93,7 +93,7 @@ const asksToSendBack = /another pass|second pass|\bsend (?:it|them|that|the agen
 function sendBack(context: ScreenContext, runs: readonly Run[], drafts: readonly Proposal[], discussed: string | null): PipScript {
   const none = (text: string): PipScript => ({ steps: [], text, filter: null, draft: null });
   const from = drafts.find((d) => d.id === discussed)?.origin;
-  const run = (from?.type === "run" ? runs.find((r) => r.id === from.runId) : undefined) ?? runs.find((r) => r.state === "done" && !!r.item && r.item.externalId === context.item?.externalId);
+  const run = (context.run ? runs.find((r) => r.id === context.run) : undefined) ?? (from?.type === "run" ? runs.find((r) => r.id === from.runId) : undefined) ?? runs.find((r) => r.state === "done" && !!r.item && r.item.externalId === context.item?.externalId);
   if (!run) return none("Which run do you mean? Open the ticket it ran on, or use Discuss with Pip on one of its drafts, and ask again.");
   const blocker = followUpBlocker(run);
   if (blocker) return none(`I can't send run ${run.shortId ?? run.id} back: ${blocker}.`);
