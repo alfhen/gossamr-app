@@ -115,22 +115,33 @@ pub(super) fn quoted(text: &str, limit: usize, one_line: bool) -> Option<String>
     Some(if one_line { format!("{OPEN} {cut}{more} {CLOSE}") } else { format!("{OPEN}\n{cut}{more}\n{CLOSE}") })
 }
 
+/// One line of text from a model or agent for use outside the data markers: secrets masked, markers stripped, cut short.
+pub(super) fn plain_line(text: &str, limit: usize) -> String {
+    clip(&defang(&redact(text)).split_whitespace().collect::<Vec<_>>().join(" "), limit)
+}
+
 /// A page of an agent's text from character `offset`, cleaned like `quoted`, in its own markers. The line after the
 /// markers is ours, not the agent's: it says where the rest is, so the model knows nothing was dropped silently.
 fn result_page(text: &str, offset: usize, limit: usize, id: &str) -> std::result::Result<String, String> {
+    page_of(text, offset, limit, &format!("get_run_result with id {id}"), "result")
+}
+
+/// One page of `text` for any tool that pages: `next_call` names the call that fetches the next page and `what` the
+/// thing being read.
+pub(super) fn page_of(text: &str, offset: usize, limit: usize, next_call: &str, what: &str) -> std::result::Result<String, String> {
     let clean: Vec<char> = defang(&redact(text)).trim().chars().collect();
     let total = clean.len();
     if offset > 0 && offset >= total {
-        return Err(format!("offset {offset} is past the end: the result is {total} characters long."));
+        return Err(format!("offset {offset} is past the end: the {what} is {total} characters long."));
     }
     let end = (offset + limit).min(total);
     let shown: String = clean[offset..end].iter().collect();
     let trailer = if end < total {
-        format!("Characters {offset} to {end} of {total}. More is available: call get_run_result with id {id} and offset {end}.")
+        format!("Characters {offset} to {end} of {total}. More is available: call {next_call} and offset {end}.")
     } else if offset > 0 {
-        format!("Characters {offset} to {end} of {total}. That is the end of the result.")
+        format!("Characters {offset} to {end} of {total}. That is the end of the {what}.")
     } else {
-        "That is the whole result.".to_string()
+        format!("That is the whole {what}.")
     };
     Ok(format!("{OPEN}\n{shown}\n{CLOSE}\n{trailer}"))
 }
@@ -273,7 +284,7 @@ async fn visible_run(st: &McpState, pip: &PipRun, args: &Value) -> std::result::
     Ok(run)
 }
 
-fn offset_of(args: &Value) -> std::result::Result<usize, String> {
+pub(super) fn offset_of(args: &Value) -> std::result::Result<usize, String> {
     match &args["offset"] {
         Value::Null => Ok(0),
         v => v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| "offset must be a whole number of 0 or more".to_string()),

@@ -347,7 +347,7 @@ export function commentControl(run: Pick<Run, "item" | "result">): DraftControl 
 export function commentWithPipPrompt(run: { id: string; item: { key: string } | null }, draftId: string | null = null): string {
   const key = run.item?.key ?? "its ticket";
   if (draftId) {
-    return `Let's talk about the comment draft ${draftId} on ${key}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then check the draft against it and tell me what you would change. Edit the draft only if I ask you to, and don't say anything has been posted.`;
+    return `Let's talk about the comment draft ${draftId} on ${key}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then read the draft in full with get_proposal (page by page until it says that is the end) and check it against the run and tell me what you would change. Edit the draft only if I ask you to, and don't say anything has been posted.`;
   }
   return `Draft a Jira comment from run ${run.id}: read the whole run with get_run and then get_run_result until it says that is the end, then propose a short comment on ${key}. Quote only what the run found, and don't say anything has been posted.`;
 }
@@ -378,7 +378,7 @@ export function planDescriptionStatus(outcome: Pick<RunOutcome, "planDescription
 /** What "Chat it over with Pip" sends. Pip reads the run and the ticket itself, so the prompt names them and never carries their text. */
 export function planDescriptionWithPipPrompt(run: { id: string; item: { key: string } | null }, draftId: string): string {
   const key = run.item?.key ?? "its ticket";
-  return `Let's talk about the description update draft ${draftId} on ${key}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then read ${key} with get_item and check the draft against both: it is the ticket's description with the run's plan added as a 'Gossamr Plan' section. Tell me what you would change. Edit the draft only if I ask you to, with revise_proposal and the complete new description, keeping every part you aren't changing word for word and the 'Gossamr Plan' heading, and don't say anything has been changed in Jira.`;
+  return `Let's talk about the description update draft ${draftId} on ${key}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then read the draft in full with get_proposal (page by page until it says that is the end) and ${key} with get_item, and check the draft against both: it is the ticket's description with the run's plan added as a 'Gossamr Plan' section. Tell me what you would change. Edit the draft only if I ask you to, with revise_proposal and the complete new description, keeping every part you aren't changing word for word and the 'Gossamr Plan' heading, and don't say anything has been changed in Jira.`;
 }
 
 type PlanRun = Pick<Run, "spec" | "item" | "state" | "result" | "resultComplete">;
@@ -445,7 +445,7 @@ export function ticketControl(run: Pick<Run, "item" | "result" | "state">): Draf
 
 /** What "Finish with Pip" sends. Pip reads the run itself, all of it, so the prompt names the run and the draft and never carries their text. */
 export function finishWithPipPrompt(run: { id: string }, draftId: string): string {
-  return `Finish the new ticket draft ${draftId}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then tighten the draft's title and description with revise_proposal, keeping only what the run found, and tell me what you changed. Don't say anything has been created: I still approve it.`;
+  return `Finish the new ticket draft ${draftId}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then read the draft in full with get_proposal and tighten its title and description with revise_proposal, keeping only what the run found, and tell me what you changed. Don't say anything has been created: I still approve it.`;
 }
 
 /** The ticket draft a run left, if it is still waiting: the one the person can open, finish with Pip or approve. */
@@ -494,7 +494,7 @@ export function ticketStatus(outcome: Pick<RunOutcome, "ticketDraft"> | null): "
 export function breakdownWithPipPrompt(run: { id: string; item: { key: string } | null }, draftId: string | null = null): string {
   const key = run.item?.key ?? "its ticket";
   if (draftId) {
-    return `Let's talk about the breakdown draft ${draftId} on ${key}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then check the subtasks against it and tell me what you would change. Edit the draft only if I ask you to, with revise_proposal and only its summaries, and don't say anything has been created.`;
+    return `Let's talk about the breakdown draft ${draftId} on ${key}, drafted from agent run ${run.id}. Read the whole run first: get_run, then the rest of its result with get_run_result until it says that is the end. Then read the draft in full with get_proposal, check the subtasks against the run and tell me what you would change. Edit the draft only if I ask you to, with revise_proposal and only its summaries, and don't say anything has been created.`;
   }
   return `Propose subtasks for ${key} from run ${run.id}: read the whole run with get_run and then get_run_result until it says that is the end, then propose 3 to 8 short subtasks with propose_subtasks, only if the ticket is too big for one piece. Don't say anything has been created.`;
 }

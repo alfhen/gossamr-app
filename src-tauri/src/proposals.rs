@@ -210,6 +210,11 @@ pub fn require_pip_pending(p: &Proposal) -> Result<()> {
     Ok(())
 }
 
+/// Whether the person has changed the draft's text at all.
+pub fn person_edited(p: &Proposal) -> bool {
+    p.revisions.iter().any(|r| r.note == EDITED_NOTE)
+}
+
 /// Whether the person has changed what an agent run draft would do. Their edit is theirs to keep: Pip's later revision
 /// would silently replace what they wrote.
 pub fn person_edited_run(p: &Proposal) -> bool {
