@@ -36,6 +36,8 @@ interface SetupState {
   planFromRun: string | null;
   /** The build run a review is made from; the backend reads its answer. */
   buildFromRun: string | null;
+  /** The Agents setting that offers runs the result tool is on, so a new draft asks for it. */
+  reportAvailable: boolean;
   prs: PrSearch;
   item: ItemRef | null;
   /** What the ticket is called, for naming the worktree. */
@@ -101,6 +103,7 @@ const closed = {
   pr: null,
   planFromRun: null as string | null,
   buildFromRun: null as string | null,
+  reportAvailable: false,
   prs: NO_PRS,
   item: null,
   title: null,
@@ -208,7 +211,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
       const project = ticketlessShape(item, kind) ? await projectFor(backend, repo) : null;
       if (!current(mine)) return;
       set({ project });
-      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: kind === "build", plan: null, planFromRun: kind === "build" ? planFromRun : null, buildAccount: null, buildFromRun: kind === "review" ? buildFromRun : null, project };
+      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: kind === "build", report: get().reportAvailable, plan: null, planFromRun: kind === "build" ? planFromRun : null, buildAccount: null, buildFromRun: kind === "review" ? buildFromRun : null, project };
       const draft = await backend.runsDraft(spec, item);
       if (!current(mine)) return void backend.proposalsSkip(draft.id).catch(() => {});
       set({ proposalId: draft.id, ownDraft: true });
@@ -229,7 +232,8 @@ export const useRunSetup = create<SetupState>((set, get) => {
       if (!backend || !useRuns.getState().ensureAgentsIntro()) return;
       const mine = ++run;
       useRuns.getState().closeSheet();
-      set({ ...closed, open: true, backend, kind, pr: pr ?? null, planFromRun, buildFromRun, item, phase: "preparing" });
+      const reportAvailable = !!(await backend.runsSettings().catch(() => null))?.reportResult;
+      set({ ...closed, open: true, backend, kind, pr: pr ?? null, planFromRun, buildFromRun, reportAvailable, item, phase: "preparing" });
       latestWatched = [];
       stopWatching?.();
       stopWatching = backend.onWatchChanged(() => void loadRepos(run, true));

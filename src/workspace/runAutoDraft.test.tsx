@@ -308,7 +308,7 @@ describe("what the person sees", () => {
   });
 
   it("has the setting in the safety sheet's limits, on by default", () => {
-    const settings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal" as const, draftOnFinish: true };
+    const settings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal" as const, draftOnFinish: true, reportResult: false };
     const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={settings} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(html).toContain("Draft a Jira comment when an agent finishes");
     expect(html).toMatch(/<input type="checkbox"[^>]*checked/);

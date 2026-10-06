@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { SUMMARY_ONLY, type CodeChange, type Run, type RunOutcome } from "../types";
 import { Box, Btn, CopyButton, Details, Sec } from "./AgentSheet";
-import { planDescriptionStatus, blockerChoices, blockerControl, breakdownStatus, buildFromPlanControl, changeSummary, commentControl, createdFrom, planCommentControl, reviewThisControl, ticketControl, ticketStatus } from "./runSheetLogic";
+import { planDescriptionStatus, blockerChoices, blockerControl, breakdownStatus, buildFromPlanControl, changeSummary, commentControl, createdFrom, planCommentControl, reportNotes, reviewThisControl, SOURCE_CHIP, ticketControl, ticketStatus } from "./runSheetLogic";
 
 export interface ResultActions {
   draftComment(): void;
@@ -89,6 +89,32 @@ function BlockerPicker({ tickets, named, own, drafting, on }: { tickets: ResultP
 
 const TICKET_KIND: Record<string, string> = { task: "Task", bug: "Bug", story: "Story", epic: "Epic" };
 
+/** Where the result on the sheet came from: reported through the tool, or read from the written answer. */
+function SourceChip({ outcome }: { outcome: RunOutcome | null }) {
+  const chip = outcome?.source ? SOURCE_CHIP[outcome.source] : null;
+  if (!chip) return null;
+  return (
+    <span data-source={outcome?.source} className={`rounded-full px-2 font-semibold ${chip.warn ? "bg-ws-warn/15 text-ws-warn" : "bg-ws-hover text-ws-ink2"}`}>
+      {chip.label}
+    </span>
+  );
+}
+
+/** What the report tool did for this run, in plain sentences, when the run was asked to use it. */
+function ReportNotes({ outcome }: { outcome: RunOutcome | null }) {
+  const notes = reportNotes(outcome);
+  if (notes.length === 0) return null;
+  return (
+    <div data-report-notes className="grid gap-0.5">
+      {notes.map((n) => (
+        <p key={n} className="m-0 text-xs text-ws-ink3">
+          {n}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 /** What an investigation with no ticket found. It ends as one draft ticket, which nothing creates until the person approves it. */
 function TicketFound({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "on">) {
   const text = run.result?.trim();
@@ -104,6 +130,7 @@ function TicketFound({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "
             <p className="m-0 flex flex-wrap items-center gap-2 text-xs font-semibold text-ws-ink3">
               The ticket it proposes
               <span className="rounded-full bg-ws-hover px-2 font-semibold text-ws-ink2">{TICKET_KIND[proposal.kind] ?? proposal.kind}</span>
+              <SourceChip outcome={outcome} />
             </p>
             <p data-ticket="title" className="selectable m-0 text-[14px] font-semibold [overflow-wrap:anywhere]">
               {proposal.title}
@@ -118,7 +145,7 @@ function TicketFound({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "
           <>
             <p className="m-0 flex flex-wrap items-center gap-2 text-xs font-semibold text-ws-ink3">
               {outcome?.summaryOnly ? SUMMARY_ONLY : "No 'New ticket:' section, so this is its whole answer"}
-              <span className="rounded-full bg-ws-warn/15 px-2 font-semibold text-ws-warn">{outcome?.summaryOnly ? "Summary only" : "Not parsed"}</span>
+              {outcome?.source ? <SourceChip outcome={outcome} /> : <span className="rounded-full bg-ws-warn/15 px-2 font-semibold text-ws-warn">{outcome?.summaryOnly ? "Summary only" : "Not parsed"}</span>}
             </p>
             <p data-ticket="answer" className="selectable m-0 whitespace-pre-wrap text-[13.5px] [overflow-wrap:anywhere]">
               {text}
@@ -127,6 +154,7 @@ function TicketFound({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "
         ) : (
           <p className="m-0 text-ws-ink3">It finished without a written answer.</p>
         )}
+        <ReportNotes outcome={outcome} />
         {proposal && text && (
           <Details summary="The full answer">
             <p className="selectable m-0 whitespace-pre-wrap text-[13.5px] text-ws-ink2 [overflow-wrap:anywhere]">{text}</p>
@@ -380,14 +408,16 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingB
         {note?.text ? (
           <>
             <p className="m-0 flex flex-wrap items-center gap-2 text-xs font-semibold text-ws-ink3">
-              {outcome?.summaryOnly ? SUMMARY_ONLY : note.fromMarker ? "For Jira, as the agent wrote it" : "No 'For Jira:' section, so this is its whole answer, shortened"}
-              {outcome?.summaryOnly ? (
+              {outcome?.summaryOnly ? SUMMARY_ONLY : outcome?.source === "structured" ? "For Jira, as the agent reported it" : note.fromMarker ? "For Jira, as the agent wrote it" : "No 'For Jira:' section, so this is its whole answer, shortened"}
+              {outcome?.source ? (
+                <SourceChip outcome={outcome} />
+              ) : outcome?.summaryOnly ? (
                 <span className="rounded-full bg-ws-warn/15 px-2 font-semibold text-ws-warn">Summary only</span>
               ) : (
                 !note.fromMarker && <span className="rounded-full bg-ws-warn/15 px-2 font-semibold text-ws-warn">Not parsed</span>
               )}
             </p>
-            <p data-note={outcome?.summaryOnly ? "summary" : note.fromMarker ? "section" : "whole"} className="selectable m-0 whitespace-pre-wrap text-[13.5px] [overflow-wrap:anywhere]">
+            <p data-note={outcome?.summaryOnly ? "summary" : outcome?.source === "structured" ? "structured" : note.fromMarker ? "section" : "whole"} className="selectable m-0 whitespace-pre-wrap text-[13.5px] [overflow-wrap:anywhere]">
               {note.text}
             </p>
           </>
@@ -396,6 +426,7 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingB
         ) : (
           <p className="m-0 text-ws-ink3">It finished without a written answer.</p>
         )}
+        <ReportNotes outcome={outcome} />
         {text && note?.fromMarker && (
           <Details summary="The full answer">
             <p className="selectable m-0 whitespace-pre-wrap text-[13.5px] text-ws-ink2 [overflow-wrap:anywhere]">{text}</p>

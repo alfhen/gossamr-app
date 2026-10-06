@@ -4,7 +4,7 @@ import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
 import { KIND_LABEL } from "./agentsLogic";
 import { PrPicker } from "./PrPicker";
-import { PromptParts } from "./RunPrompt";
+import { PromptParts, ReportExtras } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
 import { COPY, homeShort, kindBlock, launchCommand, permissionMode, repoShortage, savedAsTyped, startBlock, startSteps, ticketlessShape, worktreeBranch, type RepoShortage } from "./runSheetLogic";
 import { containerKey } from "../lib/filter";
@@ -40,6 +40,7 @@ export interface SetupActions {
   searchPrs(query: string): void;
   choosePr(number: number): void;
   setAllowPush(on: boolean): void;
+  setReport?(on: boolean): void;
   trustFolder?(path: string): void;
   recheck?(): void;
   refreshPlan?(): void;
@@ -91,6 +92,8 @@ export interface SetupViewProps {
   onBuildAccount?(text: string): void;
   wide: boolean;
   onWide(): void;
+  /** The Agents setting that offers the result tool is on. */
+  reportOffered?: boolean;
   on: SetupActions;
 }
 
@@ -293,6 +296,22 @@ function KindPicker({ p }: { p: SetupViewProps }) {
   );
 }
 
+/** The result tool: asking for it is part of what the person approves, and the prompt below shows the exact words. */
+function ReportOption({ p }: { p: SetupViewProps }) {
+  const on = !!p.review?.spec.report;
+  return (
+    <Sec title="Result">
+      <label className="flex items-start gap-2">
+        <input type="checkbox" aria-label="Let the agent report its result to Gossamr" checked={on} disabled={!p.review || p.busy || p.phase !== "ready"} onChange={(ev) => p.on.setReport?.(ev.target.checked)} className="mt-1" />
+        <span className="grid gap-0.5">
+          <b className="font-semibold text-ws-ink">Let the agent report its result to Gossamr</b>
+          <span className="text-ws-ink2">The prompt asks it to call one extra tool, report_result, with its result. The tool only records what it says on this run; it can&apos;t write to Jira or reach anything else, and what you get is still a draft. The agent writes its full answer too, and Gossamr reads that when the tool isn&apos;t used.</span>
+        </span>
+      </label>
+    </Sec>
+  );
+}
+
 function PushOption({ p }: { p: SetupViewProps }) {
   const on = !!p.review?.spec.allowPush;
   const mode = permissionMode(p.preflight);
@@ -441,6 +460,7 @@ export function RunSetupView(p: SetupViewProps) {
       )}
       <KindPicker p={p} />
       {p.kind === "build" && <PushOption p={p} />}
+      {(p.reportOffered || p.review?.spec.report) && <ReportOption p={p} />}
       {p.kind === "review" && p.repo && (
         <PrPicker
           key={p.repo}
@@ -480,6 +500,7 @@ export function RunSetupView(p: SetupViewProps) {
           <Details summary="What Gossamr adds for the model">
             <pre className={MONO_BLOCK}>{review.guard}</pre>
             <p className="m-0 text-ws-ink2">{COPY.guardNote}</p>
+            <ReportExtras report={review.report} />
           </Details>
         )}
       </Sec>
@@ -579,6 +600,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     onBuildAccount: setBuildAccount,
     wide,
     onWide: () => setWide((w) => !w),
+    reportOffered: s.reportAvailable,
     on: {
       close: () => useRunSetup.getState().close(),
       discard: () => void useRunSetup.getState().discard(),
@@ -598,6 +620,7 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
       searchPrs: (query) => void useRunSetup.getState().searchPrs(query),
       choosePr: (number) => void useRunSetup.getState().choosePr(number),
       setAllowPush: (on) => void useRunSetup.getState().saveEdit({ allowPush: on }),
+      setReport: (on) => void useRunSetup.getState().saveEdit({ report: on }),
       trustFolder: (path) => void useRunSetup.getState().trustFolder(path),
       recheck: () => void useRunSetup.getState().recheck(),
       refreshPlan: () => void useRunSetup.getState().refreshPlan(),

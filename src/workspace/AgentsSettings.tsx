@@ -117,6 +117,20 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         </Box>
       </Sec>
 
+      <Sec title="Result tool">
+        <Box>
+          <label className="flex items-start gap-2">
+            <input type="checkbox" aria-label="Offer new runs the result tool" disabled={!settings || settingsSaving} checked={!!settings?.reportResult} onChange={(e) => settings && onSettings({ ...settings, reportResult: e.target.checked })} className="mt-1" />
+            <span className="grid gap-0.5">
+              <b className="font-semibold text-ws-ink">Let new agents report their result to Gossamr</b>
+              <span className="text-ws-ink2">Off by default. When on, a new run can be asked to call one extra tool, report_result, that hands Gossamr its result as data: the note for Jira, a proposed ticket, subtasks or a plan. Gossamr checks and cleans it before it is stored on that run.</span>
+            </span>
+          </label>
+          <p className="m-0 text-sm text-ws-ink2">The tool only records what the agent says, on that run. It has no way to reach Jira, your repository or any other run, and drafts made from it still wait for your approval. The agent still writes its full answer, and Gossamr reads that as before when the tool is missing, unused or refused. The run sheet says which one it used.</p>
+          <p className="m-0 text-sm text-ws-ink3">Not tried on real runs yet. It applies to runs you start after turning it on, and each run's setup sheet can still turn it off. If Claude asks to approve the tool, that shows as a permission prompt you answer in Terminal.</p>
+        </Box>
+      </Sec>
+
       <Sec title="Clean up">
         <Box>
           <p className="m-0 text-ws-ink2">Finished runs leave their worktree and session files behind. Clean up removes a worktree with claude rm, which refuses work that was never pushed and says why. Gossamr never forces it.</p>

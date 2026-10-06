@@ -1,4 +1,4 @@
-import { SUMMARY_ONLY, type CodeChange, type JiraNote, type RunKind, type TicketProposal, type WorkItemKind } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type ItemRef, type JiraNote, type ReportView, type ResultSource, type RunKind, type TicketProposal, type WorkItemKind } from "../types";
 
 const KEY = /\b[A-Za-z][A-Za-z0-9_]*-\d+\b/g;
 
@@ -187,12 +187,13 @@ export const ticketBody = (t: TicketProposal) => (t.body ? `${t.body}\n\n${FOUND
 export const ticketKeys = (text: string): string[] => [...new Set((text.match(KEY) ?? []).map((k) => k.toUpperCase()))];
 
 /** The comment as the backend first drafts it, for the sample data. */
-export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false): string {
+export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false, blocked = false): string {
   const intro: Partial<Record<RunKind, string>> = {
     investigate: "Looked into this with an agent (it was asked to only read code and change nothing).",
     plan: "Planned this with an agent (it was asked to only read code and change nothing).",
   };
   const parts = [intro[kind] ?? "An agent worked on this."];
+  if (blocked) parts.push("The agent reports it could not finish.");
   if (summaryOnly) parts.push(SUMMARY_ONLY);
   else if (!note.fromMarker) parts.push("The agent didn't mark anything for Jira, so this is its whole answer, shortened:");
   parts.push(note.text);
@@ -249,4 +250,96 @@ export function fit(text: string, limit: number, note: (total: number) => string
   const word = Math.max(window.lastIndexOf(" "), window.lastIndexOf("\n"));
   const cutAt = [paragraph, sentence, word].find((i) => i >= 0 && [...window.slice(0, i)].length >= floor) ?? window.length;
   return { text: `${window.slice(0, cutAt).trimEnd()}\n\n${tail}`, total, cut: true };
+}
+
+/** What an agent reported through the run-report tool, as `runs/report` stores it. */
+export interface MockReport {
+  status: "done" | "blocked";
+  note?: string;
+  newTicket?: TicketProposal;
+  subtasks?: string[];
+  plan?: string;
+}
+
+/** A run's report row: whether it was offered the tool, and what came of it. */
+export interface MockReportRow {
+  offered: boolean;
+  report: MockReport | null;
+  revision: number;
+  calls: number;
+  rejections: number;
+  /** The person answered or carried on after the report was made. */
+  stale: boolean;
+}
+
+export const MAX_REPORT_CALLS = 12;
+export const MAX_REPORT_REJECTIONS = 5;
+
+export interface Resolved {
+  source: ResultSource | null;
+  note: JiraNote | null;
+  ticket: TicketProposal | null;
+  subtasks: string[];
+  keys: string[];
+  plan: string | null;
+  status: "done" | "blocked" | null;
+  /** The agent's own account rather than Claude's one-line summary of it. */
+  complete: boolean;
+}
+
+interface Resolvable {
+  result?: string | null;
+  resultComplete?: boolean;
+  item: ItemRef | null;
+  spec: { kind: RunKind };
+}
+
+/** Which result a run's drafts and sheet use, as `runs::report::resolve`: a current report wins wholesale, else the written answer. */
+export function resolveResult(run: Resolvable, row: MockReportRow | null): Resolved {
+  const result = run.result?.trim() || undefined;
+  const own = run.item?.key.toUpperCase();
+  const onTicket = !!run.item;
+  const current = row?.report && !row.stale ? row.report : null;
+  if (current) {
+    const keys = [...new Set([...(result ? ticketKeys(result) : []), ...ticketKeys(current.note ?? "")])].filter((k) => k !== own);
+    return {
+      source: "structured",
+      note: current.note ? { text: current.note, fromMarker: true } : null,
+      ticket: current.newTicket ?? null,
+      subtasks: run.spec.kind === "triage" && onTicket ? (current.subtasks ?? []) : [],
+      keys,
+      plan: current.plan ?? null,
+      status: current.status,
+      complete: true,
+    };
+  }
+  const note = result ? jiraNote(result) : null;
+  const source: ResultSource | null = !result ? null : run.resultComplete === false ? "summaryOnly" : note?.fromMarker ? "section" : "whole";
+  return {
+    source,
+    note,
+    ticket: result && !onTicket ? ticketProposal(result) : null,
+    subtasks: result && onTicket && run.spec.kind === "triage" ? subtaskProposals(result) : [],
+    keys: result ? ticketKeys(result).filter((k) => k !== own) : [],
+    plan: null,
+    status: null,
+    complete: source !== null && source !== "summaryOnly",
+  };
+}
+
+/** What the sheet shows of the report tool's part in a run; null when the run was never asked to use it. */
+export function reportView(row: MockReportRow | null, asked: boolean, resolved: Resolved): ReportView | null {
+  if (!row && !asked) return null;
+  const r = row ?? { offered: false, report: null, revision: 0, calls: 0, rejections: 0, stale: false };
+  return {
+    offered: r.offered,
+    status: resolved.status,
+    revision: r.revision,
+    calls: r.calls,
+    rejections: r.rejections,
+    stale: r.stale && !!r.report,
+    locked: r.calls >= MAX_REPORT_CALLS || r.rejections >= MAX_REPORT_REJECTIONS,
+    firstAt: null,
+    lastAt: null,
+  };
 }

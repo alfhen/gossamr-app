@@ -15,7 +15,7 @@ import { offsetText } from "./RunTimeline";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
-const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true };
+const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false };
 const seeded = () => new MockBackend().runs.list();
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 212_000, result: null, error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
