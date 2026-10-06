@@ -148,6 +148,25 @@ async fn an_edited_message_is_sent_on_the_retry_of_a_send_that_failed_after_the_
 }
 
 #[tokio::test]
+async fn the_retry_follows_the_message_that_failed_even_when_the_draft_was_edited_during_the_send() {
+    let (rig, run) = finished().await;
+    let p = follow_up(&rig, &run, CreatedBy::Pip, "Original words.").await;
+    rig.fx.core.edit_proposal(&p.id, &crate::inbox::Edit::FollowUp { message: "Edited meanwhile.".into() }).await.unwrap();
+    rig.set(&run, |r| {
+        r.state = RunState::Stopped;
+        r.unsent_answer = Some("Original words.".into());
+    })
+    .await;
+    rig.fx.core.follow_up_failed(&p.id, "boom", Some("Original words.")).await.unwrap();
+    let stored = rig.fx.core.proposal(&p.id).await.unwrap().unwrap();
+    let kept: Vec<_> = stored.revisions.iter().filter(|r| r.note == proposals::SEND_FAILED_NOTE).collect();
+    assert!(matches!(&kept[..], [r] if matches!(&r.intent, Intent::FollowUp { message, .. } if message == "Original words.")));
+    rig.session(&run, |e| e.state = Some("stopped".into()));
+    let sent = rig.svc.send_follow_up(&p.id, "Edited meanwhile.").await.unwrap();
+    assert_eq!(sent.state, RunState::Working);
+}
+
+#[tokio::test]
 async fn another_stopped_run_with_an_unsent_answer_is_not_taken_for_a_retry() {
     let (rig, run) = finished().await;
     let p = follow_up(&rig, &run, CreatedBy::Pip, "More please.").await;
