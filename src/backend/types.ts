@@ -185,8 +185,8 @@ export interface Backend {
   runsStop(id: string): Promise<Run>;
   /** Answers a run that is asking a question: stops its session and wakes it with the answer. Also sends again an answer that was stopped on its way. */
   runsAnswer(id: string, text: string): Promise<Run>;
-  /** Sends a finished run back for another pass with a `followUp` draft's message, as the person last edited it. Rejects with the reason when the run can't be resumed; the draft stays pending. */
-  runsSendFollowUp(proposalId: string): Promise<Run>;
+  /** Sends a finished run back for another pass with a `followUp` draft's message. `message` is what the person read; a draft that changed since rejects with "The message changed after you read it. Read it again." Rejects with the reason when the run can't be resumed; the draft stays pending. */
+  runsSendFollowUp(proposalId: string, message: string): Promise<Run>;
   /** Takes a listed session over as the continuation of a stopped or finished run. */
   runsAdoptSession(id: string, session: string): Promise<Run>;
   /** Stops every active run, across accounts. */

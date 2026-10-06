@@ -1156,10 +1156,11 @@ export class MockRuns {
   }
 
   /** Sends the run back for another pass with the draft's message, as the backend does: Working again, one more pass, and a line on its timeline. */
-  sendFollowUp(proposalId: string): Run {
+  sendFollowUp(proposalId: string, read: string): Run {
     const p = this.proposals.get(proposalId);
     if (p?.intent.type !== "followUp") throw new Error("that draft isn't a follow-up");
     if (p.state.type !== "pending") throw new Error("that follow-up has already been decided");
+    if (read.trim() !== p.intent.message.trim()) throw new Error("The message changed after you read it. Read it again.");
     const run = this.get(p.intent.runId);
     if (!run) throw new Error("that run no longer exists");
     const blocker = followUpBlocker(run);

@@ -105,7 +105,7 @@ export interface DraftCardProps {
   /** For a follow-up, the pass the agent would be on once it is sent. */
   pass?: number;
   /** Sends a follow-up back to its run, after saving the edit. */
-  onSendBack?(edit: ProposalEdit | null): void;
+  onSendBack?(edit: ProposalEdit | null, message: string): void;
 }
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
@@ -379,7 +379,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
                   </button>
                 )}
                 {followUp && (
-                  <button type="button" disabled={working || state === "applying" || !!messageProblem} title={messageProblem ?? undefined} onClick={() => (onSendBack ?? onApprove)(edit())} className={`${primary} px-5 py-2 text-base`}>
+                  <button type="button" disabled={working || state === "applying" || !!messageProblem} title={messageProblem ?? undefined} onClick={() => (onSendBack ? onSendBack(edit(), message.trim()) : onApprove(edit()))} className={`${primary} px-5 py-2 text-base`}>
                     {working || state === "applying" ? "Sending…" : "Send back"}
                   </button>
                 )}
@@ -442,10 +442,10 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
       onOpenRun={(id) => useRuns.getState().openRun(id)}
       onDiscuss={p.origin.type === "run" && p.intent.type === "comment" ? discuss : undefined}
       pass={pass}
-      onSendBack={(edit) =>
+      onSendBack={(edit, message) =>
         void run(async () => {
           if (edit && backend) await backend.proposalsEdit(p.id, edit);
-          await useWorkspace.getState().sendFollowUp(p.id);
+          await useWorkspace.getState().sendFollowUp(p.id, message);
           return null;
         })
       }

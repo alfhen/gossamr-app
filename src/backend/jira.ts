@@ -330,8 +330,8 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_answer", { id, text });
   }
 
-  runsSendFollowUp(proposalId: string) {
-    return invoke<Run>("runs_send_follow_up", { proposalId });
+  runsSendFollowUp(proposalId: string, message: string) {
+    return invoke<Run>("runs_send_follow_up", { proposalId, message });
   }
 
   runsAdoptSession(id: string, session: string) {

@@ -468,8 +468,8 @@ export class MockBackend implements Backend {
     return this.runs.stop(id);
   }
 
-  async runsSendFollowUp(proposalId: string) {
-    return this.runs.sendFollowUp(proposalId);
+  async runsSendFollowUp(proposalId: string, message: string) {
+    return this.runs.sendFollowUp(proposalId, message);
   }
 
   async runsAnswer(id: string, text: string) {

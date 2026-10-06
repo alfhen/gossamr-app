@@ -29,7 +29,8 @@ describe("a finished plan run with open questions in the sample build", () => {
 
     await b.proposalsEdit(draft.id, { type: "followUp", message: "Settle both questions yourself and say which you chose." });
     await expect(b.proposalsApprove(draft.id)).rejects.toThrow("own button");
-    const sent = await b.runsSendFollowUp(draft.id);
+    await expect(b.runsSendFollowUp(draft.id, "Something else.")).rejects.toThrow("changed after you read it");
+    const sent = await b.runsSendFollowUp(draft.id, "Settle both questions yourself and say which you chose.");
     expect(sent.state).toBe("working");
     expect(sent.passes).toBe(2);
     expect(sent.continuedAt).toBeTruthy();
@@ -66,9 +67,9 @@ describe("a finished plan run with open questions in the sample build", () => {
     expect(b.proposals.get(draft.id)?.intent).toMatchObject({ message: "Revised message." });
     await b.proposalsEdit(draft.id, { type: "followUp", message: "Mine." });
     expect(() => b.proposals.pipRevise(draft.id, "Pip again")).toThrow("edited this follow-up");
-    await b.runsSendFollowUp(draft.id);
+    await b.runsSendFollowUp(draft.id, "Mine.");
     await expect(b.runs.pipFollowUp(run.id, "More", "x", "r")).rejects.toThrow("can't be sent back");
-    await expect(b.runsSendFollowUp(draft.id)).rejects.toThrow("already been decided");
+    await expect(b.runsSendFollowUp(draft.id, "Mine.")).rejects.toThrow("already been decided");
   });
 });
 
