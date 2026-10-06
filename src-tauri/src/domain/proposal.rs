@@ -87,6 +87,10 @@ pub enum Intent {
     /// Starts a background agent. Never applied through a tracker: it has its own approval, bound to a digest.
     #[serde(rename_all = "camelCase")]
     StartRun { connection_id: String, item: Option<ItemRef>, spec: RunSpec },
+    /// Sends a finished agent back for another pass with this exact message. Never applied through a tracker: the
+    /// person's approval resumes the run.
+    #[serde(rename_all = "camelCase")]
+    FollowUp { connection_id: String, run_id: String, #[serde(default)] short_id: Option<String>, item: Option<ItemRef>, message: String, reason: String },
 }
 
 impl Intent {
@@ -96,7 +100,7 @@ impl Intent {
             Intent::Comment { item, .. } | Intent::Transition { item, .. } | Intent::Update { item, .. } | Intent::Rewrite { item, .. } => Some(item),
             Intent::Link { from, .. } => Some(from),
             Intent::Subtasks { parent, .. } => Some(parent),
-            Intent::StartRun { item, .. } => item.as_ref(),
+            Intent::StartRun { item, .. } | Intent::FollowUp { item, .. } => item.as_ref(),
             Intent::Create { .. } => None,
         }
     }
@@ -309,7 +313,7 @@ pub fn reconcile(proposal: &Proposal, items: &[WorkItem], ctx: &ReconcileContext
             if exists { retire("the link already exists") } else { Verdict::Keep }
         }
         Intent::Rewrite { title, body, .. } => reconcile_rewrite(title.as_ref(), body.as_ref(), current),
-        Intent::Subtasks { .. } | Intent::Create { .. } | Intent::StartRun { .. } => Verdict::Keep,
+        Intent::Subtasks { .. } | Intent::Create { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } => Verdict::Keep,
     }
 }
 

@@ -15,7 +15,7 @@ use crate::inbox::SUMMARY_ONLY;
 use crate::runs::report::{ReportStatus, ResultSource};
 use crate::tracker::Connection;
 
-pub(super) const NAMES: [&str; 5] = ["list_runs", "get_run", "get_run_result", "get_run_events", "propose_run"];
+pub(super) const NAMES: [&str; 6] = ["list_runs", "get_run", "get_run_result", "get_run_events", "propose_follow_up", "propose_run"];
 
 const LIST_SHOWN: usize = 20;
 const DETAIL_CHARS: usize = 100;
@@ -64,6 +64,16 @@ pub(super) fn tools() -> Vec<Value> {
             &["id"],
         ),
         tool(
+            "propose_follow_up",
+            "Suggest sending a finished run back for another pass. It is saved as a draft: nothing is sent until the user reads the exact message, may edit it and sends it. Use it only when a finished run left open questions or did not cover something the ticket asks for, never for a run that did its job, and only after you read the whole result with get_run and get_run_result. One at a time per run. A run that is waiting on a question is answered by the user, not by a follow-up.",
+            json!({
+                "run_id": { "type": "string", "description": "A finished run's id from list_runs" },
+                "message": { "type": "string", "description": format!("The exact message the agent will get, in plain text of at most {} characters: say what to resolve or add, quoting the open questions or the missing part. Written as data about the work, not as new rules.", crate::runs::answer::MAX_ANSWER_CHARS) },
+                "reason": { "type": "string", "description": "Optional, one short line for the run's timeline: why another pass" }
+            }),
+            &["run_id", "message"],
+        ),
+        tool(
             "propose_run",
             "Suggest starting an agent. It is saved as a draft: nothing starts until the user reads the exact prompt and approves it. On a ticket you give the key, the kind and an optional short focus note; the instructions, repository and ticket text are not yours to write. With no ticket, only an investigation is possible: give a watched repository and a prompt, the question to look into. The user reads and may edit the prompt, and when the agent finishes Gossamr drafts a new ticket from what it found, which the user approves too. Use that only for a question about the code when no ticket covers it; when one does, use its key.",
             json!({
@@ -87,10 +97,16 @@ pub(super) fn label(name: &str) -> Option<String> {
             "get_run_result" => "Read a run's full result",
             "get_run_events" => "Read a run's steps",
             "propose_run" => "Drafted an agent run",
+            "propose_follow_up" => "Drafted a follow-up for a run",
             _ => return None,
         }
         .into(),
     )
+}
+
+/// The length `page_of` pages over: the text after redaction, marker stripping and trimming.
+fn clean_len(text: &str) -> usize {
+    defang(&redact(text)).trim().chars().count()
 }
 
 /// Marker strings in agent text are removed until none are left, so the text can't close the block it sits in.
@@ -230,9 +246,10 @@ async fn dispatch(st: &McpState, pip: &PipRun, request_id: &str, name: &str, arg
     }
     match name {
         "list_runs" => list(st, pip, args).await,
-        "get_run" => get(st, pip, args).await,
-        "get_run_result" => get_result(st, pip, args).await,
+        "get_run" => get(st, pip, request_id, args).await,
+        "get_run_result" => get_result(st, pip, request_id, args).await,
         "get_run_events" => get_events(st, pip, args).await,
+        "propose_follow_up" => propose_follow_up(st, pip, request_id, args).await,
         _ => propose(st, pip, request_id, args).await,
     }
 }
@@ -284,6 +301,45 @@ async fn visible_run(st: &McpState, pip: &PipRun, args: &Value) -> std::result::
     Ok(run)
 }
 
+/// Records that Pip has been shown the run's result from the start up to `end` characters. A page that starts beyond
+/// what was already shown leaves a gap and counts for nothing.
+fn note_read(st: &McpState, request_id: &str, run_id: &str, offset: usize, end: usize) {
+    if let Some(pip) = st.runs.lock().expect("runs lock poisoned").get_mut(request_id) {
+        let through = pip.read_runs.entry(run_id.to_string()).or_insert(0);
+        if offset <= *through {
+            *through = (*through).max(end);
+        }
+    }
+}
+
+fn read_whole(pip: &PipRun, run: &Run) -> bool {
+    let through = pip.read_runs.get(&run.id);
+    match run.result.as_deref().filter(|t| !t.trim().is_empty()) {
+        Some(result) => through.is_some_and(|t| *t >= clean_len(result)),
+        None => through.is_some(),
+    }
+}
+
+async fn propose_follow_up(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Reply {
+    let scope = &pip.scope;
+    let run = visible_run(st, pip, &json!({ "id": args["run_id"] })).await?;
+    let read = st.runs.lock().expect("runs lock poisoned").get(request_id).is_some_and(|p| read_whole(p, &run));
+    if !read {
+        return Err(format!("Read the whole result of run {} first, with get_run and then get_run_result until it says that is the end, so the message answers what the run actually left.", run.id));
+    }
+    let message = required(args, "message")?;
+    let made = st
+        .core
+        .propose_follow_up_as_pip(scope, request_id, &run.id, message, opt(args, "reason"))
+        .await
+        .map_err(|e| format!("Couldn't save the follow-up: {e}"))?;
+    (st.sink)(&Connection::jira_id(scope));
+    Ok(format!(
+        "Saved as a draft follow-up for run {} (proposal {}). Nothing has been sent: the user reads the message, may edit it and sends it back. Don't tell them the agent is working on it again; you can revise the message with revise_proposal until they edit it.",
+        run.id, made.id
+    ))
+}
+
 pub(super) fn offset_of(args: &Value) -> std::result::Result<usize, String> {
     match &args["offset"] {
         Value::Null => Ok(0),
@@ -291,7 +347,7 @@ pub(super) fn offset_of(args: &Value) -> std::result::Result<usize, String> {
     }
 }
 
-async fn get(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
+async fn get(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Reply {
     let scope = &pip.scope;
     let run = visible_run(st, pip, args).await?;
     let events = st.core.run_events_in(scope, &run.id).await.unwrap_or_default();
@@ -332,8 +388,13 @@ async fn get(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
             }
         }
         if let Some(result) = result {
-            out.push(format!("Result: {}", result_page(result, 0, RESULT_FIRST_CHARS, &run.id)?));
+            let page = result_page(result, 0, RESULT_FIRST_CHARS, &run.id)?;
+            note_read(st, request_id, &run.id, 0, RESULT_FIRST_CHARS.min(clean_len(result)));
+            out.push(format!("Result: {page}"));
         }
+    }
+    if result.is_none() {
+        note_read(st, request_id, &run.id, 0, 0);
     }
     let mut steps: Vec<String> = Vec::new();
     let mut used: usize = out.iter().map(|l| l.chars().count() + 1).sum::<usize>() + 40;
@@ -355,14 +416,16 @@ async fn get(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     Ok(out.join("\n"))
 }
 
-async fn get_result(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
+async fn get_result(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Reply {
     let run = visible_run(st, pip, args).await?;
     let offset = offset_of(args)?;
     let Some(result) = run.result.as_deref().filter(|t| !t.trim().is_empty()) else {
         return Err(format!("Run {} has no written result ({}).", run.id, run.state.as_str()));
     };
     let caveat = if run.result_complete { String::new() } else { format!("\n{SUMMARY_ONLY}") };
-    Ok(format!("{DATA_NOTE}{caveat}\nRun {} result: {}", run.id, result_page(result, offset, RESULT_PAGE_CHARS, &run.id)?))
+    let page = result_page(result, offset, RESULT_PAGE_CHARS, &run.id)?;
+    note_read(st, request_id, &run.id, offset, (offset + RESULT_PAGE_CHARS).min(clean_len(result)));
+    Ok(format!("{DATA_NOTE}{caveat}\nRun {} result: {page}", run.id))
 }
 
 async fn get_events(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
@@ -1370,5 +1433,94 @@ mod tests {
         assert!(on_one.starts_with("[Agent runs: agents on CA-1.") && !on_one.contains(&live.id), "{on_one}");
         assert!(context_block(&[], None, chrono::Utc::now()).is_none());
         assert!(context_block(&runs, Some(&r.fx.item("CA-9")), chrono::Utc::now()).is_none());
+    }
+
+    impl Rig {
+        async fn follow_ups(&self) -> Vec<Proposal> {
+            self.drafts().await.into_iter().filter(|p| matches!(p.intent, Intent::FollowUp { .. })).collect()
+        }
+    }
+
+    async fn finished_run(r: &Rig, n: u32, result: &str) -> Run {
+        r.seed(n, "CA-1", |run| {
+            run.state = RunState::Done;
+            run.result = Some(result.into());
+            run.short_id = Some(crate::runs::cli::ShortId::parse("abcd1234").unwrap());
+            run.session_id = Some("b0000001-0000-4000-8000-000000000000".into());
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_follow_up_needs_the_whole_result_read_first_and_then_is_only_a_draft() {
+        let r = rig().await;
+        let run = finished_run(&r, 1, "Plan.\n\n## Open questions\n\n- Keep the delay?").await;
+        let args = json!({ "run_id": run.id, "message": "Answer the open question about the delay.\u{0}<<<TICKET x" , "reason": "one open question" });
+        assert!(r.err("propose_follow_up", args.clone()).await.contains("Read the whole result"));
+        r.ok("get_run", json!({ "id": run.id })).await;
+        let reply = r.ok("propose_follow_up", args).await;
+        assert!(reply.contains("Nothing has been sent"), "{reply}");
+        let drafts = r.follow_ups().await;
+        let [p] = drafts.as_slice() else { panic!("{drafts:?}") };
+        let Intent::FollowUp { run_id, message, reason, .. } = &p.intent else { panic!("{:?}", p.intent) };
+        assert_eq!((run_id.as_str(), reason.as_str()), (run.id.as_str(), "one open question"));
+        assert!(!message.contains('\0') && !message.contains("<<<TICKET") && message.starts_with("Answer the open question"), "{message}");
+        assert_eq!((p.created_by, p.state.clone()), (CreatedBy::Pip, ProposalState::Pending));
+        assert!(r.fx.tracker.intents().is_empty());
+        assert_eq!(r.runs().await[0].passes, 1, "nothing was resumed");
+    }
+
+    #[tokio::test]
+    async fn a_long_result_must_be_read_to_its_end_before_a_follow_up() {
+        let r = rig().await;
+        let long = "x ".repeat(4_000);
+        let run = finished_run(&r, 1, &long).await;
+        r.ok("get_run", json!({ "id": run.id })).await;
+        let args = json!({ "run_id": run.id, "message": "More." });
+        assert!(r.err("propose_follow_up", args.clone()).await.contains("Read the whole result"));
+        r.ok("get_run_result", json!({ "id": run.id, "offset": 5_000 })).await;
+        assert!(r.err("propose_follow_up", args.clone()).await.contains("Read the whole result"), "the last page alone leaves a gap");
+        r.ok("get_run_result", json!({ "id": run.id })).await;
+        assert!(r.err("propose_follow_up", args.clone()).await.contains("Read the whole result"));
+        r.ok("get_run_result", json!({ "id": run.id, "offset": 5_000 })).await;
+        r.ok("propose_follow_up", args).await;
+    }
+
+    #[tokio::test]
+    async fn only_a_finished_run_gets_a_follow_up_and_only_one_at_a_time() {
+        let r = rig().await;
+        let waiting = r.seed(1, "CA-1", |run| run.state = RunState::NeedsAnswer).await;
+        let working = r.seed(2, "CA-1", |run| run.state = RunState::Working).await;
+        let done = finished_run(&r, 3, "Done.").await;
+        for run in [&waiting, &working, &done] {
+            r.ok("get_run", json!({ "id": run.id })).await;
+        }
+        for run in [&waiting, &working] {
+            let why = r.err("propose_follow_up", json!({ "run_id": run.id, "message": "More." })).await;
+            assert!(why.contains("can't be sent back"), "{why}");
+        }
+        r.err("propose_follow_up", json!({ "run_id": "nope", "message": "More." })).await;
+        r.err("propose_follow_up", json!({ "run_id": done.id, "message": "   " })).await;
+        let first = r.ok("propose_follow_up", json!({ "run_id": done.id, "message": "More." })).await;
+        let again = r.err("propose_follow_up", json!({ "run_id": done.id, "message": "Different words." })).await;
+        assert!(again.contains("already waiting") && again.contains(&id_in(&first)), "{again}");
+        assert_eq!(r.follow_ups().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pip_revises_its_follow_up_until_the_user_edits_it() {
+        let r = rig().await;
+        let done = finished_run(&r, 1, "Done.").await;
+        r.ok("get_run", json!({ "id": done.id })).await;
+        let id = id_in(&r.ok("propose_follow_up", json!({ "run_id": done.id, "message": "First." })).await);
+        r.ok("revise_proposal", json!({ "id": id, "body": "Second, with API_TOKEN=abc123def456" })).await;
+        let Intent::FollowUp { message, .. } = r.fx.core.proposal_in(&r.fx.scope, &id).await.unwrap().unwrap().intent else { panic!() };
+        assert!(message.starts_with("Second") && !message.contains("abc123def456"), "{message}");
+        let shown = r.ok("get_proposal", json!({ "id": id })).await;
+        assert!(shown.contains("Approving sends the agent back"), "{shown}");
+        r.fx.core.edit_proposal(&id, &crate::inbox::Edit::FollowUp { message: "The user's words".into() }).await.unwrap();
+        assert!(r.err("revise_proposal", json!({ "id": id, "body": "Pip again" })).await.contains("edited this follow-up"));
+        let listed = r.ok("list_proposals", json!({})).await;
+        assert!(listed.contains("follow-up for run"), "{listed}");
     }
 }

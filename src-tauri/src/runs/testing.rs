@@ -226,7 +226,7 @@ impl ClaudeCli for FakeCli {
             return Err(CliError::Failed { code: Some(1), stderr: format!("No session {session_id}") });
         };
         let original = s.sessions[at].clone();
-        if s.resume == Resume::Wakes && original.state.as_deref() == Some("stopped") {
+        if s.resume == Resume::Wakes && matches!(original.state.as_deref(), Some("stopped" | "done")) {
             let entry = &mut s.sessions[at];
             entry.state = Some("working".into());
             entry.pid = Some(4242);

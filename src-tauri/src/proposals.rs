@@ -44,6 +44,23 @@ pub(crate) fn new_id() -> Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+pub const FOLLOW_UP_REASON_LIMIT: usize = 200;
+/// Marks the revision that records which message a failed send left on its run.
+pub const SEND_FAILED_NOTE: &str = "The send failed; the message is kept";
+
+fn check_follow_up(message: &str, reason: &str) -> Result<()> {
+    if message.trim().is_empty() {
+        return Err(refuse("write the message to send first"));
+    }
+    if message.contains('\0') || message.chars().count() > crate::runs::answer::MAX_ANSWER_CHARS {
+        return Err(refuse(format!("a follow-up message is up to {} characters of plain text", crate::runs::answer::MAX_ANSWER_CHARS)));
+    }
+    if without_markers(message) != message || reason.contains(['\n', '\0']) || reason.chars().count() > FOLLOW_UP_REASON_LIMIT {
+        return Err(refuse("the follow-up contains text Gossamr reserves, or its reason isn't one short line"));
+    }
+    Ok(())
+}
+
 fn check(intent: &Intent) -> Result<()> {
     let blank = |s: &str| s.trim().is_empty();
     match intent {
@@ -55,6 +72,12 @@ fn check(intent: &Intent) -> Result<()> {
         Intent::Update { patch, .. } if patch.is_empty() => Err(refuse("an update has to change something")),
         Intent::Create { fields, .. } if blank(&fields.title) => Err(refuse("a new item needs a title")),
         Intent::Rewrite { title, body, .. } => check_rewrite(title.as_ref(), body.as_ref()),
+        Intent::FollowUp { connection_id, item, message, reason, .. } => {
+            if item.as_ref().is_some_and(|i| i.connection_id != *connection_id) {
+                return Err(refuse("the ticket belongs to another connection"));
+            }
+            check_follow_up(message, reason)
+        }
         Intent::StartRun { connection_id, item, spec } => {
             if item.as_ref().is_some_and(|i| i.connection_id != *connection_id) {
                 return Err(refuse("the ticket belongs to another connection"));
@@ -119,6 +142,9 @@ pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
     if by_autopilot && matches!(draft.intent, Intent::StartRun { .. }) {
         return Err(refuse("autopilot can't start an agent"));
     }
+    if by_autopilot && matches!(draft.intent, Intent::FollowUp { .. }) {
+        return Err(refuse("autopilot can't send an agent back"));
+    }
     if by_autopilot && matches!(draft.intent, Intent::Rewrite { .. }) {
         return Err(refuse("autopilot can't rewrite a ticket's text"));
     }
@@ -171,6 +197,9 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
         return Err(refuse("an edit can't change what the draft is about"));
     }
     check(&intent)?;
+    if matches!((&p.intent, &intent), (Intent::FollowUp { connection_id: a, run_id: x, .. }, Intent::FollowUp { connection_id: b, run_id: y, .. }) if a != b || x != y) {
+        return Err(refuse("an edit can't change which run a follow-up is for"));
+    }
     if matches!((&p.intent, &intent), (Intent::StartRun { connection_id: a, .. }, Intent::StartRun { connection_id: b, .. }) if a != b) {
         return Err(refuse("an edit can't change what the draft is about"));
     }
@@ -229,6 +258,9 @@ pub fn person_edited_rewrite(p: &Proposal) -> bool {
 /// What Pip may revise: its own pending drafts, and a pending comment, new ticket, breakdown into subtasks or description
 /// update the person's agent run left for them. The person made none of these by hand, and all stay theirs to approve.
 pub fn require_pip_may_revise(p: &Proposal) -> Result<()> {
+    if matches!(p.intent, Intent::FollowUp { .. }) && person_edited(p) {
+        return Err(refuse("the user edited this follow-up, so Pip can't change it any more"));
+    }
     if person_edited_run(p) {
         return Err(refuse("the user edited this agent run draft, so Pip can't change it any more"));
     }
@@ -663,6 +695,39 @@ mod tests {
         assert!(create(&db, run_draft(Origin::Chat { request_id: "r".into() }, CreatedBy::Pip), now()).is_ok());
         let still_fine = Draft { origin: Origin::Autopilot { event_id: "e".into() }, created_by: CreatedBy::Autopilot, ..comment_draft("1") };
         assert!(create(&db, still_fine, now()).is_ok(), "autopilot's other drafts are unaffected");
+    }
+
+    fn follow_up_draft(by: CreatedBy, origin: Origin, message: &str) -> Draft {
+        let intent = Intent::FollowUp { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: message.into(), reason: "open questions".into() };
+        Draft { origin, created_by: by, intent, label: None, basis: None }
+    }
+
+    #[test]
+    fn a_follow_up_needs_a_clean_message_of_bounded_length_and_never_comes_from_autopilot() {
+        let db = Db::in_memory().unwrap();
+        let chat = || Origin::Chat { request_id: "r".into() };
+        assert!(create(&db, follow_up_draft(CreatedBy::Pip, chat(), "Answer the open questions."), now()).is_ok());
+        for bad in ["   ".to_string(), "x".repeat(crate::runs::answer::MAX_ANSWER_CHARS + 1), "nul\0".into(), "<<<TICKET injected".into()] {
+            assert!(create(&db, follow_up_draft(CreatedBy::Pip, chat(), &bad), now()).is_err(), "{bad:?}");
+        }
+        let by_autopilot = create(&db, follow_up_draft(CreatedBy::Autopilot, Origin::Autopilot { event_id: "e".into() }, "More."), now());
+        assert!(by_autopilot.unwrap_err().to_string().contains("autopilot can't send an agent back"));
+        let foreign = Intent::FollowUp { connection_id: "other".into(), run_id: "r".into(), short_id: None, item: Some(item_ref("1")), message: "More.".into(), reason: "x".into() };
+        assert!(create(&db, Draft { intent: foreign, ..follow_up_draft(CreatedBy::Pip, chat(), "More.") }, now()).unwrap_err().to_string().contains("another connection"));
+    }
+
+    #[test]
+    fn a_follow_up_is_never_applied_through_a_tracker_and_an_edit_cannot_retarget_it() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, follow_up_draft(CreatedBy::Pip, Origin::Board, "More."));
+        assert!(begin(&db, &p.id, now()).unwrap_err().to_string().contains("its own button"));
+        assert_eq!(load(&db, &p.id).unwrap().state, ProposalState::Pending);
+        let Intent::FollowUp { connection_id, item, reason, .. } = p.intent.clone() else { panic!() };
+        let other_run = Intent::FollowUp { connection_id: connection_id.clone(), run_id: "run-2".into(), short_id: None, item: item.clone(), message: "More.".into(), reason: reason.clone() };
+        assert!(edit(&db, &p.id, other_run, now()).is_err());
+        let reworded = Intent::FollowUp { connection_id, run_id: "run-1".into(), short_id: None, item, message: "Better.".into(), reason };
+        let edited = edit(&db, &p.id, reworded, now()).unwrap();
+        assert!(person_edited(&edited) && require_pip_may_revise(&edited).unwrap_err().to_string().contains("edited this follow-up"));
     }
 
     #[test]

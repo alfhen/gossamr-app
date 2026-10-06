@@ -111,6 +111,11 @@ fn body_of(p: &Proposal) -> String {
             }
             out.join("\n\n")
         }
+        Intent::FollowUp { run_id, short_id, item, message, reason, .. } => {
+            let on = item.as_ref().map_or("no ticket", |i| i.key.as_str());
+            let session = short_id.as_deref().map(|s| format!(" (session {})", super::runs::plain_line(s, 20))).unwrap_or_default();
+            format!("Follow-up for run {run_id}{session} on {on}. Approving sends the agent back for another pass with exactly this message.\n\nWhy: {reason}\n\nMessage:\n{message}")
+        }
         Intent::Update { item, patch } => format!("Triage update on {}: {}", item.key, serde_json::to_string(patch).unwrap_or_default()),
         Intent::Link { from, to, kind } => format!("Link {} to {} ({kind:?})", from.key, to.key),
     }
