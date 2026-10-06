@@ -469,6 +469,7 @@ export class MockBackend implements Backend {
   }
 
   async runsSendFollowUp(proposalId: string, message: string) {
+    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
     return this.runs.sendFollowUp(proposalId, message);
   }
 

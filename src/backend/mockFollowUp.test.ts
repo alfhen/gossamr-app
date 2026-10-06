@@ -45,6 +45,17 @@ describe("a finished plan run with open questions in the sample build", () => {
     expect(again.result).toBe(SCRIPTED_PLAN_ANSWERED);
     expect(again.result).not.toContain("## Open questions for a person");
     expect(again.passes).toBe(2);
+    expect(again.summary).not.toContain("open questions");
+  });
+
+  it("is not sent while Agents are off", async () => {
+    const b = sample();
+    const run = planRun(b);
+    await ask(b, "send it back for another pass", run.item);
+    const [draft] = followUps(b);
+    await b.runsSetEnabled(false);
+    await expect(b.runsSendFollowUp(draft.id, (draft.intent as { message: string }).message)).rejects.toThrow("turned off");
+    expect(b.runs.get(run.id)?.state).toBe("done");
   });
 
   it("is not sent back twice at once, and a run that did its job is not sent back at all", async () => {

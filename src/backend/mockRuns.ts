@@ -146,6 +146,8 @@ export const SCRIPTED_PLAN_ANSWERED = `${SCRIPTED_PLAN_RESULT.split("## Open que
 For Jira:
 Plan for the welcome flow refresh, second pass: the open questions are settled (Klaviyo keeps its own subjects, the second email keeps its two-day delay) and the plan is updated to match.`;
 
+const PLAN_ANSWERED_SUMMARY = "Plan updated: both questions are settled and the plan follows the decisions";
+
 const PLAN_SUMMARY = "Plan complete: welcome emails move to the shared layout, subjects in one config, six steps, two open questions";
 
 /** One scripted run of each of the other kinds: a build that opened a pull request, a review, a triage, a verify and a finished plan. */
@@ -677,8 +679,9 @@ export class MockRuns {
       patch.tokens = (run.tokens ?? 0) + 12_000;
     }
     if (to === "done") {
-      patch.result = !run.item && run.spec.project ? SCRIPTED_TICKET_RESULT : (run.passes ?? 1) > 1 && run.spec.kind === "plan" ? SCRIPTED_PLAN_ANSWERED : SCRIPTED_RESULT[run.spec.kind];
-      patch.summary = SCRIPTED_SUMMARY[run.spec.kind];
+      const answered = (run.passes ?? 1) > 1 && run.spec.kind === "plan";
+      patch.result = !run.item && run.spec.project ? SCRIPTED_TICKET_RESULT : answered ? SCRIPTED_PLAN_ANSWERED : SCRIPTED_RESULT[run.spec.kind];
+      patch.summary = answered ? PLAN_ANSWERED_SUMMARY : SCRIPTED_SUMMARY[run.spec.kind];
       patch.resultComplete = true;
       patch.endedAt = at;
       this.scriptedReport(run, patch.result);
