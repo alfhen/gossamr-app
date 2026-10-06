@@ -155,6 +155,6 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
     else if (p.state.type === "pending" || p.state.type === "applying") showDraft(p.id);
     else if (p.created[0] && !showMe(p.created[0])) showDraft(p.id);
   };
-  const pass = useRuns((s) => (p.intent.type === "followUp" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
+  const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
   return <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} pass={pass} onOpen={open} />;
 }

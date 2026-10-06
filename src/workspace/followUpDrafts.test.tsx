@@ -134,3 +134,11 @@ describe("the run sheet after a follow-up", () => {
     expect(timelineIcon("follow_up")).toBe("retry");
   });
 });
+
+describe("a decided follow-up", () => {
+  it("names no pass, since the run's count has moved on", () => {
+    const sent = renderToStaticMarkup(<DraftCard {...props} pass={3} proposal={followUp({ state: { type: "applied" } })} />);
+    expect(sent).not.toContain("Pass 3");
+    expect(draftPreviewBody(followUp({ state: { type: "applied" } }), null)).not.toContain("(pass");
+  });
+});

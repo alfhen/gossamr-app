@@ -293,7 +293,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
           <div className="grid gap-1.5" data-follow-up>
             <p className="m-0 flex flex-wrap items-baseline gap-2 font-semibold">
               Send the agent back for another pass
-              <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Pass {pass ?? 2}</span>
+              {open && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Pass {pass ?? 2}</span>}
               {p.createdBy === "pip" && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Proposed by Pip</span>}
             </p>
             <p className="m-0 text-sm text-ws-ink2">
@@ -427,7 +427,7 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
     }
   };
 
-  const pass = useRuns((s) => (p.intent.type === "followUp" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
+  const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
   const discuss = () => p.origin.type === "run" && askPip(commentWithPipPrompt({ id: p.origin.runId, item: target ?? null }, p.id));
 
   return (

@@ -80,7 +80,7 @@ export function openQuestions(markdown: string): string | null {
   const inline = lines[at].replace(/^\s*(?:#{1,6}\s*|\*\*)?open questions[^:\n]*:?\**\s*/i, "").trim();
   const rest: string[] = inline ? [inline] : [];
   for (const l of lines.slice(at + 1)) {
-    if (/^\s*#{1,6}\s/.test(l)) break;
+    if (/^\s*#{1,6}\s/.test(l) || /^\s*for jira:/i.test(l)) break;
     rest.push(l);
   }
   const text = rest.join("\n").trim();

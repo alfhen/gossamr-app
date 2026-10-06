@@ -31,3 +31,9 @@ describe("mock Pip reading a draft in full", () => {
     expect(openQuestions("nothing here")).toBeNull();
   });
 });
+
+describe("open questions in a run result", () => {
+  it("stop before the For Jira section", () => {
+    expect(openQuestions("## Open questions for a person\n\n- one?\n\nFor Jira:\nsummary")).toBe("- one?");
+  });
+});
