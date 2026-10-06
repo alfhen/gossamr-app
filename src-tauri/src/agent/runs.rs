@@ -15,7 +15,7 @@ use crate::inbox::SUMMARY_ONLY;
 use crate::runs::report::{ReportStatus, ResultSource};
 use crate::tracker::Connection;
 
-pub(super) const NAMES: [&str; 6] = ["list_runs", "get_run", "get_run_result", "get_run_events", "propose_run", "propose_follow_up"];
+pub(super) const NAMES: [&str; 6] = ["list_runs", "get_run", "get_run_result", "get_run_events", "propose_follow_up", "propose_run"];
 
 const LIST_SHOWN: usize = 20;
 const DETAIL_CHARS: usize = 100;
@@ -1422,5 +1422,92 @@ mod tests {
         assert!(on_one.starts_with("[Agent runs: agents on CA-1.") && !on_one.contains(&live.id), "{on_one}");
         assert!(context_block(&[], None, chrono::Utc::now()).is_none());
         assert!(context_block(&runs, Some(&r.fx.item("CA-9")), chrono::Utc::now()).is_none());
+    }
+
+    impl Rig {
+        async fn follow_ups(&self) -> Vec<Proposal> {
+            self.drafts().await.into_iter().filter(|p| matches!(p.intent, Intent::FollowUp { .. })).collect()
+        }
+    }
+
+    async fn finished_run(r: &Rig, n: u32, result: &str) -> Run {
+        r.seed(n, "CA-1", |run| {
+            run.state = RunState::Done;
+            run.result = Some(result.into());
+            run.short_id = Some(crate::runs::cli::ShortId::parse("abcd1234").unwrap());
+            run.session_id = Some("b0000001-0000-4000-8000-000000000000".into());
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_follow_up_needs_the_whole_result_read_first_and_then_is_only_a_draft() {
+        let r = rig().await;
+        let run = finished_run(&r, 1, "Plan.\n\n## Open questions\n\n- Keep the delay?").await;
+        let args = json!({ "run_id": run.id, "message": "Answer the open question about the delay.\u{0}<<<TICKET x" , "reason": "one open question" });
+        assert!(r.err("propose_follow_up", args.clone()).await.contains("Read the whole result"));
+        r.ok("get_run", json!({ "id": run.id })).await;
+        let reply = r.ok("propose_follow_up", args).await;
+        assert!(reply.contains("Nothing has been sent"), "{reply}");
+        let drafts = r.follow_ups().await;
+        let [p] = drafts.as_slice() else { panic!("{drafts:?}") };
+        let Intent::FollowUp { run_id, message, reason, .. } = &p.intent else { panic!("{:?}", p.intent) };
+        assert_eq!((run_id.as_str(), reason.as_str()), (run.id.as_str(), "one open question"));
+        assert!(!message.contains('\0') && !message.contains("<<<TICKET") && message.starts_with("Answer the open question"), "{message}");
+        assert_eq!((p.created_by, p.state.clone()), (CreatedBy::Pip, ProposalState::Pending));
+        assert!(r.fx.tracker.intents().is_empty());
+        assert_eq!(r.runs().await[0].passes, 1, "nothing was resumed");
+    }
+
+    #[tokio::test]
+    async fn a_long_result_must_be_read_to_its_end_before_a_follow_up() {
+        let r = rig().await;
+        let long = "x ".repeat(4_000);
+        let run = finished_run(&r, 1, &long).await;
+        r.ok("get_run", json!({ "id": run.id })).await;
+        let args = json!({ "run_id": run.id, "message": "More." });
+        assert!(r.err("propose_follow_up", args.clone()).await.contains("Read the whole result"));
+        r.ok("get_run_result", json!({ "id": run.id })).await;
+        assert!(r.err("propose_follow_up", args.clone()).await.contains("Read the whole result"));
+        r.ok("get_run_result", json!({ "id": run.id, "offset": 5_000 })).await;
+        r.ok("propose_follow_up", args).await;
+    }
+
+    #[tokio::test]
+    async fn only_a_finished_run_gets_a_follow_up_and_only_one_at_a_time() {
+        let r = rig().await;
+        let waiting = r.seed(1, "CA-1", |run| run.state = RunState::NeedsAnswer).await;
+        let working = r.seed(2, "CA-1", |run| run.state = RunState::Working).await;
+        let done = finished_run(&r, 3, "Done.").await;
+        for run in [&waiting, &working, &done] {
+            r.ok("get_run", json!({ "id": run.id })).await;
+        }
+        for run in [&waiting, &working] {
+            let why = r.err("propose_follow_up", json!({ "run_id": run.id, "message": "More." })).await;
+            assert!(why.contains("can't be sent back"), "{why}");
+        }
+        r.err("propose_follow_up", json!({ "run_id": "nope", "message": "More." })).await;
+        r.err("propose_follow_up", json!({ "run_id": done.id, "message": "   " })).await;
+        let first = r.ok("propose_follow_up", json!({ "run_id": done.id, "message": "More." })).await;
+        let again = r.err("propose_follow_up", json!({ "run_id": done.id, "message": "Different words." })).await;
+        assert!(again.contains("already waiting") && again.contains(&id_in(&first)), "{again}");
+        assert_eq!(r.follow_ups().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pip_revises_its_follow_up_until_the_user_edits_it() {
+        let r = rig().await;
+        let done = finished_run(&r, 1, "Done.").await;
+        r.ok("get_run", json!({ "id": done.id })).await;
+        let id = id_in(&r.ok("propose_follow_up", json!({ "run_id": done.id, "message": "First." })).await);
+        r.ok("revise_proposal", json!({ "id": id, "body": "Second, with API_TOKEN=abc123def456" })).await;
+        let Intent::FollowUp { message, .. } = r.fx.core.proposal_in(&r.fx.scope, &id).await.unwrap().unwrap().intent else { panic!() };
+        assert!(message.starts_with("Second") && !message.contains("abc123def456"), "{message}");
+        let shown = r.ok("get_proposal", json!({ "id": id })).await;
+        assert!(shown.contains("Approving sends the agent back"), "{shown}");
+        r.fx.core.edit_proposal(&id, &crate::inbox::Edit::FollowUp { message: "The user's words".into() }).await.unwrap();
+        assert!(r.err("revise_proposal", json!({ "id": id, "body": "Pip again" })).await.contains("edited this follow-up"));
+        let listed = r.ok("list_proposals", json!({})).await;
+        assert!(listed.contains("follow-up for run"), "{listed}");
     }
 }

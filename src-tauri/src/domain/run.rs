@@ -1394,4 +1394,23 @@ mod tests {
         let working = Run { state: RunState::Working, ..stopped("Stopped by Gossamr: it passed the 60 minute limit") };
         assert!(!working.with_failure_filled().stopped_by_limit);
     }
+
+    #[test]
+    fn a_run_stored_before_passes_were_counted_is_on_its_first_pass_and_only_a_finished_one_can_go_back() {
+        let mut json = serde_json::to_value(Run::queued("r".into(), "p".into(), "c".into(), None, spec(), "f".into(), Utc::now())).unwrap();
+        json.as_object_mut().unwrap().remove("passes");
+        let mut run: Run = serde_json::from_value(json).unwrap();
+        assert_eq!(run.passes, 1);
+        assert!(run.follow_up_blocker().unwrap().contains("hasn't finished"));
+        run.state = RunState::Done;
+        assert!(run.follow_up_blocker().unwrap().contains("no session"));
+        (run.short_id, run.session_id) = (Some(ShortId::parse("abcd1234").unwrap()), Some("s".into()));
+        assert_eq!(run.follow_up_blocker(), None);
+        run.state = RunState::NeedsAnswer;
+        assert!(run.follow_up_blocker().unwrap().contains("waiting on the person"));
+        run.state = RunState::Stopped;
+        assert!(run.follow_up_blocker().is_some());
+        run.stopped_by_limit = true;
+        assert_eq!(run.follow_up_blocker(), None);
+    }
 }

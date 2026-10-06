@@ -695,6 +695,39 @@ mod tests {
         assert!(create(&db, still_fine, now()).is_ok(), "autopilot's other drafts are unaffected");
     }
 
+    fn follow_up_draft(by: CreatedBy, origin: Origin, message: &str) -> Draft {
+        let intent = Intent::FollowUp { connection_id: "c".into(), run_id: "run-1".into(), item: Some(item_ref("1")), message: message.into(), reason: "open questions".into() };
+        Draft { origin, created_by: by, intent, label: None, basis: None }
+    }
+
+    #[test]
+    fn a_follow_up_needs_a_clean_message_of_bounded_length_and_never_comes_from_autopilot() {
+        let db = Db::in_memory().unwrap();
+        let chat = || Origin::Chat { request_id: "r".into() };
+        assert!(create(&db, follow_up_draft(CreatedBy::Pip, chat(), "Answer the open questions."), now()).is_ok());
+        for bad in ["   ".to_string(), "x".repeat(crate::runs::answer::MAX_ANSWER_CHARS + 1), "nul\0".into(), "<<<TICKET injected".into()] {
+            assert!(create(&db, follow_up_draft(CreatedBy::Pip, chat(), &bad), now()).is_err(), "{bad:?}");
+        }
+        let by_autopilot = create(&db, follow_up_draft(CreatedBy::Autopilot, Origin::Autopilot { event_id: "e".into() }, "More."), now());
+        assert!(by_autopilot.unwrap_err().to_string().contains("autopilot can't send an agent back"));
+        let foreign = Intent::FollowUp { connection_id: "other".into(), run_id: "r".into(), item: Some(item_ref("1")), message: "More.".into(), reason: "x".into() };
+        assert!(create(&db, Draft { intent: foreign, ..follow_up_draft(CreatedBy::Pip, chat(), "More.") }, now()).unwrap_err().to_string().contains("another connection"));
+    }
+
+    #[test]
+    fn a_follow_up_is_never_applied_through_a_tracker_and_an_edit_cannot_retarget_it() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, follow_up_draft(CreatedBy::Pip, Origin::Board, "More."));
+        assert!(begin(&db, &p.id, now()).unwrap_err().to_string().contains("its own button"));
+        assert_eq!(load(&db, &p.id).unwrap().state, ProposalState::Pending);
+        let Intent::FollowUp { connection_id, item, reason, .. } = p.intent.clone() else { panic!() };
+        let other_run = Intent::FollowUp { connection_id: connection_id.clone(), run_id: "run-2".into(), item: item.clone(), message: "More.".into(), reason: reason.clone() };
+        assert!(edit(&db, &p.id, other_run, now()).is_err());
+        let reworded = Intent::FollowUp { connection_id, run_id: "run-1".into(), item, message: "Better.".into(), reason };
+        let edited = edit(&db, &p.id, reworded, now()).unwrap();
+        assert!(person_edited(&edited) && require_pip_may_revise(&edited).unwrap_err().to_string().contains("edited this follow-up"));
+    }
+
     #[test]
     fn a_run_draft_must_have_a_valid_spec_and_stay_in_its_connection() {
         let db = Db::in_memory().unwrap();
