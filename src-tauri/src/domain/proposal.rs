@@ -90,7 +90,7 @@ pub enum Intent {
     /// Sends a finished agent back for another pass with this exact message. Never applied through a tracker: the
     /// person's approval resumes the run.
     #[serde(rename_all = "camelCase")]
-    FollowUp { connection_id: String, run_id: String, item: Option<ItemRef>, message: String, reason: String },
+    FollowUp { connection_id: String, run_id: String, #[serde(default)] short_id: Option<String>, item: Option<ItemRef>, message: String, reason: String },
 }
 
 impl Intent {

@@ -536,9 +536,10 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                     }
                 }
                 Intent::StartRun { connection_id, item, spec } => super::runs::revised(connection_id, item, spec, args)?,
-                Intent::FollowUp { connection_id, run_id, item, reason, .. } => Intent::FollowUp {
+                Intent::FollowUp { connection_id, run_id, short_id, item, reason, .. } => Intent::FollowUp {
                     connection_id: connection_id.clone(),
                     run_id: run_id.clone(),
+                    short_id: short_id.clone(),
                     item: item.clone(),
                     message: crate::runs::result::scrub(required(args, "body")?).trim().to_string(),
                     reason: reason.clone(),

@@ -28,7 +28,7 @@ async fn finished() -> (Rig, Run) {
 }
 
 async fn follow_up(rig: &Rig, run: &Run, by: CreatedBy, message: &str) -> Proposal {
-    let intent = Intent::FollowUp { connection_id: run.connection_id.clone(), run_id: run.id.clone(), item: run.item.clone(), message: message.into(), reason: "two open questions".into() };
+    let intent = Intent::FollowUp { connection_id: run.connection_id.clone(), run_id: run.id.clone(), short_id: None, item: run.item.clone(), message: message.into(), reason: "two open questions".into() };
     let scope = rig.fx.scope.clone();
     rig.fx.core.propose(&scope, Draft { origin: Origin::Chat { request_id: "r".into() }, created_by: by, intent, label: None, basis: None }).await.unwrap()
 }

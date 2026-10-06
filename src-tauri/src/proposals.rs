@@ -696,7 +696,7 @@ mod tests {
     }
 
     fn follow_up_draft(by: CreatedBy, origin: Origin, message: &str) -> Draft {
-        let intent = Intent::FollowUp { connection_id: "c".into(), run_id: "run-1".into(), item: Some(item_ref("1")), message: message.into(), reason: "open questions".into() };
+        let intent = Intent::FollowUp { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: message.into(), reason: "open questions".into() };
         Draft { origin, created_by: by, intent, label: None, basis: None }
     }
 
@@ -710,7 +710,7 @@ mod tests {
         }
         let by_autopilot = create(&db, follow_up_draft(CreatedBy::Autopilot, Origin::Autopilot { event_id: "e".into() }, "More."), now());
         assert!(by_autopilot.unwrap_err().to_string().contains("autopilot can't send an agent back"));
-        let foreign = Intent::FollowUp { connection_id: "other".into(), run_id: "r".into(), item: Some(item_ref("1")), message: "More.".into(), reason: "x".into() };
+        let foreign = Intent::FollowUp { connection_id: "other".into(), run_id: "r".into(), short_id: None, item: Some(item_ref("1")), message: "More.".into(), reason: "x".into() };
         assert!(create(&db, Draft { intent: foreign, ..follow_up_draft(CreatedBy::Pip, chat(), "More.") }, now()).unwrap_err().to_string().contains("another connection"));
     }
 
@@ -721,9 +721,9 @@ mod tests {
         assert!(begin(&db, &p.id, now()).unwrap_err().to_string().contains("its own button"));
         assert_eq!(load(&db, &p.id).unwrap().state, ProposalState::Pending);
         let Intent::FollowUp { connection_id, item, reason, .. } = p.intent.clone() else { panic!() };
-        let other_run = Intent::FollowUp { connection_id: connection_id.clone(), run_id: "run-2".into(), item: item.clone(), message: "More.".into(), reason: reason.clone() };
+        let other_run = Intent::FollowUp { connection_id: connection_id.clone(), run_id: "run-2".into(), short_id: None, item: item.clone(), message: "More.".into(), reason: reason.clone() };
         assert!(edit(&db, &p.id, other_run, now()).is_err());
-        let reworded = Intent::FollowUp { connection_id, run_id: "run-1".into(), item, message: "Better.".into(), reason };
+        let reworded = Intent::FollowUp { connection_id, run_id: "run-1".into(), short_id: None, item, message: "Better.".into(), reason };
         let edited = edit(&db, &p.id, reworded, now()).unwrap();
         assert!(person_edited(&edited) && require_pip_may_revise(&edited).unwrap_err().to_string().contains("edited this follow-up"));
     }

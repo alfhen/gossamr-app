@@ -234,7 +234,7 @@ impl Core {
             return Err(refuse(format!("Run {run_id} can't be sent back: {why}.")));
         }
         let connection_id = Connection::jira_id(scope);
-        let intent = Intent::FollowUp { connection_id, run_id: run.id.clone(), item: run.item.clone(), message, reason };
+        let intent = Intent::FollowUp { connection_id, run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string), item: run.item.clone(), message, reason };
         let at = Utc::now();
         self.with_db_for(scope, |db| {
             let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };

@@ -130,9 +130,10 @@ impl Edit {
                 }
                 Ok(Intent::Create { container, fields, link: link.clone() })
             }
-            (Edit::FollowUp { message }, Intent::FollowUp { connection_id, run_id, item, reason, .. }) => Ok(Intent::FollowUp {
+            (Edit::FollowUp { message }, Intent::FollowUp { connection_id, run_id, short_id, item, reason, .. }) => Ok(Intent::FollowUp {
                 connection_id: connection_id.clone(),
                 run_id: run_id.clone(),
+                short_id: short_id.clone(),
                 item: item.clone(),
                 message: message.trim().to_string(),
                 reason: reason.clone(),
