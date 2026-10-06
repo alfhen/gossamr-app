@@ -104,7 +104,7 @@ impl RunService {
                     run.unsent_answer = Some(message.clone());
                 }
                 self.store(&run).await?;
-                if let Err(e) = self.core.follow_up_failed(proposal_id, &why, stopped).await {
+                if let Err(e) = self.core.follow_up_failed(proposal_id, &why, stopped.then_some(message.as_str())).await {
                     eprintln!("couldn't note why the follow-up failed: {e}");
                 }
                 Err(Error::Claude(format!("{why} The follow-up is kept.")))
