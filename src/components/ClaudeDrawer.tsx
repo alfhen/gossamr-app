@@ -287,7 +287,7 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
   };
 
   const approve = async () => {
-    if (!backend || intent.type === "startRun") return;
+    if (!backend || intent.type === "startRun" || intent.type === "followUp") return;
     setWorking(true);
     setProblem(null);
     try {

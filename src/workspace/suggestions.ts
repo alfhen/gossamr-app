@@ -69,7 +69,7 @@ function runChips(run: NonNullable<AgentsSuggestionScene["open"]>): string[] {
     case "failed":
       return ["Why did this run fail?", "What did this run get done?"];
     case "done":
-      return ["What did this run find?", ...(run.ticket ? ["Draft a comment from this run"] : []), "Create a follow-up ticket"];
+      return ["What did this run find?", ...(run.ticket ? ["Draft a comment from this run"] : []), "Send it back for another pass", "Create a follow-up ticket"];
     case "going":
       return ["What is this run doing?"];
     case "ended":

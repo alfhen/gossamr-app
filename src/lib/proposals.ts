@@ -18,6 +18,7 @@ export function targetOf(intent: Intent): ItemRef | null {
     case "subtasks":
       return intent.parent;
     case "startRun":
+    case "followUp":
       return intent.item;
     case "create":
       return null;
@@ -26,9 +27,9 @@ export function targetOf(intent: Intent): ItemRef | null {
   }
 }
 
-/** The drafts a screen that can only approve with `proposalsApprove` may offer: a run is approved with `runsApprove`, after its prompt is shown. */
+/** The drafts a screen that can only approve with `proposalsApprove` may offer: a run is approved with `runsApprove` after its prompt is shown, a follow-up with `runsSendFollowUp`. */
 export function withoutRunDrafts(proposals: Proposal[]): Proposal[] {
-  return proposals.filter((p) => p.intent.type !== "startRun");
+  return proposals.filter((p) => p.intent.type !== "startRun" && p.intent.type !== "followUp");
 }
 
 /** Drafts Pip made while answering one question, oldest first so they read in the order they were proposed. */

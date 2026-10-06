@@ -9,8 +9,10 @@ import { draftSummary, draftTitle, linkSentence } from "./DraftCard";
 import { collapsible, draftFacts, isCreate, showDraft } from "./draftTicket";
 import { showMe } from "./jump";
 import { useRunSetup } from "./runSetupStore";
+import { useRuns } from "./runsStore";
+import { nextPass } from "./followUp";
 
-const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶" };
+const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺" };
 
 const STATE: Record<Proposal["state"]["type"], string> = { pending: "Draft", applying: "Working…", applied: "Done", skipped: "Skipped", retired: "Out of date" };
 
@@ -28,7 +30,7 @@ const clipText = (text: string) => {
   return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat;
 };
 
-export function draftPreviewBody(p: Proposal, statusName: string | null): string {
+export function draftPreviewBody(p: Proposal, statusName: string | null, pass?: number): string {
   const i = p.intent;
   switch (i.type) {
     case "comment":
@@ -47,6 +49,8 @@ export function draftPreviewBody(p: Proposal, statusName: string | null): string
       return linkSentence(i);
     case "startRun":
       return `Start an agent: ${i.item?.key ?? `${i.spec.repo}, no ticket`}\n${!i.item && i.spec.instruction.trim() ? `${clipText(i.spec.instruction)}\n` : ""}${i.spec.focus?.trim() ? `Focus from Pip: ${i.spec.focus.trim()}\n` : ""}Read the exact prompt, then start it. Nothing runs before that.`;
+    case "followUp":
+      return `Send the agent back for another pass${pass ? ` (pass ${pass})` : ""}. Why: ${i.reason}\n\n${i.message}\n\nNothing is sent until you read this and send it.`;
     default:
       return unreachable(i);
   }
@@ -83,19 +87,21 @@ interface Props {
   statusName: string | null;
   /** The target ticket's title when it is cached. */
   targetTitle: string | null;
+  /** For a follow-up, the pass the agent would be on once it is sent. */
+  pass?: number;
   onOpen(): void;
 }
 
 /** A draft as it appears in the conversation: what it is, how it stands and where to go to decide. Deciding happens on the ticket. */
-export function DraftPreview({ proposal: p, statusName, targetTitle, onOpen }: Props) {
+export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpen }: Props) {
   const state = p.state.type;
   const target = targetOf(p.intent);
   const pending = state === "pending" || state === "applying";
   const revision = p.revisions[p.revisions.length - 1];
   const made = p.intent.type === "create" && state === "applied" ? p.created[0] : undefined;
-  const go = pending ? (p.intent.type === "startRun" ? "Review and start →" : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
+  const go = pending ? (p.intent.type === "startRun" ? "Review and start →" : p.intent.type === "followUp" ? "Review and send back →" : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
   const create = isCreate(p) ? p : null;
-  const body = create ? docText(create.intent.fields.body) || "No description." : draftPreviewBody(p, statusName);
+  const body = create ? docText(create.intent.fields.body) || "No description." : draftPreviewBody(p, statusName, pass);
   return (
     <article
       aria-label={draftTitle(p)}
@@ -149,5 +155,6 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
     else if (p.state.type === "pending" || p.state.type === "applying") showDraft(p.id);
     else if (p.created[0] && !showMe(p.created[0])) showDraft(p.id);
   };
-  return <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} onOpen={open} />;
+  const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
+  return <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} pass={pass} onOpen={open} />;
 }

@@ -349,7 +349,9 @@ export type Intent =
   /** A new title and/or description, each with the text it was drafted against; an approval refuses when the ticket no longer reads that way. */
   | { type: "rewrite"; item: ItemRef; title: TitleChange | null; body: BodyChange | null; /** What the old description holds that this turns into plain text, such as `tables`. */ flattened: string[] }
   /** Never applied with `proposalsApprove`; `runsApprove` starts it, bound to the digest the person read. */
-  | { type: "startRun"; connectionId: string; item: ItemRef | null; spec: RunSpec };
+  | { type: "startRun"; connectionId: string; item: ItemRef | null; spec: RunSpec }
+  /** Never applied with `proposalsApprove`; `runsSendFollowUp` sends the finished run back with this message, which the person may edit first. */
+  | { type: "followUp"; connectionId: string; runId: string; shortId?: string | null; item: ItemRef | null; message: string; reason: string };
 
 export interface TitleChange {
   from: string;
@@ -448,6 +450,7 @@ export type ProposalEdit =
   /** A new item's fields; the ones left out stay as they are. */
   | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef }
   /** A run draft's settings, as the person edits them; the ones left out stay as they are. */
+  | { type: "followUp"; message: string }
   | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; report?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
@@ -543,6 +546,8 @@ export interface Run {
   /** Set once `claude rm` has taken the worktree away; the run stays for its result. */
   worktreeRemovedAt?: string | null;
   continuedAt?: string | null;
+  /** How many times the agent has been given the job: 1 for the first, one more for each follow-up sent back. */
+  passes?: number;
   /** Gossamr stopped the run for passing its time or token limit. It can be resumed. */
   stoppedByLimit?: boolean;
   /** Sessions this run left behind when it carried on under a new id. */

@@ -91,7 +91,7 @@ describe("chips and placeholder on the Agents screen", () => {
 
   it("asks about the open run by how it stands", () => {
     const chips = (id: string) => suggestionsFor(scene({ agents: agentsSuggestionScene(RUNS, id) }));
-    expect(chips("c")).toEqual(["What did this run find?", "Draft a comment from this run", "Create a follow-up ticket"]);
+    expect(chips("c")).toEqual(["What did this run find?", "Draft a comment from this run", "Send it back for another pass", "Create a follow-up ticket"]);
     expect(chips("a")[0]).toBe("What is this run asking me?");
     expect(chips("b")).toEqual(["What is this run doing?"]);
     expect(chips("d")).toEqual(["What happened in this run?"]);

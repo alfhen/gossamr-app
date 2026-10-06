@@ -211,6 +211,11 @@ function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTit
         {run.state === "stopped" ? "Stopped" : ended ? "Finished" : "Started"} <b className="font-semibold text-ws-ink">{ageText(run, now)}</b>
       </span>
       {tokens && <span>{tokens}</span>}
+      {(run.passes ?? 1) > 1 && (
+        <span data-passes title="How many times the agent has been given this job">
+          Pass <b className="font-semibold text-ws-ink">{run.passes}</b>
+        </span>
+      )}
       {run.item && (
         <span>
           Ticket{" "}

@@ -89,6 +89,8 @@ interface WorkspaceState {
   /** Shows a failure without blocking anything. */
   report(what: string, e: unknown): void;
   approve(id: string): Promise<Proposal>;
+  /** Sends a follow-up draft back to its run. Rejects with the reason when it can't be sent; the draft stays pending. */
+  sendFollowUp(id: string, message: string): Promise<void>;
   skip(id: string): Promise<Proposal>;
   /** Drafts moving an item to a status, replacing any transition draft still pending for it. Nothing is written until approval. */
   draftTransition(item: ItemRef, to: StatusDef): Promise<Proposal>;
@@ -381,10 +383,22 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const backend = get().backend!;
     const mine = generation;
     if (get().proposals[id]?.intent.type === "startRun") throw new Error("A run is approved with its own button, after its prompt is shown.");
+    if (get().proposals[id]?.intent.type === "followUp") throw new Error("A follow-up is sent back with its own button.");
     const p = await backend.proposalsApprove(id);
     if (backend !== get().backend || mine !== generation) return p;
     set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));
     return p;
+  },
+
+  async sendFollowUp(id, message) {
+    const backend = get().backend!;
+    const mine = generation;
+    try {
+      await backend.runsSendFollowUp(id, message);
+    } finally {
+      const p = await backend.proposalsGet(id).catch(() => null);
+      if (p && backend === get().backend && mine === generation) set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));
+    }
   },
 
   async skip(id) {
