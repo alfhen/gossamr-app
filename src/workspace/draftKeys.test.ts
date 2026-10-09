@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { docFromText } from "../lib/docs";
 import type { Intent, Proposal, ProposalState, RunSpec } from "../types";
-import { DRAFT_CARD, draftKeyAction, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, stepDraftCards, upToNewestDraft, type Asking } from "./draftKeys";
+import { DRAFT_CARD, FROM_INPUT, draftKeyAction, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, stepDraftCards, upToNewestDraft, type Asking } from "./draftKeys";
 
 const ref = itemRef("CA-412");
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
@@ -151,6 +151,28 @@ describe("onDraftCardKey", () => {
     expect(a.open).toHaveBeenCalledTimes(2);
   });
 
+  it("sends the first letter after ArrowUp from the empty input back to the input, j, k and o included", () => {
+    for (const text of ["just show me", "keep going", "okay", "open it"]) {
+      const a = acts();
+      const done = onDraftCardKey(key(text[0], card()), draft(INTENTS.comment), a.asking, { ...a, fromInput: true });
+      expect(done).toBe(true);
+      expect(a.typed).toEqual([text[0]]);
+      expect(a.open).not.toHaveBeenCalled();
+    }
+    // a and s still only ask, and the letter after them goes back with them.
+    const a = acts();
+    onDraftCardKey(key("a", card()), draft(INTENTS.comment), a.asking, { ...a, fromInput: true });
+    expect(a.asking).toBe("approve");
+    onDraftCardKey(key("d", card()), draft(INTENTS.comment), a.asking, a);
+    expect(a.typed).toEqual(["ad"]);
+    expect(a.approve).not.toHaveBeenCalled();
+    // Without the mark, o still opens and j is left for stepping.
+    const b = acts();
+    expect(onDraftCardKey(key("o", card()), draft(INTENTS.comment), null, b)).toBe(true);
+    expect(b.open).toHaveBeenCalledTimes(1);
+    expect(onDraftCardKey(key("j", card()), draft(INTENTS.comment), null, b)).toBe(false);
+  });
+
   it("never decides a draft from text typed after ArrowUp, and gives the text back to the input", () => {
     // A text that starts with o opens the ticket, which writes nothing; these are the ones that start with a card's decision keys.
     for (const text of ["add a note", "show me the drafts", "sure", "a", "s", "As it says", "aaa", "ss"]) {
@@ -233,6 +255,13 @@ describe("moving between cards", () => {
     expect(cards[0].focus).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves a key alone that the card already took", () => {
+    const cards = [card(), card()];
+    const ev = { ...key("j", cards[0]), isDefaultPrevented: () => true };
+    expect(stepDraftCards(ev, rootOf(cards))).toBe(false);
+    expect(cards[1].focus).not.toHaveBeenCalled();
+  });
+
   it("leaves keys alone that come from anything but a card", () => {
     const cards = [card(), card()];
     const input = { id: "pip-input", matches: () => false };
@@ -250,6 +279,13 @@ describe("moving between cards", () => {
     expect(cards[1].focus).toHaveBeenCalled();
     expect(cards[0].focus).not.toHaveBeenCalled();
     expect(ev.preventDefault).toHaveBeenCalled();
+  });
+
+  it("marks the card it reaches, so the card's first key can go back to the input", () => {
+    const cards = [{ ...card(), setAttribute: vi.fn() }, { ...card(), setAttribute: vi.fn() }];
+    upToNewestDraft(key("ArrowUp", null), "", rootOf(cards));
+    expect(cards[1].setAttribute).toHaveBeenCalledWith(FROM_INPUT, "");
+    expect(cards[0].setAttribute).not.toHaveBeenCalled();
   });
 
   it("keeps ArrowUp for the text when the input has some, and does nothing with no draft waiting", () => {

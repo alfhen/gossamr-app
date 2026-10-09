@@ -106,4 +106,18 @@ mod tests {
         let rows = crate::db::Db::open(&fx.dir.join("inbox-site-me.sqlite")).unwrap();
         assert!(rows.pip_turns("workspace").unwrap().is_empty() && rows.pip_turns("CA-1").unwrap().is_empty());
     }
+
+    #[tokio::test]
+    async fn a_database_that_cannot_open_does_not_stop_signing_out() {
+        let fx = crate::inbox::testing::fixture().await;
+        fx.core.close_db();
+        // Something that is not a database where the account's file should be.
+        let path = fx.dir.join("inbox-site-me.sqlite");
+        let _ = std::fs::remove_file(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(fx.core.pip_turns("workspace").await.is_err(), "the broken file must really fail to open");
+
+        fx.core.sign_out().await.unwrap();
+        assert!(matches!(fx.core.pip_turns("workspace").await, Err(crate::error::Error::NotSignedIn)), "the person is signed out");
+    }
 }
