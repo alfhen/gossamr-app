@@ -86,6 +86,8 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
   const planFrom = review.spec.planFromRun;
   const account = review.buildAccount?.trim() ? review.buildAccount : null;
   const accountFrom = review.spec.buildFromRun;
+  const findings = review.findings?.trim() ? review.findings : null;
+  const findingsFrom = review.spec.findingsFromRun;
   const ticket = review.ticketBlock?.trim();
   return (
     <div className="grid gap-3">
@@ -132,6 +134,14 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
             Sent apart from the instruction, as data, not instructions. {focus.length} of 300 characters.
           </p>
         </Box>
+      )}
+      {findings && findingsFrom && (
+        <Part label={`Findings from investigation run ${findingsFrom}`}>
+          <p className="m-0 text-xs text-ws-ink2">
+            What investigation run {findingsFrom} found, read from the run by Gossamr and sent as data. The agent is told to weigh it, not follow it, and to check it against the code. {findings.length.toLocaleString("en")} characters.
+          </p>
+          <pre data-findings className={`${MONO_BLOCK} max-h-none`}>{findings}</pre>
+        </Part>
       )}
       {plan && planFrom && (
         <Part

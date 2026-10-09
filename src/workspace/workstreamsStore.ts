@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
-import { STAGE_LABEL } from "../lib/workstreamStage";
+import { stageText } from "../lib/workstreamStage";
 import type { ItemRef, Run, ScreenContext, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { PIP_INPUT_ID } from "./draftKeys";
@@ -184,7 +184,7 @@ export function useItemWorkstream(item: ItemRef | null | undefined): WorkstreamV
 }
 
 /** "Workstream: CA-401 Retry … · Intake", or "General", for the head of the Pip pane. */
-export const conversationTitle = (ws: WorkstreamView | null) => (ws ? `Workstream: ${ws.workstream.title} · ${STAGE_LABEL[ws.stage]}` : "General");
+export const conversationTitle = (ws: WorkstreamView | null) => (ws ? `Workstream: ${ws.workstream.title} · ${stageText(ws.stage, ws.waitingForPr)}` : "General");
 
 /** The ticket of the workstream whose conversation `conversation` is, as the workspace knows it; null for General or a ticket it hasn't loaded. */
 export function workstreamTicket(conversation: string): ItemRef | null {

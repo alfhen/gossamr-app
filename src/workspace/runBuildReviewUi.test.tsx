@@ -38,7 +38,9 @@ describe("the run sheet for a finished build", () => {
     expect(html).toContain("data-review-box");
     expect(html).toContain("Pull request #218 (a draft)");
     expect(html).toContain("treats what the builder says it did as a claim to verify");
-    expect(html).toContain("comments nothing on the pull request");
+    expect(html).toContain("The reviewer tries to show the change is not ready");
+    expect(html).toContain("ends with a verdict: pass or blocking");
+    expect(html).toContain("never comments on, approves or changes the pull request");
     expect(disabled(html, "Review this")).toBe(false);
   });
 
@@ -49,9 +51,14 @@ describe("the run sheet for a finished build", () => {
   });
 
   it("turns it off, with the reason, when there is no pull request or it is not in the same repository", () => {
-    const none = sheet(build, outcome({ change: null }));
-    expect(disabled(none, "Review this")).toBe(true);
-    expect(none).toContain("This build has no pull request yet");
+    const unpushed = sheet({ ...build, spec: { ...build.spec, allowPush: false } }, outcome({ change: null }));
+    expect(disabled(unpushed, "Review this")).toBe(true);
+    expect(unpushed).toContain("This build has no pull request yet. Push it and open one");
+    // A build that was asked to push opened its own; the person isn't told to push it again while a sync finds it.
+    const waiting = sheet({ ...build, spec: { ...build.spec, allowPush: true } }, outcome({ change: null }));
+    expect(disabled(waiting, "Review this")).toBe(true);
+    expect(waiting).toContain("Its draft pull request hasn&#x27;t been found on GitHub yet");
+    expect(waiting).not.toContain("Push it and open one");
     const fork = sheet(build, outcome({ change: { ...outcome().change!, headRepo: "mallory/webshop" } }));
     expect(disabled(fork, "Review this")).toBe(true);
     expect(fork).toContain("isn&#x27;t from a branch in the same repository");
@@ -123,5 +130,20 @@ describe("a review draft that follows a build", () => {
     expect(html).toContain("shown whole in the prompt");
     const plain = await backend.runsDraft({ ...build.spec, kind: "review", instruction: "", allowPush: false, pr: 212, buildAccount: null, buildFromRun: null, name: "ca-402-other-0a1b" }, build.item);
     expect(card(plain)).not.toContain("Checks the builder");
+  });
+});
+
+describe("an investigation's findings in the exact-prompt review", () => {
+  it("shows them read-only as a part of their own, labelled with the run, sent as data, with their length", () => {
+    const spec = { ...build.spec, kind: "plan" as const, allowPush: false, pr: null, prSha: null, instruction: "Plan it.", findings: "It retries without backoff.", findingsFromRun: "run-3" };
+    const review: RunReview = { digest: "d", prompt: "Plan it.", instruction: "Plan it.", focus: null, ticketBlock: null, findings: spec.findings, guard: "g", spec };
+    const html = renderToStaticMarkup(<PromptParts review={review} />);
+    expect(html).toContain("Findings from investigation run run-3");
+    expect(html).toContain("sent as data");
+    expect(html).toContain("data-findings");
+    expect(html).toContain("It retries without backoff.");
+    expect(html).toContain("27 characters");
+    expect(html).not.toContain("<textarea");
+    expect(renderToStaticMarkup(<PromptParts review={{ ...review, findings: null, spec: { ...spec, findings: null, findingsFromRun: null } }} />)).not.toContain("Findings from");
   });
 });

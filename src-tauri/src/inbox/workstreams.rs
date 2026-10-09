@@ -9,7 +9,7 @@ use super::Core;
 use crate::auth::Scope;
 use crate::db::Db;
 use crate::domain::workstream::{run_labels, stage, Mode, Stage};
-use crate::domain::{has_markers, Actor, ItemRef, Run, RunQuery, Workstream, WorkstreamEvent};
+use crate::domain::{has_markers, Actor, ItemRef, Run, RunKind, RunQuery, RunState, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::tracker::Connection;
@@ -20,6 +20,8 @@ pub const NOTES_LIMIT: usize = 2_048;
 pub const NOTES_OPEN: &str = "<<<PIP_NOTES";
 pub const NOTES_CLOSE: &str = "PIP_NOTES>>>";
 const TITLE_LIMIT: usize = 200;
+/// Told to Pip wherever a finished build's pull request hasn't been found yet: a review needs it pinned.
+pub const WAITING_FOR_PR_HINT: &str = "Gossamr asked GitHub for it; draft the review once get_workstream no longer says the build is waiting for its pull request.";
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
@@ -35,12 +37,37 @@ pub struct WorkstreamView {
     pub runs: Vec<String>,
     /// `(run id, "R1")`, oldest first.
     pub labels: Vec<(String, String)>,
+    /// The newest finished build that publishes a pull request, while no sync has found that pull request yet and no
+    /// review was queued after it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for_pr: Option<String>,
 }
 
 impl WorkstreamView {
     fn of(workstream: Workstream, runs: &[Run]) -> Self {
-        WorkstreamView { stage: stage(runs), runs: runs.iter().map(|r| r.id.clone()).collect(), labels: run_labels(runs), workstream }
+        WorkstreamView { stage: stage(runs), runs: runs.iter().map(|r| r.id.clone()).collect(), labels: run_labels(runs), workstream, waiting_for_pr: None }
     }
+}
+
+/// Whether a pushed build is still waiting for its pull request. The code cache is only advisory here: a lookup that
+/// fails leaves the view without the flag rather than failing the view.
+fn waiting_for(build: &Run, lookup: Result<Option<u64>>) -> Option<String> {
+    match lookup {
+        Ok(None) => Some(build.id.clone()),
+        Ok(Some(_)) => None,
+        Err(e) => {
+            eprintln!("couldn't look up the pull request of build {}: {e}", build.id);
+            None
+        }
+    }
+}
+
+/// The newest finished build among `runs` that pushes a branch, when no review was queued after it: the one whose pull
+/// request a review needs.
+fn pushed_build(runs: &[Run]) -> Option<&Run> {
+    let build = runs.iter().filter(|r| r.spec.kind == RunKind::Build && r.state == RunState::Done && r.spec.allow_push).max_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)))?;
+    let reviewed = runs.iter().any(|r| r.spec.kind == RunKind::Review && ((r.queued_at, &r.id) > (build.queued_at, &build.id) || r.spec.build_from_run.as_deref() == Some(build.id.as_str())));
+    (!reviewed).then_some(build)
 }
 
 fn sha256_hex(text: &str) -> String {
@@ -116,29 +143,42 @@ impl Core {
     /// One of `scope`'s workstreams with its stage, or `None` when it isn't one of them.
     pub async fn workstream(&self, scope: &Scope, id: &str) -> Result<Option<WorkstreamView>> {
         let connection_id = Connection::jira_id(scope);
-        self.with_db_for(scope, |db| {
-            let Some(ws) = db.workstream(id)?.filter(|w| w.connection_id == connection_id) else { return Ok(None) };
-            let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), workstream: Some(ws.id.clone()), ..Default::default() })?;
-            Ok(Some(WorkstreamView::of(ws, &runs)))
-        })
-        .await
+        let found = self
+            .with_db_for(scope, |db| {
+                let Some(ws) = db.workstream(id)?.filter(|w| w.connection_id == connection_id) else { return Ok(None) };
+                let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), workstream: Some(ws.id.clone()), ..Default::default() })?;
+                Ok(Some((ws, runs)))
+            })
+            .await?;
+        found.map(|(ws, runs)| self.view_of(ws, &runs)).transpose()
+    }
+
+    /// A workstream's view from its runs, with the build still waiting for its pull request. That is read from the
+    /// code cache, so it is looked up outside the account's database.
+    fn view_of(&self, workstream: Workstream, runs: &[Run]) -> Result<WorkstreamView> {
+        let mut view = WorkstreamView::of(workstream, runs);
+        if let Some(build) = pushed_build(runs) {
+            view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
+        }
+        Ok(view)
     }
 
     /// `scope`'s workstreams, newest first, each with its stage; closed ones only when asked for.
     pub async fn workstreams(&self, scope: &Scope, include_closed: bool) -> Result<Vec<WorkstreamView>> {
         let connection_id = Connection::jira_id(scope);
-        self.with_db_for(scope, |db| {
-            let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?;
-            Ok(db
-                .workstreams(&connection_id, include_closed)?
-                .into_iter()
-                .map(|ws| {
-                    let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())).cloned().collect();
-                    WorkstreamView::of(ws, &linked)
-                })
-                .collect())
-        })
-        .await
+        let (workstreams, runs) = self
+            .with_db_for(scope, |db| {
+                let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?;
+                Ok((db.workstreams(&connection_id, include_closed)?, runs))
+            })
+            .await?;
+        workstreams
+            .into_iter()
+            .map(|ws| {
+                let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())).cloned().collect();
+                self.view_of(ws, &linked)
+            })
+            .collect()
     }
 
     /// Closes a workstream. Its runs and drafts are left as they are; closing it again changes nothing.
@@ -260,6 +300,71 @@ mod tests {
         run.state = state;
         fx.core.with_db_for(&fx.scope, |db| db.insert_run(&run)).await.unwrap();
         run
+    }
+
+    /// A run linked to `ws`, queued `at` seconds after the epoch so the order is fixed, changed by `edit`.
+    async fn insert_at(fx: &Fixture, id: &str, ws: &str, kind: RunKind, state: RunState, at: i64, edit: impl FnOnce(&mut Run)) -> Run {
+        let mut run = insert_run(fx, id, Some(ws), kind, state).await;
+        run.queued_at = chrono::DateTime::from_timestamp(1_800_000_000 + at, 0).unwrap();
+        edit(&mut run);
+        fx.core.with_db_for(&fx.scope, |db| db.save_run(&run)).await.unwrap();
+        run
+    }
+
+    async fn waiting(fx: &Fixture, ws: &str) -> Option<String> {
+        let view = fx.core.workstream(&fx.scope, ws).await.unwrap().unwrap();
+        let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws).unwrap();
+        assert_eq!(listed.waiting_for_pr, view.waiting_for_pr, "the list and the single view agree");
+        view.waiting_for_pr
+    }
+
+    #[tokio::test]
+    async fn a_finished_pushing_build_waits_for_its_pull_request_until_a_sync_caches_it() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        insert_at(&fx, "r-plan", &ws.id, RunKind::Plan, RunState::Done, 0, |_| {}).await;
+        let build = insert_at(&fx, "r-build", &ws.id, RunKind::Build, RunState::Done, 10, |r| r.spec.allow_push = true).await;
+        assert_eq!(waiting(&fx, &ws.id).await.as_deref(), Some("r-build"));
+        let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+        assert_eq!(view.stage, Stage::Build, "the stage is left as the runs give it");
+        assert_eq!(serde_json::to_value(&view).unwrap()["waitingForPr"], "r-build");
+
+        let mut pull = crate::codehost::links::tests::pr(301, &format!("worktree-{}", build.spec.name), "Retry", "");
+        pull.state = crate::domain::CodeChangeState::Draft;
+        fx.core.with_code_db("github:ann", |db| db.upsert_code_changes(&[pull], "2026-09-29T00:00:00Z")).unwrap();
+        assert_eq!(waiting(&fx, &ws.id).await, None, "the pull request was found");
+        let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+        assert!(serde_json::to_value(&view).unwrap().get("waitingForPr").is_none(), "not written when unset");
+    }
+
+    #[tokio::test]
+    async fn a_failed_pull_request_lookup_leaves_the_view_without_the_flag() {
+        let fx = fixture().await;
+        let build = insert_run(&fx, "r-build", None, RunKind::Build, RunState::Done).await;
+        assert_eq!(waiting_for(&build, Ok(None)).as_deref(), Some("r-build"));
+        assert_eq!(waiting_for(&build, Ok(Some(301))), None);
+        assert_eq!(waiting_for(&build, Err(crate::error::Error::NotSignedIn)), None, "an advisory lookup never fails the view");
+    }
+
+    #[tokio::test]
+    async fn a_build_reviewed_since_or_one_that_does_not_push_waits_for_nothing() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        insert_at(&fx, "r-local", &ws.id, RunKind::Build, RunState::Done, 0, |_| {}).await;
+        assert_eq!(waiting(&fx, &ws.id).await, None, "a build that doesn't push opens no pull request");
+
+        insert_at(&fx, "r-working", &ws.id, RunKind::Build, RunState::Working, 5, |r| r.spec.allow_push = true).await;
+        assert_eq!(waiting(&fx, &ws.id).await, None, "an unfinished build isn't waiting yet");
+
+        insert_at(&fx, "r-push", &ws.id, RunKind::Build, RunState::Done, 10, |r| r.spec.allow_push = true).await;
+        assert_eq!(waiting(&fx, &ws.id).await.as_deref(), Some("r-push"));
+        insert_at(&fx, "r-review", &ws.id, RunKind::Review, RunState::Queued, 20, |_| {}).await;
+        assert_eq!(waiting(&fx, &ws.id).await, None, "a review was queued after it");
+
+        let other = fx.core.open_workstream(&fx.scope, None, Some("Another".into())).await.unwrap();
+        insert_at(&fx, "r-other", &other.id, RunKind::Build, RunState::Done, 30, |r| r.spec.allow_push = true).await;
+        insert_at(&fx, "r-older-review", &other.id, RunKind::Review, RunState::Done, 0, |r| r.spec.build_from_run = Some("r-other".into())).await;
+        assert_eq!(waiting(&fx, &other.id).await, None, "a review of that very build counts whenever it was queued");
     }
 
     #[tokio::test]

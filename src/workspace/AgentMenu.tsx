@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { itemKey } from "../lib/filter";
-import { STAGE_LABEL } from "../lib/workstreamStage";
+import { stageText } from "../lib/workstreamStage";
 import type { CodeChange, ItemRef, Run, RunKind, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { RunLabel } from "./AgentCard";
@@ -118,8 +118,8 @@ export function WorkstreamLine({ workstream }: { workstream: WorkstreamView }) {
         ◆
       </span>
       <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
-      <span className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip" data-stage={workstream.stage}>
-        {STAGE_LABEL[workstream.stage]}
+      <span className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip" data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>
+        {stageText(workstream.stage, workstream.waitingForPr)}
       </span>
     </p>
   );

@@ -58,6 +58,9 @@ pub fn record(db: &Db, p: &Proposal, actor: Actor, action: &str, at: DateTime<Ut
 
 const EDITED_NOTE: &str = "Edited";
 
+/// The note on a revision Pip made.
+pub const REVISED_BY_PIP: &str = "Revised by Pip";
+
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
@@ -290,8 +293,19 @@ pub fn left_by_run(p: &Proposal) -> bool {
         && matches!(p.created_by, CreatedBy::Agent | CreatedBy::User)
 }
 
+/// Whether the draft is a description update carrying a `Gossamr Plan` section that an agent run left: the plan a build
+/// follows once the person approves it.
+pub fn is_run_plan_rewrite(p: &Proposal) -> bool {
+    matches!(p.origin, Origin::Run { .. }) && matches!(&p.intent, Intent::Rewrite { body: Some(b), .. } if b.to.plan_section().is_some())
+}
+
+/// Whether Pip changed the draft's text and the person never edited it after: what it says is partly Pip's words.
+pub fn revised_by_pip_unedited(p: &Proposal) -> bool {
+    p.revisions.iter().any(|r| r.note == REVISED_BY_PIP) && !person_edited(p)
+}
+
 /// What Pip may revise: its own pending drafts, and a pending comment, new ticket, breakdown into subtasks or description
-/// update the person's agent run left for them. The person made none of these by hand, and all stay theirs to approve.
+/// update without a Gossamr Plan the person's agent run left for them. The person made none of these by hand, and all stay theirs to approve.
 /// A draft that belongs to a workstream is revised only from that workstream's conversation (`workstream`); one in no
 /// workstream from any conversation.
 pub fn require_pip_may_revise(p: &Proposal, workstream: Option<&str>) -> Result<()> {
@@ -307,6 +321,10 @@ pub fn require_pip_may_revise(p: &Proposal, workstream: Option<&str>) -> Result<
     // Person edits are final: a comment, new ticket or breakdown an agent left is the person's once they have edited it.
     if left_by_run(p) && person_edited(p) {
         return Err(refuse("the user edited this draft, so Pip can't change it any more"));
+    }
+    // A build follows the plan the person approves here and is told a person settled it, so none of it may be Pip's.
+    if left_by_run(p) && is_run_plan_rewrite(p) {
+        return Err(refuse("this description update carries the Gossamr Plan a build follows, so only the user changes it; tell them what you would change instead"));
     }
     if p.created_by != CreatedBy::Pip && !left_by_run(p) {
         return Err(refuse("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it"));

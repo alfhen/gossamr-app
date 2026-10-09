@@ -972,6 +972,12 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         if synced.links_changed {
                             dev_links_changed(&app, &connection_id);
                         }
+                        // A pull request found here can end a workstream's wait for its build's one.
+                        if synced.changed || synced.links_changed {
+                            if let Ok(scope) = core.scope().await {
+                                workstreams_changed(&app, &Connection::jira_id(&scope));
+                            }
+                        }
                     }
                     Err(_) => {
                         cache_changed(&app, &connection_id);

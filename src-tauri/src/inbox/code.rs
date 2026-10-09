@@ -560,6 +560,12 @@ impl Core {
         }
     }
 
+    /// Asks the sync loop for a code sync now, as the Sync button does: a build that just pushed a branch has its pull
+    /// request found sooner than at the next interval.
+    pub fn request_code_sync(&self) {
+        self.wake.notify_one();
+    }
+
     /// Syncs each GitHub connection that is due. Each has its own schedule, so one that is rate limited waits alone.
     pub async fn sync_code_if_due(&self, trigger: Trigger) -> Vec<(String, Result<CodeSynced>)> {
         let mut out = Vec::new();

@@ -497,6 +497,10 @@ export interface RunSpec {
   buildAccount?: string | null;
   /** The build run it came from. Set with `buildAccount`, reviews only. */
   buildFromRun?: string | null;
+  /** For a triage or plan made after an investigation: what it found, sent as data apart from the instruction. Filled by the backend from that run, never by the caller. */
+  findings?: string | null;
+  /** The investigation run the findings came from. Set with `findings`, triage and plans only. */
+  findingsFromRun?: string | null;
   /** Whether a build is told it may push and open a draft pull request. Builds only. */
   allowPush?: boolean;
   /** Where the draft ticket of an investigation with no ticket lands. Its presence makes the run end as a ticket; the agent never chooses it. */
@@ -629,6 +633,31 @@ export interface RunOutcome {
   planDraft?: { id: string; state: ProposalState } | null;
   /** For a Plan run on a ticket: the description update that adds its plan, or why there is none. */
   planDescription?: { draft: { id: string; state: ProposalState } | null; unavailable: string | null } | null;
+  /** For a Review run that gave a verdict: the verdict and its findings. Null for other runs and for a review without one. */
+  review?: ReviewView | null;
+}
+
+/** A review's conclusion: `blocking` when it found something that has to be fixed before the change is ready. */
+export type ReviewVerdict = "pass" | "blocking";
+
+export type ReviewSeverity = "blocking" | "should-fix" | "nit";
+
+/** One thing a review found, and the file and line, command or acceptance point it rests on. The words are the agent's. */
+export interface ReviewFinding {
+  severity: ReviewSeverity;
+  text: string;
+  where: string | null;
+}
+
+/** A review's verdict as the sheet and card show it. Only the verdict and the counts are meant to be acted on. */
+export interface ReviewView {
+  verdict: ReviewVerdict;
+  blocking: number;
+  shouldFix: number;
+  nits: number;
+  findings: ReviewFinding[];
+  /** Reported through the tool, or read from the `Verdict:` line of the written answer. */
+  source: "structured" | "written";
 }
 
 /** The whole plan of a Plan run drafted as a comment, and whether it had to be cut to fit a Jira comment. */
@@ -649,6 +678,8 @@ export interface RunReview {
   plan?: string | null;
   /** For a review made from a build: the builder's account as it will be sent. */
   buildAccount?: string | null;
+  /** For a triage or plan made after an investigation: the findings as they will be sent. */
+  findings?: string | null;
   guard: string;
   /** What the session is also given when the run asks for the result tool and Gossamr's server is running. */
   report?: { allowed: string; guard: string } | null;
@@ -752,6 +783,8 @@ export interface WorkstreamView {
   stage: WorkstreamStage;
   runs: string[];
   labels: [string, string][];
+  /** The newest finished build that published a pull request a sync hasn't found yet, while no review was queued after it. */
+  waitingForPr?: string | null;
 }
 
 /** Who did something recorded in a workstream's audit. */

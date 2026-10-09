@@ -1,10 +1,10 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RunSpec } from "../types";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Run, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { mockPipTurns } from "./mockPipTurns";
 import { mockDigest } from "./mockRuns";
-import { MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT } from "./mockWorkstreams";
+import { MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, waitingForPr } from "./mockWorkstreams";
 
 /** A browser's storage for this file, kept across new backends as across reloads of one page. */
 const saved = new Map<string, string>();
@@ -265,16 +265,89 @@ describe("runs and drafts in a mock workstream", () => {
     const ws = await backend.workstreamsOpen(CA401);
     mockPipTurns.begin(`ws:${ws.id}`, "ws-ask-1", "investigate this", { imageCount: 0 });
     mockPipTurns.begin("general", "general-ask-1", "investigate this", { imageCount: 0 });
-    const inWorkstream = await backend.pipRunDraft(CA401, null, "ws-ask-1");
+    const inWorkstream = await backend.pipRunDraft(CA401, "investigate", null, null, "ws-ask-1");
     expect(inWorkstream.origin).toEqual({ type: "chat", requestId: "ws-ask-1", workstream: ws.id });
     expect(inWorkstream.intent.type === "startRun" && inWorkstream.intent.spec.workstream).toBe(ws.id);
     const comment = await backend.pipDraft({ type: "comment", item: CA401, body: { blocks: [] } }, null, "ws-ask-1");
     expect(comment.origin).toEqual({ type: "chat", requestId: "ws-ask-1", workstream: ws.id });
-    const general = await backend.pipRunDraft(CA401, null, "general-ask-1");
+    const general = await backend.pipRunDraft(CA401, "investigate", null, null, "general-ask-1");
     expect(general.origin).toEqual({ type: "chat", requestId: "general-ask-1" });
     expect(general.intent.type === "startRun" && general.intent.spec.workstream).toBeUndefined();
-    await expect(backend.pipRunDraft(itemRef("CA-402"), null, "ws-ask-1")).rejects.toThrow("about another ticket");
+    await expect(backend.pipRunDraft(itemRef("CA-402"), "investigate", null, null, "ws-ask-1")).rejects.toThrow("about another ticket");
     expect((await backend.workstreamsEvents(ws.id)).filter((e) => e.action === "draft_created").map((e) => e.actor)).toEqual(["pip", "pip"]);
     mockPipTurns.clear();
+  });
+});
+
+describe("a workstream's build waiting for its pull request", () => {
+  beforeEach(() => saved.clear());
+  afterEach(() => vi.useRealTimers());
+
+  /** A finished build the person started in a new workstream on CA-401, and the backend it ran in. */
+  async function finishedBuild(prSurfaceMs: number | null) {
+    const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs } });
+    const ws = await b.workstreamsOpen(CA401);
+    const made = await b.runsDraft(spec({ kind: "build", workstream: ws.id }), CA401);
+    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    for (let i = 0; i < 3; i++) b.runs.advance(run.id);
+    mockPipTurns.begin(`ws:${ws.id}`, `ws-pr-${run.id}`, "review it", { imageCount: 0 });
+    return { b, ws: ws.id, build: b.runs.get(run.id)!, request: `ws-pr-${run.id}` };
+  }
+
+  it("waits until the code host shows the draft pull request the build opened, then lets Pip draft the review pinned to it", async () => {
+    const { b, ws, build, request } = await finishedBuild(null);
+    expect(build).toMatchObject({ state: "done", spec: { allowPush: true }, branch: `worktree-${build.spec.name}` });
+    expect(build.result).toContain("opened a draft pull request");
+    expect(build.result).toMatch(/For Jira:\n.*https:\/\/github\.com\/acme\/storefront\/pull\/300/);
+    expect((await b.workstreamsGet(ws))?.waitingForPr).toBe(build.id);
+    expect((await b.workstreamsGet(ws))?.stage).toBe("build");
+    expect((await b.runsOutcome(build.id)).change).toBeNull();
+    await expect(b.pipRunDraft(CA401, "review", build.id, null, request)).rejects.toThrow(/^that build has no pull request in this repository yet\. Gossamr asked GitHub/);
+    const runs = b.runs.list().length;
+
+    let told = 0;
+    const stop = b.onWorkstreamsChanged(() => told++);
+    expect(b.runs.surfacePullRequests()).toBe(true);
+    stop();
+    expect(told).toBeGreaterThan(0);
+    expect(b.runs.surfacePullRequests()).toBe(false);
+    const view = await b.workstreamsGet(ws);
+    expect(view?.waitingForPr).toBeUndefined();
+    expect(view?.stage).toBe("build");
+    const change = (await b.runsOutcome(build.id)).change!;
+    expect(change).toMatchObject({ kind: "pullRequest", state: "draft", number: 300, repo: "acme/storefront", headRepo: "acme/storefront", headRef: `worktree-${build.spec.name}`, baseRef: "main", url: "https://github.com/acme/storefront/pull/300" });
+    expect(change.sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(b.github.code.changes.some((c) => c.externalId === change.externalId)).toBe(true);
+
+    const review = await b.pipRunDraft(CA401, "review", build.id, null, request);
+    const reviewSpec = review.intent.type === "startRun" ? review.intent.spec : null;
+    expect(reviewSpec).toMatchObject({ kind: "review", pr: 300, prSha: change.sha, buildFromRun: build.id, report: true, workstream: ws });
+    expect((await b.runsReview(review.id)).prompt).toContain(`Review pull request #300 in acme/storefront at commit ${change.sha}.`);
+    // Drafting reads; nothing started on its own.
+    expect(b.runs.list().length).toBe(runs);
+  });
+
+  it("shows the pull request after a moment on its own", async () => {
+    vi.useFakeTimers();
+    const { b, ws, build } = await finishedBuild(1_500);
+    expect((await b.workstreamsGet(ws))?.waitingForPr).toBe(build.id);
+    vi.advanceTimersByTime(1_500);
+    expect((await b.workstreamsGet(ws))?.waitingForPr).toBeUndefined();
+    expect(b.runs.pullRequestOf(build.id)).toBe(300);
+  });
+
+  it("is derived like the backend: the newest finished pushing build, unless reviewed since or its pull request is found", () => {
+    const run = (id: string, kind: Run["spec"]["kind"], state: Run["state"], minute: number, over: Partial<RunSpec> = {}) =>
+      ({ id, state, queuedAt: `2026-09-30T10:${String(minute).padStart(2, "0")}:00Z`, spec: { ...spec({ kind, workstream: "ws-1" }), ...over } }) as Run;
+    const none = () => null;
+    expect(waitingForPr([run("b1", "build", "done", 0)], none)).toBeNull();
+    expect(waitingForPr([run("b1", "build", "working", 0, { allowPush: true })], none)).toBeNull();
+    const pushed = run("b1", "build", "done", 1, { allowPush: true });
+    expect(waitingForPr([pushed, run("p1", "plan", "done", 0)], none)).toBe("b1");
+    expect(waitingForPr([pushed], (id) => (id === "b1" ? 300 : null))).toBeNull();
+    expect(waitingForPr([pushed, run("r1", "review", "queued", 2)], none)).toBeNull();
+    expect(waitingForPr([pushed, run("r0", "review", "done", 0, { buildFromRun: "b1" })], none)).toBeNull();
+    expect(waitingForPr([pushed, run("r0", "review", "done", 0)], none)).toBe("b1");
+    expect(waitingForPr([pushed, run("b2", "build", "done", 3, { allowPush: true })], (id) => (id === "b1" ? null : 301))).toBeNull();
   });
 });

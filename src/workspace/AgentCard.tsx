@@ -1,9 +1,10 @@
 import type { KeyboardEvent } from "react";
 import { runRef } from "../lib/composerVerbs";
-import type { Run } from "../types";
+import type { ReviewView, Run } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
 import { KIND_LABEL, ageSince, ageText, branchOf, formatTokens, repoName, runTitle, stateView } from "./agentsLogic";
+import { verdictChip, verdictText } from "./runSheetLogic";
 
 export const agentId = (id: string) => `agent-${id}`;
 
@@ -35,7 +36,24 @@ export interface AgentItemProps {
   /** A description update that adds this plan to its ticket is waiting as a draft. */
   descriptionReady?: boolean;
   onOpenDescription?(): void;
+  /** A finished review's verdict; null when it gave none, absent while unread or for any other run. */
+  review?: ReviewView | null;
   failure: FailureState;
+}
+
+/** A finished review's verdict in a chip: "Blocking · 2" or "Pass". */
+export function VerdictChip({ review }: { review: ReviewView }) {
+  const blocking = review.verdict === "blocking";
+  return (
+    <span
+      data-verdict={review.verdict}
+      data-blocking-count={review.blocking}
+      title={`The reviewer's verdict: ${verdictText(review)}`}
+      className={`inline-flex shrink-0 items-center rounded-full px-2 text-xs leading-[1.6] font-semibold whitespace-nowrap ${blocking ? "bg-ws-blocked-soft text-ws-blocked" : "bg-ws-done-soft text-ws-done"}`}
+    >
+      {verdictChip(review)}
+    </span>
+  );
 }
 
 export const ticketLabel = (run: Run) => run.item?.key ?? null;
@@ -68,7 +86,7 @@ export function RunLabel({ label }: { label?: string }) {
   );
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, failure }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -96,7 +114,8 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
           {KIND_LABEL[run.spec.kind]}
         </span>
         {ticketLabel(run) && <span className="font-mono text-sm font-semibold text-ws-ink2">{ticketLabel(run)}</span>}
-        <span className="ml-auto shrink-0">
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {review && <VerdictChip review={review} />}
           <StateChip run={run} now={now} />
         </span>
       </div>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
-import { STAGE_LABEL, labelsByRun } from "../lib/workstreamStage";
-import type { CodeChange, Run, RunsEnvironment, WorkstreamView } from "../types";
+import { labelsByRun, stageText } from "../lib/workstreamStage";
+import type { CodeChange, ReviewView, Run, RunsEnvironment, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { AgentCard, agentId, type AgentItemProps } from "./AgentCard";
 import { Icon } from "./AgentIcons";
@@ -32,7 +32,7 @@ import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
-import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
+import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -225,8 +225,8 @@ function WorkstreamSection({ group, children }: { group: WorkstreamGroup; childr
         )}
         <h3 className={`m-0 min-w-0 truncate text-sm font-semibold ${group.id ? "text-ws-ink" : "text-ws-ink2"}`}>{group.title}</h3>
         {group.stage && (
-          <span data-stage={group.stage} className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
-            {STAGE_LABEL[group.stage]}
+          <span data-stage={group.stage} data-waiting-for-pr={group.waitingForPr || undefined} className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
+            {stageText(group.stage, group.waitingForPr)}
           </span>
         )}
         <span className="text-xs text-ws-ink3">{group.runs.length}</span>
@@ -262,11 +262,13 @@ export interface AgentsScreenProps {
   descriptionReady?(run: Run): boolean;
   /** What "Review this" does for a finished build whose pull request can be reviewed; absent for any other run. */
   reviewThis?(run: Run): (() => void) | undefined;
+  /** A finished review's verdict, once its outcome is read; null for a review that gave none, absent for any other run. */
+  reviewOf?(run: Run): ReviewView | null | undefined;
   on: AgentsActions;
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, on }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on }: AgentsScreenProps) {
   const footer = useFooterHeight();
   const { lanes, workstreams: wsGroups, order } = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now), [group, runs, workstreams, filters, earlierOpen, now]);
   const filtered = isFiltered(filters);
@@ -292,6 +294,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     onOpenDescription: on.openDescription ? () => on.openDescription?.(run) : undefined,
     onBuildFromPlan: buildFromPlanControl(run).enabled ? () => on.buildFromPlan(run) : undefined,
     onReviewThis: reviewThis?.(run),
+    review: reviewOf?.(run),
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
     failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
   });
@@ -443,6 +446,27 @@ function useBuildChanges(runs: readonly Run[]) {
   return changes;
 }
 
+/** The verdict of each finished review, read from its outcome once it is done and again whenever it changes. */
+function useReviewVerdicts(runs: readonly Run[]) {
+  const backend = useRuns((s) => s.backend);
+  const [verdicts, setVerdicts] = useState<Record<string, ReviewView | null>>({});
+  const asked = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (!backend) return;
+    for (const run of runs) {
+      if (run.spec.kind !== "review" || run.state !== "done") continue;
+      const version = `${run.lastProgressAt}|${run.endedAt ?? ""}`;
+      if (asked.current.get(run.id) === version) continue;
+      asked.current.set(run.id, version);
+      backend.runsOutcome(run.id).then(
+        (outcome) => setVerdicts((v) => ({ ...v, [run.id]: outcome.review ?? null })),
+        () => asked.current.delete(run.id),
+      );
+    }
+  }, [backend, runs]);
+  return verdicts;
+}
+
 export function AgentsView() {
   const runs = useRuns((s) => s.runs);
   const status = useRuns((s) => s.status);
@@ -462,6 +486,7 @@ export function AgentsView() {
   const proposals = useWorkspace((s) => s.proposals);
   const now = useNow();
   const changes = useBuildChanges(runs);
+  const verdicts = useReviewVerdicts(runs);
 
   const order = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now).order, [group, runs, workstreams, filters, earlierOpen, now]);
   const orderRef = useRef(order);
@@ -526,6 +551,7 @@ export function AgentsView() {
         const change = changes[run.id] ?? null;
         return change && reviewThisControl(run, change).enabled ? () => void useRunSetup.getState().begin(reviewThisOptions(run, change)) : undefined;
       }}
+      reviewOf={(run) => shownVerdict(run, verdicts)}
       on={actions}
     />
   );

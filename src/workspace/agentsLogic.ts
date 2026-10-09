@@ -208,6 +208,8 @@ export interface WorkstreamGroup {
   title: string;
   /** Derived from every run of the workstream, filtered or not; null for the runs that belong to none. */
   stage: WorkstreamStage | null;
+  /** The workstream's build whose pull request hasn't been found yet, if any. */
+  waitingForPr?: string | null;
   runs: Run[];
   /** Run id to its short name in the workstream (`R1` for the first queued), counted over all its runs so a filter never renumbers them. */
   labels: Record<string, string>;
@@ -233,7 +235,7 @@ export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonl
     const view = byId.get(id);
     const mine = sortRuns(all.filter((r) => shown.has(r.id)));
     if (!mine.length) continue;
-    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, stage: stage(all), runs: mine, labels: Object.fromEntries(runLabels(all)) });
+    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, stage: stage(all), waitingForPr: view?.waitingForPr ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
   }
   const latest = (g: WorkstreamGroup) => ageSince(g.runs[0]);
   groups.sort((a, b) => latest(b).localeCompare(latest(a)) || a.title.localeCompare(b.title));
