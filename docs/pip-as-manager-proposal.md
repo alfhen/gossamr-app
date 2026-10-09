@@ -58,7 +58,7 @@ Today's Review prompt already treats the builder's account as "a claim to verify
 | Stance | The reviewer's job is to show the change is **not** ready: find a failing case, an unmet acceptance point, a missing test, a regression or a security issue. Passing is the conclusion only when it tried and failed to find any of these. |
 | Evidence | It may check out the PR head in its own worktree and run the existing tests and read-only commands, as Verify does today. Every finding must cite a file and line, a command and its output, or the acceptance point it fails. |
 | Independence | It gets the ticket, the diff and the build account (labelled as a claim). It does **not** get Pip's notes or the plan's reasoning, so it judges the result rather than the intent. |
-| Verdict | `report: true` is always on for Review, so the result is machine-readable: `verdict: pass | blocking`, and findings with a severity (`blocking`, `should-fix`, `nit`). The supervisor reads only the verdict and the count of blocking findings. It never reads the prose. |
+| Verdict | `report: true` is always on for Review, so the result is machine-readable: `verdict: pass \| blocking`, and findings with a severity (`blocking`, `should-fix`, `nit`). The supervisor reads only the verdict and the count of blocking findings. It never reads the prose. |
 | Fix loop | `blocking` → an auto-started FollowUp to the same Build session with the blocking findings (Core-filled, marker-wrapped), then a fresh Review on the new commit. At most 2 rounds; then it stops and Pip brings it to the person. `should-fix` and `nit` are listed for the person and Pip, but never start a run. |
 | Still read-only on GitHub | It never comments on, approves or changes the PR. Its findings reach the ticket only as a Jira comment draft the person approves. |
 
@@ -78,7 +78,7 @@ These rules let a run start the next step without a per-run approval. The superv
 Conditions on every auto-start:
 - The workstream is in **Manage** mode, isn't held, and is within its budget.
 - The source run finished as Done. Failed, stopped or needs-something never auto-starts anything.
-- The new spec comes from the kind's fixed template plus Core-filled handoff slots. Pip's `focus` line is **not** carried into an auto-started run, so nothing Pip or an agent wrote decides what it does.
+- The new spec comes from the kind's fixed template plus Core-filled handoff slots. Pip's `focus` line is **not** carried into an auto-started run, so nothing Pip wrote decides what it does. Agent output does decide **whether** some rules fire: Triage's `plan recommended` and Review's `verdict`. The fix round goes further, because its FollowUp carries the Review's findings text, which an agent wrote, into the push-capable Build session. See the fix-round risk in §8.
 - The spec's digest is recorded in `workstream_events` with the rule that started it, and the run card shows "started automatically after R7". The person can stop it like any other run.
 - The person can switch each rule off per workstream or globally in Settings.
 
@@ -127,8 +127,8 @@ All durable state lives in Rust/SQLite. The frontend only displays it.
 | `Workstream { id, connection_id, item_key?, repo?, title, pip_session?, mode, held_reason?, budget, spent, notes?, created_at, closed_at? }` | New `domain/workstream.rs`, `db/workstreams.rs`, table in `db/schema.rs` | `mode` is the autonomy level (§6). No step state machine; the stage is derived. |
 | Run ↔ workstream | `RunSpec.workstream: Option<String>` | **Must be added to `RunSpec::digest` by hand** (`run.rs:308-340` builds an explicit canonical JSON) and left out when `None`, so old digests stay valid. Not rendered into the prompt. |
 | Draft ↔ workstream | `Origin::Chat { request_id, workstream }` (`#[serde(default)]`); run-origin drafts inherit it from `run.spec.workstream` in `run_results.rs`/`plan_description.rs` | Add `origin_kind`/`workstream` **columns** on `proposals` (today a single JSON blob, `schema.rs:101-108`) and `ProposalQuery.workstream`. |
-| Provenance | `CreatedBy::Agent` as a **unit variant**, so it stays `Copy` and the TS union becomes `'user'|'pip'|'autopilot'|'agent'`; the run id and kind are already in `Origin::Run` | Replaces the `CreatedBy::User` overload for run-result drafts (`run_results.rs:422,478,523`, `plan_description.rs:161`). Rewrite `require_pip_may_revise` (`proposals.rs:260-278`) to allow Agent drafts in the same workstream, keeping the "Edited" lock. |
-| Transcripts | New `pip_turns(conversation, request_id, role user|pip|wake, prompt, text, steps_json, status, usage_json, created_at)` | Replaces in-memory `claudeStore`. Wake turns must be registered by the backend, because `updateByRequest` drops unknown requestIds. |
+| Provenance | `CreatedBy::Agent` as a **unit variant**, so it stays `Copy` and the TS union becomes `'user'\|'pip'\|'autopilot'\|'agent'`; the run id and kind are already in `Origin::Run` | Replaces the `CreatedBy::User` overload for run-result drafts (`run_results.rs:422,478,523`, `plan_description.rs:161`). Rewrite `require_pip_may_revise` (`proposals.rs:260-278`) to allow Agent drafts in the same workstream, keeping the "Edited" lock. |
+| Transcripts | New `pip_turns(conversation, request_id, role user\|pip\|wake, prompt, text, steps_json, status, usage_json, created_at)` | Replaces in-memory `claudeStore`. Wake turns must be registered by the backend, because `updateByRequest` drops unknown requestIds. |
 | Pip session per workstream | `Workstream.pip_session` | It must be pinned in the resume allowlist separately from the 50-entry LRU (`OWN_SESSIONS_KEPT`, `inbox.rs:50`), or long workstreams silently stop resuming. |
 | Audit | `workstream_events` append-only table (actor Person/Pip/Supervisor/Run, action, ids, digest) | Exportable. A hash chain is optional and comes later. |
 | Supervisor queue | In memory, rebuilt from run states and `workstream_events` on startup | An idempotency key `(workstream, run, state)` makes sure a duplicate wake is a no-op. |
@@ -137,7 +137,7 @@ All durable state lives in Rust/SQLite. The frontend only displays it.
 
 | Module | New/changed | Purpose |
 |---|---|---|
-| `agent/queue.rs` | New | Per-conversation FIFO of `User(AskRequest) | Wake(WakeFacts)`. One turn in flight per conversation, global cap 2. A user message cancels a pending or in-flight wake. Wakes merge. |
+| `agent/queue.rs` | New | Per-conversation FIFO of `User(AskRequest) \| Wake(WakeFacts)`. One turn in flight per conversation, global cap 2. A user message cancels a pending or in-flight wake. Wakes merge. |
 | `agent/supervisor.rs` | New | `on_run(run, attention)` **spawns** a task and never does work inline, because `notify` runs under `RunService.launching` (`tracker.rs:239`). It runs a periodic sweep over linked runs to catch the events the notifier never emits: a person-Stopped run, a Done-after-continuation that drafted nothing, or `draft_on_finish` turned off (`tracker.rs:396-407`). It holds budgets, the hold state and recovery. |
 | `agent/workstream.rs` | New MCP module | `get_workstream`, `list_workstreams`, `set_workstream_notes` (≤2 KB, scrubbed, fed back as data), `propose_answer`. Chained into `tool_list`/`run_tool`/`tool_label` like `runs.rs`. |
 | `agent/mod.rs` | Changed | `AskRequest` gets `conversation` and `workstream`. `PipRun` gets `workstream`. Turns go through the queue. Usage is recorded per turn. |
@@ -264,7 +264,8 @@ Every phase can ship on its own, behind the agents flag, and has mock parity. Es
 | Wake loops and cost (Pip proposes → run finishes → Pip proposes…) | Wakes only on terminal or needs states; per-workstream auto-turn and wake budgets reset only by a human; global cap of 2 Pip processes; usage measured from Phase 0. |
 | Approval fatigue keeps the person as orchestrator | Auto-start rules cover the routine handoffs; inline review-and-start, the Needs-you tray and per-step batches cover the rest. |
 | Auto-start chains spend without anyone watching | Rules apply only in Manage mode, within the workstream budget, from Done runs, and never more than 2 fix rounds. Tripwires hold the workstream. Each rule can be switched off. |
-| Injection steers a push-capable Build | Build never auto-starts from agent output, only from the person's plan approval. Its handoff is the approved plan, filled by Core. Push is limited to a draft PR; `PUSH_ALLOWED` forbids ready-for-review and merging. Security review before Phase 2 ships. |
+| Injection steers a push-capable Build | The first Build starts only from the person's plan approval, and its handoff is the approved plan, filled by Core. Push is limited to a draft PR; `PUSH_ALLOWED` forbids ready-for-review and merging. Security review before Phase 2 ships. |
+| Fix rounds carry agent-written text into the push-capable Build | A blocking Review auto-starts a FollowUp to the Build, and that FollowUp contains the Review's findings, which an agent wrote and which may quote hostile PR or ticket content. Mitigations: only findings marked `blocking` that cite a file and line are passed; each is length-capped, marker-wrapped and introduced by a fixed sentence saying it is data describing a defect, not an instruction; the FollowUp's own instruction is a fixed template (fix these findings in this PR, change nothing else); the Build can still only push its own branch to a draft PR; at most 2 rounds; tripwires on marker or defang hits hold the workstream; a person reviews and merges the PR on GitHub. If that is not enough, the fix round can be made a person-approved step (open question 2). |
 | A weak reviewer passes bad work | The adversarial stance and evidence requirement, no access to Pip's notes, and a structured verdict. A human still reviews and merges the PR on GitHub. Golden-scenario evals with seeded bugs check that Review catches them. |
 | Deadlocks and lock contention (notify under `launching`; `answer` holds it through a 5 s settle) | The supervisor always spawns; `launch_waiting` runs after the guard drops; a dedicated concurrency test. |
 | Startup wiring cycle | `OnceLock<Weak<AgentService>>` late binding; the supervisor no-ops until bound. |
@@ -280,7 +281,7 @@ Every phase can ship on its own, behind the agents flag, and has mock parity. Es
 ## 9. Open questions for the product owner
 
 1. Is the auto-start rule table right? In particular, should approving the plan start the Build directly, or should the person still see the Build's RunSetup?
-2. How many fix rounds should a blocking review get before it comes back to the person (proposed: 2)?
+2. Should the fix round start automatically (it carries the reviewer's findings, written by an agent, into the Build session that can push), or should the person approve each fix round? If automatic, how many rounds before it comes back to the person (proposed: 2)?
 3. Should auto-start wait for the enforced read-only permission (Phase 6) before it is on by default, or ship on by default in Phase 3?
 4. Should Manage be the default for new workstreams once Phase 3 has proven itself, or stay opt-in per workstream?
 5. Is a workstream always one ticket (plus subtasks), or can it span an epic or several repos? Single-ticket is assumed for v1.
