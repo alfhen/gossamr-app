@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { Run, RunState } from "../types";
+import type { Run, RunState, WorkstreamView } from "../types";
 import {
   ALL,
   NO_FILTERS,
@@ -10,6 +10,8 @@ import {
   filterOptions,
   formatTokens,
   groupRuns,
+  groupRunsByWorkstream,
+  NO_WORKSTREAM_TITLE,
   laneIsFolded,
   laneOf,
   navOrder,
@@ -259,5 +261,68 @@ describe("the header", () => {
   it("offers Stop all only for runs it could stop", () => {
     const runs = [run("working", { id: "a" }), run("needsPermission", { id: "b" }), run("launching", { id: "c" }), run("queued", { id: "d" }), run("done", { id: "e" }), run("failed", { id: "f" })];
     expect(stoppable(runs).map((r) => r.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("grouping by workstream", () => {
+  const view = (id: string, title: string): WorkstreamView => ({
+    workstream: { id, connectionId: "mock", itemKey: null, repo: null, title, pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(600), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 } },
+    stage: "intake",
+    runs: [],
+    labels: [],
+  });
+  const inWs = (state: RunState, id: string, workstream: string | null, queued: number, over: Partial<Run> = {}) => run(state, { id, queuedAt: iso(queued), spec: { ...base.spec, workstream }, ...over });
+  const runs = [
+    inWs("done", "a1", "ws-a", 300, { spec: { ...base.spec, kind: "investigate", workstream: "ws-a" }, endedAt: iso(200) }),
+    inWs("working", "a2", "ws-a", 100, { spec: { ...base.spec, kind: "plan", workstream: "ws-a" } }),
+    inWs("working", "b1", "ws-b", 5),
+    inWs("needsAnswer", "loose1", null, 50),
+    inWs("done", "loose2", null, 400, { endedAt: iso(1) }),
+  ];
+  const workstreams = [view("ws-a", "CA-401 Retry the payment"), view("ws-b", "CA-402 Cart totals")];
+
+  it("puts each workstream's runs under its title and stage, and the rest under No workstream, last", () => {
+    const groups = groupRunsByWorkstream(runs, workstreams, NO_FILTERS, NOW);
+    expect(groups.map((g) => [g.id, g.title, g.stage, g.runs.map((r) => r.id)])).toEqual([
+      ["ws-b", "CA-402 Cart totals", "investigate", ["b1"]],
+      ["ws-a", "CA-401 Retry the payment", "plan", ["a2", "a1"]],
+      [null, NO_WORKSTREAM_TITLE, null, ["loose2", "loose1"]],
+    ]);
+  });
+
+  it("orders workstreams by their latest activity", () => {
+    const later = [...runs, inWs("queued", "a3", "ws-a", 1, { spec: { ...base.spec, kind: "build", workstream: "ws-a" } })];
+    expect(groupRunsByWorkstream(later, workstreams, NO_FILTERS, NOW).map((g) => g.id)).toEqual(["ws-a", "ws-b", null]);
+  });
+
+  it("labels runs R1, R2 by queue time over all of the workstream's runs, so a filter never renumbers them", () => {
+    const [, a] = groupRunsByWorkstream(runs, workstreams, NO_FILTERS, NOW);
+    expect(a.labels).toEqual({ a1: "R1", a2: "R2" });
+    const running = groupRunsByWorkstream(runs, workstreams, { ...NO_FILTERS, lane: "running" }, NOW);
+    const ws = running.find((g) => g.id === "ws-a")!;
+    expect(ws.runs.map((r) => r.id)).toEqual(["a2"]);
+    expect(ws.labels.a2).toBe("R2");
+    // The stage still counts the run the filter hides.
+    expect(ws.stage).toBe("plan");
+  });
+
+  it("leaves out a group the filters empty, and has no No workstream group when every run is in one", () => {
+    expect(groupRunsByWorkstream(runs, workstreams, { ...NO_FILTERS, lane: "needs" }, NOW).map((g) => g.id)).toEqual([null]);
+    expect(groupRunsByWorkstream(runs.slice(0, 3), workstreams, NO_FILTERS, NOW).map((g) => g.id)).toEqual(["ws-b", "ws-a"]);
+    expect(groupRunsByWorkstream([], workstreams, NO_FILTERS, NOW)).toEqual([]);
+  });
+
+  it("still groups the runs of a workstream it has no title for, by its id", () => {
+    const groups = groupRunsByWorkstream(runs, [workstreams[0]], NO_FILTERS, NOW);
+    expect(groups.find((g) => g.id === "ws-b")?.title).toBe("Workstream ws-b");
+  });
+
+  it("walks runs in group order with j and k, in either grouping, and never folds a workstream", () => {
+    const stoppedLoose = inWs("stopped", "s1", null, 2);
+    const stoppedInWs = inWs("stopped", "s2", "ws-b", 3);
+    const all = [...runs, stoppedLoose, stoppedInWs];
+    expect(navOrder(groupRunsByWorkstream(all, workstreams, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["s2", "b1", "a2", "a1", "loose2", "s1", "loose1"]);
+    expect(navOrder(groupRuns(all, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["loose1", "b1", "a2", "loose2", "a1"]);
+    expect(navOrder(groupRuns(all, NO_FILTERS, NOW), true, NO_FILTERS)).toEqual(["loose1", "b1", "a2", "loose2", "a1", "s1", "s2"]);
   });
 });

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { Run, RunState } from "../types";
+import type { Run, RunState, WorkstreamView } from "../types";
 import { AgentCard, onActivate } from "./AgentCard";
 import { AgentRow } from "./AgentRow";
 import { FailureNext, OpenInTerminal } from "./AgentParts";
@@ -27,6 +27,7 @@ const on = (): AgentsActions => ({
   filter: vi.fn(),
   clearFilters: vi.fn(),
   setView: vi.fn(),
+  setGroup: vi.fn(),
   toggleEarlier: vi.fn(),
   setIntro: vi.fn(),
   dismissIntro: vi.fn(),
@@ -160,6 +161,43 @@ describe("the lanes", () => {
     const out = screen({ selectedId: id });
     expect(out.match(/aria-current="true"/g)).toHaveLength(1);
     expect(out).toContain(`data-run-id="${id}"`);
+  });
+});
+
+describe("grouped by workstream", () => {
+  const ws: WorkstreamView = {
+    workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(60), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 } },
+    stage: "investigate",
+    runs: ["w1"],
+    labels: [["w1", "R1"]],
+  };
+  const linked = () => run("working", { id: "w1", queuedAt: iso(1), spec: { ...eight()[0].spec, kind: "investigate", workstream: "ws-1" } });
+
+  it("offers Group by with State pressed by default", () => {
+    const out = screen();
+    expect(out).toContain('aria-label="Group by"');
+    expect(out).toMatch(/aria-pressed="true"[^>]*>State</);
+    expect(out).toContain("data-lane=");
+    expect(out).not.toContain("data-workstream-group");
+  });
+
+  it("shows a workstream with its title, stage chip and R labels, and the other runs under No workstream", () => {
+    const out = screen({ runs: [...eight(), linked()], group: "workstream", workstreams: [ws] });
+    expect(out).toMatch(/aria-pressed="true"[^>]*>Workstream</);
+    expect(out.match(/data-workstream-group="([^"]+)"/g)).toEqual(['data-workstream-group="ws-1"', 'data-workstream-group="none"']);
+    expect(out).toContain(">CA-401 Retry the payment</h3>");
+    expect(out).toContain('data-stage="investigate"');
+    expect(out).toContain('data-run-label="R1"');
+    expect(out).toContain(">No workstream</h3>");
+    expect(out).not.toContain("data-lane=");
+    // Every run is reachable; nothing folds in this grouping.
+    expect(articles(out)).toHaveLength(9);
+    expect(out).toContain('aria-setsize="9"');
+  });
+
+  it("labels the run in list mode too", () => {
+    const out = screen({ runs: [linked()], group: "workstream", workstreams: [ws], view: "list" });
+    expect(out).toContain('data-run-label="R1"');
   });
 });
 

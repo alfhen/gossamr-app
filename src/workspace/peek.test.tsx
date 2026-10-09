@@ -5,7 +5,7 @@ import { docFromText } from "../lib/docs";
 import type { Proposal, StatusDef } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftCard, draftSummary, draftTitle, type DraftCardProps } from "./DraftCard";
-import { PeekView, type PeekViewProps } from "./PeekSheet";
+import { PeekView, WorkstreamControl, type PeekViewProps } from "./PeekSheet";
 import { PipAvatar } from "./PipAvatar";
 import { FilterNote, Launcher, Nudge, PipFilterNote } from "./PipExtras";
 import { ContextChip } from "./PipPane";
@@ -260,5 +260,23 @@ describe("WorkDocView", () => {
     expect(out).toContain("@Sam");
     expect(out).toContain("<li>");
     expect(out).toContain("x = 1");
+  });
+});
+
+describe("the workstream control", () => {
+  const item = { connectionId: "mock", externalId: "CA-401", key: "CA-401" };
+  const view = { workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry", pipSession: null, mode: "advise" as const, heldReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 } }, stage: "intake" as const, runs: [], labels: [] };
+  const noop = () => {};
+
+  it("offers Close behind a confirm that says the agents and drafts are kept", () => {
+    const asking = renderToStaticMarkup(<WorkstreamControl item={item} workstream={view} onStart={noop} onOpen={noop} onAskClose={noop} onClose={noop} />);
+    expect(asking).toContain("Close…");
+    expect(asking).not.toContain("Close workstream");
+    const confirming = renderToStaticMarkup(<WorkstreamControl item={item} workstream={view} onStart={noop} onOpen={noop} confirmingClose onAskClose={noop} onClose={noop} />);
+    expect(confirming).toContain('aria-label="Close this workstream"');
+    expect(confirming).toContain("Its agents and drafts are kept.");
+    expect(confirming).toContain("Close workstream");
+    expect(confirming).toContain("Keep");
+    expect(renderToStaticMarkup(<WorkstreamControl item={item} workstream={null} onStart={noop} onOpen={noop} onAskClose={noop} />)).toContain("Start a workstream");
   });
 });

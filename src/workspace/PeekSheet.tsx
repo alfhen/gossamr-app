@@ -5,7 +5,7 @@ import { docFromText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import { liveMentions, type Mention } from "../lib/mentions";
 import { relativeTime } from "../lib/views";
-import type { ItemRef, StatusDef, WorkEvent, WorkItem } from "../types";
+import type { ItemRef, StatusDef, WorkEvent, WorkItem, WorkstreamView } from "../types";
 import { draftsForItem, knownMoves, useItemsByFilter, useWorkspace, workflowOfItem } from "../workspaceStore";
 import { draftStatus, movesAreOpaque, targetsFor } from "./boardLogic";
 import { PeekResizer, usePaneWidths } from "./PaneResizers";
@@ -24,6 +24,8 @@ import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
+import { STAGE_LABEL } from "../lib/workstreamStage";
+import { focusPip, useItemWorkstream, useWorkstreams } from "./workstreamsStore";
 
 const CATEGORY_TONE = {
   todo: "bg-ws-hover text-ws-ink2",
@@ -425,6 +427,72 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
   );
 }
 
+interface WorkstreamControlProps {
+  item: ItemRef;
+  workstream: WorkstreamView | null;
+  onStart(): void;
+  onOpen(): void;
+  /** Whether Close is waiting for the person to confirm it. */
+  confirmingClose?: boolean;
+  /** Asks to close it (true) or takes the question back (false). */
+  onAskClose?(ask: boolean): void;
+  onClose?(): void;
+}
+
+/**
+ * Beside the Agent menu: a way to start a workstream on the ticket, or, once it has one, its stage, a way to its
+ * conversation, and Close behind a confirm.
+ */
+export function WorkstreamControl({ item, workstream, onStart, onOpen, confirmingClose = false, onAskClose, onClose }: WorkstreamControlProps) {
+  if (!workstream) {
+    return (
+      <button
+        type="button"
+        onClick={onStart}
+        title={`Give ${item.key} its own conversation with Pip, where its agents and drafts are grouped`}
+        className="inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-0.5 text-sm font-semibold text-ws-ink2 hover:border-ws-pip hover:text-ws-pip"
+      >
+        <span aria-hidden>◇</span>
+        Start a workstream
+      </button>
+    );
+  }
+  return (
+    <span data-workstream={workstream.workstream.id} className="inline-flex items-center gap-2 rounded-md bg-ws-pip-soft px-2.5 py-0.5 text-sm text-ws-pip">
+      <span title={workstream.workstream.title}>
+        <span aria-hidden>◆ </span>Workstream · <b data-stage={workstream.stage}>{STAGE_LABEL[workstream.stage]}</b>
+      </span>
+      <button type="button" onClick={onOpen} className="font-semibold underline">
+        Open in Pip
+      </button>
+      {onAskClose &&
+        (confirmingClose ? (
+          <span
+            role="group"
+            aria-label="Close this workstream"
+            data-esc-local
+            className="inline-flex items-center gap-1.5 text-ws-ink2"
+            onKeyDown={(ev) => {
+              if (ev.key === "Escape") (ev.stopPropagation(), onAskClose(false));
+            }}
+          >
+            Close it? Its agents and drafts are kept.
+            <button type="button" autoFocus onClick={onClose} className="font-semibold text-ws-pip underline">
+              Close workstream
+            </button>
+            <button type="button" onClick={() => onAskClose(false)} className="underline">
+              Keep
+            </button>
+          </span>
+        ) : (
+          <button type="button" onClick={() => onAskClose(true)} title={`Close ${item.key}'s workstream; its conversation goes back to General, and its agents and drafts are kept`} className="text-ws-ink2 underline">
+            Close…
+          </button>
+        ))}
+    </span>
+  );
+}
+
 /** Overlays the canvas for the item in `useTabs().selected`, sliding in when it first opens and out when it closes. */
 export function PeekSheet() {
   const selected = useTabs((s) => s.selected);
@@ -514,6 +582,8 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
   const now = useMemo(() => new Date(), [item]);
   const agentsOn = useAgentsEnabled();
   const agentRuns = useRuns((s) => (agentsOn ? runsOfTicket(s.runs, ref).length : 0));
+  const workstream = useItemWorkstream(agentsOn ? ref : null);
+  const confirmingClose = useWorkstreams((s) => s.confirmingClose);
 
   useEffect(() => {
     void useWorkspace.getState().loadEvents(ref);
@@ -619,11 +689,26 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
           </SectionCard>
         ) : null
       }
-      agentMenu={agentsOn && !readOnly ? <AgentMenu item={ref} /> : undefined}
+      agentMenu={
+        agentsOn && !readOnly ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <AgentMenu item={ref} />
+            <WorkstreamControl
+              item={ref}
+              workstream={workstream}
+              onStart={() => void useWorkstreams.getState().start(ref)}
+              onOpen={focusPip}
+              confirmingClose={!!workstream && confirmingClose === workstream.workstream.id}
+              onAskClose={(ask) => useWorkstreams.getState().askClose(ask && workstream ? workstream.workstream.id : null)}
+              onClose={() => workstream && void useWorkstreams.getState().close(workstream.workstream.id)}
+            />
+          </div>
+        ) : undefined
+      }
       agents={
-        agentRuns > 0 ? (
+        agentRuns > 0 || workstream ? (
           <SectionCard id="agents" title="Agents on this ticket" count={agentRuns}>
-            <TicketAgents item={ref} title={item.title} />
+            <TicketAgents item={ref} title={item.title} workstream={workstream} />
           </SectionCard>
         ) : undefined
       }

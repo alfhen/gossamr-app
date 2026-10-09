@@ -153,7 +153,7 @@ describe("mock runs", () => {
     const backend = new MockBackend();
     const failed = (await backend.runsList({ states: ["failed"] }))[0];
     await expect(backend.runsAttach(failed.id)).rejects.toThrow(/no session/);
-    await expect(backend.runsRetryLaunch((await backend.runsList({ states: ["working"] }))[0].id)).rejects.toThrow(/failed/);
+    await expect(backend.runsRetryLaunch((await backend.runsList({ states: ["working"] }))[0].id)).rejects.toThrow("This run is working and has nothing to retry.");
     expect((await backend.runsRetryLaunch(failed.id)).state).toBe("failed");
     await backend.runsTrustFolder(failed.id);
     expect((await backend.runsRetryLaunch(failed.id)).state).toBe("queued");

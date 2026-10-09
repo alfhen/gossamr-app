@@ -17,6 +17,7 @@ import { activeTab, allSavedViews, useTabs } from "./tabsStore";
 import { openTicketByKey } from "./jump";
 import { useGithubUi } from "./githubUi";
 import { openPull } from "./openPull";
+import { useWorkstreams } from "./workstreamsStore";
 
 /** Where focus lands when the palette closes and the element that opened it is gone. */
 export const MAIN_ID = "workspace-main";
@@ -142,6 +143,13 @@ export function jumpToItem(item: WorkItem) {
   tabs.select(itemKey(item.item));
 }
 
+/** The synced ticket the peek shows, the one a workstream can be started on; an unsynced one is read-only. */
+function peekedTicket(): WorkItem | null {
+  const { selected, route, marked } = useTabs.getState();
+  if (!selected || route === "settings" || marked.length > 1) return null;
+  return useWorkspace.getState().items[selected] ?? null;
+}
+
 export function appActions(): CommandActions {
   const tabs = useTabs.getState();
   const prefs = usePrefs.getState();
@@ -179,6 +187,15 @@ export function appActions(): CommandActions {
     openAgentSafety: () => {
       tabs.setRoute("agents");
       useRuns.getState().openSafety();
+    },
+    startWorkstream: () => {
+      const ticket = peekedTicket();
+      if (ticket) void useWorkstreams.getState().start(ticket.item);
+    },
+    closeWorkstream: () => {
+      const ticket = peekedTicket();
+      const open = ticket ? useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) : null;
+      if (open) useWorkstreams.getState().askClose(open.workstream.id);
     },
     jumpToItem,
     askPip,
@@ -239,6 +256,8 @@ export function Palette() {
   const agents = useAgentsEnabled();
   const needingMe = useAttention();
   const savedViews = useTabs((s) => s.savedViews);
+  const selected = useTabs((s) => s.selected);
+  const workstreams = useWorkstreams((s) => s.list);
   const tab = useTabs((s) => activeTab(s));
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -260,7 +279,17 @@ export function Palette() {
       return title ? [{ id: "new:create", group: "Create" as const, icon: "＋", label: `Draft “${title}” in ${container.name}`, hint: "↵", run: () => void draftTicket(container, title) }] : [];
     }
     const actions = { ...appActions(), newTicket: () => go({ type: "project" }) };
-    const ctx: CommandContext = { project: projectOf(tab.filter) ?? null, view: tab.view, unreadActivity: unread, pendingDrafts: pendingDrafts({ proposals }).length, github, agents, agentsNeedingMe: needingMe };
+    const ticket = peekedTicket();
+    const ctx: CommandContext = {
+      project: projectOf(tab.filter) ?? null,
+      view: tab.view,
+      unreadActivity: unread,
+      pendingDrafts: pendingDrafts({ proposals }).length,
+      github,
+      agents,
+      agentsNeedingMe: needingMe,
+      ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
+    };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);
     const found = [
@@ -272,7 +301,7 @@ export function Palette() {
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched]);
+  }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams]);
 
   const prompting = step.type !== "search";
   return (

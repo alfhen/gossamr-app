@@ -7,7 +7,7 @@ import { useDev } from "./devStore";
 import { useLookup } from "./hooks";
 import { PipResizer } from "./PaneResizers";
 import { PipAvatar } from "./PipAvatar";
-import { Composer, PIP_INPUT_ID, PipConversation, WORKSPACE_CONVERSATION, useAnswering } from "./PipConversation";
+import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, PipConversation, useAnswering, workstreamConversation } from "./PipConversation";
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { chipCount, currentContext, unassignedIn, useItemScene, useScreen } from "./pipHooks";
 import { usePip } from "./pipStore";
@@ -19,8 +19,11 @@ import { agentsSuggestionScene, describeRun, runSummaryPrompt } from "./pipRuns"
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { draftsForItem, pendingDrafts, useWorkspace } from "../workspaceStore";
+import { useClaude } from "../claudeStore";
+import { inWorkstreamPane } from "../lib/proposals";
+import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
 
-export { AppliedCard, PIP_INPUT_ID, WORKSPACE_CONVERSATION } from "./PipConversation";
+export { AppliedCard, GENERAL_CONVERSATION, PIP_INPUT_ID, workstreamConversation } from "./PipConversation";
 
 export function ContextChip({ kind, label, following, open, onToggle }: { kind: string; label: string; following: boolean; open: boolean; onToggle(): void }) {
   return (
@@ -100,11 +103,20 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const proposals = useWorkspace((s) => s.proposals);
   const pinned = usePip((s) => s.pinned);
   const quote = usePip((s) => s.quote);
-  const running = useAnswering(WORKSPACE_CONVERSATION);
+  // The ticket the peek shows has an open workstream: its conversation is the one here. Otherwise it is General.
+  const workstream = usePaneWorkstream();
+  const workstreamId = workstream?.workstream.id ?? null;
+  const conversation = workstreamId ? workstreamConversation(workstreamId) : GENERAL_CONVERSATION;
+  const running = useAnswering(conversation);
   const [seeing, setSeeing] = useState(false);
   const attached = useAttachments();
   const drop = useFileDrop((files) => void attached.add(files));
-  const proposalList = useMemo(() => Object.values(proposals), [proposals]);
+  // A workstream's conversation shows its own drafts and the open ones on its ticket; General shows everyone's.
+  const shownWorkstream = workstream?.workstream ?? null;
+  const proposalList = useMemo(() => Object.values(proposals).filter((p) => !shownWorkstream || inWorkstreamPane(p, shownWorkstream)), [proposals, shownWorkstream]);
+  useEffect(() => {
+    void useClaude.getState().load(conversation);
+  }, [conversation]);
   const following = pinned === null;
   const live = useMemo(() => buildScreenContext(screen), [screen]);
   const context: ScreenContext = pinned ?? live;
@@ -166,11 +178,14 @@ export function PipPane({ onClose }: { onClose(): void }) {
             ×
           </button>
         </div>
+        <p data-pip-conversation={conversation} title={workstream ? "This workstream's own conversation with Pip" : "Pip's conversation for everything that isn't in a workstream"} className="m-0 truncate text-sm font-semibold text-ws-ink2">
+          {conversationTitle(workstream)}
+        </p>
         <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
         {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
       </header>
-      <PipConversation conversation={WORKSPACE_CONVERSATION} proposals={proposalList} />
-      <Composer conversation={WORKSPACE_CONVERSATION} attached={attached} chips={chips} looking={label} scene={{ itemKey: itemScene?.key ?? null, route: screen.route, runOpen: !!context.run }} />
+      <PipConversation key={conversation} conversation={conversation} proposals={proposalList} />
+      <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={{ itemKey: itemScene?.key ?? null, route: screen.route, runOpen: !!context.run }} />
     </aside>
   );
 }

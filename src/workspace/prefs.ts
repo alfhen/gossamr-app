@@ -4,6 +4,7 @@ import type { Collapsed, PeekSectionId } from "./peekLogic";
 import { PEEK_DEFAULT, PIP_DEFAULT, storedWidth } from "./paneSizes";
 import { parseColumnOrders, type ColumnOrders } from "./columnOrder";
 import { readStored, writeStored } from "./storage";
+import { AGENTS_GROUPS, type AgentsGroup } from "./agentsLogic";
 
 export const THEMES = ["auto", "light", "dark"] as const;
 export type ThemeMode = (typeof THEMES)[number];
@@ -28,6 +29,8 @@ interface Prefs {
   /** Board column order the person chose, per project. */
   columnOrder: ColumnOrders;
   agentsView: AgentsViewMode;
+  /** Whether the Agents view groups runs by state (its lanes) or by workstream. */
+  agentsGroup: AgentsGroup;
   /** The person dismissed the explainer on the Agents view. */
   agentsIntroSeen: boolean;
   setUi(ui: UiMode): void;
@@ -40,12 +43,13 @@ interface Prefs {
   /** Saves the order of a project's columns; `null` goes back to the default. */
   setColumnOrder(container: string, ids: string[] | null): void;
   setAgentsView(view: AgentsViewMode): void;
+  setAgentsGroup(group: AgentsGroup): void;
   setAgentsIntroSeen(seen: boolean): void;
 }
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsIntroSeen"> {
+export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     // Installs from before the workspace was the default stored "classic" without anyone choosing it.
@@ -57,6 +61,7 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
     pipWidth: storedWidth(raw?.pipWidth, PIP_DEFAULT),
     columnOrder: parseColumnOrders(raw?.columnOrder),
     agentsView: AGENTS_VIEWS.find((v) => v === raw?.agentsView) ?? "cards",
+    agentsGroup: AGENTS_GROUPS.find((g) => g === raw?.agentsGroup) ?? "state",
     agentsIntroSeen: raw?.agentsIntroSeen === true,
   };
 }
@@ -78,11 +83,12 @@ export const usePrefs = create<Prefs>((set) => ({
       return { columnOrder: ids ? { ...rest, [container]: ids } : rest };
     }),
   setAgentsView: (agentsView) => set({ agentsView }),
+  setAgentsGroup: (agentsGroup) => set({ agentsGroup }),
   setAgentsIntroSeen: (agentsIntroSeen) => set({ agentsIntroSeen }),
 }));
 
-usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsIntroSeen }) =>
-  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsIntroSeen }),
+usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen }) =>
+  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen }),
 );
 
 /** The browser build has no classic inbox to fall back to, so it always shows the workspace. */

@@ -4,7 +4,7 @@ import { targetOf } from "../lib/proposals";
 import type { CleanupResult, ItemRef, PlanComment, Proposal, Run, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
-import { NO_FILTERS, attentionCount, groupRuns, navOrder, stepRun, type AgentFilters } from "./agentsLogic";
+import { NO_FILTERS, agentGroups, attentionCount, stepRun, type AgentFilters } from "./agentsLogic";
 import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
 import { planCommentMessage } from "./runSheetLogic";
@@ -12,6 +12,7 @@ import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
+import { useWorkstreams } from "./workstreamsStore";
 
 const SEEN_KEY = "gossamr-runs-seen";
 /** How long the list is waited for before the view says so and offers Retry, rather than showing a spinner for good. */
@@ -71,7 +72,7 @@ interface RunsState {
   setPicking(open: boolean): void;
   /** False when it opened the safety sheet because the person has not seen it; callers stop there. */
   ensureAgentsIntro(): boolean;
-  /** Moves the run sheet to the next (`1`) or previous (`-1`) run, in the order the Agents view lists them. */
+  /** Moves the run sheet to the next (`1`) or previous (`-1`) run, in the order the Agents view lists them, grouped as it is. */
   browse(delta: 1 | -1): void;
   stop(id: string): Promise<void>;
   startNow(id: string): Promise<void>;
@@ -268,7 +269,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   browse(delta) {
     const { sheet, runs, filters, earlierOpen } = get();
     if (sheet?.type !== "run") return;
-    const order = navOrder(groupRuns(runs, filters, Date.now()), earlierOpen, filters);
+    const order = agentGroups(usePrefs.getState().agentsGroup, runs, useWorkstreams.getState().list, filters, earlierOpen, Date.now()).order;
     const next = stepRun(order, sheet.id, delta);
     if (next) set({ selectedId: next, sheet: { type: "run", id: next } });
   },

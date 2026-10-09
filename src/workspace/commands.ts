@@ -48,6 +48,10 @@ export interface CommandActions {
   startAgentOn(item: WorkItem, kind: RunKind): void;
   showAgentsNeedingMe(): void;
   openAgentSafety(): void;
+  /** Opens (or finds) the workstream on the ticket the peek shows and shows its conversation in Pip. */
+  startWorkstream(): void;
+  /** Asks, in the peek, to confirm closing the workstream on the ticket the peek shows. */
+  closeWorkstream(): void;
   jumpToItem(item: WorkItem): void;
   askPip(query: string): void;
 }
@@ -63,6 +67,8 @@ export interface CommandContext {
   agents?: boolean;
   /** Agents waiting on the person, for the hint beside "Show agents that need me". */
   agentsNeedingMe?: number;
+  /** The synced ticket the peek shows, and whether it has an open workstream already. */
+  ticket?: { key: string; workstream: boolean } | null;
 }
 
 const NO_CONTEXT: CommandContext = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
@@ -119,6 +125,32 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
           { id: "agents:needs", group: "Agents" as const, icon: "✋", label: "Show agents that need me", hint: ctx.agentsNeedingMe ? `${ctx.agentsNeedingMe} waiting` : undefined, keywords: "agents waiting permission question blocked", run: a.showAgentsNeedingMe },
           { id: "agents:stop", group: "Agents" as const, icon: "■", label: "Stop all agents…", keywords: "agents halt kill end everything", run: a.openAgentSafety },
           { id: "agents:safety", group: "Agents" as const, icon: "⛨", label: "Agent safety and settings", keywords: "agents touch permissions", run: a.openAgentSafety },
+          ...(ctx.ticket
+            ? [
+                {
+                  id: "workstream:start",
+                  group: "Agents" as const,
+                  icon: "◇",
+                  label: ctx.ticket.workstream ? `Open the workstream on ${ctx.ticket.key}` : `Start a workstream on ${ctx.ticket.key}`,
+                  hint: ctx.ticket.workstream ? "in Pip" : undefined,
+                  keywords: "workstream pip conversation track ticket",
+                  run: a.startWorkstream,
+                },
+                ...(ctx.ticket.workstream
+                  ? [
+                      {
+                        id: "workstream:close",
+                        group: "Agents" as const,
+                        icon: "◇",
+                        label: `Close the workstream on ${ctx.ticket.key}…`,
+                        hint: "asks first",
+                        keywords: "workstream end finish stop conversation general",
+                        run: a.closeWorkstream,
+                      },
+                    ]
+                  : []),
+              ]
+            : []),
         ]
       : []),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },

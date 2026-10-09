@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Intent, Proposal, RunSpec } from "../types";
-import { draftsForTurn, earlierDrafts, targetOf, withoutRunDrafts } from "./proposals";
+import { draftsForTurn, earlierDrafts, inWorkstreamPane, targetOf, withoutRunDrafts } from "./proposals";
 
 const ref = (key: string) => ({ connectionId: "c", externalId: key, key });
 
@@ -68,5 +68,20 @@ describe("startRun drafts", () => {
     expect(withoutRunDrafts(all).map((p) => p.id)).toEqual(["1"]);
     expect(earlierDrafts(withoutRunDrafts(all), "A-1", []).map((p) => p.id)).toEqual(["1"]);
     expect(draftsForTurn(withoutRunDrafts(all), "r1").map((p) => p.id)).toEqual(["1"]);
+  });
+});
+
+describe("inWorkstreamPane", () => {
+  const ws = { id: "ws-1", itemKey: "A-1", connectionId: "c" };
+
+  it("shows the workstream's own drafts in any state, and open drafts on its ticket, as Pip's block lists them", () => {
+    const own = proposal("1", subtasks("B-2"), { origin: { type: "chat", requestId: "r1", workstream: "ws-1" }, state: { type: "applied" } });
+    const onTicket = proposal("2", subtasks("A-1"), { origin: { type: "run", runId: "run-1", shortId: null, workstream: null }, createdBy: "agent" });
+    const doneOnTicket = proposal("3", subtasks("A-1"), { state: { type: "skipped" } });
+    const elsewhere = proposal("4", subtasks("B-2"));
+    const otherConnection = proposal("5", { type: "subtasks", parent: { connectionId: "other", externalId: "A-1", key: "A-1" }, summaries: ["a"] });
+    const otherWorkstream = proposal("6", subtasks("B-2"), { origin: { type: "chat", requestId: "r1", workstream: "ws-2" } });
+    expect([own, onTicket, doneOnTicket, elsewhere, otherConnection, otherWorkstream].filter((p) => inWorkstreamPane(p, ws)).map((p) => p.id)).toEqual(["1", "2"]);
+    expect(inWorkstreamPane(onTicket, { ...ws, itemKey: null })).toBe(false);
   });
 });
