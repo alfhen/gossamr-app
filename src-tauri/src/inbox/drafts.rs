@@ -11,7 +11,7 @@ use super::{db_file, identity_of, Core};
 use crate::auth::Scope;
 use crate::db::Db;
 use crate::domain::{
-    default_instruction, Basis, TICKETLESS_STARTER, CodeChange, CodeChangeState, ContainerRef, CreatedBy, Doc, Intent, ItemKind, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind,
+    default_instruction, Actor, Basis, TICKETLESS_STARTER, WorkstreamEvent, CodeChange, CodeChangeState, ContainerRef, CreatedBy, Doc, Intent, ItemKind, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind,
     RunEvent, RunQuery, RunReview, RunSpec,
 };
 use crate::error::{Error, Result};
@@ -300,19 +300,28 @@ impl Core {
     }
 
     /// Pip's change to one of its pending drafts, or to a pending comment, new ticket or breakdown drafted from a run's result. Anyone else's,
-    /// and anything already decided, is refused here whatever the caller checked.
-    pub async fn revise_as_pip(&self, scope: &Scope, id: &str, intent: Intent) -> Result<Proposal> {
+    /// anything already decided, and a draft of another workstream than the conversation's (`workstream`) is refused
+    /// here whatever the caller checked.
+    pub async fn revise_as_pip(&self, scope: &Scope, workstream: Option<&str>, id: &str, intent: Intent) -> Result<Proposal> {
         self.with_db_for(scope, |db| {
-            proposals::require_pip_may_revise(&db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?)?;
+            let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
+            proposals::require_pip_may_revise(&current, workstream)?;
             proposals::edit_noted(db, id, intent, "Revised by Pip", Utc::now())
         })
         .await
     }
 
-    pub async fn retire_as_pip(&self, scope: &Scope, id: &str, reason: &str) -> Result<Proposal> {
+    /// Pip withdrawing one of its pending drafts. A draft of another workstream than the conversation's (`workstream`)
+    /// is refused, as a revision of it is.
+    pub async fn retire_as_pip(&self, scope: &Scope, workstream: Option<&str>, id: &str, reason: &str) -> Result<Proposal> {
         self.with_db_for(scope, |db| {
-            proposals::require_pip_pending(&db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?)?;
-            proposals::retire(db, id, reason, Utc::now())
+            let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
+            proposals::require_pip_pending(&current)?;
+            proposals::require_same_workstream(&current, workstream)?;
+            let at = Utc::now();
+            let retired = proposals::retire(db, id, reason, at)?;
+            proposals::record(db, &retired, Actor::Pip, "draft_retired", at);
+            Ok(retired)
         })
         .await
     }
@@ -337,7 +346,16 @@ impl Core {
     }
 
     pub async fn skip_proposal(&self, id: &str) -> Result<Proposal> {
-        self.with_proposals(|db| proposals::skip(db, id, Utc::now())).await
+        self.with_proposals(|db| {
+            let was_pending = db.proposal(id)?.is_some_and(|p| p.state == ProposalState::Pending);
+            let at = Utc::now();
+            let skipped = proposals::skip(db, id, at)?;
+            if was_pending {
+                proposals::record(db, &skipped, Actor::Person, "draft_skipped", at);
+            }
+            Ok(skipped)
+        })
+        .await
     }
 
     /// The clone as the run will use it: an existing folder with a `.git`, under the person's home, by its real path.
@@ -435,6 +453,9 @@ impl Core {
         let links = item.as_ref().map(|i| self.ticket_dev_links(i)).unwrap_or_default();
         let intent = self
             .with_db_for(&scope, |db| {
+                if let Some(ws) = &spec.workstream {
+                    super::workstreams::require_linkable(db, &connection_id, ws, item.as_ref())?;
+                }
                 spec.ticket_block = item.as_ref().map(|i| db.item(i)).transpose()?.flatten().map(|w| snapshot(db, &w, &links, spec.plan.is_some()));
                 Ok(Intent::StartRun { connection_id: connection_id.clone(), item: item.clone(), spec })
             })
@@ -508,9 +529,25 @@ impl Core {
             if self.resolve_clone(&spec.clone_path)? != spec.clone_path {
                 return Err(Error::Proposal("the clone path isn't its real path; edit the draft and review it again".into()));
             }
+            // The workstream may have closed since the run was drafted; a run started into it would sit under a
+            // workstream nobody can talk to Pip in, with result drafts Pip could never revise.
+            if let Some(ws) = spec.workstream.as_deref().filter(|_| p.state == ProposalState::Pending) {
+                super::workstreams::require_linkable(db, connection_id, ws, item.as_ref()).map_err(|e| match e {
+                    Error::Proposal(why) => Error::Proposal(format!("{why}; draft the run again")),
+                    other => other,
+                })?;
+            }
             let (connection_id, item, spec) = (connection_id.clone(), item.clone(), spec.clone());
             let run_id = proposals::new_id()?;
-            db.approve_start_run(id, digest, |p| Run::queued(run_id, p.id.clone(), connection_id, item, spec, file, Utc::now()))
+            let run = db.approve_start_run(id, digest, |p| Run::queued(run_id, p.id.clone(), connection_id, item, spec, file, Utc::now()))?;
+            if let Some(ws) = &run.spec.workstream {
+                let event = WorkstreamEvent::new(ws, Actor::Person, "run_approved", run.queued_at).run(&run.id).proposal(&run.proposal_id).digest(&run.digest);
+                // The run is approved either way; a lost audit line must not read as a failed approval.
+                if let Err(e) = db.append_workstream_event(&event) {
+                    eprintln!("couldn't record the approval of run {} in workstream {ws}: {e}", run.id);
+                }
+            }
+            Ok(run)
         })
         .await
     }
@@ -551,7 +588,15 @@ impl Core {
         let claimed = self.with_db_for(&scope, |db| proposals::begin(db, id, Utc::now())).await?;
         let outcome = proposals::execute(tracker.as_ref(), &claimed).await;
         let wrote = outcome.error.is_none() || !outcome.created.is_empty();
-        let done = self.with_db_for(&scope, |db| proposals::finish(db, id, outcome, Utc::now())).await?;
+        let done = self.with_db_for(&scope, |db| {
+            let at = Utc::now();
+            let done = proposals::finish(db, id, outcome, at)?;
+            if done.state == ProposalState::Applied {
+                proposals::record(db, &done, Actor::Person, "draft_approved", at);
+            }
+            Ok(done)
+        })
+        .await?;
         if let (Origin::Run { run_id, .. }, Intent::Create { .. }, Some(made)) = (&done.origin, &done.intent, done.created.first().filter(|_| done.state == ProposalState::Applied)) {
             // The ticket exists either way; the run learns of it again the next time its sheet reads the outcome.
             if let Err(e) = self.record_created_from_run(run_id, made).await {
@@ -862,7 +907,7 @@ mod tests {
     async fn a_pip_revision_after_reading_is_refused_at_approval() {
         let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let clone = clone_in(&fx, "webshop");
-        let by_pip = Draft::from_pip("r", Intent::StartRun { connection_id: fx.item("CA-1").connection_id, item: Some(fx.item("CA-1")), spec: spec_in(&clone) }, None);
+        let by_pip = Draft::from_pip("r", None, Intent::StartRun { connection_id: fx.item("CA-1").connection_id, item: Some(fx.item("CA-1")), spec: spec_in(&clone) }, None);
         let p = fx.core.propose(&fx.scope, by_pip).await.unwrap();
         let read = fx.core.runs_review(&p.id).await.unwrap();
 
@@ -871,7 +916,7 @@ mod tests {
             item: Some(fx.item("CA-1")),
             spec: RunSpec { focus: Some("look somewhere else".into()), ..read.spec.clone() },
         };
-        fx.core.revise_as_pip(&fx.scope, &p.id, revised).await.unwrap();
+        fx.core.revise_as_pip(&fx.scope, None, &p.id, revised).await.unwrap();
 
         let err = fx.core.runs_approve(&p.id, &read.digest).await.unwrap_err();
         assert!(err.to_string().contains("changed after you read it"), "{err}");
@@ -909,6 +954,100 @@ mod tests {
         let comment = fx.core.draft_as_user(Intent::Comment { item: fx.item("CA-1"), body: Doc::paragraph("hi") }, None).await.unwrap();
         assert!(fx.core.runs_review(&comment.id).await.is_err());
         assert!(fx.core.runs_approve(&comment.id, "x").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_run_links_only_to_an_open_workstream_of_its_own_ticket() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        fx.add_item(2).await;
+        fx.add_item(3).await;
+        let clone = clone_in(&fx, "webshop");
+        let open = |key: &'static str| {
+            let fx = &fx;
+            async move { fx.core.open_workstream(&fx.scope, Some(fx.item(key)), None).await.unwrap() }
+        };
+        let (one, two, three) = (open("CA-1").await, open("CA-2").await, open("CA-3").await);
+        fx.core.close_workstream(&fx.scope, &three.id).await.unwrap();
+        let ticketless = fx.core.open_workstream(&fx.scope, None, Some("Why is it slow?".into())).await.unwrap();
+        let linked = |ws: &str| RunSpec { workstream: Some(ws.into()), ..spec_in(&clone) };
+        let refused = |spec: RunSpec, key: Option<&'static str>| {
+            let fx = &fx;
+            async move { fx.core.draft_run(spec, key.map(|k| fx.item(k))).await.unwrap_err().to_string() }
+        };
+
+        assert!(refused(linked("nope"), Some("CA-1")).await.contains("no workstream nope"));
+        assert!(refused(linked(&two.id), Some("CA-1")).await.contains("another ticket"));
+        assert!(refused(linked(&three.id), Some("CA-3")).await.contains("closed"));
+        assert!(refused(linked(&ticketless.id), Some("CA-1")).await.contains("another ticket"));
+        let no_ticket = RunSpec { instruction: String::new(), project: Some(project_of(&fx)), ..linked(&one.id) };
+        assert!(refused(no_ticket, None).await.contains("another ticket"));
+        assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().is_empty());
+
+        let p = fx.core.draft_run(linked(&one.id), Some(fx.item("CA-1"))).await.unwrap();
+        assert_eq!(spec_of(&p).workstream.as_deref(), Some(one.id.as_str()));
+        let ticketless_run = RunSpec { instruction: String::new(), project: Some(project_of(&fx)), name: "eng-1-other-0002".into(), ..linked(&ticketless.id) };
+        let q = fx.core.draft_run(ticketless_run, None).await.unwrap();
+        assert_eq!(spec_of(&q).workstream, Some(ticketless.id.clone()));
+        assert_eq!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn approving_a_workstream_run_records_the_approval_with_its_digest_and_others_record_nothing() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        let clone = clone_in(&fx, "webshop");
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let p = fx.core.draft_run(RunSpec { workstream: Some(ws.id.clone()), ..spec_in(&clone) }, Some(fx.item("CA-1"))).await.unwrap();
+        let review = fx.core.runs_review(&p.id).await.unwrap();
+        let run = fx.core.runs_approve(&p.id, &review.digest).await.unwrap();
+        assert_eq!(run.spec.workstream.as_deref(), Some(ws.id.as_str()));
+
+        let plain = fx.core.draft_run(RunSpec { name: "eng-1-plain-0002".into(), ..spec_in(&clone) }, Some(fx.item("CA-1"))).await.unwrap();
+        let digest = fx.core.runs_review(&plain.id).await.unwrap().digest;
+        fx.core.runs_approve(&plain.id, &digest).await.unwrap();
+
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        let approved: Vec<_> = events.iter().filter(|e| e.action == "run_approved").collect();
+        assert_eq!(approved.len(), 1);
+        let e = approved[0];
+        assert_eq!((e.actor, e.run_id.as_deref(), e.proposal_id.as_deref(), e.digest.as_deref()), (Actor::Person, Some(run.id.as_str()), Some(p.id.as_str()), Some(review.digest.as_str())));
+        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().runs, vec![run.id]);
+    }
+
+    #[tokio::test]
+    async fn a_run_drafted_into_a_workstream_that_has_since_closed_is_refused_at_approval() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        let clone = clone_in(&fx, "webshop");
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let p = fx.core.draft_run(RunSpec { workstream: Some(ws.id.clone()), ..spec_in(&clone) }, Some(fx.item("CA-1"))).await.unwrap();
+        let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
+        fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
+
+        let err = fx.core.runs_approve(&p.id, &digest).await.unwrap_err().to_string();
+        assert!(err.contains("closed") && err.contains("draft the run again"), "{err}");
+        assert!(fx.core.runs_list(&RunQuery::default()).await.unwrap().is_empty(), "no run was queued");
+        assert_eq!(fx.core.proposal(&p.id).await.unwrap().unwrap().state, ProposalState::Pending);
+        assert!(fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap().iter().all(|e| e.action != "run_approved"));
+    }
+
+    #[tokio::test]
+    async fn an_edit_cannot_move_a_run_into_out_of_or_between_workstreams() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        let clone = clone_in(&fx, "webshop");
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let linked = fx.core.draft_run(RunSpec { workstream: Some(ws.id.clone()), ..spec_in(&clone) }, Some(fx.item("CA-1"))).await.unwrap();
+        let loose = fx.core.draft_run(RunSpec { name: "eng-1-loose-0002".into(), ..spec_in(&clone) }, Some(fx.item("CA-1"))).await.unwrap();
+        let moved = |p: &Proposal, to: Option<&str>| {
+            let Intent::StartRun { connection_id, item, spec } = p.intent.clone() else { panic!() };
+            Intent::StartRun { connection_id, item, spec: RunSpec { workstream: to.map(Into::into), ..spec } }
+        };
+        for (p, to) in [(&linked, Some("ws-other")), (&linked, None), (&loose, Some(ws.id.as_str()))] {
+            let err = fx.core.with_proposals(|db| proposals::edit_noted(db, &p.id, moved(p, to), "Revised", Utc::now())).await.unwrap_err().to_string();
+            assert!(err.contains("another workstream"), "{err}");
+        }
+        let same = fx.core.with_proposals(|db| proposals::edit_noted(db, &linked.id, moved(&linked, Some(&ws.id)), "Revised", Utc::now())).await;
+        assert!(same.is_ok());
+        let edit = Edit::Run { instruction: Some("Also read the logs.".into()), base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: None, build_account: None, project: None };
+        assert_eq!(spec_of(&fx.core.edit_proposal(&linked.id, &edit).await.unwrap()).workstream, Some(ws.id.clone()), "the person's edits keep it");
     }
 
     #[test]
@@ -953,7 +1092,7 @@ mod tests {
         let connection = fx.item("CA-1").connection_id;
         let by_pip = |name: &str, path: &Path| {
             let spec = RunSpec { clone_path: path.to_path_buf(), name: name.into(), ..crate::domain::fixtures::run_spec() };
-            Draft::from_pip("r", Intent::StartRun { connection_id: connection.clone(), item: item(), spec }, None)
+            Draft::from_pip("r", None, Intent::StartRun { connection_id: connection.clone(), item: item(), spec }, None)
         };
 
         let through_link = fx.core.propose(&fx.scope, by_pip("eng-1-linked-0001", &link)).await.unwrap();
@@ -1270,7 +1409,7 @@ mod tests {
 
     async fn pips_rewrite(fx: &crate::inbox::testing::Fixture, title: Option<&str>, description: Option<&str>) -> Proposal {
         let intent = fx.core.rewrite_intent(&fx.scope, "CA-1", title, description).await.unwrap();
-        fx.core.propose(&fx.scope, Draft::from_pip("r", intent, None)).await.unwrap()
+        fx.core.propose(&fx.scope, Draft::from_pip("r", None, intent, None)).await.unwrap()
     }
 
     async fn jira_now(fx: &crate::inbox::testing::Fixture, f: impl FnOnce(&mut crate::domain::WorkItem)) {

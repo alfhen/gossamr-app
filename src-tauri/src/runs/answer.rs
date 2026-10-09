@@ -102,6 +102,8 @@ impl RunService {
                 if let Err(e) = self.core.append_run_events(&run.id, &[event]).await {
                     eprintln!("couldn't record the answer: {e}");
                 }
+                // Only the length: the answer's text stays with the run.
+                self.note_person(&run, "run_answered", Some(text.chars().count().to_string())).await;
                 Ok(run)
             }
             Some(why) => {

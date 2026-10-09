@@ -349,10 +349,14 @@ pub(crate) fn sanitize(raw: &str) -> String {
     strip_tags(&scrub(raw))
 }
 
+/// Whether `text` holds the markers that fence an agent's output wherever Pip reads it.
+pub(crate) fn has_output_markers(text: &str) -> bool {
+    OUTPUT_MARKERS.iter().any(|m| text.contains(m))
+}
+
 /// `sanitize` without the removal of HTML-like tags, for text that is going into a ticket and may legitimately name them.
 pub(crate) fn scrub(raw: &str) -> String {
-    let text = strip_ansi(&redact(raw)).replace("\r\n", "\n");
-    let text: String = text.chars().filter(|c| matches!(c, '\n' | '\t') || !(c.is_control() || is_direction_mark(*c))).collect();
+    let text = visible(&strip_ansi(&redact(raw)).replace("\r\n", "\n"));
     let mut text = without_markers(&text);
     for marker in OUTPUT_MARKERS {
         while text.contains(marker) {
@@ -360,6 +364,12 @@ pub(crate) fn scrub(raw: &str) -> String {
         }
     }
     text
+}
+
+/// `text` without the characters that don't show: control characters other than newlines and tabs, and direction and
+/// zero-width marks. A marker split by one of them reads as the marker once they are gone.
+pub(crate) fn visible(text: &str) -> String {
+    text.chars().filter(|c| matches!(c, '\n' | '\t') || !(c.is_control() || is_direction_mark(*c))).collect()
 }
 
 fn is_direction_mark(c: char) -> bool {

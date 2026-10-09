@@ -528,7 +528,7 @@ async fn a_finished_run_with_a_for_jira_section_leaves_one_comment_draft_and_a_r
     rig.poll().await;
     let drafts = comment_drafts(&rig).await;
     let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
-    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::User));
+    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::Agent));
     assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
     assert!(matches!(&draft.intent, crate::domain::Intent::Comment { body, .. } if body.plain_text().contains("The consumer retries without a backoff.")));
     assert!(rig.fx.tracker.intents().is_empty(), "a draft writes nothing to Jira");
@@ -586,7 +586,7 @@ async fn a_finished_investigation_with_no_ticket_leaves_one_draft_ticket_and_a_r
     rig.poll().await;
     let drafts = ticket_drafts(&rig).await;
     let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
-    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::User));
+    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::Agent));
     assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
     assert!(matches!(&draft.intent, crate::domain::Intent::Create { fields, .. } if fields.title == "Add a backoff to the order consumer"));
     assert!(comment_drafts(&rig).await.is_empty() && rig.fx.tracker.intents().is_empty(), "nothing is posted or created");
@@ -639,7 +639,7 @@ async fn a_triage_that_proposes_a_breakdown_leaves_subtasks_beside_its_comment_a
     rig.poll().await;
     let drafts = subtask_drafts(&rig).await;
     let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
-    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::User));
+    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::Agent));
     assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
     assert!(matches!(&draft.intent, crate::domain::Intent::Subtasks { parent, summaries } if parent.key == "CA-1" && summaries == &["Add a backoff to the consumer", "Report the consumer lag", "Survive a restart"]));
     assert_eq!(comment_drafts(&rig).await.len(), 1, "the status comment is still drafted");
@@ -703,7 +703,7 @@ async fn a_plan_that_finishes_leaves_its_status_comment_and_a_description_update
     let drafts = description_drafts(&rig).await;
     let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
     assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
-    assert_eq!(draft.created_by, crate::domain::CreatedBy::User);
+    assert_eq!(draft.created_by, crate::domain::CreatedBy::Agent);
     assert!(matches!(&draft.intent, crate::domain::Intent::Rewrite { body: Some(b), .. } if b.to.to_markdown().contains("## Gossamr Plan") && b.to.to_markdown().contains("Round once.") && !b.to.to_markdown().contains("For Jira")));
     assert_eq!(comment_drafts(&rig).await.len(), 1, "the status comment is still drafted");
     assert!(rig.fx.tracker.intents().is_empty(), "nothing is written");

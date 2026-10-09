@@ -29,11 +29,11 @@ use auth::{Auth, AuthStatus, DeviceStart, OAuthApp, Scope};
 use agent::{AgentService, AskOutcome, AskRequest};
 use claude::ClaudeCodeProvider;
 use tracker::{Connection, Move};
-use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState};
+use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState, WorkstreamView};
 use error::{Error, Result};
 use domain::{
     CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, ContainerRef, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, RunReview, RunSpec, Stray,
-    TreeEntry, WatchChange, WatchMode, WorkItem, Workflow,
+    TreeEntry, WatchChange, WatchMode, WorkItem, Workflow, Workstream, WorkstreamEvent,
 };
 use model::{Snapshot, Transition};
 use runs::preflight::Preflight;
@@ -88,6 +88,11 @@ fn assigned_elsewhere(app: &AppHandle, connection_id: &str, strays: &[Stray]) {
 /// Tells the page the stored drafts changed, so it can re-read them.
 fn proposals_changed(app: &AppHandle, connection_id: &str) {
     let _ = app.emit("proposals-changed", serde_json::json!({ "connectionId": connection_id }));
+}
+
+/// Tells the page a workstream was opened, closed or changed, so it can re-read them.
+fn workstreams_changed(app: &AppHandle, connection_id: &str) {
+    let _ = app.emit("workstreams-changed", serde_json::json!({ "connectionId": connection_id }));
 }
 
 /// Asks the page to narrow the view the person is looking at.
@@ -544,6 +549,46 @@ async fn runs_start_now(runs: State<'_, RunsState>, id: String) -> Result<Run> {
 async fn runs_retry_launch(runs: State<'_, RunsState>, id: String) -> Result<Run> {
     runs.ensure_enabled()?;
     runs.retry_launch(&id).await
+}
+
+/// Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back.
+#[tauri::command]
+async fn workstreams_open(app: AppHandle, core: State<'_, CoreState>, item: Option<ItemRef>, title: Option<String>) -> Result<Workstream> {
+    let ws = core.open_workstream(&core.scope().await?, item, title).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
+#[tauri::command]
+async fn workstreams_get(core: State<'_, CoreState>, id: String) -> Result<Option<WorkstreamView>> {
+    core.workstream(&core.scope().await?, &id).await
+}
+
+/// The signed-in account's workstreams with their derived stages, newest first.
+#[tauri::command]
+async fn workstreams_list(core: State<'_, CoreState>, include_closed: Option<bool>) -> Result<Vec<WorkstreamView>> {
+    core.workstreams(&core.scope().await?, include_closed.unwrap_or(false)).await
+}
+
+#[tauri::command]
+async fn workstreams_close(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
+    let ws = core.close_workstream(&core.scope().await?, &id).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
+/// The person's change to a workstream's notes.
+#[tauri::command]
+async fn workstreams_set_notes(app: AppHandle, core: State<'_, CoreState>, id: String, notes: String) -> Result<Workstream> {
+    let ws = core.set_workstream_notes(&core.scope().await?, &id, &notes, domain::Actor::Person).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
+/// A workstream's audit, oldest first.
+#[tauri::command]
+async fn workstreams_events(core: State<'_, CoreState>, id: String) -> Result<Vec<WorkstreamEvent>> {
+    core.workstream_events(&core.scope().await?, &id).await
 }
 
 /// Every watched GitHub repository as owner/name.
@@ -1165,6 +1210,12 @@ pub fn run() {
             runs_draft_ticket,
             runs_repo_project,
             runs_get,
+            workstreams_open,
+            workstreams_get,
+            workstreams_list,
+            workstreams_close,
+            workstreams_set_notes,
+            workstreams_events,
             sync_now,
             mark_seen,
             set_unread,

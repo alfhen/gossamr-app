@@ -43,6 +43,7 @@ fn header(p: &Proposal) -> String {
         CreatedBy::Pip => "Pip",
         CreatedBy::User => "the user",
         CreatedBy::Autopilot => "autopilot",
+        CreatedBy::Agent => "an agent run",
     };
     let state = match &p.state {
         ProposalState::Pending => "pending".to_string(),
