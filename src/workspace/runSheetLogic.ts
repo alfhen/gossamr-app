@@ -57,6 +57,9 @@ export interface PromptPart {
 /** Starts the plan part of a build's prompt: the sentence about following it, then the plan between its markers. As `PLAN_FOLLOW` in `domain/run.rs`. */
 export const PLAN_INTRO = "A person read, edited and approved the plan below.";
 
+/** Starts the plan part instead when the plan is the planning run's own answer, which nobody settled. As `PLAN_FOLLOW_UNEDITED` in `domain/run.rs`. */
+export const PLAN_INTRO_UNEDITED = "The plan below is the planning run's own answer.";
+
 /** Starts the builder's account part of a review's prompt: the sentence about checking it, then the account between its markers. As `BUILD_ACCOUNT_PREFACE` in `domain/run.rs`. */
 export const ACCOUNT_INTRO = "The builder's own account of what it did is below.";
 
@@ -88,7 +91,8 @@ export function splitPrompt(review: Pick<RunReview, "prompt" | "instruction">): 
     const end = rest.indexOf(close, at);
     return { at, end: end >= 0 ? end + close.length : 0, open: end < 0 };
   };
-  const plan = block(PLAN_INTRO, "\nPLAN>>>");
+  const plans = [block(PLAN_INTRO, "\nPLAN>>>"), block(PLAN_INTRO_UNEDITED, "\nPLAN>>>")].filter((b) => b.at >= 0);
+  const plan = plans.sort((a, b) => a.at - b.at)[0] ?? { at: -1, end: 0, open: false };
   const account = block(ACCOUNT_INTRO, "\nBUILD>>>");
   const ticketAt = plan.open || account.open ? -1 : ticketFound >= Math.max(plan.end, account.end) ? ticketFound : -1;
   const focusFound = find("Focus from Pip (");

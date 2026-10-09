@@ -34,8 +34,8 @@ interface PipState {
   pinned: ScreenContext | null;
   /** Text the person selected in the peek sheet to ask about. */
   quote: string | null;
-  /** A prompt waiting to land in the pane's input. */
-  prefill: { text: string } | null;
+  /** A prompt waiting to land in the pane's input, in place of what is there or, with `append`, after it. */
+  prefill: { text: string; append?: boolean } | null;
   applyFilter(filter: WorkFilter, note: string, requestId?: string): void;
   undoFilter(): void;
   clearFiltered(): void;
@@ -49,6 +49,8 @@ interface PipState {
   clearQuote(): void;
   /** Opens the pane with `text` in the input, unsent. */
   openWith(text: string): void;
+  /** Adds text to the end of the pane's input, as typing that landed on a draft card does. */
+  typeOn(text: string): void;
   clearPrefill(): void;
 }
 
@@ -118,6 +120,7 @@ export const usePip = create<PipState>((set, get) => ({
     set({ prefill: { text } });
     usePrefs.getState().setPipOpen(true);
   },
+  typeOn: (text) => set((s) => ({ prefill: s.prefill ? { ...s.prefill, text: s.prefill.text + text } : { text, append: true } })),
   clearPrefill: () => set({ prefill: null }),
 }));
 

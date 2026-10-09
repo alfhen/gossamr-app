@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import process from "node:process";
@@ -22,5 +23,7 @@ export default defineConfig(() => ({
   test: {
     environment: "node",
     passWithNoTests: true,
+    // Playwright runs e2e/ (pnpm e2e); its specs aren't vitest tests.
+    exclude: [...configDefaults.exclude, "e2e/**"],
   },
 }));

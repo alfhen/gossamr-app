@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import { targetOf, unreachable } from "../lib/proposals";
@@ -11,6 +11,8 @@ import { showMe } from "./jump";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { nextPass } from "./followUp";
+import { FROM_INPUT, PIP_INPUT_ID, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, type Asking } from "./draftKeys";
+import { usePip } from "./pipStore";
 
 const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺" };
 
@@ -90,10 +92,35 @@ interface Props {
   /** For a follow-up, the pass the agent would be on once it is sent. */
   pass?: number;
   onOpen(): void;
+  /** What the a key does on a focused card, for drafts that may be approved in place. */
+  onApprove?(): void;
+  /** What the s key does on a focused card. */
+  onSkip?(): void;
 }
 
-/** A draft as it appears in the conversation: what it is, how it stands and where to go to decide. Deciding happens on the ticket. */
-export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpen }: Props) {
+/** Hands typing that landed on a card back to Pip's input, after what is already there. */
+function typeIntoInput(text: string): boolean {
+  const input = document.getElementById(PIP_INPUT_ID);
+  if (!input) return false;
+  input.focus();
+  usePip.getState().typeOn(text);
+  return true;
+}
+
+/**
+ * A draft as it appears in the conversation: what it is, how it stands and where to go to decide. Deciding happens on the
+ * ticket, or from the keyboard on the focused card for a draft that needs no review. Only a card reached from the keyboard
+ * takes its keys; one focused by a click on its text shows no ring and no hint, and its keys do nothing.
+ */
+export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpen, onApprove, onSkip }: Props) {
+  /** Focused from the keyboard: only then does the card take its keys and show them. */
+  const [armed, setArmed] = useState(false);
+  const [asking, setAsking] = useState<Asking | null>(null);
+  const ref = useRef<HTMLElement>(null);
+  /** Set by a press of the pointer until the focus it causes has arrived. */
+  const pointer = useRef(false);
+  /** Set once a decision was made from the keys, so the card hands focus on if that decision takes it away. */
+  const decided = useRef(false);
   const state = p.state.type;
   const target = targetOf(p.intent);
   const pending = state === "pending" || state === "applying";
@@ -102,11 +129,57 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
   const go = pending ? (p.intent.type === "startRun" ? "Review and start →" : p.intent.type === "followUp" ? "Review and send back →" : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
   const create = isCreate(p) ? p : null;
   const body = create ? docText(create.intent.fields.body) || "No description." : draftPreviewBody(p, statusName, pass);
+  const decide = (run?: () => void) =>
+    run &&
+    (() => {
+      decided.current = true;
+      run();
+    });
+
+  // The hint renders under the card once it is armed, so the card is brought into view again with it.
+  useLayoutEffect(() => {
+    if (armed) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [armed, asking]);
+
+  // A card decided from its keys can leave the conversation, as one under "Drafts waiting" does; focus moves on first.
+  useLayoutEffect(() => {
+    const card = ref.current;
+    return () => {
+      if (!card || !decided.current || !card.contains(document.activeElement)) return;
+      focusAfterLeaving(card, card.closest("aside") ?? document, document.getElementById(PIP_INPUT_ID));
+    };
+  }, []);
+
   return (
     <article
+      ref={ref}
       aria-label={draftTitle(p)}
       data-draft={p.id}
-      className={`overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win shadow-sm ${state === "applied" ? "opacity-70" : state === "skipped" || state === "retired" ? "opacity-45" : ""}`}
+      data-state={state}
+      tabIndex={0}
+      aria-keyshortcuts={draftKeyShortcuts(p)}
+      onMouseDown={() => {
+        pointer.current = true;
+        setTimeout(() => (pointer.current = false), 0);
+      }}
+      onKeyDown={(ev) => {
+        if (!armed) return;
+        const fromInput = ev.target === ev.currentTarget && ev.currentTarget.hasAttribute(FROM_INPUT);
+        if (ev.target === ev.currentTarget) ev.currentTarget.removeAttribute(FROM_INPUT);
+        onDraftCardKey(ev, p, asking, { approve: decide(onApprove), skip: decide(onSkip), open: onOpen, ask: setAsking, type: typeIntoInput, fromInput });
+      }}
+      onFocus={(ev) => {
+        const byPointer = pointer.current;
+        pointer.current = false;
+        if (ev.target === ev.currentTarget) setArmed(!byPointer);
+      }}
+      onBlur={(ev) => {
+        if (ev.target !== ev.currentTarget) return;
+        ev.currentTarget.removeAttribute(FROM_INPUT);
+        setArmed(false);
+        setAsking(null);
+      }}
+      className={`overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "applied" ? "opacity-70" : state === "skipped" || state === "retired" ? "opacity-45" : ""}`}
     >
       <div className={`flex items-center gap-2 px-2.5 py-1.5 text-sm font-semibold ${HEADER[state]}`}>
         <span aria-hidden>{ICON[p.intent.type]}</span>
@@ -139,8 +212,31 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
             </button>
           ))}
       </div>
+      {armed && (
+        <p role="status" className={`m-0 border-t border-ws-sep px-2.5 py-1 text-xs ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "text-ws-ink3"}`}>
+          {draftKeyHint(p, asking)}
+        </p>
+      )}
     </article>
   );
+}
+
+const deciding = new Set<string>();
+
+/** Approving and skipping from a card's keys, through the store, one decision at a time per draft; a failure shows as a toast. */
+export function draftDecisions(id: string): { approve(): void; skip(): void } {
+  const decide = (verb: string, job: () => Promise<Proposal>) => {
+    if (deciding.has(id)) return;
+    deciding.add(id);
+    void job()
+      .then((done) => done.error && useWorkspace.getState().report(`Couldn't ${verb} that draft`, done.error))
+      .catch((e) => useWorkspace.getState().report(`Couldn't ${verb} that draft`, e))
+      .finally(() => deciding.delete(id));
+  };
+  return {
+    approve: () => decide("approve", () => useWorkspace.getState().approve(id)),
+    skip: () => decide("skip", () => useWorkspace.getState().skip(id)),
+  };
 }
 
 /** The preview wired to the workspace: opening it shows the ticket, or the draft of a ticket that doesn't exist yet. */
@@ -156,5 +252,6 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
     else if (p.created[0] && !showMe(p.created[0])) showDraft(p.id);
   };
   const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
-  return <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} pass={pass} onOpen={open} />;
+  const { approve, skip } = draftDecisions(p.id);
+  return <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} pass={pass} onOpen={open} onApprove={approve} onSkip={skip} />;
 }

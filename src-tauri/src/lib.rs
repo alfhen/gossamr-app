@@ -26,7 +26,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use auth::{Auth, AuthStatus, DeviceStart, OAuthApp, Scope};
-use agent::{AgentService, AskRequest};
+use agent::{AgentService, AskOutcome, AskRequest};
 use claude::ClaudeCodeProvider;
 use tracker::{Connection, Move};
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState};
@@ -871,7 +871,7 @@ async fn claude_sessions(core: State<'_, CoreState>, key: String) -> Result<Clau
 }
 
 #[tauri::command]
-async fn ask_claude(app: AppHandle, agent: State<'_, AgentState>, request: AskRequest) -> Result<()> {
+async fn ask_claude(app: AppHandle, agent: State<'_, AgentState>, request: AskRequest) -> Result<AskOutcome> {
     agent
         .ask(request, Arc::new(move |u| {
             let _ = app.emit("claude", u);
@@ -879,9 +879,17 @@ async fn ask_claude(app: AppHandle, agent: State<'_, AgentState>, request: AskRe
         .await
 }
 
+/// Pip's conversation `conversation` as stored, with what a turn still running has said so far.
 #[tauri::command]
-fn cancel_claude(agent: State<'_, AgentState>, request_id: String) {
-    agent.cancel(&request_id);
+async fn pip_turns(agent: State<'_, AgentState>, conversation: String) -> Result<Vec<db::PipTurn>> {
+    agent.turns(&conversation).await
+}
+
+/// Stops the turn `request_id`: the running one, or one still waiting, which then never starts.
+#[tauri::command]
+async fn cancel_claude(agent: State<'_, AgentState>, request_id: String) -> Result<()> {
+    agent.cancel(&request_id).await;
+    Ok(())
 }
 
 fn spawn_sync_loop(app: AppHandle, core: CoreState) {
@@ -1172,7 +1180,8 @@ pub fn run() {
             create_subtasks,
             claude_sessions,
             ask_claude,
-            cancel_claude
+            cancel_claude,
+            pip_turns
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

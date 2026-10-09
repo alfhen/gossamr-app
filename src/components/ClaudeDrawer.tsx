@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { claude } from "../backend/claude";
-import { useClaude, type Turn } from "../claudeStore";
+import { useClaude, type Conversation, type Turn } from "../claudeStore";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, participants, type Mention } from "../lib/mentions";
 import { draftsForTurn, earlierDrafts, targetOf, withoutRunDrafts } from "../lib/proposals";
@@ -21,17 +21,23 @@ function suggestions(t: Ticket): string[] {
   ];
 }
 
+/** The drawer's turn still in flight: the one being answered, or one queued behind other Pip processes. While there is one, the drawer takes no new question and Stop ends it. */
+export function turnInFlight(conv: Conversation | undefined): Turn | null {
+  return conv?.turns.find((t) => t.status === "running" || t.status === "queued") ?? null;
+}
+
 export function ClaudeDrawer() {
   const store = useStore();
   const ticket = selectedTicket(store);
-  const { open, setOpen, byTicket, proposals: allProposals, ask, cancel } = useClaude();
+  const { open, setOpen, byTicket, proposals: allProposals, ask, cancel, remove } = useClaude();
   const proposals = useMemo(() => withoutRunDrafts(allProposals), [allProposals]);
   const conv = ticket ? byTicket[ticket.key] : undefined;
   const [sessions, setSessions] = useState<{ key: string; last: string | null } | null>(null);
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const running = conv?.turns.some((t) => t.status === "running") ?? false;
+  const inFlight = turnInFlight(conv);
+  const running = inFlight !== null;
   const earlier = useMemo(
     () => (ticket ? earlierDrafts(proposals, ticket.key, conv?.turns.map((t) => t.requestId) ?? []) : []),
     [proposals, ticket?.key, conv],
@@ -39,6 +45,7 @@ export function ClaudeDrawer() {
 
   useEffect(() => {
     if (!open || !ticket) return;
+    void useClaude.getState().load(ticket.key);
     let live = true;
     claude
       .sessions(ticket.key)
@@ -120,7 +127,7 @@ export function ClaudeDrawer() {
             ))}
           </>
         )}
-        {conv?.turns.map((t) => <TurnView key={t.requestId} turn={t} proposals={proposals} />)}
+        {conv?.turns.map((t) => <DrawerTurn key={t.requestId} turn={t} proposals={proposals} />)}
       </div>
 
       <form
@@ -141,7 +148,7 @@ export function ClaudeDrawer() {
             className="min-w-0 flex-1 rounded-lg border border-field-border bg-field px-2.5 py-2 outline-none focus:border-claude focus:ring-3 focus:ring-claude-soft"
           />
           {running ? (
-            <button type="button" onClick={() => cancel(ticket.key)} className="rounded-md border border-field-border px-3 font-semibold">
+            <button type="button" onClick={() => (inFlight?.status === "queued" ? remove(inFlight.requestId) : cancel(ticket.key))} className="rounded-md border border-field-border px-3 font-semibold">
               Stop
             </button>
           ) : (
@@ -158,12 +165,13 @@ export function ClaudeDrawer() {
   );
 }
 
-function TurnView({ turn, proposals }: { turn: Turn; proposals: Proposal[] }) {
+export function DrawerTurn({ turn, proposals }: { turn: Turn; proposals: Proposal[] }) {
   return (
     <>
       <div className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
         {turn.prompt}
       </div>
+      {turn.status === "queued" && <p className="m-0 justify-self-end text-sm text-ink-3">Queued, starts when Pip is free</p>}
       {(turn.steps.length > 0 || (turn.status === "running" && !turn.text)) && (
         <ul className="grid gap-1 text-sm text-ink-2">
           {turn.steps.map((s, i) => (

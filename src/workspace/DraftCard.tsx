@@ -273,7 +273,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
             )}
             {intent.spec.plan?.trim() && intent.spec.planFromRun && (
               <p data-plan-from className="m-0 text-sm text-ws-ink2">
-                Follows the plan from run <b className="font-mono font-semibold">{intent.spec.planFromRun}</b> ({intent.spec.plan.length.toLocaleString("en")} characters, shown whole in the prompt).
+                Follows the {intent.spec.planApproved ? "" : "unedited "}plan from run <b className="font-mono font-semibold">{intent.spec.planFromRun}</b> ({intent.spec.plan.length.toLocaleString("en")} characters, shown whole in the prompt).
               </p>
             )}
             {intent.spec.buildAccount?.trim() && intent.spec.buildFromRun && (

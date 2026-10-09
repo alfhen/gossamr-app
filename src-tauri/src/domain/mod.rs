@@ -83,6 +83,7 @@ pub(crate) mod fixtures {
             pr_sha: None,
             plan: None,
             plan_from_run: None,
+            plan_approved: false,
             build_account: None,
             build_from_run: None,
             allow_push: false,

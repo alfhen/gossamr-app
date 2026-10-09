@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { listenToClaude } from "../claudeStore";
+import { listenToClaude, useClaude } from "../claudeStore";
 import type { Backend } from "../backend/types";
 import { TicketLinksContext } from "../components/ticketLinks";
 import type { WorkFilter } from "../types";
@@ -18,7 +18,7 @@ import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
 import { FilterNote, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
-import { PipPane } from "./PipPane";
+import { PipPane, WORKSPACE_CONVERSATION } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
 import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
 import { applyTheme, usePrefs } from "./prefs";
@@ -95,6 +95,14 @@ export function Workspace({ backend }: { backend: Backend }) {
   usePipView();
 
   useEffect(() => listenToClaude(), []);
+
+  // Once the backend answers, Pip's conversation comes back from where it is kept, so it outlives a reload.
+  const ready = status === "ready";
+  useEffect(() => {
+    if (!ready) return;
+    listenToClaude();
+    void useClaude.getState().load(WORKSPACE_CONVERSATION);
+  }, [ready, backend]);
 
   const missingConnection = !!choice && !choiceConnection;
   useEffect(() => {
