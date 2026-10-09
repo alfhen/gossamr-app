@@ -7,7 +7,7 @@ import type { Intent, Proposal, RunSpec } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { Composer, GENERAL_CONVERSATION, PipConversation, VerbNote, composerVerb, inputAfterCommand, workstreamConversation } from "./PipConversation";
+import { Composer, GENERAL_CONVERSATION, PipConversation, VerbNote, composerVerb, inputAfterCommand, outcomeBelongs, workstreamConversation } from "./PipConversation";
 import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
 import { MockBackend } from "../backend/mock";
@@ -170,6 +170,12 @@ describe("PipConversation", () => {
       expect(inputAfterCommand({ ok: false, message: "Couldn't answer R2." }, "/answer R2 a long paragraph", "/answer R2 a long paragraph")).toBe("/answer R2 a long paragraph");
       expect(inputAfterCommand({ ok: true, message: "Stopped R1" }, "/stop R1", "/stop R1")).toBe("");
       expect(inputAfterCommand({ ok: true, message: "Stopped R1" }, "/stop R1", "and then")).toBe("and then");
+    });
+
+    it("drops a command's outcome once the person has moved to another conversation", () => {
+      expect(outcomeBelongs(ws, ws)).toBe(true);
+      expect(outcomeBelongs(ws, GENERAL_CONVERSATION)).toBe(false);
+      expect(outcomeBelongs(ws, workstreamConversation("ws-2"))).toBe(false);
     });
 
     it("says what is wrong without calling anything, and lets a question through", async () => {
