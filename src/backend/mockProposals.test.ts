@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { docText } from "../lib/docs";
 import type { Intent } from "../types";
 import { MockBackend } from "./mock";
+import { MockProposals } from "./mockProposals";
 
 const ref = { connectionId: "mock", externalId: "CA-412", key: "CA-412" };
 const comment: Intent = { type: "comment", item: ref, body: { blocks: [{ type: "paragraph", content: [{ type: "text", text: "Hi", marks: [] }] }] } };
@@ -56,5 +57,33 @@ describe("mock proposals", () => {
     expect((await backend.proposalsList({ item: ref })).map((d) => d.id)).toEqual([p.id]);
     expect((await backend.cacheItem(ref))?.status.name).toBe(before);
     await expect(backend.proposalsCreate({ ...to, to: "" })).rejects.toThrow(/target status/);
+  });
+});
+
+describe("drafts kept across a reload", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("come back with the conversation that made them, under ids the new store hasn't given out", () => {
+    const saved = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => saved.get(k) ?? null, setItem: (k: string, v: string) => void saved.set(k, v), removeItem: (k: string) => void saved.delete(k) });
+    const fromChat = (p: { origin: { type: string; requestId?: string } }) => p.origin.type === "chat" && p.origin.requestId !== "gone";
+    const first = new MockProposals(async () => []);
+    first.keep("kept", fromChat);
+    const asked = first.draft(comment, null, "r1");
+    first.draft(comment, null, "gone");
+    void first.create(comment);
+    void first.skip(asked.id);
+
+    const again = new MockProposals(async () => []);
+    const seeded = again.draft(comment, null, "sample");
+    again.keep("kept", fromChat);
+    const back = again.list();
+    expect(back.map((p) => [p.origin, p.state.type])).toEqual([
+      [{ type: "chat", requestId: "r1" }, "skipped"],
+      [{ type: "chat", requestId: "sample" }, "pending"],
+    ]);
+    expect(new Set(back.map((p) => p.id)).size).toBe(2);
+    expect(back[0].id).not.toBe(seeded.id);
+    expect(again.draft(comment, null, "r2").id).not.toBe(back[0].id);
   });
 });

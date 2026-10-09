@@ -46,6 +46,10 @@ import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
 import { targetOf } from "../lib/proposals";
 import { MockProposals } from "./mockProposals";
+import { mockPipTurns } from "./mockPipTurns";
+
+/** Where the sample backend keeps the drafts Pip made in its conversations. */
+const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
 import { MockRuns } from "./mockRuns";
 import { seedDrafts } from "./mockDrafts";
 import type { MockOptions } from "./mockWatch";
@@ -391,6 +395,8 @@ export class MockBackend implements Backend {
     this.runs.pullRequest = (repo, number) => this.github.code.change(repo, number);
     this.runs.seedPlanDescriptions();
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
+    // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
+    this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));
   }
 
   private readonly device: NonNullable<MockOptions["device"]>;
@@ -661,6 +667,10 @@ export class MockBackend implements Backend {
 
   pipFollowUp(runId: string, message: string, reason: string, requestId: string) {
     return this.runs.pipFollowUp(runId, message, reason, requestId);
+  }
+
+  pipDrafted(requestId: string) {
+    return this.proposals.list().some((p) => p.origin.type === "chat" && p.origin.requestId === requestId);
   }
 
   pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string) {

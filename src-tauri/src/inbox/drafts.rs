@@ -162,6 +162,7 @@ impl Edit {
                     if v != RunKind::Build {
                         spec.plan = None;
                         spec.plan_from_run = None;
+                        spec.plan_approved = false;
                     }
                     if v != RunKind::Review {
                         spec.build_account = None;
@@ -204,7 +205,10 @@ impl Edit {
                     if v.trim().is_empty() {
                         spec.plan = None;
                         spec.plan_from_run = None;
+                        spec.plan_approved = false;
                     } else if spec.plan_from_run.is_some() {
+                        // Text the person changed here is theirs, so the build is told a person settled it.
+                        spec.plan_approved |= spec.plan.as_deref() != Some(v.as_str());
                         spec.plan = Some(v.clone());
                     } else {
                         return Err(Error::Proposal("this draft doesn't carry a plan".into()));
@@ -421,6 +425,7 @@ impl Core {
             spec.pr_sha = change.sha;
         }
         spec.plan = None;
+        spec.plan_approved = false;
         if let Some(from) = spec.plan_from_run.take() {
             if item.is_none() {
                 return Err(Error::Proposal("Build needs a ticket".into()));
@@ -914,6 +919,28 @@ mod tests {
         assert_eq!((spec.instruction.as_str(), spec.name.as_str(), spec.base.as_str(), spec.repo.as_str()), ("Look at logs", "new-name", "main", "acme/webshop"));
         assert_eq!(spec.clone_path, PathBuf::from("/Users/me/Code/other"));
         assert!(Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: None, build_account: None, project: None }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
+    }
+
+    #[test]
+    fn a_plan_the_person_edits_is_theirs_and_removing_it_or_leaving_build_clears_the_mark() {
+        let raw = RunSpec { kind: RunKind::Build, instruction: default_instruction(RunKind::Build).into(), plan: Some("1. Raw plan".into()), plan_from_run: Some("r1".into()), ..crate::domain::fixtures::run_spec() };
+        let current = Intent::StartRun { connection_id: "c".into(), item: None, spec: raw };
+        let edit = |plan: Option<&str>, kind: Option<RunKind>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr: None, allow_push: None, report: None, plan: plan.map(Into::into), build_account: None, project: None };
+        let spec_after = |e: Edit, on: &Intent| match e.apply_to(on).unwrap() {
+            Intent::StartRun { spec, .. } => spec,
+            other => panic!("{other:?}"),
+        };
+        assert!(!spec_after(edit(Some("1. Raw plan"), None), &current).plan_approved, "the same text sent back is no edit");
+        let edited = spec_after(edit(Some("1. Raw plan\n2. And a test"), None), &current);
+        assert!(edited.plan_approved && edited.plan.as_deref() == Some("1. Raw plan\n2. And a test"));
+        edited.validate().unwrap();
+        let on = Intent::StartRun { connection_id: "c".into(), item: None, spec: edited };
+        assert!(spec_after(edit(None, None), &on).plan_approved, "an edit to something else keeps it");
+        let removed = spec_after(edit(Some(" \n"), None), &on);
+        assert_eq!((removed.plan, removed.plan_from_run, removed.plan_approved), (None, None, false));
+        let triage = spec_after(edit(None, Some(RunKind::Triage)), &on);
+        assert_eq!((triage.plan.as_deref(), triage.plan_approved), (None, false));
+        triage.validate().unwrap();
     }
 
     #[tokio::test]

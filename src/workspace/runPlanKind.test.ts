@@ -82,7 +82,8 @@ describe("Build from this plan", () => {
     expect(parts.map((p) => p.id)).toEqual(["base", "template", "extra", "plan", "ticket"]);
     expect(parts.find((p) => p.id === "plan")!.text).toContain("PLAN>>>");
     expect(parts.map((p) => p.text).join("\n\n")).toBe(review!.prompt);
-    expect(s().preflight!.rows.some((r) => r.level === "green" && r.text.includes(`follows the plan from run ${plan.id}`))).toBe(true);
+    expect(review!.spec.planApproved).toBe(false);
+    expect(s().preflight!.rows.some((r) => r.level === "amber" && r.text.includes(`This build follows run ${plan.id}'s own plan, which nobody edited or approved`))).toBe(true);
   });
 
   it("keeps the ticket and repository fixed and still refuses a build without a ticket", async () => {

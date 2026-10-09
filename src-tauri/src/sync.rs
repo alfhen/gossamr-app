@@ -157,6 +157,7 @@ pub fn store(
     if plan == Plan::Full {
         state.full_at = Some(at.clone());
         db.prune_items(connection_id, &stamp(started - Duration::days(KEEP_DAYS)))?;
+        db.prune_pip_turns(&stamp(started - Duration::days(KEEP_DAYS)))?;
         if watch.mode == WatchMode::Selected {
             db.prune_unwatched(connection_id, &stamp(started - Duration::days(UNWATCH_GRACE_DAYS)))?;
         }
@@ -498,6 +499,22 @@ mod tests {
         store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
         let left = db.items_synced_since(CONNECTION, "", &Visible::All).unwrap();
         assert_eq!(left.iter().map(|i| i.item.key.as_str()).collect::<Vec<_>>(), ["CA-1"]);
+    }
+
+    #[tokio::test]
+    async fn a_full_sync_prunes_pip_turns_on_the_same_horizon_and_an_incremental_one_does_not() {
+        let db = Db::in_memory().unwrap();
+        let meta = crate::agent::TurnMeta::default();
+        db.begin_pip_turn("workspace", "old", "p", &meta, "done", "2026-01-01T00:00:00.000Z").unwrap();
+        db.begin_pip_turn("workspace", "recent", "p", &meta, "done", "2026-09-01T00:00:00.000Z").unwrap();
+        let fake = Fake::default();
+        let pulled = pull(&fake, CONNECTION, Plan::Since { minutes: 30 }, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
+        store(&db, CONNECTION, "me", &pulled, Plan::Since { minutes: 30 }, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        assert_eq!(db.pip_turns("workspace").unwrap().len(), 2);
+        let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
+        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        let left: Vec<String> = db.pip_turns("workspace").unwrap().into_iter().map(|t| t.request_id).collect();
+        assert_eq!(left, ["recent"]);
     }
 
     fn in_container(mut i: WorkItem, container: &str) -> WorkItem {

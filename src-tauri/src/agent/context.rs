@@ -9,6 +9,8 @@ use crate::domain::{
 
 const SUMMARY_CHARS: usize = 240;
 const LINKED_PRS_SHOWN: usize = 10;
+/// At most this many open drafts go into the prompt; `list_proposals` reads the rest.
+pub const OPEN_DRAFTS_SHOWN: usize = 20;
 
 /// What the person can see when they ask.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -246,12 +248,31 @@ pub fn compose(
     if drafts.is_empty() {
         out.push_str("None.\n");
     }
-    for p in drafts {
+    for p in shown_drafts(drafts, ctx.item.as_ref()) {
         out.push_str(&draft_line(p));
         out.push('\n');
     }
+    if drafts.len() > OPEN_DRAFTS_SHOWN {
+        out.push_str(&format!("…and {} more open drafts; list_proposals reads them all.\n", drafts.len() - OPEN_DRAFTS_SHOWN));
+    }
     out.push_str(&format!("\n[Request]\n{}", request.trim()));
     out
+}
+
+/// The drafts the prompt lists: all of them, in the order given, when they fit; otherwise the open item's first and
+/// then the most recently changed.
+fn shown_drafts<'a>(drafts: &'a [Proposal], item: Option<&ItemRef>) -> Vec<&'a Proposal> {
+    if drafts.len() <= OPEN_DRAFTS_SHOWN {
+        return drafts.iter().collect();
+    }
+    let on_item = |p: &Proposal| match (p.target(), item) {
+        (Some(t), Some(i)) => t.connection_id == i.connection_id && t.key.eq_ignore_ascii_case(&i.key),
+        _ => false,
+    };
+    let mut ranked: Vec<&Proposal> = drafts.iter().collect();
+    ranked.sort_by(|a, b| on_item(b).cmp(&on_item(a)).then(b.updated_at.cmp(&a.updated_at)));
+    ranked.truncate(OPEN_DRAFTS_SHOWN);
+    ranked
 }
 
 #[cfg(test)]
@@ -353,6 +374,54 @@ mod tests {
         assert!(p.contains("b2 · pending · by the user · comment"));
         assert!(!p.contains("b2 · pending · by the user · yours"));
         assert!(p.ends_with("[Request]\nwhat next?"));
+    }
+
+    fn many_drafts(n: usize) -> Vec<Proposal> {
+        (0..n)
+            .map(|i| {
+                let mut p = draft(&format!("d{i:03}"), CreatedBy::User, ProposalState::Pending);
+                p.updated_at = now() + chrono::Duration::minutes(i as i64);
+                p.intent = Intent::Comment { item: item_ref(&format!("{}", 100 + i)), body: Doc::paragraph("x") };
+                p
+            })
+            .collect()
+    }
+
+    fn draft_lines(prompt: &str) -> Vec<&str> {
+        let block = prompt.split("[Open drafts, from everyone]\n").nth(1).unwrap().split("\n\n[Request]").next().unwrap();
+        block.lines().collect()
+    }
+
+    #[test]
+    fn a_flood_of_drafts_is_cut_to_the_open_items_and_the_newest_with_a_count_of_the_rest() {
+        let mut drafts = many_drafts(200);
+        // Two old drafts on the open ticket, which would not make the cut by age.
+        for (i, d) in drafts.iter_mut().take(2).enumerate() {
+            d.id = format!("here{i}");
+            d.intent = Intent::Comment { item: item_ref("1"), body: Doc::paragraph("on the screen") };
+        }
+        let ctx = ScreenContext { item: Some(item_ref("1")), ..Default::default() };
+        let p = compose(&ctx, None, &[], &drafts, &[], "hi");
+        let lines = draft_lines(&p);
+        assert_eq!(lines.len(), OPEN_DRAFTS_SHOWN + 1);
+        assert_eq!(lines[OPEN_DRAFTS_SHOWN], format!("…and {} more open drafts; list_proposals reads them all.", 200 - OPEN_DRAFTS_SHOWN));
+        assert!(lines[0].starts_with("here") && lines[1].starts_with("here"), "{lines:?}");
+        assert!(lines[2].starts_with("d199 ") && lines[3].starts_with("d198 "), "then the newest: {lines:?}");
+        assert!(!p.contains("d100 "), "older drafts are left to list_proposals");
+    }
+
+    #[test]
+    fn drafts_up_to_the_cap_are_listed_as_before_in_the_order_given() {
+        let drafts = many_drafts(OPEN_DRAFTS_SHOWN);
+        let ctx = ScreenContext { item: Some(item_ref("119")), ..Default::default() };
+        let p = compose(&ctx, None, &[], &drafts, &[], "hi");
+        let mut expected = String::new();
+        for d in &drafts {
+            expected.push_str(&draft_line(d));
+            expected.push('\n');
+        }
+        assert!(p.contains(&format!("[Open drafts, from everyone]\n{expected}\n[Request]\nhi")), "{p}");
+        assert!(!p.contains("more open drafts"));
     }
 
     #[test]

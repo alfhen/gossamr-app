@@ -22,6 +22,7 @@ pub(crate) mod code;
 mod drafts;
 mod run_results;
 mod pip_runs;
+mod pip_turns;
 mod plan_description;
 mod report;
 mod rewrites;
@@ -59,6 +60,11 @@ fn unread_cutoff(last_sync: Option<&str>) -> String {
 
 pub fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+/// `now_iso` to the millisecond, for rows that are ordered by when they were written.
+fn now_millis() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn ago(d: Duration) -> String {
@@ -249,6 +255,13 @@ impl Core {
 
     pub async fn sign_out(&self) -> Result<()> {
         let connection = self.auth.connection().await;
+        // While the identity still resolves: Pip's conversations are the person's own and go with them.
+        if connection.is_some() {
+            match self.with_db(|db| db.clear_pip_turns()).await {
+                Err(Error::SiteChanged) => {}
+                other => other?,
+            }
+        }
         self.auth.sign_out().await?;
         if let Some(c) = connection {
             self.registry.remove(&c.id);
@@ -279,6 +292,7 @@ impl Core {
             let db = Db::open(&self.data_dir.join(db_file(&connection)))?;
             backfill_cache(&db, &connection)?;
             db.release_interrupted(Utc::now())?;
+            db.fail_interrupted_pip_turns()?;
             *guard = Some((connection.id.clone(), db));
         }
         f(&guard.as_ref().expect("opened above").1)

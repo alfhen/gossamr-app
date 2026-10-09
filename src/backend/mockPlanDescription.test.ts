@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
-import { PLAN_HEADING, planSectionOf, withPlanSection, withoutPlanSection } from "./mockPlanSection";
+import { PLAN_HEADING, approvedPlanText, planIntro, planSectionOf, withPlanSection, withoutPlanSection } from "./mockPlanSection";
 import { scriptPip } from "./mockPip";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -186,5 +186,17 @@ describe("Pip and a plan's description draft", () => {
   it("says so when the draft is gone", () => {
     const b = sample();
     expect(ask(b, "Let's talk about the description update draft nope on CA-1, drafted from agent run r1.", null).text).toContain("can't find that description draft");
+  });
+});
+
+describe("the plan a build takes from an approved description", () => {
+  it("is the section without the intro Gossamr wrote, whatever its date or run, and keeps the person's own lines", () => {
+    const intro = planIntro({ shortId: "ab12cd34", endedAt: "2026-09-29T10:00:00Z", queuedAt: "2026-09-29T09:00:00Z" });
+    const doc = withPlanSection(docFromMarkdown("Intro"), intro, docFromMarkdown("# Approach\n\nRound once.\n\nA line the person added."));
+    expect(approvedPlanText(planSectionOf(doc)!)).toBe("### Approach\n\nRound once.\n\nA line the person added.");
+    const older = withPlanSection(docFromMarkdown(""), "Drafted by an agent run on 2025-01-01. Something else.", docFromMarkdown("Step."));
+    expect(approvedPlanText(planSectionOf(older)!)).toBe("Step.");
+    expect(approvedPlanText(planSectionOf(docFromMarkdown("## Gossamr Plan\n\nThe person removed the intro."))!)).toBe("The person removed the intro.");
+    expect(approvedPlanText(planSectionOf(withPlanSection(docFromMarkdown("x"), intro, docFromMarkdown("")))!)).toBe("");
   });
 });

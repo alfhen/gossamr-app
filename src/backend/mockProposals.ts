@@ -3,6 +3,7 @@ import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT } from "./mockRunKinds";
 import { targetOf } from "../lib/proposals";
 import { followUpProblem } from "../workspace/followUp";
 import { bodyChange, markdownOf } from "./mockMarkdown";
+import { readStored, writeStored } from "../workspace/storage";
 import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, WorkItemKind } from "../types";
 
 const CONNECTION = "mock";
@@ -35,6 +36,9 @@ export class MockProposals {
   private drafts: Proposal[] = [];
   private listeners = new Set<(c: ProposalsChanged) => void>();
   private seq = 0;
+
+  /** Where drafts that outlive a reload are written, and which ones; set by `keep`. */
+  private kept: { key: string; which: (p: Proposal) => boolean } | null = null;
 
   /** Called with each draft that was applied, for a backend that has to tell its own listeners. */
   onApplied: (p: Proposal) => void = () => {};
@@ -121,7 +125,20 @@ export class MockProposals {
   }
 
   private changed() {
+    if (this.kept) writeStored(this.kept.key, this.drafts.filter(this.kept.which));
     this.listeners.forEach((l) => l({ connectionId: CONNECTION }));
+  }
+
+  /**
+   * Keeps the drafts `which` picks in this browser under `key`, and brings back the ones kept there before that it still
+   * picks. They get new ids, after the ones this store has already given out, so they can't take one of those.
+   */
+  keep(key: string, which: (p: Proposal) => boolean) {
+    const stored = readStored(key);
+    const before = (Array.isArray(stored) ? (stored as Proposal[]) : []).filter((p) => !!p && typeof p.id === "string" && !!p.intent && !!p.state && !!p.origin && which(p));
+    this.drafts = [...before.reverse().map((p) => ({ ...p, id: `mock-${++this.seq}` })).reverse(), ...this.drafts];
+    this.kept = { key, which };
+    this.changed();
   }
 
   async edit(id: string, edit: ProposalEdit) {
@@ -176,12 +193,13 @@ export class MockProposals {
         ...(base !== undefined ? { base: base.trim() } : {}),
         ...(clonePath !== undefined ? { clonePath } : {}),
         ...(kind ? { kind } : {}),
-        ...(switched ? { pr: null, prSha: null, allowPush: kind === "build", ...(kind !== "build" ? { plan: null, planFromRun: null } : {}), ...(kind !== "review" ? { buildAccount: null, buildFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
+        ...(switched ? { pr: null, prSha: null, allowPush: kind === "build", ...(kind !== "build" ? { plan: null, planFromRun: null, planApproved: false } : {}), ...(kind !== "review" ? { buildAccount: null, buildFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
         ...(project ? { project } : {}),
         ...(pr !== undefined ? { pr, prSha: null, ...(pr !== was.pr ? { buildAccount: null, buildFromRun: null } : {}) } : {}),
         ...(allowPush !== undefined ? { allowPush } : {}),
         ...(report !== undefined ? { report } : {}),
-        ...(plan !== undefined ? (plan.trim() ? { plan } : { plan: null, planFromRun: null }) : {}),
+        // Plan text the person changed here is theirs, so the build is told a person settled it.
+        ...(plan !== undefined ? (plan.trim() ? { plan, planApproved: !!was.planApproved || plan !== was.plan } : { plan: null, planFromRun: null, planApproved: false }) : {}),
         ...(buildAccount !== undefined ? (buildAccount.trim() ? { buildAccount } : { buildAccount: null, buildFromRun: null }) : {}),
         ...(name !== undefined ? { name: name.trim() } : {}),
       };
@@ -247,6 +265,13 @@ export class MockProposals {
     if (p?.state.type === "skipped") return p;
     this.pending(id);
     return this.set(id, { state: { type: "skipped" } });
+  }
+
+  /** A pending build draft's plan read again from its run, for `MockRuns.refreshPlan`: the text and whether it was settled, both replaced. */
+  readPlanAgain(id: string, carried: { plan: string; planApproved: boolean }): Proposal {
+    const p = this.pending(id);
+    if (p.intent.type !== "startRun") throw new Error("that draft doesn't start a run");
+    return this.set(id, { intent: { ...p.intent, spec: { ...p.intent.spec, ...carried } }, error: null });
   }
 
   /** Marks a run draft applied, for `MockRuns.approve`. */

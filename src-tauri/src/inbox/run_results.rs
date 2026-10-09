@@ -264,9 +264,11 @@ impl Core {
         Ok(found.into_iter().filter(|p| matches!((&p.origin, &p.intent), (Origin::Run { run_id, .. }, Intent::Comment { .. }) if *run_id == run.id)).collect())
     }
 
-    /// The plan of a finished Plan run, as a build carries it: the whole answer, cleaned, and cut at a paragraph or
-    /// sentence with a note when it is over the limit. Taken here from the run, never from the caller.
-    async fn plan_of_run(&self, run_id: &str, item: Option<&ItemRef>, repo: &str) -> Result<(Run, String)> {
+    /// The plan of a finished Plan run, as a build carries it, and whether a person settled it. That is the applied
+    /// Gossamr Plan description draft with the person's edits when there is one; otherwise the whole answer, cleaned,
+    /// which nobody approved. Either is cut at a paragraph or sentence with a note when it is over the limit. Taken here
+    /// from the run and its drafts, never from the caller.
+    async fn plan_of_run(&self, run_id: &str, item: Option<&ItemRef>, repo: &str) -> Result<(Run, String, bool)> {
         let run = self.run(run_id).await?.ok_or_else(|| refuse("that plan run no longer exists"))?;
         if run.spec.kind != RunKind::Plan {
             return Err(refuse("that run isn't a plan run"));
@@ -276,16 +278,19 @@ impl Core {
         }
         let resolved = self.resolved_of(&run).await?;
         let same_ticket = run.item.as_ref().map(|i| (&i.connection_id, &i.external_id)) == item.map(|i| (&i.connection_id, &i.external_id));
-        let text = match resolved.plan.clone() {
-            Some(plan) => plan,
-            None => Self::account_of(&run, &resolved, "plan", "A build can only follow a plan Gossamr has read in full.")?,
+        let (text, approved) = match self.approved_plan_of(&run).await? {
+            Some(settled) => (settled, true),
+            None => match resolved.plan.clone() {
+                Some(plan) => (plan, false),
+                None => (Self::account_of(&run, &resolved, "plan", "A build can only follow a plan Gossamr has read in full.")?, false),
+            },
         };
         if !same_ticket || !run.spec.repo.eq_ignore_ascii_case(repo) {
             return Err(refuse("that plan is about another ticket or repository"));
         }
         let id = run.id.clone();
         let fitted = fit(&text, PLAN_LIMIT, |total| format!("[Cut here. The plan was {total} characters and a build carries at most {PLAN_LIMIT}. The whole of it is in run {id}.]"));
-        Ok((run, fitted.text))
+        Ok((run, fitted.text, approved))
     }
 
     /// Fills a build draft's plan from the run it names. Returns the run id the plan is labelled with.
@@ -293,8 +298,9 @@ impl Core {
         if spec.kind != RunKind::Build {
             return Err(refuse("only a build carries a plan"));
         }
-        let (run, text) = self.plan_of_run(run_id, item, &spec.repo).await?;
+        let (run, text, approved) = self.plan_of_run(run_id, item, &spec.repo).await?;
         spec.plan = Some(text);
+        spec.plan_approved = approved;
         Ok(run.id)
     }
 
@@ -1232,6 +1238,133 @@ pub(in crate::inbox) mod tests {
         assert_ne!(read.digest, second.digest);
         assert!(fx.core.runs_approve(&p.id, &read.digest).await.is_ok());
         assert!(fx.core.runs_refresh_plan(&p.id).await.unwrap_err().to_string().contains("still waiting"));
+    }
+
+    fn description_of(p: &Proposal) -> String {
+        match &p.intent {
+            Intent::Rewrite { body: Some(b), .. } => b.to.to_markdown(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The plan run's description draft, with `extra` added to the end of its plan by the person, then approved.
+    async fn settle_plan(fx: &Fixture, plan: &Run, extra: &str) -> Proposal {
+        let made = match fx.core.auto_draft_run_plan_description(&plan.id).await.unwrap() {
+            Some(made) => made,
+            None => fx.core.draft_run_plan_description(&plan.id).await.unwrap(),
+        };
+        let body = format!("{}\n\n{extra}", description_of(&made));
+        fx.core.edit_proposal(&made.id, &Edit::Rewrite { title: None, body: Some(body) }).await.unwrap();
+        let done = fx.core.approve_proposal(&made.id).await.unwrap();
+        assert_eq!(done.state, ProposalState::Applied, "{:?}", done.error);
+        done
+    }
+
+    #[tokio::test]
+    async fn a_build_carries_the_plan_the_person_revised_and_approved_on_the_ticket_without_the_intro() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let plan = plan_with(&fx, PLAN).await;
+        settle_plan(&fx, &plan, "Also check the refund path.").await;
+        let p = fx.core.draft_run(build_from(&fx, &plan), Some(fx.item("CA-1"))).await.unwrap();
+        let spec = spec_in(&p);
+        let text = spec.plan.clone().unwrap();
+        assert!(spec.plan_approved);
+        assert!(text.contains("Round in one place.") && text.contains("1. Fix the rounding.") && text.ends_with("2. Add a test.\n\nAlso check the refund path."), "{text}");
+        assert!(!text.contains("Drafted by an agent run") && !text.contains("A person read and approved it") && !text.contains("For Jira") && !text.contains("forged"), "{text}");
+        let review = fx.core.runs_review(&p.id).await.unwrap();
+        assert!(review.prompt.contains("A person read, edited and approved the plan below."));
+        assert!(review.prompt.contains(&format!("Plan from run {}:\n<<<PLAN\n{text}\nPLAN>>>", plan.id)), "exactly the settled text: {}", review.prompt);
+    }
+
+    #[tokio::test]
+    async fn without_an_applied_description_draft_the_build_carries_the_raw_answer_and_says_it_is_unedited() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let raw = |p: &Proposal| {
+            let spec = spec_in(p);
+            assert!(!spec.plan_approved);
+            assert!(spec.plan.as_deref().unwrap().starts_with("## Approach\n\nRound in one place.") && spec.plan.as_deref().unwrap().contains("Plan attached to the run"));
+        };
+        let none = plan_with(&fx, PLAN).await;
+        raw(&fx.core.draft_run(build_from(&fx, &none), Some(fx.item("CA-1"))).await.unwrap());
+
+        let pending = plan_with(&fx, PLAN).await;
+        let made = fx.core.auto_draft_run_plan_description(&pending.id).await.unwrap().unwrap();
+        let body = format!("{}\n\nEdited but not approved.", description_of(&made));
+        fx.core.edit_proposal(&made.id, &Edit::Rewrite { title: None, body: Some(body) }).await.unwrap();
+        let p = fx.core.draft_run(build_from(&fx, &pending), Some(fx.item("CA-1"))).await.unwrap();
+        raw(&p);
+        let review = fx.core.runs_review(&p.id).await.unwrap();
+        assert!(review.prompt.contains("The plan below is the planning run's own answer.") && !review.prompt.contains("edited and approved"), "{}", review.prompt);
+        assert!(!review.prompt.contains("Edited but not approved."));
+        fx.core.skip_proposal(&made.id).await.unwrap();
+        raw(&fx.core.draft_run(build_from(&fx, &pending), Some(fx.item("CA-1"))).await.unwrap());
+
+        let first = plan_with(&fx, "1. First idea.").await;
+        let one = fx.core.auto_draft_run_plan_description(&first.id).await.unwrap().unwrap();
+        let later = plan_with(&fx, "1. Later idea.").await;
+        fx.core.auto_draft_run_plan_description(&later.id).await.unwrap().unwrap();
+        assert!(matches!(fx.core.proposal(&one.id).await.unwrap().unwrap().state, ProposalState::Retired(_)));
+        let retired = spec_in(&fx.core.draft_run(build_from(&fx, &first), Some(fx.item("CA-1"))).await.unwrap());
+        assert_eq!((retired.plan.as_deref(), retired.plan_approved), (Some("1. First idea."), false));
+    }
+
+    #[tokio::test]
+    async fn of_two_applied_description_drafts_the_build_takes_the_newest() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let plan = plan_with(&fx, PLAN).await;
+        settle_plan(&fx, &plan, "Older settled line.").await;
+        settle_plan(&fx, &plan, "Newer settled line.").await;
+        let spec = spec_in(&fx.core.draft_run(build_from(&fx, &plan), Some(fx.item("CA-1"))).await.unwrap());
+        let text = spec.plan.unwrap();
+        assert!(spec.plan_approved && text.ends_with("Newer settled line.") && !text.contains("Older settled line."), "{text}");
+    }
+
+    #[tokio::test]
+    async fn reading_the_plan_again_after_approving_the_description_switches_the_build_to_the_settled_text() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let plan = plan_with(&fx, PLAN).await;
+        let p = fx.core.draft_run(build_from(&fx, &plan), Some(fx.item("CA-1"))).await.unwrap();
+        assert!(!spec_in(&p).plan_approved);
+        let before = fx.core.runs_review(&p.id).await.unwrap();
+        settle_plan(&fx, &plan, "Settled after the build was drafted.").await;
+        let still = fx.core.runs_review(&p.id).await.unwrap();
+        assert_eq!((still.plan, still.spec.plan_approved), (before.plan, false), "the plan doesn't change until the person reads it again");
+        let fresh = spec_in(&fx.core.runs_refresh_plan(&p.id).await.unwrap());
+        assert!(fresh.plan_approved && fresh.plan.as_deref().unwrap().ends_with("Settled after the build was drafted."));
+        let after = fx.core.runs_review(&p.id).await.unwrap();
+        assert_ne!(after.digest, before.digest);
+        assert!(after.prompt.contains("A person read, edited and approved the plan below."));
+    }
+
+    #[tokio::test]
+    async fn a_settled_plan_is_still_refused_for_another_ticket_or_repository_and_still_cut_to_the_limit() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let plan = plan_with(&fx, PLAN).await;
+        settle_plan(&fx, &plan, "Settled.").await;
+        let other = fx.core.draft_run(build_from(&fx, &plan), Some(fx.item("CA-2"))).await.unwrap_err().to_string();
+        assert!(other.contains("another ticket"), "{other}");
+        assert!(fx.core.draft_run(RunSpec { repo: "acme/other".into(), ..build_from(&fx, &plan) }, Some(fx.item("CA-1"))).await.is_err());
+
+        let long = plan_with(&fx, "short").await;
+        settle_plan(&fx, &long, &"Round the total in one place. ".repeat(700)).await;
+        let spec = spec_in(&fx.core.draft_run(build_from(&fx, &long), Some(fx.item("CA-1"))).await.unwrap());
+        let text = spec.plan.unwrap();
+        assert!(spec.plan_approved && text.chars().count() <= crate::domain::PLAN_LIMIT, "{}", text.chars().count());
+        let (kept, note) = text.split_once("\n\n[Cut here.").unwrap();
+        assert!(kept.ends_with("in one place.") && note.contains(&long.id), "{note}");
+    }
+
+    #[tokio::test]
+    async fn a_person_editing_the_plan_in_the_build_draft_settles_it_and_clearing_it_unsettles() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let plan = plan_with(&fx, PLAN).await;
+        let p = fx.core.draft_run(build_from(&fx, &plan), Some(fx.item("CA-1"))).await.unwrap();
+        let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: Some(text.into()), build_account: None, project: None };
+        let edited = spec_in(&fx.core.edit_proposal(&p.id, &edit("1. My own plan.")).await.unwrap());
+        assert!(edited.plan_approved);
+        assert!(fx.core.runs_review(&p.id).await.unwrap().prompt.contains("A person read, edited and approved the plan below."));
+        let back = spec_in(&fx.core.runs_refresh_plan(&p.id).await.unwrap());
+        assert!(!back.plan_approved, "reading the unsettled answer again resets the mark to match it");
     }
 
     #[tokio::test]
