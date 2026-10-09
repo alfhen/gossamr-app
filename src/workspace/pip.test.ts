@@ -120,7 +120,7 @@ describe("Claude-driven filters", () => {
 
   it("ignores a filter from a run this pane didn't ask for", () => {
     const turn = { requestId: "mine", prompt: "", steps: [], text: "", status: "running" as const, error: null };
-    useClaude.setState({ byTicket: { workspace: { turns: [turn], sessionId: null } } });
+    useClaude.setState({ byTicket: { general: { turns: [turn], sessionId: null } } });
     handlePipView({ requestId: "drawer", filter: { type: "blocked" }, note: "x" });
     expect(activeTab(useTabs.getState()).filter).toEqual(ALL);
     handlePipView({ requestId: "mine", filter: { type: "blocked" }, note: "x" });
@@ -284,19 +284,19 @@ describe("peek logic", () => {
 
 describe("askPip", () => {
   it("queues a question while Pip is answering instead of refusing it", async () => {
-    useClaude.setState({ byTicket: { workspace: { sessionId: "s1", turns: [{ requestId: "r1", prompt: "first", steps: [], text: "", status: "running", error: null }] } } });
+    useClaude.setState({ byTicket: { general: { sessionId: "s1", turns: [{ requestId: "r1", prompt: "first", steps: [], text: "", status: "running", error: null }] } } });
     const toasts = useToasts.getState().toasts.length;
     const sent: AskRequest[] = [];
     const ask = vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), { queued: true, ahead: 1 }));
     try {
       askPip("and then?");
-      await vi.waitFor(() => expect(useClaude.getState().byTicket.workspace.turns).toHaveLength(2));
-      await vi.waitFor(() => expect(useClaude.getState().byTicket.workspace.turns[1].status).toBe("queued"));
+      await vi.waitFor(() => expect(useClaude.getState().byTicket.general.turns).toHaveLength(2));
+      await vi.waitFor(() => expect(useClaude.getState().byTicket.general.turns[1].status).toBe("queued"));
     } finally {
       ask.mockRestore();
     }
     expect(useToasts.getState().toasts).toHaveLength(toasts);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ prompt: "and then?", sessionId: "s1", conversation: "workspace" });
+    expect(sent[0]).toMatchObject({ prompt: "and then?", sessionId: "s1", conversation: "general" });
   });
 });

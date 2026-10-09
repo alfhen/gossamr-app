@@ -4,6 +4,8 @@ import { draftsForTurn } from "../lib/proposals";
 import { REMOVED_TURN } from "../backend/claude";
 import { useClaude, type Turn } from "../claudeStore";
 import { filesIn } from "../lib/attachments";
+import { runComposerVerb, type VerbOutcome } from "../lib/composerVerbs";
+import { workstreamOfConversation } from "../lib/conversations";
 import { MAX_IMAGES, defaultQuestion } from "../lib/pipImages";
 import type { Proposal } from "../types";
 import { LiveDraftPreview } from "./DraftPreview";
@@ -13,10 +15,15 @@ import { AttachButton, AttachedThumbs, TurnImages, type useAttachments } from ".
 import { currentContext } from "./pipHooks";
 import { appliedState, usePip, type AppliedState } from "./pipStore";
 import { placeholderFor } from "./suggestions";
+import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
+import { useAgentsEnabled } from "./agentsFlag";
+import { contextFor, useWorkstreams } from "./workstreamsStore";
+import { useWorkspace } from "../workspaceStore";
 
 export { PIP_INPUT_ID };
-export const WORKSPACE_CONVERSATION = "workspace";
+/** The Pip pane's conversation when no workstream is in focus, and each workstream's own (`ws:<id>`). */
+export { GENERAL_CONVERSATION, workstreamConversation } from "../lib/conversations";
 
 const APPLIED: Record<AppliedState, { title: string; action: string | null }> = {
   applied: { title: "View updated", action: "Undo" },
@@ -144,6 +151,8 @@ function useQueued(conversation: string): boolean {
 /** The conversation itself: running agents, drafts left from before, then each question with its answer. Up and down move between its draft cards. */
 export function PipConversation({ conversation, proposals, bodyRef }: { conversation: string; proposals: Proposal[]; bodyRef?: RefObject<HTMLDivElement | null> }) {
   const turns = useClaude((s) => s.byTicket[conversation]?.turns) ?? NO_TURNS;
+  const workstreamId = workstreamOfConversation(conversation);
+  const workstream = useWorkstreams((s) => (workstreamId ? (s.list.find((v) => v.workstream.id === workstreamId)?.workstream ?? null) : null));
   const firstQueued = turns.find((t) => t.status === "queued")?.requestId;
   const ownRef = useRef<HTMLDivElement>(null);
   const ref = bodyRef ?? ownRef;
@@ -154,15 +163,48 @@ export function PipConversation({ conversation, proposals, bodyRef }: { conversa
 
   return (
     <div ref={ref} onKeyDown={(ev) => stepDraftCards(ev, ev.currentTarget)} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 py-3">
-      <PipRunStrip />
+      <PipRunStrip workstream={workstreamId} />
       <EarlierDrafts proposals={proposals} turns={turns} />
-      {turns.length === 0 && (
-        <p className="m-0 text-ws-ink2">I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing changes until you approve.</p>
-      )}
+      {turns.length === 0 &&
+        (workstreamId ? (
+          <p data-empty-workstream className="m-0 text-ws-ink2">
+            This is the workstream on {workstream?.itemKey ?? workstream?.title ?? "this ticket"}: its agents, drafts and our conversation stay together here. Ask me to investigate, triage or plan it. To act on one of its runs yourself, type /stop R1, /retry R1 or /answer R1 and your answer. Nothing changes until you approve.
+          </p>
+        ) : (
+          <p className="m-0 text-ws-ink2">I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing changes until you approve.</p>
+        ))}
       {turns.map((t) => (
         <TurnView key={t.requestId} turn={t} proposals={proposals} afterQueued={t.status === "queued" && t.requestId !== firstQueued} />
       ))}
     </div>
+  );
+}
+
+/**
+ * A command typed in the composer (`/stop R1`, `/retry R1`, `/answer R1 text`), carried out with the person's own run
+ * commands; what it came to is told under the input. Null for anything else, which is a question for Pip, and for
+ * everything while Agents are off, when the composer is what it was before agents. A command never reaches Pip and adds
+ * no turn. `R1` is looked up among the runs of the conversation's workstream.
+ */
+export function composerVerb(text: string, conversation: string, agentsOn: boolean): Promise<VerbOutcome> | null {
+  if (!agentsOn) return null;
+  const runs = useRuns.getState();
+  return runComposerVerb(text, { runs: runs.runs, workstream: workstreamOfConversation(conversation), backend: runs.backend ?? useWorkspace.getState().backend });
+}
+
+/**
+ * What the composer's input holds once a command typed as `typed` came to `outcome`, while it now holds `now`: cleared
+ * when it worked (unless the person has typed on since), kept when it was refused so it can be put right.
+ */
+export const inputAfterCommand = (outcome: VerbOutcome, typed: string, now: string) => (outcome.ok && now === typed ? "" : now);
+
+/** The muted line under the composer saying what the last command came to. */
+export function VerbNote({ outcome }: { outcome: VerbOutcome | null }) {
+  if (!outcome) return null;
+  return (
+    <p role="status" data-verb-note={outcome.ok ? "ok" : "problem"} className="m-0 -mt-2 px-3 pb-2 text-sm text-ws-ink3">
+      {outcome.message}
+    </p>
   );
 }
 
@@ -185,7 +227,12 @@ export function Composer({ conversation, attached, chips, looking, scene }: Comp
   const queued = useQueued(conversation);
   const quote = usePip((s) => s.quote);
   const prefill = usePip((s) => s.prefill);
+  const agentsOn = useAgentsEnabled();
   const [input, setInput] = useState("");
+  /** What the last command typed here came to, under the input. */
+  const [note, setNote] = useState<VerbOutcome | null>(null);
+  // A note is about the conversation it was typed in.
+  useEffect(() => setNote(null), [conversation]);
 
   useEffect(() => {
     document.getElementById(PIP_INPUT_ID)?.focus();
@@ -203,12 +250,21 @@ export function Composer({ conversation, attached, chips, looking, scene }: Comp
     const count = attached.images.length;
     const text = prompt.trim() || (count ? defaultQuestion(count) : "");
     if (!text) return;
+    setNote(null);
+    const command = composerVerb(text, conversation, agentsOn);
+    if (command) {
+      void command.then((outcome) => {
+        setNote(outcome);
+        setInput((now) => inputAfterCommand(outcome, prompt, now));
+      });
+      return;
+    }
     setInput("");
     const images = attached.take();
     const pip = usePip.getState();
     const about = pip.quote ?? undefined;
     pip.clearQuote();
-    void useClaude.getState().ask(conversation, text, sessionId, pip.pinned ?? currentContext(), { looking: pip.pinned ? "your question" : looking, quote: about, images });
+    void useClaude.getState().ask(conversation, text, sessionId, contextFor(conversation, pip.pinned ?? currentContext()), { looking: pip.pinned ? "your question" : looking, quote: about, images });
   };
 
   const submit = (ev: FormEvent) => {
@@ -263,6 +319,7 @@ export function Composer({ conversation, attached, chips, looking, scene }: Comp
           Ask
         </button>
       </form>
+      <VerbNote outcome={note} />
     </>
   );
 }

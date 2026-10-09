@@ -18,11 +18,12 @@ import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
 import { FilterNote, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
-import { PipPane, WORKSPACE_CONVERSATION } from "./PipPane";
+import { GENERAL_CONVERSATION, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
 import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
 import { applyTheme, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
+import { useWorkstreams } from "./workstreamsStore";
 import { Rail } from "./Rail";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
@@ -101,7 +102,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   useEffect(() => {
     if (!ready) return;
     listenToClaude();
-    void useClaude.getState().load(WORKSPACE_CONVERSATION);
+    void useClaude.getState().load(GENERAL_CONVERSATION);
   }, [ready, backend]);
 
   const missingConnection = !!choice && !choiceConnection;
@@ -135,7 +136,11 @@ export function Workspace({ backend }: { backend: Backend }) {
       return;
     }
     useRuns.getState().init(backend);
-    return () => useRuns.getState().dispose();
+    useWorkstreams.getState().init(backend);
+    return () => {
+      useWorkstreams.getState().dispose();
+      useRuns.getState().dispose();
+    };
   }, [backend, agentsEnabled]);
 
   useEffect(() => {

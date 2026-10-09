@@ -247,7 +247,7 @@ describe("the sample path from a prompt to a ticket", () => {
     expect(run).toMatchObject({ state: "done", item: null });
     expect(run.result).toContain("New ticket:");
     const [draft] = ticketDrafts(run);
-    expect(draft).toMatchObject({ state: { type: "pending" }, createdBy: "user", origin: { type: "run", runId: run.id } });
+    expect(draft).toMatchObject({ state: { type: "pending" }, createdBy: "agent", origin: { type: "run", runId: run.id } });
     if (draft.intent.type !== "create") throw new Error("a ticket draft");
     expect(draft.intent.container).toEqual(containerRef("CA"));
     expect(draft.intent.fields).toMatchObject({ title: "Add a backoff to the order consumer's retries", kind: "bug" });
@@ -308,7 +308,7 @@ describe("the sample path from a prompt to a ticket", () => {
     await mockAsk(req, backend, 0);
     const revised = backend.proposals.get(draft.id)!;
     expect(revised.state.type).toBe("pending");
-    expect(revised.createdBy).toBe("user");
+    expect(revised.createdBy).toBe("agent");
     expect(revised.revisions[revised.revisions.length - 1]?.note).toBe("Revised by Pip");
     if (revised.intent.type !== "create" || draft.intent.type !== "create") throw new Error("a ticket draft");
     expect(revised.intent.fields.title).toBe("Add a backoff to the order consumer");

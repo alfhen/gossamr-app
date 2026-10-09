@@ -1,4 +1,5 @@
 import type { KeyboardEvent } from "react";
+import { runRef } from "../lib/composerVerbs";
 import type { Run } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
@@ -14,6 +15,8 @@ export interface AgentItemProps {
   total: number;
   /** The ticket's title when it is cached. */
   ticketTitle: string | null;
+  /** The run's short name in its workstream (`R1`), when it is shown grouped by workstream. */
+  label?: string;
   onOpen(): void;
   onAttach(): void;
   /** Present on a finished run that has something to post. */
@@ -45,7 +48,27 @@ export function onActivate(open: () => void) {
   };
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, failure }: AgentItemProps) {
+/** The part of the run's id the composer's commands take (`/stop 3f9a12bc`), shown wherever the run is. */
+export function RunRef({ run, className = "" }: { run: Run; className?: string }) {
+  const ref = runRef(run);
+  return (
+    <span data-run-ref={ref} title={`This run's id. In Pip, /stop ${ref}, /retry ${ref} or /answer ${ref} act on it.`} className={`font-mono text-xs text-ws-ink3 ${className}`}>
+      {ref}
+    </span>
+  );
+}
+
+/** The short name of a run in its workstream, before the rest of its heading. */
+export function RunLabel({ label }: { label?: string }) {
+  if (!label) return null;
+  return (
+    <span data-run-label={label} className="shrink-0 rounded bg-ws-pip-soft px-1 font-mono text-xs font-semibold text-ws-pip">
+      {label}
+    </span>
+  );
+}
+
+export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -67,6 +90,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
       className={`ws-agent-card relative grid cursor-pointer content-start gap-2 rounded-[10px] border py-2.5 pr-3.5 pl-4 outline-offset-2 ${selected ? "border-ws-accent" : needs ? "border-ws-pip/45" : "border-ws-sep"} ${needs ? "bg-ws-pip-soft" : "bg-ws-win"}`}
     >
       <div className="flex min-w-0 items-center gap-2">
+        <RunLabel label={label} />
         <span className="inline-flex items-center gap-1 text-xs font-medium text-ws-ink2">
           <Icon name={KIND_ICON[run.spec.kind]} className="size-[13px] text-ws-ink3" />
           {KIND_LABEL[run.spec.kind]}
@@ -82,6 +106,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, on
         <span className="min-w-0 truncate">
           {repoName(run.spec.repo)} · {branchOf(run)}
         </span>
+        <RunRef run={run} className="ml-auto shrink-0" />
       </p>
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
       <div className="flex flex-wrap items-center gap-2 empty:hidden">

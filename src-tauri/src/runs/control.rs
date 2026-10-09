@@ -218,6 +218,7 @@ impl RunService {
         }
         self.reset_counts(&run.id);
         self.store(&run).await?;
+        self.note_person(&run, "run_stopped", None).await;
         Ok(run)
     }
 

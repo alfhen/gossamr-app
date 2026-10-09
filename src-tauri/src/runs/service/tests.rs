@@ -393,6 +393,26 @@ async fn a_launch_that_never_started_can_be_retried_once_the_cause_is_fixed() {
 }
 
 #[tokio::test]
+async fn retrying_a_workstream_run_is_recorded_in_its_audit_and_a_refused_retry_is_not() {
+    let rig = ready().await;
+    let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
+    let p = rig.fx.core.draft_run(RunSpec { workstream: Some(ws.id.clone()), ..rig.spec(1) }, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
+    let run = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    let retried = || async {
+        let events = rig.fx.core.workstream_events(&rig.fx.scope, &ws.id).await.unwrap();
+        events.into_iter().filter(|e| e.action == "run_retried").map(|e| e.run_id).collect::<Vec<_>>()
+    };
+    assert!(rig.svc.retry_launch(&run.id).await.is_err(), "queued");
+    assert!(retried().await.is_empty());
+    rig.cli.with(|s| s.logged_in = false);
+    rig.svc.launch(&run.id).await.unwrap();
+    rig.cli.with(|s| s.logged_in = true);
+    rig.svc.retry_launch(&run.id).await.unwrap();
+    assert_eq!(retried().await, [Some(run.id.clone())]);
+}
+
+#[tokio::test]
 async fn only_a_failed_run_without_a_session_can_be_retried() {
     let rig = ready().await;
     let queued = rig.queued(1).await;

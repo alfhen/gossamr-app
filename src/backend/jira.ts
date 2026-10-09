@@ -59,6 +59,10 @@ import type {
   WorkFilter,
   WorkItem,
   Workflow,
+  Workstream,
+  WorkstreamEvent,
+  WorkstreamView,
+  WorkstreamsChanged,
 } from "../types";
 import { readEnvironment } from "./runsEnvironment";
 import type { Backend, ReadScope } from "./types";
@@ -469,6 +473,35 @@ export class JiraBackend implements Backend {
 
   onOpenRun(listener: (runId: string) => void) {
     const pending = listen<{ runId: string }>("open-run", (e) => listener(e.payload.runId));
+    return () => void pending.then((unlisten) => unlisten());
+  }
+
+  workstreamsOpen(item: ItemRef | null, title?: string) {
+    return invoke<Workstream>("workstreams_open", { item, title: title ?? null });
+  }
+
+  workstreamsGet(id: string) {
+    return invoke<WorkstreamView | null>("workstreams_get", { id });
+  }
+
+  workstreamsList(includeClosed = false) {
+    return invoke<WorkstreamView[]>("workstreams_list", { includeClosed });
+  }
+
+  workstreamsClose(id: string) {
+    return invoke<Workstream>("workstreams_close", { id });
+  }
+
+  workstreamsSetNotes(id: string, notes: string) {
+    return invoke<Workstream>("workstreams_set_notes", { id, notes });
+  }
+
+  workstreamsEvents(id: string) {
+    return invoke<WorkstreamEvent[]>("workstreams_events", { id });
+  }
+
+  onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void) {
+    const pending = listen<WorkstreamsChanged>("workstreams-changed", (e) => listener(e.payload));
     return () => void pending.then((unlisten) => unlisten());
   }
 

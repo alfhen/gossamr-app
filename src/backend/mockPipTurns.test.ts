@@ -22,16 +22,16 @@ describe("the mock pip-turn store", () => {
 
   it("keeps a finished conversation across a reopen, as across a reload", () => {
     const first = openMockPipTurns();
-    first.begin("workspace", "r1", "What changed?", { looking: "CA-401", imageCount: 1 });
+    first.begin("general", "r1", "What changed?", { looking: "CA-401", imageCount: 1 });
     first.step("r1", "Looked up CA-401");
     first.text("r1", "Two ");
     first.text("r1", "things.");
-    expect(first.turns("workspace")[0]).toMatchObject({ status: "running", text: "Two things.", steps: ["Looked up CA-401"] });
+    expect(first.turns("general")[0]).toMatchObject({ status: "running", text: "Two things.", steps: ["Looked up CA-401"] });
     first.finish("r1", { ok: true, error: null, sessionId: "s1", usage });
     first.begin("CA-1", "r2", "Elsewhere", { imageCount: 0 });
 
     const again = openMockPipTurns();
-    expect(again.turns("workspace")).toEqual([
+    expect(again.turns("general")).toEqual([
       expect.objectContaining({ requestId: "r1", prompt: "What changed?", looking: "CA-401", imageCount: 1, text: "Two things.", steps: ["Looked up CA-401"], status: "done", sessionId: "s1", usage }),
     ]);
     expect(again.turns("CA-1").map((t) => t.requestId)).toEqual(["r2"]);
@@ -41,11 +41,11 @@ describe("the mock pip-turn store", () => {
 
   it("fails turns that were still going when the app closed, and says which never ran", () => {
     const first = openMockPipTurns();
-    first.begin("workspace", "r1", "q", { imageCount: 0 }, "running", new Date("2026-10-01T10:00:01Z"), { context, sessionId: null });
+    first.begin("general", "r1", "q", { imageCount: 0 }, "running", new Date("2026-10-01T10:00:01Z"), { context, sessionId: null });
     first.text("r1", "half");
-    first.begin("workspace", "r2", "q", { imageCount: 0 }, "queued", new Date("2026-10-01T10:00:02Z"), { context, sessionId: null });
+    first.begin("general", "r2", "q", { imageCount: 0 }, "queued", new Date("2026-10-01T10:00:02Z"), { context, sessionId: null });
     const again = openMockPipTurns(Date.now(), true);
-    expect(again.turns("workspace").map((t) => [t.status, t.error, t.text])).toEqual([
+    expect(again.turns("general").map((t) => [t.status, t.error, t.text])).toEqual([
       ["failed", INTERRUPTED, ""],
       ["failed", NEVER_RAN, ""],
     ]);
@@ -54,17 +54,17 @@ describe("the mock pip-turn store", () => {
 
   it("keeps turns going across a reload, to be asked again from the start in the order they were sent", () => {
     const first = openMockPipTurns();
-    first.begin("workspace", "r2", "second", { imageCount: 0 }, "queued", new Date("2026-10-01T10:00:02Z"), { context, sessionId: "s1" });
-    first.begin("workspace", "r1", "first", { looking: "CA-401", imageCount: 1 }, "running", new Date("2026-10-01T10:00:01Z"), { context, sessionId: null });
+    first.begin("general", "r2", "second", { imageCount: 0 }, "queued", new Date("2026-10-01T10:00:02Z"), { context, sessionId: "s1" });
+    first.begin("general", "r1", "first", { looking: "CA-401", imageCount: 1 }, "running", new Date("2026-10-01T10:00:01Z"), { context, sessionId: null });
     first.step("r1", "Looked up CA-401");
-    first.begin("workspace", "old", "no way to ask it again", { imageCount: 0 }, "running", new Date("2026-10-01T10:00:00Z"));
+    first.begin("general", "old", "no way to ask it again", { imageCount: 0 }, "running", new Date("2026-10-01T10:00:00Z"));
     const again = openMockPipTurns(Date.now(), false);
-    expect(again.turns("workspace").map((t) => [t.requestId, t.status, t.error, t.steps])).toEqual([
+    expect(again.turns("general").map((t) => [t.requestId, t.status, t.error, t.steps])).toEqual([
       ["old", "failed", INTERRUPTED, []],
       ["r1", "queued", null, []],
       ["r2", "queued", null, []],
     ]);
-    expect(again.turns("workspace")[1]).not.toHaveProperty("ask");
+    expect(again.turns("general")[1]).not.toHaveProperty("ask");
     const resumed = again.resume();
     expect(resumed.map((t) => [t.requestId, t.prompt, t.ask.sessionId, t.meta.looking])).toEqual([
       ["r1", "first", null, "CA-401"],
@@ -74,7 +74,7 @@ describe("the mock pip-turn store", () => {
     expect(again.resume()).toEqual([]);
     again.text("r1", "whole answer");
     again.finish("r1", { ok: true, error: null, sessionId: "s1", usage });
-    expect(openMockPipTurns(Date.now(), false).turns("workspace")[1]).toMatchObject({ status: "done", text: "whole answer" });
+    expect(openMockPipTurns(Date.now(), false).turns("general")[1]).toMatchObject({ status: "done", text: "whole answer" });
   });
 
   it("tells a reload from a fresh start by the tab's session storage", () => {
@@ -94,26 +94,54 @@ describe("the mock pip-turn store", () => {
   it("forgets turns past the horizon when it opens", () => {
     const now = Date.parse("2026-10-09T12:00:00Z");
     const store = openMockPipTurns(now);
-    store.begin("workspace", "old", "q", { imageCount: 0 }, "running", new Date(now - (MOCK_TURN_DAYS + 1) * DAY));
-    store.begin("workspace", "new", "q", { imageCount: 0 }, "running", new Date(now - (MOCK_TURN_DAYS - 1) * DAY));
-    expect(openMockPipTurns(now).turns("workspace").map((t) => t.requestId)).toEqual(["new"]);
+    store.begin("general", "old", "q", { imageCount: 0 }, "running", new Date(now - (MOCK_TURN_DAYS + 1) * DAY));
+    store.begin("general", "new", "q", { imageCount: 0 }, "running", new Date(now - (MOCK_TURN_DAYS - 1) * DAY));
+    expect(openMockPipTurns(now).turns("general").map((t) => t.requestId)).toEqual(["new"]);
   });
 
   it("orders turns by when they were asked and clears everything", () => {
     const store = openMockPipTurns();
-    store.begin("workspace", "b", "second", { imageCount: 0 }, "running", new Date("2026-10-01T10:00:02Z"));
-    store.begin("workspace", "a", "first", { imageCount: 0 }, "running", new Date("2026-10-01T10:00:01Z"));
-    expect(store.turns("workspace").map((t) => t.prompt)).toEqual(["first", "second"]);
+    store.begin("general", "b", "second", { imageCount: 0 }, "running", new Date("2026-10-01T10:00:02Z"));
+    store.begin("general", "a", "first", { imageCount: 0 }, "running", new Date("2026-10-01T10:00:01Z"));
+    expect(store.turns("general").map((t) => t.prompt)).toEqual(["first", "second"]);
     store.clear();
-    expect(store.turns("workspace")).toEqual([]);
-    expect(openMockPipTurns().turns("workspace")).toEqual([]);
+    expect(store.turns("general")).toEqual([]);
+    expect(openMockPipTurns().turns("general")).toEqual([]);
+  });
+
+  it("adopts turns kept under the old 'workspace' name as General's, rewriting them once", () => {
+    const old = (requestId: string, conversation: string) => ({ requestId, conversation, prompt: requestId, imageCount: 0, text: "a", steps: [], status: "done", error: null, sessionId: "s1", usage: null, createdAt: new Date().toISOString() });
+    localStorage.setItem(KEY, JSON.stringify([old("w1", "workspace"), old("t1", "CA-1"), old("g1", "general")]));
+    const store = openMockPipTurns();
+    expect(store.turns("general").map((t) => t.requestId)).toEqual(["w1", "g1"]);
+    expect(store.turns("workspace").map((t) => t.requestId)).toEqual(["w1", "g1"]);
+    expect(store.conversationOf("w1")).toBe("general");
+    expect(store.conversationOf("t1")).toBe("CA-1");
+    expect(store.conversationOf("nope")).toBeNull();
+    const kept = JSON.parse(localStorage.getItem(KEY)!) as { requestId: string; conversation: string }[];
+    expect(kept.map((t) => [t.requestId, t.conversation])).toEqual([
+      ["w1", "general"],
+      ["t1", "CA-1"],
+      ["g1", "general"],
+    ]);
+    store.begin("workspace", "w2", "asked under the old name", { imageCount: 0 });
+    expect(store.conversationOf("w2")).toBe("general");
+  });
+
+  it("keeps a workstream's conversation apart from General", () => {
+    const store = openMockPipTurns();
+    store.begin("general", "g", "in general", { imageCount: 0 });
+    store.begin("ws:ws-1", "w", "in the workstream", { imageCount: 0 });
+    expect(store.turns("general").map((t) => t.requestId)).toEqual(["g"]);
+    expect(store.turns("ws:ws-1").map((t) => t.requestId)).toEqual(["w"]);
+    expect(openMockPipTurns().conversationOf("w")).toBe("ws:ws-1");
   });
 
   it("reads a broken or foreign value as empty", () => {
     localStorage.setItem(KEY, "{not json");
-    expect(openMockPipTurns().turns("workspace")).toEqual([]);
+    expect(openMockPipTurns().turns("general")).toEqual([]);
     localStorage.setItem(KEY, JSON.stringify([{ requestId: 1 }, "x"]));
-    expect(openMockPipTurns().turns("workspace")).toEqual([]);
+    expect(openMockPipTurns().turns("general")).toEqual([]);
   });
 });
 
@@ -132,17 +160,32 @@ describe("mockUsage", () => {
 describe("mockAsk", () => {
   beforeEach(() => localStorage.removeItem(KEY));
 
+  it("drafts what is asked in a workstream's conversation into that workstream", async () => {
+    const { MockBackend } = await import("./mock");
+    const { itemRef } = await import("./mockConnector");
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    const ws = await backend.workstreamsOpen(itemRef("CA-401"));
+    const context: ScreenContext = { view: null, item: itemRef("CA-401"), filter: null, selection: [] };
+    await mockAsk({ requestId: "w1", prompt: "investigate this", sessionId: null, context, conversation: `ws:${ws.id}`, meta: { imageCount: 0 } }, backend, 0);
+    const [draft] = backend.proposals.list({ workstream: ws.id });
+    expect(draft.origin).toEqual({ type: "chat", requestId: "w1", workstream: ws.id });
+    expect(draft.intent.type === "startRun" && draft.intent.spec.workstream).toBe(ws.id);
+    await mockAsk({ requestId: "g1", prompt: "investigate this", sessionId: null, context, conversation: "general", meta: { imageCount: 0 } }, backend, 0);
+    const general = backend.proposals.list().find((p) => p.origin.type === "chat" && p.origin.requestId === "g1");
+    expect(general?.origin).toEqual({ type: "chat", requestId: "g1" });
+  });
+
   it("records the turn with its usage and tells the page the same usage", async () => {
     const context: ScreenContext = { view: null, item: null, filter: null, selection: [] };
     const events: unknown[] = [];
     const { mockPipEvents } = await import("./mockPip");
     const off = mockPipEvents.on((id, e) => id === "m1" && events.push(e));
     try {
-      await mockAsk({ requestId: "m1", prompt: "hello there", sessionId: null, context, conversation: "workspace", meta: { looking: "the board", imageCount: 0 } }, null, 0);
+      await mockAsk({ requestId: "m1", prompt: "hello there", sessionId: null, context, conversation: "general", meta: { looking: "the board", imageCount: 0 } }, null, 0);
     } finally {
       off();
     }
-    const kept = openMockPipTurns().turns("workspace").find((t) => t.requestId === "m1");
+    const kept = openMockPipTurns().turns("general").find((t) => t.requestId === "m1");
     expect(kept).toMatchObject({ status: "done", looking: "the board", sessionId: "mock-session-m1" });
     expect(kept?.text.length).toBeGreaterThan(0);
     expect(kept?.usage).toEqual(mockUsage("hello there", kept!.text));

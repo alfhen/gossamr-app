@@ -3,6 +3,7 @@ import { claude, type ClaudeEvent, type StoredTurn, type TurnUsage } from "./bac
 import type { Backend } from "./backend/types";
 import type { PipImage, ShownImage } from "./lib/pipImages";
 import type { Proposal, ScreenContext } from "./types";
+import { useWorkstreams } from "./workspace/workstreamsStore";
 
 export interface Turn {
   requestId: string;
@@ -31,6 +32,7 @@ export interface Conversation {
 
 interface ClaudeState {
   open: boolean;
+  /** Conversations by id: `general` and `ws:<id>` for the Pip pane, a ticket key for the classic drawer. */
   byTicket: Record<string, Conversation>;
   /** Every draft the backend holds. The chat cards read from here, so drafts outlive the conversation that made them. */
   proposals: Proposal[];
@@ -242,6 +244,8 @@ export function forgetConversations() {
     conversation.turns.forEach((t) => t.images?.forEach((i) => URL.revokeObjectURL(i.url)));
   }
   useClaude.setState({ open: false, byTicket: {}, proposals: [] });
+  // Which workstreams there are, and so which conversations, belongs to the account as well.
+  useWorkstreams.getState().dispose();
 }
 
 function updateByRequest(requestId: string, fn: (c: Conversation) => Conversation) {

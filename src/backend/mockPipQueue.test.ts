@@ -89,11 +89,11 @@ describe("the scripted Pip's queue", () => {
     vi.unstubAllGlobals();
   });
 
-  const ask = (requestId: string, conversation = "workspace") =>
+  const ask = (requestId: string, conversation = "general") =>
     mockQueueAsk({ requestId, prompt: "What am I looking at?", sessionId: null, context, conversation, meta: { imageCount: 0 } }, null, 1);
   const eventsOf = (id: string) => seen.filter(([r]) => r === id).map(([, e]) => e.type);
-  const statusOf = (id: string, conversation = "workspace") => mockPipTurns.turns(conversation).find((t) => t.requestId === id)?.status;
-  const settled = (id: string, conversation = "workspace") => vi.waitFor(() => expect(["done", "failed"]).toContain(statusOf(id, conversation)), { timeout: 3000 });
+  const statusOf = (id: string, conversation = "general") => mockPipTurns.turns(conversation).find((t) => t.requestId === id)?.status;
+  const settled = (id: string, conversation = "general") => vi.waitFor(() => expect(["done", "failed"]).toContain(statusOf(id, conversation)), { timeout: 3000 });
 
   it("runs a second question after the first, in the same session", async () => {
     expect(ask("q1")).toEqual({ queued: false, ahead: 0 });
@@ -105,7 +105,7 @@ describe("the scripted Pip's queue", () => {
     expect(eventsOf("q2").slice(0, 3)).toEqual(["queued", "running", "started"]);
     const doneAt = (id: string) => seen.findIndex(([r, e]) => r === id && e.type === "done");
     expect(doneAt("q1")).toBeLessThan(seen.findIndex(([r, e]) => r === "q2" && e.type === "running"));
-    const turns = mockPipTurns.turns("workspace");
+    const turns = mockPipTurns.turns("general");
     expect(turns.map((t) => [t.requestId, t.status])).toEqual([["q1", "done"], ["q2", "done"]]);
     expect(turns[1].sessionId).toBe(turns[0].sessionId);
   });
@@ -116,7 +116,7 @@ describe("the scripted Pip's queue", () => {
     ask("q3");
     mockQueueCancel("q2");
     expect(statusOf("q2")).toBe("failed");
-    expect(mockPipTurns.turns("workspace").find((t) => t.requestId === "q2")?.error).toBe("Removed before it started");
+    expect(mockPipTurns.turns("general").find((t) => t.requestId === "q2")?.error).toBe("Removed before it started");
     mockQueueCancel("q1");
     await settled("q3");
     expect(statusOf("q1")).toBe("failed");

@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { renderPrompt } from "../backend/mockRuns";
-import type { AgentSettings, CodeChange, ItemRef, Preflight, Run, RunEvent, RunReview, RunSpec, RunState } from "../types";
-import { AgentMenuView, TicketAgentRows } from "./AgentMenu";
+import type { AgentSettings, CodeChange, ItemRef, Preflight, Run, RunEvent, RunReview, RunSpec, RunState, WorkstreamView } from "../types";
+import { AgentMenuView, TicketAgentRows, TicketAgentsView } from "./AgentMenu";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsSettingsView, type CleanupOffer } from "./AgentsSettings";
 import { RunSetupView, setupBlock, type SetupViewProps } from "./RunSetup";
@@ -610,5 +610,32 @@ describe("the Agent menu on a ticket", () => {
     expect(html).toContain("A ticket");
     expect(html).toContain("Reading the cart module");
     expect(renderToStaticMarkup(<TicketAgentRows runs={[]} now={NOW} title={null} onOpen={vi.fn()} />)).toContain("None yet");
+  });
+
+  const workstream = (over: Partial<WorkstreamView> = {}): WorkstreamView => ({
+    workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(60), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 } },
+    stage: "intake",
+    runs: [],
+    labels: [],
+    ...over,
+  });
+
+  it("heads the ticket's agents with its workstream's title and stage, and labels each of its runs", () => {
+    const r = run("working", { id: "w1", lastDetail: "Reading the cart module" });
+    const html = renderToStaticMarkup(<TicketAgentsView runs={[r]} now={NOW} title="A ticket" workstream={workstream({ stage: "investigate", runs: ["w1"], labels: [["w1", "R1"]] })} onOpen={vi.fn()} />);
+    expect(html).toContain("Workstream: CA-401 Retry the payment");
+    expect(html).toMatch(/data-stage="investigate"[^>]*>Investigate</);
+    expect(html).toContain('data-run-label="R1"');
+    expect(html).toContain("Reading the cart module");
+  });
+
+  it("shows a workstream with no runs yet at Intake, and no workstream line without one", () => {
+    const html = renderToStaticMarkup(<TicketAgentsView runs={[]} now={NOW} title={null} workstream={workstream()} onOpen={vi.fn()} />);
+    expect(html).toContain("Workstream: CA-401 Retry the payment");
+    expect(html).toMatch(/data-stage="intake"[^>]*>Intake</);
+    expect(html).toContain("None yet");
+    const plain = renderToStaticMarkup(<TicketAgentsView runs={[run("done")]} now={NOW} title="A ticket" workstream={null} onOpen={vi.fn()} />);
+    expect(plain).not.toContain("Workstream:");
+    expect(plain).not.toContain("data-run-label");
   });
 });

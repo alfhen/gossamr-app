@@ -57,6 +57,10 @@ import type {
   WorkFilter,
   WorkItem,
   Workflow,
+  Workstream,
+  WorkstreamEvent,
+  WorkstreamView,
+  WorkstreamsChanged,
 } from "../types";
 
 /** Reads are limited to watched containers; this lifts that for views that must reach everything, like jumping to a key. */
@@ -251,6 +255,20 @@ export interface Backend {
   onRunsChanged(listener: (change: RunsChanged) => void): () => void;
   /** Called with a run id when a notification should open that run. Returns an unsubscribe function. */
   onOpenRun(listener: (runId: string) => void): () => void;
+  /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket that has an open one gets that one back. */
+  workstreamsOpen(item: ItemRef | null, title?: string): Promise<Workstream>;
+  /** One workstream with the stage its runs give it; null when it isn't the signed-in account's. */
+  workstreamsGet(id: string): Promise<WorkstreamView | null>;
+  /** The signed-in account's workstreams with their stages, newest first; closed ones only when asked for. */
+  workstreamsList(includeClosed?: boolean): Promise<WorkstreamView[]>;
+  /** Closes a workstream; its runs and drafts stay as they are. */
+  workstreamsClose(id: string): Promise<Workstream>;
+  /** Replaces the notes of an open workstream; blank clears them. At most 2 KB, and no data markers. */
+  workstreamsSetNotes(id: string, notes: string): Promise<Workstream>;
+  /** A workstream's append-only audit, oldest first. */
+  workstreamsEvents(id: string): Promise<WorkstreamEvent[]>;
+  /** Called when a workstream was opened, closed or changed. Returns an unsubscribe function. */
+  onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void): () => void;
   /** What each signed-in connection follows. */
   watchGet(): Promise<WatchState[]>;
   /** Choosing `selected` with nothing watched yet syncs nothing; add containers with `watchSetContainers`. */

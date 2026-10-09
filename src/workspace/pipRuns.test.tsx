@@ -104,6 +104,22 @@ describe("the strip of live runs", () => {
     expect(view([])).toBe("");
   });
 
+  it("in a workstream's conversation lists only its runs, each with its short name there", () => {
+    const view = (runs: Run[], workstream: string | null) => renderToStaticMarkup(<PipRunStripView runs={runs} enabled now={NOW} workstream={workstream} titleOf={() => null} onOpen={() => {}} />);
+    const mine = run("working", { id: "w1", spec: { ...base.spec, workstream: "ws-1" } });
+    const theirs = run("working", { id: "w2", spec: { ...base.spec, workstream: "ws-2" } });
+    const loose = run("needsAnswer", { id: "n1", spec: { ...base.spec, workstream: null } });
+    const scoped = view([mine, theirs, loose], "ws-1");
+    expect(scoped).toContain('data-run-id="w1"');
+    expect(scoped).not.toContain('data-run-id="w2"');
+    expect(scoped).not.toContain('data-run-id="n1"');
+    expect(scoped).toContain('data-run-label="R1"');
+    const general = view([mine, theirs, loose], null);
+    expect(general.match(/data-run-id=/g)).toHaveLength(3);
+    expect(general.match(/data-run-label="R1"/g)).toHaveLength(2);
+    expect(view([theirs, loose], "ws-1")).toBe("");
+  });
+
   it("gives each card its state, the ticket and what the run is doing, with an Open button", () => {
     const html = (r: Run) => renderToStaticMarkup(<PipRunCard run={r} now={NOW} ticketTitle="Checkout totals" onOpen={() => {}} />);
     const needs = html(run("needsAnswer", { needs: "Keep the old rounding?" }));

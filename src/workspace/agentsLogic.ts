@@ -1,5 +1,6 @@
 import { relativeTime } from "../lib/views";
-import type { Run, RunKind, RunState } from "../types";
+import { runLabels, stage } from "../lib/workstreamStage";
+import type { Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 
 export const QUIET_MINUTES = 30;
 const MINUTE = 60_000;
@@ -195,9 +196,64 @@ export function groupRuns(runs: readonly Run[], filters: AgentFilters, now: numb
 /** Whether a lane shows its runs: Earlier is folded away until it is opened or something is filtered. */
 export const laneIsFolded = (lane: LaneId, earlierOpen: boolean, filters: AgentFilters) => lane === "earlier" && !earlierOpen && !isFiltered(filters);
 
-/** Run ids in the order j and k walk them: every lane, minus a folded one. */
-export function navOrder(groups: readonly LaneGroup[], earlierOpen: boolean, filters: AgentFilters): string[] {
-  return groups.filter((g) => !laneIsFolded(g.lane, earlierOpen, filters)).flatMap((g) => g.runs.map((r) => r.id));
+/** How the Agents view groups runs: by lane, or by the workstream each belongs to. */
+export const AGENTS_GROUPS = ["state", "workstream"] as const;
+export type AgentsGroup = (typeof AGENTS_GROUPS)[number];
+
+export const NO_WORKSTREAM_TITLE = "No workstream";
+
+export interface WorkstreamGroup {
+  /** The workstream's id; null for the runs that belong to none. */
+  id: string | null;
+  title: string;
+  /** Derived from every run of the workstream, filtered or not; null for the runs that belong to none. */
+  stage: WorkstreamStage | null;
+  runs: Run[];
+  /** Run id to its short name in the workstream (`R1` for the first queued), counted over all its runs so a filter never renumbers them. */
+  labels: Record<string, string>;
+}
+
+/**
+ * One group per workstream with runs the filters let through, the one with the latest activity first, then the runs in
+ * no workstream last as "No workstream". A workstream missing from `workstreams` (a closed one) is still a group, named by
+ * its id. Runs are sorted as in the lanes.
+ */
+export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, now: number): WorkstreamGroup[] {
+  const shown = new Set(applyFilters(runs, filters, now).map((r) => r.id));
+  const byId = new Map(workstreams.map((w) => [w.workstream.id, w]));
+  const linked = new Map<string, Run[]>();
+  const loose: Run[] = [];
+  for (const r of runs) {
+    const id = r.spec.workstream;
+    if (id) linked.set(id, [...(linked.get(id) ?? []), r]);
+    else if (shown.has(r.id)) loose.push(r);
+  }
+  const groups: WorkstreamGroup[] = [];
+  for (const [id, all] of linked) {
+    const view = byId.get(id);
+    const mine = sortRuns(all.filter((r) => shown.has(r.id)));
+    if (!mine.length) continue;
+    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, stage: stage(all), runs: mine, labels: Object.fromEntries(runLabels(all)) });
+  }
+  const latest = (g: WorkstreamGroup) => ageSince(g.runs[0]);
+  groups.sort((a, b) => latest(b).localeCompare(latest(a)) || a.title.localeCompare(b.title));
+  if (loose.length) groups.push({ id: null, title: NO_WORKSTREAM_TITLE, stage: null, runs: sortRuns(loose), labels: {} });
+  return groups;
+}
+
+/** The groups the Agents view shows and the order j and k walk their runs, for either grouping; the run sheet browses in the same order. */
+export function agentGroups(group: AgentsGroup, runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, earlierOpen: boolean, now: number) {
+  if (group === "workstream") {
+    const groups = groupRunsByWorkstream(runs, workstreams, filters, now);
+    return { lanes: null, workstreams: groups, order: navOrder(groups, earlierOpen, filters) };
+  }
+  const lanes = groupRuns(runs, filters, now);
+  return { lanes, workstreams: null, order: navOrder(lanes, earlierOpen, filters) };
+}
+
+/** Run ids in the order j and k walk them: every group in order, minus a folded lane. Workstream groups never fold. */
+export function navOrder(groups: readonly { runs: readonly Run[]; lane?: LaneId }[], earlierOpen: boolean, filters: AgentFilters): string[] {
+  return groups.filter((g) => !g.lane || !laneIsFolded(g.lane, earlierOpen, filters)).flatMap((g) => g.runs.map((r) => r.id));
 }
 
 /** Where j (1) or k (-1) goes from `current`; with nothing current j starts at the first and k at the last. */

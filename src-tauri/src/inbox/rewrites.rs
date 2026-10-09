@@ -206,7 +206,7 @@ mod tests {
         let doc = adf(serde_json::json!([{ "type": "paragraph", "content": [{ "type": "text", "text": "See " }, { "type": "text", "text": "the files", "marks": [{ "type": "link", "attrs": { "href": held } }] }] }]));
         with_description(&fx, doc).await;
         let intent = fx.core.rewrite_intent(&fx.scope, "CA-1", None, Some(&format!("See [the files]({held}), reworded"))).await.unwrap();
-        let drafted = fx.core.propose(&fx.scope, crate::proposals::Draft::from_pip("r", intent, None)).await.unwrap();
+        let drafted = fx.core.propose(&fx.scope, crate::proposals::Draft::from_pip("r", None, intent, None)).await.unwrap();
         let edited = fx.core.edit_proposal(&drafted.id, &Edit::Rewrite { title: None, body: Some(format!("See [the files]({held}), reworded by me, and [x](ftp://new.example.com)")) }).await.unwrap();
         let Intent::Rewrite { body, .. } = edited.intent else { panic!() };
         assert_eq!(body.unwrap().to.hrefs(), [held]);

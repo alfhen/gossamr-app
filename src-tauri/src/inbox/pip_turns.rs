@@ -2,15 +2,17 @@
 //! and is refused once that account is no longer signed in, so a turn that ends after a sign-out lands nowhere.
 
 use super::{now_millis, Core};
-use crate::agent::{TurnMeta, TurnUsage};
+use crate::agent::{conversation_id, TurnMeta, TurnUsage};
 use crate::auth::Scope;
 use crate::db::PipTurn;
 use crate::error::Result;
 
 impl Core {
+    /// Records a question in `conversation`; the legacy `workspace` is kept as `general`.
     pub async fn pip_turn_begin(&self, scope: &Scope, conversation: &str, request_id: &str, prompt: &str, meta: &TurnMeta, status: &str) -> Result<()> {
         let at = now_millis();
-        self.with_db_for(scope, |db| db.begin_pip_turn(conversation, request_id, prompt, meta, status, &at).map(|_| ())).await
+        let conversation = conversation_id(conversation);
+        self.with_db_for(scope, |db| db.begin_pip_turn(&conversation, request_id, prompt, meta, status, &at).map(|_| ())).await
     }
 
     pub async fn pip_turn_status(&self, scope: &Scope, request_id: &str, status: &str) -> Result<()> {
@@ -35,9 +37,11 @@ impl Core {
         self.with_db_for(scope, |db| db.finish_pip_turn(request_id, text, ok, error, session, usage)).await
     }
 
-    /// The signed-in account's turns in `conversation`, oldest first.
+    /// The signed-in account's turns in `conversation`, oldest first. Asked for `workspace`, it gives `general`'s, which
+    /// is where those turns now are.
     pub async fn pip_turns(&self, conversation: &str) -> Result<Vec<PipTurn>> {
-        self.with_db(|db| db.pip_turns(conversation)).await
+        let conversation = conversation_id(conversation);
+        self.with_db(|db| db.pip_turns(&conversation)).await
     }
 }
 
@@ -55,6 +59,19 @@ mod tests {
         fx.core.pip_turn_finish(&fx.scope, "q1", "Hello", true, None, Some("s1"), None).await.unwrap();
         let turns = fx.core.pip_turns("workspace").await.unwrap();
         assert_eq!((turns[0].text.as_str(), turns[0].steps.len(), turns[0].session_id.as_deref()), ("Hello", 1, Some("s1")));
+    }
+
+    #[tokio::test]
+    async fn the_legacy_workspace_conversation_reads_the_turns_adopted_as_general() {
+        let fx = crate::inbox::testing::fixture().await;
+        fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Before", &TurnMeta::default(), "done").await.unwrap();
+        fx.core.pip_turn_begin(&fx.scope, "workspace", "q2", "From an old page", &TurnMeta::default(), "done").await.unwrap();
+        fx.core.pip_turn_begin(&fx.scope, "ws:w1", "q3", "In a workstream", &TurnMeta::default(), "done").await.unwrap();
+        let ids = |turns: Vec<crate::db::PipTurn>| turns.into_iter().map(|t| (t.conversation, t.request_id)).collect::<Vec<_>>();
+        let general = vec![("general".to_string(), "q1".to_string()), ("general".into(), "q2".into())];
+        assert_eq!(ids(fx.core.pip_turns("workspace").await.unwrap()), general);
+        assert_eq!(ids(fx.core.pip_turns("general").await.unwrap()), general);
+        assert_eq!(ids(fx.core.pip_turns("ws:w1").await.unwrap()), [("ws:w1".to_string(), "q3".to_string())]);
     }
 
     #[tokio::test]

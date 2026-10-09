@@ -6,7 +6,9 @@ import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithout
 import { answerProblem } from "../lib/answer";
 import { followUpBlocker, followUpProblem } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
+import { makerName } from "../lib/proposals";
 import type { MockProposals } from "./mockProposals";
+import type { MockWorkstreams } from "./mockWorkstreams";
 import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
 
 const CONNECTION = "mock";
@@ -30,9 +32,11 @@ const NEXT: Partial<Record<RunState, RunState>> = {
   systemBlocked: "working",
 };
 
-/** A stand-in for the real digest: stable for the same text, different when any part of it changes. */
+/** A stand-in for the real digest: stable for the same text, different when any part of it changes. The workstream counts only when set, so a spec without one keeps the digest it always had. */
 export function mockDigest(spec: RunSpec): string {
-  const text = JSON.stringify([spec.kind, spec.repo, spec.clonePath, spec.base, spec.name, renderPrompt(spec), GUARD, spec.pr ?? null, spec.allowPush ?? false, spec.report ?? false, spec.project ?? null, spec.plan ?? null, spec.planFromRun ?? null, spec.buildFromRun ?? null, spec.planApproved ?? false]);
+  const parts: unknown[] = [spec.kind, spec.repo, spec.clonePath, spec.base, spec.name, renderPrompt(spec), GUARD, spec.pr ?? null, spec.allowPush ?? false, spec.report ?? false, spec.project ?? null, spec.plan ?? null, spec.planFromRun ?? null, spec.buildFromRun ?? null, spec.planApproved ?? false];
+  if (spec.workstream) parts.push(spec.workstream);
+  const text = JSON.stringify(parts);
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0;
   return `mock-${h.toString(16).padStart(8, "0")}`;
@@ -471,6 +475,8 @@ export class MockRuns {
   private readonly seedDescriptions: boolean;
   /** The pull request a review reads, as GitHub has it; set by the backend that owns the code. */
   pullRequest: (repo: string, number: number) => CodeChange | null = () => null;
+  /** The workstreams a run may be linked to, and whose audit records what the person does to one; set by the backend that keeps them. */
+  workstreams: MockWorkstreams | null = null;
 
   constructor(
     private readonly proposals: MockProposals,
@@ -524,7 +530,8 @@ export class MockRuns {
         (r) =>
           (!query.states || query.states.includes(r.state)) &&
           (!query.item || r.item?.externalId === query.item.externalId) &&
-          (!query.connectionId || r.connectionId === query.connectionId),
+          (!query.connectionId || r.connectionId === query.connectionId) &&
+          (!query.workstream || r.spec.workstream === query.workstream),
       )
       .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
   }
@@ -580,6 +587,17 @@ export class MockRuns {
   }
 
   /** Approves a run draft the way the backend does: only with the digest of what is stored now. */
+  /**
+   * An id no run has had: runs aren't kept across a reload, but the drafts and workstream audit that name them are, so
+   * an id they name is never given to another run.
+   */
+  private freshId(): string {
+    const named = (id: string) => this.runs.some((r) => r.id === id) || !!this.workstreams?.namesRun(id) || this.proposals.list().some((p) => p.origin.type === "run" && p.origin.runId === id);
+    let id = `run-${++this.seq}`;
+    while (named(id)) id = `run-${++this.seq}`;
+    return id;
+  }
+
   async approve(proposalId: string, digest: string): Promise<Run> {
     const p = this.proposals.get(proposalId);
     if (!p || p.intent.type !== "startRun") throw new Error("that draft isn't a run");
@@ -594,7 +612,7 @@ export class MockRuns {
     if (this.runs.some((r) => r.expectedWorktree === expectedWorktree)) throw new Error("a run already uses that worktree");
     const at = this.now();
     const run: Run = {
-      id: `run-${++this.seq}`,
+      id: this.freshId(),
       proposalId,
       connectionId,
       item,
@@ -619,6 +637,7 @@ export class MockRuns {
       endedAt: null,
     };
     this.proposals.applyRun(proposalId, run.id);
+    this.workstreams?.record(spec.workstream, "person", "run_approved", { runId: run.id, proposalId, digest });
     if (spec.report && this.limits.reportResult) this.reports.set(run.id, { offered: true, report: null, revision: 0, calls: 0, rejections: 0, stale: false });
     this.runs = [run, ...this.runs];
     this.changed();
@@ -649,6 +668,15 @@ export class MockRuns {
     if (run.spec.kind === "triage" && run.item) report.subtasks = subtaskProposals(written);
     if (run.spec.kind === "plan") report.plan = planWithoutNote(written);
     this.reports.set(run.id, { ...row, report, revision: 1, calls: 1 });
+  }
+
+  /** Has a working run ask the person `question`, for tests and for trying the sheet. */
+  ask(id: string, question: string): Run {
+    const run = this.get(id);
+    if (run?.state !== "working") throw new Error("only a working run can ask");
+    const next = this.update(id, { state: "needsAnswer", needs: question, lastProgressAt: this.now() });
+    this.changed();
+    return next;
   }
 
   /** Sets what a run reported, for tests and for trying the sheet. */
@@ -818,9 +846,10 @@ export class MockRuns {
   stop(id: string): Run {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
-    if (!STOPPABLE.includes(run.state)) throw new Error("it can be stopped once it is working");
+    if (!STOPPABLE.includes(run.state)) throw new Error(run.state === "queued" || run.state === "launching" ? "It can be stopped once it is working." : `This run is ${run.state}, so there is nothing to stop.`);
     const next = this.update(id, { state: "stopped", endedAt: this.now() });
     this.changed();
+    this.workstreams?.record(next.spec.workstream, "person", "run_stopped", { runId: id });
     return next;
   }
 
@@ -835,6 +864,8 @@ export class MockRuns {
     const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), ...resumed });
     this.markStale(id);
     this.changed();
+    // Only the length: the answer's text stays with the run.
+    this.workstreams?.record(next.spec.workstream, "person", "run_answered", { runId: id, detail: String([...text].length) });
     return next;
   }
 
@@ -916,12 +947,14 @@ export class MockRuns {
 
   retryLaunch(id: string): Run {
     const run = this.get(id);
-    if (run?.state !== "failed") throw new Error("only a run that failed can be retried");
+    if (!run) throw new Error("that run no longer exists");
+    if (run.state !== "failed" || run.shortId) throw new Error(`This run is ${run.state} and has nothing to retry.`);
     const at = this.now();
     const next = this.stillBlocked(run)
       ? this.update(id, { lastProgressAt: at, endedAt: at })
       : this.update(id, { state: "queued", error: null, failure: null, endedAt: null, lastProgressAt: at });
     this.changed();
+    this.workstreams?.record(next.spec.workstream, "person", "run_retried", { runId: id });
     return next;
   }
 
@@ -968,6 +1001,8 @@ export class MockRuns {
 
   /** Drafts a run the way the backend does: the ticket text comes from here, never from the caller. */
   draft(spec: RunSpec, item: ItemRef | null): Promise<Proposal> {
+    const unlinkable = this.linkProblem(spec, item);
+    if (unlinkable) return Promise.reject(new Error(unlinkable));
     if (!this.known(spec.repo).some((c) => c.path === spec.clonePath)) return Promise.reject(new Error(`${spec.clonePath} isn't a git clone`));
     if (spec.report && !this.limits.reportResult) return Promise.reject(new Error("Reporting through Gossamr is off. Turn it on in Settings > Agents, or untick it for this run."));
     let carried: Pick<RunSpec, "plan" | "planFromRun" | "planApproved"> = { plan: null, planFromRun: null, planApproved: false };
@@ -1003,6 +1038,12 @@ export class MockRuns {
       made = { ...made, base: found.baseRef ?? spec.base, prSha: found.sha };
     }
     return this.proposals.create({ type: "startRun", connectionId: CONNECTION, item, spec: made }, null);
+  }
+
+  /** Why `spec` can't be linked to the workstream it names, on `item`, as `draft_run` refuses it; null without one. */
+  private linkProblem(spec: Pick<RunSpec, "workstream">, item: ItemRef | null): string | null {
+    if (spec.workstream === undefined || spec.workstream === null) return null;
+    return this.workstreams ? this.workstreams.linkProblem(spec.workstream, item) : `there is no workstream ${spec.workstream}`;
   }
 
   /** The plan of a finished Plan run as a build carries it, cut with a note when over the limit: the newest applied description draft with the person's edits, else its whole answer, which nobody settled. Never the caller's text. */
@@ -1117,7 +1158,7 @@ export class MockRuns {
   }
 
   /** A run Pip proposes: it names the ticket and a focus note, and the repository, clone, name and ticket text are filled in here. */
-  pipDraft(item: ItemRef, focus: string | null, requestId: string): Promise<Proposal> {
+  pipDraft(item: ItemRef, focus: string | null, requestId: string, workstream: string | null = null): Promise<Proposal> {
     const repo = [...this.runs.map((r) => r.spec.repo), "acme/storefront"].find((r) => (CLONES[r] ?? []).length > 0) ?? "acme/storefront";
     const clone = (CLONES[repo] ?? [])[0];
     if (!clone) return Promise.reject(new Error(`There is no local clone of ${repo}`));
@@ -1131,12 +1172,15 @@ export class MockRuns {
       focus: focus?.trim() || null,
       focusFromRun: null,
       ticketBlock: this.ticketText(item) ?? `${item.key}: sample ticket`,
+      ...(workstream ? { workstream } : {}),
     };
-    return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item, spec }, null, requestId));
+    const unlinkable = this.linkProblem(spec, item);
+    if (unlinkable) return Promise.reject(new Error(unlinkable));
+    return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item, spec }, null, requestId, workstream));
   }
 
   /** An investigation with no ticket that Pip proposes: only a watched repository and the question are Pip's; the clone, name and project are filled in here, as the backend does. */
-  pipTicketlessDraft(repo: string | null, prompt: string, requestId: string): Promise<Proposal> {
+  pipTicketlessDraft(repo: string | null, prompt: string, requestId: string, workstream: string | null = null): Promise<Proposal> {
     const watched = Object.keys(CLONES);
     const found = repo === null ? "acme/storefront" : watched.find((r) => r.toLowerCase() === repo.trim().toLowerCase());
     if (!found) return Promise.reject(new Error(`${repo?.trim()} isn't a repository the user watches. The watched ones are: ${watched.join(", ")}.`));
@@ -1155,11 +1199,14 @@ export class MockRuns {
       focusFromRun: null,
       ticketBlock: null,
       project: containerRef(REPO_PROJECTS[found] ?? "CA"),
+      ...(workstream ? { workstream } : {}),
     };
-    return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item: null, spec }, null, requestId));
+    const unlinkable = this.linkProblem(spec, null);
+    if (unlinkable) return Promise.reject(new Error(unlinkable));
+    return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item: null, spec }, null, requestId, workstream));
   }
 
-  /** A follow-up Pip proposes for a finished run, with the backend's checks. */
+  /** A follow-up Pip proposes for a finished run, with the backend's checks. It belongs to the run's workstream, whichever conversation asked. */
   pipFollowUp(runId: string, message: string, reason: string, requestId: string): Promise<Proposal> {
     const run = this.get(runId);
     if (!run) return Promise.reject(new Error(`there is no run ${runId} for this account`));
@@ -1170,7 +1217,7 @@ export class MockRuns {
     const open = this.proposals.list({ states: ["pending", "applying"] }).find((p) => p.intent.type === "followUp" && p.intent.runId === runId);
     if (open) return Promise.reject(new Error(`A follow-up for run ${runId} is already waiting (proposal ${open.id}). Revise it or leave it to the user.`));
     const intent: Intent = { type: "followUp", connectionId: CONNECTION, runId, shortId: run.shortId, item: run.item, message: message.trim(), reason };
-    return Promise.resolve(this.proposals.draft(intent, null, requestId));
+    return Promise.resolve(this.proposals.draft(intent, null, requestId, run.spec.workstream ?? null));
   }
 
   /** Sends the run back for another pass with the draft's message, as the backend does: Working again, one more pass, and a line on its timeline. */
@@ -1184,10 +1231,11 @@ export class MockRuns {
     const blocker = followUpBlocker(run);
     if (blocker) throw new Error(`This run can't be sent back: ${blocker}.`);
     const passes = (run.passes ?? 1) + 1;
-    const by = p.createdBy === "pip" ? "Pip" : "You";
+    const by = p.createdBy === "user" || p.createdBy === "autopilot" ? "You" : makerName(p.createdBy);
     this.followUps.set(run.id, [...(this.followUps.get(run.id) ?? []), { text: `${by} asked for another pass: ${p.intent.reason}`, detail: `Pass ${passes}. Approved by you.` }]);
     const next = this.update(run.id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: this.now(), lastProgressAt: this.now(), lastDetail: "Reading your message" });
-    this.proposals.applyRun(proposalId, run.id);
+    const sent = this.proposals.applyRun(proposalId, run.id);
+    this.proposals.audit(sent, "person", "draft_approved");
     this.markStale(run.id);
     this.changed();
     return next;
@@ -1262,7 +1310,7 @@ export class MockRuns {
   }
 
   private fromRun(run: Run) {
-    return { type: "run", runId: run.id, shortId: run.shortId } as const;
+    return { type: "run", runId: run.id, shortId: run.shortId, workstream: run.spec.workstream ?? null } as const;
   }
 
   /** Drafts the comment the way the backend does, and nothing is posted. */

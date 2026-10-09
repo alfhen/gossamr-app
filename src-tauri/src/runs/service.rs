@@ -457,8 +457,20 @@ impl RunService {
     /// Looks for the session of a failed launch and adopts it; only when there is none does it launch again.
     pub async fn retry_launch(&self, run_id: &str) -> Result<Run> {
         match self.start(run_id, true).await? {
-            (run, true) => Ok(run),
+            (run, true) => {
+                self.note_person(&run, "run_retried", None).await;
+                Ok(run)
+            }
             (run, false) => Err(Error::Proposal(format!("This run is {} and has nothing to retry.", run.state.as_str()))),
+        }
+    }
+
+    /// Records what the person did to a run (`run_stopped`, `run_answered`, `run_retried`) in its workstream's audit.
+    /// The action itself already happened, so a failure to record it is logged rather than reported as the action
+    /// failing.
+    pub(super) async fn note_person(&self, run: &Run, action: &str, detail: Option<String>) {
+        if let Err(e) = self.core.record_run_action(run, action, detail).await {
+            eprintln!("couldn't record {action} for run {} in its workstream: {e}", run.id);
         }
     }
 

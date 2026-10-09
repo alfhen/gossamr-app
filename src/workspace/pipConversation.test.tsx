@@ -7,8 +7,11 @@ import type { Intent, Proposal, RunSpec } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { Composer, PipConversation, WORKSPACE_CONVERSATION } from "./PipConversation";
-import { WORKSPACE_CONVERSATION as FROM_PANE, PIP_INPUT_ID } from "./PipPane";
+import { Composer, GENERAL_CONVERSATION, PipConversation, VerbNote, composerVerb, inputAfterCommand, workstreamConversation } from "./PipConversation";
+import { useRuns } from "./runsStore";
+import { useToasts } from "./toasts";
+import { MockBackend } from "../backend/mock";
+import { GENERAL_CONVERSATION as FROM_PANE, PIP_INPUT_ID } from "./PipPane";
 
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
 
@@ -65,14 +68,26 @@ describe("PipConversation", () => {
   });
 
   it("is still what the pane exports for the conversation and its input", () => {
-    expect(FROM_PANE).toBe(WORKSPACE_CONVERSATION);
+    expect(FROM_PANE).toBe(GENERAL_CONVERSATION);
+    expect(GENERAL_CONVERSATION).toBe("general");
+    expect(workstreamConversation("ws-7")).toBe("ws:ws-7");
     expect(PIP_INPUT_ID).toBe("pip-input");
   });
 
+  it("shows a workstream's conversation apart from General", () => {
+    setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [turn("g1", "A General question", "A")] }, [workstreamConversation("ws-1")]: { sessionId: null, turns: [turn("w1", "A workstream question", "B")] } });
+    const general = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
+    const ws = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-1")} proposals={[]} />);
+    expect(general).toContain("A General question");
+    expect(general).not.toContain("A workstream question");
+    expect(ws).toContain("A workstream question");
+    expect(ws).not.toContain("A General question");
+  });
+
   it("renders its turns, the drafts they made and drafts from before, on its own", () => {
-    setTurns({ [WORKSPACE_CONVERSATION]: { sessionId: "s1", turns: [turn("r1", "Draft a comment on CA-412", "I drafted a short comment.")] } });
+    setTurns({ [GENERAL_CONVERSATION]: { sessionId: "s1", turns: [turn("r1", "Draft a comment on CA-412", "I drafted a short comment.")] } });
     const proposals = [comment("p-old", null), comment("p-new", "r1")];
-    const html = renderToStaticMarkup(<PipConversation conversation={WORKSPACE_CONVERSATION} proposals={proposals} />);
+    const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={proposals} />);
     expect(html).toContain("Draft a comment on CA-412");
     expect(html).toContain("I drafted a short comment.");
     expect(html).toContain('aria-label="Drafts"');
@@ -84,16 +99,16 @@ describe("PipConversation", () => {
 
   it("shows the welcome line with no turns, and reads another conversation by its key", () => {
     setTurns({ "CA-9": { sessionId: null, turns: [turn("r9", "Other question", "Other answer")] } });
-    const empty = renderToStaticMarkup(<PipConversation conversation={WORKSPACE_CONVERSATION} proposals={[]} />);
+    const empty = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
     expect(empty).toContain("I follow along as you move around");
     expect(empty).not.toContain("Other question");
     expect(renderToStaticMarkup(<PipConversation conversation="CA-9" proposals={[]} />)).toContain("Other answer");
   });
 
   it("makes each draft card a focusable stop that names its keys, with no hint until focused", () => {
-    setTurns({ [WORKSPACE_CONVERSATION]: { sessionId: null, turns: [turn("r1", "Q", "A")] } });
+    setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [turn("r1", "Q", "A")] } });
     const run = draft("p-run", { type: "startRun", connectionId: "mock", item: itemRef("CA-412"), spec }, { origin: { type: "chat", requestId: "r1" } });
-    const html = renderToStaticMarkup(<PipConversation conversation={WORKSPACE_CONVERSATION} proposals={[comment("p1", "r1"), run]} />);
+    const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[comment("p1", "r1"), run]} />);
     expect(html).toMatch(/<article[^>]*data-draft="p1"[^>]*tabindex="0"[^>]*aria-keyshortcuts="a s Enter o"[^>]*class="[^"]*focus-visible:outline-ws-pip/);
     expect(html).toMatch(/<article[^>]*data-draft="p-run"[^>]*tabindex="0"/);
     expect(html).not.toContain("a approve");
@@ -101,15 +116,89 @@ describe("PipConversation", () => {
     expect(html).not.toMatch(/<article[^>]*class="[^"]*(?<![\w:-])outline-none/);
   });
 
+  it("opens a workstream's empty conversation with what it is for and the commands, and General with its own words", () => {
+    setTurns({});
+    const ws = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-404")} proposals={[]} />);
+    expect(ws).toContain("data-empty-workstream");
+    expect(ws).toContain("/stop R1, /retry R1 or /answer R1");
+    expect(ws).not.toContain("I follow along as you move around");
+    const general = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
+    expect(general).toContain("I follow along as you move around");
+    expect(general).not.toContain("data-empty-workstream");
+  });
+
+  describe("commands in the composer", () => {
+    const runsBefore = useRuns.getState();
+    const ws = workstreamConversation("ws-1");
+    const linked = () => {
+      const base = new MockBackend().runs.list().find((r) => r.state === "working")!;
+      return { ...base, id: "run-ws-1", spec: { ...base.spec, workstream: "ws-1" } };
+    };
+    const fake = () => ({ runsStop: vi.fn(async (id: string) => ({ ...linked(), id, state: "stopped" as const })), runsRetryLaunch: vi.fn(), runsAnswer: vi.fn() });
+    afterEach(() => {
+      useRuns.setState({ backend: runsBefore.backend, runs: runsBefore.runs });
+      useToasts.getState().clear();
+    });
+
+    it("sends /stop R1 to the person's own stop command, not to Pip, and adds no turn", async () => {
+      const backend = fake();
+      useRuns.setState({ backend: backend as never, runs: [linked()] });
+      setTurns({ [ws]: { sessionId: null, turns: [turn("w1", "Earlier", "Answer")] } });
+      const ask = vi.spyOn(useClaude.getState(), "ask");
+      const outcome = await composerVerb("/stop R1", ws, true);
+      expect(outcome).toEqual({ ok: true, message: "Stopped R1" });
+      expect(backend.runsStop).toHaveBeenCalledWith("run-ws-1");
+      expect(ask).not.toHaveBeenCalled();
+      expect(useClaude.getState().byTicket[ws].turns.map((t) => t.requestId)).toEqual(["w1"]);
+      // Told once, in the note under the input, not again as a toast.
+      expect(useToasts.getState().toasts).toEqual([]);
+      ask.mockRestore();
+    });
+
+    it("leaves everything to Pip while Agents are off, as the composer was before agents", () => {
+      const backend = fake();
+      useRuns.setState({ backend: backend as never, runs: [linked()] });
+      for (const text of ["/stop R1", "/retry R1", "/answer R1 yes", "/nudge R1"]) {
+        expect(composerVerb(text, ws, false)).toBeNull();
+        expect(composerVerb(text, GENERAL_CONVERSATION, false)).toBeNull();
+      }
+      expect(backend.runsStop).not.toHaveBeenCalled();
+    });
+
+    it("keeps what was typed when a command is refused, and clears it when it worked unless more was typed since", () => {
+      expect(inputAfterCommand({ ok: false, message: "No run R9 in this workstream" }, "/stop R9", "/stop R9")).toBe("/stop R9");
+      expect(inputAfterCommand({ ok: false, message: "Couldn't answer R2." }, "/answer R2 a long paragraph", "/answer R2 a long paragraph")).toBe("/answer R2 a long paragraph");
+      expect(inputAfterCommand({ ok: true, message: "Stopped R1" }, "/stop R1", "/stop R1")).toBe("");
+      expect(inputAfterCommand({ ok: true, message: "Stopped R1" }, "/stop R1", "and then")).toBe("and then");
+    });
+
+    it("says what is wrong without calling anything, and lets a question through", async () => {
+      const backend = fake();
+      useRuns.setState({ backend: backend as never, runs: [linked()] });
+      expect(await composerVerb("/stop R9", ws, true)).toEqual({ ok: false, message: "No run R9 in this workstream" });
+      expect(await composerVerb("/answer R1", ws, true)).toMatchObject({ ok: false, message: expect.stringMatching(/^Say what to answer/) });
+      expect(backend.runsStop).not.toHaveBeenCalled();
+      expect(composerVerb("investigate this", ws, true)).toBeNull();
+    });
+
+    it("shows the outcome as a muted note under the input", () => {
+      const html = renderToStaticMarkup(<VerbNote outcome={{ ok: true, message: "Stopped R1" }} />);
+      expect(html).toContain('role="status"');
+      expect(html).toContain("Stopped R1");
+      expect(html).toContain("text-ws-ink3");
+      expect(renderToStaticMarkup(<VerbNote outcome={null} />)).toBe("");
+    });
+  });
+
   describe("with a queue", () => {
     const at = (requestId: string, prompt: string, status: Turn["status"], error: string | null = null): Turn => ({ requestId, prompt, steps: [], text: "", status, error });
     const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
     const composer = () =>
-      renderToStaticMarkup(<Composer conversation={WORKSPACE_CONVERSATION} attached={attached} chips={["What is stale?"]} looking="the board" scene={{ itemKey: null, route: "workspace", runOpen: false }} />);
+      renderToStaticMarkup(<Composer conversation={GENERAL_CONVERSATION} attached={attached} chips={["What is stale?"]} looking="the board" scene={{ itemKey: null, route: "workspace", runOpen: false }} />);
 
     it("shows a queued question with when it runs and a way to remove it", () => {
-      setTurns({ [WORKSPACE_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running"), at("r2", "Second", "queued")] } });
-      const html = renderToStaticMarkup(<PipConversation conversation={WORKSPACE_CONVERSATION} proposals={[]} />);
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running"), at("r2", "Second", "queued")] } });
+      const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
       expect(html.match(/Queued, runs after the current answer/g)).toHaveLength(1);
       expect(html.indexOf("Queued, runs after")).toBeGreaterThan(html.indexOf("Second"));
       expect(html.match(/aria-label="Remove this question"/g)).toHaveLength(1);
@@ -117,8 +206,8 @@ describe("PipConversation", () => {
     });
 
     it("says a question queued behind another queued one runs after that one, not after the current answer", () => {
-      setTurns({ [WORKSPACE_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running"), at("r2", "Second", "queued"), at("r3", "Third", "queued")] } });
-      const html = renderToStaticMarkup(<PipConversation conversation={WORKSPACE_CONVERSATION} proposals={[]} />);
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running"), at("r2", "Second", "queued"), at("r3", "Third", "queued")] } });
+      const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
       expect(html.match(/Queued, runs after the current answer/g)).toHaveLength(1);
       expect(html.match(/Queued, runs after the question before it/g)).toHaveLength(1);
       expect(html.indexOf("Queued, runs after the current answer")).toBeLessThan(html.indexOf("Third"));
@@ -126,22 +215,22 @@ describe("PipConversation", () => {
     });
 
     it("says quietly that a removed question never ran, without an alert", () => {
-      setTurns({ [WORKSPACE_CONVERSATION]: { sessionId: null, turns: [at("r1", "Gone", "failed", "Removed before it started"), at("r2", "Broke", "failed", "Claude isn't installed")] } });
-      const html = renderToStaticMarkup(<PipConversation conversation={WORKSPACE_CONVERSATION} proposals={[]} />);
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "Gone", "failed", "Removed before it started"), at("r2", "Broke", "failed", "Claude isn't installed")] } });
+      const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
       expect(html).toContain("Removed before it started");
       expect(html.match(/role="alert"/g)).toHaveLength(1);
       expect(html).not.toContain('aria-label="Remove this question"');
     });
 
     it("keeps the input and Ask next to Stop while Pip answers, and the chips until a question waits", () => {
-      setTurns({ [WORKSPACE_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running")] } });
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running")] } });
       const running = composer();
       expect(running).toMatch(/>Stop<\/button><button type="submit"[^>]*>Ask<\/button>/);
       expect(running).toContain("What is stale?");
       expect(running).not.toMatch(/<input id="pip-input"[^>]*disabled/);
-      setTurns({ [WORKSPACE_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running"), at("r2", "Second", "queued")] } });
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running"), at("r2", "Second", "queued")] } });
       expect(composer()).not.toContain("What is stale?");
-      setTurns({ [WORKSPACE_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "done")] } });
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "done")] } });
       const idle = composer();
       expect(idle).not.toContain(">Stop<");
       expect(idle).toContain(">Ask</button>");
@@ -162,8 +251,8 @@ describe("PipConversation", () => {
     });
 
     const render = (proposals: Proposal[], turns: Turn[]) => {
-      setTurns({ [WORKSPACE_CONVERSATION]: { sessionId: null, turns } });
-      return cardsIn(renderToStaticMarkup(<PipConversation conversation={WORKSPACE_CONVERSATION} proposals={proposals} />));
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns } });
+      return cardsIn(renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={proposals} />));
     };
 
     it("approves a focused comment card once on a then Enter, and skips one on s then Enter", async () => {
