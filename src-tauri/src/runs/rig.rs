@@ -127,6 +127,21 @@ impl Rig {
         self.svc.start_now(&queued.id).await.unwrap()
     }
 
+    /// Like `launched`, for a run in a workstream opened on the ticket; with the workstream's id.
+    pub async fn launched_in_workstream(&self, n: u32) -> (Run, String) {
+        let ws = self.fx.core.open_workstream(&self.fx.scope, Some(self.fx.item("CA-1")), None).await.unwrap();
+        let p = self.fx.core.draft_run(RunSpec { workstream: Some(ws.id.clone()), ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
+        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
+        let queued = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        (self.svc.start_now(&queued.id).await.unwrap(), ws.id)
+    }
+
+    /// What the person did to runs, as workstream `ws`'s audit has it: action, run id and detail.
+    pub async fn run_actions(&self, ws: &str) -> Vec<(String, Option<String>, Option<String>)> {
+        let events = self.fx.core.workstream_events(&self.fx.scope, ws).await.unwrap();
+        events.into_iter().filter(|e| e.action.starts_with("run_") && e.action != "run_approved").map(|e| (e.action, e.run_id, e.detail)).collect()
+    }
+
     pub async fn queued(&self, n: u32) -> Run {
         let p = self.fx.core.draft_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap();
         let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;

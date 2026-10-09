@@ -82,7 +82,11 @@ impl RunService {
                 if let Err(e) = self.core.report_stale(&run.id).await {
                     eprintln!("couldn't mark the report of run {} as older than the follow-up: {e}", run.id);
                 }
-                let by = if p.created_by == CreatedBy::Pip { "Pip" } else { "You" };
+                let by = match p.created_by {
+                    CreatedBy::Pip => "Pip",
+                    CreatedBy::Agent => "An agent run",
+                    CreatedBy::User | CreatedBy::Autopilot => "You",
+                };
                 let event = RunEvent {
                     run_id: run.id.clone(),
                     seq: 0,

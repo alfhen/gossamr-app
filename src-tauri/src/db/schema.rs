@@ -254,7 +254,53 @@ CREATE TABLE pip_turns (
 ) WITHOUT ROWID;
 CREATE INDEX pip_turns_conversation ON pip_turns(conversation, created_at);";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS];
+/// Workstreams and their audit. `data` holds the whole workstream; at most one is open per ticket. `workstream_events`
+/// is only ever appended to.
+const WORKSTREAMS: &str = "
+CREATE TABLE workstreams (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  item_key TEXT,
+  repo TEXT,
+  title TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  held_reason TEXT,
+  created_at TEXT NOT NULL,
+  closed_at TEXT,
+  data TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX workstreams_open ON workstreams(connection_id, closed_at);
+CREATE UNIQUE INDEX workstreams_open_item ON workstreams(connection_id, item_key) WHERE closed_at IS NULL AND item_key IS NOT NULL;
+CREATE TABLE workstream_events (
+  workstream_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  run_id TEXT,
+  proposal_id TEXT,
+  digest TEXT,
+  detail TEXT,
+  PRIMARY KEY (workstream_id, seq)
+) WITHOUT ROWID;";
+
+/// Which kind of origin made each draft and which workstream it belongs to, as columns lists can narrow on. Rows from
+/// before are filled from `data`: the origin's workstream, else that of the run a draft would start. A row whose data
+/// isn't JSON is left with both empty.
+const PROPOSAL_WORKSTREAMS: &str = "
+ALTER TABLE proposals ADD COLUMN origin_kind TEXT;
+ALTER TABLE proposals ADD COLUMN workstream TEXT;
+UPDATE proposals SET origin_kind = json_extract(data, '$.origin.type'),
+  workstream = COALESCE(json_extract(data, '$.origin.workstream'), json_extract(data, '$.intent.spec.workstream'))
+  WHERE json_valid(data);
+CREATE INDEX proposals_workstream ON proposals(workstream, state);";
+
+/// The Pip pane's conversation was `workspace`; it is now `general`, beside each workstream's `ws:<id>`. A ticket's
+/// conversation in the classic drawer keeps its key.
+const GENERAL_CONVERSATION: &str = "
+UPDATE pip_turns SET conversation = 'general' WHERE conversation = 'workspace';";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -281,7 +327,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
-        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links", "runs", "run_events", "run_reports", "run_report_tokens", "pip_turns"] {
+        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links", "runs", "run_events", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
@@ -411,14 +457,14 @@ mod tests {
         for t in ["proposals", "item_links"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
     }
 
     #[test]
-    fn a_fresh_file_is_at_version_nine() {
+    fn a_fresh_file_is_at_version_twelve() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
     }
 
     #[test]
@@ -444,11 +490,11 @@ mod tests {
         }
         assert!(tables(&conn).contains(&"pip_turns".to_string()));
         assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
 
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
     }
 
     #[test]
@@ -482,6 +528,121 @@ mod tests {
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+    }
+
+    #[test]
+    fn a_version_nine_file_keeps_everything_and_gains_workstreams() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..9] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 9).unwrap();
+        conn.execute(
+            "INSERT INTO runs (id, proposal_id, connection_id, kind, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES ('r1', 'p1', 'c', 'investigate', 'a/b', '/w', 'done', 't', 't', '{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO proposals (id, connection_id, state, created_at, updated_at, data) VALUES ('p1', 'c', 'pending', 't', 't', '{}')", []).unwrap();
+        conn.execute("INSERT INTO pip_turns (conversation, request_id, role, status, created_at) VALUES ('workspace', 'q1', 'pip', 'done', 't')", []).unwrap();
+        assert!(!tables(&conn).contains(&"workstreams".to_string()));
+
+        migrate(&mut conn).unwrap();
+
+        for t in ["runs", "proposals", "pip_turns"] {
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
+        }
+        for t in ["workstreams", "workstream_events"] {
+            assert!(tables(&conn).contains(&t.to_string()), "missing {t}");
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
+        }
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+
+        conn.execute("INSERT INTO workstreams (id, connection_id, item_key, title, mode, created_at, data) VALUES ('w1', 'c', 'CA-1', 't', 'advise', 't', '{}')", []).unwrap();
+        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM workstreams", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+    }
+
+    #[test]
+    fn one_open_workstream_per_ticket_but_any_number_closed_or_ticketless() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn).unwrap();
+        let add = |id: &str, key: Option<&str>, closed: Option<&str>| {
+            conn.execute(
+                "INSERT INTO workstreams (id, connection_id, item_key, title, mode, created_at, closed_at, data) VALUES (?1, 'c', ?2, 't', 'advise', 't', ?3, '{}')",
+                rusqlite::params![id, key, closed],
+            )
+        };
+        add("w1", Some("CA-1"), None).unwrap();
+        assert!(add("w2", Some("CA-1"), None).is_err());
+        add("w3", Some("CA-1"), Some("t")).unwrap();
+        add("w4", None, None).unwrap();
+        add("w5", None, None).unwrap();
+    }
+
+    #[test]
+    fn a_version_ten_file_fills_the_origin_kind_and_workstream_of_every_draft() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..10] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 10).unwrap();
+        let add = |id: &str, data: &str| {
+            conn.execute("INSERT INTO proposals (id, connection_id, state, created_at, updated_at, data) VALUES (?1, 'c', 'pending', 't', 't', ?2)", rusqlite::params![id, data]).unwrap();
+        };
+        add("chat", r#"{"origin":{"type":"chat","requestId":"q"},"intent":{"type":"comment"}}"#);
+        add("run", r#"{"origin":{"type":"run","runId":"r","shortId":null},"createdBy":"user","intent":{"type":"comment"}}"#);
+        add("start", r#"{"origin":{"type":"board"},"intent":{"type":"startRun","spec":{"workstream":"w1"}}}"#);
+        add("in-ws", r#"{"origin":{"type":"chat","requestId":"q","workstream":"w2"},"intent":{"type":"startRun","spec":{"workstream":"w3"}}}"#);
+        add("empty", "{}");
+        add("broken", "not json");
+
+        migrate(&mut conn).unwrap();
+
+        let row = |id: &str| {
+            conn.query_row("SELECT origin_kind, workstream FROM proposals WHERE id = ?1", [id], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?))).unwrap()
+        };
+        let some = |s: &str| Some(s.to_string());
+        assert_eq!(row("chat"), (some("chat"), None));
+        assert_eq!(row("run"), (some("run"), None));
+        assert_eq!(row("start"), (some("board"), some("w1")));
+        assert_eq!(row("in-ws"), (some("chat"), some("w2")), "the origin's workstream wins");
+        assert_eq!(row("empty"), (None, None));
+        assert_eq!(row("broken"), (None, None));
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM proposals", [], |r| r.get::<_, i64>(0)).unwrap(), 6);
+    }
+
+    #[test]
+    fn a_version_eleven_file_moves_the_workspace_conversation_to_general_and_leaves_ticket_conversations_alone() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..11] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 11).unwrap();
+        let add = |conversation: &str, id: &str| {
+            for role in ["user", "pip"] {
+                conn.execute(
+                    "INSERT INTO pip_turns (conversation, request_id, role, status, created_at) VALUES (?1, ?2, ?3, 'done', 't')",
+                    rusqlite::params![conversation, id, role],
+                )
+                .unwrap();
+            }
+        };
+        add("workspace", "q1");
+        add("workspace", "q2");
+        add("CA-1", "q3");
+        add("ws:w1", "q4");
+
+        migrate(&mut conn).unwrap();
+
+        let in_conversation = |conn: &Connection, c: &str| conn.query_row("SELECT count(*) FROM pip_turns WHERE conversation = ?1", [c], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!((in_conversation(&conn, "general"), in_conversation(&conn, "workspace")), (4, 0));
+        assert_eq!((in_conversation(&conn, "CA-1"), in_conversation(&conn, "ws:w1")), (2, 2));
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        migrate(&mut conn).unwrap();
+        assert_eq!(in_conversation(&conn, "general"), 4);
     }
 }
