@@ -35,6 +35,8 @@ pub struct WorkstreamContext {
     pub drafts: Vec<Proposal>,
     /// The last things the person did in it, oldest first.
     pub recent_person_actions: Vec<WorkstreamEvent>,
+    /// The finished build whose pull request a sync hasn't found yet, which a review waits for.
+    pub waiting_for_pr: Option<String>,
 }
 
 fn refuse(message: impl Into<String>) -> Error {
@@ -66,7 +68,7 @@ pub async fn load(core: &Core, scope: &Scope, id: &str) -> Result<WorkstreamCont
     }
     let mut recent: Vec<WorkstreamEvent> = core.workstream_events(scope, id).await?.into_iter().filter(|e| e.actor == Actor::Person).collect();
     recent.drain(..recent.len().saturating_sub(RECENT_ACTIONS));
-    Ok(WorkstreamContext { workstream, stage: view.stage, runs, drafts, recent_person_actions: recent })
+    Ok(WorkstreamContext { workstream, stage: view.stage, runs, drafts, recent_person_actions: recent, waiting_for_pr: view.waiting_for_pr })
 }
 
 /// The workstream a turn in its conversation works in. Refused, so the turn never runs, unless it is an open
@@ -99,6 +101,11 @@ fn notes_block(notes: Option<&str>) -> String {
 /// `R1 · run <id> · <kind> · <state>`
 fn run_line(label: &str, run: &Run) -> String {
     format!("{label} · run {} · {} · {}", run.id, run.spec.kind.as_str(), run.state.as_str())
+}
+
+/// Says a finished build is waiting for its pull request to be found, e.g. `R4 (build) finished; …`.
+fn waiting_line(label: &str) -> String {
+    format!("{label} (build) finished; its pull request hasn't been found yet. Gossamr asked GitHub; draft the review once this line is gone.")
 }
 
 /// One thing the person did, e.g. `the person stopped R1`, naming runs by their short names.
@@ -144,6 +151,10 @@ impl WorkstreamContext {
         } else {
             out.push_str("Runs, oldest first:\n");
             self.runs.iter().for_each(|(label, run)| out.push_str(&format!("{}\n", run_line(label, run))));
+        }
+        if let Some(id) = &self.waiting_for_pr {
+            let label = self.runs.iter().find(|(_, r)| r.id == *id).map_or_else(|| format!("run {id}"), |(l, _)| l.clone());
+            out.push_str(&format!("{}\n", waiting_line(&label)));
         }
         if !self.recent_person_actions.is_empty() {
             let labels: HashMap<&str, &str> = self.runs.iter().map(|(l, r)| (r.id.as_str(), l.as_str())).collect();
@@ -241,7 +252,8 @@ async fn list(st: &McpState, pip: &PipRun) -> Reply {
         }
         let ticket = ws.item_key.as_deref().unwrap_or("no ticket");
         let mine = if own { " · this conversation's" } else { "" };
-        lines.push(format!("{} · {} · {ticket} · stage {:?} · {} runs{mine}", ws.id, ws.title, v.stage, v.runs.len()));
+        let waiting = v.waiting_for_pr.as_deref().map_or_else(String::new, |id| format!(" · waiting for the pull request of build run {id}"));
+        lines.push(format!("{} · {} · {ticket} · stage {:?}{waiting} · {} runs{mine}", ws.id, ws.title, v.stage, v.runs.len()));
     }
     if lines.is_empty() {
         return Ok("No open workstreams.".into());
@@ -365,6 +377,22 @@ mod tests {
         assert_eq!(same, reply, "by id from anywhere");
         assert!(r.err("general", "get_workstream", json!({})).await.contains("isn't in a workstream"));
         assert!(r.err("general", "get_workstream", json!({ "id": "nope" })).await.contains("no workstream nope"));
+    }
+
+    #[tokio::test]
+    async fn a_finished_build_whose_pull_request_is_not_found_yet_is_named_as_waiting() {
+        let r = rig().await;
+        r.run("r-a", Some(&r.ws.id), RunKind::Plan, RunState::Done, 0).await;
+        let mut build = r.run("r-b", Some(&r.ws.id), RunKind::Build, RunState::Done, 1).await;
+        let reply = r.ok("in-ws", "get_workstream", json!({})).await;
+        assert!(!reply.contains("hasn't been found yet"), "a build that doesn't push waits for nothing: {reply}");
+
+        build.spec.allow_push = true;
+        r.fx.core.save_run(&build).await.unwrap();
+        let reply = r.ok("in-ws", "get_workstream", json!({})).await;
+        assert!(reply.contains("R2 · run r-b · build · done\nR2 (build) finished; its pull request hasn't been found yet. Gossamr asked GitHub; draft the review once this line is gone.\n"), "{reply}");
+        let listed = r.ok("in-ws", "list_workstreams", json!({})).await;
+        assert!(listed.contains("stage Build · waiting for the pull request of build run r-b · 2 runs"), "{listed}");
     }
 
     #[tokio::test]

@@ -2,13 +2,13 @@ import { and } from "../lib/filter";
 import { leftByRun, targetOf } from "../lib/proposals";
 import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
-import type { Intent, ItemRef, Proposal, Run, ScreenContext, WorkFilter } from "../types";
+import type { Intent, ItemRef, Proposal, Run, RunKind, ScreenContext, WorkFilter } from "../types";
 import { needsPerson, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
 import type { AskRequest, ClaudeEvent } from "./claude";
 import { mockPipTurns, mockUsage } from "./mockPipTurns";
-import { GENERAL_CONVERSATION } from "../lib/conversations";
+import { GENERAL_CONVERSATION, workstreamOfConversation } from "../lib/conversations";
 
 /** What the scripted Pip does for one question. */
 export interface PipScript {
@@ -16,8 +16,8 @@ export interface PipScript {
   text: string;
   filter: { filter: WorkFilter; note: string } | null;
   draft: { intent: Intent; label: string | null } | null;
-  /** An agent run to propose on a ticket, with an optional focus note. */
-  runDraft?: { item: ItemRef; focus: string | null } | null;
+  /** An agent run to propose on a ticket: its kind, the run it follows (a build or review needs one) and an optional focus note. */
+  runDraft?: { item: ItemRef; kind: RunKind; fromRun: string | null; focus: string | null } | null;
   /** An investigation with no ticket to propose: a watched repository, when the request named one, and the question. */
   ticketlessRun?: { repo: string | null; prompt: string } | null;
   /** A change to the text of a comment, new-ticket or breakdown draft that came from a run. */
@@ -90,6 +90,51 @@ export function openQuestions(markdown: string): string | null {
 }
 
 const asksToSendBack = /another pass|second pass|\bsend (?:it|them|that|the agent|the run) back\b/i;
+
+/** The next step a person asks for in a workstream's conversation, and the kind of finished run it follows. */
+const CHAIN_ASKS: { pattern: RegExp; kind: RunKind; from: RunKind }[] = [
+  { pattern: /\btriage (?:it|this)\b/, kind: "triage", from: "investigate" },
+  { pattern: /\bplan (?:it|this)\b/, kind: "plan", from: "investigate" },
+  { pattern: /\bbuild (?:it|this)\b/, kind: "build", from: "plan" },
+  { pattern: /\breview (?:it|this)\b/, kind: "review", from: "build" },
+];
+
+const CHAIN_WORDS: Record<RunKind, string> = { investigate: "an investigation", triage: "a triage", plan: "a plan", build: "a build", review: "a review", verify: "a check" };
+
+/** The conversation's workstream, as the scripted Pip knows it: its id and its ticket. */
+export interface PipWorkstream {
+  id: string;
+  item: ItemRef | null;
+}
+
+/**
+ * What Pip does when asked for the next step in a workstream: it drafts that kind and names as the run it follows the
+ * workstream's newest finished run of the kind that comes before, else its newest of that kind at all, so the backend says
+ * why it can't follow it yet; with none, no run, and the backend refuses. Whatever the draft carries from that run is
+ * Gossamr's to fill in.
+ */
+function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[], workstream: PipWorkstream): PipScript | null {
+  const q = prompt.toLowerCase();
+  const ask = CHAIN_ASKS.find((a) => a.pattern.test(q));
+  if (!ask) return null;
+  const item = workstream.item ?? context.item;
+  if (!item) return { steps: [], text: "This workstream has no ticket, so there is nothing to run that on. Investigate a question instead.", filter: null, draft: null };
+  const newest = (done: boolean) =>
+    runs
+      .filter((r) => r.spec.workstream === workstream.id && r.spec.kind === ask.from && (!done || r.state === "done"))
+      .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
+  const source = newest(true) ?? (ask.kind === "build" || ask.kind === "review" ? newest(false) : undefined);
+  const fromRun = source?.id ?? null;
+  const following = fromRun ? ` following ${ask.from} run ${source?.shortId ?? fromRun}` : "";
+  const carried = ask.kind === "build" ? " Gossamr filled in the plan from that run; I didn't write it." : ask.kind === "review" ? " Gossamr filled in the builder's account and pinned the pull request; I didn't write them." : "";
+  return {
+    steps: [`Looked up ${item.key}`, "Read the workstream's runs", "Drafted an agent run"],
+    text: `I drafted ${CHAIN_WORDS[ask.kind]} of **${item.key}**${following}.${carried} It has not started. Open the draft to read the exact prompt, then start it.`,
+    filter: null,
+    draft: null,
+    runDraft: { item, kind: ask.kind, fromRun, focus: null },
+  };
+}
 
 /** What Pip does when asked to send a finished run back: only a run that left open questions gets a follow-up, and only one at a time. */
 function sendBack(context: ScreenContext, runs: readonly Run[], drafts: readonly Proposal[], discussed: string | null): PipScript {
@@ -201,9 +246,11 @@ function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
 }
 
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
-export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null): PipScript {
+export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
   const q = prompt.toLowerCase();
   if (asksToSendBack.test(prompt)) return sendBack(context, runs, drafts, discussed);
+  const step = workstream ? chainStep(prompt, context, runs, workstream) : null;
+  if (step) return step;
   const finishing = finishes.exec(prompt);
   if (finishing) {
     const left = drafts.find((d) => d.id === finishing[1] && d.state.type === "pending" && d.origin.type === "run" && d.intent.type === "create");
@@ -276,7 +323,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     if (!left) return { steps: [], text: "I can't find that description draft any more, or it has been decided already, so there is nothing to discuss.", filter: null, draft: null };
     return {
       steps: ["Read the run", "Read the rest of its result", "Read the ticket", "Checked the draft"],
-      text: `I read the whole run and the ticket and checked draft ${left.id}: the ticket's description with the run's plan added under a "Gossamr Plan" heading. Tell me what to change, for example "shorter", and I'll revise it. Nothing is written to Jira until you approve it.`,
+      text: `I read the whole run and the ticket and checked draft ${left.id}: the ticket's description with the run's plan added under a "Gossamr Plan" heading. A build follows that plan, so only you change it. Tell me what you'd change, for example "shorter", and I'll suggest the words for you to put in. Nothing is written to Jira until you approve it.`,
       filter: null,
       draft: null,
       discussed: left.id,
@@ -284,12 +331,14 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   }
   const discussedDescription = description(discussed);
   if (discussedDescription?.intent.type === "rewrite" && discussedDescription.intent.body && asksForShorter.test(q)) {
+    // The plan a build follows is the person's to change, so Pip only suggests the words.
+    const plan = shorterPlan(discussedDescription.intent.body.toText);
+    const section = plan.slice(Math.max(0, plan.search(/^#{1,6} Gossamr Plan$/m)));
     return {
-      steps: ["Read the run's full result", "Revised the description"],
-      text: "I kept the ticket's own text as it was and shortened each point in the plan to its first sentence. It isn't written to Jira; read the diff and approve, edit or skip it.",
+      steps: ["Read the run's full result", "Suggested a shorter plan"],
+      text: `A build follows this plan, so I can't change the draft; edit it yourself if you like this. I'd keep the ticket's own text and shorten each point in the plan to its first sentence:\n\n${section}`,
       filter: null,
       draft: null,
-      revise: { id: discussedDescription.id, description: shorterPlan(discussedDescription.intent.body.toText) },
     };
   }
   const talked = discusses.exec(prompt);
@@ -373,7 +422,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
         text: `I drafted an investigation of **${item.key}**${focus ? ` with a focus note: “${focus}”` : ""}. It has not started. Open the draft to read the exact prompt, then start it.`,
         filter: null,
         draft: null,
-        runDraft: { item, focus },
+        runDraft: { item, kind: "investigate", fromRun: null, focus },
       };
     }
     const ask = ticketlessQuestion(prompt);
@@ -488,8 +537,10 @@ export interface PipDrafter {
   pipRewrite(item: ItemRef, part: "title" | "description", requestId: string): Promise<unknown>;
   /** Drafts a follow-up for a finished run the way propose_follow_up does. */
   pipFollowUp(runId: string, message: string, reason: string, requestId: string): Promise<unknown>;
-  /** Drafts a run the way propose_run does: Pip names the ticket and a focus note, the backend builds the rest. */
-  pipRunDraft(item: ItemRef, focus: string | null, requestId: string): Promise<unknown>;
+  /** Drafts a run the way propose_run does: Pip names the ticket, the kind, the run it follows and a focus note, the backend builds the rest. */
+  pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string): Promise<unknown>;
+  /** The ticket of workstream `id`, for a turn asked in its conversation. */
+  pipWorkstreamItem(id: string): ItemRef | null;
   /** Drafts an investigation with no ticket the way propose_run does: Pip gives a repository and a prompt, the backend builds the rest. */
   pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string): Promise<unknown>;
   /** Whether a draft from the question `requestId` is kept already. */
@@ -527,7 +578,9 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   const session = req.sessionId ?? `mock-session-${req.requestId}`;
   // Kept the way the app keeps a turn: the question now, steps as they come, the answer and its usage at the end.
   mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 });
-  const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null);
+  const wsId = workstreamOfConversation(req.conversation);
+  const workstream = wsId ? { id: wsId, item: drafter?.pipWorkstreamItem?.(wsId) ?? null } : null;
+  const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });
   let said = "";
@@ -542,7 +595,15 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
     if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, description: script.revise.description, summaries: script.revise.summaries }, req.requestId);
     if (!stopped && script.rewrite) await drafter?.pipRewrite?.(script.rewrite.item, script.rewrite.part, req.requestId);
     if (!stopped && script.followUp) await drafter?.pipFollowUp?.(script.followUp.runId, script.followUp.message, script.followUp.reason, req.requestId);
-    if (!stopped && script.runDraft) await drafter?.pipRunDraft?.(script.runDraft.item, script.runDraft.focus, req.requestId);
+    if (!stopped && script.runDraft) {
+      // A refused draft is Pip's to report, as the tool's refusal is in a real turn, not a turn that failed.
+      const { item, kind, fromRun, focus } = script.runDraft;
+      const refused = await drafter?.pipRunDraft?.(item, kind, fromRun, focus, req.requestId).then(
+        () => null,
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      );
+      if (refused) script.text = `I couldn't draft that: ${refused}`;
+    }
     if (!stopped && script.ticketlessRun) await drafter?.pipTicketlessRunDraft?.(script.ticketlessRun.repo, script.ticketlessRun.prompt, req.requestId);
     if (!stopped && script.filter) viewListeners.forEach((l) => l(req.requestId, script.filter!.filter, script.filter!.note));
     for (const word of script.text.match(/\S+\s*/g) ?? []) {

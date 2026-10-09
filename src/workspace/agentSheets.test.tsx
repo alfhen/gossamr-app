@@ -629,6 +629,16 @@ describe("the Agent menu on a ticket", () => {
     expect(html).toContain("Reading the cart module");
   });
 
+  it("says a workstream's build is waiting for its pull request on the stage chip while it is, and only then", () => {
+    const r = run("done", { id: "b1" });
+    const waiting = renderToStaticMarkup(<TicketAgentsView runs={[r]} now={NOW} title="A ticket" workstream={workstream({ stage: "build", runs: ["b1"], labels: [["b1", "R1"]], waitingForPr: "b1" })} onOpen={vi.fn()} />);
+    expect(waiting).toMatch(/data-stage="build" data-waiting-for-pr="b1"[^>]*>Build · waiting for PR</);
+    const found = renderToStaticMarkup(<TicketAgentsView runs={[r]} now={NOW} title="A ticket" workstream={workstream({ stage: "build", runs: ["b1"], labels: [["b1", "R1"]] })} onOpen={vi.fn()} />);
+    expect(found).toMatch(/data-stage="build"[^>]*>Build</);
+    expect(found).not.toContain("data-waiting-for-pr");
+    expect(found).not.toContain("waiting for PR");
+  });
+
   it("shows a workstream with no runs yet at Intake, and no workstream line without one", () => {
     const html = renderToStaticMarkup(<TicketAgentsView runs={[]} now={NOW} title={null} workstream={workstream()} onOpen={vi.fn()} />);
     expect(html).toContain("Workstream: CA-401 Retry the payment");

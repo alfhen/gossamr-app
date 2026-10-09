@@ -159,6 +159,12 @@ impl Edit {
                     spec.pr = None;
                     spec.pr_sha = None;
                     spec.allow_push = v == RunKind::Build;
+                    // A review always reports its verdict; what another kind asks for is the person's choice again.
+                    if v == RunKind::Review {
+                        spec.report = true;
+                    } else if spec.kind == RunKind::Review {
+                        spec.report = false;
+                    }
                     if v != RunKind::Build {
                         spec.plan = None;
                         spec.plan_from_run = None;
@@ -167,6 +173,10 @@ impl Edit {
                     if v != RunKind::Review {
                         spec.build_account = None;
                         spec.build_from_run = None;
+                    }
+                    if !matches!(v, RunKind::Triage | RunKind::Plan) {
+                        spec.findings = None;
+                        spec.findings_from_run = None;
                     }
                     if v != RunKind::Investigate {
                         spec.project = None;
@@ -196,9 +206,15 @@ impl Edit {
                     spec.pr_sha = None;
                 }
                 if let Some(v) = allow_push {
+                    if !*v && spec.kind == RunKind::Build && spec.workstream.is_some() {
+                        return Err(Error::Proposal("a workstream's build always publishes a draft pull request".into()));
+                    }
                     spec.allow_push = *v;
                 }
                 if let Some(v) = report {
+                    if !*v && spec.kind == RunKind::Review {
+                        return Err(Error::Proposal(REVIEW_REPORTS.into()));
+                    }
                     spec.report = *v;
                 }
                 if let Some(v) = plan {
@@ -233,6 +249,9 @@ impl Edit {
         }
     }
 }
+
+/// Why a review's report can't be unticked: the app reads its verdict.
+pub(crate) const REVIEW_REPORTS: &str = "A review always reports its verdict to Gossamr. With reporting off in Settings the tool isn't offered, and its written 'Verdict:' line is read instead.";
 
 const FORK_REFUSAL: &str = "That pull request comes from a fork. Reviewing it would run its code with your settings; Gossamr doesn't allow that yet.";
 
@@ -306,7 +325,7 @@ impl Core {
         self.with_db_for(scope, |db| {
             let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
             proposals::require_pip_may_revise(&current, workstream)?;
-            proposals::edit_noted(db, id, intent, "Revised by Pip", Utc::now())
+            proposals::edit_noted(db, id, intent, proposals::REVISED_BY_PIP, Utc::now())
         })
         .await
     }
@@ -372,8 +391,9 @@ impl Core {
     }
 
     /// A run may ask its agent to report through the tool only while the setting is on. Refused, never changed quietly.
+    /// A review always asks: with the setting off the tool isn't offered at launch, and its written verdict is read.
     fn require_report_allowed(&self, spec: &RunSpec) -> Result<()> {
-        if spec.report && !self.report_enabled() {
+        if spec.report && spec.kind != RunKind::Review && !self.report_enabled() {
             return Err(Error::Proposal("Reporting through Gossamr is off. Turn it on in Settings > Agents, or untick it for this run.".into()));
         }
         Ok(())
@@ -425,10 +445,18 @@ impl Core {
             return Err(Error::Proposal("that item belongs to another connection".into()));
         }
         self.require_watched_repo(&spec.repo)?;
+        // A review's verdict is read by the app, so it always asks for the report, whoever drafts it.
+        if spec.kind == RunKind::Review {
+            spec.report = true;
+        }
         self.require_report_allowed(&spec)?;
         spec.clone_path = self.resolve_clone(&spec.clone_path)?;
         if spec.instruction.trim().is_empty() {
             spec.instruction = if spec.project.is_some() { TICKETLESS_STARTER.into() } else { default_instruction(spec.kind).into() };
+        }
+        // A workstream's build always ends with a draft pull request, which its review then reads.
+        if spec.kind == RunKind::Build && spec.workstream.is_some() {
+            spec.allow_push = true;
         }
         spec.build_account = None;
         if let Some(from) = spec.build_from_run.take() {
@@ -449,6 +477,13 @@ impl Core {
                 return Err(Error::Proposal("Build needs a ticket".into()));
             }
             spec.plan_from_run = Some(self.attach_plan(&mut spec, &from, item.as_ref()).await?);
+        }
+        spec.findings = None;
+        if let Some(from) = spec.findings_from_run.take() {
+            if item.is_none() {
+                return Err(Error::Proposal("Findings from an investigation need a ticket".into()));
+            }
+            spec.findings_from_run = Some(self.attach_findings(&mut spec, &from, item.as_ref()).await?);
         }
         let links = item.as_ref().map(|i| self.ticket_dev_links(i)).unwrap_or_default();
         let intent = self
@@ -1030,6 +1065,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_workstream_s_build_always_publishes_a_draft_pull_request_and_one_outside_a_workstream_is_as_before() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        let clone = clone_in(&fx, "webshop");
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let build = |ws: Option<String>, name: &str| RunSpec { kind: RunKind::Build, instruction: String::new(), allow_push: false, workstream: ws, name: name.into(), ..spec_in(&clone) };
+        let push = |on: bool| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: Some(on), report: None, plan: None, build_account: None, project: None };
+
+        let linked = fx.core.draft_run(build(Some(ws.id.clone()), "eng-1-ws-build-0001"), Some(fx.item("CA-1"))).await.unwrap();
+        assert!(spec_of(&linked).allow_push, "a workstream's build pushes even when the caller asked it not to");
+        let prompt = fx.core.runs_review(&linked.id).await.unwrap().prompt;
+        assert!(prompt.contains("gh pr create --draft") && prompt.contains("Never mark the pull request ready"), "{prompt}");
+        let err = fx.core.edit_proposal(&linked.id, &push(false)).await.unwrap_err().to_string();
+        assert!(err.contains("a workstream's build always publishes a draft pull request"), "{err}");
+        assert!(spec_of(&fx.core.proposal(&linked.id).await.unwrap().unwrap()).allow_push);
+        fx.core.edit_proposal(&linked.id, &push(true)).await.unwrap();
+
+        let loose = fx.core.draft_run(build(None, "eng-1-loose-build-0002"), Some(fx.item("CA-1"))).await.unwrap();
+        assert!(!spec_of(&loose).allow_push, "outside a workstream the person's choice stands");
+        assert!(spec_of(&fx.core.edit_proposal(&loose.id, &push(true)).await.unwrap()).allow_push);
+        assert!(!spec_of(&fx.core.edit_proposal(&loose.id, &push(false)).await.unwrap()).allow_push);
+    }
+
+    #[tokio::test]
     async fn an_edit_cannot_move_a_run_into_out_of_or_between_workstreams() {
         let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let clone = clone_in(&fx, "webshop");
@@ -1202,6 +1260,26 @@ mod tests {
             assert!(review.prompt.contains("Review pull request #12 in acme/webshop at commit a1b2c3d4e5f6."));
             let run = fx.core.runs_approve(&p.id, &review.digest).await.unwrap();
             assert_eq!((run.spec.kind, run.spec.pr), (RunKind::Review, Some(12)));
+        }
+
+        #[tokio::test]
+        async fn a_review_the_person_drafts_always_reports_its_verdict_and_it_cant_be_unticked() {
+            for setting in [false, true] {
+                let fx = watching(vec![same_repo("open", "main")]).await;
+                fx.core.set_report_enabled(setting);
+                let p = fx.core.draft_run(RunSpec { report: false, ..review_of(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
+                assert!(spec_of(&p).report, "setting {setting}: a review asks for the report whoever drafts it");
+                let review = fx.core.runs_review(&p.id).await.unwrap();
+                assert!(review.prompt.contains("verdict ('pass' or 'blocking', required)"), "{}", review.prompt);
+                let edit = |kind: Option<RunKind>, pr: Option<u64>, report: Option<bool>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr, allow_push: None, report, plan: None, build_account: None, project: None };
+                let err = fx.core.edit_proposal(&p.id, &edit(None, None, Some(false))).await.unwrap_err().to_string();
+                assert!(err.contains("A review always reports its verdict"), "{err}");
+                assert!(spec_of(&fx.core.proposal(&p.id).await.unwrap().unwrap()).report);
+                let built = fx.core.edit_proposal(&p.id, &edit(Some(RunKind::Build), None, None)).await.unwrap();
+                assert!(!spec_of(&built).report, "another kind asks only when the person ticks it");
+                let back = fx.core.edit_proposal(&p.id, &edit(Some(RunKind::Review), Some(12), None)).await.unwrap();
+                assert!(spec_of(&back).report, "turning it back into a review asks again");
+            }
         }
 
         #[tokio::test]

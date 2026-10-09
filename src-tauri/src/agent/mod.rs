@@ -447,9 +447,11 @@ impl AgentService {
         };
 
         let run_id = req.request_id.clone();
+        // In a workstream's conversation Pip manages it: it drafts each next step, and the person still starts each one.
+        let role = if workstream.is_some() { context::Role::Manager } else { context::Role::Assistant };
         let agent_req = AgentRequest {
             run_id: run_id.clone(),
-            system: context::system_prompt(provider.capabilities().reads_code, self.core.can_edit_text(&scope)?),
+            system: context::system_prompt(role, provider.capabilities().reads_code, self.core.can_edit_text(&scope)?),
             prompt: context::compose(&context, item.as_deref(), &links, &drafts, &runs, workstream.as_ref(), &req.prompt),
             mcp: self.mcp.endpoint(&run_id)?,
             sandbox,
@@ -772,6 +774,8 @@ mod tests {
             started: Mutex<Vec<(String, Option<String>)>>,
             /// The prompt each run was given, by run id.
             prompts: Mutex<HashMap<String, String>>,
+            /// The system prompt each run was given, by run id.
+            systems: Mutex<HashMap<String, String>>,
             gates: Mutex<HashMap<String, Arc<Notify>>>,
             stopped: Mutex<HashSet<String>>,
         }
@@ -793,6 +797,7 @@ mod tests {
                 let c = self.0.clone();
                 c.started.lock().unwrap().push((req.run_id.clone(), req.session.clone()));
                 c.prompts.lock().unwrap().insert(req.run_id.clone(), req.prompt.clone());
+                c.systems.lock().unwrap().insert(req.run_id.clone(), req.system.clone());
                 let now = c.now.fetch_add(1, Ordering::SeqCst) + 1;
                 c.most.fetch_max(now, Ordering::SeqCst);
                 let gate = Arc::new(Notify::new());
@@ -1064,6 +1069,8 @@ mod tests {
             assert!(svc.mcp.runs.lock().unwrap().get("q1").is_some_and(|p| p.handed.contains("CA-1")), "its ticket is handed to Pip");
             let prompt = fake.0.prompts.lock().unwrap().get("q1").cloned().unwrap();
             assert!(prompt.contains(&format!("Id: {} · ticket CA-1 · mode advise · stage Intake", ws.id)) && prompt.contains("[Open drafts in this workstream]"), "{prompt}");
+            let system = fake.0.systems.lock().unwrap().get("q1").cloned().unwrap();
+            assert!(system.contains(context::MANAGER), "a workstream's turn is the manager's: {system}");
             fake.open("q1").await;
             until_status(&fx, &conversation, "q1", "done").await;
             for _ in 0..100 {
@@ -1074,6 +1081,12 @@ mod tests {
             }
             assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream.pip_session.as_deref(), Some("sess-q1"));
             assert!(fx.core.pip_turns(GENERAL_CONVERSATION).await.unwrap().is_empty(), "the general conversation is apart");
+            svc.ask(ask("g1", GENERAL_CONVERSATION), sink.clone()).await.unwrap();
+            fake.until_started(2).await;
+            let general = fake.0.systems.lock().unwrap().get("g1").cloned().unwrap();
+            assert!(!general.contains(context::MANAGER) && general.contains("gossamr tools"), "the general conversation's turn is the assistant's: {general}");
+            fake.open("g1").await;
+            until_status(&fx, GENERAL_CONVERSATION, "g1", "done").await;
 
             // After a restart the queue knows no session; the workstream's own is continued.
             let fresh = Fake::default();

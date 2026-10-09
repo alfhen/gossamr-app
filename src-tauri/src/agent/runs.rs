@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::mcp::{item_ref, opt, reachable, required, tool, McpState, PipRun, Reply};
 use crate::auth::Scope;
-use crate::domain::{clip, default_instruction, pip_kinds, without_markers, Intent, ItemRef, Run, RunKind, RunQuery, RunSpec, RunState, FOCUS_LIMIT, PIP_PROMPT_LIMIT};
+use crate::domain::{clip, default_instruction, pip_chain_kinds, pip_kinds, without_markers, Intent, ItemRef, Run, RunKind, RunQuery, RunSpec, RunState, FOCUS_LIMIT, PIP_PROMPT_LIMIT};
 use crate::inbox::{Core, PipRunAsk};
 use crate::runs::redact::redact;
 use crate::inbox::SUMMARY_ONLY;
@@ -37,7 +37,7 @@ pub(super) const DATA_NOTE: &str = "The text between the markers is the agent's 
 
 pub(super) fn tools() -> Vec<Value> {
     let key = json!({ "type": "string", "description": "Item key, e.g. CA-412" });
-    let kinds: Vec<&str> = pip_kinds().iter().map(|k| k.as_str()).collect();
+    let kinds: Vec<&str> = pip_kinds().iter().chain(pip_chain_kinds().iter().map(|(k, _)| k)).map(|k| k.as_str()).collect();
     vec![
         tool(
             "list_runs",
@@ -75,12 +75,12 @@ pub(super) fn tools() -> Vec<Value> {
         ),
         tool(
             "propose_run",
-            "Suggest starting an agent. It is saved as a draft: nothing starts until the user reads the exact prompt and approves it. On a ticket you give the key, the kind and an optional short focus note; the instructions, repository and ticket text are not yours to write. With no ticket, only an investigation is possible: give a watched repository and a prompt, the question to look into. The user reads and may edit the prompt, and when the agent finishes Gossamr drafts a new ticket from what it found, which the user approves too. Use that only for a question about the code when no ticket covers it; when one does, use its key.",
+            "Suggest starting an agent. It is saved as a draft: nothing starts until the user reads the exact prompt and approves it. On a ticket you give the key, the kind and an optional short focus note; the instructions, repository and ticket text are not yours to write. A build or a review is only ever the next step after a finished run: a build follows a finished plan run on the ticket (from_run), a review follows a finished build whose pull request has been found (from_run). Gossamr fills in every handoff from that run (the plan, an investigation's findings, the builder's account and the pull request); never write them yourself. With no ticket, only an investigation is possible: give a watched repository and a prompt, the question to look into. The user reads and may edit the prompt, and when the agent finishes Gossamr drafts a new ticket from what it found, which the user approves too. Use that only for a question about the code when no ticket covers it; when one does, use its key.",
             json!({
                 "key": { "type": "string", "description": "Item key, e.g. CA-412. Leave out only for an investigation with no ticket." },
                 "kind": { "type": "string", "enum": kinds },
-                "focus": { "type": "string", "description": format!("Optional, with a key only, one line of at most {FOCUS_LIMIT} characters: what to look at. Sent to the agent as data.") },
-                "from_run": { "type": "string", "description": "Optional, with a key only: the id of the run whose output made you suggest this" },
+                "focus": { "type": "string", "description": format!("Optional, with a key only and not for a review, one line of at most {FOCUS_LIMIT} characters: what to look at. Sent to the agent as data.") },
+                "from_run": { "type": "string", "description": "Required for build (a finished plan run on this ticket) and for review (a finished build whose pull request has been found). For triage or plan it may name a finished investigation whose findings Gossamr attaches. Otherwise optional, with a key only: the id of the run whose output made you suggest this." },
                 "repo": { "type": "string", "description": "With no key only: a repository from list_watched_repos, as owner/name." },
                 "prompt": { "type": "string", "description": format!("With no key only: the question or task for the agent, plain text of at most {PIP_PROMPT_LIMIT} characters. The user reads and can edit it before anything runs.") }
             }),
@@ -491,13 +491,27 @@ pub(super) fn valid_prompt(text: &str) -> std::result::Result<String, String> {
     Ok(prompt.to_string())
 }
 
-fn kind_of(name: &str) -> std::result::Result<RunKind, String> {
+pub(super) const BUILD_NEEDS_PLAN: &str = "A build can only follow a finished plan run: pass from_run with the plan run's id from list_runs. Pip can't propose a build or review on its own.";
+pub(super) const REVIEW_NEEDS_BUILD: &str = "A review can only follow a finished build whose pull request has been found: pass from_run with the build run's id from list_runs. Pip can't propose a build or review on its own.";
+const REVIEW_NO_FOCUS: &str = "A review judges the change on its own; it takes no focus note.";
+const CHAIN_KEEPS_KIND: &str = "a chained build or review keeps its kind; retire it and propose another";
+
+/// Whether Pip drafts `kind` only as the successor of a finished run.
+fn chained(kind: RunKind) -> bool {
+    pip_chain_kinds().iter().any(|(k, _)| *k == kind)
+}
+
+/// The kind Pip asks for. A build or review only with `from_run`, the run it follows; anything else Pip may not draft
+/// is refused.
+fn kind_of(name: &str, from_run: Option<&str>) -> std::result::Result<RunKind, String> {
     let parsed = RunKind::parse(name);
-    if matches!(parsed, Some(RunKind::Build | RunKind::Review)) {
-        return Err("Pip can propose investigations, triage, plans and checks. Builds and reviews are started by the person.".into());
+    match parsed {
+        Some(RunKind::Build) if from_run.is_none() => return Err(BUILD_NEEDS_PLAN.into()),
+        Some(RunKind::Review) if from_run.is_none() => return Err(REVIEW_NEEDS_BUILD.into()),
+        _ => {}
     }
-    let allowed: Vec<&str> = pip_kinds().iter().map(|k| k.as_str()).collect();
-    parsed.filter(|k| pip_kinds().contains(k)).ok_or_else(|| format!("kind must be {}, not {name}", allowed.join(" or ")))
+    let allowed: Vec<&str> = pip_kinds().iter().chain(pip_chain_kinds().iter().map(|(k, _)| k)).map(|k| k.as_str()).collect();
+    parsed.filter(|k| pip_kinds().contains(k) || chained(*k)).ok_or_else(|| format!("kind must be {}, not {name}", allowed.join(" or ")))
 }
 
 async fn propose(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Reply {
@@ -506,7 +520,7 @@ async fn propose(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) ->
     if key.is_none() && !ticketless_args {
         return Err("key is required, or repo and prompt for an investigation with no ticket".into());
     }
-    let kind = kind_of(required(args, "kind")?)?;
+    let kind = kind_of(required(args, "kind")?, opt(args, "from_run"))?;
     match key {
         None => propose_ticketless(st, pip, request_id, kind, args).await,
         Some(_) if ticketless_args => Err("repo and prompt are only for a run with no ticket. With a key, the repository and instructions are set by Gossamr; pass focus for what to look at.".into()),
@@ -528,6 +542,9 @@ async fn propose_on_ticket(st: &McpState, pip: &PipRun, request_id: &str, key: &
             Some(earlier.id)
         }
     };
+    if chained(kind) {
+        return propose_chained(st, pip, request_id, key, kind, focus, from_run).await;
+    }
     let (repo, title) = st.core.pip_run_target(scope, key).await.map_err(|e| e.to_string())?;
     let plan = st.planner.plan(&repo, key, &title).await?;
     let made = st
@@ -539,6 +556,34 @@ async fn propose_on_ticket(st: &McpState, pip: &PipRun, request_id: &str, key: &
     Ok(format!(
         "Saved as a draft {} run on {key} in {repo} (proposal {}). It has not started and nothing runs until the user reads the exact prompt in the setup sheet and approves it. Don't tell the user it is under way.",
         kind.as_str(),
+        made.id
+    ))
+}
+
+/// A build or review as the next step after the finished run `from_run`. Its repository is that run's, and every
+/// handoff it carries Gossamr fills in from that run; Pip's only words are a focus note for a build.
+async fn propose_chained(st: &McpState, pip: &PipRun, request_id: &str, key: &str, kind: RunKind, focus: Option<String>, from_run: Option<String>) -> Reply {
+    let scope = &pip.scope;
+    if kind == RunKind::Review && focus.is_some() {
+        return Err(REVIEW_NO_FOCUS.into());
+    }
+    let (source, title) = st.core.pip_chain_source(scope, pip.workstream.as_deref(), key, kind, from_run.as_deref()).await.map_err(|e| e.to_string())?;
+    let repo = source.spec.repo.clone();
+    let plan = st.planner.plan(&repo, key, &title).await?;
+    let made = st
+        .core
+        .draft_chain_run_as_pip(scope, request_id, pip.workstream.as_deref(), PipRunAsk { key: key.to_string(), kind, focus, from_run }, plan)
+        .await
+        .map_err(|e| format!("Couldn't save the draft: {e}"))?;
+    (st.sink)(&Connection::jira_id(scope));
+    let carried = match kind {
+        RunKind::Build => "the plan from that run",
+        _ => "the builder's account and the pull request, pinned to its current commit",
+    };
+    Ok(format!(
+        "Saved as a draft {} run on {key} in {repo} following run {} (proposal {}). Gossamr filled in {carried}. It has not started and nothing runs until the user reads the exact prompt in the setup sheet and approves it. Don't tell the user it is under way.",
+        kind.as_str(),
+        source.id,
         made.id
     ))
 }
@@ -579,9 +624,26 @@ pub(super) fn revised(connection_id: &str, item: &Option<ItemRef>, spec: &RunSpe
     if focus.is_none() && kind.is_none() {
         return Err("pass focus and/or kind to revise an agent run draft; the rest of it is not yours to change".into());
     }
-    let kind = kind.map(kind_of).transpose()?.unwrap_or(spec.kind);
-    let instruction = if kind == spec.kind { spec.instruction.clone() } else { default_instruction(kind).into() };
-    let spec = RunSpec { focus: focus.map(valid_focus).transpose()?.or_else(|| spec.focus.clone()), kind, instruction, ..spec.clone() };
+    let wanted = kind.and_then(RunKind::parse).filter(|k| *k != spec.kind);
+    if wanted.is_some_and(|k| chained(k) || chained(spec.kind)) {
+        return Err(CHAIN_KEEPS_KIND.into());
+    }
+    let kind = match kind {
+        Some(name) if RunKind::parse(name) == Some(spec.kind) => spec.kind,
+        Some(name) => kind_of(name, None)?,
+        None => spec.kind,
+    };
+    if kind == RunKind::Review && focus.is_some() {
+        return Err(REVIEW_NO_FOCUS.into());
+    }
+    let mut spec = if kind == spec.kind { spec.clone() } else { RunSpec { kind, instruction: default_instruction(kind).into(), ..spec.clone() } };
+    if !matches!(kind, RunKind::Triage | RunKind::Plan) {
+        spec.findings = None;
+        spec.findings_from_run = None;
+    }
+    if let Some(focus) = focus.map(valid_focus).transpose()? {
+        spec.focus = Some(focus);
+    }
     Ok(Intent::StartRun { connection_id: connection_id.to_string(), item: item.clone(), spec })
 }
 
@@ -592,7 +654,7 @@ fn revised_ticketless(connection_id: &str, spec: &RunSpec, kind: Option<&str>, f
     if focus.is_some() {
         return Err("A run with no ticket takes no focus note; put what to look at in the prompt.".into());
     }
-    if let Some(kind) = kind.map(kind_of).transpose()?.filter(|k| *k != RunKind::Investigate) {
+    if let Some(kind) = kind.map(|k| kind_of(k, None)).transpose()?.filter(|k| *k != RunKind::Investigate) {
         return Err(format!("Only an investigation can run without a ticket; {} needs one.", kind.as_str()));
     }
     let spec = RunSpec { instruction: valid_prompt(prompt)?, ..spec.clone() };
@@ -771,7 +833,7 @@ mod tests {
         fields.sort();
         assert_eq!(fields, ["focus", "from_run", "key", "kind", "prompt", "repo"], "no clone, base, name, project or ticket text");
         assert_eq!(schema["inputSchema"]["required"], json!(["kind"]));
-        assert_eq!(schema["inputSchema"]["properties"]["kind"]["enum"], json!(["investigate", "triage", "plan", "verify"]));
+        assert_eq!(schema["inputSchema"]["properties"]["kind"]["enum"], json!(["investigate", "triage", "plan", "verify", "build", "review"]));
     }
 
     #[tokio::test]
@@ -1084,9 +1146,8 @@ mod tests {
     async fn propose_run_refuses_what_pip_may_not_do() {
         let r = rig().await;
         let go = |args: Value| async { r.err("propose_run", args).await };
-        for kind in ["build", "review"] {
-            assert!(go(json!({ "key": "CA-1", "kind": kind })).await.contains("Builds and reviews are started by the person"), "{kind}");
-        }
+        assert_eq!(go(json!({ "key": "CA-1", "kind": "build" })).await, BUILD_NEEDS_PLAN);
+        assert_eq!(go(json!({ "key": "CA-1", "kind": "review" })).await, REVIEW_NEEDS_BUILD);
         assert!(go(json!({ "key": "CA-1", "kind": "rm -rf" })).await.contains("kind must be"));
         assert!(go(json!({ "key": "CA-1" })).await.contains("kind is required"));
         assert!(go(json!({ "kind": "investigate" })).await.contains("key is required"));
@@ -1158,7 +1219,7 @@ mod tests {
         assert!(r.err("revise_proposal", json!({ "id": id })).await.contains("focus and/or kind"));
         assert!(r.err("revise_proposal", json!({ "id": id, "focus": "x".repeat(301) })).await.contains("the most is 300"));
         for kind in ["build", "review"] {
-            assert!(r.err("revise_proposal", json!({ "id": id, "kind": kind })).await.contains("Builds and reviews are started by the person"), "{kind}");
+            assert!(r.err("revise_proposal", json!({ "id": id, "kind": kind })).await.contains("a chained build or review keeps its kind"), "{kind}");
         }
         r.ok("revise_proposal", json!({ "id": id, "kind": "triage" })).await;
         let triage = spec_of(&r.fx.core.proposal_in(&r.fx.scope, &id).await.unwrap().unwrap());
@@ -1230,7 +1291,7 @@ mod tests {
             assert!(e.contains("Only an investigation can run without a ticket") && e.contains(kind), "{e}");
         }
         for kind in ["build", "review"] {
-            assert!(go(json!({ "kind": kind, "repo": "acme/webshop", "prompt": QUESTION })).await.contains("Builds and reviews are started by the person"), "{kind}");
+            assert!(go(json!({ "kind": kind, "repo": "acme/webshop", "prompt": QUESTION })).await.contains("Pip can't propose a build or review on its own"), "{kind}");
         }
         let ok = json!({ "kind": "investigate", "repo": "acme/webshop", "prompt": QUESTION });
         let with = |k: &str, v: Value| {
@@ -1323,7 +1384,7 @@ mod tests {
         for kind in ["triage", "plan", "verify"] {
             assert!(r.err("revise_proposal", json!({ "id": id, "prompt": "q", "kind": kind })).await.contains("Only an investigation can run without a ticket"), "{kind}");
         }
-        assert!(r.err("revise_proposal", json!({ "id": id, "prompt": "q", "kind": "build" })).await.contains("Builds and reviews are started by the person"));
+        assert!(r.err("revise_proposal", json!({ "id": id, "prompt": "q", "kind": "build" })).await.contains("Pip can't propose a build or review on its own"));
         r.ok("revise_proposal", json!({ "id": id, "prompt": "<<<TICKET q TICKET>>>", "kind": "investigate" })).await;
         assert_eq!(spec_of(&r.fx.core.proposal_in(&r.fx.scope, &id).await.unwrap().unwrap()).instruction, "q");
 
@@ -1564,5 +1625,299 @@ mod tests {
         assert!(r.err("revise_proposal", json!({ "id": id, "body": "Pip again" })).await.contains("edited this follow-up"));
         let listed = r.ok("list_proposals", json!({})).await;
         assert!(listed.contains("follow-up for run"), "{listed}");
+    }
+
+    #[test]
+    fn a_build_or_review_is_refused_without_the_run_it_follows_and_other_kinds_name_what_pip_may_ask_for() {
+        assert_eq!(kind_of("build", None).unwrap_err(), BUILD_NEEDS_PLAN);
+        assert_eq!(kind_of("review", None).unwrap_err(), REVIEW_NEEDS_BUILD);
+        assert!(BUILD_NEEDS_PLAN.contains("pass from_run with the plan run's id from list_runs") && REVIEW_NEEDS_BUILD.contains("a finished build whose pull request has been found"));
+        assert_eq!(kind_of("build", Some("r1")), Ok(RunKind::Build));
+        assert_eq!(kind_of("review", Some("r1")), Ok(RunKind::Review));
+        assert_eq!(kind_of("triage", None), Ok(RunKind::Triage));
+        let other = kind_of("deploy", Some("r1")).unwrap_err();
+        assert!(other.starts_with("kind must be investigate or triage or plan or verify or build or review"), "{other}");
+    }
+
+    mod chain {
+        use super::*;
+        use crate::codehost::github::testserver::draft_pull_reply;
+        use crate::domain::CodeChangeState;
+        use crate::inbox::testing::fixture_watching_with;
+
+        const PLAN: &str = "## Approach\n\nRound in one place.\n\n## Steps\n\n1. Fix the rounding.\n2. Add a test.\n\nFor Jira:\nPlan attached to the run.";
+        const BUILT: &str = "Fixed the rounding in cart.rs and added a test.\n\nFor Jira:\nDraft PR opened: https://github.com/acme/webshop/pull/12";
+        const FOUND: &str = "I read the consumer.\n\nFor Jira:\nThe cart rounds twice, in cart.rs and in checkout.rs.";
+        const EXTRA: &str = "Marker: also check the refund path.";
+
+        async fn chain_rig() -> Rig {
+            let fx = fixture_watching_with(&["acme/webshop"], vec![("/repos/acme/webshop/pulls/12", vec![draft_pull_reply(12, Some("acme/webshop"), "main")])]).await;
+            rig_on(fx).await
+        }
+
+        async fn rig_on(fx: Fixture) -> Rig {
+            fx.add_item(2).await;
+            let clone = fx.home.join("webshop");
+            std::fs::create_dir_all(clone.join(".git")).unwrap();
+            let clone = clone.canonicalize().unwrap();
+            let planner = FakePlanner::new(clone.clone());
+            let changes = Arc::new(AtomicUsize::new(0));
+            let counter = changes.clone();
+            let runs: PipRuns = Arc::default();
+            runs.lock().unwrap().insert("run-1".into(), PipRun::new(fx.scope.clone()));
+            let st = McpState {
+                core: fx.core.clone(),
+                tokens: Default::default(),
+                sink: Arc::new(move |_| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                }),
+                view: Arc::new(|_, _, _| {}),
+                runs,
+                planner: planner.clone(),
+            };
+            Rig { fx, st, planner, changes, clone }
+        }
+
+        impl Rig {
+            /// A finished run of `kind` on `key`, in workstream `ws` or none, whose whole answer is `result`.
+            async fn finished(&self, n: u32, key: &str, kind: RunKind, ws: Option<&str>, result: &str) -> Run {
+                let spec = RunSpec { kind, instruction: String::new(), clone_path: self.clone.clone(), name: format!("eng-1-chain-{n:04x}"), workstream: ws.map(Into::into), ..run_spec() };
+                let p = self.fx.core.draft_run(spec, Some(self.fx.item(key))).await.unwrap();
+                let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
+                let mut run = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+                run.state = RunState::Done;
+                run.result = Some(result.into());
+                run.result_complete = true;
+                run.short_id = crate::runs::cli::ShortId::parse(&format!("cd34{n:04x}"));
+                run.ended_at = Some(Utc::now());
+                self.fx.core.save_run(&run).await.unwrap();
+                run
+            }
+
+            /// The build's draft pull request, as a GitHub sync caches it.
+            fn found_pr(&self, build: &Run) {
+                let mut change = crate::codehost::links::tests::pr(12, &format!("worktree-{}", build.spec.name), "T", "");
+                change.state = CodeChangeState::Open;
+                self.fx.core.with_code_db("github:ann", |db| db.upsert_code_changes(&[change], "2026-09-29T00:00:00Z")).unwrap();
+            }
+
+            /// Pip's conversation in workstream `ws`, as request `id`.
+            fn join(&self, id: &str, ws: &str) {
+                self.st.runs.lock().unwrap().insert(id.into(), PipRun::in_workstream(self.fx.scope.clone(), ws));
+            }
+
+            async fn ask(&self, id: &str, args: Value) -> (String, bool) {
+                let r = call_tool(&self.st, id, &json!({ "name": "propose_run", "arguments": args })).await;
+                (r["content"][0]["text"].as_str().unwrap().to_string(), r["isError"].as_bool().unwrap())
+            }
+
+            async fn ask_ok(&self, id: &str, args: Value) -> Proposal {
+                let (text, error) = self.ask(id, args).await;
+                assert!(!error, "{text}");
+                self.fx.core.proposal_in(&self.fx.scope, &id_in(&text)).await.unwrap().unwrap()
+            }
+
+            async fn ask_err(&self, id: &str, args: Value) -> String {
+                let (text, error) = self.ask(id, args).await;
+                assert!(error, "should have failed: {text}");
+                text
+            }
+
+            async fn workstream(&self) -> String {
+                self.fx.core.open_workstream(&self.fx.scope, Some(self.fx.item("CA-1")), None).await.unwrap().id
+            }
+
+            /// The plan run's Gossamr Plan description draft, made as the run finished.
+            async fn plan_draft(&self, plan: &Run) -> Proposal {
+                self.fx.core.auto_draft_run_plan_description(&plan.id).await.unwrap().unwrap()
+            }
+
+            /// The person adds `EXTRA` to the plan draft and approves it.
+            async fn settle(&self, plan: &Run) {
+                let made = self.plan_draft(plan).await;
+                let Intent::Rewrite { body: Some(b), .. } = &made.intent else { panic!() };
+                let body = format!("{}\n\n{EXTRA}", b.to.to_markdown());
+                self.fx.core.edit_proposal(&made.id, &crate::inbox::Edit::Rewrite { title: None, body: Some(body) }).await.unwrap();
+                assert_eq!(self.fx.core.approve_proposal(&made.id).await.unwrap().state, ProposalState::Applied);
+            }
+        }
+
+        #[tokio::test]
+        async fn a_build_after_a_settled_plan_in_the_workstream_is_one_pip_draft_carrying_the_edited_plan_and_a_draft_pull_request() {
+            let r = chain_rig().await;
+            let ws = r.workstream().await;
+            let plan = r.finished(1, "CA-1", RunKind::Plan, Some(&ws), PLAN).await;
+            r.settle(&plan).await;
+            r.join("in-ws", &ws);
+            let (runs, jira) = (r.runs().await, r.fx.tracker.intents().len());
+
+            let (reply, error) = r.ask("in-ws", json!({ "key": "CA-1", "kind": "build", "from_run": plan.id, "focus": "Keep the diff small" })).await;
+            assert!(!error, "{reply}");
+            assert!(reply.contains(&format!("following run {}", plan.id)) && reply.contains("has not started") && reply.contains("Don't tell the user it is under way"), "{reply}");
+            let draft = r.fx.core.proposal_in(&r.fx.scope, &id_in(&reply)).await.unwrap().unwrap();
+            assert_eq!((draft.created_by, draft.state.clone()), (CreatedBy::Pip, ProposalState::Pending));
+            assert_eq!(draft.origin, Origin::Chat { request_id: "in-ws".into(), workstream: Some(ws.clone()) });
+            let spec = spec_of(&draft);
+            assert_eq!((spec.kind, spec.instruction.as_str(), spec.repo.as_str()), (RunKind::Build, default_instruction(RunKind::Build), "acme/webshop"));
+            assert_eq!((spec.plan_from_run.as_deref(), spec.plan_approved, spec.allow_push), (Some(plan.id.as_str()), true, true));
+            assert_eq!((spec.focus.as_deref(), spec.focus_from_run.as_deref(), spec.workstream.as_deref()), (Some("Keep the diff small"), Some(plan.id.as_str()), Some(ws.as_str())));
+            let text = spec.plan.clone().unwrap();
+            assert!(text.contains("Round in one place.") && text.ends_with(EXTRA) && !text.contains("Drafted by an agent run"), "{text}");
+            assert!(draft.basis.is_some());
+
+            let review = r.fx.core.runs_review(&draft.id).await.unwrap();
+            assert!(review.prompt.contains("gh pr create --draft") && review.prompt.contains("Never mark the pull request ready"), "{}", review.prompt);
+            assert!(review.prompt.contains("A person read, edited and approved the plan below."));
+            assert_eq!(r.runs().await, runs, "nothing started");
+            assert_eq!(r.fx.tracker.intents().len(), jira, "nothing was written to Jira");
+
+            let again = r.ask_err("in-ws", json!({ "key": "CA-1", "kind": "build", "from_run": plan.id })).await;
+            assert!(again.contains("identical draft is already open") && again.contains(&draft.id), "{again}");
+            let builds = r.drafts().await.into_iter().filter(|p| matches!(&p.intent, Intent::StartRun { spec, .. } if spec.kind == RunKind::Build)).count();
+            assert_eq!(builds, 1);
+        }
+
+        #[tokio::test]
+        async fn a_build_waits_for_the_person_to_settle_the_plan_and_needs_a_finished_plan_of_this_ticket_and_workstream() {
+            let r = chain_rig().await;
+            let ws = r.workstream().await;
+            r.join("in-ws", &ws);
+            let investigation = r.finished(1, "CA-1", RunKind::Investigate, Some(&ws), FOUND).await;
+            let plan = r.finished(2, "CA-1", RunKind::Plan, Some(&ws), PLAN).await;
+            let pending = r.plan_draft(&plan).await;
+
+            let build = |from: &str| json!({ "key": "CA-1", "kind": "build", "from_run": from });
+            assert!(r.ask_err("in-ws", build(&plan.id)).await.contains("the person hasn't settled the plan yet: they approve or skip the Gossamr Plan draft first"));
+            let wrong = r.ask_err("in-ws", build(&investigation.id)).await;
+            assert!(wrong.contains("A build can only follow a finished plan run") && wrong.contains("is a investigate run"), "{wrong}");
+            assert!(r.ask_err("in-ws", build("missing")).await.contains("no run missing"));
+
+            // Skipping the plan draft settles it too: the build then follows the run's own answer, and says so.
+            r.fx.core.skip_proposal(&pending.id).await.unwrap();
+            let unedited = spec_of(&r.ask_ok("in-ws", build(&plan.id)).await);
+            assert_eq!((unedited.plan_approved, unedited.allow_push), (false, true));
+
+            let working = r.finished(3, "CA-1", RunKind::Plan, Some(&ws), PLAN).await;
+            r.fx.core.save_run(&Run { state: RunState::Working, ..working.clone() }).await.unwrap();
+            assert!(r.ask_err("in-ws", build(&working.id)).await.contains("that plan run hasn't finished"));
+
+            let loose = r.finished(4, "CA-1", RunKind::Plan, None, PLAN).await;
+            assert!(r.ask_err("in-ws", build(&loose.id)).await.contains(&format!("run {} isn't part of this workstream", loose.id)));
+            let other_ticket = r.finished(5, "CA-2", RunKind::Plan, None, PLAN).await;
+            assert!(r.ask_err("run-1", build(&other_ticket.id)).await.contains("that plan run is about another ticket"));
+            let theirs = r.ask_err("run-1", build(&plan.id)).await;
+            assert!(theirs.contains(&format!("run {} belongs to another workstream; ask in that workstream's conversation", plan.id)), "{theirs}");
+            let repo_gone = r.finished(6, "CA-1", RunKind::Plan, Some(&ws), PLAN).await;
+            r.fx.core.save_run(&Run { spec: RunSpec { repo: "acme/elsewhere".into(), ..repo_gone.spec.clone() }, ..repo_gone.clone() }).await.unwrap();
+            r.fx.core.skip_proposal(&r.plan_draft(&repo_gone).await.id).await.unwrap();
+            assert!(r.ask_err("in-ws", build(&repo_gone.id)).await.contains("isn't a repository you watch"));
+            assert_eq!(r.drafts().await.iter().filter(|p| p.created_by == CreatedBy::Pip).count(), 1, "only the build from the settled plan");
+        }
+
+        #[tokio::test]
+        async fn a_build_pip_drafts_outside_a_workstream_does_not_push() {
+            let r = chain_rig().await;
+            let plan = r.finished(1, "CA-1", RunKind::Plan, None, PLAN).await;
+            r.settle(&plan).await;
+            let draft = r.ask_ok("run-1", json!({ "key": "CA-1", "kind": "build", "from_run": plan.id })).await;
+            let spec = spec_of(&draft);
+            assert_eq!((spec.allow_push, spec.plan_approved, spec.workstream.as_deref()), (false, true, None));
+            assert_eq!(draft.origin, Origin::chat("run-1"));
+            assert!(!r.fx.core.runs_review(&draft.id).await.unwrap().prompt.contains("gh pr create"));
+        }
+
+        #[tokio::test]
+        async fn a_review_follows_a_finished_build_whose_pull_request_was_found_pinned_to_its_commit_with_a_report_and_no_focus() {
+            let r = chain_rig().await;
+            let ws = r.workstream().await;
+            r.join("in-ws", &ws);
+            let build = r.finished(1, "CA-1", RunKind::Build, Some(&ws), BUILT).await;
+            let review = |focus: Option<&str>| match focus {
+                Some(f) => json!({ "key": "CA-1", "kind": "review", "from_run": build.id, "focus": f }),
+                None => json!({ "key": "CA-1", "kind": "review", "from_run": build.id }),
+            };
+            let refused = r.ask_err("in-ws", review(None)).await;
+            assert!(refused.contains("that build has no pull request in this repository yet") && refused.contains("Gossamr asked GitHub for it; draft the review once get_workstream no longer says the build is waiting"), "{refused}");
+            r.found_pr(&build);
+            assert_eq!(r.ask_err("in-ws", review(Some("the tests"))).await, "A review judges the change on its own; it takes no focus note.");
+            let runs = r.runs().await;
+
+            let draft = r.ask_ok("in-ws", review(None)).await;
+            assert_eq!((draft.created_by, draft.origin.clone()), (CreatedBy::Pip, Origin::Chat { request_id: "in-ws".into(), workstream: Some(ws.clone()) }));
+            let spec = spec_of(&draft);
+            assert_eq!((spec.kind, spec.pr, spec.pr_sha.as_deref(), spec.base.as_str()), (RunKind::Review, Some(12), Some("a1b2c3d4e5f6"), "main"));
+            assert_eq!((spec.build_from_run.as_deref(), spec.report, spec.focus.as_deref(), spec.allow_push), (Some(build.id.as_str()), true, None, false));
+            assert!(spec.build_account.as_deref().unwrap().starts_with("Fixed the rounding"));
+            assert_eq!(spec.instruction, default_instruction(RunKind::Review));
+            let read = r.fx.core.runs_review(&draft.id).await.unwrap();
+            assert!(read.prompt.contains("Review pull request #12 in acme/webshop at commit a1b2c3d4e5f6.") && !read.prompt.contains("<<<FOCUS"), "{}", read.prompt);
+            assert!(r.ask_err("in-ws", review(None)).await.contains("identical draft is already open"));
+            assert_eq!(r.runs().await, runs);
+            assert!(r.fx.tracker.intents().is_empty());
+
+            let plan = r.finished(2, "CA-1", RunKind::Plan, Some(&ws), PLAN).await;
+            let wrong = r.ask_err("in-ws", json!({ "key": "CA-1", "kind": "review", "from_run": plan.id })).await;
+            assert!(wrong.contains("A review can only follow a finished build whose pull request has been found"), "{wrong}");
+        }
+
+        #[tokio::test]
+        async fn pip_s_triage_and_plan_after_a_finished_investigation_carry_its_findings() {
+            let r = chain_rig().await;
+            let ws = r.workstream().await;
+            r.join("in-ws", &ws);
+            let investigation = r.finished(1, "CA-1", RunKind::Investigate, Some(&ws), FOUND).await;
+            let triage = spec_of(&r.ask_ok("in-ws", json!({ "key": "CA-1", "kind": "triage" })).await);
+            assert_eq!((triage.findings.as_deref(), triage.findings_from_run.as_deref()), (Some("The cart rounds twice, in cart.rs and in checkout.rs."), Some(investigation.id.as_str())));
+            let plan = spec_of(&r.ask_ok("in-ws", json!({ "key": "CA-1", "kind": "plan", "from_run": investigation.id })).await);
+            assert_eq!(plan.findings_from_run.as_deref(), Some(investigation.id.as_str()));
+            assert!(plan.findings.is_some());
+
+            // In General, only the investigation it names counts; with none named there are no findings.
+            let loose = r.finished(2, "CA-1", RunKind::Investigate, None, FOUND).await;
+            let plain = spec_of(&r.ask_ok("run-1", json!({ "key": "CA-1", "kind": "triage" })).await);
+            assert_eq!((plain.findings, plain.findings_from_run), (None, None));
+            let named = spec_of(&r.ask_ok("run-1", json!({ "key": "CA-1", "kind": "plan", "from_run": loose.id })).await);
+            assert_eq!(named.findings_from_run.as_deref(), Some(loose.id.as_str()));
+            let verify = spec_of(&r.ask_ok("in-ws", json!({ "key": "CA-1", "kind": "verify" })).await);
+            assert_eq!((verify.findings, verify.findings_from_run), (None, None));
+        }
+
+        #[tokio::test]
+        async fn a_chained_draft_keeps_its_kind_and_a_review_takes_no_focus_when_revised() {
+            let r = chain_rig().await;
+            let ws = r.workstream().await;
+            r.join("in-ws", &ws);
+            let plan = r.finished(1, "CA-1", RunKind::Plan, Some(&ws), PLAN).await;
+            r.settle(&plan).await;
+            let build = r.ask_ok("in-ws", json!({ "key": "CA-1", "kind": "build", "from_run": plan.id })).await;
+            let st = &r.st;
+            let revise = |args: Value| async move { call_tool(st, "in-ws", &json!({ "name": "revise_proposal", "arguments": args })).await };
+            let to_triage = revise(json!({ "id": build.id, "kind": "triage" })).await;
+            assert!(to_triage["content"][0]["text"].as_str().unwrap().contains("a chained build or review keeps its kind; retire it and propose another"));
+            assert_eq!(revise(json!({ "id": build.id, "focus": "Only cart.rs" })).await["isError"], false);
+            let after = spec_of(&r.fx.core.proposal_in(&r.fx.scope, &build.id).await.unwrap().unwrap());
+            assert_eq!((after.focus.as_deref(), after.kind, after.plan.is_some(), after.allow_push), (Some("Only cart.rs"), RunKind::Build, true, true));
+
+            let built = r.finished(2, "CA-1", RunKind::Build, Some(&ws), BUILT).await;
+            r.found_pr(&built);
+            let review = r.ask_ok("in-ws", json!({ "key": "CA-1", "kind": "review", "from_run": built.id })).await;
+            assert!(revise(json!({ "id": review.id, "focus": "x" })).await["content"][0]["text"].as_str().unwrap().contains("takes no focus note"));
+            assert!(revise(json!({ "id": review.id, "kind": "verify" })).await["content"][0]["text"].as_str().unwrap().contains("keeps its kind"));
+
+            let triage = r.ask_ok("in-ws", json!({ "key": "CA-1", "kind": "triage" })).await;
+            for kind in ["build", "review"] {
+                assert!(revise(json!({ "id": triage.id, "kind": kind })).await["content"][0]["text"].as_str().unwrap().contains("keeps its kind"), "{kind}");
+            }
+        }
+
+        #[tokio::test]
+        async fn without_a_ticket_pip_still_cannot_draft_a_build_or_review() {
+            let r = rig_on(crate::inbox::testing::fixture_watching(&["acme/webshop"]).await).await;
+            for kind in ["build", "review"] {
+                r.err("propose_run", json!({ "kind": kind, "repo": "acme/webshop", "prompt": "Ship it" })).await;
+                r.err("propose_run", json!({ "kind": kind, "repo": "acme/webshop", "prompt": "Ship it", "from_run": "x" })).await;
+            }
+            assert!(r.drafts().await.is_empty());
+        }
     }
 }

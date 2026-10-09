@@ -173,6 +173,12 @@ describe("grouped by workstream", () => {
   };
   const linked = () => run("working", { id: "w1", queuedAt: iso(1), spec: { ...eight()[0].spec, kind: "investigate", workstream: "ws-1" } });
 
+  it("says on the workstream's stage chip that its build waits for its pull request", () => {
+    const out = screen({ runs: [linked()], group: "workstream", workstreams: [{ ...ws, waitingForPr: "b9" }] });
+    expect(out).toMatch(/data-stage="investigate" data-waiting-for-pr="b9"[^>]*>Investigate · waiting for PR</);
+    expect(screen({ runs: [linked()], group: "workstream", workstreams: [ws] })).not.toContain("waiting for PR");
+  });
+
   it("offers Group by with State pressed by default", () => {
     const out = screen();
     expect(out).toContain('aria-label="Group by"');

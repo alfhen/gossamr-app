@@ -27,6 +27,7 @@ import type {
   ProposalEdit,
   ProposalQuery,
   ProposalsChanged,
+  RunKind,
   RunQuery,
   RunSpec,
   RunsChanged,
@@ -405,6 +406,9 @@ export class MockBackend implements Backend {
     };
     this.runs.ticketDoc = (ref) => this.connector.item(ref)?.body ?? null;
     this.runs.pullRequest = (repo, number) => this.github.code.change(repo, number);
+    // A draft pull request a build opened turns up on the code host, which ends its workstream's wait for it.
+    this.runs.onPullRequest = (change) => this.github.code.addPullRequest(change);
+    this.workstreams.prOf = (runId) => this.runs.pullRequestOf(runId);
     this.runs.seedPlanDescriptions();
     exposeMockClock(this.runs, this.workstreams);
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
@@ -719,8 +723,13 @@ export class MockBackend implements Backend {
     return this.proposals.pipRevise(id, change, requestId ? this.workstreamOfRequest(requestId) : null);
   }
 
-  pipRunDraft(item: ItemRef, focus: string | null, requestId: string) {
-    return this.runs.pipDraft(item, focus, requestId, this.workstreamOfRequest(requestId));
+  pipWorkstreamItem(id: string): ItemRef | null {
+    const key = this.workstreams.get(id)?.workstream.itemKey;
+    return key ? itemRef(key) : null;
+  }
+
+  pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string) {
+    return this.runs.pipDraft(item, kind, fromRun, focus, requestId, this.workstreamOfRequest(requestId));
   }
 
   pipFollowUp(runId: string, message: string, reason: string, requestId: string) {
@@ -1082,6 +1091,8 @@ export class MockBackend implements Backend {
   }
 
   async syncNow() {
+    // A sync finds the draft pull requests builds opened.
+    this.runs.surfacePullRequests();
     const [kind, key, who, text] = SIMULATED[this.simulated++ % SIMULATED.length];
     this.update((s) => {
       const actor = P[who];

@@ -165,7 +165,7 @@ describe("Pip and a plan's description draft", () => {
   const screen = { view: "Agents", selection: [], item: null, filter: null, run: null } as never;
   const ask = (b: MockBackend, text: string, discussed: string | null) => scriptPip(text, screen, [], b.runs.list(), NOW, b.proposals.list(), discussed);
 
-  it("reads the draft when asked to chat it over, and shortens it only when asked and never after the person edited it", async () => {
+  it("reads the draft when asked to chat it over and only suggests a shorter plan, since a build follows it and only the person changes it", async () => {
     const b = sample();
     const run = planRun(b);
     const [draft] = rewrites(b);
@@ -173,12 +173,9 @@ describe("Pip and a plan's description draft", () => {
     expect(first.discussed).toBe(draft.id);
     expect(first.revise).toBeUndefined();
     const script = ask(b, "shorter please", draft.id);
-    expect(script.revise?.id).toBe(draft.id);
-    const revised = b.proposals.pipRevise(draft.id, { description: script.revise!.description });
-    if (revised.intent.type !== "rewrite" || !revised.intent.body || draft.intent.type !== "rewrite") throw new Error("a rewrite");
-    expect(revised.revisions[revised.revisions.length - 1]?.note).toBe("Revised by Pip");
-    expect(revised.intent.body.toText).toContain("## Gossamr Plan");
-    expect(revised.intent.body.toText.length).toBeLessThan(draft.intent.body!.toText.length);
+    expect(script.revise).toBeUndefined();
+    expect(script.text).toContain("## Gossamr Plan");
+    expect(() => b.proposals.pipRevise(draft.id, { description: "Pip's tighter plan" })).toThrow("carries the Gossamr Plan a build follows");
     await b.proposalsEdit(draft.id, { type: "rewrite", body: "The person's own words" });
     expect(() => b.proposals.pipRevise(draft.id, { description: "Pip again" })).toThrow("edited this description draft");
   });

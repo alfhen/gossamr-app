@@ -214,7 +214,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
       set({ project });
       // A run on a ticket with an open workstream belongs to it, so the person's own runs group with Pip's.
       const workstream = item ? useWorkstreams.getState().forItem(item.key, item.connectionId)?.workstream.id : undefined;
-      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: kind === "build", report: get().reportAvailable, plan: null, planFromRun: kind === "build" ? planFromRun : null, buildAccount: null, buildFromRun: kind === "review" ? buildFromRun : null, project, ...(workstream ? { workstream } : {}) };
+      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: kind === "build", report: kind === "review" || get().reportAvailable, plan: null, planFromRun: kind === "build" ? planFromRun : null, buildAccount: null, buildFromRun: kind === "review" ? buildFromRun : null, project, ...(workstream ? { workstream } : {}) };
       const draft = await backend.runsDraft(spec, item);
       if (!current(mine)) return void backend.proposalsSkip(draft.id).catch(() => {});
       set({ proposalId: draft.id, ownDraft: true });
@@ -244,8 +244,8 @@ export const useRunSetup = create<SetupState>((set, get) => {
       try {
         await loadRepos(mine);
         if (!current(mine)) return;
-        const carried = (p: Proposal) => p.state.type === "pending" && p.intent.type === "startRun" && (planFromRun ? p.intent.spec.planFromRun === planFromRun : p.intent.spec.buildFromRun === buildFromRun);
-        const waiting = planFromRun || buildFromRun ? Object.values(workspace.proposals).find(carried) : findRunDraft(workspace.proposals, item, kind, pr);
+        // A build or review that follows a run opens the draft already following it, Pip's included.
+        const waiting = findRunDraft(workspace.proposals, item, kind, pr, planFromRun || buildFromRun ? { planFromRun, buildFromRun } : undefined);
         // A ticketless draft from before projects existed would end as a comment with nowhere to go.
         const reusable = waiting?.intent.type === "startRun" && ticketlessShape(item, kind) && !waiting.intent.spec.project ? undefined : waiting;
         const id = proposalId ?? reusable?.id;

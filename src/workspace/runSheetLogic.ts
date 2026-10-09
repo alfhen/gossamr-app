@@ -1,6 +1,6 @@
 import { answerProblem } from "../lib/answer";
 import { containerKey, itemKey } from "../lib/filter";
-import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type ResultSource, type Run, type RunKind, type RunOutcome, type RunReview, type RunSpec, type WorkContainer } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type Run, type RunKind, type RunOutcome, type RunReview, type RunSpec, type WorkContainer } from "../types";
 import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
@@ -49,7 +49,7 @@ export function startSteps(ticketless: boolean): readonly string[] {
 }
 
 export interface PromptPart {
-  id: "base" | "template" | "extra" | "focus" | "plan" | "account" | "ticket" | "all";
+  id: "base" | "template" | "extra" | "focus" | "findings" | "plan" | "account" | "ticket" | "all";
   label: string;
   text: string;
 }
@@ -62,6 +62,9 @@ export const PLAN_INTRO_UNEDITED = "The plan below is the planning run's own ans
 
 /** Starts the builder's account part of a review's prompt: the sentence about checking it, then the account between its markers. As `BUILD_ACCOUNT_PREFACE` in `domain/run.rs`. */
 export const ACCOUNT_INTRO = "The builder's own account of what it did is below.";
+
+/** Starts the findings part of a triage's or plan's prompt: the sentence about weighing them, then the findings between their markers. As `FINDINGS_PREFACE` in `domain/run.rs`. */
+export const FINDINGS_INTRO = "What an earlier investigation found is below.";
 
 /**
  * Cuts the prompt the backend rendered into the parts the person reads. The parts are slices of that prompt, so
@@ -94,16 +97,17 @@ export function splitPrompt(review: Pick<RunReview, "prompt" | "instruction">): 
   const plans = [block(PLAN_INTRO, "\nPLAN>>>"), block(PLAN_INTRO_UNEDITED, "\nPLAN>>>")].filter((b) => b.at >= 0);
   const plan = plans.sort((a, b) => a.at - b.at)[0] ?? { at: -1, end: 0, open: false };
   const account = block(ACCOUNT_INTRO, "\nBUILD>>>");
-  const ticketAt = plan.open || account.open ? -1 : ticketFound >= Math.max(plan.end, account.end) ? ticketFound : -1;
+  const findings = block(FINDINGS_INTRO, "\nFINDINGS>>>");
+  const ticketAt = plan.open || account.open || findings.open ? -1 : ticketFound >= Math.max(plan.end, account.end, findings.end) ? ticketFound : -1;
   const focusFound = find("Focus from Pip (");
-  const focusAt = focusFound >= 0 && (plan.at < 0 || focusFound < plan.at) && (account.at < 0 || focusFound < account.at) && (ticketAt < 0 || focusFound < ticketAt) ? focusFound : -1;
-  const starts = ([["focus", focusAt], ["plan", plan.at], ["account", account.at], ["ticket", ticketAt]] as const).filter(([, at]) => at >= 0).sort((a, b) => a[1] - b[1]);
+  const focusAt = focusFound >= 0 && [findings.at, plan.at, account.at, ticketAt].every((at) => at < 0 || focusFound < at) ? focusFound : -1;
+  const starts = ([["focus", focusAt], ["findings", findings.at], ["plan", plan.at], ["account", account.at], ["ticket", ticketAt]] as const).filter(([, at]) => at >= 0).sort((a, b) => a[1] - b[1]);
   const extra = rest.slice(0, starts.length ? starts[0][1] : undefined).trim();
   const parts: PromptPart[] = [];
   if (base) parts.push({ id: "base", label: "Which branch it starts from", text: base });
   parts.push({ id: "template", label: "What to do", text: instruction });
   if (extra) parts.push({ id: "extra", label: "Added for this run", text: extra });
-  starts.forEach(([id, at], i) => parts.push({ id, label: id === "ticket" ? "Ticket" : id === "focus" ? "Focus" : id === "plan" ? "Plan" : "The builder's account", text: rest.slice(at, starts[i + 1]?.[1]).trim() }));
+  starts.forEach(([id, at], i) => parts.push({ id, label: id === "ticket" ? "Ticket" : id === "focus" ? "Focus" : id === "findings" ? "Findings" : id === "plan" ? "Plan" : "The builder's account", text: rest.slice(at, starts[i + 1]?.[1]).trim() }));
   const joined = parts.map((p) => p.text).join("\n\n");
   return joined === prompt ? parts : whole;
 }
@@ -271,12 +275,35 @@ export type TimelineTone = "find" | "ask" | "err" | "plain";
 
 export const timelineTone = (kind: string): TimelineTone => (kind === "done" ? "find" : kind === "ask" ? "ask" : kind === "error" ? "err" : "plain");
 
-/** A pending run draft for the same ticket and kind, so choosing Investigate twice opens one draft. With no ticket only the person's own draft is reused: Pip's question is its own, reached from where it was proposed. */
-export function findRunDraft(proposals: Record<string, Proposal> | readonly Proposal[], item: ItemRef | null, kind: RunKind, pr?: number): Proposal | undefined {
+/** The finished run a build or review draft follows: the plan run of a build, the build run of a review. */
+export interface RunDraftSource {
+  planFromRun?: string | null;
+  buildFromRun?: string | null;
+}
+
+/**
+ * A pending run draft for the same ticket and kind, so choosing Investigate twice opens one draft. With no ticket only the person's own draft is reused: Pip's question is its own, reached from where it was proposed.
+ * With `from`, the draft of that kind that follows that run, whoever made it, Pip included: 'Build from this plan' opens Pip's chain draft rather than making a second one.
+ */
+export function findRunDraft(proposals: Record<string, Proposal> | readonly Proposal[], item: ItemRef | null, kind: RunKind, pr?: number, from?: RunDraftSource): Proposal | undefined {
   const all = Array.isArray(proposals) ? proposals : Object.values(proposals);
   const wanted = item ? itemKey(item) : null;
+  const follows = (p: Proposal) => {
+    if (p.intent.type !== "startRun" || !from) return false;
+    const spec = p.intent.spec;
+    return from.planFromRun ? spec.planFromRun === from.planFromRun : !!from.buildFromRun && spec.buildFromRun === from.buildFromRun;
+  };
+  const chained = !!(from?.planFromRun || from?.buildFromRun);
   return all
-    .filter((p) => p.state.type === "pending" && p.intent.type === "startRun" && p.intent.spec.kind === kind && (pr === undefined || p.intent.spec.pr === pr) && (p.intent.item ? itemKey(p.intent.item) : null) === wanted && (wanted !== null || p.createdBy !== "pip"))
+    .filter(
+      (p) =>
+        p.state.type === "pending" &&
+        p.intent.type === "startRun" &&
+        p.intent.spec.kind === kind &&
+        (chained
+          ? follows(p)
+          : (pr === undefined || p.intent.spec.pr === pr) && (p.intent.item ? itemKey(p.intent.item) : null) === wanted && (wanted !== null || p.createdBy !== "pip")),
+    )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
@@ -423,7 +450,11 @@ export function reviewThisControl(run: BuiltRun, change: Pick<CodeChange, "kind"
   if (!run.item) return no("A review from a build needs a ticket, and this build isn't about one.");
   if (!run.result?.trim()) return no("It finished without a written answer, so there is nothing to check against.");
   if (run.resultComplete === false) return no(`${SUMMARY_ONLY} A review can only follow a build Gossamr has read in full.`);
-  if (!change || change.kind !== "pullRequest" || change.number == null) return no("This build has no pull request yet. Push it and open one, or ask it to, then review it.");
+  if (!change || change.kind !== "pullRequest" || change.number == null) {
+    // A build asked to push opened its own draft pull request; only a sync hasn't found it yet.
+    if (run.spec.allowPush) return no("Its draft pull request hasn't been found on GitHub yet. Gossamr asked for a sync when it finished; Review this turns on once it shows.");
+    return no("This build has no pull request yet. Push it and open one, or ask it to, then review it.");
+  }
   if (change.repo.toLowerCase() !== run.spec.repo.toLowerCase() || (change.headRepo && change.headRepo.toLowerCase() !== run.spec.repo.toLowerCase())) return no("Its pull request isn't from a branch in the same repository, which Gossamr doesn't review yet.");
   if (change.state === "merged" || change.state === "closed") return no(`Its pull request is ${change.state}, so there is nothing to review.`);
   return { enabled: true, reason: null };
@@ -463,6 +494,17 @@ export function runTicketDraftOf(proposals: Record<string, Proposal> | readonly 
 
 /** What the card and the sheet say once the person approved the run's ticket, or null before. */
 export const createdFrom = (run: Pick<Run, "createdItem">) => (run.createdItem ? `Ticket ${run.createdItem.key} created from this` : null);
+
+/** A review's verdict in a few words for its sheet: "Blocking: 2 blocking findings" or "Pass". */
+export function verdictText(review: Pick<ReviewView, "verdict" | "blocking">): string {
+  if (review.verdict === "pass") return "Pass";
+  return `Blocking: ${review.blocking} blocking finding${review.blocking === 1 ? "" : "s"}`;
+}
+
+/** A review's verdict as its card's chip shows it: "Blocking · 2" or "Pass". */
+export const verdictChip = (review: Pick<ReviewView, "verdict" | "blocking">) => (review.verdict === "pass" ? "Pass" : `Blocking · ${review.blocking}`);
+
+export const SEVERITY_LABEL: Record<ReviewSeverity, string> = { blocking: "Blocking", "should-fix": "Should fix", nit: "Nit" };
 
 /** How the result on the sheet was read, as a short chip: where it came from, and whether Gossamr understood its shape. */
 export const SOURCE_CHIP: Record<ResultSource, { label: string; warn: boolean }> = {
