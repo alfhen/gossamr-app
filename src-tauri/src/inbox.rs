@@ -260,8 +260,9 @@ impl Core {
         // While the identity still resolves: Pip's conversations are the person's own and go with them.
         if connection.is_some() {
             match self.with_db(|db| db.clear_pip_turns()).await {
-                Err(Error::SiteChanged) => {}
-                other => other?,
+                Ok(()) | Err(Error::SiteChanged) | Err(Error::NotSignedIn) => {}
+                // Signing out never depends on the database; the rows stay in this account's own file.
+                Err(e) => eprintln!("couldn't forget Pip's conversations on sign-out: {e}"),
             }
         }
         self.auth.sign_out().await?;

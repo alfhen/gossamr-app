@@ -78,6 +78,19 @@ test("text typed after ArrowUp never decides a draft and lands in the input", as
   await page.keyboard.press("Enter");
   await expect(pipPane(page).getByText("show me the drafts", { exact: true })).toBeVisible();
 
+  await input.fill("");
+  await input.press("ArrowUp");
+  await expect(draft).toBeFocused();
+  await page.keyboard.type("just checking");
+  await expect(input).toHaveValue("just checking");
+
+  await input.fill("");
+  await input.press("ArrowUp");
+  await page.keyboard.type("okay");
+  // Had o opened the ticket, the input would hold "kay" or lose the focus.
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("okay");
+
   await expect(stateOf(draft)).toHaveText("Draft");
   await expect(comments).toHaveCount(0);
 });

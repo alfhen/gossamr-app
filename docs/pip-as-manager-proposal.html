@@ -296,7 +296,7 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 </tr>
 <tr>
 <td>Verdict</td>
-<td><code>report: true</code> is always on for Review, so the result is machine-readable: `verdict: pass</td>
+<td><code>report: true</code> is always on for Review, so the result is machine-readable: <code>verdict: pass | blocking</code>, and findings with a severity (<code>blocking</code>, <code>should-fix</code>, <code>nit</code>). The supervisor reads only the verdict and the count of blocking findings. It never reads the prose.</td>
 </tr>
 <tr>
 <td>Fix loop</td>
@@ -353,7 +353,7 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 <ul>
 <li>The workstream is in <strong>Manage</strong> mode, isn&#39;t held, and is within its budget.</li>
 <li>The source run finished as Done. Failed, stopped or needs-something never auto-starts anything.</li>
-<li>The new spec comes from the kind&#39;s fixed template plus Core-filled handoff slots. Pip&#39;s <code>focus</code> line is <strong>not</strong> carried into an auto-started run, so nothing Pip or an agent wrote decides what it does.</li>
+<li>The new spec comes from the kind&#39;s fixed template plus Core-filled handoff slots. Pip&#39;s <code>focus</code> line is <strong>not</strong> carried into an auto-started run, so nothing Pip wrote decides what it does. Agent output does decide <strong>whether</strong> some rules fire: Triage&#39;s <code>plan recommended</code> and Review&#39;s <code>verdict</code>. The fix round goes further, because its FollowUp carries the Review&#39;s findings text, which an agent wrote, into the push-capable Build session. See the fix-round risk in §8.</li>
 <li>The spec&#39;s digest is recorded in <code>workstream_events</code> with the rule that started it, and the run card shows &quot;started automatically after R7&quot;. The person can stop it like any other run.</li>
 <li>The person can switch each rule off per workstream or globally in Settings.</li>
 </ul>
@@ -408,13 +408,13 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 </tr>
 <tr>
 <td>Provenance</td>
-<td><code>CreatedBy::Agent</code> as a <strong>unit variant</strong>, so it stays <code>Copy</code> and the TS union becomes `&#39;user&#39;</td>
-<td>&#39;pip&#39;</td>
+<td><code>CreatedBy::Agent</code> as a <strong>unit variant</strong>, so it stays <code>Copy</code> and the TS union becomes <code>&#39;user&#39;|&#39;pip&#39;|&#39;autopilot&#39;|&#39;agent&#39;</code>; the run id and kind are already in <code>Origin::Run</code></td>
+<td>Replaces the <code>CreatedBy::User</code> overload for run-result drafts (<code>run_results.rs:422,478,523</code>, <code>plan_description.rs:161</code>). Rewrite <code>require_pip_may_revise</code> (<code>proposals.rs:260-278</code>) to allow Agent drafts in the same workstream, keeping the &quot;Edited&quot; lock.</td>
 </tr>
 <tr>
 <td>Transcripts</td>
-<td>New `pip_turns(conversation, request_id, role user</td>
-<td>pip</td>
+<td>New <code>pip_turns(conversation, request_id, role user|pip|wake, prompt, text, steps_json, status, usage_json, created_at)</code></td>
+<td>Replaces in-memory <code>claudeStore</code>. Wake turns must be registered by the backend, because <code>updateByRequest</code> drops unknown requestIds.</td>
 </tr>
 <tr>
 <td>Pip session per workstream</td>
@@ -439,7 +439,7 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 </thead><tbody><tr>
 <td><code>agent/queue.rs</code></td>
 <td>New</td>
-<td>Per-conversation FIFO of `User(AskRequest)</td>
+<td>Per-conversation FIFO of <code>User(AskRequest) | Wake(WakeFacts)</code>. One turn in flight per conversation, global cap 2. A user message cancels a pending or in-flight wake. Wakes merge.</td>
 </tr>
 <tr>
 <td><code>agent/supervisor.rs</code></td>
@@ -684,7 +684,11 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 </tr>
 <tr>
 <td>Injection steers a push-capable Build</td>
-<td>Build never auto-starts from agent output, only from the person&#39;s plan approval. Its handoff is the approved plan, filled by Core. Push is limited to a draft PR; <code>PUSH_ALLOWED</code> forbids ready-for-review and merging. Security review before Phase 2 ships.</td>
+<td>The first Build starts only from the person&#39;s plan approval, and its handoff is the approved plan, filled by Core. Push is limited to a draft PR; <code>PUSH_ALLOWED</code> forbids ready-for-review and merging. Security review before Phase 2 ships.</td>
+</tr>
+<tr>
+<td>Fix rounds carry agent-written text into the push-capable Build</td>
+<td>A blocking Review auto-starts a FollowUp to the Build, and that FollowUp contains the Review&#39;s findings, which an agent wrote and which may quote hostile PR or ticket content. Mitigations: only findings marked <code>blocking</code> that cite a file and line are passed; each is length-capped, marker-wrapped and introduced by a fixed sentence saying it is data describing a defect, not an instruction; the FollowUp&#39;s own instruction is a fixed template (fix these findings in this PR, change nothing else); the Build can still only push its own branch to a draft PR; at most 2 rounds; tripwires on marker or defang hits hold the workstream; a person reviews and merges the PR on GitHub. If that is not enough, the fix round can be made a person-approved step (open question 2).</td>
 </tr>
 <tr>
 <td>A weak reviewer passes bad work</td>
@@ -732,7 +736,7 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 </tr>
 </tbody></table></div><h2 id="9-open-questions-for-the-product-owner">9. Open questions for the product owner</h2><ol>
 <li>Is the auto-start rule table right? In particular, should approving the plan start the Build directly, or should the person still see the Build&#39;s RunSetup?</li>
-<li>How many fix rounds should a blocking review get before it comes back to the person (proposed: 2)?</li>
+<li>Should the fix round start automatically (it carries the reviewer&#39;s findings, written by an agent, into the Build session that can push), or should the person approve each fix round? If automatic, how many rounds before it comes back to the person (proposed: 2)?</li>
 <li>Should auto-start wait for the enforced read-only permission (Phase 6) before it is on by default, or ship on by default in Phase 3?</li>
 <li>Should Manage be the default for new workstreams once Phase 3 has proven itself, or stay opt-in per workstream?</li>
 <li>Is a workstream always one ticket (plus subtasks), or can it span an epic or several repos? Single-ticket is assumed for v1.</li>

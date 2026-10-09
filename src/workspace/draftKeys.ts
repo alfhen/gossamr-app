@@ -45,12 +45,15 @@ interface KeyEventLike {
   altKey: boolean;
   shiftKey?: boolean;
   preventDefault(): void;
+  /** React's: whether a handler nearer the target already took the key. */
+  isDefaultPrevented?(): boolean;
 }
 
 interface Focusable {
   focus(): void;
   scrollIntoView?(arg?: ScrollIntoViewOptions): void;
   getAttribute(name: string): string | null;
+  setAttribute?(name: string, value: string): void;
 }
 
 interface CardRoot {
@@ -66,6 +69,9 @@ const show = (card: Focusable) => {
   card.scrollIntoView?.({ block: "nearest" });
 };
 
+/** Marks a card that ArrowUp from the empty input just reached; the card clears it on its first key or when it loses focus. */
+export const FROM_INPUT = "data-from-input";
+
 /** Letters the conversation steps between cards with; they are never typing. */
 const STEPS = new Set(["j", "k"]);
 
@@ -77,6 +83,8 @@ interface CardActs {
   ask(asking: Asking | null): void;
   /** Takes text the person was typing back to the input; false when there is no input to take it. */
   type?(text: string): boolean;
+  /** The card was reached by ArrowUp from the empty input and this is its first key. */
+  fromInput?: boolean;
 }
 
 /**
@@ -91,6 +99,14 @@ export function onDraftCardKey(ev: KeyEventLike, p: Proposal, asking: Asking | n
   const still = asking && draftKeyAction(p, asking === "approve" ? "a" : "s") === asking;
   const confirmed = !still ? undefined : asking === "approve" ? act.approve : act.skip;
   if (asking) act.ask(null);
+  // Just reached from the empty input, a letter is more likely the start of a new question than a card key: it goes back
+  // to the input, j, k and o included. a and s keep their meaning, which never writes on one key: they ask for Enter on a
+  // decision, and the letter after them goes back too; on a run draft a opens its setup, which starts nothing.
+  if (act.fromInput && !asking && ev.key.length === 1 && act.type && ev.key !== "a" && ev.key !== "s") {
+    if (!act.type(ev.key)) return false;
+    ev.preventDefault();
+    return true;
+  }
   if (!ev.shiftKey) {
     if (confirmed && ev.key === "Enter") {
       ev.preventDefault();
@@ -137,7 +153,7 @@ export function focusAfterLeaving(card: unknown, root: CardRoot, input: Focusabl
 /** ArrowDown and j move to the next draft card in the conversation, ArrowUp and k to the previous one. Only from a focused card. */
 export function stepDraftCards(ev: KeyEventLike, root: CardRoot): boolean {
   const step = ev.key === "ArrowDown" || ev.key === "j" ? 1 : ev.key === "ArrowUp" || ev.key === "k" ? -1 : 0;
-  if (!step || !plain(ev) || !isCard(ev.target)) return false;
+  if (!step || !plain(ev) || !isCard(ev.target) || ev.isDefaultPrevented?.()) return false;
   // Taken even at either end, so j and k never fall through to stepping the canvas behind the pane.
   ev.preventDefault();
   const cards = Array.from(root.querySelectorAll(DRAFT_CARD)) as Focusable[];
@@ -153,6 +169,7 @@ export function upToNewestDraft(ev: Pick<KeyEventLike, "key" | "metaKey" | "ctrl
   const newest = cards.filter((c) => c.getAttribute("data-state") === "pending").pop();
   if (!newest) return false;
   ev.preventDefault();
+  newest.setAttribute?.(FROM_INPUT, "");
   show(newest);
   return true;
 }

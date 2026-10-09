@@ -11,7 +11,7 @@ import { showMe } from "./jump";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { nextPass } from "./followUp";
-import { PIP_INPUT_ID, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, type Asking } from "./draftKeys";
+import { FROM_INPUT, PIP_INPUT_ID, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, type Asking } from "./draftKeys";
 import { usePip } from "./pipStore";
 
 const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺" };
@@ -162,7 +162,12 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
         pointer.current = true;
         setTimeout(() => (pointer.current = false), 0);
       }}
-      onKeyDown={(ev) => armed && onDraftCardKey(ev, p, asking, { approve: decide(onApprove), skip: decide(onSkip), open: onOpen, ask: setAsking, type: typeIntoInput })}
+      onKeyDown={(ev) => {
+        if (!armed) return;
+        const fromInput = ev.target === ev.currentTarget && ev.currentTarget.hasAttribute(FROM_INPUT);
+        if (ev.target === ev.currentTarget) ev.currentTarget.removeAttribute(FROM_INPUT);
+        onDraftCardKey(ev, p, asking, { approve: decide(onApprove), skip: decide(onSkip), open: onOpen, ask: setAsking, type: typeIntoInput, fromInput });
+      }}
       onFocus={(ev) => {
         const byPointer = pointer.current;
         pointer.current = false;
@@ -170,6 +175,7 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
       }}
       onBlur={(ev) => {
         if (ev.target !== ev.currentTarget) return;
+        ev.currentTarget.removeAttribute(FROM_INPUT);
         setArmed(false);
         setAsking(null);
       }}
