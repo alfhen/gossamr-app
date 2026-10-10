@@ -486,18 +486,19 @@ impl Core {
     }
 
     /// The person wrote in workstream `id`'s conversation: Pip's automatic turns count from zero again, and a budget
-    /// hold is lifted. Only a person's message does this. A closed or unknown workstream changes nothing.
+    /// hold is lifted unless the wakes still use the budget up. Only a person's message does this. A closed or unknown
+    /// workstream changes nothing.
     pub async fn person_wrote_in_workstream(&self, scope: &Scope, id: &str) -> Result<()> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
         self.with_db_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(()) };
             let reset = ws.spent.auto_turns > 0;
-            let resumed = ws.held_reason.as_deref() == Some(HELD_BUDGET);
+            ws.spent.auto_turns = 0;
+            let resumed = ws.held_reason.as_deref() == Some(HELD_BUDGET) && budget_level(&ws) != BudgetLevel::Spent;
             if !reset && !resumed {
                 return Ok(());
             }
-            ws.spent.auto_turns = 0;
             if resumed {
                 ws.held_reason = None;
             }
@@ -1022,6 +1023,31 @@ mod tests {
         fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
         assert_eq!(fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap().spent.wakes, 3);
         assert!(!actions(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap())[4..].iter().any(|(_, a)| *a == "budget_reset"));
+    }
+
+    #[tokio::test]
+    async fn the_person_writing_keeps_a_budget_hold_the_wakes_still_use_up_and_lifts_it_otherwise() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, None, Some("Budgeted".into())).await.unwrap();
+        let mut spent = ws.clone();
+        spent.spent.auto_turns = 3;
+        spent.spent.wakes = 12;
+        fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&spent)).await.unwrap();
+        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
+        fx.core.person_wrote_in_workstream(&fx.scope, &ws.id).await.unwrap();
+        let after = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+        assert_eq!((after.workstream.held_reason.as_deref(), after.workstream.spent.auto_turns, after.budget.level), (Some(HELD_BUDGET), 0, BudgetLevel::Spent), "the wakes still use it up");
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(actions(&events)[1..], [(Actor::Supervisor, "held"), (Actor::Person, "budget_reset")], "never resumed");
+        // With the wakes within the budget, the hold is lifted.
+        let mut within = after.workstream.clone();
+        within.spent.auto_turns = 6;
+        within.spent.wakes = 9;
+        fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&within)).await.unwrap();
+        fx.core.person_wrote_in_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream.held_reason, None);
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(actions(&events)[3..], [(Actor::Person, "resumed"), (Actor::Person, "budget_reset")]);
     }
 
     #[tokio::test]

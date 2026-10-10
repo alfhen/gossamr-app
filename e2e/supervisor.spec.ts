@@ -8,6 +8,7 @@ import {
   jiraWrites,
   mockRuns,
   openApp,
+  PIP_INPUT,
   peekSheet,
   peekTicket,
   pipConversation,
@@ -463,6 +464,23 @@ test("Hold all, from the rail or with its shortcut, stops a running wake and eve
   expect(await wakeTurns(page)).toBe(1);
   expect((await actions(page, "wake")).map((e) => e.runId).sort()).toEqual([r1.id, r2.id].sort());
   expect(await jiraWrites(page)).toEqual([]);
+});
+
+test("the Hold all shortcut does nothing while the person types in Pip's input", async ({ page }) => {
+  await openApp(page, MANAGED);
+  await startWorkstream(page, "CA-401");
+  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
+  const input = page.locator(PIP_INPUT);
+  await input.fill("Hold on");
+  await input.focus();
+  await page.keyboard.press("ControlOrMeta+Shift+Period");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("Hold on");
+  await expect(heldBanner(page)).toHaveCount(0);
+  expect((await workstreamEvents(page)).some((e) => e.action === "held")).toBe(false);
+  // Away from the field, it holds.
+  await holdAll(page, "shortcut");
+  await expect(heldBanner(page)).toHaveText(/^Held: Hold all/);
 });
 
 // The sample's runs don't outlive the tab, so Resume here has no finished run to wake Pip for; that each finished run

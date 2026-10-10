@@ -174,5 +174,9 @@ export const heldBanner = (page: Page) => pipPane(page).locator("[data-held-bann
 /** Presses Hold all: the rail's button, or Cmd/Ctrl+Shift+Period. */
 export async function holdAll(page: Page, by: "button" | "shortcut" = "button") {
   if (by === "button") await page.getByRole("button", { name: "Hold all workstreams" }).click();
-  else await page.keyboard.press("ControlOrMeta+Shift+Period");
+  else {
+    // From outside any field, as the shortcut does nothing while the person types.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("ControlOrMeta+Shift+Period");
+  }
 }

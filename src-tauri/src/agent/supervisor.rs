@@ -1221,7 +1221,9 @@ impl Supervisor {
         });
     }
 
-    /// The retry after a quota miss: lifts the quota hold, if that is still what holds it, and wakes Pip again.
+    /// The retry after a quota miss: lifts the quota hold, if that is still what holds it, and wakes Pip again. Held
+    /// for something else, the facts are let go of, so setting it going wakes Pip for them; no longer held (the person
+    /// set it going before the backoff ran out), they are delivered all the same.
     async fn retry(&self, facts: WakeFacts) {
         let ws = facts.workstream.clone();
         if let Some(q) = self.quota.lock().expect("lock poisoned").get_mut(&ws) {
@@ -1230,7 +1232,16 @@ impl Supervisor {
         let Ok(scope) = self.core.scope().await else { return };
         match self.core.lift_workstream_hold(&scope, &ws, HELD_QUOTA).await {
             Ok(Some(lifted)) => (self.changed)(&lifted.connection_id),
-            Ok(None) => return,
+            Ok(None) => {
+                let held = match self.core.workstream(&scope, &ws).await {
+                    Ok(view) => view.is_none_or(|v| v.workstream.held_reason.is_some()),
+                    Err(_) => true,
+                };
+                if held {
+                    self.unmark(facts).await;
+                    return;
+                }
+            }
             Err(e) => {
                 eprintln!("couldn't lift the quota hold of workstream {ws}: {e}");
                 return;

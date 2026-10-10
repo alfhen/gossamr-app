@@ -451,12 +451,17 @@ impl AgentService {
         match entered {
             WakeEntered::Merged(id) => {
                 recorded(self.core.pip_turn_forget(&scope, &request_id).await);
-                let lines = match self.queue.lock().expect("lock poisoned").waiting(&id) {
-                    Some(QueueItem::Wake { facts, .. }) => Some(event_line(facts)),
-                    _ => None,
+                let waiting = {
+                    let queue = self.queue.lock().expect("lock poisoned");
+                    match queue.waiting(&id) {
+                        Some(QueueItem::Wake { facts, sink, .. }) => Some((event_line(facts), sink.clone(), queue.position(&id).unwrap_or(0))),
+                        _ => None,
+                    }
                 };
-                if let Some(lines) = lines {
+                if let Some((lines, sink, ahead)) = waiting {
                     recorded(self.core.pip_wake_lines(&scope, &id, &lines).await);
+                    // The page reads the merged lines from the stored turn when it hears of the wake again.
+                    sink(Update { request_id: id, event: AgentEvent::Queued { ahead } });
                 }
                 Ok(true)
             }

@@ -424,6 +424,23 @@ describe("holding and managing a mock workstream", () => {
     expect(store.get(spent.id)?.budget.level).toBe("ok");
   });
 
+  it("keeps a budget hold when the person writes while the wakes still use the budget up, and lifts it otherwise", () => {
+    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    const ws = store.open(null, "spent");
+    store.hold(ws.id, "budget", "supervisor");
+    const spend = (s: object) => {
+      (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === ws.id)!.spent = s;
+    };
+    spend({ autoTurns: 3, wakes: 12, tokens: 0 });
+    store.personWrote(ws.id);
+    expect(store.get(ws.id)?.workstream).toMatchObject({ heldReason: "budget", spent: { autoTurns: 0, wakes: 12 } });
+    expect(store.events(ws.id).map((e) => e.action)).toEqual(["opened", "held", "budget_reset"]);
+    spend({ autoTurns: 6, wakes: 9, tokens: 0 });
+    store.personWrote(ws.id);
+    expect(store.get(ws.id)?.workstream.heldReason).toBeNull();
+    expect(store.events(ws.id).map((e) => e.action)).toEqual(["opened", "held", "budget_reset", "resumed", "budget_reset"]);
+  });
+
   it("holds every open workstream on Hold all, once", async () => {
     const backend = new MockBackend();
     const a = await backend.workstreamsOpen(CA401);
