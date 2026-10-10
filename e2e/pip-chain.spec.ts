@@ -147,6 +147,12 @@ test("in one workstream Pip drafts investigate, triage with findings, plan, a bu
   // Approving Pip's build is the only way it starts.
   await openNewestDraft(page);
   await expect(setup(page).locator("[data-pip-chain]")).toHaveText(id ?? "");
+  // A Build launches as before: the exact command carries no read-only flag.
+  await setup(page).locator("summary", { hasText: "Show the exact command" }).click();
+  const command = setup(page).locator("details", { has: page.locator("summary", { hasText: "Show the exact command" }) });
+  await expect(command).toContainText("claude --bg --name");
+  await expect(command).not.toContainText("--permission-mode");
+  await expect(command).not.toContainText("--setting-sources");
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
   await expect(page.getByText("Agent started on CA-401.", { exact: false }).last()).toBeVisible();

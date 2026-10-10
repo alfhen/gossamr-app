@@ -9,7 +9,8 @@ import { AgentCard } from "./AgentCard";
 import { CLOSED_INLINE, InlineStartView, type InlineActions } from "./InlineStart";
 import { RunSetupView, type SetupViewProps } from "./RunSetup";
 import { RunSheetView, type RunSheetActions } from "./RunSheet";
-import { COPY } from "./runSheetLogic";
+import { AgentRow } from "./AgentRow";
+import { COPY, MAY_TOUCH_READ_ONLY, READ_ONLY_STEPS } from "./runSheetLogic";
 
 // What the person is shown of the restriction Claude Code enforces on a read-only kind: the headline and the note where an
 // agent is started, the exact flags and rules in "What Gossamr adds for the model", the badge on the card, and the rules a
@@ -106,6 +107,31 @@ describe("a read-only kind where it is started", () => {
         expect(listed(html, "data-read-only-allow")).toEqual(["Bash(git fetch origin main)", "Bash(git checkout --detach origin/main)"]);
         expect(html).toContain(esc(READ_ONLY_GUARD));
         expect(html).not.toContain(COPY.notALock);
+        expect(html).toContain("--setting-sources &#x27;&#x27;");
+        expect(html).toContain("--strict-mcp-config");
+        // An Investigate runs no tests, so neither the headline nor the note mentions them.
+        expect(html).not.toContain(COPY.readOnlyTests);
+        expect(html).not.toContain(esc(COPY.readOnlyTestsNote));
+        // Its run-as-you line is the read-only one: it doesn't run with the person's settings.
+        expect(html).toContain(esc(COPY.runAsYouReadOnly));
+        expect(html).not.toContain(esc(COPY.runAsYou));
+      });
+
+      it("says a Review or Verify runs the repository's tests, whose code can write, instead of promising no writes", () => {
+        for (const kind of ["review", "verify"] as const) {
+          const html = render(reviewOf({ kind, pr: kind === "review" ? 12 : null }));
+          expect(html).toContain(esc(COPY.readOnlyTests));
+          expect(html).toContain(esc(COPY.readOnlyTestsNote));
+          expect(html).not.toContain(`${COPY.readOnly}<`);
+        }
+      });
+
+      it("lists the read-only rules before the report tool's, the order the guard lines are sent in", () => {
+        const html = render(reviewOf({ kind: "investigate", report: true }));
+        const withReport = { ...reviewOf({ kind: "investigate", report: true }), report: { allowed: "mcp__run-report__report_result", guard: "REPORT LINE" } };
+        const shown = render(withReport);
+        expect(html).toContain("data-read-only-extras");
+        expect(shown.indexOf("data-read-only-extras")).toBeLessThan(shown.indexOf("data-report-extras"));
       });
 
       it("shows none of it for a Build, and the request-not-a-lock copy as before", () => {
@@ -122,7 +148,24 @@ describe("a read-only kind where it is started", () => {
 
   it("lists a review's pull request head and test runners among the allowed commands", () => {
     const html = setup(reviewOf({ kind: "review", pr: 512, prSha: "abc1234" }));
-    expect(listed(html, "data-read-only-allow")).toEqual(expect.arrayContaining(["Bash(git fetch origin pull/512/head)", "Bash(git checkout --detach abc1234)", "Bash(cargo test *)"]));
+    expect(listed(html, "data-read-only-allow")).toEqual(expect.arrayContaining(["Bash(git fetch origin pull/512/head)", "Bash(git checkout --detach abc1234)", "Bash(cargo test)"]));
+  });
+});
+
+describe("the setup sheet's exact command", () => {
+  it("carries the read-only flags and guard sentence for an Investigate, and none for a Build", () => {
+    const investigate = setup(reviewOf({ kind: "investigate" }));
+    const command = /<pre[^>]*>(cd [\s\S]*?)<\/pre>/.exec(investigate)?.[1] ?? /(cd &#x27;[\s\S]*?)<\/(?:pre|code|div)>/.exec(investigate)?.[1] ?? "";
+    expect(command).toContain("--permission-mode &#x27;dontAsk&#x27; --setting-sources &#x27;&#x27; --strict-mcp-config --allowedTools");
+    expect(command).toContain("--disallowedTools");
+    expect(command).toContain(esc(READ_ONLY_GUARD));
+    const build = setup(reviewOf({ kind: "build" }));
+    expect(build).not.toContain("--permission-mode");
+  });
+
+  it("tells the read-only steps of starting, which never stop for a permission prompt", () => {
+    expect(setup(reviewOf({ kind: "investigate" }))).toContain(esc(READ_ONLY_STEPS[1]));
+    expect(setup(reviewOf({ kind: "build" }))).not.toContain(esc(READ_ONLY_STEPS[1]));
   });
 });
 
@@ -138,6 +181,23 @@ describe("a run's sheet and card", () => {
     const old = sheet(run({ readOnly: undefined }), brief);
     expect(old).not.toContain("data-read-only");
     expect(old).not.toContain("--permission-mode");
+  });
+
+  it("says on a read-only run's sheet that pushes are refused, not asked, and keeps the old list for a Build", () => {
+    const restricted = sheet(run({ readOnly: brief.readOnly }), brief);
+    for (const t of MAY_TOUCH_READ_ONLY) expect(restricted).toContain(esc(t.text));
+    expect(restricted).not.toContain("the run stops under Needs you");
+    const builder = sheet(run({ spec: { ...run().spec, kind: "build" }, readOnly: null }), reviewOf({ kind: "build" }));
+    expect(builder).toContain("the run stops under Needs you");
+  });
+
+  it("shows only a shield in a list row, so the title keeps its room", () => {
+    const html = renderToStaticMarkup(<AgentRow run={run({ readOnly: brief.readOnly })} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    const badge = /<span data-read-only="true"[^>]*>[\s\S]*?<\/span>/.exec(html)?.[0] ?? "";
+    expect(badge).toContain('aria-label="Read-only"');
+    expect(badge).not.toMatch(/>Read-only</);
+    expect(html).toMatch(/class="min-w-\[6ch\] truncate font-semibold"/);
+    expect(renderToStaticMarkup(<AgentRow run={run({ readOnly: undefined })} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />)).not.toContain("data-read-only");
   });
 
   it("puts the Read-only badge on a restricted run's card, not on a Build's or an old run's", () => {

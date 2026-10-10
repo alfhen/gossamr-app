@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { ReadOnly, RunReview } from "../types";
 import { Icon } from "./AgentIcons";
 import { Box, BoxTitle, CopyButton, Details, MONO_BLOCK } from "./AgentSheet";
-import { FLAG_LABEL, flagCounts, highlights, readOnlyHeadline, readOnlyNote, splitPrompt, type Flag } from "./runSheetLogic";
+import { COPY, FLAG_LABEL, flagCounts, highlights, readOnlyHeadline, readOnlyNote, splitPrompt, type Flag } from "./runSheetLogic";
 
 const MARK: Record<Flag, string> = {
   link: "rounded bg-ws-accent-soft px-0.5 text-ws-accent underline decoration-dotted",

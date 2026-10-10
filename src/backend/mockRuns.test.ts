@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { Intent, RunSpec, ScreenContext } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
-import { FINDINGS_LIMIT, FINDINGS_PREFACE, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, readOnlyRules, specProblem, withoutMarkers } from "./mockRunKinds";
+import { FINDINGS_LIMIT, FINDINGS_PREFACE, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, READ_ONLY_GUARD, readOnlyRules, specProblem, withoutMarkers } from "./mockRunKinds";
 import { MockSupervisor } from "./mockSupervisor";
 import { mockAsk } from "./mockPip";
-import { MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
+import { GUARD as GUARD_TEXT, MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
 const spec: RunSpec = {
   kind: "investigate",
@@ -840,7 +840,7 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     const launched = b.runs.get(run.id)!;
     expect(launched.state).toBe("launching");
     expect(launched.readOnly).toEqual(readOnlyRules(spec));
-    expect(b.runs.launches()).toEqual([{ runId: run.id, kind: "investigate", readOnly: readOnlyRules(spec), autoStart: null, at: launched.launchedAt }]);
+    expect(b.runs.launches()).toEqual([{ runId: run.id, kind: "investigate", readOnly: readOnlyRules(spec), guard: `${GUARD_TEXT} ${READ_ONLY_GUARD}`, autoStart: null, at: launched.launchedAt }]);
     b.runs.advance(run.id);
     b.runs.advance(run.id);
     expect(b.runs.get(run.id)).toMatchObject({ state: "done", readOnly: readOnlyRules(spec) });
@@ -910,7 +910,9 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     b.runs.surfacePullRequests();
     const review = newest("review");
     finish(review.id);
-    expect(b.runs.launches().find((l) => l.runId === review.id)?.readOnly?.allow).toEqual(expect.arrayContaining([`Bash(git fetch origin pull/${review.spec.pr}/head)`, "Bash(cargo test *)"]));
+    expect(b.runs.launches().find((l) => l.runId === review.id)?.readOnly?.allow).toEqual(expect.arrayContaining([`Bash(git fetch origin pull/${review.spec.pr}/head)`, "Bash(cargo test)"]));
+    expect(b.runs.launches().find((l) => l.runId === review.id)?.guard).toContain(READ_ONLY_GUARD);
+    expect(b.runs.launches().find((l) => l.runId === buildRun.id)?.guard).not.toContain(READ_ONLY_GUARD);
 
     // The review blocked: the fix round resumes the build's session, so nothing new launches and it stays unrestricted.
     expect(b.runs.get(buildRun.id)).toMatchObject({ state: "working", passes: 2, readOnly: null });

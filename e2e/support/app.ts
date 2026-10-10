@@ -105,7 +105,7 @@ type Script = { planRecommended?: boolean; verdict?: "pass" | "blocking"; marker
 /** The restriction a read-only run is launched with (`ReadOnly` in src/types.ts). */
 export type ReadOnly = { mode: string; allow: string[]; deny: string[]; guard: string };
 /** One launch as the mock launcher made it (`MockLaunch` in src/backend/mockRuns.ts). */
-export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; autoStart: string | null; at: string };
+export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; guard: string; autoStart: string | null; at: string };
 interface Handle {
   runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number }[];
   launches(): MockLaunch[];

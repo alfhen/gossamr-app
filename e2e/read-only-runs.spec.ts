@@ -28,7 +28,9 @@ import {
 // launcher records what it would pass for each launch, and the person sees the same rules where a run is started and in
 // what a run was launched with.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
-const READ_ONLY = "Read-only: Claude Code blocks edits and writes";
+const READ_ONLY = "Read-only: Claude Code refuses edits and writes";
+const READ_ONLY_TESTS = "Read-only, except the repository's tests: Claude Code refuses edits and other writes";
+const READ_ONLY_GUARD_START = "This run is read-only: Claude Code itself refuses file edits";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
@@ -78,6 +80,11 @@ function restricted(entry: MockLaunch, kind: string) {
   expect(entry.readOnly?.mode).toBe("dontAsk");
   expect(entry.readOnly?.deny).toEqual(expect.arrayContaining(["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash(git push *)", "Bash(git commit *)", "Bash(rm *)"]));
   expect(entry.readOnly?.allow).toContain("Bash(git fetch origin main)");
+  expect(entry.readOnly).toMatchObject({ settingSources: "", strictMcpConfig: true });
+  expect(entry.readOnly?.allow.every((r) => !r.includes("*"))).toBe(true);
+  // The read-only sentence reaches the launch's guard, after the base text.
+  expect(entry.guard).toContain(READ_ONLY_GUARD_START);
+  expect(entry.guard.indexOf(READ_ONLY_GUARD_START)).toBeGreaterThan(0);
 }
 
 /** The person approves the Gossamr Plan description draft on CA-401 from its peek, as written. */
@@ -121,9 +128,16 @@ test("a person-started investigation shows and launches read-only, and its auto-
   await expect(adds).toContainText("--permission-mode dontAsk");
   const deny = adds.locator("[data-read-only-rules] li");
   for (const rule of ["Edit", "Write", "Bash(git push *)"]) await expect(deny.getByText(rule, { exact: true })).toHaveCount(1);
-  await expect(adds).toContainText("This run is read-only: Claude Code itself refuses file edits");
+  await expect(adds).toContainText(READ_ONLY_GUARD_START);
 
-  // The digest the checks show is the one the approval carries: the restriction is part of what was approved.
+  // The exact command is the restricted launch, flag for flag, and its guard carries the read-only sentence.
+  const command = await openDetails(setup(page), "Show the exact command");
+  await expect(command).toContainText("--permission-mode 'dontAsk' --setting-sources '' --strict-mcp-config --allowedTools 'Bash(git fetch origin main)'");
+  await expect(command).toContainText("--disallowedTools 'Edit' 'Write'");
+  await expect(command).toContainText(READ_ONLY_GUARD_START);
+
+  // The digest the checks show is the one the approval carries. That the restriction is part of that digest is proven
+  // by mockRuns.test.ts and the Rust `pre_phase_6_digest` tests, not here: both sides of this check come from one digest.
   const checks = setup(page).getByRole("group", { name: "Checks before you approve" });
   const shown = /What runs: ([0-9a-f]+)/.exec((await checks.textContent()) ?? "")?.[1];
   expect(shown).toBeTruthy();
@@ -178,6 +192,7 @@ test("a build launches as before; its review is restricted, a fix round goes bac
   const build = await started(page, "build");
   const built = await launch(page, build.id);
   expect(built).toMatchObject({ kind: "build", readOnly: null });
+  expect(built.guard).not.toContain(READ_ONLY_GUARD_START);
   await expect(runCard(page, build.id)).toBeVisible();
   await expect(runCard(page, build.id).locator("[data-read-only]")).toHaveCount(0);
   const sent = await brief(page, build.id);
@@ -193,7 +208,8 @@ test("a build launches as before; its review is restricted, a fix round goes bac
   restricted(reviewed, "review");
   expect(reviewed.autoStart).toBe("build_review");
   expect(reviewed.readOnly!.allow.some((r) => /^Bash\(git fetch origin pull\/\d+\/head\)$/.test(r))).toBe(true);
-  expect(reviewed.readOnly!.allow).toContain("Bash(cargo test *)");
+  expect(reviewed.readOnly!.allow).toContain("Bash(cargo test)");
+  await expect(runCard(page, review.id).locator("[data-read-only]")).toHaveAttribute("title", READ_ONLY_TESTS);
 
   // The default review blocks: the fix round wakes the build's own session, which adds no launch and no restriction.
   const before = (await mockLaunches(page)).length;

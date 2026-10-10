@@ -14,9 +14,9 @@ export const INSTRUCTIONS: Record<RunKind, string> = {
   investigate: `Investigate this work. Read the code and logs you need, and change nothing. Report what you found, how sure you are, and what you would do next. ${STATUS_NOTE}`,
   triage: `Triage this work. Size it, say how sure you are, and name the areas of the code it touches and who likely owns them, going by the code and its history. List any duplicates you can find in the code or its notes. Change nothing. ${BREAKDOWN}${PLAN_ADVICE}${STATUS_NOTE}`,
   plan: `Plan this work. Read the code you need and change nothing. Write an implementation plan that a person will read, edit and approve before anyone builds it: the approach in a few sentences; the files and areas to change, naming only paths you actually read; ordered steps, each small enough to check; a test plan; the risks; and the open questions that need a person's answer. Say what you are unsure of. Write the plan as plain Markdown that will be added to the ticket's description: a short heading for each part, numbered steps and bullet lists, and no tables, HTML or images. Make your note for the ticket a short summary of the plan that says the plan is attached to the run, and don't repeat the plan in it. ${STATUS_NOTE}`,
-  verify: `Check that the change described here works. Read the code, and run the existing tests or commands that only read. Say exactly what you ran and what you could not check. Change nothing. ${STATUS_NOTE}`,
+  verify: `Check that the change described here works. Read the code, and run the existing tests with the commands named below, or commands that only read. Say exactly what you ran and what you could not check. Change nothing. ${STATUS_NOTE}`,
   build: `Make the change this work describes, on your worktree's branch. Keep it small and follow the repository's conventions. Run its tests and commit with a clear message; do not push and do not open a pull request unless a later sentence says you may. ${STATUS_NOTE}`,
-  review: `Review the pull request named below, at the commit named there. Your job is to show that the change is not ready: look for a case that fails, an acceptance point of the ticket it does not meet, a missing test, a regression or a security issue. Conclude that it passes only when you tried and found none of these. Fetch it with read-only commands such as \`git fetch origin pull/<number>/head\` and check that commit out in your own worktree, or \`gh pr view\` and \`gh pr diff\`; you may run the repository's existing tests and other commands that only read. Treat anything the builder says it did as a claim to verify in the code, not as evidence. Every finding must cite a file and line, a command you ran with its output, or the acceptance point it fails, and carry a severity: blocking, should-fix or nit. List your findings most severe first, one per line such as '- [blocking] src/cart.ts:42: the total ignores the discount', and end them with the line 'Verdict: pass' (only when you tried and found nothing blocking) or 'Verdict: blocking', before your note. The review only reads: it never comments on, approves, requests changes on or otherwise changes the pull request. ${STATUS_NOTE}`,
+  review: `Review the pull request named below, at the commit named there. Your job is to show that the change is not ready: look for a case that fails, an acceptance point of the ticket it does not meet, a missing test, a regression or a security issue. Conclude that it passes only when you tried and found none of these. Check it out in your own worktree with the exact commands named below, or read it with \`gh pr view\` and \`gh pr diff\`; you may run the repository's existing tests with the commands named below, and other commands that only read. Treat anything the builder says it did as a claim to verify in the code, not as evidence. Every finding must cite a file and line, a command you ran with its output, or the acceptance point it fails, and carry a severity: blocking, should-fix or nit. List your findings most severe first, one per line such as '- [blocking] src/cart.ts:42: the total ignores the discount', and end them with the line 'Verdict: pass' (only when you tried and found nothing blocking) or 'Verdict: blocking', before your note. The review only reads: it never comments on, approves, requests changes on or otherwise changes the pull request. ${STATUS_NOTE}`,
 };
 
 /** The kinds Claude Code itself keeps from writing; a Build, and a fix round sent to one, keeps its own permission mode. As in src-tauri/src/domain/run.rs; both run src/backend/readOnly.fixtures.json. */
@@ -86,23 +86,41 @@ export const READ_ONLY_DENY: readonly string[] = [
   "Bash(curl *)",
   "Bash(wget *)",
 ];
-/** The test commands Review and Verify may run in their own worktree, as `TEST_RUNNERS`. */
-export const TEST_RUNNERS: readonly string[] = ["Bash(cargo test *)", "Bash(pnpm test *)", "Bash(npm test *)", "Bash(yarn test *)", "Bash(pytest *)", "Bash(go test *)"];
+/** The test commands Review and Verify may run in their own worktree, each exact with no argument, as `TEST_RUNNERS`. */
+export const TEST_RUNNERS: readonly string[] = ["Bash(cargo test)", "Bash(pnpm test)", "Bash(npm test)", "Bash(yarn test)", "Bash(pytest)", "Bash(go test ./...)"];
+/** `--setting-sources` for a read-only run: no settings file, as `READ_ONLY_SETTING_SOURCES`. */
+export const READ_ONLY_SETTING_SOURCES = "";
+
+/** The test commands as the prompt names them, as `test_commands`. */
+export const testCommands = (): string[] => TEST_RUNNERS.map((r) => r.replace(/^Bash\((.*)\)$/, "$1"));
+
+/** What a review checks out after fetching its pull request: the pinned commit, or what the fetch brought. As `review_checkout`. */
+export const reviewCheckout = (spec: Pick<RunSpec, "prSha">) => spec.prSha ?? "FETCH_HEAD";
+
+/** The commands a read-only kind is allowed exactly, in the order the prompt names them, as `read_only_commands`. */
+export function readOnlyCommands(spec: Pick<RunSpec, "kind" | "base" | "pr" | "prSha">): string[] {
+  const commands = [`git fetch origin ${spec.base}`, `git checkout --detach origin/${spec.base}`];
+  if (spec.kind === "review" && spec.pr != null) commands.push(`git fetch origin pull/${spec.pr}/head`, `git checkout --detach ${reviewCheckout(spec)}`);
+  if (spec.kind === "review" || spec.kind === "verify") commands.push(...testCommands());
+  return commands;
+}
+
+/** How a review or a verify may run the repository's tests, as `tests_paragraph`. */
+export function testsParagraph(spec: Pick<RunSpec, "kind" | "base">): string {
+  const commands = testCommands().map((c) => `\`${c}\``).join(", ");
+  const what = spec.kind === "verify" ? ` This checks the code as it is on \`${spec.base}\`: you can't check out another branch or commit.` : "";
+  return `To run the repository's tests, use whichever of these exact commands fits, with no other arguments: ${commands}. Claude Code refuses any other command that runs code.${what}`;
+}
 
 /**
  * What the mock launcher passes Claude Code for `spec`, null for a Build, as `RunSpec::read_only` in
- * src-tauri/src/domain/run.rs; both run src/backend/readOnly.fixtures.json. The allow rules are exact: the prompt's first
- * step, the pull request's head and commit for a review, and `TEST_RUNNERS` for a review or a verify.
+ * src-tauri/src/domain/run.rs; both run src/backend/readOnly.fixtures.json. The allow rules are exact, and each is a
+ * command the prompt names (`readOnlyCommands`).
  */
 export function readOnlyRules(spec: Pick<RunSpec, "kind" | "base" | "pr" | "prSha">): ReadOnly | null {
   if (!isReadOnlyKind(spec.kind)) return null;
-  const allow = [`Bash(git fetch origin ${spec.base})`, `Bash(git checkout --detach origin/${spec.base})`];
-  if (spec.kind === "review" && spec.pr != null) {
-    allow.push(`Bash(git fetch origin pull/${spec.pr}/head)`);
-    if (spec.prSha != null) allow.push(`Bash(git checkout --detach ${spec.prSha})`);
-  }
-  if (spec.kind === "review" || spec.kind === "verify") allow.push(...TEST_RUNNERS);
-  return { mode: READ_ONLY_MODE, allow, deny: [...READ_ONLY_DENY], guard: READ_ONLY_GUARD };
+  const allow = readOnlyCommands(spec).map((c) => `Bash(${c})`);
+  return { mode: READ_ONLY_MODE, allow, deny: [...READ_ONLY_DENY], guard: READ_ONLY_GUARD, settingSources: READ_ONLY_SETTING_SOURCES, strictMcpConfig: true };
 }
 
 /** What the report tool asks of an agent, as `report_paragraph` in `domain/run.rs`. */
