@@ -650,25 +650,24 @@ impl WakeQueue for Failing {
 }
 
 #[tokio::test]
-async fn a_wake_pip_was_gone_for_gives_its_facts_back_and_one_that_failed_otherwise_keeps_them() {
+async fn a_wake_that_failed_before_its_sink_heard_of_it_gives_its_facts_back() {
     let dropped = |actions: Vec<(Actor, String, Option<String>)>| actions.into_iter().filter(|(_, a, _)| a == "wake_dropped").count();
+    let failing = |error: &'static str| async move {
+        let t = setup().await;
+        let sup = Supervisor::new(CoreFacade::new(t.fx.core.clone()), Arc::new(AgentSettings::default), Arc::new(|_, _| {}), Arc::new(|_| {}));
+        sup.bind_queue(Arc::new(Failing(error)));
+        let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+        sup.clone().on_run(r1, Attention::Done).await;
+        assert_eq!(t.wakes().await.len(), 1);
+        dropped(t.actions().await)
+    };
 
-    // Pip shut down between the supervisor's look and the wake: nothing was queued, so the next sweep wakes for it.
-    let t = setup().await;
-    let sup = Supervisor::new(CoreFacade::new(t.fx.core.clone()), Arc::new(AgentSettings::default), Arc::new(|_, _| {}), Arc::new(|_| {}));
-    sup.bind_queue(Arc::new(Failing(PIP_NOT_RUNNING)));
-    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
-    sup.clone().on_run(r1, Attention::Done).await;
-    assert_eq!(t.wakes().await.len(), 1);
-    assert_eq!(dropped(t.actions().await), 1, "the fact is taken back");
-
-    // Any other failure is the queued wake's own to report through its sink.
-    let t = setup().await;
-    let sup = Supervisor::new(CoreFacade::new(t.fx.core.clone()), Arc::new(AgentSettings::default), Arc::new(|_, _| {}), Arc::new(|_| {}));
-    sup.bind_queue(Arc::new(Failing("couldn't start the turn")));
-    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
-    sup.clone().on_run(r1, Attention::Done).await;
-    assert_eq!(dropped(t.actions().await), 0);
+    // Pip shut down between the supervisor's look and the wake, or the wake never got as far as the queue: nothing
+    // was queued, so the facts are taken back and the next sweep wakes for them.
+    assert_eq!(failing(PIP_NOT_RUNNING).await, 1);
+    assert_eq!(failing("Not signed in to Jira").await, 1);
+    // A wake that was queued and then couldn't start was told through its sink, which takes the facts back itself.
+    assert_eq!(failing("Couldn't start: The assistant provider isn't available.").await, 0);
 }
 
 #[tokio::test]

@@ -997,9 +997,9 @@ impl Supervisor {
             },
             Ok(_) => {}
             Err(e) => {
-                // Never queued, so no sink will take the facts back: they wait for the next sweep. A wake that was
-                // queued and then failed to start, or hit the quota, has its sink for that.
-                if matches!(&e, Error::Claude(m) if m == PIP_NOT_RUNNING) {
+                // A wake that failed to start was told through its sink, which takes the facts back or retries on
+                // the quota. Any other error came before the sink was ever called, so the facts go back here.
+                if !matches!(&e, Error::Claude(m) if m.starts_with(WAKE_NOT_STARTED)) {
                     self.unmark(facts).await;
                 }
                 eprintln!("couldn't wake Pip in workstream {ws_id}: {e}");

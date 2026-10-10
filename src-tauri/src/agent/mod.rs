@@ -507,9 +507,10 @@ impl AgentService {
             self.wakes.lock().expect("lock poisoned").remove(&request_id);
             let message = format!("{WAKE_NOT_STARTED}: {e}");
             recorded(self.core.pip_turn_finish(&scope, &request_id, "", false, Some(&message), None, None).await);
-            sink(Update { request_id: request_id.clone(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(message), usage: None } });
+            sink(Update { request_id: request_id.clone(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(message.clone()), usage: None } });
             self.release(&request_id, None);
-            return Err(e);
+            // Its sink was told, which the caller can tell from the error.
+            return Err(Error::Claude(message));
         }
         Ok(())
     }
