@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { Intent, RunSpec } from "../types";
+import type { Intent, RunSpec, ScreenContext } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
-import { FINDINGS_LIMIT, FINDINGS_PREFACE, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, specProblem, withoutMarkers } from "./mockRunKinds";
+import { FINDINGS_LIMIT, FINDINGS_PREFACE, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, readOnlyRules, specProblem, withoutMarkers } from "./mockRunKinds";
+import { MockSupervisor } from "./mockSupervisor";
+import { mockAsk } from "./mockPip";
 import { MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
 const spec: RunSpec = {
@@ -800,5 +802,140 @@ describe("mock runs over the cap wait for a slot, as runs_approve and launch_wai
     const loose = await roomy.approve(1);
     expect(loose.slotWaitSince).toBeUndefined();
     expect(() => roomy.b.runs.stop(loose.id)).toThrow("once it is working");
+  });
+});
+
+describe("mock runs of a read-only kind launch restricted, as RunService::spawn does", () => {
+  const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront" };
+  const build: RunSpec = { ...spec, kind: "build" };
+
+  it("keeps a Build's digest as it was before Phase 6", () => {
+    // Computed before the restriction joined the digest: a Build carries none, so nothing about it changed.
+    expect(readOnlyRules(build)).toBeNull();
+    expect(mockDigest(build)).toBe("mock-ea00e03f");
+    expect(mockDigest({ ...build, allowPush: true, workstream: "ws-1" })).toBe("mock-78e0261c");
+  });
+
+  it("shows a read-only draft's rules in its review and binds them into the digest", async () => {
+    const b = new MockBackend({ runs: { seed: "empty" } });
+    const p = await draft(b);
+    const review = await b.runsReview(p.id);
+    expect(review.readOnly).toEqual(readOnlyRules(spec));
+    expect(review.readOnly).toMatchObject({ mode: "dontAsk", allow: ["Bash(git fetch origin main)", "Bash(git checkout --detach origin/main)"] });
+    expect(review.readOnly?.deny).toEqual(expect.arrayContaining(["Edit", "Write", "Bash(git push *)"]));
+    // The same spec as digested before Phase 6.
+    expect(mockDigest(spec)).not.toBe("mock-bf4bc947");
+    expect(review.digest).toBe(mockDigest(spec));
+    const buildDraft = await draft(b, { kind: "build", name: "ca-412-build-cd34" });
+    expect((await b.runsReview(buildDraft.id)).readOnly).toBeNull();
+  });
+
+  it("records one restricted launch when an approved investigation launches, and nothing more as it works and finishes", async () => {
+    const b = new MockBackend({ runs: { seed: "empty" } });
+    const p = await draft(b);
+    const run = await b.runsApprove(p.id, (await b.runsReview(p.id)).digest);
+    expect(b.runs.launches()).toEqual([]);
+    expect(run.readOnly).toBeUndefined();
+    b.runs.advance(run.id);
+    const launched = b.runs.get(run.id)!;
+    expect(launched.state).toBe("launching");
+    expect(launched.readOnly).toEqual(readOnlyRules(spec));
+    expect(b.runs.launches()).toEqual([{ runId: run.id, kind: "investigate", readOnly: readOnlyRules(spec), autoStart: null, at: launched.launchedAt }]);
+    b.runs.advance(run.id);
+    b.runs.advance(run.id);
+    expect(b.runs.get(run.id)).toMatchObject({ state: "done", readOnly: readOnlyRules(spec) });
+    expect(b.runs.launches()).toHaveLength(1);
+    // The log is handed out as a copy.
+    b.runs.launches()[0].readOnly!.deny.length = 0;
+    expect(b.runs.launches()[0].readOnly?.deny).toEqual(readOnlyRules(spec)?.deny);
+  });
+
+  it("records a Build's launch with no restriction", async () => {
+    const b = new MockBackend({ runs: { seed: "empty" } });
+    const p = await draft(b, { ...build, ...storefront, name: "ca-412-build-cd34" });
+    const run = await b.runsApprove(p.id, (await b.runsReview(p.id)).digest);
+    b.runs.advance(run.id);
+    expect(b.runs.get(run.id)).toMatchObject({ state: "launching", readOnly: null });
+    expect(b.runs.launches()).toEqual([expect.objectContaining({ runId: run.id, kind: "build", readOnly: null, autoStart: null })]);
+  });
+
+  it("records the restriction of a run that waited for a slot when launch_waiting starts it", async () => {
+    const b = new MockBackend({ runs: { seed: "empty", cap: 1 } });
+    const approve = async (n: number, kind: RunSpec["kind"]) => {
+      const made = await b.runsDraft({ ...spec, ...storefront, kind, instruction: "", name: `ca-40${n}-slot` }, itemRef(`CA-40${n}`));
+      return b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    };
+    const first = await approve(1, "investigate");
+    b.runs.advance(first.id);
+    const waiting = await approve(2, "triage");
+    expect(waiting).toMatchObject({ state: "queued", slotWaitSince: expect.any(String) });
+    b.runs.advance(first.id);
+    b.runs.advance(first.id);
+    expect(b.runs.get(waiting.id)).toMatchObject({ state: "launching", slotWaitSince: null, readOnly: readOnlyRules(waiting.spec) });
+    expect(b.runs.launches().map((l) => [l.runId, l.kind, l.readOnly?.mode ?? null])).toEqual([
+      [first.id, "investigate", "dontAsk"],
+      [waiting.id, "triage", "dontAsk"],
+    ]);
+  });
+
+  it("records an auto-started triage's restriction with its rule, and a fix round to the build adds no launch", async () => {
+    const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: true, githubRepos: 12 });
+    b.supervisor.dispose();
+    new MockSupervisor({ runs: b.runs, workstreams: b.workstreams, proposals: b.proposals, wake: () => {}, hasWaitingWake: () => false });
+    const ws = b.workstreams.open(itemRef("CA-401")).id;
+    b.workstreams.setBudget(ws, { autoTurns: 12 });
+    const newest = (kind: RunSpec["kind"]) => b.runs.list({ workstream: ws }).find((r) => r.spec.kind === kind)!;
+    const finish = (id: string) => {
+      for (let i = 0; i < 3 && b.runs.get(id)?.state !== "done"; i++) b.runs.advance(id);
+      expect(b.runs.get(id)?.state).toBe("done");
+    };
+    const made = await b.runsDraft({ ...spec, ...storefront, instruction: "", name: "ca-401-ro", ticketBlock: null, workstream: ws }, itemRef("CA-401"));
+    const r1 = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    finish(r1.id);
+
+    const triage = newest("triage");
+    expect(triage.autoStart?.rule).toBe("investigate_triage");
+    b.runs.advance(triage.id);
+    expect(b.runs.get(triage.id)?.readOnly).toEqual(readOnlyRules(triage.spec));
+    expect(b.runs.launches().find((l) => l.runId === triage.id)).toMatchObject({ kind: "triage", readOnly: { mode: "dontAsk" }, autoStart: "investigate_triage" });
+    finish(triage.id);
+    const plan = newest("plan");
+    finish(plan.id);
+    const planDraft = b.proposals.list({ states: ["pending"] }).find((p) => p.origin.type === "run" && p.origin.runId === plan.id && p.intent.type === "rewrite")!;
+    await b.proposalsApprove(planDraft.id);
+    const buildRun = newest("build");
+    finish(buildRun.id);
+    expect(b.runs.get(buildRun.id)?.readOnly).toBeNull();
+    expect(b.runs.launches().find((l) => l.runId === buildRun.id)).toMatchObject({ readOnly: null, autoStart: "plan_build" });
+    b.runs.surfacePullRequests();
+    const review = newest("review");
+    finish(review.id);
+    expect(b.runs.launches().find((l) => l.runId === review.id)?.readOnly?.allow).toEqual(expect.arrayContaining([`Bash(git fetch origin pull/${review.spec.pr}/head)`, "Bash(cargo test *)"]));
+
+    // The review blocked: the fix round resumes the build's session, so nothing new launches and it stays unrestricted.
+    expect(b.runs.get(buildRun.id)).toMatchObject({ state: "working", passes: 2, readOnly: null });
+    expect(b.runs.launches().map((l) => l.runId)).toEqual([r1.id, triage.id, plan.id, buildRun.id, review.id]);
+  });
+
+  it("adds no launch for an answer or a follow-up, which resume the session with what it was launched with", async () => {
+    const b = new MockBackend({ runs: { seed: "empty" } });
+    const p = await draft(b);
+    const run = await b.runsApprove(p.id, (await b.runsReview(p.id)).digest);
+    b.runs.advance(run.id);
+    b.runs.advance(run.id);
+    b.runs.ask(run.id, "Which branch?");
+    await b.runsAnswer(run.id, "main");
+    expect(b.runs.get(run.id)).toMatchObject({ state: "working", readOnly: readOnlyRules(spec) });
+    expect(b.runs.launches()).toHaveLength(1);
+
+    // A finished plan run of the sample, sent back for another pass through Pip's follow-up draft.
+    const kinds = new MockBackend({ runs: { seed: "kinds", planDescription: true } });
+    const plan = kinds.runs.list().find((r) => r.spec.kind === "plan")!;
+    await mockAsk({ requestId: "r1", prompt: "Send it back for another pass to settle the open questions", context: { view: "board", item: plan.item } as unknown as ScreenContext, images: [], sessionId: undefined } as never, kinds, 0);
+    const followUp = kinds.proposals.list().find((d) => d.intent.type === "followUp")!;
+    await kinds.runsSendFollowUp(followUp.id, (followUp.intent as { message: string }).message);
+    expect(kinds.runs.get(plan.id)).toMatchObject({ state: "working", passes: 2 });
+    expect(kinds.runs.get(plan.id)?.readOnly).toBe(plan.readOnly);
+    expect(kinds.runs.launches()).toEqual([]);
   });
 });

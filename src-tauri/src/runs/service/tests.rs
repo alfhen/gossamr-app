@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use super::*;
 use crate::domain::fixtures::run_spec;
-use crate::domain::RunFailure;
+use crate::domain::{RunFailure, READ_ONLY_GUARD};
 use crate::codehost::github::testserver::{pull_reply, Reply};
 use crate::inbox::testing::{fixture_watching, fixture_watching_with, Fixture};
 use crate::runs::cli::{ClaudeCli, SystemCli};
@@ -107,7 +107,7 @@ async fn a_queued_run_launches_into_its_worktree_with_the_prompt_the_person_appr
     assert_eq!((req.name.as_str(), req.worktree.as_str()), ("Gossamr: CA-1 investigate", "eng-1-fix-cart-0001"));
     assert_eq!(run.spec.name, "eng-1-fix-cart-0001", "the stored name stays the plain slug");
     assert_eq!(run.digest, run.spec.digest(), "the session title is not part of what was approved");
-    assert_eq!(req.guard, GUARD);
+    assert_eq!(req.guard, format!("{GUARD} {READ_ONLY_GUARD}"), "an investigation is read-only");
     assert_eq!(req.prompt, render_prompt(&run.spec));
     assert!(req.prompt.starts_with("Your worktree starts at the clone's current HEAD"));
     assert_eq!(run.expected_worktree, rig.clone.join(".claude/worktrees/eng-1-fix-cart-0001"));
@@ -115,6 +115,103 @@ async fn a_queued_run_launches_into_its_worktree_with_the_prompt_the_person_appr
     let [entry] = rig.svc.index.live().try_into().unwrap();
     assert_eq!((entry.run_id, entry.short_id, entry.expected_worktree), (run.id.clone(), run.short_id.clone(), run.expected_worktree));
     assert!(rig.changes.lock().unwrap().iter().all(|c| *c == run.connection_id) && !rig.changes.lock().unwrap().is_empty());
+}
+
+fn build_spec(rig: &Rig, n: u32) -> RunSpec {
+    RunSpec { kind: RunKind::Build, instruction: crate::domain::default_instruction(RunKind::Build).into(), ..rig.spec(n) }
+}
+
+async fn approved(rig: &Rig, spec: RunSpec) -> Run {
+    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
+    rig.fx.core.runs_approve(&p.id, &digest).await.unwrap()
+}
+
+fn last_launch(rig: &Rig) -> LaunchRequest {
+    rig.cli.0.lock().unwrap().launches.last().cloned().expect("a launch")
+}
+
+#[tokio::test]
+async fn a_read_only_run_launches_with_the_restriction_it_records_and_a_build_with_none() {
+    let rig = ready().await;
+    let queued = rig.queued(1).await;
+    assert_eq!(queued.read_only, None, "nothing is recorded before the launch");
+    rig.svc.launch(&queued.id).await.unwrap();
+    let run = rig.get(&queued).await;
+    let expected = run.spec.read_only().expect("an investigation is read-only");
+    assert_eq!(run.read_only.as_ref(), Some(&expected));
+    let req = last_launch(&rig);
+    assert_eq!(req.read_only.as_ref(), Some(&expected));
+    assert!(req.guard.contains(READ_ONLY_GUARD) && req.guard.starts_with(GUARD));
+    assert_eq!(run.digest, run.spec.digest());
+
+    let build = approved(&rig, build_spec(&rig, 2)).await;
+    rig.svc.launch(&build.id).await.unwrap();
+    let req = last_launch(&rig);
+    assert_eq!((req.read_only.as_ref(), req.guard.as_str()), (None, GUARD), "a build keeps exactly what it had");
+    assert_eq!(rig.get(&build).await.read_only, None);
+}
+
+#[tokio::test]
+async fn every_read_only_kind_carries_the_restriction_into_its_launch() {
+    let rig = build(None, |s| s.with_cap(6)).await;
+    for (n, kind) in [(1, RunKind::Triage), (2, RunKind::Plan), (3, RunKind::Verify)] {
+        let run = approved(&rig, RunSpec { kind, instruction: crate::domain::default_instruction(kind).into(), ..rig.spec(n) }).await;
+        rig.svc.launch(&run.id).await.unwrap();
+        let req = last_launch(&rig);
+        assert_eq!(req.read_only, run.spec.read_only(), "{kind:?}");
+        assert!(req.read_only.as_ref().is_some_and(|ro| ro.mode == "dontAsk" && ro.deny.iter().any(|r| r == "Bash(git push *)")), "{kind:?}");
+        assert_eq!(rig.get(&run).await.state, RunState::Launching, "{kind:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_retried_read_only_run_launches_with_the_restriction_again() {
+    let rig = ready().await;
+    rig.cli.with(|s| s.outcome = Outcome::Exits);
+    let run = rig.queued(1).await;
+    rig.svc.launch(&run.id).await.unwrap();
+    assert_eq!(rig.get(&run).await.state, RunState::Failed);
+    rig.cli.with(|s| s.outcome = Outcome::Starts);
+    let again = rig.svc.retry_launch(&run.id).await.unwrap();
+    assert_eq!(again.state, RunState::Launching);
+    let launches = rig.cli.0.lock().unwrap().launches.clone();
+    assert_eq!(launches.len(), 2);
+    assert!(launches.iter().all(|l| l.read_only == run.spec.read_only() && l.read_only.is_some()));
+    assert_eq!(again.read_only, run.spec.read_only());
+}
+
+#[tokio::test]
+async fn a_read_only_run_that_waited_for_a_slot_launches_with_the_restriction() {
+    let rig = build(None, |s| s.with_cap(1)).await;
+    let build_run = approved(&rig, build_spec(&rig, 1)).await;
+    rig.svc.launch(&build_run.id).await.unwrap();
+    let waiting = rig.queued(2).await;
+    rig.svc.launch(&waiting.id).await.unwrap();
+    assert!(rig.get(&waiting).await.slot_wait_since.is_some());
+    rig.set(&build_run, |r| r.state = RunState::Done).await;
+    rig.svc.index.mark_terminal(&build_run.id).unwrap();
+    assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&waiting.id));
+    let req = last_launch(&rig);
+    assert_eq!(req.read_only, waiting.spec.read_only());
+    assert!(req.read_only.is_some() && req.guard.contains(READ_ONLY_GUARD));
+    assert_eq!(rig.get(&waiting).await.read_only, waiting.spec.read_only());
+}
+
+#[tokio::test]
+async fn a_read_only_run_never_launches_on_a_claude_without_the_restriction_and_a_build_still_does() {
+    let rig = ready().await;
+    rig.cli.with(|s| s.read_only = false);
+    let run = rig.queued(1).await;
+    rig.svc.launch(&run.id).await.unwrap();
+    let failed = rig.get(&run).await;
+    assert_eq!((failed.state, failed.error.as_deref()), (RunState::Failed, Some(Failure::TooOld.to_string().as_str())));
+    assert_eq!((failed.read_only, rig.cli.launches()), (None, 0), "nothing reached the CLI");
+
+    let build = approved(&rig, build_spec(&rig, 2)).await;
+    rig.svc.launch(&build.id).await.unwrap();
+    assert_eq!(rig.get(&build).await.state, RunState::Launching, "a build needs nothing new");
+    assert_eq!(rig.cli.launches(), 1);
 }
 
 #[tokio::test]
@@ -912,17 +1009,18 @@ mod through_the_real_spawner {
     use std::collections::BTreeSet;
 
     const FAKE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/fake-claude.sh");
-    const FORBIDDEN: [&str; 9] = [
-        "--permission-mode",
+    /// Never passed: none of these would make a run safer than the person's own setup, and some would loosen it.
+    const FORBIDDEN: [&str; 6] = [
         "--dangerously-skip-permissions",
-        "--allowedTools",
-        "--disallowedTools",
         "--settings",
         "--setting-sources",
         "--strict-mcp-config",
         "--model",
         "--session-id",
     ];
+
+    /// Passed only for a read-only kind, once each.
+    const READ_ONLY_FLAGS: [&str; 3] = ["--permission-mode", "--allowedTools", "--disallowedTools"];
 
     struct Real {
         rig: Rig,
@@ -979,7 +1077,27 @@ mod through_the_real_spawner {
         let log = calls(&real);
         assert!(!FORBIDDEN.iter().any(|flag| log.lines().any(|l| l == *flag)), "{log}");
         let launch = log.split("---\n").find(|call| call.contains("\n--bg\n")).unwrap();
-        assert!(launch.starts_with(&format!("cwd={}\n--bg\n--name\nGossamr: CA-1 investigate\n--worktree\neng-1-fix-cart-0001\n--append-system-prompt\n{GUARD}\n--\n", real.rig.clone.display())), "{launch}");
+        let ro = run.spec.read_only().unwrap();
+        let expected = format!(
+            "cwd={}\n--bg\n--name\nGossamr: CA-1 investigate\n--worktree\neng-1-fix-cart-0001\n--permission-mode\ndontAsk\n--allowedTools\n{}\n--disallowedTools\n{}\n--append-system-prompt\n{GUARD} {READ_ONLY_GUARD}\n--\n",
+            real.rig.clone.display(),
+            ro.allow.join("\n"),
+            ro.deny.join("\n"),
+        );
+        assert!(launch.starts_with(&expected), "{launch}");
+        assert!(launch.lines().any(|l| l == "Bash(git push *)"), "a rule with spaces is one argument");
+        for flag in READ_ONLY_FLAGS {
+            assert_eq!(launch.lines().filter(|l| *l == flag).count(), 1, "{flag}");
+        }
+
+        let build = RunSpec { kind: RunKind::Build, ..real.rig.spec(2) };
+        let p = real.rig.fx.core.draft_run(build, Some(real.rig.fx.item("CA-1"))).await.unwrap();
+        let digest = real.rig.fx.core.runs_review(&p.id).await.unwrap().digest;
+        let build = real.rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        real.rig.svc.launch(&build.id).await.unwrap();
+        let after = calls(&real);
+        let built = after.split("---\n").filter(|call| call.contains("\n--bg\n")).nth(1).unwrap();
+        assert!(built.contains("\n--append-system-prompt\n") && !READ_ONLY_FLAGS.iter().chain(FORBIDDEN.iter()).any(|flag| built.lines().any(|l| l == *flag)), "a build is launched as before: {built}");
 
         let seen: BTreeSet<String> = std::fs::read_to_string(real.scenario_dir.join("env.last")).unwrap().lines().map(String::from).collect();
         let captured: BTreeSet<String> = ["PATH", "HOME", "FAKE_CLAUDE_SCENARIO"].map(String::from).into();
@@ -996,7 +1114,7 @@ mod through_the_real_spawner {
         let real = real().await;
         let run = real.rig.queued(1).await;
         let spec = &run.spec;
-        let request = LaunchRequest { cwd: spec.clone_path.clone(), name: "x".into(), worktree: spec.name.clone(), guard: GUARD.into(), prompt: "p".into(), report: None };
+        let request = LaunchRequest { cwd: spec.clone_path.clone(), name: "x".into(), worktree: spec.name.clone(), guard: GUARD.into(), prompt: "p".into(), report: None, read_only: None };
         let started = real.cli.launch(&request).await.unwrap();
         real.rig.set(&run, |r| {
             r.state = RunState::Failed;

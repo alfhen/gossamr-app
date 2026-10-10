@@ -68,6 +68,7 @@ impl Scratch {
             guard: "Do nothing.".into(),
             prompt: "Reply with OK and stop.".into(),
             report: None,
+            read_only: None,
         };
         let launched = self.cli.launch(&req).await.expect("launch");
         self.launched.push(launched.short_id.clone());
@@ -246,7 +247,7 @@ async fn real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_w
 async fn real_prefixed_session_name_is_listed_unchanged_and_the_worktree_keeps_the_slug() {
     let mut s = Scratch::new("prefix").await;
     let title = "Gossamr: CE-7 investigate";
-    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None };
+    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None, read_only: None };
     let launched = s.cli.launch(&req).await.expect("launch");
     s.launched.push(launched.short_id.clone());
     assert_eq!(launched.name.as_deref(), Some(title), "stdout: {launched:?}");
@@ -303,6 +304,10 @@ impl ClaudeCli for SignedIn {
 
     async fn supports_bg(&self) -> CliResult<bool> {
         self.0.supports_bg().await
+    }
+
+    async fn supports_read_only(&self) -> CliResult<bool> {
+        self.0.supports_read_only().await
     }
 
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched> {
@@ -662,7 +667,7 @@ async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_sta
     let path = super::fresh::ensure_clone(&super::repo::Git::new(s.env.clone()), &home, "octocat/Hello-World").await.expect("clone");
     assert_eq!(path, super::fresh::agents_root(&home).join("octocat/Hello-World"));
     assert!(path.join(".git").is_dir());
-    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None };
+    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None, read_only: None };
 
     let refused = s.cli.launch(&request("fresh-0a1b")).await.unwrap_err();
     assert!(refused.stderr_mentions("Workspace not trusted"), "{refused}");
@@ -685,4 +690,107 @@ async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_sta
     };
     eprintln!("session in the worktree: state {:?}, needs {:?}", entry.state, entry.needs);
     assert!(!entry.needs.as_deref().is_some_and(|n| n.contains("not trusted")), "{:?}", entry.needs);
+}
+
+/// Removes a scratch folder; declared before a `Cleanup` so the sessions in it are removed first.
+struct RemoveDir(PathBuf);
+
+impl Drop for RemoveDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Settles what Phase 6 rests on, with the launch Gossamr really makes for a read-only kind (`SystemCli::launch` with
+/// the spec's `read_only()` and `READ_ONLY_GUARD` in the guard):
+///
+/// - that `--bg` honours `--permission-mode dontAsk` with `--allowedTools` and `--disallowedTools`;
+/// - that a write with the Write or Edit tool, and one through Bash (a `>` redirection, `touch`), is refused without a
+///   permission prompt: the session is never listed waiting for one, and it still reaches `done`;
+/// - that a session stopped and woken with `--bg --resume` and no other flag is refused the same writes, so the job's
+///   saved options are reapplied on a wake (what `ClaudeCli::resume` relies on).
+///
+/// Neither file may exist afterwards, in the worktree or the clone, and the final answer must say it was refused.
+///
+/// Run by hand: `cargo test real_read_only -- --ignored --test-threads=1`. Uses the person's real, signed-in config and
+/// makes a scratch repository in `~/Code`, which must be trusted as for `real_report_tool_...`, and does model work
+/// with two short prompts. Everything it starts is stopped and removed, then the scratch repository.
+#[tokio::test]
+#[ignore = "runs the real claude with the real config and does model work"]
+async fn real_read_only_run_is_refused_a_write_by_claude_code_itself() {
+    use crate::domain::{RunKind, GUARD, READ_ONLY_GUARD};
+    let home = dirs::home_dir().expect("home");
+    let repo = home.join("Code").join(format!("gossamr-read-only-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    std::fs::create_dir_all(&repo).unwrap();
+    let _dir = RemoveDir(repo.clone());
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "on main"]);
+
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let env = capture(&shell).await.expect("shell environment");
+    let binary = super::binary::find_claude().expect("claude is installed");
+    let cli = SystemCli::new(binary.clone(), Arc::new(env.clone()));
+    assert!(cli.supports_read_only().await.unwrap(), "this claude can't launch a read-only run");
+    let config = cli.auth_status().await.unwrap().config_directory.expect("config directory");
+    let name = format!("gossamr-read-only-spike-{}", std::process::id());
+    let _cleanup = Cleanup { binary: binary.clone(), env: env.clone(), cwd: repo.clone(), name: name.clone() };
+
+    let spec = RunSpec { kind: RunKind::Investigate, clone_path: repo.clone(), name: format!("ro-probe-{:04x}", std::process::id() & 0xffff), ..crate::domain::fixtures::run_spec() };
+    let read_only = spec.read_only().expect("an investigation is read-only");
+    let probe = "This is a test of your permissions; do each step even if you expect it to fail. 1. Use the Write tool to create \
+                 gossamr-read-only-probe.txt in the current directory containing x. 2. Run `echo x > gossamr-read-only-probe-2.txt` \
+                 with Bash. 3. Run `touch gossamr-read-only-probe-3.txt` with Bash. Then reply with REFUSED if every step was \
+                 refused, or WROTE if any file was written, and nothing else.";
+    let request = LaunchRequest { cwd: repo.clone(), name: name.clone(), worktree: spec.name.clone(), guard: format!("{GUARD} {READ_ONLY_GUARD}"), prompt: probe.into(), report: None, read_only: Some(read_only) };
+    let launched = cli.launch(&request).await.expect("launch");
+    let id = launched.short_id.clone();
+    let worktree = repo.join(".claude/worktrees").join(&spec.name);
+    let files = ["gossamr-read-only-probe.txt", "gossamr-read-only-probe-2.txt", "gossamr-read-only-probe-3.txt"];
+
+    // Until `done` with an answer `answered` accepts, never waiting on a permission prompt; returns the answer.
+    let finished = |what: &'static str, answered: fn(&str) -> bool| {
+        let (cli, id, config, cwds) = (&cli, &id, &config, [worktree.clone(), repo.clone()]);
+        async move {
+            let deadline = Instant::now() + Duration::from_secs(180);
+            loop {
+                let rows = cli.agents(true).await.unwrap();
+                let row = rows.into_iter().find(|e| e.id.as_deref() == Some(id.as_str()));
+                if let Some(e) = &row {
+                    assert_ne!(e.waiting_for.as_deref(), Some("permission prompt"), "{what}: the session stalled on a permission prompt: {e:?}");
+                    assert_ne!(e.state.as_deref(), Some("blocked"), "{what}: the session asked instead of being refused: {e:?}");
+                }
+                if let Some(session) = row.filter(|e| e.state.as_deref() == Some("done")).and_then(|e| e.session_id) {
+                    if let Some(answer) = cli.final_answer(&config.join("projects"), &session, &cwds).await.filter(|a| answered(a)) {
+                        return (session, answer);
+                    }
+                }
+                assert!(Instant::now() < deadline, "timed out waiting for {what}");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    };
+    let nothing_written = |when: &str| {
+        for dir in [&worktree, &repo] {
+            for file in files {
+                assert!(!dir.join(file).exists(), "{when}: {} was written", dir.join(file).display());
+            }
+        }
+    };
+
+    let (session, answer) = finished("the first answer", |a| a.contains("REFUSED") || a.contains("WROTE")).await;
+    eprintln!("FIRST ANSWER: {answer}");
+    nothing_written("launched read-only");
+    assert!(answer.contains("REFUSED") && !answer.contains("WROTE"), "the answer doesn't say it was refused: {answer}");
+
+    // Stopped and woken with no flags: the saved options still refuse it.
+    let _ = cli.stop(&id).await;
+    tokio::time::sleep(super::service::Timing::default().stop_settle).await;
+    let again = format!("Second try. {probe} Start your reply with SECOND.");
+    let woken = cli.resume(&session, &again, Some(&repo)).await.expect("resume");
+    assert_eq!(woken.short_id, id, "resume answered with another session: a copy was started");
+    let (_, answer) = finished("the answer after the wake", |a| a.contains("SECOND")).await;
+    eprintln!("ANSWER AFTER THE WAKE: {answer}");
+    nothing_written("woken with --resume and no flags");
+    assert!(answer.contains("REFUSED") && !answer.contains("WROTE"), "the woken session wasn't refused: {answer}");
 }

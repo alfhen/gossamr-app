@@ -362,6 +362,10 @@ impl RunService {
         if !tc.cli.supports_bg().await.map_err(|e| Failure::from_cli(e, clone))? {
             return Err(Failure::TooOld);
         }
+        // Fails closed: a read-only kind is never launched without the restriction.
+        if spec.kind.read_only() && !tc.cli.supports_read_only().await.map_err(|e| Failure::from_cli(e, clone))? {
+            return Err(Failure::TooOld);
+        }
         Ok(())
     }
 
@@ -401,18 +405,28 @@ impl RunService {
         run.error = None;
         run.failure = None;
         run.ended_at = None;
+        // Recorded before the launch, so a run adopted or retried after a lost answer still says what it was given.
+        run.read_only = run.spec.read_only();
         self.store(run).await?;
         self.remember(run);
 
         let report = self.offer_report(run).await;
         let spec = &run.spec;
+        let mut guard = GUARD.to_string();
+        if let Some(ro) = &run.read_only {
+            guard = format!("{guard} {}", ro.guard);
+        }
+        if report.is_some() {
+            guard = format!("{guard} {REPORT_GUARD}");
+        }
         let request = LaunchRequest {
             cwd: spec.clone_path.clone(),
             name: title_of(run),
             worktree: spec.name.clone(),
-            guard: if report.is_some() { format!("{GUARD} {REPORT_GUARD}") } else { GUARD.into() },
+            guard,
             prompt: render_prompt(spec),
             report,
+            read_only: run.read_only.clone(),
         };
         self.in_flight.lock().expect("in-flight lock poisoned").insert(run.id.clone());
         let outcome = tc.cli.launch(&request).await;

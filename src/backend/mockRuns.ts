@@ -1,4 +1,4 @@
-import { AUTOSTART_DEFAULTS, SUMMARY_ONLY, type AgentSettings, type ChangedFile, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal, WorkstreamRule } from "../types";
+import { AUTOSTART_DEFAULTS, SUMMARY_ONLY, type AgentSettings, type ChangedFile, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, type ReadOnly, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal, WorkstreamRule } from "../types";
 import { containerRef, itemRef } from "./mockConnector";
 import { approvedPlanText, assemblePlan, planSectionOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
@@ -10,7 +10,7 @@ import { docFromText, docText } from "../lib/docs";
 import { makerName } from "../lib/proposals";
 import { revisedByPipUnedited, runAnswerProblem, type MockProposals } from "./mockProposals";
 import { textDigest, type MockWorkstreams } from "./mockWorkstreams";
-import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, BUILD_NEEDS_PLAN, PIP_CHAIN_KINDS, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT, FINDINGS_LIMIT, FINDINGS_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, findingsLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
+import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, BUILD_NEEDS_PLAN, PIP_CHAIN_KINDS, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT, FINDINGS_LIMIT, FINDINGS_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, readOnlyRules, findingsLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
 
 const CONNECTION = "mock";
 const GUARD =
@@ -45,11 +45,13 @@ const NEXT: Partial<Record<RunState, RunState>> = {
   systemBlocked: "working",
 };
 
-/** A stand-in for the real digest: stable for the same text, different when any part of it changes. The workstream and the findings' source count only when set, so a spec without them keeps the digest it always had. */
+/** A stand-in for the real digest: stable for the same text, different when any part of it changes. The workstream, the findings' source and a read-only kind's restriction count only when set, so a spec without them (a Build's) keeps the digest it always had. */
 export function mockDigest(spec: RunSpec): string {
   const parts: unknown[] = [spec.kind, spec.repo, spec.clonePath, spec.base, spec.name, renderPrompt(spec), GUARD, spec.pr ?? null, spec.allowPush ?? false, spec.report ?? false, spec.project ?? null, spec.plan ?? null, spec.planFromRun ?? null, spec.buildFromRun ?? null, spec.planApproved ?? false];
   if (spec.workstream) parts.push(spec.workstream);
   if (spec.findingsFromRun) parts.push({ findingsFromRun: spec.findingsFromRun });
+  const readOnly = readOnlyRules(spec);
+  if (readOnly) parts.push({ readOnly });
   const text = JSON.stringify(parts);
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0;
@@ -469,6 +471,15 @@ const freshCopy = (repo: string): FreshCopy => {
 
 const REFUSAL_DELAY_MS = 600;
 
+/** One launch as the mock launcher made it: the restriction it would pass Claude Code, and the rule that started the run, if one did. */
+export interface MockLaunch {
+  runId: string;
+  kind: RunKind;
+  readOnly: ReadOnly | null;
+  autoStart: WorkstreamRule | null;
+  at: string;
+}
+
 /** States that take one of the `maxRuns` slots; a queued run takes none until it launches. */
 const RUNNING: RunState[] = ["launching", "working", "needsAnswer", "needsPermission", "systemBlocked"];
 
@@ -528,6 +539,8 @@ export class MockRuns {
   onPullRequest: (change: CodeChange) => void = () => {};
   /** The workstreams a run may be linked to, and whose audit records what the person does to one; set by the backend that keeps them. */
   workstreams: MockWorkstreams | null = null;
+  /** Every launch, oldest first, with the restriction the mock launcher would pass Claude Code (`launches`). */
+  private launchLog: MockLaunch[] = [];
   /** What the next finishing runs of each kind write instead of their usual answer, oldest first (`scriptNext`). */
   private scripts = new Map<RunKind, ScriptedFinish[]>();
 
@@ -631,6 +644,7 @@ export class MockRuns {
       findings: spec.findings?.trim() ? spec.findings : null,
       guard: GUARD,
       report: spec.report ? { allowed: "mcp__run-report__report_result", guard: REPORT_GUARD } : null,
+      readOnly: readOnlyRules(spec),
       spec,
     };
   }
@@ -821,10 +835,26 @@ export class MockRuns {
       if (this.full(run.id)) break;
       if (this.held(run)) continue;
       const at = this.now();
-      this.update(run.id, { state: "launching", launchedAt: at, lastProgressAt: at, slotWaitSince: null });
+      this.markLaunching(run, { lastProgressAt: at }, at);
       started = true;
     }
     return started;
+  }
+
+  /**
+   * Launches `run`: the one place a run becomes launching, as `RunService::spawn` stores it, so every launch carries the
+   * restriction its spec gives and is logged with it. `at` is when it launched, now unless given. A follow-up, an answer or
+   * a fix round resumes the session it has and goes nowhere near here.
+   */
+  private markLaunching(run: Run, patch: Partial<Run> = {}, at: string = this.now()): Run {
+    const readOnly = readOnlyRules(run.spec);
+    this.launchLog.push({ runId: run.id, kind: run.spec.kind, readOnly, autoStart: run.autoStart?.rule ?? null, at });
+    return this.update(run.id, { ...patch, state: "launching", launchedAt: at, ...(run.slotWaitSince !== undefined ? { slotWaitSince: null } : {}), readOnly });
+  }
+
+  /** Every launch so far, oldest first, with the restriction the mock launcher would have passed. */
+  launches(): MockLaunch[] {
+    return this.launchLog.map((l) => ({ ...l, readOnly: l.readOnly && { ...l.readOnly, allow: [...l.readOnly.allow], deny: [...l.readOnly.deny] } }));
   }
 
   private step(run: Run): Run {
@@ -839,11 +869,8 @@ export class MockRuns {
     // Over the cap a queued run stays queued, waiting for a slot from the first time it found none.
     if (run.state === "queued" && this.full(run.id)) return run.slotWaitSince ? run : this.update(run.id, { slotWaitSince: this.now() });
     const at = this.now();
+    if (to === "launching") return this.markLaunching(run, { lastProgressAt: at, needs: null }, at);
     const patch: Partial<Run> = { state: to, lastProgressAt: at, needs: null };
-    if (to === "launching") {
-      patch.launchedAt = at;
-      if (run.slotWaitSince) patch.slotWaitSince = null;
-    }
     if (to === "working") {
       patch.shortId = run.shortId ?? (0x2000b000 + this.runs.length * 0x37).toString(16).padStart(8, "0");
       patch.sessionId = run.sessionId ?? `${patch.shortId}-0000-4000-8000-000000000000`;
@@ -1825,7 +1852,7 @@ export class MockRuns {
       this.changed();
       return waiting;
     }
-    const next = this.update(id, { state: "launching", launchedAt: this.now(), slotWaitSince: null });
+    const next = this.markLaunching(run);
     this.changed();
     return next;
   }

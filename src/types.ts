@@ -610,6 +610,19 @@ export interface Run {
   autoStart?: { rule: WorkstreamRule; afterRun: string } | null;
   /** Set while an approved run stays queued only because the most agents allowed are running; it starts by itself once a slot frees. */
   slotWaitSince?: string | null;
+  /** The restriction a read-only run was launched with; absent for a Build and for a run that hasn't launched. */
+  readOnly?: ReadOnly | null;
+}
+
+/**
+ * What Claude Code itself is told to refuse for a read-only kind (`ReadOnly` in domain/run.rs): the permission mode, the
+ * exact commands allowed, the tools and commands denied, and the sentence added to the guard.
+ */
+export interface ReadOnly {
+  mode: string;
+  allow: string[];
+  deny: string[];
+  guard: string;
 }
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */
@@ -723,6 +736,8 @@ export interface RunReview {
   guard: string;
   /** What the session is also given when the run asks for the result tool and Gossamr's server is running. */
   report?: { allowed: string; guard: string } | null;
+  /** For a read-only kind: what Claude Code is told to refuse, and the sentence added to the guard. */
+  readOnly?: ReadOnly | null;
   spec: RunSpec;
   /** The reviewed pull request, as GitHub names it now. */
   prTitle?: string | null;
