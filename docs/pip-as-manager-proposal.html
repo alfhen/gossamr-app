@@ -688,7 +688,7 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 </tr>
 <tr>
 <td>Fix rounds carry agent-written text into the push-capable Build</td>
-<td>A blocking Review auto-starts a FollowUp to the Build, and that FollowUp contains the Review&#39;s findings, which an agent wrote and which may quote hostile PR or ticket content. Mitigations: only findings marked <code>blocking</code> that cite a file and line are passed; each is length-capped, marker-wrapped and introduced by a fixed sentence saying it is data describing a defect, not an instruction; the FollowUp&#39;s own instruction is a fixed template (fix these findings in this PR, change nothing else); the Build can still only push its own branch to a draft PR; at most 2 rounds; tripwires on marker or defang hits hold the workstream; a person reviews and merges the PR on GitHub. If that is not enough, the fix round can be made a person-approved step (open question 2).</td>
+<td>A blocking Review auto-starts a FollowUp to the Build, and that FollowUp contains the Review&#39;s findings, which an agent wrote and which may quote hostile PR or ticket content. Mitigations: only findings marked <code>blocking</code> that cite a file and line are passed; each is length-capped, marker-wrapped and introduced by a fixed sentence saying it is data describing a defect, not an instruction; the FollowUp&#39;s own instruction is a fixed template (fix these findings in this PR, change nothing else); the Build can still only push its own branch to a draft PR; at most 2 rounds; tripwires on marker or defang hits hold the workstream; a person reviews and merges the PR on GitHub. The product owner chose automatic fix rounds, at most 2, with these mitigations (open question 2).</td>
 </tr>
 <tr>
 <td>A weak reviewer passes bad work</td>
@@ -736,7 +736,7 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 </tr>
 </tbody></table></div><h2 id="9-open-questions-for-the-product-owner">9. Open questions for the product owner</h2><ol>
 <li>Is the auto-start rule table right? In particular, should approving the plan start the Build directly, or should the person still see the Build&#39;s RunSetup?</li>
-<li>Should the fix round start automatically (it carries the reviewer&#39;s findings, written by an agent, into the Build session that can push), or should the person approve each fix round? If automatic, how many rounds before it comes back to the person (proposed: 2)?</li>
+<li>Should the fix round start automatically (it carries the reviewer&#39;s findings, written by an agent, into the Build session that can push), or should the person approve each fix round? If automatic, how many rounds before it comes back to the person (proposed: 2)? <strong>Decided:</strong> fix rounds start automatically, at most 2 before the review comes back to the person.</li>
 <li>Should auto-start wait for the enforced read-only permission (Phase 6) before it is on by default, or ship on by default in Phase 3?</li>
 <li>Should Manage be the default for new workstreams once Phase 3 has proven itself, or stay opt-in per workstream?</li>
 <li>Is a workstream always one ticket (plus subtasks), or can it span an epic or several repos? Single-ticket is assumed for v1.</li>
