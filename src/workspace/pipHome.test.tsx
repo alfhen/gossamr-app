@@ -83,6 +83,20 @@ describe("the workstream list on Pip home", () => {
     expect(list({ showClosed: true, closed: [] })).toContain("No closed workstreams.");
   });
 
+  it("offers to start a workstream, opening the palette already asking for one; with none open it says how", async () => {
+    const { START_WORKSTREAM } = await import("./PipHome");
+    expect(list()).toMatch(/<button type="button"[^>]*>Start a workstream…<\/button>/);
+    expect(list()).not.toContain("No workstreams yet");
+    expect(list({ list: [] })).toContain("No workstreams yet. Start one on a ticket below, or from its peek.");
+    usePrefs.getState().setPaletteOpen(true, START_WORKSTREAM);
+    expect(usePrefs.getState()).toMatchObject({ paletteOpen: true, paletteSeed: "start a workstream on " });
+    // Closed, and opened again with ⌘K, the palette starts empty.
+    usePrefs.getState().setPaletteOpen(false);
+    usePrefs.getState().setPaletteOpen(true);
+    expect(usePrefs.getState().paletteSeed).toBe("");
+    usePrefs.getState().setPaletteOpen(false);
+  });
+
   it("drops the ticket's key from the title it starts", () => {
     expect(rowTitle({ ...open[0].workstream, itemKey: "CA-401", title: "CA-401 Retry the export" })).toBe("Retry the export");
     expect(rowTitle({ ...open[0].workstream, itemKey: null, title: "Tidy the docs" })).toBe("Tidy the docs");
@@ -156,13 +170,18 @@ describe("with Agents off", () => {
 });
 
 describe("Start on Pip home", () => {
-  it("is off until chosen, and the choice is kept", () => {
-    expect(loadPrefs().startOnPipHome).toBe(false);
-    usePrefs.setState(loadPrefs());
-    expect(usePrefs.getState().startOnPipHome).toBe(false);
-    usePrefs.getState().setStartOnPipHome(true);
+  it("is on until the person turns it off, and the choice is kept", () => {
     expect(loadPrefs().startOnPipHome).toBe(true);
+    usePrefs.setState(loadPrefs());
+    expect(usePrefs.getState().startOnPipHome).toBe(true);
     usePrefs.getState().setStartOnPipHome(false);
     expect(loadPrefs().startOnPipHome).toBe(false);
+    usePrefs.getState().setStartOnPipHome(true);
+    expect(loadPrefs().startOnPipHome).toBe(true);
+  });
+
+  it("is on for a person whose saved settings predate it", () => {
+    localStorage.setItem("gossamr-prefs", JSON.stringify({ ui: "workspace", theme: "dark" }));
+    expect(loadPrefs()).toMatchObject({ startOnPipHome: true, theme: "dark" });
   });
 });

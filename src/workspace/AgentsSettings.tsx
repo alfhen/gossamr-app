@@ -177,13 +177,13 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
   );
 }
 
-/** The person's choice to open on Pip home. This sheet only shows while Agents are on, and so does Pip home. */
+/** Whether Gossamr opens on Pip home, as it does until the person turns it off. This sheet only shows while Agents are on, and so does Pip home. */
 function StartOnPipHome() {
   const on = usePrefs((s) => s.startOnPipHome);
   return (
     <SwitchRow
       label="Start on Pip home"
-      description="Open Gossamr on Pip home, with your workstreams and Pip side by side, instead of the workspace. ⌘0 opens it from anywhere."
+      description="Open Gossamr on Pip home, with your workstreams and Pip side by side. Turn it off to open on the workspace; ⌘0 opens Pip home from anywhere."
       checked={on}
       onChange={(next) => usePrefs.getState().setStartOnPipHome(next)}
     />

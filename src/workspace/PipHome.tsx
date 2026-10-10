@@ -65,6 +65,9 @@ export interface WorkstreamListProps {
   tray?: ReactNode;
 }
 
+/** What 'Start a workstream…' opens the palette with: the words its 'Start a workstream on KEY' entries answer to. */
+export const START_WORKSTREAM = "start a workstream on ";
+
 /** "1 needs you", "3 need you"; nothing when nothing does. */
 function NeedsBadge({ count }: { count: number }) {
   if (!count) return null;
@@ -107,8 +110,16 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           </li>
         ))}
       </ul>
-      {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">No workstreams yet. Start one from a ticket's peek, or with ⌘K: “workstream” and the ticket.</p>}
+      {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">No workstreams yet. Start one on a ticket below, or from its peek.</p>}
       <div className="mt-auto grid gap-1 border-t border-ws-sep px-1.5 py-2">
+        <button
+          type="button"
+          // The palette, already asking for a workstream: the person types the ticket, and its 'Start a workstream on' starts it.
+          onClick={() => usePrefs.getState().setPaletteOpen(true, START_WORKSTREAM)}
+          className="rounded px-2 py-1 text-left text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
+        >
+          Start a workstream…
+        </button>
         <button
           type="button"
           aria-pressed={showClosed}

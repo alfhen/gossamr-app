@@ -288,14 +288,14 @@ describe("focusComposer", () => {
     vi.stubGlobal("requestAnimationFrame", (go: () => void) => frames.push(go));
   });
 
-  it("focuses the input now, and on the next frame only if focus is where it left it", () => {
+  it("focuses an input that is there once, and never again a frame later, so a key pressed right after stays where it went", () => {
     const { doc, input, chip } = page(true);
     vi.stubGlobal("document", doc);
     focusComposer();
     expect(doc.activeElement).toBe(input);
-    // F6 pressed before the frame: the rail keeps it.
+    expect(frames).toHaveLength(0);
+    // F6 pressed straight after: the rail keeps it.
     chip.focus();
-    frames.shift()!();
     expect(doc.activeElement).toBe(chip);
     expect(input.focus).toHaveBeenCalledOnce();
   });

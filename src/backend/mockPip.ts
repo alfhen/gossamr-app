@@ -145,8 +145,8 @@ function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[],
   };
 }
 
-/** The screen line Pip home sends (`screenLine` in src/workspace/screenContext.ts). */
-const PIP_HOME = "Pip home";
+/** Whether the screen line is Pip home's, "Pip home" and then its conversation (`screenLine` in src/workspace/screenContext.ts). */
+const onPipHome = (view: string | null | undefined) => view === "Pip home" || !!view?.startsWith("Pip home · ");
 
 const asksToApprovePlan = /^\s*approve the plan\b/i;
 const asksWhyHeld = /^\s*why is (?:this|it|the workstream) held\b/i;
@@ -534,7 +534,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     return {
       steps: ["Searched the items"],
       // On Pip home no board is on screen: the filter lands on the workspace tab, there when the person goes back.
-      text: `${wanted.note}. ${context.view === PIP_HOME ? "I filtered your workspace tab for you; it is there when you go back to it." : "I filtered this view for you;"} undo it below if that wasn't what you meant.`,
+      text: `${wanted.note}. ${onPipHome(context.view) ? "I filtered your workspace tab for you; it is there when you go back to it." : "I filtered this view for you;"} undo it below if that wasn't what you meant.`,
       filter: { filter, note: wanted.note },
       draft: null,
     };
@@ -604,7 +604,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     };
   }
   if (context.view?.startsWith("Agents")) return { steps: ["Looked at your agents"], text: agentSummary(runs, now), filter: null, draft: null };
-  if (context.view === PIP_HOME)
+  if (onPipHome(context.view))
     return { steps: [], text: "You're on Pip home. Pick a workstream on the left to talk about it, ask me what your agents are doing, or start a workstream on a ticket with ⌘K.", filter: null, draft: null };
   const where = context.view ?? "the workspace";
   const open = context.item ? ` and **${context.item.key}** is open` : "";

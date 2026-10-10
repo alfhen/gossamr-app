@@ -384,6 +384,9 @@ describe("Pip home in the palette", () => {
     expect(startWorkstreamCommands(items, "workstream ca-401", open, a).some((c) => c.label === "Start a workstream on CA-401")).toBe(false);
     expect(startWorkstreamCommands(items, "ca-401", [], a)).toEqual([]);
     expect(startWorkstreamCommands(items, "start a workstream", [], a)).toEqual([]);
+    // What Pip home's 'Start a workstream…' opens the palette with asks for the ticket; it names none yet.
+    expect(startWorkstreamCommands(items, "start a workstream on ", [], a)).toEqual([]);
+    expect(startWorkstreamCommands(items, "start a workstream on ca-401", [], a)).toHaveLength(1);
   });
 
   it("keeps the peek's workstream entry as it was", () => {

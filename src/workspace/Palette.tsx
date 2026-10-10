@@ -276,7 +276,8 @@ export function Palette() {
   const selected = useTabs((s) => s.selected);
   const workstreams = useWorkstreams((s) => s.list);
   const tab = useTabs((s) => activeTab(s));
-  const [query, setQuery] = useState("");
+  // Opened to do one thing (as Pip home's 'Start a workstream'), the search starts with its words.
+  const [query, setQuery] = useState(() => usePrefs.getState().paletteSeed);
   const [active, setActive] = useState(0);
   const [step, setStep] = useState<Step>({ type: "search" });
   const unwatched = useUnwatchedMatches(query, step.type === "search");

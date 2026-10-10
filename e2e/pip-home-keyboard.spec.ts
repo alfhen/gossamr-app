@@ -82,9 +82,10 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: 12 });
   await page.keyboard.press("Escape");
 
-  // Pip home; the list with Shift+F6 from the conversation, then j to the workstream and Enter.
-  await page.keyboard.press("ControlOrMeta+0");
+  // Pip home, with the keyboard in its composer; the list with Shift+F6 from there, then j to the workstream and Enter.
+  await press(page, "ControlOrMeta+0");
   await expect(homeConversation(page)).toHaveText("General");
+  await expect(homeComposer(page)).toBeFocused();
   await press(page, "Shift+F6");
   await expect(workstreamRow(page, "General")).toBeFocused();
   await press(page, "j");
@@ -111,10 +112,10 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   const card = homeRunCards(page, "CA-401").last();
   await press(page, "ArrowUp");
   await expect(card).toBeFocused();
+  // The safety sheet a fresh profile shows first hands the keyboard back to the card it came from, ring and all.
   const review = await inlineStart(page, card, "keyboard", async () => {
-    await page.keyboard.press("ControlOrMeta+j");
-    await page.keyboard.press("ArrowUp");
     await expect(card).toBeFocused();
+    await expectVisibleFocus(page);
   });
   const start = review.getByRole("button", { name: "Start agent" });
   await expect(start).toBeEnabled();

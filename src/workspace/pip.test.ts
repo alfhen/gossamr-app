@@ -3,7 +3,7 @@ import { MockBackend } from "../backend/mock";
 import { mockAsk, mockPipEvents, scriptPip } from "../backend/mockPip";
 import { claude, type AskRequest, type ClaudeEvent } from "../backend/claude";
 import { ALL } from "../lib/filter";
-import type { ScreenContext, WorkEvent } from "../types";
+import type { ScreenContext, WorkEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
 import { askPip } from "./askPip";
@@ -15,7 +15,7 @@ import { useToasts } from "./toasts";
 import { commentNotes, historyNotes, linkRows } from "./peekLogic";
 import { NUDGE_GAP_MS, NUDGE_DWELL_MS, LARGE_LIST, nudgeCandidates, nudgeDelay, pickNudge, type NudgeScene } from "./nudges";
 import { isStillFiltered, usePip } from "./pipStore";
-import { buildScreenContext, screenLine } from "./screenContext";
+import { buildScreenContext, homeConversationLine, screenLine } from "./screenContext";
 import { activeTab, loadTabs, useTabs, type Route, type Tab } from "./tabsStore";
 
 const memory = () => {
@@ -82,6 +82,19 @@ describe("screen context by route", () => {
     const s = screen(tab, null, ["mock:DEVOPS-471"], "pip");
     expect(screenLine(s)).toBe("Pip home");
     expect(buildScreenContext(s)).toEqual({ view: "Pip home", item: null, filter: null, selection: [] });
+  });
+
+  it("names the conversation Pip home shows: General, or the open workstream selected", () => {
+    const tab0: Tab = { id: "t", title: null, filter: { type: "mine" }, view: "board" };
+    const open = { workstream: { id: "w1", title: "CA-401 Fix the cart", closedAt: null } } as unknown as WorkstreamView;
+    const closed = { workstream: { id: "w2", title: "CA-402 Old", closedAt: "2026-01-01T00:00:00Z" } } as unknown as WorkstreamView;
+    expect(homeConversationLine(null, [open])).toBe("General");
+    expect(homeConversationLine("w1", [open])).toBe("Workstream: CA-401 Fix the cart");
+    expect(homeConversationLine("w2", [open, closed])).toBe("General");
+    expect(homeConversationLine("gone", [open])).toBe("General");
+    const s = { ...screen(tab0, null, [], "pip"), home: homeConversationLine("w1", [open]) };
+    expect(buildScreenContext(s).view).toBe("Pip home · Workstream: CA-401 Fix the cart");
+    expect(screenLine({ ...s, route: "workspace" })).toBe("Board · All projects · 12 items");
   });
 
   it("names the runs on Agents, sends no board filter or ticked cards, and keeps a ticket peeked over it", () => {

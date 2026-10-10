@@ -76,8 +76,8 @@ export const showsPipPane = (route: Route, agentsEnabled: boolean, pipOpen: bool
 let landed = false;
 
 /**
- * Opens on Pip home once the workspace is ready and the backend said Agents are on, when the person chose to start
- * there. Otherwise, and with Agents off, the app opens where it always has.
+ * Opens on Pip home once the workspace is ready and the backend said Agents are on, unless the person turned 'Start on
+ * Pip home' off. Then, and with Agents off, the app opens on the workspace.
  */
 function useStartOnPipHome(ready: boolean) {
   const known = useAgentsFlag((s) => s.known);

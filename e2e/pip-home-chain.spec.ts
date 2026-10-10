@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, expectPeekInPlace, homeConversation, homeConversationRegion, mockRuns, needsYouTray, openApp, openPipHome, peekSheet, peekTicket, pipHome, startWorkstream, stepChip, stepRail, workstreamRow } from "./support/app";
+import { advanceRuns, askPip, expectPeekInPlace, homeConversation, homeConversationRegion, homeSettled, mockRuns, needsYouTray, openApp, openPipHome, peekSheet, peekTicket, pipHome, startWorkstream, stepChip, stepRail, workstreamRow } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
@@ -10,9 +10,7 @@ const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety a
 const runCards = (page: Page) => homeConversationRegion(page).getByRole("article", { name: "Start an agent: CA-401" });
 
 /** Waits until Pip has finished answering on Pip home. */
-async function settled(page: Page) {
-  await expect(pipHome(page).getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
-}
+const settled = homeSettled;
 
 /** Asks Pip for `what` on Pip home and waits for its answer. */
 async function ask(page: Page, what: string) {

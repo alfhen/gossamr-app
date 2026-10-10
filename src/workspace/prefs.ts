@@ -24,6 +24,8 @@ interface Prefs {
   peekWidth: number;
   pipWidth: number;
   paletteOpen: boolean;
+  /** What the palette's search starts with when it opens; kept for the session only. */
+  paletteSeed: string;
   /** Peek sections the person folded. Kept for the session only. */
   peekCollapsed: Collapsed;
   /** Board column order the person chose, per project. */
@@ -33,14 +35,15 @@ interface Prefs {
   agentsGroup: AgentsGroup;
   /** The person dismissed the explainer on the Agents view. */
   agentsIntroSeen: boolean;
-  /** Open on Pip home rather than the workspace, while Agents are on. Off until the person turns it on. */
+  /** Open on Pip home rather than the workspace, while Agents are on. On until the person turns it off. */
   startOnPipHome: boolean;
   setUi(ui: UiMode): void;
   setTheme(theme: ThemeMode): void;
   setPipOpen(open: boolean): void;
   setPeekWidth(width: number): void;
   setPipWidth(width: number): void;
-  setPaletteOpen(open: boolean): void;
+  /** Opens or closes the palette; opened with `seed`, its search starts with those words. */
+  setPaletteOpen(open: boolean, seed?: string): void;
   setPeekSection(id: PeekSectionId, collapsed: boolean): void;
   /** Saves the order of a project's columns; `null` goes back to the default. */
   setColumnOrder(container: string, ids: string[] | null): void;
@@ -66,20 +69,22 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
     agentsView: AGENTS_VIEWS.find((v) => v === raw?.agentsView) ?? "cards",
     agentsGroup: AGENTS_GROUPS.find((g) => g === raw?.agentsGroup) ?? "state",
     agentsIntroSeen: raw?.agentsIntroSeen === true,
-    startOnPipHome: raw?.startOnPipHome === true,
+    // Pip home is where everyone with Agents on lands; only a person who turned it off stays on the workspace.
+    startOnPipHome: raw?.startOnPipHome !== false,
   };
 }
 
 export const usePrefs = create<Prefs>((set) => ({
   ...loadPrefs(),
   paletteOpen: false,
+  paletteSeed: "",
   peekCollapsed: {},
   setUi: (ui) => set({ ui, uiChosen: true }),
   setTheme: (theme) => set({ theme }),
   setPipOpen: (pipOpen) => set({ pipOpen }),
   setPeekWidth: (peekWidth) => set({ peekWidth }),
   setPipWidth: (pipWidth) => set({ pipWidth }),
-  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+  setPaletteOpen: (paletteOpen, seed = "") => set({ paletteOpen, paletteSeed: paletteOpen ? seed : "" }),
   setPeekSection: (id, collapsed) => set((s) => ({ peekCollapsed: { ...s.peekCollapsed, [id]: collapsed } })),
   setColumnOrder: (container, ids) =>
     set((s) => {

@@ -222,7 +222,7 @@ describe("mockAsk", () => {
       await mockAsk({ requestId, prompt, sessionId: null, context, conversation, meta: { imageCount: 0 } }, backend, 0);
       return openMockPipTurns().turns(conversation).find((t) => t.requestId === requestId)?.text ?? "";
     };
-    const home: ScreenContext = { view: "Pip home", item: null, filter: null, selection: [] };
+    const home: ScreenContext = { view: "Pip home · General", item: null, filter: null, selection: [] };
     const waiting = await answer("wait-1", "What is waiting to start?", `ws:${ws.id}`, home);
     expect(waiting).toContain("Review and start");
     expect(waiting).toContain("can't start it myself");

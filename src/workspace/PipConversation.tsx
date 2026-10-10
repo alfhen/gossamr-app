@@ -163,7 +163,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
   const working = turn.status === "running" && !turn.text;
   if (turn.kind === "wake") {
     return (
-      <div data-turn-kind="wake" className="grid gap-1">
+      <div data-turn-kind="wake" data-turn-status={turn.status} className="grid gap-1">
         <WakeHeader turn={turn} />
         {(turn.steps.length > 0 || working) && (
           <ul className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
@@ -190,7 +190,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
     );
   }
   return (
-    <div data-turn-kind="user" className="grid gap-2">
+    <div data-turn-kind="user" data-turn-status={turn.status} className="grid gap-2">
       {turn.images && <TurnImages images={turn.images} />}
       {!turn.images && !!turn.imageCount && (
         <p className="m-0 justify-self-end text-xs text-ws-ink3">

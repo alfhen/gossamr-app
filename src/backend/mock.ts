@@ -52,7 +52,7 @@ import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector
 import { targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { MockSupervisor } from "./mockSupervisor";
-import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockQueueWake } from "./mockPipQueue";
+import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
 import { mockPipTurns } from "./mockPipTurns";
@@ -433,7 +433,7 @@ export class MockBackend implements Backend {
       hasWaitingWake: mockHasWaitingWake,
       cancelWakes: mockCancelWakes,
     });
-    exposeMockClock({ runs: this.runs, workstreams: this.workstreams, proposals: this.proposals, pip: { hold: holdMockPip } });
+    exposeMockClock({ runs: this.runs, workstreams: this.workstreams, proposals: this.proposals, pip: { hold: holdMockPip, idle: mockPipIdle } });
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
     this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));

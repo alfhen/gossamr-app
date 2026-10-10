@@ -4,7 +4,9 @@ import {
   askPip,
   dismissAgentSafety,
   holdPip,
+  homeSettled,
   inlineStart,
+  jiraWrites,
   homeComposer,
   homeConversation,
   homeConversationRegion,
@@ -18,6 +20,7 @@ import {
   pipPane,
   startWorkstream,
   stepChip,
+  stepRail,
   workstreamEvents,
   workstreamRow,
 } from "./support/app";
@@ -100,23 +103,16 @@ test("with Agents off there is no Pip home: no rail button, Cmd/Ctrl+0 does noth
   await expect(page.getByRole("listbox", { name: "Items" })).toBeVisible();
 });
 
-test("Start on Pip home: off lands on the workspace; on in Settings lands on Pip home; with Agents off it is the workspace still", async ({ page }) => {
-  await openApp(page, "runs=empty");
-  await agentsSettled(page, true);
-  await page.reload();
+test("a fresh profile lands on Pip home with Agents on, and on the workspace with them off; 'Start on Pip home' off lands on the workspace", async ({ page }) => {
+  // Nothing saved yet: the defaults, with Agents off first.
+  await page.goto("/?runs=empty&agents=off");
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-  await agentsSettled(page, true);
+  await agentsSettled(page, false);
   await expect(pipHome(page)).toHaveCount(0);
+  await expect(page.getByRole("listbox", { name: "Items" })).toBeVisible();
 
-  await page.getByRole("button", { name: /^Agents/ }).click();
-  await page.getByRole("button", { name: "Safety and settings" }).click();
-  const sheet = page.getByRole("dialog", { name: "Agents safety and settings" });
-  const choice = sheet.getByRole("switch", { name: "Start on Pip home" });
-  await expect(choice).toHaveAttribute("aria-checked", "false");
-  await choice.click();
-  await expect(choice).toHaveAttribute("aria-checked", "true");
-
-  await page.reload();
+  // Agents on: Pip home, on General.
+  await page.goto("/?runs=empty");
   await expect(pipHome(page).getByRole("navigation", { name: "Workstreams" })).toBeVisible();
   await expect(homeConversation(page)).toHaveText("General");
   // Going back to the workspace stays there: Pip home is where a load starts, once.
@@ -124,12 +120,41 @@ test("Start on Pip home: off lands on the workspace; on in Settings lands on Pip
   await page.getByRole("combobox").fill("Show List");
   await page.keyboard.press("Enter");
   await expect(pipHome(page)).toHaveCount(0);
-
-  await page.goto("/?runs=empty&agents=off");
-  await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-  await agentsSettled(page, false);
-  await expect(pipHome(page)).toHaveCount(0);
   await expect(page.getByRole("listbox", { name: "Items" })).toBeVisible();
+
+  // The switch is on until the person turns it off; then a load opens on the workspace.
+  await page.getByRole("button", { name: /^Agents/ }).click();
+  await page.getByRole("button", { name: "Safety and settings" }).click();
+  const sheet = page.getByRole("dialog", { name: "Agents safety and settings" });
+  const choice = sheet.getByRole("switch", { name: "Start on Pip home" });
+  await expect(choice).toHaveAttribute("aria-checked", "true");
+  await choice.click();
+  await expect(choice).toHaveAttribute("aria-checked", "false");
+
+  await page.reload();
+  await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+  await agentsSettled(page, true);
+  await expect(page.getByRole("listbox", { name: "Items" })).toBeVisible();
+  await expect(pipHome(page)).toHaveCount(0);
+});
+
+test("Pip home's 'Start a workstream…' opens the palette asking for the ticket, and the one picked opens there", async ({ page }) => {
+  await openApp(page, "runs=empty");
+  await agentsSettled(page, true);
+  await openPipHome(page);
+  await expect(pipHome(page).getByText("No workstreams yet.")).toBeVisible();
+  await pipHome(page).getByRole("button", { name: "Start a workstream…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Command palette" });
+  await expect(dialog.getByRole("combobox")).toHaveValue("start a workstream on ");
+  await expect(dialog.getByRole("option", { name: /^Start a workstream on/ })).toHaveCount(0);
+  await page.keyboard.type("CA-401");
+  const option = dialog.getByRole("option", { name: /^Start a workstream on CA-401/ });
+  await expect(option).toBeVisible();
+  await option.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(workstreamRow(page, "CA-401")).toHaveAttribute("aria-selected", "true");
+  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
+  await expect(pipHome(page).getByText("No workstreams yet.")).toHaveCount(0);
 });
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
@@ -139,9 +164,7 @@ const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
 const withoutAge = (line: string) => line.replace(/ · (?:now|\d+[mhd])$/, "");
 
 /** Waits until Pip has finished answering on Pip home. */
-async function settled(page: Page) {
-  await expect(pipHome(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-}
+const settled = homeSettled;
 
 /** Starts a workstream on `key` from its peek, then shows it on Pip home. */
 async function homeWorkstream(page: Page, key = "CA-401") {
@@ -463,4 +486,39 @@ test("with Agents off, Activity has no 'Pip & agents' chip", async ({ page }) =>
   await palette(page, "open activity", /^Open activity/);
   await expect(page.getByRole("group", { name: "Show" }).getByRole("button", { name: "All", exact: true })).toBeVisible();
   await expect(page.getByRole("group", { name: "Show" }).getByRole("button", { name: /Pip & agents/ })).toHaveCount(0);
+});
+
+test("the rail's 'Approve these 2' approves Pip's two comments and never the description update beside them, which still opens its diff", async ({ page }) => {
+  await openApp(page, "runs=empty");
+  await agentsSettled(page, true);
+  // Pip's drafts in the workstream's conversation, from the pane beside CA-401's peek: two comments and a description update.
+  await startWorkstream(page, "CA-401");
+  const pane = pipPane(page);
+  for (const [ask, drafts] of [
+    ["Draft a comment on this one", 1],
+    ["Draft another comment on this one", 2],
+    ["Draft a description update", 3],
+  ] as const) {
+    await askPip(page, ask);
+    await expect(pane.locator('article[data-draft][data-state="pending"]')).toHaveCount(drafts);
+  }
+  await expect(pane.getByRole("article", { name: "Update the description of CA-401" })).toHaveCount(1);
+
+  await openPipHome(page);
+  await workstreamRow(page, "CA-401").click();
+  const section = stepRail(page).getByRole("region", { name: "Pip's drafts" });
+  const rewrite = section.getByRole("article", { name: "Update the description of CA-401" });
+  await expect(rewrite).toHaveAttribute("data-state", "pending");
+  await section.getByRole("button", { name: "Approve these 2" }).click();
+  await section.getByRole("button", { name: "Yes, approve 2" }).click();
+  await expect(section.locator("[data-batch-outcome]")).toHaveText("Approved 2.");
+  await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toEqual(["comment", "comment"]);
+  await expect(rewrite).toHaveAttribute("data-state", "pending");
+  await expect(section.getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
+
+  // The update is read in its diff, in the peek, and approved only there.
+  await rewrite.getByRole("button", { name: "Review on CA-401 →" }).click();
+  await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
+  await expect(peekSheet(page).getByRole("button", { name: "Update description" })).toBeVisible();
+  expect((await jiraWrites(page)).map((w) => w.type)).toEqual(["comment", "comment"]);
 });

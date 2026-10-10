@@ -3,11 +3,27 @@ import { expect, type Locator, type Page } from "@playwright/test";
 /** The id of Pip's message input (PIP_INPUT_ID in src/workspace/PipPane.tsx). */
 export const PIP_INPUT = "#pip-input";
 
+/** Where the app's preferences are kept (KEY in src/workspace/prefs.ts). */
+const PREFS = "gossamr-prefs";
+
+/**
+ * Makes this page's profile one whose person turned 'Start on Pip home' off, so a load lands on the workspace with Agents
+ * on too. Only a profile with no preferences yet is changed: whatever the app or the test saves afterwards stands, across
+ * reloads as well.
+ */
+export async function landOnWorkspace(page: Page) {
+  await page.addInitScript((key) => {
+    if (localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify({ startOnPipHome: false }));
+  }, PREFS);
+}
+
 /**
  * Opens the workspace in mock mode and waits for the sample tickets. `query` goes through as the page's search string, so mock
- * flags such as `runs=empty` reach mockOptionsFromUrl.
+ * flags such as `runs=empty` reach mockOptionsFromUrl. Pip home is where the app lands with Agents on; the specs here start
+ * on the workspace, as a person who turned that off does (`landOnWorkspace`), and go to Pip home when they mean to.
  */
 export async function openApp(page: Page, query = "") {
+  await landOnWorkspace(page);
   await page.goto(query ? `/?${query.replace(/^\?/, "")}` : "/");
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
 }
@@ -93,6 +109,7 @@ interface Handle {
   jiraWrites(): { proposalId: string; type: string; key: string | null }[];
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
   holdPip(on: boolean): void;
+  pipIdle(): boolean;
 }
 type Mocked = { __gossamrMock?: Handle };
 const NO_MOCK = "the sample backend isn't there; is this a dev build in mock mode?";
@@ -237,8 +254,22 @@ export async function agentsSettled(page: Page, on = true) {
   await expect(page.getByRole("button", { name: /^Agents/ })).toHaveCount(on ? 1 : 0);
 }
 
-/** Waits until Pip has finished answering on Pip home. */
+/** Whether the scripted Pip has no turn running or waiting anywhere, a wake the supervisor queued included. */
+export const pipIdle = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.pipIdle();
+  }, NO_MOCK);
+
+/**
+ * Waits until Pip has finished answering on Pip home: the sample Pip has nothing running or waiting, a wake a run's
+ * finish queued included, and the conversation shows every turn ended. No Stop on screen alone proves nothing until a
+ * turn has started.
+ */
 export async function homeSettled(page: Page) {
+  await expect.poll(() => pipIdle(page), { message: "the sample Pip has no turn running or waiting" }).toBe(true);
+  await expect(homeConversationRegion(page).locator('[data-turn-status="running"], [data-turn-status="queued"]')).toHaveCount(0);
   await expect(pipHome(page).getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
 }
 

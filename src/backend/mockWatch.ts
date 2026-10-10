@@ -113,6 +113,8 @@ export interface MockHandle {
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
   /** Makes the scripted Pip wait, answering, after starting each turn (true) until let go (false). */
   holdPip(on: boolean): void;
+  /** Whether the scripted Pip has no turn running or waiting anywhere, a wake the supervisor queued included. */
+  pipIdle(): boolean;
 }
 
 /** The parts of the sample backend the handle reaches. */
@@ -120,7 +122,7 @@ export interface MockClockParts {
   runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string }; state: string }[]; surfacePullRequests(): boolean; scriptNext(kind: RunKind, script: ScriptedFinish): void };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown };
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[] };
-  pip?: { hold(on: boolean): void };
+  pip?: { hold(on: boolean): void; idle(): boolean };
 }
 
 declare global {
@@ -145,6 +147,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip }: MockClock
     jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent) })),
     setBudget: (id, budget) => void workstreams?.setBudget(id, budget),
     holdPip: (on) => pip?.hold(on),
+    pipIdle: () => pip?.idle() ?? true,
   };
 }
 

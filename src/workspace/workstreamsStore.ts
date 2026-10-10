@@ -272,6 +272,8 @@ export function focusComposer() {
   const focus = () => document.getElementById(PIP_INPUT_ID)?.focus();
   focus();
   const was = document.activeElement;
+  // Focused now: focusing again a frame later could only take a key typed since (F6, say) back to the input.
+  if (was && was === document.getElementById(PIP_INPUT_ID)) return;
   requestAnimationFrame(() => {
     // Only if focus hasn't moved since: a key pressed in between (F6 to the rail, say) keeps where it took it.
     const at = document.activeElement;

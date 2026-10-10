@@ -293,7 +293,8 @@ export function workstreamCommands(list: readonly WorkstreamView[], query: strin
  */
 export function startWorkstreamCommands(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[], a: Pick<CommandActions, "startWorkstreamOn">, limit = 3): Command[] {
   const rest = /^\s*(?:start\s+)?(?:a\s+)?workstream\s+(?:on\s+)?(.+)$/i.exec(query)?.[1]?.trim();
-  if (!rest) return [];
+  // "start a workstream on " is the question still being asked (as Pip home's 'Start a workstream…' opens it), not a ticket called "on".
+  if (!rest || /^on$/i.test(rest)) return [];
   const taken = new Set(open.filter((v) => v.workstream.closedAt === null && v.workstream.itemKey).map((v) => `${v.workstream.connectionId}:${v.workstream.itemKey}`));
   const byKey = new Map(items.map((i) => [itemKey(i.item), i]));
   return ticketCommands(items, rest, () => {}, limit + taken.size).flatMap((c) => {
