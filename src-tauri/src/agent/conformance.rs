@@ -1475,7 +1475,7 @@ pub async fn read_only_runs_always_launch_restricted() -> std::result::Result<()
 fn files_that_build_launch_requests() -> std::io::Result<Vec<String>> {
     use std::path::Path;
     // Spelled in two parts so this file never matches itself, though it is test code anyway.
-    let needle = format!("{}Request {{", "Launch");
+    let name = format!("{}Request", "Launch");
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = vec![];
     let mut stack = vec![src.clone()];
@@ -1517,13 +1517,24 @@ fn files_that_build_launch_requests() -> std::io::Result<Vec<String>> {
             code.push_str(line);
             code.push('\n');
         }
-        let built = code.matches(&needle).count() - code.matches(&format!("struct {needle}")).count();
-        if built > 0 {
+        if builds(&code, &name) > 0 {
             found.push(path.strip_prefix(&src).unwrap_or(path).to_string_lossy().replace('\\', "/"));
         }
     }
     found.sort();
     Ok(found)
+}
+
+/// How many times `code` builds (or has an `impl` block for) the struct `name`: the name followed by `{` with any
+/// whitespace between, and not its own declaration.
+fn builds(code: &str, name: &str) -> usize {
+    code.match_indices(name)
+        .filter(|(at, _)| {
+            let before = code[..*at].trim_end();
+            let whole = !code[..*at].ends_with(|c: char| c.is_alphanumeric() || c == '_');
+            whole && !before.ends_with("struct") && code[at + name.len()..].trim_start().starts_with('{')
+        })
+        .count()
 }
 
 /// Only the run service builds a `LaunchRequest` (its `spawn`, which sets the restriction from the spec), so no other
@@ -1720,6 +1731,17 @@ mod tests {
     #[tokio::test]
     async fn read_only_runs_always_launch_restricted() {
         super::read_only_runs_always_launch_restricted().await.unwrap();
+    }
+
+    #[test]
+    fn a_struct_literal_is_found_however_it_is_spaced_and_an_impl_block_counts_too() {
+        let name = "LaunchRequest";
+        assert_eq!(super::builds("pub struct LaunchRequest {\n}", name), 0);
+        assert_eq!(super::builds("let r = LaunchRequest{ cwd };", name), 1);
+        assert_eq!(super::builds("let r = LaunchRequest\n    {\n cwd };", name), 1);
+        assert_eq!(super::builds("impl LaunchRequest { fn new() -> Self { Self { cwd } } }", name), 1);
+        assert_eq!(super::builds("fn f(r: &LaunchRequest) {}", name), 0, "a type in a signature builds nothing");
+        assert_eq!(super::builds("MyLaunchRequest { }", name), 0);
     }
 
     #[test]
