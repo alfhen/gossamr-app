@@ -5,7 +5,7 @@ use rusqlite::types::Value as Sql;
 use rusqlite::{params, params_from_iter, OptionalExtension};
 
 use super::{stamp, Db};
-use crate::domain::{Intent, Proposal, ProposalQuery, ProposalState, StateKind};
+use crate::domain::{Intent, MaybePosted, Proposal, ProposalQuery, ProposalState, StateKind};
 use crate::error::{Error, Result};
 
 /// The error a proposal keeps when Gossamr closed while it was being applied.
@@ -129,8 +129,9 @@ impl Db {
 
     /// Moves a pending `GithubReview` to `Applying` and returns it, or `None` when it wasn't pending. Like
     /// `begin_applying`, the state column is the guard, so a review is posted at most once however often it is approved.
-    /// Any other kind is refused and left as it was.
-    pub fn begin_posting_review(&self, id: &str, at: DateTime<Utc>) -> Result<Option<Proposal>> {
+    /// Any other kind is refused and left as it was. `sending` is the post about to go out, stored with the claim as maybe
+    /// posted, so a close before its answer comes leaves it to be looked for on GitHub; `None` keeps what the draft has.
+    pub fn begin_posting_review(&self, id: &str, at: DateTime<Utc>, sending: Option<MaybePosted>) -> Result<Option<Proposal>> {
         let tx = self.conn.unchecked_transaction()?;
         let claimed = tx.execute("UPDATE proposals SET state = 'applying' WHERE id = ?1 AND state = 'pending'", params![id])?;
         if claimed == 0 {
@@ -140,6 +141,9 @@ impl Db {
         let mut p: Proposal = serde_json::from_str(&data)?;
         if !matches!(p.intent, Intent::GithubReview { .. }) {
             return Err(Error::Proposal("only a review draft is posted to GitHub".into()));
+        }
+        if sending.is_some() {
+            p.maybe_posted = sending;
         }
         p.state = ProposalState::Applying;
         p.updated_at = at;

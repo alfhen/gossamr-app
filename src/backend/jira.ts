@@ -314,8 +314,8 @@ export class JiraBackend implements Backend {
     return invoke<Proposal>("proposals_approve", { id });
   }
 
-  proposalsPostReview(id: string, revisions: number) {
-    return invoke<Proposal>("proposals_post_review", { id, revisions });
+  proposalsPostReview(id: string, revisions: number, postAnyway = false) {
+    return invoke<Proposal>("proposals_post_review", { id, revisions, postAnyway });
   }
 
   onProposalsChanged(listener: (change: ProposalsChanged) => void) {

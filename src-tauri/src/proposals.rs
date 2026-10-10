@@ -339,6 +339,7 @@ pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
         run: None,
         superseded_by: None,
         posted: None,
+        maybe_posted: None,
     };
     // Everything that can refuse the draft is decided before anything is written.
     let replaced = tidy(db, &p)?;
@@ -1664,7 +1665,7 @@ mod tests {
             false => vec![],
         };
         let created_by = serde_json::from_value(v["by"].clone()).unwrap();
-        Proposal { id: id.into(), created_at: now(), updated_at: now(), origin, created_by, intent, label: None, basis: None, state, revisions, created: vec![], error: None, run: None, superseded_by: None, posted: None }
+        Proposal { id: id.into(), created_at: now(), updated_at: now(), origin, created_by, intent, label: None, basis: None, state, revisions, created: vec![], error: None, run: None, superseded_by: None, posted: None, maybe_posted: None }
     }
 
     #[test]

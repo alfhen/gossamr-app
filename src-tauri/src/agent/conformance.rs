@@ -1211,7 +1211,10 @@ pub async fn orchestration_never_writes_jira() -> std::result::Result<(), String
     // GitHub was only ever read.
     let reviews: Vec<_> = core.proposals_in(&fx.scope, &ProposalQuery::default()).await.unwrap().into_iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).collect();
     let states: Vec<_> = reviews.iter().map(|p| (p.state.kind(), p.superseded_by.clone())).collect();
-    if !matches!(states.as_slice(), [(crate::domain::StateKind::Pending, None), (crate::domain::StateKind::Retired, Some(by))] if *by == reviews[0].id) {
+    // Both may carry the same timestamp, so the listing's order between them isn't theirs to rely on.
+    let waiting: Vec<_> = reviews.iter().filter(|p| p.state.kind() == crate::domain::StateKind::Pending && p.superseded_by.is_none()).collect();
+    let replaced: Vec<_> = reviews.iter().filter(|p| p.state.kind() == crate::domain::StateKind::Retired).collect();
+    if !(reviews.len() == 2 && matches!((waiting.as_slice(), replaced.as_slice()), ([w], [r]) if r.superseded_by.as_deref() == Some(w.id.as_str()))) {
         return Err(format!("the reviews' GitHub drafts aren't one waiting and one it replaced: {states:?}"));
     }
     if let Some(write) = fx.github_seen().into_iter().find(|(method, _)| method != "GET") {
@@ -1360,7 +1363,7 @@ pub async fn orchestration_never_posts_to_github() -> std::result::Result<(), St
         .filter(|p| p.state == crate::domain::ProposalState::Pending && matches!(&p.intent, Intent::GithubReview { number: 12, .. }))
         .collect();
     let [draft] = pending.as_slice() else { return Err(format!("expected one pending review draft of #12, found {}", pending.len())) };
-    let posted = core.post_review_draft(&draft.id, draft.revisions.len()).await.map_err(|e| e.to_string())?;
+    let posted = core.post_review_draft(&draft.id, draft.revisions.len(), false).await.map_err(|e| e.to_string())?;
     if posted.state != crate::domain::ProposalState::Applied || posted.posted.as_ref().map(|p| p.id) != Some(4242) {
         return Err(format!("the approved review wasn't posted: {:?} {:?}", posted.state, posted.error));
     }
@@ -1376,7 +1379,7 @@ pub async fn orchestration_never_posts_to_github() -> std::result::Result<(), St
     if body["event"] != "COMMENT" || body["commit_id"] != FIXED || inline != [("src/cart.ts", 3, "RIGHT", "**Nit:** naming")] {
         return Err(format!("the review posted isn't the passing review's comment review at the fixed commit: {body}"));
     }
-    if core.post_review_draft(&draft.id, draft.revisions.len()).await.is_ok() || writes().len() != 1 {
+    if core.post_review_draft(&draft.id, draft.revisions.len(), false).await.is_ok() || writes().len() != 1 {
         return Err("approving the posted review again sent it again".into());
     }
     if !w.events().await.iter().any(|e| e.action == "review_posted" && e.proposal_id.as_deref() == Some(draft.id.as_str()) && e.detail.as_deref() == Some("acme/webshop#12 review 4242")) {

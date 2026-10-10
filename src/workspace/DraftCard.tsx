@@ -107,7 +107,8 @@ export interface DraftCardProps {
   people: Person[];
   working: boolean;
   error: string | null;
-  onApprove(edit: ProposalEdit | null): void;
+  /** `postAnyway` is a review's Post anyway: the person's choice to send one that may already be on GitHub. */
+  onApprove(edit: ProposalEdit | null, options?: { postAnyway?: boolean }): void;
   onSkip(): void;
   /** Opens the setup sheet for a run draft, the one place it is approved. */
   onReview?(): void;
@@ -603,13 +604,13 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
       }
       onReview={p.intent.type === "startRun" ? () => void useRunSetup.getState().begin({ proposalId: p.id }) : undefined}
       access={access}
-      onApprove={(edit) =>
+      onApprove={(edit, options) =>
         void run(async () => {
           // A review goes to GitHub by its own path, and only on this approval; never through the tracker.
           if (review) {
             if (!backend) return null;
             // The person's edit is saved first, so what is posted is what the card shows.
-            const done = await editThenPost(p.id, edit, p.revisions.length, { saveEdit: (id, e) => backend.proposalsEdit(id, e), post: (id, revisions) => useWorkspace.getState().postReview(id, revisions) });
+            const done = await editThenPost(p.id, edit, p.revisions.length, { saveEdit: (id, e) => backend.proposalsEdit(id, e), post: (id, revisions) => useWorkspace.getState().postReview(id, revisions, options?.postAnyway) });
             // A refusal may have been for want of access, which is then asked again.
             if (done.error) useReviewAccess.getState().forget(review.connectionId, review.repo);
             return done;

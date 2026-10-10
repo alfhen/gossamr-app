@@ -129,6 +129,10 @@ export interface MockHandle {
   githubWrites(): GithubWrite[];
   /** Someone pushes to pull request `number` of `repo`: its head moves to a new commit whose diff lacks the lines it showed. */
   movePullHead(repo: string, number: number): boolean;
+  /** How many reviews the sample GitHub was asked to post, refused ones included. */
+  githubPostsTried(): number;
+  /** The next review post's answer is lost, as a 502: GitHub keeps the review when `kept`, and drops it otherwise. */
+  loseNextReviewAnswer(kept: boolean): void;
 }
 
 /** What `editTicket` changes on a sample ticket; the status is a status id or its name. */
@@ -145,7 +149,7 @@ export interface MockClockParts {
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(key: string, change: TicketEdit): void };
-  github?: { writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean };
+  github?: { writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
 }
 
 declare global {
@@ -158,8 +162,9 @@ declare global {
  * backend puts its clock on `globalThis.__gossamrMock`: `__gossamrMock.advanceRuns()` steps every unfinished run along and
  * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs, `launches()` lists every
  * launch with the read-only restriction the mock launcher passed Claude Code, and `surfacePullRequests()` shows the
- * draft pull requests finished builds opened without waiting, `githubWrites()` lists the reviews posted to the sample GitHub and
- * `movePullHead(repo, number)` force-pushes a pull request. The last sample backend made wins.
+ * draft pull requests finished builds opened without waiting, `githubWrites()` lists the reviews posted to the sample GitHub,
+ * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
+ * `loseNextReviewAnswer(kept)` loses the next post's answer. The last sample backend made wins.
  */
 export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, github }: MockClockParts) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
@@ -178,6 +183,8 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     editTicket: (key, change) => tickets?.edit(key, change),
     githubWrites: () => (github?.writes ?? []).map((w) => ({ ...w, comments: w.comments.map((c) => ({ ...c })) })),
     movePullHead: (repo, number) => github?.movePullHead(repo, number) ?? false,
+    githubPostsTried: () => github?.tried() ?? 0,
+    loseNextReviewAnswer: (kept) => github?.loseNextAnswer(kept),
   };
 }
 

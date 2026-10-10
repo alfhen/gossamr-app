@@ -1049,11 +1049,15 @@ export class MockRuns {
     return this.pullRequest(repo, number) ?? own ?? null;
   }
 
-  /** What the backend does when a run reaches Done: one comment draft from a marked `For Jira:` section, never a second. */
+  /**
+   * What the backend does when a run reaches Done: one comment draft from a marked `For Jira:` section, never a second. A
+   * review's GitHub review draft is made whatever `draftOnFinish` says, as `draft_review` in `runs/tracker.rs` does, since
+   * nothing else makes one and it writes nothing until the person posts it.
+   */
   private autoDraft(run: Run) {
     const resolved = this.resolved(run);
-    if (!this.limits.draftOnFinish || !resolved.complete) return;
     this.makeReviewDraft(run, resolved);
+    if (!this.limits.draftOnFinish || !resolved.complete) return;
     if (!run.item) {
       const proposal = run.spec.project ? resolved.ticket : null;
       if (proposal && !this.ticketDrafts(run.id).length) this.makeTicketDraft(run, proposal);

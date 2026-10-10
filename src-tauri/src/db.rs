@@ -28,7 +28,6 @@ pub use code::CachedHttp;
 pub use pip_turns::{PipTurn, ROLE_WAKE};
 #[cfg(test)]
 pub use pip_turns::{INTERRUPTED, NEVER_RAN};
-pub use proposals::INTERRUPTED_NOTE;
 
 pub struct Db {
     conn: Connection,

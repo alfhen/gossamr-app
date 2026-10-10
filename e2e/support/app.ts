@@ -119,6 +119,8 @@ interface Handle {
   editTicket(key: string, change: TicketEdit): void;
   githubWrites(): GithubWrite[];
   movePullHead(repo: string, number: number): boolean;
+  githubPostsTried(): number;
+  loseNextReviewAnswer(kept: boolean): void;
 }
 /** One review posted to the sample GitHub (`GithubWrite` in src/backend/mockGithub.ts). */
 export type GithubWrite = {
@@ -206,6 +208,25 @@ export const movePullHead = (page: Page, repo: string, number: number) =>
       return mock.movePullHead(repo, number);
     },
     { repo, number, missing: NO_MOCK },
+  );
+
+/** How many reviews the sample GitHub was asked to post, refused ones included. */
+export const githubPostsTried = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.githubPostsTried();
+  }, NO_MOCK);
+
+/** The next review post's answer is lost, as a 502: the sample GitHub keeps the review when `kept`, and drops it otherwise. */
+export const loseNextReviewAnswer = (page: Page, kept: boolean) =>
+  page.evaluate(
+    ({ kept, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.loseNextReviewAnswer(kept);
+    },
+    { kept, missing: NO_MOCK },
   );
 
 /** Sets workstream `id`'s own limits for automatic turns and wakes. */

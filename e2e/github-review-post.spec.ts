@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { githubWrites, jiraWrites, movePullHead, peekSheet, reviewedDraft } from "./support/app";
+import { githubPostsTried, githubWrites, jiraWrites, loseNextReviewAnswer, movePullHead, peekSheet, reviewedDraft } from "./support/app";
 
 test("approving a finished review's GitHub draft posts exactly one comment review with its inline comments, and nothing else", async ({ page }) => {
   const review = await reviewedDraft(page);
@@ -41,4 +41,39 @@ test("a review whose pull request moved on fails to post as outdated and posts n
   await expect(review.locator("[data-review-outdated]")).toHaveText("Outdated");
   await expect(review.getByRole("alert")).toContainText("no longer match the pull request; it is outdated");
   expect(await githubWrites(page)).toEqual([]);
+});
+
+test("a post whose answer was lost says the review may be on GitHub, sends nothing until Post anyway, then sends it once", async ({ page }) => {
+  const review = await reviewedDraft(page);
+  await loseNextReviewAnswer(page, false);
+  await review.getByRole("button", { name: "Post review" }).click();
+  await expect(review.locator("[data-review-maybe-posted]")).toContainText("This review may already be on GitHub");
+  await expect(review.getByRole("alert")).toContainText("GitHub may have posted this review already");
+  await expect(review.getByRole("button", { name: "Post anyway" })).toHaveCount(0);
+
+  // Posting again looks for it on GitHub, doesn't find it, and still sends nothing.
+  await review.getByRole("button", { name: "Post review" }).click();
+  await expect(review.getByRole("alert")).toContainText("didn't find the review it may have posted");
+  expect(await githubPostsTried(page)).toBe(1);
+  expect(await githubWrites(page)).toEqual([]);
+
+  await review.getByRole("button", { name: "Post anyway" }).click();
+  await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
+  const [write] = await githubWrites(page);
+  await expect(page.locator(`[data-draft="${write.proposalId}"] [data-review-posted]`).first()).toContainText("Posted to GitHub");
+  expect(await githubPostsTried(page)).toBe(2);
+});
+
+test("a review that went through though its answer was lost is found by what was sent, even after an edit, and not sent again", async ({ page }) => {
+  const review = await reviewedDraft(page);
+  await loseNextReviewAnswer(page, true);
+  await review.getByRole("button", { name: "Post review" }).click();
+  await expect(review.locator("[data-review-maybe-posted]")).toBeVisible();
+  const [sent] = await githubWrites(page);
+
+  await review.getByRole("textbox", { name: "Review summary" }).fill("My own words.");
+  await review.getByRole("button", { name: "Post review" }).click();
+  await expect(page.locator(`[data-draft="${sent.proposalId}"] [data-review-posted]`).first()).toContainText("Posted to GitHub");
+  expect((await githubWrites(page)).map((w) => w.body)).toEqual([sent.body]);
+  expect(await githubPostsTried(page)).toBe(1);
 });

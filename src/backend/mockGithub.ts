@@ -56,10 +56,15 @@ export interface GithubWrite {
   commitId: string;
   body: string;
   comments: ReviewComment[];
+  /** The review's id on GitHub. */
+  id?: number;
 }
 
 /** GitHub's 422 for a review whose lines no longer match the pull request, as `Error::ReviewOutdated`. */
 export class ReviewOutdatedError extends Error {}
+
+/** A post whose answer never came, as a 5xx or a failure in transit: GitHub may or may not have kept it. */
+export class AnswerLostError extends Error {}
 
 /**
  * A believable GitHub connection for the mock: repositories to choose from, watched the way the backend watches them
@@ -77,6 +82,10 @@ export class MockGithub {
   private nextReview = 9001;
   /** Repositories (lowercased) where a post was refused with a 403, which then outranks the token's permissions. */
   private refused = new Set<string>();
+  /** The next post's answer is lost (`loseNextAnswer`): "kept" when GitHub kept the review anyway, "dropped" when not. */
+  private losing: "kept" | "dropped" | null = null;
+  /** How many posts were asked for, refused ones included. */
+  tried = 0;
 
   constructor(
     private readonly repoCount: number,
@@ -217,6 +226,7 @@ export class MockGithub {
    * the reviewed commit out of the pull request. Anything else is appended to `writes`, once.
    */
   postReview(proposalId: string, intent: Extract<Intent, { type: "githubReview" }>): PostedReview {
+    this.tried++;
     const { repo, number } = intent;
     if (this.reviewWrites === "none" || !this.reviewAccess(repo).canPost) {
       this.refused.add(repo.toLowerCase());
@@ -227,9 +237,23 @@ export class MockGithub {
     // GitHub reads the lines against the diff at the review's own commit, so a head that merely moved on takes it (its
     // comments show as outdated there); a commit a force-push dropped is refused.
     if (!this.code.hasCommit(repo, number, intent.commitSha)) throw new ReviewOutdatedError("GitHub couldn't place this review on the pull request as it is now (commit_id is not part of the pull request).");
-    this.writes.push({ proposalId, repo, number, event: "COMMENT", commitId: intent.commitSha, body: intent.summary, comments: intent.comments.map((c) => ({ ...c })) });
+    const losing = this.losing;
+    this.losing = null;
+    if (losing !== "dropped") this.writes.push({ proposalId, repo, number, event: "COMMENT", commitId: intent.commitSha, body: intent.summary, comments: intent.comments.map((c) => ({ ...c })), id: this.nextReview });
     const id = this.nextReview++;
+    if (losing) throw new AnswerLostError("GitHub returned 502: Bad Gateway");
     return { id, url: `https://github.com/${repo}/pull/${number}#pullrequestreview-${id}`, at: new Date().toISOString() };
+  }
+
+  /** The next post's answer is lost on the way back, as a 502: GitHub keeps the review when `kept`, and drops it otherwise. */
+  loseNextAnswer(kept: boolean) {
+    this.losing = kept ? "kept" : "dropped";
+  }
+
+  /** The comment review at `commitSha` with `summary` as its body, if one was posted, as `posted_review` in `codehost/github/mod.rs`. */
+  postedReview(repo: string, number: number, commitSha: string, summary: string): PostedReview | null {
+    const w = this.writes.find((w) => w.repo.toLowerCase() === repo.toLowerCase() && w.number === number && w.commitId === commitSha && w.body === summary);
+    return w?.id === undefined ? null : { id: w.id, url: `https://github.com/${repo}/pull/${number}#pullrequestreview-${w.id}`, at: new Date().toISOString() };
   }
 
   onWatchChanged(listener: (c: WatchChanged) => void) {

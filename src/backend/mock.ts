@@ -446,7 +446,7 @@ export class MockBackend implements Backend {
       proposals: this.proposals,
       pip: { hold: holdMockPip, idle: mockPipIdle },
       tickets: { edit: (key, change) => this.editTicket(key, change) },
-      github: { writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number) },
+      github: { writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
     });
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
@@ -895,8 +895,14 @@ export class MockBackend implements Backend {
     return this.proposals.approve(id);
   }
 
-  proposalsPostReview(id: string, revisions: number) {
-    return this.proposals.postReview(id, revisions, async (p) => this.github.postReview(p.id, p.intent));
+  proposalsPostReview(id: string, revisions: number, postAnyway = false) {
+    return this.proposals.postReview(
+      id,
+      revisions,
+      async (p) => this.github.postReview(p.id, p.intent),
+      async (p, sent) => this.github.postedReview(p.intent.repo, p.intent.number, sent.commitSha, sent.summary),
+      postAnyway,
+    );
   }
 
   /** Someone force-pushes pull request `number` of `repo`: its head is a new commit whose diff lacks the lines it showed, and the old one is gone from it, as `MockCode.movePullHead`. */

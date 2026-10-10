@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { REVIEW_CHANGED, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
+import { REVIEW_CHANGED, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
 import type { Intent, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
@@ -122,7 +122,7 @@ describe("posting a review draft to the mock GitHub", () => {
     const posted = await backend.proposalsPostReview(draft.id, draft.revisions.length);
     expect(posted.state.type).toBe("applied");
     expect(posted.posted?.url).toMatch(/^https:\/\/github\.com\/acme\/webshop\/pull\/218#pullrequestreview-\d+$/);
-    expect(backend.github.writes).toEqual([{ proposalId: draft.id, repo: "acme/webshop", number: 218, event: "COMMENT", commitId: "a1b2c3d4e5f6", body: intent.summary, comments: intent.comments }]);
+    expect(backend.github.writes).toEqual([{ proposalId: draft.id, repo: "acme/webshop", number: 218, event: "COMMENT", commitId: "a1b2c3d4e5f6", body: intent.summary, comments: intent.comments, id: posted.posted!.id }]);
     expect(backend.github.writes[0].comments.map((c) => `${c.path}:${c.line}`)).toEqual(["src/consumer/retry.ts:42", "src/consumer/retry.ts:17"]);
     await expect(backend.proposalsPostReview(draft.id, draft.revisions.length)).rejects.toThrow("that draft is applied");
     expect(backend.github.writes).toHaveLength(1);
@@ -170,6 +170,34 @@ describe("posting a review draft to the mock GitHub", () => {
     await expect(backend.proposalsPostReview(draft.id, draft.revisions.length)).rejects.toThrow(REVIEW_CHANGED);
     expect(backend.github.writes).toEqual([]);
     expect(backend.proposals.get(draft.id)?.state.type).toBe("pending");
+  });
+
+  it("keeps a post whose answer was lost as maybe posted through an edit, and finds the review sent with the old summary instead of sending it again", async () => {
+    const { backend, draft, intent } = await reviewed();
+    backend.github.loseNextAnswer(true);
+    const back = await backend.proposalsPostReview(draft.id, 0);
+    expect(back.state.type).toBe("pending");
+    expect(back.error?.startsWith(REVIEW_MAYBE_POSTED_NOTE)).toBe(true);
+    expect(back.maybePosted).toMatchObject({ commitSha: "a1b2c3d4e5f6", summary: intent.summary, checkedAt: null });
+    const edited = await backend.proposalsEdit(draft.id, { type: "githubReview", summary: "My own words." });
+    expect([edited.error, edited.maybePosted]).toEqual([null, back.maybePosted]);
+    const done = await backend.proposalsPostReview(draft.id, edited.revisions.length);
+    expect([done.state.type, done.posted?.id, done.maybePosted]).toEqual(["applied", backend.github.writes[0].id, null]);
+    expect(backend.github.writes.map((w) => w.body)).toEqual([intent.summary]);
+    expect(backend.github.tried).toBe(1);
+  });
+
+  it("holds a maybe posted review GitHub doesn't show until the person posts anyway, then sends it once", async () => {
+    const { backend, draft } = await reviewed();
+    backend.github.loseNextAnswer(false);
+    await backend.proposalsPostReview(draft.id, 0);
+    const held = await backend.proposalsPostReview(draft.id, 0);
+    expect([held.state.type, held.error]).toEqual(["pending", REVIEW_NOT_FOUND_NOTE]);
+    expect(held.maybePosted?.checkedAt).toBeTruthy();
+    expect(backend.github.tried).toBe(1);
+    const done = await backend.proposalsPostReview(draft.id, 0, true);
+    expect([done.state.type, done.maybePosted]).toEqual(["applied", null]);
+    expect([backend.github.tried, backend.github.writes.length]).toEqual([2, 1]);
   });
 
   it("serves every sample pull request's diff for the PR view, with the files, additions and deletions its stats say", async () => {

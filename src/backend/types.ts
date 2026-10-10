@@ -185,8 +185,12 @@ export interface Backend {
    * person's approval calls it. A refusal resolves with the draft back to pending and `error` set; GitHub finding its
    * lines outdated sets `REVIEW_OUTDATED_NOTE`.
    */
-  /** `revisions` is how many revisions the draft had as the person saw it: one revised since is refused (`REVIEW_CHANGED`). */
-  proposalsPostReview(id: string, revisions: number): Promise<Proposal>;
+  /**
+   * `revisions` is how many revisions the draft had as the person saw it: one revised since is refused (`REVIEW_CHANGED`).
+   * A draft with `maybePosted` set is looked for on GitHub rather than sent; `postAnyway`, the person's explicit choice once
+   * it wasn't found, sends it.
+   */
+  proposalsPostReview(id: string, revisions: number, postAnyway?: boolean): Promise<Proposal>;
   /** Called when drafts changed, including by a sync revising or retiring them. Returns an unsubscribe function. */
   onProposalsChanged(listener: (change: ProposalsChanged) => void): () => void;
   /** Background agent runs, newest first. */

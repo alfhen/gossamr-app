@@ -14,9 +14,10 @@ use crate::runs::redact::redact;
 /// The only kind of review Gossamr posts. It is fixed here and never taken from a caller.
 const EVENT: &str = "COMMENT";
 
-/// What a 403 refusing a review says: the token can't write to pull requests in `repo`. Only a refusal in these words
-/// is remembered as the repository not taking reviews (`GithubHost::post_review`); a rate limit or a single sign-on
-/// demand is worded otherwise, and says nothing lasting about the token's access.
+/// What a 403 refusing a review says when GitHub said the token can't reach the resource: the token can't write to pull
+/// requests in `repo`. Only a refusal in these words is remembered as the repository not taking reviews
+/// (`GithubHost::post_review`); a rate limit, a single sign-on demand or any other 403 (an archived or locked repository,
+/// say) keeps GitHub's own words, and says nothing lasting about the token's access.
 pub(super) fn no_write_access(repo: &str) -> String {
     format!("GitHub refused to post the review: the token can't write to pull requests in {repo}. Open the PR view instead, or reconnect GitHub with write access.")
 }
@@ -28,7 +29,7 @@ fn refusal(status: u16, h: &HeaderMap, body: &str, repo: &str, number: u64) -> E
     let general = error_for(status, h, body, Utc::now().timestamp());
     match status {
         // A rate limit or a single sign-on demand says something else, and its own words are the right ones.
-        403 if matches!(general, Error::CodeHost { .. }) && h.get("x-github-sso").is_none() => Error::CodeHost { status, message: no_write_access(repo) },
+        403 if matches!(general, Error::CodeHost { .. }) && h.get("x-github-sso").is_none() && lacks_access(body) => Error::CodeHost { status, message: no_write_access(repo) },
         404 => Error::CodeHost { status, message: format!("GitHub couldn't find pull request #{number} in {repo}, or the token can't see it.") },
         422 => {
             let said = said(body);
@@ -42,10 +43,19 @@ fn refusal(status: u16, h: &HeaderMap, body: &str, repo: &str, number: u64) -> E
     }
 }
 
-/// Whether what a 422 said is about where the review sits: a line, position or path of the diff, or its commit.
+/// Whether a 403 says the token can't reach the pull request: GitHub's "Resource not accessible by …".
+fn lacks_access(body: &str) -> bool {
+    error_message(body).to_ascii_lowercase().contains("resource not accessible")
+}
+
+/// Words of a 422 that say it is about where the review sits, matched as whole words.
+const PLACE_WORDS: [&str; 6] = ["line", "position", "commit", "commit_id", "diff", "path"];
+
+/// Whether what a 422 said is about where the review sits: a line, position or path of the diff, or its commit. Only
+/// whole words count, so a limit on "inline comments" isn't taken for a line.
 fn misplaced(said: &str) -> bool {
     let said = said.to_ascii_lowercase();
-    ["line", "position", "commit", "diff", "could not be resolved", "path"].iter().any(|w| said.contains(w))
+    said.contains("could not be resolved") || said.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|w| PLACE_WORDS.contains(&w))
 }
 
 /// The most of GitHub's own words a refused review repeats.

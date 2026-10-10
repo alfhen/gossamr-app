@@ -364,6 +364,7 @@ mod tests {
             run: None,
             superseded_by: None,
             posted: None,
+            maybe_posted: None,
         }
     }
 

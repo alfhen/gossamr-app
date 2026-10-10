@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { REVIEW_CHANGED, REVIEW_MAYBE_POSTED_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
+import { REVIEW_CHANGED, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -22,9 +22,9 @@ describe("the desktop backend's wiring", () => {
 
   it("sends a review draft's post, files, diff and access with the argument names the commands take", () => {
     const jira = read("./jira.ts");
-    expect(jira).toContain('invoke<Proposal>("proposals_post_review", { id, revisions })');
+    expect(jira).toContain('invoke<Proposal>("proposals_post_review", { id, revisions, postAnyway })');
     const lib = read("../../src-tauri/src/lib.rs");
-    expect(lib).toContain("async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: String, revisions: usize)");
+    expect(lib).toContain("async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: String, revisions: usize, post_anyway: Option<bool>)");
     for (const command of ["code_pull_files", "code_pull_diff"]) expect(lib).toMatch(new RegExp(`async fn ${command}\\(core: State<'_, CoreState>, connection_id: String, repo: String, number: u64\\)`));
     expect(lib).toMatch(/async fn code_review_access\(core: State<'_, CoreState>, connection_id: String, repo: String\)/);
     for (const command of ["code_pull_files", "code_pull_diff"]) expect(jira).toMatch(new RegExp(`"${command}", \\{ connectionId, repo, number \\}`));
@@ -35,6 +35,7 @@ describe("the desktop backend's wiring", () => {
     const rust = read("../../src-tauri/src/inbox/review_drafts.rs").replace(/"\s*\n\s*"/g, "");
     expect(rust).toContain(`pub const REVIEW_OUTDATED_NOTE: &str =\n    "${REVIEW_OUTDATED_NOTE}";`);
     expect(rust).toContain(`pub const REVIEW_MAYBE_POSTED_NOTE: &str = "${REVIEW_MAYBE_POSTED_NOTE}";`);
+    expect(rust).toContain(`pub const REVIEW_NOT_FOUND_NOTE: &str =\n    "${REVIEW_NOT_FOUND_NOTE}";`);
     expect(rust).toContain(`pub const REVIEW_CHANGED: &str = "${REVIEW_CHANGED}";`);
   });
 });

@@ -299,6 +299,19 @@ describe("mock runs of every kind", () => {
     expect(after[1].supersededBy).toBe(after[0].id);
   });
 
+  it("leaves the GitHub review draft of a finished review with drafting on finish off, and no Jira draft", async () => {
+    const backend = new MockBackend({ githubRepos: 14 });
+    await backend.watchSetMode("github:ada", "everything");
+    await backend.runsSetSettings({ ...(await backend.runsSettings()), draftOnFinish: false });
+    const made = await backend.runsDraft({ ...spec, ...webshop, kind: "review", pr: 218, instruction: "" }, itemRef("CA-402"));
+    const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+    for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
+    expect(backend.runs.get(run.id)?.state).toBe("done");
+    const fromRun = backend.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === run.id);
+    expect(fromRun.map((p) => p.intent.type)).toEqual(["githubReview"]);
+    expect(backend.proposals.writes).toEqual([]);
+  });
+
   it("swaps an untouched template when the kind is edited and clears what belongs to the old kind", async () => {
     const backend = new MockBackend();
     const made = await backend.runsDraft({ ...spec, ...storefront, kind: "build", instruction: "", allowPush: true }, itemRef("CA-412"));
