@@ -10,6 +10,7 @@ import type { AskRequest, ClaudeEvent, EventMeta } from "./claude";
 import { mockPipTurns, mockUsage } from "./mockPipTurns";
 import { GENERAL_CONVERSATION, workstreamOfConversation } from "../lib/conversations";
 import { labelsByRun } from "../lib/workstreamStage";
+import { heldText } from "../lib/workstreamHold";
 
 /** What the scripted Pip does for one question. */
 export interface PipScript {
@@ -94,19 +95,26 @@ const asksToSendBack = /another pass|second pass|\bsend (?:it|them|that|the agen
 
 /** The next step a person asks for in a workstream's conversation, and the kind of finished run it follows. */
 const CHAIN_ASKS: { pattern: RegExp; kind: RunKind; from: RunKind }[] = [
-  { pattern: /\btriage (?:it|this)\b/, kind: "triage", from: "investigate" },
-  { pattern: /\bplan (?:it|this)\b/, kind: "plan", from: "investigate" },
+  { pattern: /\btriage (?:it|this)\b|^\s*triage [a-z][a-z0-9]+-\d+\b/, kind: "triage", from: "investigate" },
+  { pattern: /\bplan (?:it|this)\b|^\s*plan [a-z][a-z0-9]+-\d+\b/, kind: "plan", from: "investigate" },
   { pattern: /\bbuild (?:it|this)\b/, kind: "build", from: "plan" },
   { pattern: /\breview (?:it|this)\b/, kind: "review", from: "build" },
 ];
 
 const CHAIN_WORDS: Record<RunKind, string> = { investigate: "an investigation", triage: "a triage", plan: "a plan", build: "a build", review: "a review", verify: "a check" };
 
-/** The conversation's workstream, as the scripted Pip knows it: its id and its ticket. */
+/** The conversation's workstream, as the scripted Pip knows it: its id, its ticket and why it is held, if it is. */
 export interface PipWorkstream {
   id: string;
   item: ItemRef | null;
+  heldReason?: string | null;
 }
+
+/** A key the person named ("plan CA-401"), upper case, when it isn't the workstream's own: then it isn't this workstream's next step. */
+const otherKey = (q: string, item: ItemRef | null) => {
+  const named = /\b([a-z][a-z0-9]+-\d+)\b/.exec(q)?.[1]?.toUpperCase();
+  return named && item && named !== item.key.toUpperCase() ? named : null;
+};
 
 /**
  * What Pip does when asked for the next step in a workstream: it drafts that kind and names as the run it follows the
@@ -117,7 +125,7 @@ export interface PipWorkstream {
 function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[], workstream: PipWorkstream): PipScript | null {
   const q = prompt.toLowerCase();
   const ask = CHAIN_ASKS.find((a) => a.pattern.test(q));
-  if (!ask) return null;
+  if (!ask || otherKey(q, workstream.item)) return null;
   const item = workstream.item ?? context.item;
   if (!item) return { steps: [], text: "This workstream has no ticket, so there is nothing to run that on. Investigate a question instead.", filter: null, draft: null };
   const newest = (done: boolean) =>
@@ -135,6 +143,44 @@ function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[],
     draft: null,
     runDraft: { item, kind: ask.kind, fromRun, focus: null },
   };
+}
+
+/** The screen line Pip home sends (`screenLine` in src/workspace/screenContext.ts). */
+const PIP_HOME = "Pip home";
+
+const asksToApprovePlan = /^\s*approve the plan\b/i;
+const asksWhyHeld = /^\s*why is (?:this|it|the workstream) held\b/i;
+const asksWhileAway = /\bwhile i was away\b/i;
+const asksWhatRunDoes = /^\s*what is (r\d+) doing\b/i;
+const asksWhatWaitsToStart = /^\s*what is waiting to start\b/i;
+
+/**
+ * What Pip says to the workstream questions its chips ask: where the plan is approved (Pip approves nothing), why the
+ * workstream is held, what its agents did, and what one of them is doing. Null for anything else.
+ */
+function workstreamAnswer(prompt: string, runs: readonly Run[], workstream: PipWorkstream, now: number): PipScript | null {
+  const key = workstream.item?.key ?? "the ticket";
+  const own = runs.filter((r) => r.spec.workstream === workstream.id);
+  const say = (text: string, steps: string[] = []): PipScript => ({ steps, text, filter: null, draft: null });
+  if (asksToApprovePlan.test(prompt))
+    return say(`I can't approve anything myself. The plan's update to the description of **${key}** waits in the Plan step on the right, and in ${key}'s peek: read the change there and press Update description. The build starts only after that.`, ["Read the workstream's drafts"]);
+  if (asksWhyHeld.test(prompt)) {
+    const held = heldText(workstream.heldReason);
+    return say(
+      held
+        ? `${held}. While it is held I'm not woken and nothing starts on its own; agents already running carry on. Resume it from the Steps column or type /resume.`
+        : "This workstream isn't held. Its automatic steps run as its rules say, and every change to Jira still waits for you.",
+    );
+  }
+  if (asksWhileAway.test(prompt)) return say(agentSummary(own, now), ["Read the workstream's runs"]);
+  if (asksWhatWaitsToStart.test(prompt))
+    return say(`A run I drafted for **${key}** waits in this conversation and under its step on the right. Press Review and start on it to read the exact prompt, then Start agent. Nothing runs before that, and I can't start it myself.`, ["Read the workstream's drafts"]);
+  const named = asksWhatRunDoes.exec(prompt)?.[1]?.toUpperCase();
+  if (named) {
+    const run = own.find((r) => labelsByRun(runs).get(r.id) === named);
+    return say(run ? `${named} is ${stateView(run, now).label.toLowerCase()}${run.lastDetail ? `: ${run.lastDetail}` : "."}` : `There is no ${named} in this workstream.`, ["Read the workstream's runs"]);
+  }
+  return null;
 }
 
 /** How a wake's prompt starts: the supervisor's event lines (`eventLine` in mockSupervisor.ts). */
@@ -293,6 +339,8 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs);
   const q = prompt.toLowerCase();
   if (asksToSendBack.test(prompt)) return sendBack(context, runs, drafts, discussed);
+  const answer = workstream ? workstreamAnswer(prompt, runs, workstream, now) : null;
+  if (answer) return answer;
   const step = workstream ? chainStep(prompt, context, runs, workstream) : null;
   if (step) return step;
   const finishing = finishes.exec(prompt);
@@ -485,7 +533,8 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     const filter = context.filter ? and(context.filter, wanted.filter) : wanted.filter;
     return {
       steps: ["Searched the items"],
-      text: `${wanted.note}. I filtered this view for you; undo it below if that wasn't what you meant.`,
+      // On Pip home no board is on screen: the filter lands on the workspace tab, there when the person goes back.
+      text: `${wanted.note}. ${context.view === PIP_HOME ? "I filtered your workspace tab for you; it is there when you go back to it." : "I filtered this view for you;"} undo it below if that wasn't what you meant.`,
       filter: { filter, note: wanted.note },
       draft: null,
     };
@@ -555,6 +604,8 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     };
   }
   if (context.view?.startsWith("Agents")) return { steps: ["Looked at your agents"], text: agentSummary(runs, now), filter: null, draft: null };
+  if (context.view === PIP_HOME)
+    return { steps: [], text: "You're on Pip home. Pick a workstream on the left to talk about it, ask me what your agents are doing, or start a workstream on a ticket with ⌘K.", filter: null, draft: null };
   const where = context.view ?? "the workspace";
   const open = context.item ? ` and **${context.item.key}** is open` : "";
   return {
@@ -585,6 +636,8 @@ export interface PipDrafter {
   pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string): Promise<unknown>;
   /** The ticket of workstream `id`, for a turn asked in its conversation. */
   pipWorkstreamItem(id: string): ItemRef | null;
+  /** Why workstream `id` is held, or null; only the scripted answer to "Why is this held?" reads it. */
+  pipWorkstreamHeld(id: string): string | null;
   /** Drafts an investigation with no ticket the way propose_run does: Pip gives a repository and a prompt, the backend builds the rest. */
   pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string): Promise<unknown>;
   /** Whether a draft from the question `requestId` is kept already. */
@@ -644,7 +697,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   // Kept the way the app keeps a turn: the question now, steps as they come, the answer and its usage at the end.
   mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "running", new Date(), undefined, req.kind ?? "user");
   const wsId = workstreamOfConversation(req.conversation);
-  const workstream = wsId ? { id: wsId, item: drafter?.pipWorkstreamItem?.(wsId) ?? null } : null;
+  const workstream = wsId ? { id: wsId, item: drafter?.pipWorkstreamItem?.(wsId) ?? null, heldReason: drafter?.pipWorkstreamHeld?.(wsId) ?? null } : null;
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });

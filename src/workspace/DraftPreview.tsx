@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useContext, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import { targetOf, unreachable } from "../lib/proposals";
@@ -11,8 +11,11 @@ import { showMe } from "./jump";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { nextPass } from "./followUp";
-import { FROM_INPUT, PIP_INPUT_ID, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, type Asking } from "./draftKeys";
+import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, type Asking } from "./draftKeys";
 import { usePip } from "./pipStore";
+import { InlineStart, InlineStartContext, inlineStartId, inlineStartKey, inlineStartable, useInlineStarts } from "./InlineStart";
+import { focusPeekDraft } from "./peekDrafts";
+import { useTabs } from "./tabsStore";
 
 const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺" };
 
@@ -96,6 +99,11 @@ interface Props {
   onApprove?(): void;
   /** What the s key does on a focused card. */
   onSkip?(): void;
+  /**
+   * A run draft started in place on Pip home: its action shows or hides `panel`, the review under the card, instead of
+   * opening the setup sheet; `onKey` takes the review's own keys (⌘↵) pressed on the card itself, and says whether it did.
+   */
+  expander?: { open: boolean; panel: ReactNode; onKey?(ev: KeyboardEvent<HTMLElement>): boolean };
 }
 
 /** Hands typing that landed on a card back to Pip's input, after what is already there. */
@@ -112,7 +120,7 @@ function typeIntoInput(text: string): boolean {
  * ticket, or from the keyboard on the focused card for a draft that needs no review. Only a card reached from the keyboard
  * takes its keys; one focused by a click on its text shows no ring and no hint, and its keys do nothing.
  */
-export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpen, onApprove, onSkip }: Props) {
+export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpen, onApprove, onSkip, expander }: Props) {
   /** Focused from the keyboard: only then does the card take its keys and show them. */
   const [armed, setArmed] = useState(false);
   const [asking, setAsking] = useState<Asking | null>(null);
@@ -126,7 +134,7 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
   const pending = state === "pending" || state === "applying";
   const revision = p.revisions[p.revisions.length - 1];
   const made = p.intent.type === "create" && state === "applied" ? p.created[0] : undefined;
-  const go = pending ? (p.intent.type === "startRun" ? "Review and start →" : p.intent.type === "followUp" ? "Review and send back →" : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
+  const go = pending ? (p.intent.type === "startRun" ? (expander ? "Review and start" : "Review and start →") : p.intent.type === "followUp" ? "Review and send back →" : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
   const create = isCreate(p) ? p : null;
   const body = create ? docText(create.intent.fields.body) || "No description." : draftPreviewBody(p, statusName, pass);
   const decide = (run?: () => void) =>
@@ -146,7 +154,7 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
     const card = ref.current;
     return () => {
       if (!card || !decided.current || !card.contains(document.activeElement)) return;
-      focusAfterLeaving(card, card.closest("aside") ?? document, document.getElementById(PIP_INPUT_ID));
+      focusAfterLeaving(card, card.closest(PIP_ROOT) ?? document, document.getElementById(PIP_INPUT_ID));
     };
   }, []);
 
@@ -156,6 +164,8 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
       aria-label={draftTitle(p)}
       data-draft={p.id}
       data-state={state}
+      // While a decision waits for Enter, Esc is the card's: it cancels the ask, and stops nothing else.
+      data-esc-local={asking ? "" : undefined}
       tabIndex={0}
       aria-keyshortcuts={draftKeyShortcuts(p)}
       onMouseDown={() => {
@@ -163,6 +173,8 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
         setTimeout(() => (pointer.current = false), 0);
       }}
       onKeyDown={(ev) => {
+        // ⌘↵ starts an open review from the card that opened it too, on the same terms as its Start.
+        if (ev.target === ev.currentTarget && expander?.open && expander.onKey?.(ev)) return;
         if (!armed) return;
         const fromInput = ev.target === ev.currentTarget && ev.currentTarget.hasAttribute(FROM_INPUT);
         if (ev.target === ev.currentTarget) ev.currentTarget.removeAttribute(FROM_INPUT);
@@ -176,8 +188,11 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
       onBlur={(ev) => {
         if (ev.target !== ev.currentTarget) return;
         ev.currentTarget.removeAttribute(FROM_INPUT);
-        setArmed(false);
         setAsking(null);
+        // A press inside the card (on Start in its review, say) takes the focus as it goes down; the hint goes once the
+        // click is over, so nothing moves under the pointer and the click lands where it was aimed.
+        if (pointer.current) return void window.addEventListener("mouseup", () => setTimeout(() => setArmed(false), 0), { once: true, capture: true });
+        setArmed(false);
       }}
       className={`overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "applied" ? "opacity-70" : state === "skipped" || state === "retired" ? "opacity-45" : ""}`}
     >
@@ -203,7 +218,13 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
         {targetTitle && <span className="min-w-0 truncate">{targetTitle}</span>}
         {go &&
           (pending ? (
-            <button type="button" onClick={onOpen} className="ml-auto shrink-0 rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip hover:brightness-110">
+            <button
+              type="button"
+              onClick={onOpen}
+              aria-expanded={expander ? expander.open : undefined}
+              aria-controls={expander?.open ? inlineStartId(p.id) : undefined}
+              className="ml-auto shrink-0 rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+            >
               {go}
             </button>
           ) : (
@@ -212,6 +233,7 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
             </button>
           ))}
       </div>
+      {expander?.open && expander.panel}
       {armed && (
         <p role="status" className={`m-0 border-t border-ws-sep px-2.5 py-1 text-xs ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "text-ws-ink3"}`}>
           {draftKeyHint(p, asking)}
@@ -239,19 +261,58 @@ export function draftDecisions(id: string): { approve(): void; skip(): void } {
   };
 }
 
+/**
+ * What a draft card's action does: a run draft opens the setup sheet, or on Pip home (`inline`) one of a kind started in
+ * place shows its review under the card; a ticket's draft shows the ticket (on Pip home its peek opens over Pip home
+ * rather than going to the canvas, where a rewrite's diff is read and approved as anywhere); a draft of a ticket that
+ * doesn't exist yet shows that draft.
+ */
+export function openLiveDraft(p: Proposal, { inline = false }: { inline?: boolean } = {}) {
+  const target = targetOf(p.intent);
+  if (inline && inlineStartable(p)) return useInlineStarts.getState().toggle(p.id);
+  if (p.intent.type === "startRun" && p.state.type === "pending") void useRunSetup.getState().begin({ proposalId: p.id });
+  else if (target && inline && useWorkspace.getState().items[itemKey(target)]) {
+    useTabs.getState().select(itemKey(target));
+    // The keyboard goes with it, to the draft in the peek; closing the peek gives it back to where it was.
+    focusPeekDraft(p.id);
+  }
+  else if (target) showMe(target, { peek: true });
+  else if (p.state.type === "pending" || p.state.type === "applying") showDraft(p.id);
+  else if (p.created[0] && !showMe(p.created[0])) showDraft(p.id);
+}
+
+/** ⌘↵ on the card of run draft `id` while its review is open: as in the review, it starts when Start would; true when the key was taken. */
+function startKey(id: string, ev: KeyboardEvent<HTMLElement>): boolean {
+  const inline = useInlineStarts.getState();
+  const entry = inline.entries[id];
+  const key = entry ? inlineStartKey(ev, entry) : null;
+  if (!key) return false;
+  ev.preventDefault();
+  if (key === "start") void inline.start(id);
+  return true;
+}
+
 /** The preview wired to the workspace: opening it shows the ticket, or the draft of a ticket that doesn't exist yet. */
 export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
   const containers = useWorkspace((s) => s.containers);
+  const inline = useContext(InlineStartContext);
   const target = targetOf(p.intent);
   const item = useWorkspace((s) => (target ? s.items[itemKey(target)] : undefined));
   const statusName = item && p.intent.type === "transition" ? (draftStatus(p, workflowOfItem({ containers }, item))?.name ?? null) : null;
-  const open = () => {
-    if (p.intent.type === "startRun" && p.state.type === "pending") void useRunSetup.getState().begin({ proposalId: p.id });
-    else if (target) showMe(target, { peek: true });
-    else if (p.state.type === "pending" || p.state.type === "applying") showDraft(p.id);
-    else if (p.created[0] && !showMe(p.created[0])) showDraft(p.id);
-  };
+  const startable = inline && inlineStartable(p);
+  const expanded = useInlineStarts((s) => startable && (s.entries[p.id]?.phase ?? "closed") !== "closed");
   const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
   const { approve, skip } = draftDecisions(p.id);
-  return <DraftPreview proposal={p} statusName={statusName} targetTitle={item?.title ?? null} pass={pass} onOpen={open} onApprove={approve} onSkip={skip} />;
+  return (
+    <DraftPreview
+      proposal={p}
+      statusName={statusName}
+      targetTitle={item?.title ?? null}
+      pass={pass}
+      onOpen={() => openLiveDraft(p, { inline })}
+      onApprove={approve}
+      onSkip={skip}
+      expander={startable ? { open: expanded, panel: <InlineStart proposal={p} />, onKey: (ev) => startKey(p.id, ev) } : undefined}
+    />
+  );
 }

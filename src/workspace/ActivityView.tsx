@@ -3,7 +3,7 @@ import { itemKey } from "../lib/filter";
 import { relativeTime } from "../lib/views";
 import type { ContainerRef, FeedEntry, ItemRef, Proposal } from "../types";
 import { allContainers, nameOf, pendingDrafts, useWorkspace } from "../workspaceStore";
-import { CHIPS, CHIP_LABEL, SOURCE_LABEL, buildRows, codeVerb, draftsFor, groupByDay, initials, rowAt, rowId, shownSourceOf, coversAgents, sourcesFor, stepIndex, toCodeEntry, toRunEntries, verb, type ActivityChip, type ActivitySource, type CodeEntry, type RunEntry } from "./activityLogic";
+import { CHIPS, CHIP_LABEL, PIP_CHIP, SOURCE_LABEL, buildRows, chipsFor, toWorkstreamEntries, type WorkstreamEntry, codeVerb, draftsFor, groupByDay, initials, rowAt, rowId, shownSourceOf, coversAgents, sourcesFor, stepIndex, toCodeEntry, toRunEntries, verb, type ActivityChip, type ActivitySource, type CodeEntry, type RunEntry } from "./activityLogic";
 import { GithubMark } from "./DevBits";
 import { useDev } from "./devStore";
 import { openOnGithub } from "./githubUi";
@@ -19,6 +19,7 @@ import { showMe } from "./jump";
 import { runBreakdownDraftOf, runDraftOf } from "./runSheetLogic";
 import { useTabs } from "./tabsStore";
 import { StrayNotices } from "./WatchNotices";
+import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
 
 export const feedRowId = (id: string) => `feed-${id}`;
 
@@ -237,6 +238,60 @@ export function RunFeedRow({ entry: e, ticketTitle, now, selected, position, tot
   );
 }
 
+export interface PipRowProps {
+  entry: WorkstreamEntry;
+  ticketTitle: string | null;
+  now: Date;
+  position: number;
+  total: number;
+  onOpen(): void;
+}
+
+/** A line of a workstream's audit: what Pip, the rules or the person did there. It opens the workstream on Pip home. */
+export function PipFeedRow({ entry: e, ticketTitle, now, position, total, onOpen }: PipRowProps) {
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.target !== ev.currentTarget || ev.key !== "Enter") return;
+    ev.preventDefault();
+    onOpen();
+  };
+  return (
+    <article
+      id={feedRowId(e.id)}
+      data-source="pip"
+      data-action={e.action}
+      tabIndex={0}
+      aria-posinset={position}
+      aria-setsize={total}
+      onKeyDown={onKey}
+      className="group flex gap-3 rounded-lg px-2 py-2.5 outline-offset-[-2px] hover:bg-ws-hover"
+    >
+      <span aria-hidden className="mt-2 size-2 shrink-0 rounded-full bg-transparent" />
+      <span aria-hidden title="Pip & agents" className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-ws-pip-soft text-ws-pip">
+        ◆
+      </span>
+      <div className="min-w-0 flex-1">
+        <button type="button" onClick={onOpen} className="block w-full text-left">
+          <span className="block [overflow-wrap:anywhere]">{e.text}</span>
+          {e.itemKey && (
+            <span className="mt-0.5 block text-ws-ink2 [overflow-wrap:anywhere]">
+              <span className="font-mono text-sm font-semibold">{e.itemKey}</span>
+              {ticketTitle && <span> {ticketTitle}</span>}
+            </span>
+          )}
+        </button>
+        <div className="mt-1 flex items-center gap-1 text-sm text-ws-ink3">
+          <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
+          <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+            <button type="button" className={action} onClick={onOpen}>
+              Open on Pip home
+            </button>
+          </span>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 export function SourceBar({ source, sources, onChange }: { source: ActivitySource; sources: readonly ActivitySource[]; onChange(source: ActivitySource): void }) {
   return (
     <div role="group" aria-label="Source" className="flex flex-wrap gap-1.5">
@@ -261,10 +316,10 @@ export function DayHeading({ label }: { label: string }) {
   return <h3 className="sticky top-0 z-10 m-0 bg-ws-win px-2 pt-4 pb-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">{label}</h3>;
 }
 
-export function ChipBar({ chip, counts, onChange }: { chip: ActivityChip; counts: Partial<Record<ActivityChip, number>>; onChange(chip: ActivityChip): void }) {
+export function ChipBar({ chip, counts, onChange, chips = CHIPS }: { chip: ActivityChip; counts: Partial<Record<ActivityChip, number>>; onChange(chip: ActivityChip): void; chips?: readonly ActivityChip[] }) {
   return (
     <div role="group" aria-label="Show" className="flex flex-wrap gap-1.5">
-      {CHIPS.map((c) => (
+      {chips.map((c) => (
         <button
           key={c}
           type="button"
@@ -273,6 +328,7 @@ export function ChipBar({ chip, counts, onChange }: { chip: ActivityChip; counts
           className={`rounded-xl px-2.5 py-px text-sm font-semibold ${chip === c ? "bg-ws-accent-soft text-ws-accent" : "text-ws-ink2 hover:bg-ws-hover"}`}
         >
           {c === "drafts" && <span aria-hidden>✦ </span>}
+          {c === PIP_CHIP && <span aria-hidden>◆ </span>}
           {CHIP_LABEL[c]}
           {!!counts[c] && <span className="ml-1 font-normal">{counts[c]}</span>}
         </button>
@@ -301,7 +357,28 @@ const EMPTY: Record<ActivityChip, string> = {
   status: "No status changes yet.",
   assigned: "Nothing has been assigned to you.",
   drafts: "No drafts waiting. Ask Pip, or drag a card to a new column.",
+  pip: "Nothing from Pip and your agents yet. What happens in a workstream shows up here.",
 };
+
+const NO_EVENTS: Readonly<Record<string, never>> = {};
+
+/** The open workstreams' audits as feed rows, while the "Pip & agents" chip shows: read again as the workstreams and runs move. */
+function useWorkstreamEntries(shown: boolean): WorkstreamEntry[] {
+  const list = useWorkstreams((s) => s.list);
+  const events = useWorkstreams((s) => (shown ? s.events : NO_EVENTS));
+  // The audit moves when a run starts, changes state or ends, not when a working run ticks along.
+  const moves = useRuns((s) => (shown ? s.runs.map((r) => `${r.id}:${r.state}`).join(" ") : ""));
+  const items = useWorkspace((s) => s.items);
+  useEffect(() => {
+    if (!shown) return;
+    for (const v of list) void useWorkstreams.getState().loadEvents(v.workstream.id);
+  }, [shown, list, moves]);
+  return useMemo(() => {
+    if (!shown) return [];
+    const byKey = new Map(Object.values(items).map((i) => [`${i.item.connectionId}:${i.item.key}`, i.item] as const));
+    return toWorkstreamEntries(events, list, (v) => (v.workstream.itemKey ? (byKey.get(`${v.workstream.connectionId}:${v.workstream.itemKey}`) ?? null) : null));
+  }, [shown, events, list, items]);
+}
 
 function Drafts({ drafts }: { drafts: Proposal[] }) {
   if (!drafts.length) return <EmptyNote>{EMPTY.drafts}</EmptyNote>;
@@ -332,6 +409,13 @@ export function ActivityView() {
   const byChange = useDev((s) => s.byChange);
   const sources = sourcesFor({ github: hasGithub, agents: agentsOn });
   const shownSource: ActivitySource = shownSourceOf(source, sources);
+  const chips = chipsFor({ agents: agentsOn });
+  const pipChip = chip === PIP_CHIP;
+  // "Pip & agents" goes with Agents: turned off, the feed is everything again.
+  useEffect(() => {
+    if (pipChip && !agentsOn) useActivity.getState().setChip("all");
+  }, [pipChip, agentsOn]);
+  const workstreamEntries = useWorkstreamEntries(pipChip && agentsOn);
   // A source that went away (agents turned off) must not stay chosen in the store, or the feed keeps loading it.
   useEffect(() => {
     if (source !== shownSource) useActivity.getState().setSource(shownSource);
@@ -349,8 +433,8 @@ export function ActivityView() {
   const byKey = useMemo(() => new Map(Object.values(items).map((i) => [i.item.key.toUpperCase(), i.item] as const)), [items]);
   const codeEntries = useMemo(() => codeEvents.flatMap((e) => toCodeEntry(e, { byKey, byChange, read: codeRead, now: Date.now() }) ?? []), [codeEvents, byKey, byChange, codeRead]);
   const rows = useMemo(
-    () => buildRows({ source: shownSource, chip, container: project, jira: entries, more: next !== null, code: codeEntries, agents: runEntries, containerOf: (ref: ItemRef) => items[itemKey(ref)]?.container ?? null }),
-    [shownSource, chip, projectKey, entries, next, codeEntries, runEntries, items],
+    () => buildRows({ source: shownSource, chip, container: project, jira: entries, more: next !== null, code: codeEntries, agents: runEntries, workstream: workstreamEntries, containerOf: (ref: ItemRef) => items[itemKey(ref)]?.container ?? null }),
+    [shownSource, chip, projectKey, entries, next, codeEntries, runEntries, workstreamEntries, items],
   );
   const groups = useMemo(() => groupByDay(rows.map((row) => ({ at: rowAt(row), row })), now), [rows, now]);
 
@@ -429,8 +513,8 @@ export function ActivityView() {
           onChange={(p) => useTabs.getState().setFilter(withProject(tab.filter, p))}
         />
         {sources.length > 2 && <SourceBar source={shownSource} sources={sources} onChange={(s) => useActivity.getState().setSource(s)} />}
-        <ChipBar chip={chip} counts={{ needsMe: unread, drafts: drafts.length }} onChange={(c) => useActivity.getState().setChip(c)} />
-        {!showDrafts && (
+        <ChipBar chip={chip} chips={chips} counts={{ needsMe: unread, drafts: drafts.length }} onChange={(c) => useActivity.getState().setChip(c)} />
+        {!showDrafts && !pipChip && (
           <button type="button" disabled={unread === 0} onClick={() => (coversAgents(shownSource) && useActivity.getState().markRunRead(runEntries.filter((e) => e.unread && inProject(e.item)).map((e) => e.id)), void useActivity.getState().markAllRead(codeEntries.filter((e) => e.unread && (!project || (!!e.item && items[itemKey(e.item)]?.container.connectionId === project.connectionId && items[itemKey(e.item)]?.container.externalId === project.externalId))).map((e) => e.id)))} className="ml-auto text-sm text-ws-ink3 underline disabled:no-underline disabled:opacity-45">
             Mark all read
           </button>
@@ -441,23 +525,28 @@ export function ActivityView() {
           <StrayNotices />
           {showDrafts ? (
             <Drafts drafts={drafts} />
-          ) : status === "error" ? (
+          ) : !pipChip && status === "error" ? (
             <div role="alert" className="grid justify-items-center gap-2 py-12 text-ws-blocked">
               <p className="m-0">{error}</p>
               <button type="button" className="rounded-md border border-ws-sep2 px-3 py-1 text-ws-ink" onClick={() => void useActivity.getState().reload()}>
                 Try again
               </button>
             </div>
-          ) : status !== "ready" ? (
+          ) : !pipChip && status !== "ready" ? (
             <EmptyNote>Loading activity…</EmptyNote>
           ) : rows.length === 0 ? (
-            <EmptyNote>{shownSource === "github" ? EMPTY_GITHUB : shownSource === "agents" ? EMPTY_AGENTS : EMPTY[chip]}</EmptyNote>
+            <EmptyNote>{pipChip ? EMPTY.pip : shownSource === "github" ? EMPTY_GITHUB : shownSource === "agents" ? EMPTY_AGENTS : EMPTY[chip]}</EmptyNote>
           ) : (
             <div role="feed" aria-label="Activity" aria-busy={loadingMore}>
               {groups.map((g) => (
                 <section key={g.day} aria-label={g.label}>
                   <DayHeading label={g.label} />
                   {g.entries.map(({ row }) => {
+                    if (row.source === "pip") {
+                      const w = row.entry;
+                      const linked = w.item ? items[itemKey(w.item)] : undefined;
+                      return <PipFeedRow key={w.id} entry={w} ticketTitle={linked?.title ?? null} now={now} position={++position} total={total} onOpen={() => openOnPipHome(w.workstreamId)} />;
+                    }
                     if (row.source === "agents") {
                       const r = row.entry;
                       const linked = r.item ? items[itemKey(r.item)] : undefined;

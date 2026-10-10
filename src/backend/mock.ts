@@ -395,6 +395,7 @@ export class MockBackend implements Backend {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined);
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
+    this.agentsOn = options.agents ?? true;
     this.runs = new MockRuns(this.proposals, options.runs);
     this.workstreams = new MockWorkstreams(
       () => this.runs.list(),
@@ -562,7 +563,7 @@ export class MockBackend implements Backend {
     return this.workstreams.get(ws)?.workstream.itemKey === target.key ? ws : null;
   }
 
-  /** Agents are on in the sample build, as the browser build has always shown them. */
+  /** Agents are on in the sample build, as the browser build has always shown them, unless `options.agents` is false. */
   private agentsOn = true;
   /** Makes the next `runsSetEnabled(true)` fail with this reason, as a failed environment capture does. */
   enableFailure: string | null = null;
@@ -795,6 +796,10 @@ export class MockBackend implements Backend {
   pipWorkstreamItem(id: string): ItemRef | null {
     const key = this.workstreams.get(id)?.workstream.itemKey;
     return key ? itemRef(key) : null;
+  }
+
+  pipWorkstreamHeld(id: string): string | null {
+    return this.workstreams.get(id)?.workstream.heldReason ?? null;
   }
 
   pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string) {

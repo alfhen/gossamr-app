@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { SwitchRow } from "../components/Switch";
 import { developmentLine } from "../lib/devLinks";
 import { describeFilter, itemKey } from "../lib/filter";
-import type { ItemRef, ScreenContext } from "../types";
+import type { ItemRef, Proposal, ScreenContext, WorkstreamView } from "../types";
 import { useDev } from "./devStore";
 import { useLookup } from "./hooks";
 import { PipResizer } from "./PaneResizers";
@@ -14,7 +14,7 @@ import { chipCount, currentContext, unassignedIn, useItemScene, useScreen } from
 import { usePip } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { buildScreenContext, contextLabel, contextLines } from "./screenContext";
-import { suggestionsFor } from "./suggestions";
+import { suggestionsFor, workstreamChips } from "./suggestions";
 import { useAgentsEnabled } from "./agentsFlag";
 import { agentsSuggestionScene, describeRun, runSummaryPrompt } from "./pipRuns";
 import { useRuns } from "./runsStore";
@@ -25,6 +25,7 @@ import { inWorkstreamPane } from "../lib/proposals";
 import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
 import { stageText } from "../lib/workstreamStage";
 import { WorkstreamControls } from "./WorkstreamControls";
+import { workstreamSuggestionScene } from "./pipHomeLogic";
 
 export { AppliedCard, GENERAL_CONVERSATION, PIP_INPUT_ID, workstreamConversation } from "./PipConversation";
 
@@ -74,6 +75,16 @@ export function escapeClosesPane(s: { peekOpen: boolean; ticked: boolean; editin
   return !s.editing || s.inPipInput;
 }
 
+/**
+ * Esc on Pip home: whatever is open over it takes Esc first (a sheet, the peek, the palette, a popover, the image
+ * lightbox, or a confirmation or field that handles Esc itself, `handled`), and only then does Esc stop Pip's answer in
+ * the focused conversation, if it is answering. Nothing to stop is nothing done.
+ */
+export function escapeCancelsTurn(s: { sheetOpen: boolean; peekOpen: boolean; paletteOpen: boolean; popoverOpen: boolean; lightbox: boolean; handled: boolean; running: boolean }): boolean {
+  if (s.sheetOpen || s.peekOpen || s.paletteOpen || s.popoverOpen || s.lightbox || s.handled) return false;
+  return s.running;
+}
+
 function usePaneEscape(onClose: () => void) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
@@ -99,29 +110,30 @@ function usePaneEscape(onClose: () => void) {
   }, [onClose]);
 }
 
-/** Docked to the right of the canvas: the conversation with Pip, with what it can see and the drafts it made. */
-export function PipPane({ onClose }: { onClose(): void }) {
+/** The drafts a conversation shows: a workstream's own and the open ones on its ticket; General shows everyone's. Also loads the conversation's turns. */
+export function useConversationDrafts(conversation: string, workstream: WorkstreamView | null): Proposal[] {
+  const proposals = useWorkspace((s) => s.proposals);
+  const shown = workstream?.workstream ?? null;
+  useEffect(() => {
+    void useClaude.getState().load(conversation);
+  }, [conversation]);
+  return useMemo(() => Object.values(proposals).filter((p) => !shown || inWorkstreamPane(p, shown)), [proposals, shown]);
+}
+
+const NO_TURNS: readonly { kind?: "user" | "wake" }[] = [];
+
+/**
+ * What the composer offers and says for the screen, the same in the Pip pane and on Pip home: the suggestion chips, the
+ * placeholder's scene, and what Pip sees (the context with its label, and the words that describe it). In a
+ * workstream's conversation (`workstream`) the chips are about where that workstream stands.
+ */
+export function usePipChips(workstream: WorkstreamView | null = null) {
   const screen = useScreen();
   const itemScene = useItemScene(screen);
   const lookup = useLookup();
   const proposals = useWorkspace((s) => s.proposals);
   const pinned = usePip((s) => s.pinned);
   const quote = usePip((s) => s.quote);
-  // The ticket the peek shows has an open workstream: its conversation is the one here. Otherwise it is General.
-  const workstream = usePaneWorkstream();
-  const workstreamId = workstream?.workstream.id ?? null;
-  const conversation = workstreamId ? workstreamConversation(workstreamId) : GENERAL_CONVERSATION;
-  const running = useAnswering(conversation);
-  const [seeing, setSeeing] = useState(false);
-  const attached = useAttachments();
-  const drop = useFileDrop((files) => void attached.add(files));
-  // A workstream's conversation shows its own drafts and the open ones on its ticket; General shows everyone's.
-  const shownWorkstream = workstream?.workstream ?? null;
-  const proposalList = useMemo(() => Object.values(proposals).filter((p) => !shownWorkstream || inWorkstreamPane(p, shownWorkstream)), [proposals, shownWorkstream]);
-  useEffect(() => {
-    void useClaude.getState().load(conversation);
-  }, [conversation]);
-  const following = pinned === null;
   const live = useMemo(() => buildScreenContext(screen), [screen]);
   const context: ScreenContext = pinned ?? live;
   const code = useDev((s) => s.index);
@@ -146,6 +158,8 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
   const agentsOn = useAgentsEnabled();
   const hasRuns = runs.length > 0;
+  const turns = useClaude((s) => (workstream ? s.byTicket[workstreamConversation(workstream.workstream.id)]?.turns : undefined)) ?? NO_TURNS;
+  const workstreamScene = useMemo(() => (agentsOn && workstream ? workstreamSuggestionScene(workstream, runs, Object.values(proposals), turns) : undefined), [agentsOn, workstream, runs, proposals, turns]);
   const base = suggestionsFor({
     route: screen.route,
     quote: quote !== null,
@@ -157,13 +171,53 @@ export function PipPane({ onClose }: { onClose(): void }) {
     shown: screen.shown.length,
     filtered: chipCount(screen) > 0,
     agents: agentsOn ? agentsSuggestionScene(runs, screen.agents?.openRun ?? null) : undefined,
+    workstream: workstreamScene,
   });
-  const chips = agentsOn && hasRuns && screen.route !== "settings" && !quote && !base.includes(runSummaryPrompt()) ? [...base, runSummaryPrompt()] : base;
+  // A workstream's chips name its own runs already, at most six of them.
+  const chips = agentsOn && hasRuns && screen.route !== "settings" && !quote && !(workstreamScene && workstreamChips(workstreamScene).length) && !base.includes(runSummaryPrompt()) ? [...base, runSummaryPrompt()] : base;
+  const scene = { itemKey: itemScene?.key ?? null, route: screen.route, runOpen: !!context.run, workstream: !!workstream };
+  return { chips, scene, kind, label, context, words, quote, following: pinned === null };
+}
+
+/** The line naming the conversation: "General", or "Workstream: <title> · <Stage>" with only the title cut short. */
+export function ConversationLine({ conversation, workstream }: { conversation: string; workstream: WorkstreamView | null }) {
+  return (
+    <p
+      data-pip-conversation={conversation}
+      data-waiting-for-pr={workstream?.waitingForPr || undefined}
+      title={workstream ? `This workstream's own conversation with Pip. ${conversationTitle(workstream)}` : "Pip's conversation for everything that isn't in a workstream"}
+      className="m-0 flex min-w-0 text-sm font-semibold text-ws-ink2"
+    >
+      {workstream ? (
+        <>
+          {/* Only the title is cut: where the workstream stands is what the person most needs to see. */}
+          <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
+          <span className="shrink-0 whitespace-pre">{` · ${stageText(workstream.stage, workstream.waitingForPr)}`}</span>
+        </>
+      ) : (
+        <span className="truncate">{conversationTitle(null)}</span>
+      )}
+    </p>
+  );
+}
+
+/** Docked to the right of the canvas: the conversation with Pip, with what it can see and the drafts it made. */
+export function PipPane({ onClose }: { onClose(): void }) {
+  // The ticket the peek shows has an open workstream: its conversation is the one here. Otherwise it is General.
+  const workstream = usePaneWorkstream();
+  const workstreamId = workstream?.workstream.id ?? null;
+  const conversation = workstreamId ? workstreamConversation(workstreamId) : GENERAL_CONVERSATION;
+  const running = useAnswering(conversation);
+  const [seeing, setSeeing] = useState(false);
+  const attached = useAttachments();
+  const drop = useFileDrop((files) => void attached.add(files));
+  const proposalList = useConversationDrafts(conversation, workstream);
+  const { chips, scene, kind, label, context, words, quote, following } = usePipChips(workstream);
 
   usePaneEscape(onClose);
 
   return (
-    <aside aria-label="Pip" {...drop.handlers} className="ws-legacy relative flex min-h-0 flex-col border-l border-ws-sep bg-ws-win">
+    <aside aria-label="Pip" data-pip-root {...drop.handlers} className="ws-legacy relative flex min-h-0 flex-col border-l border-ws-sep bg-ws-win">
       {drop.over && (
         <div aria-hidden className="pointer-events-none absolute inset-2 z-10 grid place-items-center rounded-xl border-2 border-dashed border-ws-pip bg-ws-pip-soft text-center font-semibold text-ws-pip">
           Drop an image to show Pip
@@ -182,28 +236,13 @@ export function PipPane({ onClose }: { onClose(): void }) {
             ×
           </button>
         </div>
-        <p
-          data-pip-conversation={conversation}
-          data-waiting-for-pr={workstream?.waitingForPr || undefined}
-          title={workstream ? `This workstream's own conversation with Pip. ${conversationTitle(workstream)}` : "Pip's conversation for everything that isn't in a workstream"}
-          className="m-0 flex min-w-0 text-sm font-semibold text-ws-ink2"
-        >
-          {workstream ? (
-            <>
-              {/* Only the title is cut: where the workstream stands is what the person most needs to see. */}
-              <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
-              <span className="shrink-0 whitespace-pre">{` · ${stageText(workstream.stage, workstream.waitingForPr)}`}</span>
-            </>
-          ) : (
-            <span className="truncate">{conversationTitle(null)}</span>
-          )}
-        </p>
+        <ConversationLine conversation={conversation} workstream={workstream} />
         {workstream && <WorkstreamControls key={workstream.workstream.id} view={workstream} />}
         <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
         {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
       </header>
       <PipConversation key={conversation} conversation={conversation} proposals={proposalList} />
-      <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={{ itemKey: itemScene?.key ?? null, route: screen.route, runOpen: !!context.run }} />
+      <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} />
     </aside>
   );
 }

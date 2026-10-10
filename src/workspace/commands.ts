@@ -1,5 +1,5 @@
 import { itemKey } from "../lib/filter";
-import type { ContainerRef, Intent, RunKind, WorkContainer, WorkFilter, WorkItem } from "../types";
+import type { ContainerRef, Intent, RunKind, WorkContainer, WorkFilter, WorkItem, WorkstreamView } from "../types";
 import type { SavedView } from "./filters";
 import { THEMES, THEME_LABEL, type ThemeMode } from "./prefs";
 import { CODE_FILTERS, CODE_FILTER_LABEL } from "../lib/devLinks";
@@ -56,6 +56,14 @@ export interface CommandActions {
   holdAllWorkstreams(): void;
   jumpToItem(item: WorkItem): void;
   askPip(query: string): void;
+  /** Goes to Pip home. */
+  openPipHome(): void;
+  /** Shows open workstream `id` on Pip home. */
+  openWorkstream(id: string): void;
+  /** Opens (or finds) the workstream on `item`, shows it on Pip home and asks Pip there to plan it: Pip only drafts, nothing starts. */
+  askPipToPlan(item: WorkItem): void;
+  /** Starts a workstream on `item` and shows its conversation where the person is: on Pip home, or in the Pip pane. */
+  startWorkstreamOn(item: WorkItem): void;
 }
 
 /** What the screen shows right now, for the hints beside entries. */
@@ -71,6 +79,8 @@ export interface CommandContext {
   agentsNeedingMe?: number;
   /** The synced ticket the peek shows, and whether it has an open workstream already. */
   ticket?: { key: string; workstream: boolean } | null;
+  /** The person is on Pip home, where opening it is nothing and ⌘J goes to its composer. */
+  onPipHome?: boolean;
 }
 
 /** The shortcut for Hold all workstreams, as the rail and the palette show it. */
@@ -82,6 +92,12 @@ export const HOLD_ALL_HINT = "⌘⇧.";
  */
 export const isHoldAllKey = (ev: Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">) =>
   (ev.metaKey || ev.ctrlKey) && ev.shiftKey && !ev.altKey && (ev.code === "Period" || ev.key === "." || ev.key === ">");
+
+/** The shortcut for Pip home, as the rail and the footer show it. */
+export const PIP_HOME_HINT = "⌘0";
+
+/** Whether a key press opens Pip home: Cmd/Ctrl+0 and nothing else held. A plain 0 stays the map's. */
+export const isPipHomeKey = (ev: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">) => (ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key === "0";
 
 const NO_CONTEXT: CommandContext = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
 
@@ -119,6 +135,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "app:activity", group: "Go to", icon: "→", label: "Open activity", hint: ctx.unreadActivity ? `${ctx.unreadActivity} new` : undefined, keywords: "feed events", run: a.openActivity },
     { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", hint: ctx.pendingDrafts ? `${ctx.pendingDrafts} pending` : undefined, keywords: "pip proposals review waiting", run: a.openDrafts },
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences autopilot", run: a.openSettings },
+    ...(ctx.agents && !ctx.onPipHome ? [{ id: "app:pip-home", group: "Go to" as const, icon: "✦", label: "Open Pip home", hint: PIP_HOME_HINT, keywords: "pip workstreams conversation agents manager needs you", run: a.openPipHome }] : []),
     ...FILTERS.map(
       (f): Command => ({ id: `filter:${f.id}`, group: "Filters", icon: "⏷", label: `Filter: ${f.label}`, keywords: f.keywords, run: () => a.addFilter(f.filter) }),
     ),
@@ -175,7 +192,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
         ]
       : []),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },
-    { id: "app:pip", group: "App", icon: "✦", label: "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
+    { id: "app:pip", group: "App", icon: "✦", label: ctx.onPipHome ? "Go to Pip's composer" : "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
   ];
 }
 
@@ -240,6 +257,64 @@ export function agentCommands(items: readonly WorkItem[], query: string, run: (i
   return found.flatMap((id) => {
     const item = byKey.get(id);
     return item ? [{ id: `${verb.kind}:${id}`, group: "Agents" as const, icon: ">_", label: `${verb.label} ${item.item.key}  ${item.title}`, hint: "agent", keywords: "start an agent", run: () => run(item, verb.kind) }] : [];
+  });
+}
+
+/** "Open the workstream on KEY" for each open workstream whose key or title matches the query; nothing for an empty one. */
+export function workstreamCommands(list: readonly WorkstreamView[], query: string, a: Pick<CommandActions, "openWorkstream">, limit = 5): Command[] {
+  const q = query.trim().toLowerCase().replace(/^(?:open\s+)?(?:the\s+)?(?:workstream\s+(?:on\s+)?)?/, "");
+  if (!q) return [];
+  const matches: { view: WorkstreamView; rank: number }[] = [];
+  for (const view of list) {
+    const ws = view.workstream;
+    if (ws.closedAt !== null) continue;
+    const key = ws.itemKey?.toLowerCase() ?? "";
+    const rank = key && key === q ? 0 : key && key.startsWith(q) ? 1 : ws.title.toLowerCase().includes(q) ? 2 : null;
+    if (rank !== null) matches.push({ view, rank });
+  }
+  return matches
+    .sort((x, y) => x.rank - y.rank)
+    .slice(0, limit)
+    .map(({ view: { workstream: ws } }): Command => ({
+      id: `workstream:open:${ws.id}`,
+      group: "Agents",
+      icon: "◇",
+      label: `Open the workstream on ${ws.itemKey ?? ws.title}`,
+      hint: "Pip home",
+      keywords: "workstream pip home conversation",
+      run: () => a.openWorkstream(ws.id),
+    }));
+}
+
+/**
+ * "Start a workstream on KEY" for a query like "start a workstream on ca-401" or "workstream checkout", the rest of the
+ * words finding the ticket as `ticketCommands` does: from anywhere, Pip home included, without peeking the ticket first.
+ * A ticket whose workstream is open already is left to `workstreamCommands`.
+ */
+export function startWorkstreamCommands(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[], a: Pick<CommandActions, "startWorkstreamOn">, limit = 3): Command[] {
+  const rest = /^\s*(?:start\s+)?(?:a\s+)?workstream\s+(?:on\s+)?(.+)$/i.exec(query)?.[1]?.trim();
+  if (!rest) return [];
+  const taken = new Set(open.filter((v) => v.workstream.closedAt === null && v.workstream.itemKey).map((v) => `${v.workstream.connectionId}:${v.workstream.itemKey}`));
+  const byKey = new Map(items.map((i) => [itemKey(i.item), i]));
+  return ticketCommands(items, rest, () => {}, limit + taken.size).flatMap((c) => {
+    const item = byKey.get(c.id.slice("ticket:".length));
+    if (!item || taken.has(`${item.item.connectionId}:${item.item.key}`)) return [];
+    return [{ id: `workstream:start:${itemKey(item.item)}`, group: "Agents" as const, icon: "◇", label: `Start a workstream on ${item.item.key}`, hint: item.title, keywords: "workstream pip conversation track ticket", run: () => a.startWorkstreamOn(item) }];
+  }).slice(0, limit);
+}
+
+/**
+ * "Ask Pip to plan KEY" for a query that starts with "plan", the rest of the words finding the ticket as `agentCommands`
+ * does. It only asks: Pip drafts the plan run, which waits for the person.
+ */
+export function askToPlanCommands(items: readonly WorkItem[], query: string, a: Pick<CommandActions, "askPipToPlan">, limit = 3): Command[] {
+  if (!/^\s*plan\b/i.test(query)) return [];
+  const rest = query.replace(/^\s*plan\b/i, " ").trim();
+  const found = rest ? ticketCommands(items, rest, () => {}, limit).map((c) => c.id.slice("ticket:".length)) : [...items].sort((x, y) => y.updated.localeCompare(x.updated)).slice(0, limit).map((i) => itemKey(i.item));
+  const byKey = new Map(items.map((i) => [itemKey(i.item), i]));
+  return found.flatMap((id) => {
+    const item = byKey.get(id);
+    return item ? [{ id: `askplan:${id}`, group: "Ask Pip" as const, icon: "✦", label: `Ask Pip to plan ${item.item.key}`, hint: "drafts only", keywords: "pip plan workstream", run: () => a.askPipToPlan(item) }] : [];
   });
 }
 

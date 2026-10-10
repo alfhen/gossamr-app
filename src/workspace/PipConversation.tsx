@@ -10,7 +10,7 @@ import { workstreamOfConversation } from "../lib/conversations";
 import { MAX_IMAGES, defaultQuestion } from "../lib/pipImages";
 import type { Proposal } from "../types";
 import { LiveDraftPreview } from "./DraftPreview";
-import { PIP_INPUT_ID, stepDraftCards, upToNewestDraft } from "./draftKeys";
+import { PIP_INPUT_ID, PIP_ROOT, stepDraftCards, upToNewestDraft } from "./draftKeys";
 import { PipRunStrip } from "./PipRunCard";
 import { AttachButton, AttachedThumbs, TurnImages, type useAttachments } from "./PipImages";
 import { currentContext } from "./pipHooks";
@@ -19,6 +19,7 @@ import { placeholderFor } from "./suggestions";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useAgentsEnabled } from "./agentsFlag";
+import { usePipHome } from "./pipHomeStore";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { useWorkspace } from "../workspaceStore";
 
@@ -63,30 +64,93 @@ function LiveApplied({ requestId }: { requestId: string }) {
 const WAKE_LINE = /^\[Event\] (?:run (\S+)|a run) \(\w+\) ([^;]+)/;
 const WAKE_STATE: Record<string, string> = { Done: "finished", Failed: "failed", Stopped: "stopped", "Stopped at a limit": "stopped at a limit" };
 
+/** What a wake turn's muted line says, in parts: the run it names (by its label, else its short id) and that run's id, so the line can link to it. */
+export interface WakeParts {
+  /** "run R2", "a run", or null when the prompt has no event lines. */
+  who: string | null;
+  /** The id of the run named, when the event names one. */
+  runId: string | null;
+  /** What follows the run: " finished", " finished and 1 more". */
+  rest: string;
+}
+
+/** The parts of a wake turn's header, from the turn's event lines (`WAKE_LINE`). */
+export function wakeParts(prompt: string, labels: ReadonlyMap<string, string>): WakeParts {
+  const events = prompt
+    .split("\n")
+    .map((l) => WAKE_LINE.exec(l.trim()))
+    .filter((m): m is RegExpExecArray => m !== null);
+  if (!events.length) return { who: null, runId: null, rest: "" };
+  const state = (s: string) => WAKE_STATE[s.trim()] ?? "needs you";
+  const [, id, first] = events[0];
+  const more = events.length > 1 ? ` and ${events.length - 1} more` : "";
+  return { who: id ? `run ${labels.get(id) ?? runRef({ id })}` : "a run", runId: id ?? null, rest: ` ${state(first)}${more}` };
+}
+
 /**
  * The muted line a wake turn opens with in place of a question: "Pip picked this up: run R2 finished", the run named by
  * its label in its workstream (`labels`), else its short id, from the turn's event lines.
  */
 export function wakeHeader(prompt: string, labels: ReadonlyMap<string, string>): string {
-  const events = prompt
-    .split("\n")
-    .map((l) => WAKE_LINE.exec(l.trim()))
-    .filter((m): m is RegExpExecArray => m !== null);
-  if (!events.length) return "Pip picked this up";
-  const state = (s: string) => WAKE_STATE[s.trim()] ?? "needs you";
-  const [, id, first] = events[0];
-  const who = id ? `run ${labels.get(id) ?? runRef({ id })}` : "a run";
-  const more = events.length > 1 ? ` and ${events.length - 1} more` : "";
-  return `Pip picked this up: ${who} ${state(first)}${more}`;
+  const { who, rest } = wakeParts(prompt, labels);
+  return who ? `Pip picked this up: ${who}${rest}` : "Pip picked this up";
+}
+
+/**
+ * Opens the run a wake turn is about: on Pip home its step opens in the rail and its card there takes focus; in the Pip
+ * pane its sheet opens over the screen the person is on.
+ */
+export function openWakeRun(runId: string) {
+  if (useTabs.getState().route === "pip") usePipHome.getState().focus({ type: "run", id: runId, where: "rail" });
+  else useRuns.getState().openRun(runId, { stay: true });
 }
 
 function WakeHeader({ turn }: { turn: Turn }) {
   const runs = useRuns((s) => s.runs);
+  const { who, runId, rest } = wakeParts(turn.prompt, labelsByRun(runs));
   return (
-    <p data-wake-header className="m-0 flex items-center gap-1.5 text-sm text-ws-ink3">
+    <p data-wake-header className="m-0 flex flex-wrap items-center gap-x-1.5 text-sm text-ws-ink3">
       <span aria-hidden className="size-1.5 rounded-full bg-ws-pip" />
-      {wakeHeader(turn.prompt, labelsByRun(runs))}
+      {who === null ? (
+        "Pip picked this up"
+      ) : (
+        <span>
+          Pip picked this up:{" "}
+          {runId && runs.some((r) => r.id === runId) ? (
+            <button type="button" data-wake-run={runId} title="Show this run" onClick={() => openWakeRun(runId)} className="rounded text-ws-ink2 underline-offset-2 hover:text-ws-pip hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ws-pip">
+              {who}
+            </button>
+          ) : (
+            who
+          )}
+          {rest}
+        </span>
+      )}
     </p>
+  );
+}
+
+/** More than about three lines of a wake's answer is folded away behind Show more. */
+const WAKE_LINES = 3;
+const WAKE_CHARS = 240;
+export const wakeIsLong = (text: string) => text.trim().split(/\n+/).length > WAKE_LINES || text.length > WAKE_CHARS;
+
+/** A wake's answer, at most about three lines until the person asks for the rest. */
+function WakeText({ id, text }: { id: string; text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = wakeIsLong(text);
+  const panel = `wake-text-${id}`;
+  return (
+    <div className="grid gap-0.5">
+      <div id={panel} data-wake-text data-clamped={long && !open ? "true" : undefined} className={`ws-legacy text-ws-ink2 ${long && !open ? "line-clamp-3" : ""}`}>
+        <Markdown text={text} />
+      </div>
+      {long && (
+        <button type="button" aria-expanded={open} aria-controls={panel} onClick={() => setOpen(!open)} className="justify-self-start rounded text-xs font-semibold text-ws-ink2 hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip">
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -99,7 +163,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
   const working = turn.status === "running" && !turn.text;
   if (turn.kind === "wake") {
     return (
-      <div data-turn-kind="wake" className="grid gap-1.5">
+      <div data-turn-kind="wake" className="grid gap-1">
         <WakeHeader turn={turn} />
         {(turn.steps.length > 0 || working) && (
           <ul className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
@@ -112,11 +176,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
             {working && <li className="animate-pulse text-ws-ink3">Reading what happened…</li>}
           </ul>
         )}
-        {turn.text && (
-          <div className="ws-legacy">
-            <Markdown text={turn.text} />
-          </div>
-        )}
+        {turn.text && <WakeText id={turn.requestId} text={turn.text} />}
         {drafts.map((p) => (
           <LiveDraftPreview key={p.id} proposal={p} />
         ))}
@@ -281,6 +341,15 @@ export function VerbNote({ outcome }: { outcome: VerbOutcome | null }) {
   );
 }
 
+/** What the agents are doing, under the composer: updated as runs move, and never a turn in the conversation. */
+export function ComposerFooter({ text }: { text: string }) {
+  return (
+    <p role="status" data-composer-footer className="m-0 -mt-1 px-3 pb-2 text-xs text-ws-ink3">
+      {text}
+    </p>
+  );
+}
+
 interface ComposerProps {
   conversation: string;
   /** Images waiting to go with the next question; the pane owns them so a drop anywhere on it lands here. */
@@ -291,6 +360,8 @@ interface ComposerProps {
   looking: string;
   /** What the placeholder suggests asking about. */
   scene: Omit<Parameters<typeof placeholderFor>[0], "images" | "quote">;
+  /** A muted line under the input, such as Pip home's "4 agents working · 2 need you"; the pane has none. */
+  footer?: string | null;
 }
 
 /** Where a question is written: suggestions, the quoted text, attached images and the input with Ask or Stop. */
@@ -300,7 +371,7 @@ export function outcomeBelongs(asked: string, shown: string): boolean {
   return asked === shown;
 }
 
-export function Composer({ conversation, attached, chips, looking, scene }: ComposerProps) {
+export function Composer({ conversation, attached, chips, looking, scene, footer = null }: ComposerProps) {
   const sessionId = useClaude((s) => s.byTicket[conversation]?.sessionId ?? null);
   const running = useAnswering(conversation);
   const queued = useQueued(conversation);
@@ -382,7 +453,7 @@ export function Composer({ conversation, attached, chips, looking, scene }: Comp
           id={PIP_INPUT_ID}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => upToNewestDraft(e, input, e.currentTarget.closest("aside") ?? document)}
+          onKeyDown={(e) => upToNewestDraft(e, input, e.currentTarget.closest(PIP_ROOT) ?? document)}
           onPaste={(e) => {
             const files = filesIn(e.clipboardData).filter((f) => f.type === "" || f.type.startsWith("image/"));
             if (!files.length) return;
@@ -404,6 +475,7 @@ export function Composer({ conversation, attached, chips, looking, scene }: Comp
         </button>
       </form>
       <VerbNote outcome={note} />
+      {footer && <ComposerFooter text={footer} />}
     </>
   );
 }

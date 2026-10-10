@@ -3,9 +3,10 @@ import type { Backend } from "../backend/types";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { stageText } from "../lib/workstreamStage";
 import { budgetView } from "../lib/workstreamHold";
-import type { AutoStartSwitches, ItemRef, Run, ScreenContext, Workstream, WorkstreamMode, WorkstreamRule, WorkstreamView } from "../types";
+import type { AutoStartSwitches, ItemRef, Run, ScreenContext, Workstream, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { PIP_INPUT_ID } from "./draftKeys";
+import { keepSelectionOpen, usePipHome } from "./pipHomeStore";
 import { usePrefs } from "./prefs";
 import { useRuns, type RunSheetTarget } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -15,12 +16,20 @@ interface WorkstreamsState {
   backend: Backend | null;
   /** The open workstreams, newest first, each with the stage its runs give it. */
   list: WorkstreamView[];
+  /** The closed workstreams, as Pip home lists them read-only once asked; empty until `loadClosed` read them. */
+  closed: WorkstreamView[];
   init(backend: Backend): void;
   dispose(): void;
   refresh(): Promise<void>;
+  /** Reads the closed workstreams into `closed`. */
+  loadClosed(): Promise<void>;
+  /** Each workstream's audit, oldest first, by id, as last read by `loadEvents`; Pip home's step rail reads the selected one's. */
+  events: Record<string, WorkstreamEvent[]>;
+  /** Reads workstream `id`'s audit into `events`. */
+  loadEvents(id: string): Promise<void>;
   /** The open workstream on the ticket `itemKey` (its key, such as `CA-401`), if there is one. */
   forItem(itemKey: string, connectionId?: string): WorkstreamView | null;
-  /** Opens (or finds) the workstream on `item` and shows its conversation in the Pip pane. Null when it couldn't. */
+  /** Opens (or finds) the workstream on `item` and shows its conversation: on Pip home there, elsewhere in the Pip pane. Null when it couldn't. */
   start(item: ItemRef): Promise<WorkstreamView | null>;
   /** The workstream whose Close waits for the person to confirm it in the peek, if any. */
   confirmingClose: string | null;
@@ -49,6 +58,11 @@ interface WorkstreamsState {
 let stop: (() => void) | null = null;
 /** Bumped on every read and on dispose, so a list read for an earlier backend or account can't land. */
 let seq = 0;
+/** The same for reads of the closed workstreams. */
+let closedSeq = 0;
+/** The same for reads of each workstream's audit: the newest read of each id, from one counter, so a read from before a dispose never matches. */
+const eventsSeq = new Map<string, number>();
+let eventsCounter = 0;
 
 const ofItem = (list: readonly WorkstreamView[], key: string, connectionId?: string) =>
   list.find((v) => v.workstream.itemKey === key && v.workstream.closedAt === null && (!connectionId || v.workstream.connectionId === connectionId)) ?? null;
@@ -78,15 +92,22 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
   return {
     backend: null,
     list: [],
+    closed: [],
+    events: {},
     confirmingClose: null,
     globals: null,
 
     init(backend) {
       get().dispose();
       set({ backend });
-      const offWorkstreams = backend.onWorkstreamsChanged(() => void get().refresh());
+      // The selected workstream on Pip home has its audit read again with the list, for its step rail.
+      const selectedEvents = () => {
+        const id = usePipHome.getState().selected;
+        if (id) void get().loadEvents(id);
+      };
+      const offWorkstreams = backend.onWorkstreamsChanged(() => (void get().refresh(), selectedEvents()));
       // A run that moved on may have moved its workstream's stage on.
-      const offRuns = backend.onRunsChanged(() => void get().refresh());
+      const offRuns = backend.onRunsChanged(() => (void get().refresh(), selectedEvents()));
       stop = () => (offWorkstreams(), offRuns());
       void get().refresh();
     },
@@ -95,7 +116,10 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       stop?.();
       stop = null;
       seq++;
-      set({ backend: null, list: [], confirmingClose: null, globals: null });
+      closedSeq++;
+      eventsSeq.clear();
+      set({ backend: null, list: [], closed: [], events: {}, confirmingClose: null, globals: null });
+      usePipHome.getState().reset();
     },
 
     async refresh() {
@@ -103,7 +127,30 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       if (!backend) return;
       const mine = ++seq;
       const list = await backend.workstreamsList().catch(() => null);
-      if (list && mine === seq && get().backend === backend) set({ list });
+      if (!list || mine !== seq || get().backend !== backend) return;
+      set({ list });
+      keepSelectionOpen(list.filter((v) => v.workstream.closedAt === null).map((v) => v.workstream.id));
+      // What Pip home lists as closed follows the open list: one closed meanwhile moves across.
+      if (usePipHome.getState().showClosed) void get().loadClosed();
+    },
+
+    async loadClosed() {
+      const { backend } = get();
+      if (!backend) return;
+      const mine = ++closedSeq;
+      const all = await backend.workstreamsList(true).catch(() => null);
+      if (all && mine === closedSeq && get().backend === backend) set({ closed: all.filter((v) => v.workstream.closedAt !== null) });
+    },
+
+    async loadEvents(id) {
+      const { backend } = get();
+      if (!backend) return;
+      const mine = ++eventsCounter;
+      eventsSeq.set(id, mine);
+      const events = await backend.workstreamsEvents(id).catch(() => null);
+      // A newer read of the same audit, a dispose or another backend meanwhile: this one is stale.
+      if (!events || eventsSeq.get(id) !== mine || get().backend !== backend) return;
+      set({ events: { ...get().events, [id]: events } });
     },
 
     forItem: (itemKey, connectionId) => ofItem(get().list, itemKey, connectionId),
@@ -117,7 +164,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       try {
         const ws = await backend.workstreamsOpen(item);
         if (get().backend === backend) await get().refresh();
-        focusPip();
+        focusPip(ws.id);
         return get().list.find((v) => v.workstream.id === ws.id) ?? { workstream: ws, stage: "intake", runs: [], labels: [], budget: budgetView(ws) };
       } catch (e) {
         useToasts.getState().push(`Couldn't start a workstream on ${item.key}. ${messageOf(e)}`);
@@ -192,14 +239,51 @@ export function holdAllVisible(list: readonly WorkstreamView[], conversations: R
   return Object.entries(conversations).some(([c, conv]) => workstreamOfConversation(c) !== null && !!conv?.turns.some((t) => t.status === "running"));
 }
 
-/** Opens the Pip pane, or keeps it open, and puts the cursor in its composer. */
-export function focusPip() {
-  usePrefs.getState().setPipOpen(true);
+/**
+ * Opens the Pip pane, or keeps it open, and puts the cursor in its composer. On Pip home there is no pane: it selects
+ * workstream `id` there (when given) and puts the cursor in Pip home's composer instead.
+ */
+export function focusPip(id?: string) {
+  if (useTabs.getState().route === "pip") {
+    if (id) usePipHome.getState().openWorkstream(id);
+  } else {
+    usePrefs.getState().setPipOpen(true);
+  }
+  focusComposer();
+}
+
+/**
+ * Shows workstream `id` (null: General) on Pip home, from any route: the palette's "Open the workstream on KEY", the
+ * peek's "Open on Pip home", an Activity row. A peek open over Pip home closes so the workstream is what shows.
+ */
+export function openOnPipHome(id: string | null) {
+  const tabs = useTabs.getState();
+  if (tabs.route !== "pip") tabs.setRoute("pip");
+  else if (tabs.selected !== null) tabs.select(null);
+  const home = usePipHome.getState();
+  if (id) home.openWorkstream(id);
+  else home.openGeneral();
+}
+
+/** Puts the cursor in Pip's composer, the pane's or Pip home's, whichever is on screen. */
+export function focusComposer() {
   if (typeof document === "undefined") return;
-  // The pane may only mount on this render; its input is there on the next frame.
+  // The composer may only mount on this render; its input is there on the next frame.
   const focus = () => document.getElementById(PIP_INPUT_ID)?.focus();
   focus();
-  requestAnimationFrame(focus);
+  const was = document.activeElement;
+  requestAnimationFrame(() => {
+    // Only if focus hasn't moved since: a key pressed in between (F6 to the rail, say) keeps where it took it.
+    const at = document.activeElement;
+    if (at === was || !at || at === document.body) focus();
+  });
+}
+
+/** ⌘J and the rail's Pip button: on Pip home they go to its composer; elsewhere they open or close the Pip pane. */
+export function togglePip() {
+  if (useTabs.getState().route === "pip") return focusComposer();
+  const prefs = usePrefs.getState();
+  prefs.setPipOpen(!prefs.pipOpen);
 }
 
 /** The ticket the peek shows (selected or peeked), when one is open on a screen that shows it. */
@@ -249,6 +333,29 @@ export function paneWorkstream(): WorkstreamView | null {
 export function paneConversation(): string {
   const ws = paneWorkstream();
   return ws ? workstreamConversation(ws.workstream.id) : GENERAL_CONVERSATION;
+}
+
+/** The conversation Pip home shows: its selected workstream's, or General. */
+const homeConversation = (selected: string | null) => (selected ? workstreamConversation(selected) : GENERAL_CONVERSATION);
+
+/** The conversation in focus: on Pip home the one it shows, elsewhere the one the Pip pane shows (`paneConversation`). */
+export function focusedConversation(): string {
+  return useTabs.getState().route === "pip" ? homeConversation(usePipHome.getState().selected) : paneConversation();
+}
+
+/** `focusedConversation`, kept current. */
+export function useFocusedConversation(): string {
+  const home = useTabs((s) => s.route === "pip");
+  const selected = usePipHome((s) => s.selected);
+  const pane = usePaneWorkstream();
+  if (home) return homeConversation(selected);
+  return pane ? workstreamConversation(pane.workstream.id) : GENERAL_CONVERSATION;
+}
+
+/** The open workstream Pip home shows, kept current; null for General. */
+export function useHomeWorkstream(): WorkstreamView | null {
+  const selected = usePipHome((s) => s.selected);
+  return useWorkstreams((s) => (selected ? (s.list.find((v) => v.workstream.id === selected && v.workstream.closedAt === null) ?? null) : null));
 }
 
 /** `paneWorkstream`, kept current as the selection, the tickets and the workstreams change. */

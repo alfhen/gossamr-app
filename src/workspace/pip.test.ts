@@ -8,6 +8,9 @@ import { useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
 import { askPip } from "./askPip";
 import { handlePipView } from "./PipExtras";
+import { escapeCancelsTurn } from "./PipPane";
+import { usePipHome } from "./pipHomeStore";
+import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
 import { commentNotes, historyNotes, linkRows } from "./peekLogic";
 import { NUDGE_GAP_MS, NUDGE_DWELL_MS, LARGE_LIST, nudgeCandidates, nudgeDelay, pickNudge, type NudgeScene } from "./nudges";
@@ -75,6 +78,12 @@ describe("screen context by route", () => {
     expect(buildScreenContext(s)).toEqual({ view: "Settings", item: null, filter: null, selection: [] });
   });
 
+  it("says Pip home on Pip home, never the workspace tab's view, and sends no board filter or ticked cards", () => {
+    const s = screen(tab, null, ["mock:DEVOPS-471"], "pip");
+    expect(screenLine(s)).toBe("Pip home");
+    expect(buildScreenContext(s)).toEqual({ view: "Pip home", item: null, filter: null, selection: [] });
+  });
+
   it("names the runs on Agents, sends no board filter or ticked cards, and keeps a ticket peeked over it", () => {
     const agents = { openRun: null, waiting: 0, runs: [], filters: { lane: "all", repo: "all", ticket: "all" } as const, earlierOpen: false, now: 0 };
     const s = { ...screen(tab, "mock:DEVOPS-471", ["mock:DEVOPS-471", "mock:DEVOPS-473"], "agents"), agents };
@@ -126,6 +135,40 @@ describe("Claude-driven filters", () => {
     handlePipView({ requestId: "mine", filter: { type: "blocked" }, note: "x" });
     expect(activeTab(useTabs.getState()).filter).toEqual({ type: "blocked" });
     useClaude.setState({ byTicket: {} });
+  });
+
+  it("on Pip home, applies a filter asked in the selected workstream's conversation to the workspace tab only, and ignores the rest", () => {
+    const turn = (requestId: string) => ({ requestId, prompt: "", steps: [], text: "", status: "running" as const, error: null });
+    useClaude.setState({ byTicket: { "ws:ws-1": { turns: [turn("home")], sessionId: null }, general: { turns: [turn("general")], sessionId: null }, "ws:ws-2": { turns: [turn("other")], sessionId: null } } });
+    useTabs.getState().setRoute("pip");
+    usePipHome.getState().openWorkstream("ws-1");
+    const backend = ws().backend!;
+    const calls = Object.getOwnPropertyNames(Object.getPrototypeOf(backend))
+      .filter((name) => name !== "constructor" && typeof (backend as unknown as Record<string, unknown>)[name] === "function")
+      .map((name) => vi.spyOn(backend as unknown as Record<string, () => unknown>, name));
+    const proposals = ws().proposals;
+    const runs = useRuns.getState().runs;
+    const tabs = useTabs.getState().tabs.length;
+    try {
+      handlePipView({ requestId: "general", filter: { type: "blocked" }, note: "x" });
+      handlePipView({ requestId: "other", filter: { type: "blocked" }, note: "x" });
+      expect(activeTab(useTabs.getState()).filter).toEqual(ALL);
+      expect(usePip.getState().filtered).toBeNull();
+      handlePipView({ requestId: "home", filter: { type: "blocked" }, note: "Blocked" });
+      expect(activeTab(useTabs.getState()).filter).toEqual({ type: "blocked" });
+      expect(usePip.getState().applied.home).toMatchObject({ note: "Blocked", undone: false });
+      expect(useTabs.getState()).toMatchObject({ route: "pip", selected: null, marked: [] });
+      expect(useTabs.getState().tabs).toHaveLength(tabs);
+      expect(usePipHome.getState().selected).toBe("ws-1");
+      expect(ws().proposals).toBe(proposals);
+      expect(useRuns.getState().runs).toBe(runs);
+      for (const call of calls) expect(call).not.toHaveBeenCalled();
+    } finally {
+      calls.forEach((c) => c.mockRestore());
+      useTabs.getState().setRoute("workspace");
+      usePipHome.getState().reset();
+      useClaude.setState({ byTicket: {} });
+    }
   });
 
   it("undoes on the tab it filtered even after another tab became active", () => {
@@ -298,5 +341,18 @@ describe("askPip", () => {
     expect(useToasts.getState().toasts).toHaveLength(toasts);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ prompt: "and then?", sessionId: "s1", conversation: "general" });
+  });
+});
+
+describe("Esc on Pip home", () => {
+  const none = { sheetOpen: false, peekOpen: false, paletteOpen: false, popoverOpen: false, lightbox: false, handled: false, running: true };
+
+  it("leaves Esc to an open sheet, the peek, the palette, a popover, the lightbox or a confirmation first", () => {
+    for (const open of ["sheetOpen", "peekOpen", "paletteOpen", "popoverOpen", "lightbox", "handled"] as const) expect(escapeCancelsTurn({ ...none, [open]: true })).toBe(false);
+  });
+
+  it("then cancels Pip's turn, and does nothing with no turn to cancel", () => {
+    expect(escapeCancelsTurn(none)).toBe(true);
+    expect(escapeCancelsTurn({ ...none, running: false })).toBe(false);
   });
 });

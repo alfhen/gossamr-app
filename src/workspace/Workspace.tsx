@@ -23,9 +23,10 @@ import { usePaneWidths } from "./PaneResizers";
 import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
 import { applyTheme, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
-import { useWorkstreams } from "./workstreamsStore";
+import { togglePip, useWorkstreams } from "./workstreamsStore";
+import { PipHome } from "./PipHome";
 import { Rail } from "./Rail";
-import { isHoldAllKey } from "./commands";
+import { isHoldAllKey, isPipHomeKey } from "./commands";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
 import { ConnectGithubDialog } from "./ConnectGithub";
@@ -33,7 +34,7 @@ import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
 import { ToastHost } from "./ToastHost";
-import { useTabs } from "./tabsStore";
+import { useTabs, type Route } from "./tabsStore";
 
 /** Matches no item, for a filter that has nothing to read. */
 const NOTHING: WorkFilter = { type: "items", items: [] };
@@ -62,12 +63,42 @@ function Canvas() {
   return <View tab={tab} items={items} />;
 }
 
+/** What the main area shows on `route`. Agents and Pip home are there only while Agents are on; until the route moves on, nothing is. */
+export function mainScreen(route: Route, agentsEnabled: boolean): Route | null {
+  return (route === "agents" || route === "pip") && !agentsEnabled ? null : route;
+}
+
+/** Whether the docked Pip pane is in the window: as the person left it, except on Pip home, whose own conversation takes its place. */
+export const showsPipPane = (route: Route, agentsEnabled: boolean, pipOpen: boolean) => pipOpen && mainScreen(route, agentsEnabled) !== "pip";
+
+/** Pip home is where the app opens only once per load, so coming back to the workspace later doesn't send the person away again. */
+let landed = false;
+
+/**
+ * Opens on Pip home once the workspace is ready and the backend said Agents are on, when the person chose to start
+ * there. Otherwise, and with Agents off, the app opens where it always has.
+ */
+function useStartOnPipHome(ready: boolean) {
+  const known = useAgentsFlag((s) => s.known);
+  const enabled = useAgentsFlag((s) => s.enabled);
+  useEffect(() => {
+    if (!ready || !known || landed) return;
+    landed = true;
+    if (enabled && usePrefs.getState().startOnPipHome) useTabs.getState().setRoute("pip");
+  }, [ready, known, enabled]);
+}
+
 function useGlobalKeys(agentsEnabled: boolean) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       if (agentsEnabled && isHoldAllKey(ev)) {
         ev.preventDefault();
         void useWorkstreams.getState().holdAll();
+        return;
+      }
+      if (agentsEnabled && isPipHomeKey(ev)) {
+        ev.preventDefault();
+        useTabs.getState().setRoute("pip");
         return;
       }
       if (!(ev.metaKey || ev.ctrlKey) || ev.altKey || ev.shiftKey) return;
@@ -77,7 +108,8 @@ function useGlobalKeys(agentsEnabled: boolean) {
         prefs.setPaletteOpen(!prefs.paletteOpen);
       } else if (ev.key === "j") {
         ev.preventDefault();
-        prefs.setPipOpen(!prefs.pipOpen);
+        // On Pip home this goes to its composer; elsewhere it opens or closes the pane.
+        togglePip();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -100,11 +132,14 @@ export function Workspace({ backend }: { backend: Backend }) {
   const agentsEnabled = useAgentsEnabled();
   useGlobalKeys(agentsEnabled);
   usePipView();
+  const screen = mainScreen(route, agentsEnabled);
+  const paneShown = showsPipPane(route, agentsEnabled, pipOpen);
 
   useEffect(() => listenToClaude(), []);
 
   // Once the backend answers, Pip's conversation comes back from where it is kept, so it outlives a reload.
   const ready = status === "ready";
+  useStartOnPipHome(ready);
   useEffect(() => {
     if (!ready) return;
     listenToClaude();
@@ -138,7 +173,8 @@ export function Workspace({ backend }: { backend: Backend }) {
 
   useEffect(() => {
     if (!agentsEnabled) {
-      if (useTabs.getState().route === "agents") useTabs.getState().setRoute("workspace");
+      const now = useTabs.getState().route;
+      if (now === "agents" || now === "pip") useTabs.getState().setRoute("workspace");
       return;
     }
     useRuns.getState().init(backend);
@@ -176,7 +212,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   if (choice) {
     return (
       <>
-        <div className="ws-root relative h-full overflow-hidden bg-ws-win text-ws-ink">
+        <div className="ws-root relative h-full overflow-clip bg-ws-win text-ws-ink">
           <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-10" />
           <ChooseWatch key={choice.connectionId} backend={backend} state={choice} connection={choiceConnection} />
         </div>
@@ -187,24 +223,27 @@ export function Workspace({ backend }: { backend: Backend }) {
 
   return (
     <TicketLinksContext.Provider value={workspaceTicketLinks}>
-      <div className="ws-root grid h-full overflow-hidden bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `58px minmax(0,1fr)${pipOpen ? ` ${pipWidth}px` : ""}` }}>
+      {/* Clipped, not hidden: an overflow-hidden root is still a scroll container, and a scrollIntoView or focus() deep inside
+          (a card in the peek, say) would scroll the whole app up under the person. A clipped one never scrolls. */}
+      <div className="ws-root grid h-full overflow-clip bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `58px minmax(0,1fr)${paneShown ? ` ${pipWidth}px` : ""}` }}>
         <Rail />
         <main id={MAIN_ID} tabIndex={-1} className="relative flex min-h-0 min-w-0 flex-col outline-none">
           {route === "workspace" ? <Header /> : <div data-tauri-drag-region className="h-[34px] shrink-0" />}
           {route === "workspace" && <FilterBar />}
           {route === "workspace" && <FilterNote />}
           <div className="min-h-0 flex-1">
-            {route === "workspace" && <Canvas />}
-            {route === "activity" && <ActivityView />}
-            {route === "agents" && agentsEnabled && <AgentsView />}
-            {route === "settings" && <Settings />}
+            {screen === "workspace" && <Canvas />}
+            {screen === "activity" && <ActivityView />}
+            {screen === "agents" && <AgentsView />}
+            {screen === "pip" && <PipHome />}
+            {screen === "settings" && <Settings />}
           </div>
           <PeekSheet />
           {agentsEnabled && <AgentSheets />}
-          {!pipOpen && <PipLauncher />}
+          {!pipOpen && screen !== "pip" && <PipLauncher />}
           <SelectionAsk />
         </main>
-        {pipOpen && <PipPane onClose={() => setPipOpen(false)} />}
+        {paneShown && <PipPane onClose={() => setPipOpen(false)} />}
         {paletteOpen && <Palette />}
       </div>
       <ConnectGithubDialog />

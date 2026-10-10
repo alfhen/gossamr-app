@@ -5,7 +5,7 @@ import { itemsByFilter, pendingDrafts, useWorkspace } from "../workspaceStore";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { buildCommands, agentCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
+import { buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
 import { useAgentsEnabled } from "./agentsFlag";
@@ -17,7 +17,7 @@ import { activeTab, allSavedViews, useTabs } from "./tabsStore";
 import { openTicketByKey } from "./jump";
 import { useGithubUi } from "./githubUi";
 import { openPull } from "./openPull";
-import { useWorkstreams } from "./workstreamsStore";
+import { openOnPipHome, togglePip, useWorkstreams } from "./workstreamsStore";
 
 /** Where focus lands when the palette closes and the element that opened it is gone. */
 export const MAIN_ID = "workspace-main";
@@ -177,7 +177,7 @@ export function appActions(): CommandActions {
     openPull: (ref) => void openPull(ref),
     newTab: () => void tabs.openTab(),
     newTicket: () => {},
-    togglePip: () => prefs.setPipOpen(!usePrefs.getState().pipOpen),
+    togglePip,
     startAgent: () => useRuns.getState().setPicking(true),
     startAgentOn: (item, kind) => void useRunSetup.getState().begin({ item: item.item, kind }),
     showAgentsNeedingMe: () => {
@@ -200,7 +200,23 @@ export function appActions(): CommandActions {
     holdAllWorkstreams: () => void useWorkstreams.getState().holdAll(),
     jumpToItem,
     askPip,
+    openPipHome: () => tabs.setRoute("pip"),
+    openWorkstream: openOnPipHome,
+    askPipToPlan: (item) => void askPipToPlan(item),
+    startWorkstreamOn: (item) => void useWorkstreams.getState().start(item.item),
   };
+}
+
+/**
+ * The palette's "Ask Pip to plan KEY": opens or finds the workstream on the ticket (as the person's own Start a
+ * workstream does), shows it on Pip home and asks Pip there to plan it. Pip only drafts the plan run; nothing starts.
+ */
+export async function askPipToPlan(item: WorkItem) {
+  useTabs.getState().setRoute("pip");
+  const ws = await useWorkstreams.getState().start(item.item);
+  if (!ws) return;
+  openOnPipHome(ws.workstream.id);
+  askPip(`plan ${item.item.key}`);
 }
 
 type Step = { type: "search" } | { type: "project" } | { type: "title"; container: WorkContainer };
@@ -290,6 +306,7 @@ export function Palette() {
       agents,
       agentsNeedingMe: needingMe,
       ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
+      onPipHome: useTabs.getState().route === "pip",
     };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);
@@ -297,7 +314,11 @@ export function Palette() {
       ...ticketCommands(all, query, actions.jumpToItem),
       ...keyCommand(query, all, actions.openTicket),
       ...pullCommand(query, actions.openPull),
+      ...(agents ? askToPlanCommands(all, query, actions) : []),
       ...(agents ? agentCommands(all, query, actions.startAgentOn) : []),
+      ...(agents ? workstreamCommands(workstreams, query, actions) : []),
+      // The peeked ticket's own "Start a workstream" is in the commands already.
+      ...(agents ? startWorkstreamCommands(all, query, workstreams, actions).filter((c) => !ticket || c.id !== `workstream:start:${itemKey(ticket.item)}`) : []),
       ...rankCommands([...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query),
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
