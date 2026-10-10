@@ -5,7 +5,7 @@ import type { Run, RunEvent, RunOutcome, RunReview } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
-import { StateChip } from "./AgentParts";
+import { StateChip, useSlotQueue } from "./AgentParts";
 import { KIND_LABEL, agentGroups, ageText, formatTokens, ordinal, permissionRequest, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition, stateView } from "./agentsLogic";
 import { openTicketByKey } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
@@ -382,6 +382,7 @@ export function RunSheet({ id }: { id: string }) {
   const earlierOpen = useRuns((s) => s.earlierOpen);
   const group = usePrefs((s) => s.agentsGroup);
   const workstreams = useWorkstreams((s) => s.list);
+  const slotLine = useSlotQueue();
   const label = useMemo(() => labelsByRun(runs).get(id), [runs, id]);
   const ticket = useWorkspace((s) => (run?.item ? s.items[itemKey(run.item)] : undefined));
   const [wide, setWide] = useState(false);
@@ -513,6 +514,6 @@ export function RunSheet({ id }: { id: string }) {
       backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
     },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, runs)} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} on={on} />;
 }
 

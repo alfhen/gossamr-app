@@ -76,6 +76,11 @@ test("the person edits Pip's suggested reply and sends it with ⌘↵; the run r
   await expect(peekSheet(page).locator("[data-question]")).toHaveText(`R1 asks: ${QUESTION}`);
   const mine = "No, use the new rounding on the refund path too, and say so in your result.";
   await editor.fill(mine);
+  // Esc leaves the reply with the edit kept and the peek open; the next Esc would close it.
+  await editor.press("Escape");
+  await expect(editor).not.toBeFocused();
+  await expect(editor).toHaveValue(mine);
+  await expect(peekSheet(page)).toBeVisible();
   await editor.press("ControlOrMeta+Enter");
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("working");
   await expect(card).toHaveAttribute("data-state", "applied");

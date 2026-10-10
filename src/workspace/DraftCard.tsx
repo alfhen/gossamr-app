@@ -416,6 +416,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                   setMessage(e.target.value);
                 }}
                 onKeyDown={(e) => {
+                  // Esc leaves the reply with the edit kept, so the next Esc closes the peek, as its other fields do.
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.currentTarget.blur();
+                    return;
+                  }
                   if (!isSendKey(e)) return;
                   e.preventDefault();
                   sendAnswer();

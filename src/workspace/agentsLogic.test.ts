@@ -15,6 +15,7 @@ import {
   laneIsFolded,
   ordinal,
   slotPosition,
+  slotQueue,
   slotText,
   stoppedText,
   laneOf,
@@ -348,6 +349,23 @@ describe("a run waiting for a slot", () => {
     expect(slotPosition(started, all)).toBeNull();
     const tie = [waiting("y", 1), waiting("x", 1)];
     expect(slotPosition(tie[1], tie)).toBe(1);
+  });
+
+  it("is placed behind only the runs that can take a slot, not ones in a held or closed workstream", () => {
+    const ws = (id: string, over: { heldReason?: string; closedAt?: string } = {}) =>
+      ({ workstream: { id, heldReason: over.heldReason ?? null, closedAt: over.closedAt ?? null } }) as unknown as WorkstreamView;
+    const inWs = (r: Run, workstream: string | null): Run => ({ ...r, spec: { ...r.spec, workstream } });
+    const held = inWs(waiting("h", 1), "ws-held");
+    const closed = inWs(waiting("c", 2), "ws-closed");
+    const open = inWs(waiting("o", 3), "ws-open");
+    const loose = waiting("l", 4);
+    const unknown = inWs(waiting("u", 5), "ws-unloaded");
+    const all = [held, closed, open, loose, unknown];
+    const line = slotQueue(all, [ws("ws-held", { heldReason: "person" }), ws("ws-closed", { closedAt: at(0) }), ws("ws-open")]);
+    expect(line.map((r) => r.id)).toEqual(["o", "l", "u"]);
+    expect([open, loose, unknown].map((r) => slotPosition(r, line))).toEqual([1, 2, 3]);
+    expect(slotPosition(held, line)).toBeNull();
+    expect(slotQueue(all, [])).toBe(all);
   });
 
   it("is placed by the time it was queued, however many fractional digits the backend wrote", () => {

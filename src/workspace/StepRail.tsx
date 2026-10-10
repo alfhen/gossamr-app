@@ -289,7 +289,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
               {shown && (
                 <div id={panel} className="grid gap-1.5 pl-2">
                   {chip.runs.map((run) => (
-                    <PipRunCard key={run.id} run={run} now={now} ticketTitle={titleOf(run)} label={labels.get(run.id)} onOpen={() => onOpenRun(run)} focusable queue={runs} />
+                    <PipRunCard key={run.id} run={run} now={now} ticketTitle={titleOf(run)} label={labels.get(run.id)} onOpen={() => onOpenRun(run)} focusable />
                   ))}
                   <StepDrafts step={chip.kind} drafts={drafts[chip.kind] ?? []} approve={approve} />
                   <EarlierStepDrafts step={chip.kind} drafts={retired[chip.kind] ?? []} />

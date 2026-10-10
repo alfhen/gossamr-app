@@ -19,12 +19,10 @@ interface CardProps {
   onOpen(): void;
   /** Stepped to from the keyboard, as on Pip home's step rail: it takes focus from code and shows a ring. */
   focusable?: boolean;
-  /** Every run, to place one waiting for a slot in line; the runs store's when absent. */
-  queue?: readonly Run[];
 }
 
 /** A run in Pip's pane: its state, what it is doing, and a way into the run's sheet. */
-export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = false, queue }: CardProps) {
+export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = false }: CardProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -46,11 +44,11 @@ export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = f
         <span className="min-w-0 truncate text-xs text-ws-ink3">
           {waitsForSlot(run) ? (
             <span data-slot-wait className={`font-semibold ${tone.text}`}>
-              <RowText run={run} now={now} queue={queue} />
+              <RowText run={run} now={now} />
             </span>
           ) : (
             <>
-              <span className={`font-semibold ${tone.text}`}>{view.label}</span> · <RowText run={run} now={now} queue={queue} />
+              <span className={`font-semibold ${tone.text}`}>{view.label}</span> · <RowText run={run} now={now} />
             </>
           )}
         </span>

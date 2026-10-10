@@ -148,6 +148,15 @@ export const SLOT_WAIT = "Waiting for a slot";
 /** An approved run that stays queued only because as many agents as the settings allow are running. */
 export const waitsForSlot = (run: Pick<Run, "state" | "slotWaitSince">) => run.state === "queued" && !!run.slotWaitSince;
 
+/**
+ * The runs that can be given a slot, as `launch_waiting` lines them up: none in a workstream that is held or closed,
+ * which waits for the person rather than for a slot. `workstreams` are the ones loaded; a run in any other stays in line.
+ */
+export function slotQueue<R extends Pick<Run, "spec">>(runs: readonly R[], workstreams: readonly WorkstreamView[]): readonly R[] {
+  const stalled = new Set(workstreams.filter((v) => v.workstream.heldReason || v.workstream.closedAt).map((v) => v.workstream.id));
+  return stalled.size ? runs.filter((r) => !r.spec.workstream || !stalled.has(r.spec.workstream)) : runs;
+}
+
 /** Where `run` is in line for a slot, 1 for next, among the queued runs waiting for one in approval order; null when it isn't waiting. */
 export function slotPosition(run: Pick<Run, "id" | "state" | "slotWaitSince">, runs: readonly Pick<Run, "id" | "state" | "slotWaitSince" | "queuedAt">[]): number | null {
   if (!waitsForSlot(run)) return null;
