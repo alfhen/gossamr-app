@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
 import { labelsByRun, stageText } from "../lib/workstreamStage";
-import type { CodeChange, ReviewView, Run, RunsEnvironment, WorkstreamView } from "../types";
+import type { ReviewView, Run, RunsEnvironment, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { AgentCard, agentId, type AgentItemProps } from "./AgentCard";
 import { Icon } from "./AgentIcons";
@@ -30,6 +30,7 @@ import { useFooterHeight } from "./CanvasFooter";
 import { failureAction } from "./failureActions";
 import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
+import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
 import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
@@ -417,55 +418,6 @@ const actions: AgentsActions = {
   startAgent: () => useRuns.getState().setPicking(true),
   openSafety: () => useRuns.getState().openSafety(),
 };
-
-const CHANGE_RECHECK_MS = 30_000;
-
-/** The pull request each finished build opened, as the last sync saw it, asked again while a build has none. */
-function useBuildChanges(runs: readonly Run[]) {
-  const backend = useRuns((s) => s.backend);
-  const [changes, setChanges] = useState<Record<string, CodeChange | null>>({});
-  const asked = useRef(new Map<string, number>());
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => setTick((n) => n + 1), CHANGE_RECHECK_MS);
-    return () => clearInterval(timer);
-  }, []);
-  useEffect(() => {
-    if (!backend) return;
-    const at = Date.now();
-    for (const run of runs) {
-      if (run.spec.kind !== "build" || run.state !== "done" || !run.item || run.resultComplete === false || changes[run.id]?.number != null) continue;
-      if (at - (asked.current.get(run.id) ?? 0) < CHANGE_RECHECK_MS) continue;
-      asked.current.set(run.id, at);
-      backend.runsOutcome(run.id).then(
-        (outcome) => setChanges((c) => ({ ...c, [run.id]: outcome.change })),
-        () => {},
-      );
-    }
-  }, [backend, runs, changes, tick]);
-  return changes;
-}
-
-/** The verdict of each finished review, read from its outcome once it is done and again whenever it changes. */
-function useReviewVerdicts(runs: readonly Run[]) {
-  const backend = useRuns((s) => s.backend);
-  const [verdicts, setVerdicts] = useState<Record<string, ReviewView | null>>({});
-  const asked = useRef(new Map<string, string>());
-  useEffect(() => {
-    if (!backend) return;
-    for (const run of runs) {
-      if (run.spec.kind !== "review" || run.state !== "done") continue;
-      const version = `${run.lastProgressAt}|${run.endedAt ?? ""}`;
-      if (asked.current.get(run.id) === version) continue;
-      asked.current.set(run.id, version);
-      backend.runsOutcome(run.id).then(
-        (outcome) => setVerdicts((v) => ({ ...v, [run.id]: outcome.review ?? null })),
-        () => asked.current.delete(run.id),
-      );
-    }
-  }, [backend, runs]);
-  return verdicts;
-}
 
 export function AgentsView() {
   const runs = useRuns((s) => s.runs);

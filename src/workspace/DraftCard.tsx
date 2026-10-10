@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, type Mention } from "../lib/mentions";
@@ -13,6 +13,7 @@ import { commentWithPipPrompt } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
+import { peekFocusAfterLeaving } from "./peekDrafts";
 import { itemKey } from "../lib/filter";
 import { FOLLOW_UP_LIMIT, followUpProblem, followUpTitle, nextPass } from "./followUp";
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
@@ -124,6 +125,18 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
   const [newTitle, setNewTitle] = useState(rewriteFields(rewrite).title);
   const [newText, setNewText] = useState(rewriteFields(rewrite).text);
   const rewriteEdited = useRef(false);
+  const card = useRef<HTMLElement>(null);
+  /** The keyboard was in the card, and hasn't gone anywhere else since: a button disabled while it works drops it on the page. */
+  const hadFocus = useRef(false);
+  // A card decided in the peek leaves "Drafts waiting"; if the keyboard was in it, it goes on to the next card, not nowhere.
+  useLayoutEffect(() => {
+    const el = card.current;
+    return () => {
+      const at = document.activeElement;
+      if (!el || !hadFocus.current || !(!at || at === document.body || el.contains(at))) return;
+      peekFocusAfterLeaving(el, document);
+    };
+  }, []);
   const attempting = useRef(working);
   attempting.current = working;
   // Pip may revise its draft while the card is open; follow it until the person types. Text that changes during an approval is
@@ -190,8 +203,13 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
 
   return (
     <article
+      ref={card}
       aria-label={draftTitle(p)}
       data-draft={p.id}
+      onFocus={() => (hadFocus.current = true)}
+      onBlur={(ev) => {
+        if (ev.relatedTarget && !ev.currentTarget.contains(ev.relatedTarget as Node)) hadFocus.current = false;
+      }}
       className={`ws-legacy overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">

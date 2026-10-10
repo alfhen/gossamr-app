@@ -1,15 +1,21 @@
 import { keysIn } from "../lib/devLinks";
 import { safeGithubUrl } from "../lib/githubUrl";
-import type { ContainerRef, FeedEntry, FeedQuery, ItemRef, PersonRef, Proposal, Run, WorkEvent } from "../types";
+import type { ContainerRef, FeedEntry, FeedQuery, ItemRef, PersonRef, Proposal, Run, WorkEvent, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { targetOf } from "../lib/proposals";
 import { itemKey } from "../lib/filter";
 import type { WorkItem } from "../types";
 import { KIND_LABEL, permissionRequest, resultHeadline } from "./agentsLogic";
 
 export const CHIPS = ["all", "needsMe", "mentions", "comments", "status", "assigned", "drafts"] as const;
-export type ActivityChip = (typeof CHIPS)[number];
+/** The chip that shows what Pip and the agents did in the workstreams, from their audit; offered only while Agents are on. */
+export const PIP_CHIP = "pip";
+export type ActivityChip = (typeof CHIPS)[number] | typeof PIP_CHIP;
+
+/** The chips to offer: every one in `CHIPS`, then "Pip & agents" while Agents are on. */
+export const chipsFor = (o: { agents: boolean }): readonly ActivityChip[] => (o.agents ? [...CHIPS, PIP_CHIP] : CHIPS);
 
 export const CHIP_LABEL: Record<ActivityChip, string> = {
+  pip: "Pip & agents",
   all: "All",
   needsMe: "Needs me",
   mentions: "Mentions",
@@ -171,8 +177,26 @@ export interface RunEntry {
   unread: boolean;
 }
 
+/** A line of a workstream's audit as a row of the feed: "Pip picked up R2", "Triage started automatically after R1". */
+export interface WorkstreamEntry {
+  source: "pip";
+  /** `ws:<workstream id>:<seq>`, one per audit line. */
+  id: string;
+  at: string;
+  workstreamId: string;
+  actor: WorkstreamActor;
+  action: string;
+  runId: string | null;
+  /** The workstream's ticket by key, null for a ticketless one; `item` is the ticket itself when the page knows it. */
+  itemKey: string | null;
+  item: ItemRef | null;
+  text: string;
+  mention: false;
+  unread: false;
+}
+
 /** One row of the merged feed. */
-export type ActivityRow = { source: "jira"; entry: FeedEntry } | { source: "github"; entry: CodeEntry } | { source: "agents"; entry: RunEntry };
+export type ActivityRow = { source: "jira"; entry: FeedEntry } | { source: "github"; entry: CodeEntry } | { source: "agents"; entry: RunEntry } | { source: "pip"; entry: WorkstreamEntry };
 
 export const rowId = (r: ActivityRow) => r.entry.id;
 export const rowAt = (r: ActivityRow) => r.entry.at;
@@ -261,6 +285,7 @@ export function codeMatchesChip(chip: ActivityChip, e: Pick<CodeEntry, "kind" | 
     case "comments":
     case "status":
     case "drafts":
+    case "pip":
       return false;
   }
 }
@@ -313,6 +338,90 @@ export function agentMatchesChip(chip: ActivityChip, e: Pick<RunEntry, "unread">
   return chip === "all" || (chip === "needsMe" && e.unread);
 }
 
+const KIND_WORD: Record<string, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
+
+const HELD_WORDS: Record<WorkstreamActor, string> = { person: "You held the workstream", pip: "Pip held the workstream", supervisor: "The workstream was held", run: "The workstream was held" };
+
+/**
+ * What one audit line says in the feed, naming runs by their label in the workstream (`label`); null for lines the
+ * feed leaves out (a fix round's own auto-start line, which "Fix round n sent" already says, and bookkeeping).
+ * `rounds` counts the fix rounds sent so far, this one included.
+ */
+function eventText(e: WorkstreamEvent, label: (id: string | null) => string, rounds: number): string | null {
+  const who = e.actor === "person" ? "You" : e.actor === "pip" ? "Pip" : e.actor === "supervisor" ? "Gossamr" : "An agent";
+  switch (e.action) {
+    case "opened":
+      return `${who} opened the workstream`;
+    case "closed":
+      return `${who} closed the workstream`;
+    case "wake":
+      return `Pip picked up ${label(e.runId)}`;
+    case "autostart": {
+      const [rule, after] = (e.detail ?? "").split(" after ");
+      if (rule === "fix_round") return null;
+      const kind = KIND_WORD[rule?.split("_")[1] ?? ""] ?? "The next step";
+      return `${kind} ${label(e.runId)} started automatically${after ? ` after ${label(after)}` : ""}`;
+    }
+    case "autostart_failed":
+      return `An automatic step after ${label(e.runId)} couldn't start`;
+    case "fix_round_sent":
+      return `Fix round ${rounds} sent to ${label(e.runId)}`;
+    case "fix_rounds_exhausted":
+      return `The review still blocks after ${e.detail ?? "2"} fix rounds`;
+    case "waiting_for_pr":
+      return `${label(e.runId)} is waiting for its pull request`;
+    case "held":
+      return HELD_WORDS[e.actor];
+    case "resumed":
+      return `${who} resumed the workstream`;
+    case "mode_set":
+      return e.detail === "manage" ? `${who} let Pip manage the workstream` : `${who} stopped Pip managing the workstream`;
+    case "rule_set":
+      return `${who} changed an automatic step`;
+    case "run_approved":
+      return `${who} started ${label(e.runId)}`;
+    case "run_stopped":
+      return `${who} stopped ${label(e.runId)}`;
+    case "run_answered":
+      return `${who} answered ${label(e.runId)}`;
+    case "run_retried":
+      return `${who} retried ${label(e.runId)}`;
+    case "draft_approved":
+      return `${who} approved a draft`;
+    case "draft_skipped":
+      return `${who} skipped a draft`;
+    case "notes_set":
+      return "Pip updated its notes";
+    case "budget_reset":
+      return `${who} reset the budget`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * The rows the workstreams' audits add to the "Pip & agents" chip, newest first: each line of `events` (by workstream,
+ * oldest first in each) worded for the feed, with its workstream's ticket as the item. `refOf` finds the ticket itself
+ * when the page knows it, for narrowing to a project.
+ */
+export function toWorkstreamEntries(events: Readonly<Record<string, readonly WorkstreamEvent[]>>, workstreams: readonly WorkstreamView[], refOf: (ws: WorkstreamView) => ItemRef | null = () => null): WorkstreamEntry[] {
+  const out: WorkstreamEntry[] = [];
+  for (const view of workstreams) {
+    const id = view.workstream.id;
+    const labels = new Map(view.labels);
+    const label = (run: string | null) => (run ? (labels.get(run) ?? `run ${run.length <= 12 ? run : run.slice(0, 8)}`) : "a run");
+    const item = refOf(view);
+    let rounds = 0;
+    for (const e of events[id] ?? []) {
+      if (e.action === "fix_round_sent") rounds++;
+      const text = eventText(e, label, rounds);
+      if (!text) continue;
+      out.push({ source: "pip", id: `ws:${id}:${e.seq}`, at: e.at, workstreamId: id, actor: e.actor, action: e.action, runId: e.runId, itemKey: view.workstream.itemKey, item, text, mention: false, unread: false });
+    }
+  }
+  return out.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : b.id.localeCompare(a.id, undefined, { numeric: true })));
+}
+
 export interface RowsInput {
   source: ActivitySource;
   chip: ActivityChip;
@@ -322,14 +431,22 @@ export interface RowsInput {
   more: boolean;
   code: readonly CodeEntry[];
   agents?: readonly RunEntry[];
+  /** The workstreams' audit lines, shown under the "Pip & agents" chip and nowhere else. */
+  workstream?: readonly WorkstreamEntry[];
   /** The container an item is in, to narrow GitHub entries to a project through their ticket. */
   containerOf(item: ItemRef): ContainerRef | null;
 }
 
 const sameContainer = (a: ContainerRef, b: ContainerRef) => a.connectionId === b.connectionId && a.externalId === b.externalId;
 
-/** The feed the person sees: each source filtered by the chip and project, newest first. */
+/** The feed the person sees: each source filtered by the chip and project, newest first. "Pip & agents" is the workstreams' audit alone. */
 export function buildRows(i: RowsInput): ActivityRow[] {
+  if (i.chip === PIP_CHIP) {
+    return (i.workstream ?? [])
+      .filter((e) => !i.container || (!!e.item && sameContainer(i.containerOf(e.item) ?? { connectionId: "", externalId: "" }, i.container)))
+      .map((entry): ActivityRow => ({ source: "pip", entry }))
+      .sort((a, b) => (rowAt(a) < rowAt(b) ? 1 : rowAt(a) > rowAt(b) ? -1 : rowId(b).localeCompare(rowId(a), undefined, { numeric: true })));
+  }
   const jira: ActivityRow[] = i.source === "github" || i.source === "agents" ? [] : i.jira.map((entry) => ({ source: "jira", entry }));
   const oldest = i.more && i.jira.length ? i.jira[i.jira.length - 1].at : null;
   const code: ActivityRow[] =

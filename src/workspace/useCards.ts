@@ -17,6 +17,22 @@ export interface Notice {
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** What approving a batch of drafts came to: how many went through, and each one that didn't, by id, with its reason. */
+export interface ApprovedEach {
+  ok: number;
+  failed: { id: string; error: string }[];
+}
+
+/** Approves the drafts `ids` one at a time, in order, through `approve`; a draft that comes back with an error is counted as failed and the rest go on. */
+export async function approveEach(ids: readonly string[], approve: (id: string) => Promise<{ error?: string | null }>): Promise<ApprovedEach> {
+  const failed: ApprovedEach["failed"] = [];
+  for (const id of ids) {
+    const done = await approve(id);
+    if (done.error) failed.push({ id, error: done.error });
+  }
+  return { ok: ids.length - failed.length, failed };
+}
+
 /** Everything the board and the age view share: what a card shows, what its actions do, and the bulk actions. */
 export function useCards(items: readonly WorkItem[], order: readonly string[]) {
   const allItems = useWorkspace((s) => s.items);
@@ -129,12 +145,13 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
     approve: () =>
       attempt(async () => {
         setConfirming(false);
-        const failed: string[] = [];
-        for (const a of approvable) {
-          const done = await useWorkspace.getState().approve(a.id);
-          if (done.error) failed.push(`${a.key}: ${done.error}`);
-        }
-        const ok = approvable.length - failed.length;
+        const done = await approveEach(
+          approvable.map((a) => a.id),
+          (id) => useWorkspace.getState().approve(id),
+        );
+        const keyOf = new Map(approvable.map((a) => [a.id, a.key]));
+        const failed = done.failed.map((f) => `${keyOf.get(f.id)}: ${f.error}`);
+        const ok = done.ok;
         say(failed.length ? `Approved ${ok}. Failed: ${failed.join("; ")}` : `Approved ${ok} move${ok === 1 ? "" : "s"}.`, failed.length ? "error" : "info");
       }),
     clear: () => {

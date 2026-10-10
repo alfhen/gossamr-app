@@ -8,8 +8,10 @@ import { needsPerson } from "./agentsLogic";
 import { useRuns } from "./runsStore";
 import { useActiveTab } from "./hooks";
 import { itemScene, type ItemScene } from "./pipScene";
-import { buildScreenContext, type Screen } from "./screenContext";
+import { usePipHome } from "./pipHomeStore";
+import { buildScreenContext, homeConversationLine, type Screen } from "./screenContext";
 import { activeTab, useTabs } from "./tabsStore";
+import { useWorkstreams } from "./workstreamsStore";
 
 const peekedItems = (p: ReturnType<typeof useWorkspace.getState>["peeked"]) => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.item]));
 
@@ -35,6 +37,7 @@ export function readScreen(): Screen {
     marked: tabs.marked,
     activity: { chip, container },
     agents: agentsIn(useAgentsFlag.getState().enabled, useRuns.getState()),
+    home: homeConversationLine(usePipHome.getState().selected, useWorkstreams.getState().list),
   };
 }
 
@@ -59,9 +62,11 @@ export function useScreen(): Screen {
   const filters = useRuns((s) => s.filters);
   const earlierOpen = useRuns((s) => s.earlierOpen);
   const agents = useMemo(() => agentsIn(enabled, { sheet, runs, filters, earlierOpen }), [enabled, sheet, runs, filters, earlierOpen]);
+  const homeSelected = usePipHome((s) => s.selected);
+  const home = useWorkstreams((s) => homeConversationLine(homeSelected, s.list));
   return useMemo(
-    () => ({ route, tab, shown, items, peeked, containers, selected, marked, activity: { chip, container }, agents }),
-    [route, tab, shown, items, peeked, containers, selected, marked, chip, container, agents],
+    () => ({ route, tab, shown, items, peeked, containers, selected, marked, activity: { chip, container }, agents, home }),
+    [route, tab, shown, items, peeked, containers, selected, marked, chip, container, agents, home],
   );
 }
 

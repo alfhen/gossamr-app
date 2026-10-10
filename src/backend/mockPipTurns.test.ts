@@ -175,6 +175,70 @@ describe("mockAsk", () => {
     expect(general?.origin).toEqual({ type: "chat", requestId: "g1" });
   });
 
+  it("drafts a plan run for 'plan CA-401' in that ticket's workstream, and nothing starts", async () => {
+    const { MockBackend } = await import("./mock");
+    const { itemRef } = await import("./mockConnector");
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    const ws = await backend.workstreamsOpen(itemRef("CA-401"));
+    const context: ScreenContext = { view: null, item: null, filter: null, selection: [] };
+    await mockAsk({ requestId: "p1", prompt: "plan CA-401", sessionId: null, context, conversation: `ws:${ws.id}`, meta: { imageCount: 0 } }, backend, 0);
+    const [draft] = backend.proposals.list({ workstream: ws.id });
+    expect(draft.state.type).toBe("pending");
+    expect(draft.intent.type === "startRun" && draft.intent.spec.kind).toBe("plan");
+    expect(draft.intent.type === "startRun" && draft.intent.item?.key).toBe("CA-401");
+    expect(backend.runs.list()).toHaveLength(0);
+    // Another ticket's key isn't this workstream's next step.
+    await mockAsk({ requestId: "p2", prompt: "plan CA-402", sessionId: null, context, conversation: `ws:${ws.id}`, meta: { imageCount: 0 } }, backend, 0);
+    expect(backend.proposals.list({ workstream: ws.id }).filter((p) => p.origin.type === "chat" && p.origin.requestId === "p2" && p.intent.type === "startRun")).toHaveLength(0);
+  });
+
+  it("answers 'Why is this held?' from the workstream's held reason, and 'Approve the plan' with where to approve it", async () => {
+    const { MockBackend } = await import("./mock");
+    const { itemRef } = await import("./mockConnector");
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    const ws = await backend.workstreamsOpen(itemRef("CA-401"));
+    const context: ScreenContext = { view: null, item: null, filter: null, selection: [] };
+    const answer = async (requestId: string, prompt: string) => {
+      await mockAsk({ requestId, prompt, sessionId: null, context, conversation: `ws:${ws.id}`, meta: { imageCount: 0 } }, backend, 0);
+      return openMockPipTurns().turns(`ws:${ws.id}`).find((t) => t.requestId === requestId)?.text ?? "";
+    };
+    const drafts = backend.proposals.list().length;
+    expect(await answer("h0", "Why is this held?")).toContain("isn't held");
+    await backend.workstreamsHold(ws.id);
+    expect(await answer("h1", "Why is this held?")).toMatch(/^Held by you\. While it is held I'm not woken and nothing starts on its own/);
+    const plan = await answer("a1", "Approve the plan");
+    expect(plan).toContain("I can't approve anything myself");
+    expect(plan).toContain("Plan step");
+    expect(plan).toContain("CA-401's peek");
+    expect(backend.proposals.list()).toHaveLength(drafts);
+  });
+
+  it("answers 'What is waiting to start?' with where the run draft is read and started, and on Pip home speaks of Pip home, not a board", async () => {
+    const { MockBackend } = await import("./mock");
+    const { itemRef } = await import("./mockConnector");
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    const ws = await backend.workstreamsOpen(itemRef("CA-401"));
+    const answer = async (requestId: string, prompt: string, conversation: string, context: ScreenContext) => {
+      await mockAsk({ requestId, prompt, sessionId: null, context, conversation, meta: { imageCount: 0 } }, backend, 0);
+      return openMockPipTurns().turns(conversation).find((t) => t.requestId === requestId)?.text ?? "";
+    };
+    const home: ScreenContext = { view: "Pip home · General", item: null, filter: null, selection: [] };
+    const waiting = await answer("wait-1", "What is waiting to start?", `ws:${ws.id}`, home);
+    expect(waiting).toContain("Review and start");
+    expect(waiting).toContain("can't start it myself");
+    expect(backend.runs.list()).toHaveLength(0);
+    const general = await answer("home-1", "Catch me up", "general", home);
+    expect(general).toMatch(/^You're on Pip home\./);
+    expect(general).not.toMatch(/stale|blocked/);
+    // A filter asked for there lands on the workspace tab, and says so.
+    const filtered = await answer("home-2", "Show stale tickets", "general", home);
+    expect(filtered).toContain("I filtered your workspace tab");
+    // Each sentence starts with a capital: the undo offer reads on its own after the full stop.
+    expect(filtered).toMatch(/go back to it\. Undo it below if that wasn't what you meant\.$/);
+    const board: ScreenContext = { view: "Board", item: null, filter: null, selection: [] };
+    expect(await answer("board-1", "Show stale tickets", "general", board)).toMatch(/I filtered this view for you; undo it below if that wasn't what you meant\.$/);
+  });
+
   it("records the turn with its usage and tells the page the same usage", async () => {
     const context: ScreenContext = { view: null, item: null, filter: null, selection: [] };
     const events: unknown[] = [];

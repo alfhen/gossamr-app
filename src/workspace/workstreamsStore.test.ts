@@ -11,7 +11,9 @@ import { usePip } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { activeTab, loadTabs, useTabs } from "./tabsStore";
-import { contextFor, conversationTitle, paneConversation, paneWorkstream, useWorkstreams, workstreamTicket } from "./workstreamsStore";
+import { contextFor, conversationTitle, focusComposer, focusedConversation, paneConversation, paneWorkstream, useWorkstreams, workstreamTicket } from "./workstreamsStore";
+import { usePipHome } from "./pipHomeStore";
+import type { WorkstreamView } from "../types";
 import { GENERAL_CONVERSATION, workstreamConversation } from "../lib/conversations";
 
 const memory = () => {
@@ -34,6 +36,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  useTabs.getState().setRoute("workspace");
   useWorkstreams.getState().dispose();
   useClaude.setState({ byTicket: {} });
   vi.unstubAllGlobals();
@@ -162,5 +165,157 @@ describe("what Pip sees in a workstream's conversation", () => {
     expect(contextFor(workstreamConversation(started!.workstream.id), { ...empty, item: other }).item).toEqual(other);
     expect(contextFor(GENERAL_CONVERSATION, empty).item).toBeNull();
     expect(workstreamTicket(workstreamConversation("ws-unknown"))).toBeNull();
+  });
+});
+
+describe("Pip home's conversation", () => {
+  it("is the Pip home selection's on route pip, and the pane's everywhere else", async () => {
+    const ws = (await useWorkstreams.getState().start(CA401))!;
+    useTabs.getState().select(itemKey(CA401));
+    expect(focusedConversation()).toBe(workstreamConversation(ws.workstream.id));
+    expect(focusedConversation()).toBe(paneConversation());
+    useTabs.getState().setRoute("pip");
+    expect(usePipHome.getState().selected).toBeNull();
+    expect(focusedConversation()).toBe(GENERAL_CONVERSATION);
+    usePipHome.getState().openWorkstream(ws.workstream.id);
+    expect(focusedConversation()).toBe(workstreamConversation(ws.workstream.id));
+    // The pane's own pick is untouched by Pip home's.
+    expect(paneConversation()).toBe(GENERAL_CONVERSATION);
+    useTabs.getState().setRoute("activity");
+    expect(focusedConversation()).toBe(paneConversation());
+  });
+
+  it("selects a workstream started on Pip home there, and leaves the pane closed", async () => {
+    usePrefs.getState().setPipOpen(false);
+    useTabs.getState().setRoute("pip");
+    const started = (await useWorkstreams.getState().start(CA401))!;
+    expect(usePipHome.getState().selected).toBe(started.workstream.id);
+    expect(usePrefs.getState().pipOpen).toBe(false);
+    expect(focusedConversation()).toBe(workstreamConversation(started.workstream.id));
+  });
+
+  it("goes back to General once the selected workstream closes, or the workstreams go away", async () => {
+    useTabs.getState().setRoute("pip");
+    const started = (await useWorkstreams.getState().start(CA401))!;
+    await useWorkstreams.getState().close(started.workstream.id);
+    expect(usePipHome.getState().selected).toBeNull();
+    const again = (await useWorkstreams.getState().start(CA401))!;
+    expect(usePipHome.getState().selected).toBe(again.workstream.id);
+    useWorkstreams.getState().dispose();
+    expect(usePipHome.getState().selected).toBeNull();
+  });
+
+  it("asks there in the selection's conversation without opening the pane", async () => {
+    usePrefs.getState().setPipOpen(false);
+    useTabs.getState().setRoute("pip");
+    const sent: AskRequest[] = [];
+    const ask = vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), { queued: false, ahead: 0 }));
+    try {
+      askPip("Show stale tickets");
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+    } finally {
+      ask.mockRestore();
+    }
+    expect(sent[0]).toMatchObject({ conversation: GENERAL_CONVERSATION });
+    expect(usePrefs.getState().pipOpen).toBe(false);
+    expect(useTabs.getState().route).toBe("pip");
+  });
+
+  it("lists the closed workstreams, and a read that an earlier one overtook doesn't land", async () => {
+    const first = (await useWorkstreams.getState().start(CA401))!;
+    await useWorkstreams.getState().close(first.workstream.id);
+    await useWorkstreams.getState().loadClosed();
+    expect(useWorkstreams.getState().closed.map((v) => v.workstream.id)).toEqual([first.workstream.id]);
+
+    const stale: WorkstreamView = { ...first, workstream: { ...first.workstream, id: "ws-stale" } };
+    let release: (list: WorkstreamView[]) => void = () => {};
+    const read = vi.spyOn(backend, "workstreamsList").mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    const slow = useWorkstreams.getState().loadClosed();
+    const fresh = useWorkstreams.getState().loadClosed();
+    await fresh;
+    release([stale]);
+    await slow;
+    read.mockRestore();
+    expect(useWorkstreams.getState().closed.map((v) => v.workstream.id)).toEqual([first.workstream.id]);
+  });
+
+  it("reads a workstream's audit for the step rail, again for the selected one as it changes, and drops a read overtaken or disposed", async () => {
+    const ws = (await useWorkstreams.getState().start(CA401))!;
+    const id = ws.workstream.id;
+    await useWorkstreams.getState().loadEvents(id);
+    expect(useWorkstreams.getState().events[id]?.map((e) => e.action)).toEqual((await backend.workstreamsEvents(id)).map((e) => e.action));
+
+    // Selected on Pip home, a change to it reads the audit again.
+    usePipHome.getState().openWorkstream(id);
+    await backend.workstreamsHold(id);
+    await vi.waitFor(() => expect(useWorkstreams.getState().events[id]?.slice(-1)[0]?.action).toBe("held"));
+
+    let release: (events: Awaited<ReturnType<typeof backend.workstreamsEvents>>) => void = () => {};
+    const read = vi.spyOn(backend, "workstreamsEvents").mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    const slow = useWorkstreams.getState().loadEvents(id);
+    await useWorkstreams.getState().loadEvents(id);
+    release([]);
+    await slow;
+    read.mockRestore();
+    expect(useWorkstreams.getState().events[id]?.length).toBeGreaterThan(0);
+
+    const late = vi.spyOn(backend, "workstreamsEvents").mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    const pending = useWorkstreams.getState().loadEvents(id);
+    useWorkstreams.getState().dispose();
+    release([]);
+    await pending;
+    late.mockRestore();
+    expect(useWorkstreams.getState().events).toEqual({});
+  });
+});
+
+describe("focusComposer", () => {
+  /** A page with a body, Pip's input when `mounted`, and a rail chip; focusing one makes it the active element. */
+  const page = (mounted: boolean) => {
+    const doc = { activeElement: null as unknown, body: {} as unknown, getElementById: (id: string) => (id === "pip-input" && doc.mounted ? input : null), mounted };
+    doc.activeElement = doc.body;
+    const make = () => {
+      const e = { focus: vi.fn(() => void (doc.activeElement = e)) };
+      return e;
+    };
+    const input = make();
+    const chip = make();
+    return { doc, input, chip };
+  };
+  let frames: (() => void)[] = [];
+  beforeEach(() => {
+    frames = [];
+    vi.stubGlobal("requestAnimationFrame", (go: () => void) => frames.push(go));
+  });
+
+  it("focuses an input that is there once, and never again a frame later, so a key pressed right after stays where it went", () => {
+    const { doc, input, chip } = page(true);
+    vi.stubGlobal("document", doc);
+    focusComposer();
+    expect(doc.activeElement).toBe(input);
+    expect(frames).toHaveLength(0);
+    // F6 pressed straight after: the rail keeps it.
+    chip.focus();
+    expect(doc.activeElement).toBe(chip);
+    expect(input.focus).toHaveBeenCalledOnce();
+  });
+
+  it("focuses an input that mounts a frame later, unless a key took focus elsewhere first", () => {
+    const later = page(false);
+    vi.stubGlobal("document", later.doc);
+    focusComposer();
+    expect(later.doc.activeElement).toBe(later.doc.body);
+    later.doc.mounted = true;
+    frames.shift()!();
+    expect(later.doc.activeElement).toBe(later.input);
+
+    const moved = page(false);
+    vi.stubGlobal("document", moved.doc);
+    focusComposer();
+    moved.chip.focus();
+    moved.doc.mounted = true;
+    frames.shift()!();
+    expect(moved.doc.activeElement).toBe(moved.chip);
+    expect(moved.input.focus).not.toHaveBeenCalled();
   });
 });

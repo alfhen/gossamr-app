@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { agentTicketChoices, buildCommands, agentCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
+import { agentTicketChoices, askToPlanCommands, buildCommands, agentCommands, startWorkstreamCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
 import { BUILT_IN_VIEWS } from "./filters";
 
 const containers = await new MockBackend().cacheContainers();
@@ -9,7 +9,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showAgentsNeedingMe", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showAgentsNeedingMe", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openWorkstream", "askPipToPlan", "startWorkstreamOn"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -322,5 +322,75 @@ describe("agent commands", () => {
     expect(agentTicketChoices(items, "no ticket", pick).map((c) => c.id)).toContain("agent:none");
     expect(latest.find((c) => c.id === "agent:none")?.label).toBe("Investigate something (no ticket)");
     expect(agentTicketChoices(items, "investigate", pick).map((c) => c.id)).toContain("agent:none");
+  });
+});
+
+describe("Pip home in the palette", () => {
+  const ctx = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
+  const view = (id: string, key: string | null, closed = false) =>
+    ({ workstream: { id, itemKey: key, title: key ? `${key} Refund rounding` : "Look into the logs", closedAt: closed ? "2026-10-01T00:00:00Z" : null }, stage: "intake", runs: [], labels: [] }) as unknown as Parameters<typeof workstreamCommands>[0][number];
+
+  it("offers 'Open Pip home' only while Agents are on", () => {
+    const a = actions();
+    expect(buildCommands(containers, BUILT_IN_VIEWS, a, ctx).some((c) => c.id === "app:pip-home")).toBe(false);
+    const on = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, agents: true });
+    const home = on.find((c) => c.id === "app:pip-home")!;
+    expect(home).toMatchObject({ group: "Go to", label: "Open Pip home", hint: "⌘0" });
+    expect(rankCommands(on, "pip home")[0].id).toBe("app:pip-home");
+    home.run();
+    expect(a.openPipHome).toHaveBeenCalled();
+  });
+
+  it("opens an open workstream by its ticket's key, never a closed one", () => {
+    const a = actions();
+    const list = [view("w1", "CA-401"), view("w2", "CA-402"), view("w3", "CA-4011", true), view("w4", null)];
+    const found = workstreamCommands(list, "ca-401", a);
+    expect(found.map((c) => c.label)).toEqual(["Open the workstream on CA-401"]);
+    found[0].run();
+    expect(a.openWorkstream).toHaveBeenCalledWith("w1");
+    expect(workstreamCommands(list, "workstream ca-402", a).map((c) => c.id)).toEqual(["workstream:open:w2"]);
+    expect(workstreamCommands(list, "logs", a).map((c) => c.label)).toEqual(["Open the workstream on Look into the logs"]);
+    expect(workstreamCommands(list, "  ", a)).toEqual([]);
+  });
+
+  it("asks Pip to plan the ticket a query starting with 'plan' names", () => {
+    const a = actions();
+    const ca401 = items.find((i) => i.item.key === "CA-401")!;
+    const found = askToPlanCommands(items, "plan ca-401", a);
+    expect(found[0]).toMatchObject({ id: expect.stringMatching(/^askplan:/), group: "Ask Pip", label: "Ask Pip to plan CA-401" });
+    found[0].run();
+    expect(a.askPipToPlan).toHaveBeenCalledWith(ca401);
+    expect(askToPlanCommands(items, "ca-401 plan", a)).toEqual([]);
+    expect(askToPlanCommands(items, "planet", a)).toEqual([]);
+  });
+
+  it("on Pip home, leaves out 'Open Pip home' and calls ⌘J what it does there", () => {
+    const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true, onPipHome: true });
+    expect(on.some((c) => c.id === "app:pip-home")).toBe(false);
+    expect(on.find((c) => c.id === "app:pip")?.label).toBe("Go to Pip's composer");
+    expect(buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true }).find((c) => c.id === "app:pip")?.label).toBe("Toggle Pip");
+  });
+
+  it("starts a workstream on a ticket the query names, with no ticket peeked, and never one whose workstream is open", () => {
+    const a = actions();
+    const ca401 = items.find((i) => i.item.key === "CA-401")!;
+    const found = startWorkstreamCommands(items, "start a workstream on ca-401", [], a);
+    expect(found[0]).toMatchObject({ id: "workstream:start:mock:CA-401", group: "Agents", label: "Start a workstream on CA-401" });
+    found[0].run();
+    expect(a.startWorkstreamOn).toHaveBeenCalledWith(ca401);
+    expect(startWorkstreamCommands(items, "workstream ca-401", [], a)[0]?.label).toBe("Start a workstream on CA-401");
+    // Open already: the palette offers to open it instead (workstreamCommands).
+    const open = [{ ...view("w1", "CA-401"), workstream: { ...view("w1", "CA-401").workstream, connectionId: ca401.item.connectionId } }] as Parameters<typeof workstreamCommands>[0];
+    expect(startWorkstreamCommands(items, "workstream ca-401", open, a).some((c) => c.label === "Start a workstream on CA-401")).toBe(false);
+    expect(startWorkstreamCommands(items, "ca-401", [], a)).toEqual([]);
+    expect(startWorkstreamCommands(items, "start a workstream", [], a)).toEqual([]);
+    // What Pip home's 'Start a workstream…' opens the palette with asks for the ticket; it names none yet.
+    expect(startWorkstreamCommands(items, "start a workstream on ", [], a)).toEqual([]);
+    expect(startWorkstreamCommands(items, "start a workstream on ca-401", [], a)).toHaveLength(1);
+  });
+
+  it("keeps the peek's workstream entry as it was", () => {
+    const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true, ticket: { key: "CA-401", workstream: false } });
+    expect(on.find((c) => c.id === "workstream:start")?.label).toBe("Start a workstream on CA-401");
   });
 });
