@@ -92,6 +92,20 @@ test("after the pull request moves on the card warns before posting, and the pos
   expect(await githubWrites(page)).toEqual([]);
 });
 
+test("the review's preview card warns that the pull request moved on before a posts it, as the full card does", async ({ page }) => {
+  const review = await reviewedDraft(page);
+  expect(await movePullHead(page, "acme/webshop", 218)).toBe(true);
+  const card = await previewCard(page);
+  await expect(card.locator("[data-preview-warning]")).toHaveText(/^The pull request has moved on since this review: reviewed a1b2c3d4, now at moved\w*\. GitHub may mark these comments outdated\.$/);
+  await page.keyboard.press("a");
+  await expect(card.getByRole("status")).toHaveText("↵ post this review · any other key cancels");
+  await expect(card.locator("[data-preview-warning]")).toBeVisible();
+  await page.keyboard.press("Enter");
+  // The mock's push dropped the reviewed commit, so GitHub refuses it as outdated.
+  await expect(review.locator("[data-review-outdated]")).toHaveText("Outdated");
+  expect(await githubWrites(page)).toEqual([]);
+});
+
 test("a then Enter on the review's preview card posts it, once", async ({ page }) => {
   await reviewedDraft(page);
   const card = await previewCard(page);

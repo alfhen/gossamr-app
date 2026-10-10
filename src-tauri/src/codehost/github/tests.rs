@@ -572,6 +572,17 @@ async fn a_422_that_isnt_about_the_reviews_lines_says_what_github_said_rather_th
 }
 
 #[tokio::test]
+async fn githubs_words_in_a_refused_review_are_kept_on_one_line_without_control_characters_or_secrets_and_cut_short() {
+    let said = format!("Body is too long\\n\\u001b[31mred\\u001b[0m ghp_abcdefghijklmnopqrstuvwxyz0123456789 {}", "x ".repeat(400));
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::status(422, &format!("{{\"message\":\"Validation Failed\",\"errors\":[\"{said}\"]}}"))])]).await;
+    let err = host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
+    let Error::CodeHost { status: 422, message } = &err else { panic!("{err:?}") };
+    assert!(message.starts_with("GitHub didn't accept the review: Body is too long [31mred"), "{message}");
+    assert!(!message.chars().any(char::is_control) && !message.contains("ghp_abc"), "{message}");
+    assert!(message.chars().count() < 400, "{}", message.chars().count());
+}
+
+#[tokio::test]
 async fn a_post_refused_for_single_sign_on_isnt_remembered_as_the_repository_refusing_reviews() {
     let server = serve(vec![
         ("/repos/acme/webshop", vec![Reply::ok("{\"full_name\":\"acme/webshop\",\"name\":\"webshop\",\"private\":true,\"permissions\":{\"pull\":true,\"push\":true}}")]),

@@ -7,8 +7,9 @@ use serde_json::json;
 
 use super::http::{error_for, error_message, Api};
 use super::wire::ReviewPosted;
-use crate::domain::{PostedReview, ReviewComment};
+use crate::domain::{clip, PostedReview, ReviewComment};
 use crate::error::{Error, Result};
+use crate::runs::redact::redact;
 
 /// The only kind of review Gossamr posts. It is fixed here and never taken from a caller.
 const EVENT: &str = "COMMENT";
@@ -47,7 +48,11 @@ fn misplaced(said: &str) -> bool {
     ["line", "position", "commit", "diff", "could not be resolved", "path"].iter().any(|w| said.contains(w))
 }
 
-/// What a 422 says: its errors when it lists them, else its message.
+/// The most of GitHub's own words a refused review repeats.
+const SAID_LIMIT: usize = 300;
+
+/// What a 422 says: its errors when it lists them, else its message. It is shown to the person and kept on the draft, so
+/// it goes on one line, without control characters or anything shaped like a secret, cut at `SAID_LIMIT`.
 fn said(body: &str) -> String {
     let value: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
     let details: Vec<String> = value
@@ -62,7 +67,8 @@ fn said(body: &str) -> String {
         })
         .unwrap_or_default();
     let said = if details.is_empty() { error_message(body) } else { details.join("; ") };
-    said.trim().trim_end_matches('.').to_string()
+    let flat = redact(&said.replace(|c: char| c.is_control(), " ")).split_whitespace().collect::<Vec<_>>().join(" ");
+    clip(&flat, SAID_LIMIT).trim().trim_end_matches('.').to_string()
 }
 
 /// Posts one comment review of pull request `number` in `repo` at `commit_sha`, with `summary` as its body and

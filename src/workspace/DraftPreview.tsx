@@ -1,7 +1,7 @@
 import { useContext, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
-import { targetOf, unreachable } from "../lib/proposals";
+import { REVIEW_OUTDATED_NOTE, targetOf, unreachable } from "../lib/proposals";
 import type { Proposal } from "../types";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { draftStatus } from "./boardLogic";
@@ -12,7 +12,7 @@ import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { nextPass } from "./followUp";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
-import { openPullView } from "./pullViewStore";
+import { openPullView, sameCommit, usePullDiff } from "./pullViewStore";
 import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, type Asking } from "./draftKeys";
 import { usePip } from "./pipStore";
 import { InlineStart, InlineStartContext, inlineStartId, inlineStartKey, inlineStartable, useInlineStarts } from "./InlineStart";
@@ -189,6 +189,12 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
   /** Whether a may decide the draft in place: not an answer whose run moved on, nor a review the token can't post. */
   const canApprove = !stale && (p.intent.type !== "githubReview" || canPost);
   const title = draftTitle(p, answer?.label);
+  const review = p.intent.type === "githubReview" && state === "pending" ? p.intent : null;
+  // A review the keys may post reads where its pull request is now, once the card is reached from the keyboard, so it
+  // warns before a posts it as the full card does.
+  const now = usePullDiff(review && canApprove && armed ? review.connectionId : null, review?.repo ?? null, review?.number ?? null);
+  const head = now.status === "ready" ? now.diff.change.sha : null;
+  const warning = !review || !armed ? null : p.error === REVIEW_OUTDATED_NOTE ? REVIEW_OUTDATED_NOTE : head && !sameCommit(head, review.commitSha) ? `The pull request has moved on since this review: reviewed ${review.commitSha.slice(0, 8)}, now at ${head.slice(0, 8)}. GitHub may mark these comments outdated.` : null;
   /** A review the token can't post is read in the pull request view rather than posted. */
   const toPullView = p.intent.type === "githubReview" && !canPost && !!onPullView;
   const go = pending ? (p.intent.type === "githubReview" ? (toPullView ? "Open PR view →" : "Review and post →") : p.intent.type === "startRun" ? (expander ? "Review and start" : "Review and start →") : p.intent.type === "followUp" ? "Review and send back →" : p.intent.type === "runAnswer" ? (stale ? "" : "Review and answer →") : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
@@ -299,6 +305,11 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
       {armed && (
         <p role="status" className={`m-0 border-t border-ws-sep px-2.5 py-1 text-xs ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "text-ws-ink3"}`}>
           {draftKeyHint(p, asking, canApprove)}
+        </p>
+      )}
+      {warning && (
+        <p data-preview-warning className="m-0 border-t border-ws-sep bg-ws-blocked-soft px-2.5 py-1 text-xs font-semibold text-ws-blocked">
+          {warning}
         </p>
       )}
     </article>
