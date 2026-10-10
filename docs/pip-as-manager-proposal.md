@@ -290,6 +290,6 @@ Every phase can ship on its own, behind the agents flag, and has mock parity. Es
 7. Should Build require the plan-description draft to be **applied to Jira** first, or is "accepted in Gossamr" enough?
 8. Should the manager use a stronger model or effort than standard Pip? It costs more per wake, and today it is pinned in `claude/mod.rs`.
 9. What daily budget for Pip manager turns is acceptable on a person's subscription, and should wakes pause while the app is in the background?
-10. Should Pip home become the landing screen for everyone with agents enabled, and does this land before or after build-plan 2f (classic inbox removal)?
+10. Should Pip home become the landing screen for everyone with agents enabled, and does this land before or after build-plan 2f (classic inbox removal)? **Decided:** Pip home is the landing screen for everyone with agents enabled, from Phase 4. The classic inbox stays one key away, and a setting lets a person start on the inbox instead.
 11. Structured reports (`report_result`) are now required for Triage and Review, because auto-start reads them. Should they be on for every workstream run?
 12. Should Hold all also stop runs the person started outside workstreams, or only workstream runs (proposed)?
