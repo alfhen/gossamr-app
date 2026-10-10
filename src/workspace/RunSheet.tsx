@@ -15,7 +15,7 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { COPY, MAY_TOUCH, answerable, breakdownWithPipPrompt, planDescriptionWithPipPrompt, buildFromPlanOptions, canStartNow, descriptionWithPipPrompt, reviewThisControl, reviewThisOptions, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
+import { COPY, answerable, mayTouch, readOnlyNote, breakdownWithPipPrompt, planDescriptionWithPipPrompt, buildFromPlanOptions, canStartNow, descriptionWithPipPrompt, reviewThisControl, reviewThisOptions, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { RunContinuation } from "./RunContinuation";
@@ -257,8 +257,8 @@ function BriefBody({ brief, readOnly }: { brief: RunSheetViewProps["brief"]; rea
       <PromptParts review={brief} />
       <Details summary="What Gossamr added for the model">
         <pre className={MONO_BLOCK}>{brief.guard}</pre>
-        <ReportExtras report={brief.report} />
         <ReadOnlyExtras readOnly={readOnly} />
+        <ReportExtras report={brief.report} />
       </Details>
     </>
   );
@@ -358,11 +358,11 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
         {run.readOnly && (
           <>
             <ReadOnlyLine readOnly={run.readOnly} />
-            <p className="m-0 text-ws-ink2">{COPY.readOnlyNote}</p>
+            <p className="m-0 text-ws-ink2">{readOnlyNote(run.readOnly)}</p>
           </>
         )}
         <ul className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
-          {MAY_TOUCH.map((t) => (
+          {mayTouch(run.readOnly).map((t) => (
             <li key={t.title} data-tone={t.tone} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5">
               <Icon name={t.tone === "yes" ? "check" : t.tone === "ask" ? "hand" : "x"} className={`mt-0.5 size-3.5 ${t.tone === "yes" ? "text-ws-done" : t.tone === "ask" ? "text-ws-warn" : "text-ws-ink3"}`} />
               <span>

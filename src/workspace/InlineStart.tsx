@@ -5,7 +5,7 @@ import { useWorkspace } from "../workspaceStore";
 import { Box, BoxTitle, Btn, Details, MONO_BLOCK } from "./AgentSheet";
 import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
-import { COPY, startBlock } from "./runSheetLogic";
+import { COPY, readOnlyNote, runAsYou, startBlock } from "./runSheetLogic";
 import { DRAFT_CARD, PIP_INPUT_ID } from "./draftKeys";
 import { afterRunStarted, approveRunDraft, readRunDraft } from "./runSetupStore";
 import { useRuns } from "./runsStore";
@@ -312,8 +312,8 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
           <Details summary="What Gossamr adds for the model">
             <pre className={MONO_BLOCK}>{review.guard}</pre>
             <p className="m-0 text-ws-ink2">{COPY.guardNote}</p>
-            <ReportExtras report={review.report} />
             <ReadOnlyExtras readOnly={review.readOnly} />
+            <ReportExtras report={review.report} />
           </Details>
         </>
       ) : (
@@ -325,11 +325,11 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
       )}
       <RunPreflight preflight={preflight} checking={phase === "loading"} steps={{ trust: on.trustFolder, recheck: on.recheck, rechecking: entry.rechecking }} />
       <Box label="What agents can do">
-        <p className="m-0 text-ws-ink">{COPY.runAsYou}</p>
+        <p className="m-0 text-ws-ink">{runAsYou(review?.readOnly)}</p>
         {review?.readOnly ? (
           <>
             <ReadOnlyLine readOnly={review.readOnly} />
-            <p className="m-0 text-ws-ink2">{COPY.readOnlyNote}</p>
+            <p className="m-0 text-ws-ink2">{readOnlyNote(review.readOnly)}</p>
           </>
         ) : (
           <p className="m-0 text-ws-ink2">{COPY.notALock}</p>

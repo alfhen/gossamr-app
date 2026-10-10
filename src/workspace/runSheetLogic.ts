@@ -1,15 +1,18 @@
 import { answerProblem } from "../lib/answer";
 import { containerKey, itemKey } from "../lib/filter";
-import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type Run, type RunKind, type RunOutcome, type RunReview, type RunSpec, type WorkContainer } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type ReadOnly, type Run, type RunKind, type RunOutcome, type RunReview, type RunSpec, type WorkContainer } from "../types";
 import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
 export const COPY = {
   runAsYou: "Agents run as you, with your own Claude settings. Anything your Claude can do, they can do.",
   notALock: "They are told not to write to Jira and to send findings back to you. They run as you, so this is a request, not a lock.",
-  readOnly: "Read-only: Claude Code blocks edits and writes",
-  readOnlyNote: "Claude Code refuses file edits, the commands listed and anything that would ask for permission, whatever your own permission mode. Commands you allowed in your own Claude settings still run, except the ones listed. Review and Verify may run the repository's tests, whose code runs as written.",
-  readOnlySteps: "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself blocks their file edits and writing commands. A Build changes code in its worktree, and what it is told about Jira and pushing is a request, not a lock.",
+  runAsYouReadOnly: "A read-only step runs signed in as you, but without your own or the repository's Claude settings and MCP servers: only Claude Code's own read-only commands and the commands listed run.",
+  readOnly: "Read-only: Claude Code refuses edits and writes",
+  readOnlyTests: "Read-only, except the repository's tests: Claude Code refuses edits and other writes",
+  readOnlyNote: "Claude Code refuses file edits, the commands listed and any command not allowed above, whatever your own permission mode. It reads none of your or the repository's Claude settings and loads none of your MCP servers, so their allow rules don't apply.",
+  readOnlyTestsNote: "The repository's tests run as the repository wrote them, so their code can write inside the run's worktree.",
+  readOnlySteps: "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself refuses their file edits and writing commands, and they run without your own or the repository's Claude settings. Review and Verify may run the repository's tests, whose code runs as written. A Build changes code in its worktree, and what it is told about Jira and pushing is a request, not a lock.",
   receives: "The prompt, the focus note and the ticket text below are exactly what the agent receives.",
   guardNote: "This is a request to the model, not a block.",
   startsNow: "Starts right away. You can stop it once it's working.",
@@ -29,6 +32,32 @@ export const MAY_TOUCH: readonly MayTouch[] = [
   { tone: "no", title: "Writing to Jira:", text: "the agent is told not to, and to send anything for Jira back to you. Nothing enforces that: it runs as you and could use any Atlassian tool in your own Claude config." },
 ];
 
+/** What a read-only step may touch, in place of `MAY_TOUCH`: Claude Code refuses instead of asking, and the person's own settings don't apply. */
+export const MAY_TOUCH_READ_ONLY: readonly MayTouch[] = [
+  { tone: "yes", title: "Starts in its own worktree.", text: "Your own checkout and branch are not changed by the launch. It may read any other file you can." },
+  { tone: "yes", title: "Runs only what is listed:", text: "Claude Code's own read-only commands and the exact commands allowed above. Your Claude settings, allowed commands and MCP servers don't apply." },
+  { tone: "no", title: "Pushing a branch, opening a PR, network commands:", text: "refused. A read-only step never stops to ask you; it says in its answer what was refused." },
+  { tone: "no", title: "Writing to Jira:", text: "the agent is told not to, and to send anything for Jira back to you. It loads none of your MCP servers, and anything for Jira reaches it only as a draft you approve." },
+];
+
+/** What a run may touch: `MAY_TOUCH_READ_ONLY` for a read-only step, `MAY_TOUCH` otherwise. */
+export const mayTouch = (readOnly: ReadOnly | null | undefined): readonly MayTouch[] => (readOnly ? MAY_TOUCH_READ_ONLY : MAY_TOUCH);
+
+/** The test commands Review and Verify may run, as `TEST_RUNNERS` in domain/run.rs. */
+const TEST_RULE = /^Bash\((?:cargo test|pnpm test|npm test|yarn test|pytest|go test \.\/\.\.\.)\)$/;
+
+/** Whether a read-only run may run the repository's tests, whose code can write. */
+export const runsTests = (readOnly: ReadOnly | null | undefined) => !!readOnly?.allow.some((r) => TEST_RULE.test(r));
+
+/** The read-only headline, which never claims more than the rules hold: a step that runs the repository's tests says so. */
+export const readOnlyHeadline = (readOnly: ReadOnly) => (runsTests(readOnly) ? COPY.readOnlyTests : COPY.readOnly);
+
+/** What the read-only rules mean, with the sentence about tests only for a step that runs them. */
+export const readOnlyNote = (readOnly: ReadOnly) => (runsTests(readOnly) ? `${COPY.readOnlyNote} ${COPY.readOnlyTestsNote}` : COPY.readOnlyNote);
+
+/** Who the agent runs as, said for the kind it is. */
+export const runAsYou = (readOnly: ReadOnly | null | undefined) => (readOnly ? COPY.runAsYouReadOnly : COPY.runAsYou);
+
 export const START_STEPS: readonly string[] = [
   "Gossamr makes the worktree and starts claude --bg in it with the prompt above. It is the same Claude Code you use yourself, with your own settings and permissions.",
   "It works in the background. If your settings would ask you something, it stops and shows up under Needs you. You answer a question in Gossamr and a permission prompt in Terminal.",
@@ -47,8 +76,15 @@ export function defaultProject(options: { repoProject: ContainerRef | null; last
   return known(options.repoProject) ?? known(options.last) ?? options.projects[0]?.ref ?? null;
 }
 
-export function startSteps(ticketless: boolean): readonly string[] {
-  return ticketless ? [START_STEPS[0], START_STEPS[1], "When it is done it is under Ready to review, and one draft ticket made from its answer waits for you. Nothing is created in Jira until you approve it."] : START_STEPS;
+/** The first two steps for a read-only kind: it runs without the person's settings, and Claude Code refuses instead of asking, so it never stops for a permission prompt. */
+export const READ_ONLY_STEPS: readonly string[] = [
+  "Gossamr makes the worktree and starts claude --bg in it with the prompt above and the read-only rules. It is the same Claude Code you use yourself, signed in as you, without your own Claude settings.",
+  "It works in the background, read-only. It never stops for a permission prompt: Claude Code refuses anything not allowed, and the run says in its answer what was refused. If it has a question, it stops under Needs you and you answer it in Gossamr.",
+];
+
+export function startSteps(ticketless: boolean, readOnly = false): readonly string[] {
+  const first = readOnly ? READ_ONLY_STEPS : START_STEPS.slice(0, 2);
+  return [...first, ticketless ? "When it is done it is under Ready to review, and one draft ticket made from its answer waits for you. Nothing is created in Jira until you approve it." : START_STEPS[2]];
 }
 
 export interface PromptPart {
@@ -256,10 +292,35 @@ export function formatBytes(bytes: number): string {
 
 const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
 
-/** The launch as a shell would read it. Gossamr passes each part as its own argument, so nothing is run through a shell. */
-export function launchCommand(spec: Pick<RunSpec, "clonePath" | "name" | "repo" | "kind">, key: string | null, guard: string, prompt: string): string {
+/** What a launch adds beside the prompt and the guard: a read-only kind's restriction and the run-report tool. */
+export interface LaunchExtras {
+  readOnly?: ReadOnly | null;
+  report?: { allowed: string; guard: string } | null;
+}
+
+/** Where the run-report config file goes; Gossamr writes it as the run launches. */
+export const REPORT_CONFIG_SHOWN = "<run-report config, written at launch>";
+
+/**
+ * The launch as a shell would read it, flag for flag as `SystemCli::launch` in runs/cli.rs builds it, with the guard
+ * as `RunService::spawn` composes it. Gossamr passes each part as its own argument, so nothing is run through a shell.
+ */
+export function launchCommand(spec: Pick<RunSpec, "clonePath" | "name" | "repo" | "kind">, key: string | null, guard: string, prompt: string, extras: LaunchExtras = {}): string {
   const name = `${key ?? spec.repo} ${spec.kind}`;
-  return [`cd ${quote(spec.clonePath)}`, `claude --bg --name ${quote(name)} --worktree ${quote(spec.name)} --append-system-prompt ${quote(guard)} ${quote(prompt)}`].join("\n");
+  const { readOnly, report } = extras;
+  const args = ["claude", "--bg", "--name", quote(name), "--worktree", quote(spec.name)];
+  if (report) args.push("--mcp-config", quote(REPORT_CONFIG_SHOWN));
+  if (readOnly) {
+    args.push("--permission-mode", quote(readOnly.mode));
+    if (readOnly.settingSources != null) args.push("--setting-sources", quote(readOnly.settingSources));
+    if (readOnly.strictMcpConfig) args.push("--strict-mcp-config");
+  }
+  const allowed = [...(report ? [report.allowed] : []), ...(readOnly?.allow ?? [])];
+  if (allowed.length) args.push("--allowedTools", ...allowed.map(quote));
+  if (readOnly?.deny.length) args.push("--disallowedTools", ...readOnly.deny.map(quote));
+  const fullGuard = [guard, readOnly?.guard, report?.guard].filter(Boolean).join(" ");
+  args.push("--append-system-prompt", quote(fullGuard), "--", quote(prompt));
+  return [`cd ${quote(spec.clonePath)}`, args.join(" ")].join("\n");
 }
 
 const TIMELINE_ICON: Record<string, IconName> = {

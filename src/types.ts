@@ -623,6 +623,10 @@ export interface ReadOnly {
   allow: string[];
   deny: string[];
   guard: string;
+  /** `--setting-sources`: the settings files the run reads; empty for none. Absent on a run launched before it existed. */
+  settingSources?: string | null;
+  /** `--strict-mcp-config`: only the MCP servers Gossamr passes are loaded. */
+  strictMcpConfig?: boolean;
 }
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */

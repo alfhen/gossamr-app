@@ -46,9 +46,9 @@ export function AgentRow({ run, now, selected, position, total, ticketTitle, lab
       <span className="truncate font-mono text-sm font-semibold text-ws-ink2">{ticketLabel(run) ?? "none"}</span>
       <span className="flex min-w-0 items-center gap-1.5">
         <RunLabel label={label} />
-        <span className="truncate font-semibold">{title}</span>
+        <span className="min-w-[6ch] truncate font-semibold">{title}</span>
         <RunRef run={run} className="shrink-0" />
-        <ReadOnlyBadge run={run} />
+        <ReadOnlyBadge run={run} compact />
         <AutoStarted run={run} className="hidden @6xl:inline" />
       </span>
       <span className="hidden truncate text-ws-ink2 @6xl:block">{KIND_LABEL[run.spec.kind]}</span>

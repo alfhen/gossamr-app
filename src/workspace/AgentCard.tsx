@@ -6,7 +6,7 @@ import type { ReviewView, Run } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
 import { KIND_LABEL, ageSince, ageText, branchOf, formatTokens, repoName, runTitle, stateView } from "./agentsLogic";
-import { COPY, verdictChip, verdictText } from "./runSheetLogic";
+import { readOnlyHeadline, verdictChip, verdictText } from "./runSheetLogic";
 
 export const agentId = (id: string) => `agent-${id}`;
 
@@ -110,11 +110,23 @@ export function AutoStarted({ run, className = "" }: { run: Run; className?: str
   );
 }
 
-/** A small mark on a run launched read-only: Claude Code itself refused its edits and writes. Nothing for a Build or a run from before. */
-export function ReadOnlyBadge({ run }: { run: Run }) {
+/**
+ * A small mark on a run launched read-only: Claude Code itself refused its edits and writes. Nothing for a Build, a run
+ * from before, or one that carried on in a session Gossamr didn't launch. `compact` shows the shield alone, for a list
+ * row whose title needs the room.
+ */
+export function ReadOnlyBadge({ run, compact = false }: { run: Run; compact?: boolean }) {
   if (!run.readOnly) return null;
+  const headline = readOnlyHeadline(run.readOnly);
+  if (compact) {
+    return (
+      <span data-read-only title={headline} aria-label="Read-only" role="img" className="inline-flex shrink-0 items-center text-ws-ink3">
+        <Icon name="shield" className="size-3" />
+      </span>
+    );
+  }
   return (
-    <span data-read-only title={COPY.readOnly} className="inline-flex shrink-0 items-center gap-0.5 rounded bg-ws-hover px-1 text-xs font-medium text-ws-ink2">
+    <span data-read-only title={headline} className="inline-flex shrink-0 items-center gap-0.5 rounded bg-ws-hover px-1 text-xs font-medium text-ws-ink2">
       <Icon name="shield" className="size-3" />
       Read-only
     </span>
