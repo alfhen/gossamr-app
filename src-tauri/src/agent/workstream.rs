@@ -4,12 +4,13 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use super::context::draft_line;
 use super::mcp::{item_ref, opt, reachable, tool, McpState, PipRun, Reply};
 use crate::auth::Scope;
-use crate::domain::workstream::{run_labels, Stage};
+use crate::domain::workstream::{run_labels, Stage, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, TRIPWIRES};
 use crate::domain::{Actor, Proposal, ProposalQuery, Run, RunQuery, StateKind, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::inbox::{Core, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
@@ -39,6 +40,65 @@ pub struct WorkstreamContext {
     pub waiting_for_pr: Option<String>,
     /// For a wake turn: the `[Event]` lines Rust wrote about what happened. Shown before the workstream's block.
     pub event: Option<String>,
+    /// The last tripwire that held it, from its audit.
+    pub last_trip: Option<LastTrip>,
+}
+
+/// The last tripwire that held a workstream, as its audit has it: only kinds, field names and times, never ticket text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LastTrip {
+    /// One of `TRIPWIRES`.
+    pub kind: String,
+    /// For a basis drift, the basis fields that drifted (`BASIS_SUMMARY`, `BASIS_DESCRIPTION`, `BASIS_STATUS`).
+    pub fields: Vec<String>,
+    pub at: DateTime<Utc>,
+    /// When the person resumed it after, if they did.
+    pub resumed_at: Option<DateTime<Utc>>,
+}
+
+/// The last tripwire in `events` (oldest first) with the fields its `basis_drifted` line names and the person's first
+/// resume after it. Kinds and fields not known here are left out, so nothing else of the audit reaches Pip.
+pub fn last_trip(events: &[WorkstreamEvent]) -> Option<LastTrip> {
+    let trip = events.iter().rev().find(|e| e.actor == Actor::Supervisor && e.action == "tripwire")?;
+    let kind = trip.detail.as_deref().filter(|k| TRIPWIRES.contains(k))?.to_string();
+    let after = || events.iter().filter(|e| e.seq > trip.seq);
+    let fields = after()
+        .find(|e| e.actor == Actor::Supervisor && e.action == "basis_drifted")
+        .and_then(|e| e.detail.as_deref())
+        .map(|d| d.split(',').filter(|f| [BASIS_SUMMARY, BASIS_DESCRIPTION, BASIS_STATUS].contains(f)).map(String::from).collect())
+        .unwrap_or_default();
+    let resumed_at = after().find(|e| e.actor == Actor::Person && e.action == "resumed").map(|e| e.at);
+    Some(LastTrip { kind, fields, at: trip.at, resumed_at })
+}
+
+/// Why a tripwire of `kind` held a workstream, in words, e.g. "the ticket's description changed in Jira".
+pub fn trip_reason(kind: &str, fields: &[String]) -> String {
+    match kind {
+        "basis_drift" => {
+            let changed: Vec<&str> = [BASIS_SUMMARY, BASIS_DESCRIPTION].into_iter().filter(|f| fields.iter().any(|g| g == f)).collect();
+            let done = fields.iter().any(|f| f == BASIS_STATUS);
+            match (changed.is_empty(), done) {
+                (true, false) => "the ticket changed in Jira".into(),
+                (true, true) => "the ticket was moved to Done in Jira".into(),
+                (false, false) => format!("the ticket's {} changed in Jira", changed.join(" and ")),
+                (false, true) => format!("the ticket's {} changed and it was moved to Done in Jira", changed.join(" and ")),
+            }
+        }
+        "marker" => "a run's output held one of Gossamr's data markers".into(),
+        "repeated_failure" => "the same step failed twice".into(),
+        _ => "you kept asking for a step Gossamr refused".into(),
+    }
+}
+
+/// The line that tells Pip about the last tripwire, e.g. "Gossamr held this workstream at 2026-10-10 09:12 because the
+/// ticket's description changed in Jira (basis_drift); the person resumed it at 09:30 and …".
+fn trip_line(trip: &LastTrip) -> String {
+    let held = format!("Gossamr held this workstream at {} because {} ({})", trip.at.format("%Y-%m-%d %H:%M"), trip_reason(&trip.kind, &trip.fields), trip.kind);
+    match (trip.resumed_at, trip.kind == "basis_drift") {
+        (Some(at), true) => format!("{held}; the person resumed it at {} and the ticket as it reads now is the new basis. Read it with get_item before drafting.", at.format("%H:%M")),
+        (Some(at), false) => format!("{held}; the person resumed it at {}.", at.format("%H:%M")),
+        (None, _) => format!("{held}; it stays held until the person resumes it."),
+    }
 }
 
 fn refuse(message: impl Into<String>) -> Error {
@@ -68,9 +128,11 @@ pub async fn load(core: &Core, scope: &Scope, id: &str) -> Result<WorkstreamCont
             }
         }
     }
-    let mut recent: Vec<WorkstreamEvent> = core.workstream_events(scope, id).await?.into_iter().filter(|e| e.actor == Actor::Person).collect();
+    let events = core.workstream_events(scope, id).await?;
+    let last_trip = last_trip(&events);
+    let mut recent: Vec<WorkstreamEvent> = events.into_iter().filter(|e| e.actor == Actor::Person).collect();
     recent.drain(..recent.len().saturating_sub(RECENT_ACTIONS));
-    Ok(WorkstreamContext { workstream, stage: view.stage, runs, drafts, recent_person_actions: recent, waiting_for_pr: view.waiting_for_pr, event: None })
+    Ok(WorkstreamContext { workstream, stage: view.stage, runs, drafts, recent_person_actions: recent, waiting_for_pr: view.waiting_for_pr, event: None, last_trip })
 }
 
 /// The workstream a turn in its conversation works in. Refused, so the turn never runs, unless it is an open
@@ -157,6 +219,9 @@ impl WorkstreamContext {
         if let Some(id) = &self.waiting_for_pr {
             let label = self.runs.iter().find(|(_, r)| r.id == *id).map_or_else(|| format!("run {id}"), |(l, _)| l.clone());
             out.push_str(&format!("{}\n", waiting_line(&label)));
+        }
+        if let Some(trip) = &self.last_trip {
+            out.push_str(&format!("{}\n", trip_line(trip)));
         }
         if !self.recent_person_actions.is_empty() {
             let labels: HashMap<&str, &str> = self.runs.iter().map(|(l, r)| (r.id.as_str(), l.as_str())).collect();
@@ -466,6 +531,58 @@ mod tests {
         assert!(line(WorkstreamEvent::new("w", Actor::Person, "run_answered", at).run("r-z")).ends_with("the person answered run r-z"));
         assert!(line(WorkstreamEvent::new("w", Actor::Person, "draft_skipped", at).proposal("p1")).ends_with("the person skipped draft p1"));
         assert!(line(WorkstreamEvent::new("w", Actor::Person, "held <<<x", at)).ends_with("the person held x"));
+    }
+
+    #[test]
+    fn the_last_tripwire_is_read_from_the_audit_with_its_fields_and_the_resume_after_it() {
+        use chrono::TimeZone;
+        let at = |h: u32, m: u32| Utc.with_ymd_and_hms(2026, 10, 10, h, m, 0).unwrap();
+        let line = |seq: u32, actor: Actor, action: &str, when: DateTime<Utc>, detail: &str| {
+            let mut e = WorkstreamEvent::new("w", actor, action, when).detail(detail);
+            e.seq = seq;
+            e
+        };
+        let mut events = vec![
+            line(1, Actor::Supervisor, "tripwire", at(8, 0), "marker"),
+            line(2, Actor::Person, "resumed", at(8, 5), "tripwire:marker"),
+            line(3, Actor::Supervisor, "tripwire", at(9, 12), "basis_drift"),
+            line(4, Actor::Supervisor, "basis_drifted", at(9, 12), "description,<<<TICKET"),
+            line(5, Actor::Supervisor, "held", at(9, 12), "tripwire:basis_drift"),
+        ];
+        let held = last_trip(&events).unwrap();
+        assert_eq!(held, LastTrip { kind: "basis_drift".into(), fields: vec!["description".into()], at: at(9, 12), resumed_at: None });
+        assert_eq!(trip_line(&held), "Gossamr held this workstream at 2026-10-10 09:12 because the ticket's description changed in Jira (basis_drift); it stays held until the person resumes it.");
+        events.push(line(6, Actor::Person, "resumed", at(9, 30), "tripwire:basis_drift"));
+        let resumed = last_trip(&events).unwrap();
+        assert_eq!(
+            trip_line(&resumed),
+            "Gossamr held this workstream at 2026-10-10 09:12 because the ticket's description changed in Jira (basis_drift); the person resumed it at 09:30 and the ticket as it reads now is the new basis. Read it with get_item before drafting."
+        );
+        assert_eq!(trip_reason("basis_drift", &["summary".into(), "description".into()]), "the ticket's summary and description changed in Jira");
+        assert_eq!(trip_reason("basis_drift", &["status".into()]), "the ticket was moved to Done in Jira");
+        assert_eq!(trip_reason("basis_drift", &["summary".into(), "status".into()]), "the ticket's summary changed and it was moved to Done in Jira");
+        assert!(trip_line(&last_trip(&events[..2]).unwrap()).ends_with("(marker); the person resumed it at 08:05."));
+        assert_eq!(last_trip(&[line(1, Actor::Supervisor, "tripwire", at(9, 0), "made-up")]), None, "an unknown kind isn't told");
+        assert_eq!(last_trip(&[]), None);
+    }
+
+    #[tokio::test]
+    async fn the_block_tells_pip_of_the_last_tripwire_with_no_ticket_text() {
+        let r = rig().await;
+        assert!(!r.ok("in-ws", "get_workstream", json!({})).await.contains("Gossamr held this workstream"));
+        r.fx.edit_item("CA-1", |i| {
+            i.title = "SECRET-TITLE".into();
+            i.body = Doc::paragraph("SECRET-BODY");
+        })
+        .await;
+        r.fx.core.trip_workstream(&r.fx.scope, &r.ws.id, "basis_drift", None, &["summary", "description"]).await.unwrap();
+        r.fx.core.resume_workstream(&r.fx.scope, &r.ws.id).await.unwrap();
+        let ctx = load(&r.fx.core, &r.fx.scope, &r.ws.id).await.unwrap();
+        let block = ctx.block();
+        let line = block.lines().find(|l| l.starts_with("Gossamr held this workstream")).unwrap_or_else(|| panic!("{block}"));
+        assert!(line.contains("because the ticket's summary and description changed in Jira (basis_drift); the person resumed it at"), "{line}");
+        assert!(line.ends_with("Read it with get_item before drafting."), "{line}");
+        assert!(!block.contains("SECRET"), "{block}");
     }
 
     #[test]

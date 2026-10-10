@@ -142,6 +142,21 @@ describe("the runs store", () => {
     expect(s().stopping).toBe(false);
   });
 
+  it("names the runs waiting for a slot that Stop all stopped before they started", async () => {
+    await settle();
+    vi.spyOn(backend, "runsStopAll").mockResolvedValueOnce({ stopped: 3, failed: 0, waiting: 2 });
+    await s().stopAll();
+    expect(useToasts.getState().toasts[0]).toMatchObject({ text: "Stopped 3 agents and 2 waiting to start", tone: "info" });
+  });
+
+  it("says so when Start now finds every slot taken, instead of doing nothing visible", async () => {
+    await settle();
+    const queued = { ...s().runs[0], state: "queued" as const, slotWaitSince: "2026-09-30T11:00:00Z" };
+    vi.spyOn(backend, "runsStartNow").mockResolvedValueOnce(queued);
+    await s().startNow(queued.id);
+    expect(useToasts.getState().toasts[0].text).toBe("Every slot is taken, so it waits and starts when one of the running agents finishes.");
+  });
+
   it("reports a failed Stop all instead of swallowing it", async () => {
     await settle();
     vi.spyOn(backend, "runsStopAll").mockRejectedValueOnce(new Error("runs_stop_all is not available yet"));

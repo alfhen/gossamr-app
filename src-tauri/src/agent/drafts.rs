@@ -117,6 +117,12 @@ fn body_of(p: &Proposal) -> String {
             let session = short_id.as_deref().map(|s| format!(" (session {})", super::runs::plain_line(s, 20))).unwrap_or_default();
             format!("Follow-up for run {run_id}{session} on {on}. Approving sends the agent back for another pass with exactly this message.\n\nWhy: {reason}\n\nMessage:\n{message}")
         }
+        Intent::RunAnswer { run_id, short_id, item, message, question, .. } => {
+            let on = item.as_ref().map_or("no ticket", |i| i.key.as_str());
+            let session = short_id.as_deref().map(|s| format!(" (session {})", super::runs::plain_line(s, 20))).unwrap_or_default();
+            let asked = question.as_deref().and_then(|q| super::runs::quoted(q, crate::proposals::ANSWER_QUESTION_LIMIT, false)).map(|q| format!("\n\nIt asked: {q}\n{}", super::runs::DATA_NOTE)).unwrap_or_default();
+            format!("Answer for run {run_id}{session} on {on}. Approving sends the agent exactly this answer and it carries on.{asked}\n\nAnswer:\n{message}")
+        }
         Intent::Update { item, patch } => format!("Triage update on {}: {}", item.key, serde_json::to_string(patch).unwrap_or_default()),
         Intent::Link { from, to, kind } => format!("Link {} to {} ({kind:?})", from.key, to.key),
     }

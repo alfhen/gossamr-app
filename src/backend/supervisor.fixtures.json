@@ -2072,5 +2072,251 @@
       ],
       "expect": null
     }
+  ],
+  "basisDrift": [
+    {
+      "name": "nothing changed",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "10",
+        "statusCategory": "active",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent.",
+        "assignee": "a1"
+      },
+      "expect": []
+    },
+    {
+      "name": "the summary changed",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "10",
+        "statusCategory": "active",
+        "summary": "Fix the whole checkout",
+        "description": "Rounding is off by a cent.",
+        "assignee": "a1"
+      },
+      "expect": [
+        "summary"
+      ]
+    },
+    {
+      "name": "the description changed",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "10",
+        "statusCategory": "active",
+        "summary": "Fix the cart",
+        "description": "Someone rewrote the ticket.",
+        "assignee": "a1"
+      },
+      "expect": [
+        "description"
+      ]
+    },
+    {
+      "name": "the summary and the description changed",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "10",
+        "statusCategory": "active",
+        "summary": "New",
+        "description": "New text.",
+        "assignee": "a1"
+      },
+      "expect": [
+        "summary",
+        "description"
+      ]
+    },
+    {
+      "name": "moved to Done",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "30",
+        "statusCategory": "done",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent.",
+        "assignee": "a1"
+      },
+      "expect": [
+        "status"
+      ]
+    },
+    {
+      "name": "moved to In Progress doesn't trip",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "20",
+        "statusCategory": "active",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent.",
+        "assignee": "a1"
+      },
+      "expect": []
+    },
+    {
+      "name": "moved back to To Do doesn't trip",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "5",
+        "statusCategory": "todo",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent.",
+        "assignee": "a1"
+      },
+      "expect": []
+    },
+    {
+      "name": "a new assignee doesn't trip",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "10",
+        "statusCategory": "active",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent.",
+        "assignee": "b2"
+      },
+      "expect": []
+    },
+    {
+      "name": "a basis that was already Done doesn't trip on its own status",
+      "basis": {
+        "statusId": "30",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "30",
+        "statusCategory": "done",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent.",
+        "assignee": "a1"
+      },
+      "expect": []
+    },
+    {
+      "name": "a description being written is left out",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent.",
+        "changing": [
+          "description"
+        ]
+      },
+      "now": {
+        "statusId": "10",
+        "statusCategory": "active",
+        "summary": "Fix the cart",
+        "description": "Rewritten by the person.",
+        "assignee": "a1"
+      },
+      "expect": []
+    },
+    {
+      "name": "a summary being written is left out, the description still counts",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent.",
+        "changing": [
+          "summary"
+        ]
+      },
+      "now": {
+        "statusId": "10",
+        "statusCategory": "active",
+        "summary": "Retitled",
+        "description": "Someone else's text.",
+        "assignee": "a1"
+      },
+      "expect": [
+        "description"
+      ]
+    },
+    {
+      "name": "a move being written to Done is left out",
+      "basis": {
+        "statusId": "10",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent.",
+        "changing": [
+          "status"
+        ]
+      },
+      "now": {
+        "statusId": "30",
+        "statusCategory": "done",
+        "summary": "Fix the cart",
+        "description": "Rounding is off by a cent.",
+        "assignee": "a1"
+      },
+      "expect": []
+    },
+    {
+      "name": "an old basis without a summary isn't compared on it",
+      "basis": {
+        "statusId": "10",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "10",
+        "statusCategory": "active",
+        "summary": "Retitled",
+        "description": "Rounding is off by a cent.",
+        "assignee": "a1"
+      },
+      "expect": []
+    },
+    {
+      "name": "an old basis without a summary still trips on its description",
+      "basis": {
+        "statusId": "10",
+        "description": "Rounding is off by a cent."
+      },
+      "now": {
+        "statusId": "10",
+        "statusCategory": "active",
+        "summary": "Retitled",
+        "description": "Changed.",
+        "assignee": "a1"
+      },
+      "expect": [
+        "description"
+      ]
+    }
   ]
 }

@@ -28,6 +28,20 @@ describe("heldText", () => {
     expect(heldText("something newer")).toBe("Held");
   });
 
+  it("says what changed in Jira for a basis-drift hold", () => {
+    const drift = `${TRIPWIRE}basis_drift`;
+    expect(heldText(drift, ["description"])).toBe("Held: the ticket's description changed in Jira");
+    expect(heldText(drift, ["summary"])).toBe("Held: the ticket's summary changed in Jira");
+    expect(heldText(drift, ["summary", "description"])).toBe("Held: the ticket's summary and description changed in Jira");
+    expect(heldText(drift, ["description", "summary"])).toBe("Held: the ticket's summary and description changed in Jira");
+    expect(heldText(drift, ["status"])).toBe("Held: the ticket was moved to Done");
+    expect(heldText(drift, ["description", "status"])).toBe("Held: the ticket's description changed and it was moved to Done");
+    expect(heldText(drift, [])).toBe("Held: the ticket changed since the workstream opened");
+    expect(heldText(drift)).toBe("Held: the ticket changed since the workstream opened");
+    expect(heldText("tripwire:marker", ["description"])).toContain("data markers");
+    expect(heldText(HELD_PERSON, ["description"])).toBe("Held by you");
+  });
+
   it("names every rule", () => {
     const names = WORKSTREAM_RULES.map(ruleText);
     expect(new Set(names).size).toBe(WORKSTREAM_RULES.length);

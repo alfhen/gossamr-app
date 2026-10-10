@@ -248,14 +248,24 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
 /** Drafts still waiting that no question in this conversation made, such as ones from before a restart. */
 export function EarlierDrafts({ proposals, turns }: { proposals: Proposal[]; turns: Turn[] }) {
   const asked = new Set(turns.map((t) => t.requestId));
-  const waiting = proposals.filter((p) => p.state.type === "pending" && !(p.origin.type === "chat" && asked.has(p.origin.requestId)));
-  if (!waiting.length) return null;
+  const unasked = (p: Proposal) => !(p.origin.type === "chat" && asked.has(p.origin.requestId));
+  const waiting = proposals.filter((p) => p.state.type === "pending" && unasked(p));
+  /** The drafts this section has shown waiting. */
+  const shown = useRef(new Set<string>());
+  for (const p of waiting) shown.current.add(p.id);
+  // A draft that waited here and was retired (another move of the ticket was approved, say) stays, collapsed with why,
+  // rather than vanishing from under the person.
+  const retired = proposals.filter((p) => p.state.type === "retired" && shown.current.has(p.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  if (!waiting.length && !retired.length) return null;
   return (
     <section aria-label="Drafts" className="grid gap-1.5">
       <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
         Drafts waiting <span className="font-normal">{waiting.length}</span>
       </h3>
       {waiting.map((p) => (
+        <LiveDraftPreview key={p.id} proposal={p} />
+      ))}
+      {retired.map((p) => (
         <LiveDraftPreview key={p.id} proposal={p} />
       ))}
     </section>

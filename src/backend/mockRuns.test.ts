@@ -4,7 +4,7 @@ import type { Intent, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { FINDINGS_LIMIT, FINDINGS_PREFACE, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, specProblem, withoutMarkers } from "./mockRunKinds";
-import { findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
+import { MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
 const spec: RunSpec = {
   kind: "investigate",
@@ -113,7 +113,7 @@ describe("mock runs", () => {
     const after = await backend.runsList();
     for (const r of before.filter((x) => !active.includes(x))) expect(after.find((x) => x.id === r.id)?.state).toBe(r.state);
     expect(after.filter((r) => r.state === "stopped")).toHaveLength(active.length);
-    expect(await backend.runsStopAll()).toEqual({ stopped: 0, failed: 0 });
+    expect(await backend.runsStopAll()).toEqual({ stopped: 0, failed: 0, waiting: 0 });
   });
 
   it("answers a question, and only a question", async () => {
@@ -503,5 +503,229 @@ describe("a triage or plan after an investigation carries its findings, as the b
     expect(plan.intent.type === "startRun" && plan.intent.spec.findingsFromRun).toBe(investigation.id);
     const verify = await b.proposalsEdit(made.id, { type: "run", kind: "verify" });
     expect(verify.intent.type === "startRun" && verify.intent.spec).toMatchObject({ findings: null, findingsFromRun: null });
+  });
+});
+
+describe("mock answer drafts, as propose_answer and runs_answer_draft", () => {
+  const CA401 = itemRef("CA-401");
+
+  /** A backend with run R1 investigating CA-401 in a workstream (not managed, so nothing wakes Pip), working and then asking `question`. */
+  async function asking(question = "Should the refund path keep the old rounding?") {
+    const b = new MockBackend({ runs: { seed: "empty" } });
+    const ws = b.workstreams.open(CA401).id;
+    const made = await b.runsDraft({ ...spec, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", name: "ca-401-answer", workstream: ws }, CA401);
+    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    b.runs.advance(run.id);
+    b.runs.advance(run.id);
+    b.runs.ask(run.id, question);
+    return { b, ws, run: b.runs.get(run.id)! };
+  }
+  const actions = (b: MockBackend, ws: string) => b.workstreams.events(ws).map((e) => e.action);
+
+  it("drafts an answer only for a run waiting for one, with clean text, keeping what it asked", async () => {
+    const { b, ws, run } = await asking();
+    await expect(b.runs.proposeAnswer("nope", "Yes.", "r")).rejects.toThrow("there is no run nope");
+    await expect(b.runs.proposeAnswer(run.id, "   ", "r")).rejects.toThrow(/Write an answer/);
+    await expect(b.runs.proposeAnswer(run.id, "x".repeat(4001), "r")).rejects.toThrow(/up to 4000/);
+    const p = await b.runs.proposeAnswer(run.id, "Keep the old rounding. <<<TICKET", "r");
+    expect(p).toMatchObject({ createdBy: "pip", state: { type: "pending" }, origin: { type: "chat", requestId: "r", workstream: ws } });
+    expect(p.intent).toMatchObject({ type: "runAnswer", runId: run.id, item: { key: "CA-401" }, message: "Keep the old rounding.", question: "Should the refund path keep the old rounding?" });
+    b.runs.stop(run.id);
+    await expect(b.runs.proposeAnswer(run.id, "Yes.", "r")).rejects.toThrow("isn't waiting for an answer");
+  });
+
+  it("refuses a second answer for a run outside a workstream while the first waits", async () => {
+    const b = new MockBackend();
+    const run = b.runs.list().find((r) => r.state === "needsAnswer")!;
+    const first = await b.runs.proposeAnswer(run.id, "Yes.", "r");
+    await expect(b.runs.proposeAnswer(run.id, "No.", "r")).rejects.toThrow(`already waiting (proposal ${first.id})`);
+  });
+
+  it("is never applied as a tracker write or made by hand", async () => {
+    const { b, run } = await asking();
+    const p = await b.runs.proposeAnswer(run.id, "Yes.", "r");
+    await expect(b.proposalsApprove(p.id)).rejects.toThrow("An answer is sent with its own button");
+    await expect(b.proposalsCreate(p.intent)).rejects.toThrow("only Pip proposes an answer");
+    expect(b.proposals.writes).toEqual([]);
+  });
+
+  it("sends the answer the person read as their own answer goes: the run resumes and the draft is applied", async () => {
+    const { b, ws, run } = await asking();
+    const p = await b.runs.proposeAnswer(run.id, "Keep the old rounding.", "r");
+    const resumed = await b.runsAnswerDraft(p.id, "Keep the old rounding.");
+    expect(resumed).toMatchObject({ id: run.id, state: "working", needs: null });
+    expect(b.proposals.get(p.id)).toMatchObject({ state: { type: "applied" }, run: run.id, error: null });
+    expect(actions(b, ws).slice(-2)).toEqual(["run_answered", "draft_approved"]);
+    expect(b.proposals.writes).toEqual([]);
+    await expect(b.runsAnswerDraft(p.id, "Keep the old rounding.")).rejects.toThrow("already been decided");
+  });
+
+  it("refuses an answer that changed after it was read, and leaves the run asking", async () => {
+    const { b, run } = await asking();
+    const p = await b.runs.proposeAnswer(run.id, "Keep the old rounding.", "r");
+    await expect(b.runsAnswerDraft(p.id, "Something else.")).rejects.toThrow("The answer changed after you read it. Read it again.");
+    expect(b.runs.get(run.id)?.state).toBe("needsAnswer");
+    expect(b.proposals.get(p.id)?.state.type).toBe("pending");
+  });
+
+  it("sends the person's edit, after which Pip can't revise it or draft over it", async () => {
+    const { b, run } = await asking();
+    const p = await b.runs.proposeAnswer(run.id, "Keep the old rounding.", "r");
+    await expect(b.proposalsEdit(p.id, { type: "runAnswer", message: "  " })).rejects.toThrow(/Write an answer/);
+    const edited = await b.proposalsEdit(p.id, { type: "runAnswer", message: "Use the new rounding everywhere." });
+    expect(edited.revisions.map((r) => r.note)).toEqual(["Edited"]);
+    expect(() => b.proposals.pipRevise(p.id, "Pip's words")).toThrow("the user edited this answer");
+    await expect(b.runs.proposeAnswer(run.id, "Keep it.", "r")).rejects.toThrow(`the user edited draft ${p.id}`);
+    await b.runsAnswerDraft(p.id, "Use the new rounding everywhere.");
+    expect(b.proposals.get(p.id)?.intent).toMatchObject({ message: "Use the new rounding everywhere." });
+  });
+
+  it("retires the draft once the run is answered in Terminal, so it is never sent to its next question", async () => {
+    const { b, run } = await asking();
+    const p = await b.runs.proposeAnswer(run.id, "Yes.", "r");
+    // Answered in Terminal: working again.
+    b.runs.advance(run.id);
+    expect(b.proposals.get(p.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
+    await expect(b.runsAnswerDraft(p.id, "Yes.")).rejects.toThrow("already been decided");
+    // It asks again, and Pip may suggest for the new question.
+    b.runs.ask(run.id, "Which branch?");
+    const next = await b.runs.proposeAnswer(run.id, "Use main.", "r2");
+    expect(next.intent).toMatchObject({ type: "runAnswer", question: "Which branch?" });
+  });
+
+  it("never sends an answer to a question the run no longer asks, and retires it when the question changes", async () => {
+    const { b, run } = await asking();
+    const p = await b.runs.proposeAnswer(run.id, "Yes.", "r");
+    b.runs.ask(run.id, "A different question?");
+    expect(b.proposals.get(p.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
+    await expect(b.runsAnswerDraft(p.id, "Yes.")).rejects.toThrow();
+    expect(b.runs.get(run.id)).toMatchObject({ state: "needsAnswer", needs: "A different question?" });
+  });
+
+  it("replaces Pip's older answer for the run in its workstream", async () => {
+    const { b, ws, run } = await asking();
+    const older = await b.runs.proposeAnswer(run.id, "Yes.", "r1");
+    const newer = await b.runs.proposeAnswer(run.id, "No, use the new rounding.", "r2");
+    expect(b.proposals.get(older.id)).toMatchObject({ state: { type: "retired", reason: "Replaced by a newer draft" }, supersededBy: newer.id });
+    expect(actions(b, ws)).toContain("draft_superseded");
+  });
+
+  it("retires a run's waiting answers once it is answered, and once it stops asking", async () => {
+    const answered = await asking();
+    const p = await answered.b.runs.proposeAnswer(answered.run.id, "Yes.", "r");
+    await answered.b.runsAnswer(answered.run.id, "My own answer.");
+    expect(answered.b.proposals.get(p.id)?.state).toEqual({ type: "retired", reason: "The run was answered" });
+    expect(actions(answered.b, answered.ws)).toContain("draft_retired");
+
+    const stopped = await asking();
+    const q = await stopped.b.runs.proposeAnswer(stopped.run.id, "Yes.", "r");
+    stopped.b.runs.stop(stopped.run.id);
+    expect(stopped.b.proposals.get(q.id)?.state).toEqual({ type: "retired", reason: "The run isn't asking any more" });
+  });
+});
+
+describe("mock runs over the cap wait for a slot, as runs_approve and launch_waiting", () => {
+  /** A backend with room for three agents and none running, and a way to approve run `n` on a CA ticket. */
+  function capped() {
+    const b = new MockBackend({ runs: { seed: "empty", cap: 3 } });
+    const approve = async (n: number) => {
+      const key = `CA-40${n}`;
+      const made = await b.runsDraft({ ...spec, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", name: `ca-40${n}-slot` }, itemRef(key));
+      return b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    };
+    const live = () => b.runs.list().filter((r) => ["launching", "working", "needsAnswer", "needsPermission", "systemBlocked"].includes(r.state)).length;
+    return { b, approve, live };
+  }
+
+  it("keeps a 4th approved run queued with slotWaitSince, then launches it when one finishes", async () => {
+    const { b, approve, live } = capped();
+    const first = [await approve(1), await approve(2), await approve(3)];
+    for (const r of first) b.runs.advance(r.id);
+    expect(live()).toBe(3);
+    const preflight = await b.runsPreflight(null);
+    expect(preflight.blocking).toBe(false);
+    expect(preflight.rows.find((r) => r.level === "amber")?.text).toBe("3 of 3 agents are running. This one will wait for a slot and start when one finishes.");
+
+    const fourth = await approve(4);
+    expect(fourth).toMatchObject({ state: "queued", slotWaitSince: expect.any(String) });
+    b.runs.advance();
+    b.runs.advance(fourth.id);
+    expect(b.runs.get(fourth.id)).toMatchObject({ state: "queued", slotWaitSince: fourth.slotWaitSince });
+    expect(live()).toBe(3);
+
+    b.runs.advance(first[0].id);
+    b.runs.advance(first[0].id);
+    expect(b.runs.get(first[0].id)?.state).toBe("done");
+    expect(b.runs.get(fourth.id)).toMatchObject({ state: "launching", slotWaitSince: null });
+    expect(live()).toBe(3);
+  });
+
+  it("launches the waiting in approval order, never over the cap, and start now leaves one waiting rather than refusing", async () => {
+    const { b, approve, live } = capped();
+    const first = [await approve(1), await approve(2), await approve(3)];
+    for (const r of first) b.runs.advance(r.id);
+    const [older, newer] = [await approve(4), await approve(5)];
+    expect(b.runs.startNow(newer.id)).toMatchObject({ state: "queued", slotWaitSince: newer.slotWaitSince });
+    for (let i = 0; i < 2; i++) b.runs.advance();
+    expect(live()).toBeLessThanOrEqual(3);
+    // Each advance finishes the working ones together, which frees all three slots at once.
+    const states = () => [older, newer].map((r) => b.runs.get(r.id)?.state);
+    expect(states()).not.toContain("queued");
+    expect(Date.parse(b.runs.get(older.id)!.launchedAt!)).toBeLessThan(Date.parse(b.runs.get(newer.id)!.launchedAt!));
+  });
+
+  it("lets only the oldest waiting run take a single freed slot", async () => {
+    const { b, approve } = capped();
+    const first = [await approve(1), await approve(2), await approve(3)];
+    for (const r of first) b.runs.advance(r.id);
+    const [older, newer] = [await approve(4), await approve(5)];
+    b.runs.advance(first[1].id);
+    b.runs.stop(first[1].id);
+    expect(b.runs.get(older.id)?.state).toBe("launching");
+    expect(b.runs.get(newer.id)).toMatchObject({ state: "queued", slotWaitSince: expect.any(String) });
+  });
+
+  it("Stop all stops the runs waiting for a slot too, so it launches nothing in the slots it frees", async () => {
+    const { b, approve, live } = capped();
+    for (const n of [1, 2, 3]) {
+      const run = await approve(n);
+      b.runs.advance(run.id);
+      b.runs.advance(run.id);
+    }
+    const waiting = [await approve(4), await approve(5)];
+    expect(waiting.map((r) => b.runs.get(r.id)?.slotWaitSince)).toEqual([expect.any(String), expect.any(String)]);
+    expect(await b.runsStopAll()).toEqual({ stopped: 3, failed: 0, waiting: 2 });
+    expect(live()).toBe(0);
+    for (const r of waiting) expect(b.runs.get(r.id)).toMatchObject({ state: "stopped", error: "Stopped before it started", slotWaitSince: null });
+    b.runs.advance();
+    expect(live()).toBe(0);
+    expect(b.runs.list().filter((r) => r.state === "launching")).toEqual([]);
+  });
+
+  it("gives a freed slot to the run already waiting for it rather than to a fresh approval", async () => {
+    const { b, approve } = capped();
+    for (const n of [1, 2, 3]) b.runs.advance((await approve(n)).id);
+    const older = await approve(4);
+    // The cap is raised, and nothing has started in the new slot yet.
+    b.runs.setSettings({ ...b.runs.settings(), maxRuns: 4 });
+    const newer = await approve(5);
+    expect(b.runs.get(older.id)).toMatchObject({ state: "launching", slotWaitSince: null });
+    expect(b.runs.get(newer.id)).toMatchObject({ state: "queued", slotWaitSince: expect.any(String) });
+  });
+
+  it("stops a run waiting for a slot without a session, and other queued runs still can't be stopped", async () => {
+    const { b, approve } = capped();
+    const ws = b.workstreams.open(itemRef("CA-401")).id;
+    for (const n of [1, 2, 3]) b.runs.advance((await approve(n)).id);
+    const made = await b.runsDraft({ ...spec, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", name: "ca-401-waits", workstream: ws }, itemRef("CA-401"));
+    const waiting = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    const stopped = b.runs.stop(waiting.id);
+    expect(stopped).toMatchObject({ state: "stopped", error: "Stopped before it started", slotWaitSince: null, shortId: null });
+    expect(b.workstreams.events(ws).map((e) => e.action)).toContain("run_stopped");
+
+    const roomy = capped();
+    const loose = await roomy.approve(1);
+    expect(loose.slotWaitSince).toBeUndefined();
+    expect(() => roomy.b.runs.stop(loose.id)).toThrow("once it is working");
   });
 });

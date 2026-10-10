@@ -231,7 +231,8 @@ impl RunService {
         if runs.is_empty() && waiting.is_empty() && finished.is_empty() {
             return idle;
         }
-        let mut busy = runs.iter().any(|r| r.state != RunState::Queued) || !waiting.is_empty();
+        // A run waiting for a slot counts: the next look should be soon, so it starts promptly once one frees.
+        let mut busy = runs.iter().any(|r| r.state != RunState::Queued || r.slot_wait_since.is_some()) || !waiting.is_empty();
         let Ok(tc) = self.tools.get().await else { return Polled { busy } };
         self.collect_answers(&tc, &waiting).await;
         let config_dir = self.claude_config_dir(&tc).await;
@@ -383,6 +384,18 @@ impl RunService {
         if run != before {
             self.core.save_run(&run).await?;
             touched = true;
+        }
+        // An answer Pip suggested has nothing left to answer once the run finished or stopped without one, or moved on
+        // from that question: answered in Terminal, or asking another. Only `answer` takes a run out of a question with
+        // the drafts left to it, and it decides them itself. A run that is only unclear for now keeps them.
+        let moved_on = run.state != RunState::Unknown && (run.state != RunState::NeedsAnswer || super::answer::asked(run.needs.as_deref()) != super::answer::asked(before.needs.as_deref()));
+        if before.state == RunState::NeedsAnswer && (ended || moved_on) {
+            let why = if ended { super::answer::NOT_ASKING } else { super::answer::MOVED_ON };
+            match self.core.retire_answer_drafts(run_id, None, why).await {
+                Ok(0) => {}
+                Ok(_) => (self.drafted)(&run.connection_id),
+                Err(e) => eprintln!("couldn't retire the answers suggested for run {run_id}: {e}"),
+            }
         }
         if reopened {
             if let Err(e) = self.core.report_stale(run_id).await {

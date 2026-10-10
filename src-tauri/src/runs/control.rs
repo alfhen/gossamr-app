@@ -26,12 +26,21 @@ const STOP_LIMIT: Duration = Duration::from_secs(5);
 const DISK_LIMIT: Duration = Duration::from_secs(3);
 const ATTACH_KEPT: Duration = Duration::from_secs(24 * 60 * 60);
 const ATTACH_DIR: &str = "attach";
+/// Why a run stopped while it waited for a slot.
+pub const NOT_STARTED: &str = "Stopped before it started";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct StopAll {
     pub stopped: usize,
     /// Runs that couldn't be stopped, including ones that aren't working yet.
     pub failed: usize,
+    /// Approved runs that were waiting for a slot, stopped before they started so none takes a freed one.
+    pub waiting: usize,
+}
+
+/// An approved run queued only because the cap was full: it has no session, and it would start on its own.
+fn waits_for_slot(run: &Run) -> bool {
+    run.state == RunState::Queued && run.slot_wait_since.is_some() && run.short_id.is_none()
 }
 
 fn can_stop(state: RunState) -> bool {
@@ -201,11 +210,16 @@ impl RunService {
         run.last_progress_at = now;
     }
 
-    /// Stops a run that is working or waiting on the person. Its conversation and worktree are kept.
+    /// Stops a run that is working or waiting on the person. Its conversation and worktree are kept. A queued run that
+    /// is only waiting for a slot has no session yet, so it is marked stopped without asking Claude anything.
     pub async fn stop(&self, run_id: &str) -> Result<Run> {
         self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
+        if waits_for_slot(&run) {
+            self.withdraw(&mut run).await?;
+            return Ok(run);
+        }
         if !can_stop(run.state) {
             return Err(refuse(match run.state {
                 RunState::Queued | RunState::Launching => "It can be stopped once it is working.".to_owned(),
@@ -244,7 +258,20 @@ impl RunService {
         Ok(tally)
     }
 
-    /// Stops the runs Gossamr started, in any account. A session that isn't in the run index is never touched.
+    /// Marks a run waiting for a slot stopped before it started; there is no session, so Claude isn't asked. Called with
+    /// the launch lock held, so nothing launches it in between.
+    async fn withdraw(&self, run: &mut Run) -> Result<()> {
+        Self::stopped(run);
+        run.slot_wait_since = None;
+        run.error = Some(NOT_STARTED.into());
+        self.store(run).await?;
+        self.note_person(run, "run_stopped", None).await;
+        Ok(())
+    }
+
+    /// Stops the runs Gossamr started, in any account, and, in this one, the approved runs waiting for a slot, all under
+    /// one hold of the launch lock: the slots it frees are never taken by a waiting run. A session that isn't in the run
+    /// index is never touched.
     pub async fn stop_all(&self) -> Result<StopAll> {
         self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
@@ -278,6 +305,20 @@ impl RunService {
                     }
                 }
                 _ => tally.failed += 1,
+            }
+        }
+        let queued = self.core.runs_list(&RunQuery { states: Some(vec![RunState::Queued]), ..RunQuery::default() }).await?;
+        for listed in queued.iter().filter(|r| waits_for_slot(r)) {
+            let Ok(mut run) = self.load(&listed.id).await else { continue };
+            if !waits_for_slot(&run) {
+                continue;
+            }
+            match self.withdraw(&mut run).await {
+                Ok(()) => tally.waiting += 1,
+                Err(e) => {
+                    eprintln!("couldn't stop waiting run {}: {e}", run.id);
+                    tally.failed += 1;
+                }
             }
         }
         Ok(tally)

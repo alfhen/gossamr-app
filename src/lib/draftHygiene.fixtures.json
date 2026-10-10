@@ -1,0 +1,1247 @@
+[
+  {
+    "name": "two moves of one ticket",
+    "kind": "key",
+    "a": {
+      "type": "transition",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "to": "In Progress"
+    },
+    "b": {
+      "type": "transition",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "to": "In Review"
+    },
+    "same": true
+  },
+  {
+    "name": "moves of two tickets",
+    "kind": "key",
+    "a": {
+      "type": "transition",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "to": "In Progress"
+    },
+    "b": {
+      "type": "transition",
+      "item": {
+        "connectionId": "c",
+        "externalId": "2",
+        "key": "CA-2"
+      },
+      "to": "In Progress"
+    },
+    "same": false
+  },
+  {
+    "name": "two description updates of one ticket",
+    "kind": "key",
+    "a": {
+      "type": "rewrite",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "title": {
+        "from": "Old",
+        "to": "A"
+      },
+      "body": null,
+      "flattened": []
+    },
+    "b": {
+      "type": "rewrite",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "title": {
+        "from": "Old",
+        "to": "B"
+      },
+      "body": null,
+      "flattened": []
+    },
+    "same": true
+  },
+  {
+    "name": "two triage updates of one ticket",
+    "kind": "key",
+    "a": {
+      "type": "update",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "patch": {
+        "assignee": null,
+        "parent": null,
+        "priority": "high"
+      }
+    },
+    "b": {
+      "type": "update",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "patch": {
+        "assignee": null,
+        "parent": null,
+        "priority": "low"
+      }
+    },
+    "same": true
+  },
+  {
+    "name": "two breakdowns of one ticket",
+    "kind": "key",
+    "a": {
+      "type": "subtasks",
+      "parent": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "summaries": [
+        "a"
+      ]
+    },
+    "b": {
+      "type": "subtasks",
+      "parent": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "summaries": [
+        "b"
+      ]
+    },
+    "same": true
+  },
+  {
+    "name": "a move and a description update",
+    "kind": "key",
+    "a": {
+      "type": "transition",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "to": "Done"
+    },
+    "b": {
+      "type": "rewrite",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "title": {
+        "from": "Old",
+        "to": "A"
+      },
+      "body": null,
+      "flattened": []
+    },
+    "same": false
+  },
+  {
+    "name": "two comments on one ticket",
+    "kind": "key",
+    "a": {
+      "type": "comment",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "body": {
+        "blocks": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "b": {
+      "type": "comment",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "body": {
+        "blocks": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "same": false
+  },
+  {
+    "name": "two links from one ticket",
+    "kind": "key",
+    "a": {
+      "type": "link",
+      "from": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "to": {
+        "connectionId": "c",
+        "externalId": "2",
+        "key": "CA-2"
+      },
+      "kind": "blocks"
+    },
+    "b": {
+      "type": "link",
+      "from": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "to": {
+        "connectionId": "c",
+        "externalId": "3",
+        "key": "CA-3"
+      },
+      "kind": "blocks"
+    },
+    "same": false
+  },
+  {
+    "name": "two follow-ups",
+    "kind": "key",
+    "a": {
+      "type": "followUp",
+      "connectionId": "c",
+      "runId": "r1",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "message": "More.",
+      "reason": "open questions"
+    },
+    "b": {
+      "type": "followUp",
+      "connectionId": "c",
+      "runId": "r1",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "message": "More.",
+      "reason": "open questions"
+    },
+    "same": false
+  },
+  {
+    "name": "two answers for the same run",
+    "kind": "key",
+    "a": {
+      "type": "runAnswer",
+      "connectionId": "c",
+      "runId": "r1",
+      "shortId": null,
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "message": "Yes.",
+      "question": "Which one?"
+    },
+    "b": {
+      "type": "runAnswer",
+      "connectionId": "c",
+      "runId": "r1",
+      "shortId": null,
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "message": "No.",
+      "question": "Which one?"
+    },
+    "same": true
+  },
+  {
+    "name": "answers for different runs",
+    "kind": "key",
+    "a": {
+      "type": "runAnswer",
+      "connectionId": "c",
+      "runId": "r1",
+      "shortId": null,
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "message": "Yes.",
+      "question": "Which one?"
+    },
+    "b": {
+      "type": "runAnswer",
+      "connectionId": "c",
+      "runId": "r2",
+      "shortId": null,
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "message": "Yes.",
+      "question": "Which one?"
+    },
+    "same": false
+  },
+  {
+    "name": "Pip replaces its own older move",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Progress"
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Review"
+      }
+    },
+    "expect": "supersede"
+  },
+  {
+    "name": "Pip replaces an agent's description update",
+    "kind": "decide",
+    "older": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "A"
+        },
+        "body": null,
+        "flattened": []
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "B"
+        },
+        "body": null,
+        "flattened": []
+      }
+    },
+    "expect": "supersede"
+  },
+  {
+    "name": "an agent replaces Pip's breakdown",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "subtasks",
+        "parent": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "summaries": [
+          "a"
+        ]
+      }
+    },
+    "newer": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "subtasks",
+        "parent": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "summaries": [
+          "b"
+        ]
+      }
+    },
+    "expect": "supersede"
+  },
+  {
+    "name": "a legacy run draft counts as an agent's",
+    "kind": "decide",
+    "older": {
+      "by": "user",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "A"
+        },
+        "body": null,
+        "flattened": []
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "B"
+        },
+        "body": null,
+        "flattened": []
+      }
+    },
+    "expect": "supersede"
+  },
+  {
+    "name": "a person's draft is never superseded",
+    "kind": "decide",
+    "older": {
+      "by": "user",
+      "origin": "board",
+      "workstream": null,
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Progress"
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Review"
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "a person's board draft never supersedes",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Progress"
+      }
+    },
+    "newer": {
+      "by": "user",
+      "origin": "board",
+      "workstream": null,
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Review"
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "another workstream is left alone",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w2",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Progress"
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Review"
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "a draft in no workstream is left alone",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": null,
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Progress"
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": null,
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Review"
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "comments accumulate",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "comment",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "body": {
+          "blocks": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "hello"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "comment",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "body": {
+          "blocks": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "hello"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "another ticket is left alone",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "2",
+          "key": "CA-2"
+        },
+        "to": "In Progress"
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Review"
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "a decided draft is left alone",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Progress"
+      },
+      "state": "skipped"
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Review"
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "a person-edited draft refuses Pip",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Progress"
+      },
+      "edited": true
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "transition",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "to": "In Review"
+      }
+    },
+    "expect": "refuse"
+  },
+  {
+    "name": "a person-edited draft keeps an agent's alongside",
+    "kind": "decide",
+    "older": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "A"
+        },
+        "body": null,
+        "flattened": []
+      },
+      "edited": true
+    },
+    "newer": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "B"
+        },
+        "body": null,
+        "flattened": []
+      }
+    },
+    "expect": "alongside"
+  },
+  {
+    "name": "Pip never replaces a run's plan rewrite",
+    "kind": "decide",
+    "older": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "A"
+        },
+        "body": null,
+        "flattened": []
+      },
+      "planRewrite": true
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "B"
+        },
+        "body": {
+          "from": {
+            "blocks": []
+          },
+          "to": {
+            "blocks": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "New",
+                    "marks": []
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "flattened": []
+      }
+    },
+    "expect": "refuse"
+  },
+  {
+    "name": "Pip's title-only rewrite stays beside a run's plan rewrite",
+    "kind": "decide",
+    "older": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "A"
+        },
+        "body": null,
+        "flattened": []
+      },
+      "planRewrite": true
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "B"
+        },
+        "body": null,
+        "flattened": []
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "a newer run's plan rewrite replaces an older one",
+    "kind": "decide",
+    "older": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "A"
+        },
+        "body": null,
+        "flattened": []
+      },
+      "planRewrite": true
+    },
+    "newer": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "B"
+        },
+        "body": null,
+        "flattened": []
+      },
+      "planRewrite": true
+    },
+    "expect": "supersede"
+  },
+  {
+    "name": "a triage update of another field leaves the older one be",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "update",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "patch": {
+          "assignee": {
+            "connectionId": "c",
+            "accountId": "a1"
+          },
+          "parent": null,
+          "priority": null
+        }
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "update",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "patch": {
+          "assignee": null,
+          "parent": null,
+          "priority": "high"
+        }
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "a triage update that sets every field the older one did replaces it",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "update",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "patch": {
+          "assignee": {
+            "connectionId": "c",
+            "accountId": "a1"
+          },
+          "parent": null,
+          "priority": null
+        }
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "update",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "patch": {
+          "assignee": {
+            "connectionId": "c",
+            "accountId": "a1"
+          },
+          "parent": null,
+          "priority": "high"
+        }
+      }
+    },
+    "expect": "supersede"
+  },
+  {
+    "name": "a title-only rewrite leaves an agent's description rewrite be",
+    "kind": "decide",
+    "older": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": null,
+        "body": {
+          "from": {
+            "blocks": []
+          },
+          "to": {
+            "blocks": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "New",
+                    "marks": []
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "flattened": []
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "B"
+        },
+        "body": null,
+        "flattened": []
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "a body-only rewrite leaves a title-only one be",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "A"
+        },
+        "body": null,
+        "flattened": []
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": null,
+        "body": {
+          "from": {
+            "blocks": []
+          },
+          "to": {
+            "blocks": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "New",
+                    "marks": []
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "flattened": []
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "a rewrite of title and description replaces a title-only one",
+    "kind": "decide",
+    "older": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "A"
+        },
+        "body": null,
+        "flattened": []
+      }
+    },
+    "newer": {
+      "by": "pip",
+      "origin": "chat",
+      "workstream": "w1",
+      "intent": {
+        "type": "rewrite",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "title": {
+          "from": "Old",
+          "to": "B"
+        },
+        "body": {
+          "from": {
+            "blocks": []
+          },
+          "to": {
+            "blocks": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "New",
+                    "marks": []
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "flattened": []
+      }
+    },
+    "expect": "supersede"
+  }
+]

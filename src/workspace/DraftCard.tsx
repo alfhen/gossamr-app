@@ -16,6 +16,9 @@ import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { peekFocusAfterLeaving } from "./peekDrafts";
 import { itemKey } from "../lib/filter";
 import { FOLLOW_UP_LIMIT, followUpProblem, followUpTitle, nextPass } from "./followUp";
+import { RetiredDraft } from "./RetiredDraft";
+import { answerProblem, MAX_ANSWER } from "../lib/answer";
+import { answerTitle, editThenSend, isSendKey, NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
@@ -31,7 +34,8 @@ const LINK_VERB: Record<Extract<Proposal["intent"], { type: "link" }>["kind"], s
 /** What a link draft says, such as `CA-2 blocks CA-1`. */
 export const linkSentence = (i: Extract<Proposal["intent"], { type: "link" }>) => `${i.from.key} ${LINK_VERB[i.kind]} ${i.to.key}`;
 
-export function draftTitle(p: Proposal): string {
+/** A draft's title; an answer names its run by `runLabel` ("R1") when the caller knows it. */
+export function draftTitle(p: Proposal, runLabel?: string | null): string {
   const i = p.intent;
   switch (i.type) {
     case "comment":
@@ -52,6 +56,8 @@ export function draftTitle(p: Proposal): string {
       return `Start an agent: ${i.item?.key ?? `${i.spec.repo}, no ticket`}`;
     case "followUp":
       return followUpTitle(i);
+    case "runAnswer":
+      return answerTitle(i, runLabel);
     default:
       return unreachable(i);
   }
@@ -81,6 +87,8 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
       return `${i.spec.kind} in ${i.spec.repo}`;
     case "followUp":
       return i.reason;
+    case "runAnswer":
+      return i.message.replace(/\s+/g, " ");
     default:
       return unreachable(i);
   }
@@ -107,12 +115,26 @@ export interface DraftCardProps {
   pass?: number;
   /** Sends a follow-up back to its run, after saving the edit. */
   onSendBack?(edit: ProposalEdit | null, message: string): void;
+  /** For an answer, how the run it answers stands now. */
+  answer?: AnswerRun | null;
+  /** Sends an answer to its run, after saving the edit. */
+  onSendAnswer?(edit: ProposalEdit | null, message: string): void;
 }
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
 const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45";
 
-export function DraftCard({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss, pass, onSendBack }: DraftCardProps) {
+export function DraftCard(props: DraftCardProps) {
+  const p = props.proposal;
+  if (p.state.type !== "retired") return <DraftCardBody {...props} />;
+  return (
+    <RetiredDraft proposal={p} title={draftTitle(p, props.answer?.label)} state={BADGE.retired}>
+      <DraftCardBody {...props} />
+    </RetiredDraft>
+  );
+}
+
+function DraftCardBody({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss, pass, onSendBack, answer, onSendAnswer }: DraftCardProps) {
   const intent = p.intent;
   const key = targetOf(intent)?.key ?? "";
   const stored = intent.type === "comment" ? docText(intent.body) : "";
@@ -149,14 +171,18 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
   }, [rewrite?.title?.to, rewrite?.body?.toText]);
   const rewriteBlock = !!rewrite && rewriteBlocked(rewrite, newTitle, newText);
   const followUp = intent.type === "followUp" ? intent : null;
-  const [message, setMessage] = useState(followUp?.message ?? "");
+  const reply = intent.type === "runAnswer" ? intent : null;
+  const sentMessage = followUp?.message ?? reply?.message ?? "";
+  const [message, setMessage] = useState(sentMessage);
   const messageEdited = useRef(false);
   useEffect(() => {
     if (!takesBackendText(messageEdited.current, attempting.current)) return;
     messageEdited.current = false;
-    setMessage(followUp?.message ?? "");
-  }, [followUp?.message]);
-  const messageProblem = followUp ? followUpProblem(message) : null;
+    setMessage(sentMessage);
+  }, [sentMessage]);
+  const messageProblem = followUp ? followUpProblem(message) : reply ? answerProblem(message) : null;
+  /** Why an answer can't be sent now: what is wrong with the reply, or the run moved on. */
+  const replyBlock = reply ? (messageProblem ?? (answer?.waiting ? null : NOT_WAITING)) : null;
   const summaries = intent.type === "subtasks" ? intent.summaries : [];
   const made = p.created.length;
   const [picked, setPicked] = useState<boolean[]>(summaries.map(() => true));
@@ -178,6 +204,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
     if (intent.type === "comment" && edited.current) return { type: "comment", body, mentions: liveMentions(body, mentions) };
     if (rewrite && rewriteEdited.current) return rewriteEdit(rewrite, newTitle, newText);
     if (followUp && messageEdited.current) return { type: "followUp", message };
+    if (reply && messageEdited.current) return { type: "runAnswer", message };
     if (intent.type === "subtasks") {
       const wanted = summaries.filter((_, i) => i < made || picked[i]);
       return wanted.length === summaries.length ? null : { type: "subtasks", summaries: wanted };
@@ -186,6 +213,10 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
   };
 
   const runDraft = intent.type === "startRun";
+  const sendAnswer = () => {
+    if (!reply || working || state !== "pending" || replyBlock) return;
+    if (onSendAnswer) onSendAnswer(edit(), message.trim());
+  };
   const action =
     intent.type === "comment"
       ? "Post comment"
@@ -204,7 +235,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
   return (
     <article
       ref={card}
-      aria-label={draftTitle(p)}
+      aria-label={draftTitle(p, answer?.label)}
       data-draft={p.id}
       onFocus={() => (hadFocus.current = true)}
       onBlur={(ev) => {
@@ -214,7 +245,7 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
         <span aria-hidden>✦</span>
-        {draftTitle(p)}
+        {draftTitle(p, answer?.label)}
         <span className="ml-auto font-normal text-ws-ink3">{BADGE[state]}</span>
       </div>
       <div className="grid gap-2 px-3 py-2.5">
@@ -349,6 +380,60 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
             </p>
           </div>
         )}
+        {reply && (
+          <div className="grid gap-1.5" data-run-answer>
+            <p className="m-0 flex flex-wrap items-baseline gap-2 font-semibold">
+              Answer the agent&apos;s question
+              {p.createdBy === "pip" && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Suggested by Pip</span>}
+            </p>
+            {(answer?.question ?? reply.question) && (
+              <blockquote data-question className="m-0 rounded-md border-l-2 border-ws-sep2 bg-ws-sel px-2 py-1 text-sm whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">
+                <b className="font-semibold">{answer?.label ?? "The agent"} asks:</b> {answer?.question ?? reply.question}
+              </blockquote>
+            )}
+            <p className="m-0 text-sm text-ws-ink3">
+              The question is the agent&apos;s words.
+              {onOpenRun && (
+                <>
+                  {" "}
+                  <button type="button" onClick={() => onOpenRun(reply.runId)} className="text-ws-pip hover:underline">
+                    Open the run
+                  </button>
+                </>
+              )}
+            </p>
+            <label className="grid gap-1 text-sm font-semibold" htmlFor={`run-answer-${p.id}`}>
+              Reply the agent will get
+              <textarea
+                id={`run-answer-${p.id}`}
+                value={message}
+                disabled={!open || working}
+                rows={Math.min(14, Math.max(4, message.split("\n").length + 1))}
+                maxLength={MAX_ANSWER}
+                aria-keyshortcuts="Meta+Enter Control+Enter"
+                onChange={(e) => {
+                  messageEdited.current = true;
+                  setMessage(e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (!isSendKey(e)) return;
+                  e.preventDefault();
+                  sendAnswer();
+                }}
+                className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2 py-1.5 text-base font-normal [overflow-wrap:anywhere]"
+              />
+            </label>
+            <p className="m-0 text-sm text-ws-ink3">
+              {open
+                ? answer?.waiting === false
+                  ? `${NOT_WAITING}. Skip this draft.`
+                  : "Gossamr puts its standing reminder in front, then resumes the agent with this reply, as your own answer goes. Nothing is sent before you press Send answer (⌘↵)."
+                : state === "applied"
+                  ? "Sent."
+                  : "Not sent."}
+            </p>
+          </div>
+        )}
         {p.origin.type === "run" && (
           <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
             {p.createdBy === "agent" && (
@@ -406,7 +491,12 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
                     {working || state === "applying" ? "Sending…" : "Send back"}
                   </button>
                 )}
-                {!runDraft && !followUp && (
+                {reply && (
+                  <button type="button" disabled={working || state === "applying" || !!replyBlock} title={replyBlock ?? undefined} onClick={sendAnswer} className={`${primary} px-5 py-2 text-base`}>
+                    {working || state === "applying" ? "Sending…" : "Send answer"}
+                  </button>
+                )}
+                {!runDraft && !followUp && !reply && (
                   <button
                     type="button"
                     disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock}
@@ -451,6 +541,7 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
   };
 
   const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
+  const answer = useAnswerRun(p);
   const discuss = () => p.origin.type === "run" && askPip(commentWithPipPrompt({ id: p.origin.runId, item: target ?? null }, p.id));
 
   return (
@@ -469,6 +560,14 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
         void run(async () => {
           if (edit && backend) await backend.proposalsEdit(p.id, edit);
           await useWorkspace.getState().sendFollowUp(p.id, message);
+          return null;
+        })
+      }
+      answer={answer}
+      onSendAnswer={(edit, message) =>
+        void run(async () => {
+          if (!backend) return null;
+          await editThenSend(p.id, edit, message, { saveEdit: (id, e) => backend.proposalsEdit(id, e), send: (id, m) => useWorkspace.getState().sendAnswerDraft(id, m) });
           return null;
         })
       }

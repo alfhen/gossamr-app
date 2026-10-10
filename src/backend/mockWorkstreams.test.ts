@@ -4,7 +4,10 @@ import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { mockPipTurns } from "./mockPipTurns";
 import { mockDigest } from "./mockRuns";
-import { MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, waitingForPr } from "./mockWorkstreams";
+import { MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, basisOfItem, driftOf, lastTripOf, waitingForPr, type BasisTicket } from "./mockWorkstreams";
+import { driftLine } from "./mockPip";
+import fixtures from "./supervisor.fixtures.json";
+import { docFromText } from "../lib/docs";
 
 /** A browser's storage for this file, kept across new backends as across reloads of one page. */
 const saved = new Map<string, string>();
@@ -509,5 +512,72 @@ describe("holding and managing a mock workstream", () => {
     const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
     expect(store.get("ws-1")?.workstream).toEqual({ ...old, rules: {}, basis: null });
     expect(store.setRule("ws-1", "fix_round", false).rules).toEqual({ fix_round: false });
+  });
+});
+
+describe("a mock workstream's ticket drifting from its basis", () => {
+  beforeEach(() => saved.clear());
+
+  it("runs the shared basis-drift fixture as the Rust side does", () => {
+    for (const c of fixtures.basisDrift) {
+      const { basis: b, now: n } = c as typeof c & { basis: { summary?: string; changing?: string[] } };
+      const then: BasisTicket = { title: b.summary ?? "", body: docFromText(b.description), status: { id: b.statusId, name: b.statusId, category: "active" }, assignee: null };
+      const basis = { ...basisOfItem(then), ...(b.summary === undefined ? { summaryDigest: undefined } : {}), changing: b.changing ?? [] };
+      const ticket: BasisTicket = { title: n.summary, body: docFromText(n.description), status: { id: n.statusId, name: n.statusId, category: n.statusCategory as "todo" | "active" | "done" }, assignee: { connectionId: "c", accountId: n.assignee } };
+      expect(driftOf(basis, ticket), c.name).toEqual(c.expect);
+    }
+  });
+
+  it("keeps the summary in a new basis; one stored before summaries were kept doesn't drift on it until resumed", async () => {
+    const backend = new MockBackend();
+    const ws = await backend.workstreamsOpen(CA401);
+    expect(ws.basis?.summaryDigest).toMatch(/^mock-/);
+    // As a basis stored before summaries were kept reads.
+    const stored = JSON.parse(saved.get(MOCK_WORKSTREAMS_KEY)!);
+    delete stored.workstreams[0].basis.summaryDigest;
+    saved.set(MOCK_WORKSTREAMS_KEY, JSON.stringify(stored));
+    const reread = new MockWorkstreams(() => [], () => "Welcome flow refresh", () => new Date(), MOCK_WORKSTREAMS_KEY, false);
+    reread.ticketOf = (key) => backend.connector.item(itemRef(key));
+    backend.editTicket("CA-401", { summary: "Retitled" });
+    expect(reread.basisDrift(ws.id)).toEqual([]);
+    backend.editTicket("CA-401", { description: "Rewritten." });
+    expect(reread.basisDrift(ws.id)).toEqual(["description"]);
+
+    reread.trip(ws.id, "basis_drift", null, ["description"]);
+    expect(reread.get(ws.id)?.workstream).toMatchObject({ heldReason: "tripwire:basis_drift", drifted: ["description"] });
+    const resumed = reread.resume(ws.id);
+    expect(resumed.basis?.summaryDigest).toMatch(/^mock-/);
+    expect(resumed.drifted).toBeUndefined();
+    expect(reread.basisDrift(ws.id)).toEqual([]);
+    expect(reread.events(ws.id).slice(-2).map((e) => [e.actor, e.action, e.detail])).toEqual([
+      ["person", "resumed", "tripwire:basis_drift"],
+      ["supervisor", "basis_captured", null],
+    ]);
+  });
+
+  it("takes an approved move or rewrite into the basis, so the person's own write isn't drift", () => {
+    const backend = new MockBackend();
+    const ws = backend.workstreams.open(CA401);
+    backend.editTicket("CA-401", { statusId: "Sent" });
+    backend.workstreams.rebase(ws.id, ["status"]);
+    expect(backend.workstreams.basisDrift(ws.id)).toEqual([]);
+    backend.editTicket("CA-401", { summary: "Someone else's title" });
+    backend.workstreams.rebase(ws.id, ["description"]);
+    expect(backend.workstreams.basisDrift(ws.id)).toEqual(["summary"]);
+  });
+
+  it("tells the next wake once that the ticket changed while it was held", () => {
+    const backend = new MockBackend();
+    const ws = backend.workstreams.open(CA401).id;
+    backend.workstreams.trip(ws, "basis_drift", null, ["summary", "description"]);
+    const held = backend.pipWorkstreamTrip(ws);
+    expect(held).toMatchObject({ kind: "basis_drift", fields: ["summary", "description"], resumedAt: null });
+    expect(driftLine(held)).toBeNull();
+    backend.workstreams.resume(ws);
+    const trip = backend.pipWorkstreamTrip(ws);
+    expect(driftLine(trip)).toBe("The ticket's summary and description changed while I was held; I'll work from it as it reads now.");
+    expect(lastTripOf(backend.workstreams.events(ws))).toEqual(trip);
+    expect(driftLine({ kind: "basis_drift", fields: ["status"], at: "", resumedAt: "x" })).toBe("The ticket was moved to Done while I was held; I'll work from it as it reads now.");
+    expect(driftLine({ kind: "marker", fields: [], at: "", resumedAt: "x" })).toBeNull();
   });
 });

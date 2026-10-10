@@ -1,5 +1,5 @@
 import { AUTO_TURNS_DEFAULT, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WAKES_DEFAULT } from "../types";
-import type { AutoStartSwitches, BudgetLevel, BudgetView, Tripwire, Workstream, WorkstreamRule } from "../types";
+import type { AutoStartSwitches, BasisField, BudgetLevel, BudgetView, Tripwire, Workstream, WorkstreamRule } from "../types";
 
 const TRIPWIRE_TEXT: Record<Tripwire, string> = {
   marker: "a run's output held one of Gossamr's data markers",
@@ -8,8 +8,24 @@ const TRIPWIRE_TEXT: Record<Tripwire, string> = {
   chain_refused: "Pip kept asking for a step Gossamr refused",
 };
 
-/** What the page says about a workstream held for `reason` (`heldReason`); null when it isn't held. */
-export function heldText(reason: string | null | undefined): string | null {
+/**
+ * What changed in Jira for a basis-drift hold, from the fields that drifted (`Workstream.drifted`): "the ticket's
+ * summary and description changed in Jira", "the ticket was moved to Done"; as `trip_reason` in
+ * src-tauri/src/agent/workstream.rs words it for Pip. With none known, the general wording.
+ */
+export function driftText(drifted: readonly BasisField[] | null | undefined): string {
+  const changed = (["summary", "description"] as const).filter((f) => drifted?.includes(f));
+  const done = drifted?.includes("status") ?? false;
+  if (changed.length === 0) return done ? "the ticket was moved to Done" : TRIPWIRE_TEXT.basis_drift;
+  const what = `the ticket's ${changed.join(" and ")} changed`;
+  return done ? `${what} and it was moved to Done` : `${what} in Jira`;
+}
+
+/**
+ * What the page says about a workstream held for `reason` (`heldReason`); null when it isn't held. A basis-drift hold
+ * says what changed when `drifted` names it.
+ */
+export function heldText(reason: string | null | undefined, drifted?: readonly BasisField[] | null): string | null {
   if (!reason) return null;
   switch (reason) {
     case HELD_RESTART:
@@ -27,6 +43,7 @@ export function heldText(reason: string | null | undefined): string | null {
   }
   if (reason.startsWith(TRIPWIRE)) {
     const kind = reason.slice(TRIPWIRE.length) as Tripwire;
+    if (kind === "basis_drift") return `Held: ${driftText(drifted)}`;
     if ((TRIPWIRES as readonly string[]).includes(kind)) return `Held: ${TRIPWIRE_TEXT[kind]}`;
   }
   return "Held";

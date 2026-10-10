@@ -3,7 +3,7 @@ import { SwitchRow } from "../components/Switch";
 import { RULE_SWITCH, ruleText } from "../lib/workstreamHold";
 import { AUTOSTART_DEFAULTS, WORKSTREAM_RULES, type AgentSettings, type Run, type WorkstreamRule } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
-import { stoppable, KIND_LABEL } from "./agentsLogic";
+import { slotWaiters, stopAllText, stoppable, KIND_LABEL } from "./agentsLogic";
 import { COPY, MAY_TOUCH } from "./runSheetLogic";
 import { Icon } from "./AgentIcons";
 import { usePrefs } from "./prefs";
@@ -36,6 +36,8 @@ export interface SettingsViewProps {
 export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose }: SettingsViewProps) {
   const [asking, setAsking] = useState(false);
   const active = stoppable(runs);
+  const waiting = slotWaiters(runs);
+  const reach = active.length + waiting.length;
   return (
     <SheetFrame label="Agents safety and settings" title="Agents" hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>} wide={false} onClose={onClose}>
       <h2 className="m-0 text-[20px] leading-tight font-semibold">Safety and settings</h2>
@@ -56,10 +58,10 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
               }}
             >
               <span className="text-ws-ink2">
-                Stop {active.length} {active.length === 1 ? "agent" : "agents"}?
+                Stop {stopAllText(active.length, waiting.length)}?
               </span>
               <Btn tone="dangerFill" autoFocus onClick={() => (setAsking(false), onStopAll())}>
-                Yes, stop {active.length === 1 ? "it" : "all"}
+                Yes, stop {reach === 1 ? "it" : "all"}
               </Btn>
               <Btn tone="ghost" onClick={() => setAsking(false)}>
                 Keep going
@@ -67,8 +69,8 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
             </div>
           ) : (
             <div>
-              <Btn tone="danger" icon="stop" disabled={active.length === 0 || stopping} onClick={() => setAsking(true)}>
-                Stop all{active.length ? ` (${active.length})` : ""}
+              <Btn tone="danger" icon="stop" disabled={reach === 0 || stopping} onClick={() => setAsking(true)}>
+                Stop all{reach ? ` (${reach})` : ""}
               </Btn>
             </div>
           )}

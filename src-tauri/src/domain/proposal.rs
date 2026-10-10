@@ -91,6 +91,19 @@ pub enum Intent {
     /// person's approval resumes the run.
     #[serde(rename_all = "camelCase")]
     FollowUp { connection_id: String, run_id: String, #[serde(default)] short_id: Option<String>, item: Option<ItemRef>, message: String, reason: String },
+    /// Answers a run that is asking a question with this exact message. Never applied through a tracker: the person's
+    /// approval sends it the way their own answer is sent. `question` is what the run asked when this was drafted.
+    #[serde(rename_all = "camelCase")]
+    RunAnswer {
+        connection_id: String,
+        run_id: String,
+        #[serde(default)]
+        short_id: Option<String>,
+        item: Option<ItemRef>,
+        message: String,
+        #[serde(default)]
+        question: Option<String>,
+    },
 }
 
 impl Intent {
@@ -100,8 +113,35 @@ impl Intent {
             Intent::Comment { item, .. } | Intent::Transition { item, .. } | Intent::Update { item, .. } | Intent::Rewrite { item, .. } => Some(item),
             Intent::Link { from, .. } => Some(from),
             Intent::Subtasks { parent, .. } => Some(parent),
-            Intent::StartRun { item, .. } | Intent::FollowUp { item, .. } => item.as_ref(),
+            Intent::StartRun { item, .. } | Intent::FollowUp { item, .. } | Intent::RunAnswer { item, .. } => item.as_ref(),
             Intent::Create { .. } => None,
+        }
+    }
+
+    /// What a newer draft of the same kind replaces in a workstream: one move, one description update, one triage
+    /// update and one breakdown per ticket, and one answer per run. Comments legitimately accumulate, and new tickets,
+    /// links, run starts and follow-ups have rules of their own, so they have no key.
+    pub fn supersession_key(&self) -> Option<(&'static str, String)> {
+        match self {
+            Intent::Transition { item, .. } => Some(("transition", item.external_id.clone())),
+            Intent::Rewrite { item, .. } => Some(("rewrite", item.external_id.clone())),
+            Intent::Update { item, .. } => Some(("update", item.external_id.clone())),
+            Intent::Subtasks { parent, .. } => Some(("subtasks", parent.external_id.clone())),
+            Intent::RunAnswer { run_id, .. } => Some(("runAnswer", run_id.clone())),
+            Intent::Comment { .. } | Intent::Create { .. } | Intent::Link { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } => None,
+        }
+    }
+
+    /// Whether this draft changes every field `older`, of the same kind and key, changes, so nothing is lost when it
+    /// replaces it. A triage update sets the assignee, epic and priority apart, and a rewrite the title and description
+    /// apart; the other kinds replace one thing whole.
+    pub fn covers(&self, older: &Intent) -> bool {
+        match (self, older) {
+            (Intent::Update { patch: new, .. }, Intent::Update { patch: old, .. }) => {
+                (old.assignee.is_none() || new.assignee.is_some()) && (old.parent.is_none() || new.parent.is_some()) && (old.priority.is_none() || new.priority.is_some())
+            }
+            (Intent::Rewrite { title: nt, body: nb, .. }, Intent::Rewrite { title: ot, body: ob, .. }) => (ot.is_none() || nt.is_some()) && (ob.is_none() || nb.is_some()),
+            _ => true,
         }
     }
 }
@@ -282,6 +322,9 @@ pub struct Proposal {
     /// The run an approved `StartRun` became.
     #[serde(default)]
     pub run: Option<String>,
+    /// The newer draft of the same kind that replaced this one in its workstream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -366,7 +409,7 @@ pub fn reconcile(proposal: &Proposal, items: &[WorkItem], ctx: &ReconcileContext
             if exists { retire("the link already exists") } else { Verdict::Keep }
         }
         Intent::Rewrite { title, body, .. } => reconcile_rewrite(title.as_ref(), body.as_ref(), current),
-        Intent::Subtasks { .. } | Intent::Create { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } => Verdict::Keep,
+        Intent::Subtasks { .. } | Intent::Create { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } => Verdict::Keep,
     }
 }
 
@@ -471,6 +514,7 @@ mod tests {
             created: vec![],
             error: None,
             run: None,
+            superseded_by: None,
         }
     }
 
@@ -768,6 +812,34 @@ mod tests {
             let back: Proposal = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
             assert_eq!(back, p);
         }
+    }
+
+    fn answer(question: Option<&str>) -> Intent {
+        Intent::RunAnswer { connection_id: "c".into(), run_id: "run-1".into(), short_id: Some("abcd1234".into()), item: Some(item_ref("1")), message: "Use staging.".into(), question: question.map(Into::into) }
+    }
+
+    #[test]
+    fn an_answer_serialises_with_a_run_answer_tag_reads_back_and_is_kept_by_reconcile() {
+        let intent = answer(Some("Which database?"));
+        let json = serde_json::to_value(&intent).unwrap();
+        assert_eq!(json["type"], "runAnswer");
+        assert_eq!((json["connectionId"].as_str(), json["runId"].as_str(), json["shortId"].as_str()), (Some("c"), Some("run-1"), Some("abcd1234")));
+        assert_eq!((json["message"].as_str(), json["question"].as_str()), (Some("Use staging."), Some("Which database?")));
+        assert_eq!(serde_json::from_value::<Intent>(json).unwrap(), intent);
+        assert_eq!(intent.target(), Some(&item_ref("1")));
+        assert_eq!(intent.supersession_key(), Some(("runAnswer", "run-1".to_string())));
+        let item = work_item("1", "todo");
+        let mut moved = work_item("1", "done");
+        moved.comment_count = 3;
+        assert_eq!(run(&proposal(intent, &item), &[moved]), Verdict::Keep);
+    }
+
+    #[test]
+    fn an_answer_stored_without_a_session_or_question_still_reads() {
+        let json = serde_json::json!({ "type": "runAnswer", "connectionId": "c", "runId": "run-1", "item": null, "message": "Yes." });
+        let read: Intent = serde_json::from_value(json).unwrap();
+        assert_eq!(read, Intent::RunAnswer { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: None, message: "Yes.".into(), question: None });
+        assert_eq!(read.target(), None);
     }
 
     #[test]

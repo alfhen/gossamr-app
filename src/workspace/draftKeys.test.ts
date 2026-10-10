@@ -17,6 +17,7 @@ const INTENTS: Record<Intent["type"], Intent> = {
   rewrite: { type: "rewrite", item: ref, title: { from: "Old", to: "New" }, body: null, flattened: [] },
   startRun: { type: "startRun", connectionId: "mock", item: ref, spec },
   followUp: { type: "followUp", connectionId: "mock", runId: "run-1", item: ref, message: "Again.", reason: "open questions" },
+  runAnswer: { type: "runAnswer", connectionId: "mock", runId: "run-1", shortId: null, item: ref, message: "Keep the old rounding.", question: "Keep the old rounding?" },
 };
 
 const STATES: ProposalState[] = [{ type: "pending" }, { type: "applying" }, { type: "applied" }, { type: "skipped" }, { type: "retired", reason: "The ticket moved on" }];
@@ -37,7 +38,7 @@ const draft = (intent: Intent, state: ProposalState = { type: "pending" }): Prop
   run: null,
 });
 
-const INLINE = new Set(["comment", "transition", "subtasks", "create", "link", "update"]);
+const INLINE = new Set(["comment", "transition", "subtasks", "create", "link", "update", "runAnswer"]);
 const KEYS = ["a", "s", "Enter", "o", "x", "A", "ArrowUp", " "];
 
 /** What each key should do, written out once so the table below reads as the rule. */
@@ -84,6 +85,13 @@ describe("the focused card's hint and shortcuts", () => {
     expect(draftKeyHint(draft(INTENTS.comment, { type: "applied" }))).toBe("↵ open");
     expect(draftKeyShortcuts(draft(INTENTS.comment))).toBe("a s Enter o");
     expect(draftKeyShortcuts(draft(INTENTS.comment, { type: "skipped" }))).toBe("Enter o");
+  });
+
+  it("offers to send an answer, and nothing but skip once its run stopped asking", () => {
+    expect(draftKeyHint(draft(INTENTS.runAnswer))).toBe("a send · s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.runAnswer), "approve")).toBe("↵ send this reply · any other key cancels");
+    expect(draftKeyHint(draft(INTENTS.runAnswer), null, false)).toBe("s skip · ↵ open");
+    expect(draftKeyShortcuts(draft(INTENTS.runAnswer))).toBe("a s Enter o");
   });
 
   it("says what Enter confirms while a decision waits for it", () => {
@@ -215,6 +223,25 @@ describe("onDraftCardKey", () => {
     expect(press(a, draft(INTENTS.comment), ["a", "j"])).toBe(false);
     expect(a.asking).toBeNull();
     expect(a.typed).toEqual([]);
+  });
+
+  it("sends an answer only on the Enter after a, the card showing its whole reply meanwhile", () => {
+    const a = acts();
+    expect(draftKeyAction(draft(INTENTS.runAnswer), "a")).toBe("approve");
+    expect(press(a, draft(INTENTS.runAnswer), ["a"])).toBe(true);
+    expect(a.asking).toBe("approve");
+    expect(a.approve).not.toHaveBeenCalled();
+    expect(press(a, draft(INTENTS.runAnswer), ["Enter"])).toBe(true);
+    expect(a.approve).toHaveBeenCalledTimes(1);
+    expect(a.open).not.toHaveBeenCalled();
+  });
+
+  it("never sends an answer a card has no send for, as when its run stopped asking", () => {
+    const a = acts();
+    const { approve, ...rest } = a;
+    for (const k of ["a", "Enter"]) onDraftCardKey(key(k, card()), draft(INTENTS.runAnswer), a.asking, rest);
+    expect(a.ask).not.toHaveBeenCalledWith("approve");
+    expect(approve).not.toHaveBeenCalled();
   });
 
   it("does nothing when the card has no handler for the action", () => {

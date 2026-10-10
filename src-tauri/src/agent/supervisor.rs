@@ -405,7 +405,8 @@ pub struct TripInput<'a> {
     pub ws: &'a Workstream,
     /// A run woken now whose output holds a data marker.
     pub marked: Option<&'a str>,
-    pub drifted: bool,
+    /// The basis fields its ticket drifted from (`drifted` in inbox/workstreams.rs); empty when it didn't.
+    pub drifted: &'a [&'static str],
     pub runs: &'a [Run],
     pub events: &'a [WorkstreamEvent],
 }
@@ -416,7 +417,7 @@ pub fn tripwire_of(input: &TripInput) -> Option<(&'static str, Option<String>)> 
     if let Some(run) = input.marked {
         return Some((TRIP_MARKER, Some(run.to_string())));
     }
-    if input.drifted {
+    if !input.drifted.is_empty() {
         return Some((TRIP_BASIS, None));
     }
     let (since_seq, since) = counting_since(input.events, input.ws.created_at);
@@ -452,10 +453,11 @@ pub trait SupervisorCore: Send + Sync {
     async fn admit_wake(&self, scope: &Scope, ws: &str, facts: &[WakeFact], ask: &WakeAdmission) -> Result<Admitted>;
     /// Charges a wake admitted to merge that the queue made a turn of its own after all (`Core::charge_wake`).
     async fn charge_wake(&self, scope: &Scope, ws: &str, at: DateTime<Utc>) -> Result<bool>;
-    async fn trip_workstream(&self, scope: &Scope, ws: &str, kind: &str, run: Option<&str>) -> Result<Workstream>;
+    /// Trips `ws` for `kind` about `run`; `fields` are the basis fields that drifted, for a basis-drift tripwire.
+    async fn trip_workstream(&self, scope: &Scope, ws: &str, kind: &str, run: Option<&str>, fields: &[&str]) -> Result<Workstream>;
     async fn hold_workstream(&self, scope: &Scope, ws: &str, reason: &str) -> Result<Workstream>;
     async fn lift_workstream_hold(&self, scope: &Scope, ws: &str, reason: &str) -> Result<Option<Workstream>>;
-    async fn workstream_basis_drift(&self, scope: &Scope, ws: &str) -> Result<Option<bool>>;
+    async fn workstream_basis_drift(&self, scope: &Scope, ws: &str) -> Result<Option<Vec<&'static str>>>;
     /// Whether the person approved the Gossamr Plan draft of the plan run `run`.
     async fn plan_approved_of(&self, run: &Run) -> Result<bool>;
     /// The pull request a build opened, as a sync cached it, with its head commit.
@@ -548,8 +550,8 @@ impl SupervisorCore for CoreFacade {
         self.core.charge_wake(scope, ws, at).await
     }
 
-    async fn trip_workstream(&self, scope: &Scope, ws: &str, kind: &str, run: Option<&str>) -> Result<Workstream> {
-        self.core.trip_workstream(scope, ws, kind, run).await
+    async fn trip_workstream(&self, scope: &Scope, ws: &str, kind: &str, run: Option<&str>, fields: &[&str]) -> Result<Workstream> {
+        self.core.trip_workstream(scope, ws, kind, run, fields).await
     }
 
     async fn hold_workstream(&self, scope: &Scope, ws: &str, reason: &str) -> Result<Workstream> {
@@ -560,7 +562,7 @@ impl SupervisorCore for CoreFacade {
         self.core.lift_workstream_hold(scope, ws, reason, Actor::Supervisor).await
     }
 
-    async fn workstream_basis_drift(&self, scope: &Scope, ws: &str) -> Result<Option<bool>> {
+    async fn workstream_basis_drift(&self, scope: &Scope, ws: &str) -> Result<Option<Vec<&'static str>>> {
         self.core.workstream_basis_drift(scope, ws).await
     }
 
@@ -908,15 +910,16 @@ impl Supervisor {
                 break;
             }
         }
-        let drifted = self.core.workstream_basis_drift(&scope, ws_id).await.ok().flatten().unwrap_or(false);
-        let input = TripInput { ws: &ws, marked: marker.as_deref(), drifted, runs: &runs, events: &events };
+        let drifted = self.core.workstream_basis_drift(&scope, ws_id).await.ok().flatten().unwrap_or_default();
+        let input = TripInput { ws: &ws, marked: marker.as_deref(), drifted: &drifted, runs: &runs, events: &events };
         if let Some((kind, run)) = tripwire_of(&input) {
-            self.trip(&scope, &connection, ws_id, kind, run.as_deref()).await;
+            let fields: &[&str] = if kind == TRIP_BASIS { &drifted } else { &[] };
+            self.trip(&scope, &connection, ws_id, kind, run.as_deref(), fields).await;
             return;
         }
         let rules = self.autostart(&scope, &ws, &runs, &events).await;
         if let Some(run) = &rules.marked {
-            self.trip(&scope, &connection, ws_id, TRIP_MARKER, Some(run)).await;
+            self.trip(&scope, &connection, ws_id, TRIP_MARKER, Some(run), &[]).await;
             return;
         }
         if !rules.notes.is_empty() {
@@ -935,9 +938,10 @@ impl Supervisor {
         }
     }
 
-    /// Holds `ws_id` for tripwire `kind` about `run`, and stops any wake of it still waiting or running.
-    async fn trip(&self, scope: &Scope, connection: &str, ws_id: &str, kind: &str, run: Option<&str>) {
-        if let Err(e) = self.core.trip_workstream(scope, ws_id, kind, run).await {
+    /// Holds `ws_id` for tripwire `kind` about `run` (with the basis `fields` that drifted), and stops any wake of it
+    /// still waiting or running.
+    async fn trip(&self, scope: &Scope, connection: &str, ws_id: &str, kind: &str, run: Option<&str>, fields: &[&str]) {
+        if let Err(e) = self.core.trip_workstream(scope, ws_id, kind, run, fields).await {
             eprintln!("couldn't hold workstream {ws_id} for its {kind} tripwire: {e}");
         }
         if let Some(agent) = self.agent() {

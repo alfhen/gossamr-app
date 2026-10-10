@@ -142,7 +142,8 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
         review_row(&mut rows, spec, found);
     }
     if live >= cap {
-        rows.red(&Failure::CapReached(live));
+        // Not red: an approved run over the cap stays queued and starts by itself once a slot frees.
+        rows.add(Level::Amber, format!("{live} of {cap} agents are running. This one will wait for a slot and start when one finishes."));
     } else {
         rows.add(Level::Green, format!("{live} of {cap} agents running"));
     }

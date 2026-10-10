@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "./mock";
-import { mockAsk, mockPipEvents, openQuestions, scriptPip } from "./mockPip";
+import { mockAsk, mockPipEvents, openQuestions, scriptPip, suggestedAnswer } from "./mockPip";
+import { eventLine } from "./mockSupervisor";
 import { mockPipTurns } from "./mockPipTurns";
 import { itemRef } from "./mockConnector";
 import { BUILD_NEEDS_PLAN, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, REVIEW_REPORTS, WAITING_FOR_PR_HINT } from "./mockRunKinds";
@@ -205,6 +206,12 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
     expect(mockPipTurns.turns(`ws:${ws}`).find((t) => t.requestId === "ws-refused")).toMatchObject({ status: "done", error: null });
   });
 
+  it("says which ticket fields drifted when asked why a workstream is held", () => {
+    const context = { screen: "board", item: null } as unknown as ScreenContext;
+    const ws = { id: "ws1", item: CA401, heldReason: "tripwire:basis_drift", drifted: ["summary", "description"] as const };
+    expect(scriptPip("Why is this held?", context, [], [], NOW, [], null, ws).text).toMatch(/^Held: the ticket's summary and description changed in Jira\./);
+  });
+
   it("names the workstream's newest finished run of the kind before as the one to follow", () => {
     const ws = { id: "ws1", item: CA401 };
     const run = (id: string, kind: RunKind, state: Run["state"], at: string) => ({ id, item: CA401, spec: { kind, workstream: "ws1" }, state, queuedAt: at, endedAt: state === "done" ? at : null }) as unknown as Run;
@@ -219,5 +226,42 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
     // A plan still working is named, so the backend says it hasn't finished.
     expect(scriptPip("build it", context, [], [run("w1", "plan", "working", "2026-09-30T12:00:00Z")], NOW, [], null, ws).runDraft).toMatchObject({ fromRun: "w1" });
     expect(scriptPip("build it", context, [], runs, NOW, [], null, null).runDraft ?? null).toBeNull();
+  });
+});
+
+describe("mock Pip woken by a run that asks a question, as propose_answer does", () => {
+  const CA401 = itemRef("CA-401");
+
+  it("drafts exactly one suggested reply for the person to check, and starts or answers nothing", async () => {
+    const b = new MockBackend({ runs: { seed: "empty" } });
+    const ws = b.workstreams.open(CA401).id;
+    const made = await b.runsDraft({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-asks", instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws }, CA401);
+    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    b.runs.advance(run.id);
+    b.runs.advance(run.id);
+    b.runs.ask(run.id, "Should the refund path keep the old rounding?");
+    const runsBefore = b.runs.list().map((r) => [r.id, r.state]);
+    let said = "";
+    const stop = mockPipEvents.on((id, e) => {
+      if (id === "wake-asks" && e.type === "text") said += e.text;
+    });
+    const prompt = eventLine([{ run: run.id, kind: "investigate", state: "needsAnswer" }]);
+    await mockAsk({ requestId: "wake-asks", prompt, context: { screen: "board", item: CA401, selection: [] } as unknown as ScreenContext, conversation: `ws:${ws}`, kind: "wake" } as AskRequest, b, 0);
+    stop();
+    const answers = b.proposals.list().filter((p) => p.intent.type === "runAnswer");
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toMatchObject({ createdBy: "pip", state: { type: "pending" }, origin: { type: "chat", requestId: "wake-asks", workstream: ws } });
+    expect(answers[0].intent).toMatchObject({ runId: run.id, question: "Should the refund path keep the old rounding?" });
+    expect((answers[0].intent as { message: string }).message).toContain("CA-401");
+    expect(said).toBe("R1 asks: “Should the refund path keep the old rounding?” I drafted a reply for you to check.");
+    // Nothing started, stopped or answered: the runs are as they were, and no other draft was made.
+    expect(b.runs.list().map((r) => [r.id, r.state])).toEqual(runsBefore);
+    expect(b.proposals.list().filter((p) => p.intent.type !== "runAnswer" && p.state.type === "pending")).toEqual([]);
+  });
+
+  it("suggests the run's own reply when it offered one", async () => {
+    const b = new MockBackend();
+    const run = b.runs.list().find((r) => r.state === "needsAnswer")!;
+    expect(suggestedAnswer(run)).toBe(run.suggestedReply);
   });
 });

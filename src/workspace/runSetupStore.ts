@@ -51,7 +51,9 @@ export function afterRunStarted(run: Run, item: ItemRef | null, { switchToAgents
   runs.watchLaunch(run.id);
   runs.select(run.id);
   if (switchToAgents) useTabs.getState().setRoute("agents");
-  useToasts.getState().push(`Agent started${item ? ` on ${item.key}` : ""}. It runs in the background.`, "info", { label: "Open", run: () => runs.openRun(run.id) });
+  // Over the cap an approved run waits for a slot; it isn't announced as started.
+  const text = run.state === "queued" && run.slotWaitSince ? `Approved${item ? ` the agent on ${item.key}` : ""}. Every slot is taken, so it waits and starts when one of the running agents finishes.` : `Agent started${item ? ` on ${item.key}` : ""}. It runs in the background.`;
+  useToasts.getState().push(text, "info", { label: "Open", run: () => runs.openRun(run.id) });
 }
 
 export type SetupPhase = "preparing" | "ready" | "starting";

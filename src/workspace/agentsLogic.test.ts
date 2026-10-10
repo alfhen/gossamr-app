@@ -13,6 +13,10 @@ import {
   groupRunsByWorkstream,
   NO_WORKSTREAM_TITLE,
   laneIsFolded,
+  ordinal,
+  slotPosition,
+  slotText,
+  stoppedText,
   laneOf,
   navOrder,
   permissionRequest,
@@ -24,6 +28,8 @@ import {
   sortRuns,
   stateView,
   stepRun,
+  slotWaiters,
+  stopAllText,
   stoppable,
   summaryLine,
   type LaneId,
@@ -325,5 +331,60 @@ describe("grouping by workstream", () => {
     expect(navOrder(groupRunsByWorkstream(all, workstreams, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["s2", "b1", "a2", "a1", "loose2", "s1", "loose1"]);
     expect(navOrder(groupRuns(all, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["loose1", "b1", "a2", "loose2", "a1"]);
     expect(navOrder(groupRuns(all, NO_FILTERS, NOW), true, NO_FILTERS)).toEqual(["loose1", "b1", "a2", "loose2", "a1", "s1", "s2"]);
+  });
+});
+
+describe("a run waiting for a slot", () => {
+  const at = (n: number) => new Date(Date.parse("2026-09-30T11:00:00Z") + n * 60_000).toISOString();
+  const waiting = (id: string, queued: number): Run => ({ ...run("queued", { id, queuedAt: at(queued) }), slotWaitSince: at(queued) });
+
+  it("is placed in line by approval order among the queued runs waiting for one", () => {
+    const [a, b, c] = [waiting("a", 3), waiting("b", 1), waiting("c", 2)];
+    const plain = run("queued", { id: "p", queuedAt: at(0) });
+    const started = { ...run("launching", { id: "s", queuedAt: at(0) }), slotWaitSince: at(0) };
+    const all = [a, b, c, plain, started];
+    expect([b, c, a].map((r) => slotPosition(r, all))).toEqual([1, 2, 3]);
+    expect(slotPosition(plain, all)).toBeNull();
+    expect(slotPosition(started, all)).toBeNull();
+    const tie = [waiting("y", 1), waiting("x", 1)];
+    expect(slotPosition(tie[1], tie)).toBe(1);
+  });
+
+  it("is placed by the time it was queued, however many fractional digits the backend wrote", () => {
+    // As strings, "…:00.5Z" sorts after "…:00.25Z" though it is earlier... and "…:00Z" after both.
+    const first = { ...run("queued", { id: "z", queuedAt: "2026-09-30T11:00:00.2Z" }), slotWaitSince: "x" };
+    const second = { ...run("queued", { id: "a", queuedAt: "2026-09-30T11:00:00.25Z" }), slotWaitSince: "x" };
+    const third = { ...run("queued", { id: "m", queuedAt: "2026-09-30T11:00:01Z" }), slotWaitSince: "x" };
+    const all = [third, second, first];
+    expect([first, second, third].map((r) => slotPosition(r, all))).toEqual([1, 2, 3]);
+  });
+
+  it("is counted apart from the running ones, and Stop all names it", () => {
+    const runs = [run("working", { id: "w1" }), run("working", { id: "w2" }), waiting("q1", 1), waiting("q2", 2)];
+    expect(summaryLine(runs, NOW)).toBe("2 running · 2 waiting for a slot");
+    expect(slotWaiters(runs).map((r) => r.id)).toEqual(["q1", "q2"]);
+    expect(stoppable(runs).map((r) => r.id)).toEqual(["w1", "w2"]);
+    expect(stopAllText(3, 2)).toBe("3 agents and 2 waiting to start");
+    expect(stopAllText(1, 0)).toBe("1 agent");
+    expect(stopAllText(0, 1)).toBe("1 waiting to start");
+  });
+
+  it("says where it is in line, on the card and in the state", () => {
+    const [first, second] = [waiting("a", 1), waiting("b", 2)];
+    expect(progressText(first, [second, first])).toBe("Waiting for a slot · 1st in line");
+    expect(progressText(second, [second, first])).toBe("Waiting for a slot · 2nd in line");
+    expect(slotText(first)).toBe("Waiting for a slot");
+    expect(stateView(first, NOW).label).toBe("Waiting for a slot");
+    expect(stateView(run("queued"), NOW).label).toBe("Queued");
+    expect(progressText(run("queued"))).toBe("Waiting to start");
+  });
+
+  it("counts in ordinals", () => {
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 101, 111].map(ordinal)).toEqual(["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "101st", "111th"]);
+  });
+
+  it("says a run stopped before it started so when it never launched", () => {
+    expect(stoppedText({ ...run("stopped"), launchedAt: null, error: "Stopped before it started" })).toBe("Stopped before it started");
+    expect(stoppedText({ ...run("stopped"), launchedAt: at(0), error: null, lastDetail: null })).toBe("Stopped before it finished");
   });
 });

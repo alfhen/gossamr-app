@@ -3,7 +3,7 @@ import { claude } from "../backend/claude";
 import { useClaude, type Conversation, type Turn } from "../claudeStore";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, participants, type Mention } from "../lib/mentions";
-import { draftsForTurn, earlierDrafts, targetOf, withoutRunDrafts } from "../lib/proposals";
+import { draftsForTurn, earlierDrafts, isRunDraft, targetOf, withoutRunDrafts } from "../lib/proposals";
 import { selectedTicket, useStore } from "../store";
 import type { Proposal, Status, Ticket } from "../types";
 import { Sparkle } from "./icons";
@@ -295,7 +295,7 @@ function ProposalView({ proposal: p }: { proposal: Proposal }) {
   };
 
   const approve = async () => {
-    if (!backend || intent.type === "startRun" || intent.type === "followUp") return;
+    if (!backend || isRunDraft(intent)) return;
     setWorking(true);
     setProblem(null);
     try {

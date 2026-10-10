@@ -278,3 +278,12 @@ async fn a_retry_after_given_as_a_past_date_retries_at_once() {
     assert_eq!(client(&server).comments(&scope(), "CA-1").await.unwrap().len(), 3);
     assert_eq!(server.targets().len(), 2);
 }
+
+#[tokio::test]
+async fn an_answer_to_an_agent_is_refused_and_nothing_is_sent_to_jira() {
+    let server = serve(vec![]).await;
+    let answer = Intent::RunAnswer { connection_id: "jira:site:me".into(), run_id: "r1".into(), short_id: None, item: Some(item("CA-1")), message: "Use staging.".into(), question: None };
+    let err = tracker(&server).apply(&answer).await.unwrap_err();
+    assert!(matches!(&err, Error::Proposal(m) if m.contains("its own button")), "{err}");
+    assert!(server.seen.lock().unwrap().is_empty(), "no request reached Jira");
+}

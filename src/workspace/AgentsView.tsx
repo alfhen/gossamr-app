@@ -18,6 +18,8 @@ import {
   isFiltered,
   laneIsFolded,
   stepRun,
+  slotWaiters,
+  stopAllText,
   stoppable,
   summaryLine,
   type AgentFilters,
@@ -65,14 +67,16 @@ export function keyAction(key: string, current: string | null, order: readonly s
   return key === "Escape" && current ? { type: "clear" } : null;
 }
 
-export function StopAll({ count, busy, onStop }: { count: number; busy: boolean; onStop(): void }) {
+/** Stop all, with `count` agents working or waiting on the person and `waiting` approved runs waiting for a slot. */
+export function StopAll({ count, waiting = 0, busy, onStop }: { count: number; waiting?: number; busy: boolean; onStop(): void }) {
   const [asking, setAsking] = useState(false);
+  const none = count + waiting === 0;
   useEffect(() => {
-    if (count === 0) setAsking(false);
-  }, [count]);
+    if (none) setAsking(false);
+  }, [none]);
   if (!asking) {
     return (
-      <button type="button" disabled={count === 0 || busy} title="Stop every agent that is working or waiting" onClick={() => setAsking(true)} className={`${BUTTON} border-ws-blocked text-ws-blocked hover:bg-ws-blocked hover:text-white`}>
+      <button type="button" disabled={none || busy} title="Stop every agent that is working or waiting" onClick={() => setAsking(true)} className={`${BUTTON} border-ws-blocked text-ws-blocked hover:bg-ws-blocked hover:text-white`}>
         <Icon name="stop" />
         Stop all
       </button>
@@ -91,7 +95,7 @@ export function StopAll({ count, busy, onStop }: { count: number; busy: boolean;
       className="inline-flex flex-wrap items-center gap-2"
     >
       <span className="text-sm text-ws-ink2">
-        Stop {count} {count === 1 ? "agent" : "agents"}? Their work is kept. Agents from Terminal are not touched.
+        Stop {stopAllText(count, waiting)}? Their work is kept. Agents from Terminal are not touched.
       </span>
       <button type="button" autoFocus onClick={() => (setAsking(false), onStop())} className={`${BUTTON} border-ws-blocked bg-ws-blocked font-semibold text-white`}>
         Yes, stop all
@@ -335,7 +339,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
           <Icon name="shield" />
           Safety and settings
         </button>
-        <StopAll count={stoppable(runs).length} busy={stopping} onStop={on.stopAll} />
+        <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
       </header>
       <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} on={on} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-20">

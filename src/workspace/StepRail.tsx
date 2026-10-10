@@ -9,7 +9,7 @@ import { Btn } from "./AgentSheet";
 import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
-import { batchable, batchToApprove, freezeBatch, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
+import { batchable, batchToApprove, freezeBatch, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
 import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
@@ -130,6 +130,36 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
   );
 }
 
+/** A step's retired drafts, collapsed to "N earlier drafts"; open, each says what it was and why it went. */
+export function EarlierStepDrafts({ step, drafts, initialOpen = false }: { step: StepGroup; drafts: readonly Proposal[]; initialOpen?: boolean }) {
+  const [open, setOpen] = useState(initialOpen);
+  if (!drafts.length) return null;
+  const list = `earlier-drafts-${step}`;
+  return (
+    <div data-earlier-drafts={step} className="grid gap-1 text-sm">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={list}
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 justify-self-start rounded text-ws-ink3 hover:text-ws-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+      >
+        <span aria-hidden className="text-xs">
+          {open ? "▾" : "▸"}
+        </span>
+        {drafts.length} earlier draft{drafts.length === 1 ? "" : "s"}
+      </button>
+      <ul id={list} hidden={!open} className="m-0 grid list-none gap-0.5 p-0 pl-4 text-ws-ink3">
+        {drafts.map((p) => (
+          <li key={p.id} data-earlier-draft={p.id} className="[overflow-wrap:anywhere]">
+            <span className="font-semibold text-ws-ink2">{draftTitle(p)}</span> · {p.state.type === "retired" ? p.state.reason : ""}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** The chip's one line: the newest run's label and state, then what else is worth a glance. */
 function ChipLine({ chip, label }: { chip: StepChip; label?: string }) {
   if (!chip.newest) return <span className="text-xs text-ws-ink3">Not started</span>;
@@ -198,6 +228,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
     if (revealIn) setOpen((was) => (was.has(revealIn) ? was : new Set([...was, revealIn])));
   }, [reveal, revealIn]);
   const drafts = useMemo(() => stepDrafts(proposals, runs), [proposals, runs]);
+  const retired = useMemo(() => retiredStepDrafts(proposals, runs), [proposals, runs]);
   const labels = useMemo(() => new Map(view.labels), [view.labels]);
   const id = view.workstream.id;
   const toggle = (step: StepGroup) =>
@@ -213,10 +244,11 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
         <p className="selectable m-0 text-sm whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{view.workstream.notes?.trim() || "No notes yet."}</p>
       </section>
       <WorkstreamControls key={id} view={view} />
-      {drafts.pip && (
+      {(drafts.pip || retired.pip) && (
         <section aria-label="Pip's drafts" className="grid gap-1.5">
           <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Pip&apos;s drafts</h3>
-          <StepDrafts step="pip" drafts={drafts.pip} approve={approve} />
+          <StepDrafts step="pip" drafts={drafts.pip ?? []} approve={approve} />
+          <EarlierStepDrafts step="pip" drafts={retired.pip ?? []} />
         </section>
       )}
       <ol aria-label="Steps of the workstream" className="m-0 grid list-none gap-1.5 p-0">
@@ -250,10 +282,11 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
               {shown && (
                 <div id={panel} className="grid gap-1.5 pl-2">
                   {chip.runs.map((run) => (
-                    <PipRunCard key={run.id} run={run} now={now} ticketTitle={titleOf(run)} label={labels.get(run.id)} onOpen={() => onOpenRun(run)} focusable />
+                    <PipRunCard key={run.id} run={run} now={now} ticketTitle={titleOf(run)} label={labels.get(run.id)} onOpen={() => onOpenRun(run)} focusable queue={runs} />
                   ))}
                   <StepDrafts step={chip.kind} drafts={drafts[chip.kind] ?? []} approve={approve} />
-                  {!chip.runs.length && !drafts[chip.kind] && <p className="m-0 text-sm text-ws-ink3">Nothing here yet.</p>}
+                  <EarlierStepDrafts step={chip.kind} drafts={retired[chip.kind] ?? []} />
+                  {!chip.runs.length && !drafts[chip.kind] && !retired[chip.kind] && <p className="m-0 text-sm text-ws-ink3">Nothing here yet.</p>}
                 </div>
               )}
             </li>

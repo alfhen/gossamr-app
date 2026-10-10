@@ -555,6 +555,14 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                     message: crate::runs::result::scrub(required(args, "body")?).trim().to_string(),
                     reason: reason.clone(),
                 },
+                Intent::RunAnswer { connection_id, run_id, short_id, item, question, .. } => Intent::RunAnswer {
+                    connection_id: connection_id.clone(),
+                    run_id: run_id.clone(),
+                    short_id: short_id.clone(),
+                    item: item.clone(),
+                    message: crate::runs::result::scrub(required(args, "body")?).trim().to_string(),
+                    question: question.clone(),
+                },
                 _ => return Err("this kind of draft can't be revised".into()),
             };
             let revised = core.revise_as_pip(scope, run.workstream.as_deref(), id, intent).await.map_err(|e| e.to_string())?;
@@ -635,6 +643,21 @@ async fn propose(st: &McpState, run: &PipRun, run_id: &str, intent: Intent, labe
     let made = st.core.propose(scope, Draft::from_pip(run_id, workstream, intent, label)).await.map_err(|e| format!("Couldn't save the draft: {e}"))?;
     (st.sink)(&Connection::jira_id(scope));
     let mut reply = saved(&target, &place, &made.id);
+    // A newer draft of the same kind replaces Pip's older one in a workstream; that one isn't open any more.
+    let replaced: Vec<String> = match similar.is_empty() {
+        true => Vec::new(),
+        false => {
+            let all = ProposalQuery { states: None, ..query };
+            let now: Vec<Proposal> = st.core.proposals_in(scope, &all).await.map_err(|e| e.to_string())?;
+            now.into_iter().filter(|p| p.superseded_by.as_deref() == Some(made.id.as_str())).map(|p| p.id).collect()
+        }
+    };
+    let similar: Vec<&str> = similar.into_iter().filter(|id| !replaced.iter().any(|r| r == id)).collect();
+    match replaced.as_slice() {
+        [] => {}
+        [one] => reply.push_str(&format!(" It replaces your earlier draft {one}, now retired.")),
+        many => reply.push_str(&format!(" It replaces your earlier drafts {}, now retired.", many.join(", "))),
+    }
     if !similar.is_empty() {
         reply.push_str(&format!(" Note: other open drafts of this kind exist on the item ({}); revise or retire yours if this replaces one.", similar.join(", ")));
     }
@@ -990,6 +1013,30 @@ mod tests {
 
         r.fx.core.skip_proposal(&first).await.unwrap();
         r.ok("propose_comment", json!({ "key": "CA-1", "body": "Ship it" })).await;
+    }
+
+    #[tokio::test]
+    async fn a_newer_draft_of_the_same_kind_in_a_workstream_says_which_one_it_replaced_and_a_refusal_passes_through() {
+        let r = rig().await;
+        let ws = r.fx.core.open_workstream(&r.fx.scope, Some(r.fx.item("CA-1")), None).await.unwrap();
+        r.st.runs.lock().unwrap().insert("in-ws".into(), PipRun::in_workstream(r.fx.scope.clone(), &ws.id));
+        let call = |name: &'static str, args: Value| {
+            let st = &r.st;
+            async move {
+                let out = call_tool(st, "in-ws", &json!({ "name": name, "arguments": args })).await;
+                (out["content"][0]["text"].as_str().unwrap().to_string(), out["isError"].as_bool().unwrap_or(false))
+            }
+        };
+        let (first, _) = call("propose_subtasks", json!({ "key": "CA-1", "summaries": ["a"] })).await;
+        let first = id_in(&first);
+        let (second, failed) = call("propose_subtasks", json!({ "key": "CA-1", "summaries": ["b"] })).await;
+        assert!(!failed && second.contains(&format!("It replaces your earlier draft {first}, now retired.")) && !second.contains("Note:"), "{second}");
+        assert_eq!(r.stored(&first).await.superseded_by.as_deref(), Some(id_in(&second).as_str()));
+
+        let mine = id_in(&second);
+        r.fx.core.edit_proposal(&mine, &crate::inbox::Edit::Subtasks { summaries: vec!["mine".into()] }).await.unwrap();
+        let (refused, failed) = call("propose_subtasks", json!({ "key": "CA-1", "summaries": ["c"] })).await;
+        assert!(failed && refused.contains(&format!("the user edited draft {mine}")), "{refused}");
     }
 
     #[tokio::test]

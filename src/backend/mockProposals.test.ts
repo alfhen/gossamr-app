@@ -1,8 +1,15 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { docText } from "../lib/docs";
-import type { Intent } from "../types";
+import type { Intent, ScreenContext } from "../types";
+import type { AskRequest } from "./claude";
+import { mockAsk, mockPipEvents } from "./mockPip";
+import { mockPipTurns } from "./mockPipTurns";
+import { PLAN_IS_THE_USERS, REPLACED_REASON, WORKSTREAM_PENDING_CAP } from "../lib/proposals";
 import { MockBackend } from "./mock";
 import { MockProposals } from "./mockProposals";
+import { bodyChange } from "./mockMarkdown";
+import { itemRef, statusId } from "./mockConnector";
 
 const ref = { connectionId: "mock", externalId: "CA-412", key: "CA-412" };
 const comment: Intent = { type: "comment", item: ref, body: { blocks: [{ type: "paragraph", content: [{ type: "text", text: "Hi", marks: [] }] }] } };
@@ -145,5 +152,106 @@ describe("drafts an agent run left", () => {
     expect(back).toMatchObject({ createdBy: "user", origin: { type: "run", runId: "r1" } });
     expect(textOf(again.pipRevise(back.id, "Reworded", "ws-1").intent)).toBe("Reworded");
     expect(legacy.createdBy).toBe("agent");
+  });
+});
+
+describe("mock draft hygiene, as proposals.rs keeps it", () => {
+  const item = (key: string) => ({ connectionId: "mock", externalId: key, key });
+  const move = (key: string, to: string): Intent => ({ type: "transition", item: item(key), to });
+  const note = (text: string): Intent => ({ type: "comment", item: item("CA-1"), body: { blocks: [{ type: "paragraph", content: [{ type: "text", text, marks: [] }] }] } });
+  const store = () => {
+    const lines: [string, string, string, string | undefined][] = [];
+    const proposals = new MockProposals(async () => []);
+    proposals.audit = (p, actor, action, detail) => void lines.push([p.id, actor, action, detail]);
+    return { proposals, lines };
+  };
+  const runOrigin = (workstream: string) => ({ type: "run" as const, runId: "r1", shortId: null, workstream });
+
+  it("a newer Pip move of the same ticket in the workstream retires the older one, and says so in the audit", () => {
+    const { proposals, lines } = store();
+    const old = proposals.draft(move("CA-1", "ca-copy"), "Copy", "q1", "ws-1");
+    const other = proposals.draft(move("CA-2", "ca-copy"), "Copy", "q1", "ws-1");
+    const elsewhere = proposals.draft(move("CA-1", "ca-copy"), "Copy", "q1", "ws-2");
+    const comment = proposals.draft(note("one"), null, "q1", "ws-1");
+    const byHand = proposals.draft(move("CA-1", "ca-qa"), "QA", "q0");
+    const next = proposals.draft(move("CA-1", "ca-qa"), "QA", "q2", "ws-1");
+    proposals.draft(note("two"), null, "q2", "ws-1");
+    const back = proposals.get(old.id)!;
+    expect(back.state).toEqual({ type: "retired", reason: "Replaced by a newer draft" });
+    expect(back.supersededBy).toBe(next.id);
+    expect(lines).toContainEqual([old.id, "pip", "draft_superseded", next.id]);
+    for (const p of [other, elsewhere, comment, byHand]) expect(proposals.get(p.id)!.state.type).toBe("pending");
+  });
+
+  it("a draft the person edited refuses Pip's and keeps an agent's alongside; a run's plan is never replaced by Pip", async () => {
+    const { proposals } = store();
+    const old = proposals.draft({ type: "subtasks", parent: item("CA-1"), summaries: ["a"] }, null, "q", "ws-1");
+    await proposals.edit(old.id, { type: "subtasks", summaries: ["mine"] });
+    expect(() => proposals.draft({ type: "subtasks", parent: item("CA-1"), summaries: ["b"] }, null, "q", "ws-1")).toThrow(`the user edited draft ${old.id} of the same kind on CA-1`);
+    const agent = proposals.fromRun({ type: "subtasks", parent: item("CA-1"), summaries: ["c"] }, null, runOrigin("ws-1"));
+    expect([proposals.get(old.id)!.state.type, agent.state.type]).toEqual(["pending", "pending"]);
+    expect(proposals.list().length).toBe(2);
+
+    const plan = proposals.fromRun({ type: "rewrite", item: item("CA-2"), title: null, body: bodyChange({ blocks: [] }, "## Gossamr Plan\n\n1. Do it"), flattened: [] }, null, runOrigin("ws-1"));
+    expect(() => proposals.draft({ type: "rewrite", item: item("CA-2"), title: { from: "Old", to: "New" }, body: bodyChange({ blocks: [] }, "Pip's description"), flattened: [] }, null, "q", "ws-1")).toThrow("only the user changes it");
+    expect(proposals.get(plan.id)!.state.type).toBe("pending");
+    // A title change leaves the plan alone, so both stay.
+    const title = proposals.draft({ type: "rewrite", item: item("CA-2"), title: { from: "Old", to: "New" }, body: null, flattened: [] }, null, "q", "ws-1");
+    expect([proposals.get(plan.id)!.state.type, title.state.type]).toEqual(["pending", "pending"]);
+  });
+
+  it("refuses Pip's ninth waiting draft in a workstream without storing it, never an agent's, and a replacement frees a slot", () => {
+    const { proposals } = store();
+    for (let n = 1; n < 8; n++) proposals.draft(note(`c${n}`), null, "q", "ws-1");
+    const old = proposals.draft(move("CA-1", "ca-copy"), "Copy", "q", "ws-1");
+    const next = proposals.draft(move("CA-1", "ca-qa"), "QA", "q", "ws-1");
+    expect(proposals.get(old.id)!.supersededBy).toBe(next.id);
+    const before = proposals.list().length;
+    expect(() => proposals.draft(note("ninth"), null, "q", "ws-1")).toThrow("Workstream ws-1 already has 8 drafts waiting for the user. Don't draft more until they decide some; revise one with revise_proposal or withdraw one with retire_proposal.");
+    expect(proposals.list().length).toBe(before);
+    expect(proposals.fromRun(note("found"), null, runOrigin("ws-1")).state.type).toBe("pending");
+    expect(proposals.draft(note("elsewhere"), null, "q").state.type).toBe("pending");
+  });
+
+  it("approving one move retires the other waiting moves of that ticket, whoever made them", async () => {
+    const backend = new MockBackend();
+    const key = "CA-401";
+    const ticket = itemRef(key);
+    const mine = await backend.proposalsCreate({ type: "transition", item: ticket, to: statusId("CA", "Copy") }, "Copy");
+    const pips = backend.proposals.draft({ type: "transition", item: ticket, to: statusId("CA", "QA") }, "QA", "q");
+    const other = backend.proposals.draft({ type: "comment", item: ticket, body: { blocks: [] } });
+    const done = await backend.proposalsApprove(pips.id);
+    expect([done.state.type, done.error]).toEqual(["applied", null]);
+    expect(backend.proposals.get(mine.id)!.state).toEqual({ type: "retired", reason: `Another move of ${key} was approved` });
+    expect(backend.proposals.get(other.id)!.state.type).toBe("pending");
+    expect(backend.proposals.writes.filter((w) => w.intent.type === "transition" && w.intent.item.key === key)).toHaveLength(1);
+  });
+});
+
+describe("mock draft hygiene in Pip's words", () => {
+  it("uses the backend's words and cap", () => {
+    const rust = readFileSync(new URL("../../src-tauri/src/proposals.rs", import.meta.url), "utf8");
+    expect(/pub const WORKSTREAM_PENDING_CAP: usize = (\d+);/.exec(rust)?.[1]).toBe(String(WORKSTREAM_PENDING_CAP));
+    expect(/pub const REPLACED_REASON: &str = "([^"]*)";/.exec(rust)?.[1]).toBe(REPLACED_REASON);
+    expect(rust.replace(/"\s*\n\s*"/g, "")).toContain(PLAN_IS_THE_USERS);
+    expect(rust).toContain("drafts waiting for the user. Don't draft more until they decide some; revise one with revise_proposal or withdraw one with retire_proposal.");
+    expect(rust).toContain('format!("Another move of {} was approved", item.key)');
+  });
+
+  it("has the scripted Pip say why a draft was refused, as a real turn reports a tool's refusal", async () => {
+    const b = new MockBackend({ runs: { seed: "empty" } });
+    const ticket = { connectionId: "mock", externalId: "CA-401", key: "CA-401" };
+    const ws = await b.workstreamsOpen(ticket);
+    for (let n = 0; n < WORKSTREAM_PENDING_CAP; n++) b.proposals.draft({ type: "comment", item: ticket, body: { blocks: [] } }, null, "q", ws.id);
+    mockPipTurns.begin(`ws:${ws.id}`, "ws-capped", "move it", { imageCount: 0 });
+    let said = "";
+    const stop = mockPipEvents.on((id, e) => {
+      if (id === "ws-capped" && e.type === "text") said += e.text;
+    });
+    await mockAsk({ requestId: "ws-capped", prompt: "move it to QA", context: { screen: "board", item: ticket, selection: [] } as unknown as ScreenContext, conversation: `ws:${ws.id}` } as AskRequest, b, 0);
+    stop();
+    // In the person's words: no workstream id or tool names.
+    expect(said).toBe("I couldn't draft that: this workstream already has 8 drafts waiting for you. Decide some and I'll draft more");
+    expect(b.proposals.list().filter((p) => p.intent.type === "transition")).toEqual([]);
   });
 });

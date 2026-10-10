@@ -118,8 +118,12 @@ pub const MANAGER: &str = "This conversation belongs to a workstream, and you ma
      recommends, the build once the person approved the plan, the review once the build's pull request is found, and at \
      most two fix rounds when a review blocks): an [Event] line says when Gossamr started one, so don't draft that step \
      again, and still never say it started until list_runs shows it Working. When an [Event] says a review still blocks \
-     after the fix rounds, bring it to the person. A turn that opens with [Event] lines is a wake: Gossamr, not the person, \
-     asked you because a run changed; reply in at most about three lines.";
+     after the fix rounds, bring it to the person. When an [Event] says a run needs an answer, read its question with \
+     get_run and, if the ticket or the plan settles it, suggest a reply with propose_answer, which the person reads and \
+     sends; otherwise tell the person what it asks. A turn that opens with [Event] lines is a wake: Gossamr, not the person, \
+     asked you because a run changed; reply in at most about three lines. A workstream holds at most 8 drafts waiting for \
+     the person, and a new draft of the same kind on the same ticket (a move, a description update, a triage update or \
+     subtasks) replaces your older one, so draft the one you mean rather than several.";
 
 pub fn system_prompt(role: Role, reads_code: bool, edits_text: bool) -> String {
     let assistant = assistant_prompt(reads_code, edits_text);
@@ -192,7 +196,9 @@ fn assistant_prompt(reads_code: bool, edits_text: bool) -> String {
          When a finished run left open questions, or did not cover something the ticket asks for, you may propose a follow-up with propose_follow_up, \
          after reading its whole result: it saves a draft holding the exact message to send back, which the user reads, may edit and sends. Quote the open \
          questions from the run or its draft (get_proposal). Never propose one for a run that did its job, only one at a time per run, and a run waiting \
-         on a question is answered by the user, not by you. Never say an agent was sent back or is working again until a tool reply says so.{rewrite}"
+         on a question is answered by the user, not by you: you may suggest the answer with propose_answer, after reading its question with \
+         get_run, which saves a draft the user reads, may edit and sends. Never say an agent was sent back, was answered or is working again \
+         until a tool reply says so.{rewrite}"
     )
 }
 
@@ -247,6 +253,7 @@ fn intent_summary(p: &Proposal) -> String {
         }
         Intent::Link { from, to, .. } => format!("link {} to {}", from.key, to.key),
         Intent::FollowUp { run_id, reason, .. } => format!("follow-up for run {run_id}: “{}”", clip(reason)),
+        Intent::RunAnswer { run_id, message, .. } => format!("answer for run {run_id}: “{}”", clip(message)),
         Intent::StartRun { item, spec, .. } => match item {
             Some(item) => format!("start an agent on {} in {}", item.key, spec.repo),
             None => format!("start an agent in {} with no ticket: “{}”", spec.repo, clip(&spec.instruction)),
@@ -352,6 +359,7 @@ mod tests {
             created: vec![],
             error: None,
             run: None,
+            superseded_by: None,
         }
     }
 
@@ -740,6 +748,7 @@ mod tests {
             spent: Default::default(),
             rules: Default::default(),
             basis: None,
+            drifted: Vec::new(),
         };
         WorkstreamContext {
             workstream,
@@ -749,6 +758,7 @@ mod tests {
             recent_person_actions: vec![WorkstreamEvent::new("w1", Actor::Person, "run_stopped", now()).run("r1")],
             waiting_for_pr: None,
             event: None,
+            last_trip: None,
         }
     }
 
@@ -829,6 +839,12 @@ mod tests {
             "Some steps start automatically by rules the person switched on",
             "still never say it started until list_runs shows it Working",
             "review still blocks after the fix rounds, bring it to the person",
+            &format!("at most {} drafts waiting for", crate::proposals::WORKSTREAM_PENDING_CAP),
+            "a new draft of the same kind on the same ticket",
+            "replaces your older one",
+            "When an [Event] says a run needs an answer, read its question with get_run",
+            "suggest a reply with propose_answer, which the person reads and sends",
+            "otherwise tell the person what it asks",
         ] {
             assert!(p.contains(needed), "{needed}");
         }
