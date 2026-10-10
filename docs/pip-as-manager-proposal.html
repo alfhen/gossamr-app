@@ -303,8 +303,8 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 <td><code>blocking</code> → an auto-started FollowUp to the same Build session with the blocking findings (Core-filled, marker-wrapped), then a fresh Review on the new commit. At most 2 rounds; then it stops and Pip brings it to the person. <code>should-fix</code> and <code>nit</code> are listed for the person and Pip, but never start a run.</td>
 </tr>
 <tr>
-<td>Still read-only on GitHub</td>
-<td>It never comments on, approves or changes the PR. Its findings reach the ticket only as a Jira comment draft the person approves.</td>
+<td>Posts only through drafts</td>
+<td>The reviewer itself never writes to GitHub. Its findings become drafts the person approves in Gossamr, the same way as Jira drafts: a <strong>GitHub review draft</strong> (a summary plus one inline comment per finding, each at the file and line it cites) and, when useful, a Jira comment draft. Gossamr posts the review only when the person approves it, always as a plain comment review (never Approve or Request changes). The person can edit, drop single comments or discard the draft.</td>
 </tr>
 </tbody></table></div><h3 id="auto-start-rules">Auto-start rules</h3><p>These rules let a run start the next step without a per-run approval. The supervisor applies them from fixed Rust code, so they don&#39;t depend on Pip or on agent prose.</p>
 <div class="tbl"><table><thead><tr>
@@ -603,7 +603,7 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 <li>Pip&#39;s notes and answers go through <code>scrub()</code>, and marker strings are rejected.</li>
 <li><strong>Tripwires</strong> (hold the workstream and drop it to Advise): marker or defang hits in a child&#39;s output; Basis drift on the ticket since the workstream opened (status, assignee or description changed in Jira, via the existing <code>Basis</code>); two failures of the same step; Pip asking for a Build/Review the gate refused three times.</li>
 </ul>
-<h3 id="sandboxing">Sandboxing</h3><p>Pip&#39;s sandbox is unchanged. Sub-agents keep their worktrees, their GUARD, Gossamr never writing folder trust, run-index-only stop/rm, and no <code>--discard-unpushed</code>. A workstream Build may push its own branch and open a <strong>draft</strong> PR, and nothing else: <code>PUSH_ALLOWED</code> forbids marking it ready or merging, and Review never writes to GitHub.</p>
+<h3 id="sandboxing">Sandboxing</h3><p>Pip&#39;s sandbox is unchanged. Sub-agents keep their worktrees, their GUARD, Gossamr never writing folder trust, run-index-only stop/rm, and no <code>--discard-unpushed</code>. A workstream Build may push its own branch and open a <strong>draft</strong> PR, and nothing else: <code>PUSH_ALLOWED</code> forbids marking it ready or merging, and Review never writes to GitHub itself: its findings reach the PR only as a review draft that Gossamr posts after the person approves it.</p>
 <h3 id="kill-switches">Kill switches</h3><ul>
 <li><strong>Per workstream:</strong> Hold (no wakes, no queued launches; running children continue), Stop (stops its children through <code>control::stop</code>), Close.</li>
 <li><strong>Hold all</strong> (rail button visible while anything is active, plus a shortcut): holds every workstream, cancels in-flight Pip turns (<code>cancel</code>, then <code>finish()</code> revokes MCP tokens), skips queued launches, optionally stops workstream runs, and leaves drafts inert.</li>
@@ -653,6 +653,12 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 <td><code>Intent::RunAnswer</code> + <code>propose_answer</code> + <code>runs_answer_draft</code>; queue-at-cap (service + amber preflight row + <code>launch_waiting</code> after the lock drops, ordered against <code>answer</code>&#39;s 5 s settle); per-workstream pending-draft cap and same-kind supersession; sibling-transition retirement; Basis-drift tripwire.</td>
 <td><code>domain/proposal.rs</code>, <code>proposals.rs</code>, <code>db/proposals.rs</code>, <code>tracker/jira/mod.rs</code>, <code>runs/answer.rs</code>, <code>runs/service.rs</code>, <code>runs/preflight.rs</code>, <code>runs/tracker.rs</code>, <code>DraftCard.tsx</code>, mocks</td>
 <td>A NeedsAnswer child shows Pip&#39;s suggested reply and approving it resumes the run; a 4th approved run waits and launches later; approving one transition retires its siblings; no lock deadlock under a concurrency test.</td>
+</tr>
+<tr>
+<td><strong>5b. GitHub review drafts</strong> (≈1 wk)</td>
+<td>A <code>GithubReview</code> draft kind (summary + inline comments at cited file/line, built by Core from the Review&#39;s structured findings, never from free prose); a GitHub write path limited to <code>POST /repos/{o}/{r}/pulls/{n}/reviews</code> with <code>event: COMMENT</code>, called only from the person&#39;s approval; a draft card with the diff hunk around each comment, per-comment drop/edit and an outdated-commit warning; write-access check on the token, with an in-app PR view (files, diff, the review&#39;s comments) as the fallback when posting isn&#39;t allowed; conformance test that nothing posts to GitHub without an approval.</td>
+<td><code>domain/proposal.rs</code>, <code>proposals.rs</code>, <code>codehost/github/write.rs</code> (new), <code>codehost/mod.rs</code>, <code>inbox/drafts.rs</code>, <code>agent/supervisor.rs</code>, <code>DraftCard.tsx</code>, <code>DraftPreview.tsx</code>, <code>PullView.tsx</code> (new), mocks</td>
+<td>A blocking or passing Review produces one GitHub review draft; approving it posts exactly one COMMENT review with its inline comments (mock GitHub); editing or dropping a comment changes what is posted; a token without write access shows the in-app PR view instead; no code path posts without approval.</td>
 </tr>
 <tr>
 <td><strong>6. Enforced read-only runs</strong></td>
@@ -740,7 +746,7 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 <li>Should auto-start wait for the enforced read-only permission (Phase 6) before it is on by default, or ship on by default in Phase 3?</li>
 <li>Should Manage be the default for new workstreams once Phase 3 has proven itself, or stay opt-in per workstream?</li>
 <li>Is a workstream always one ticket (plus subtasks), or can it span an epic or several repos? Single-ticket is assumed for v1.</li>
-<li>Should the adversarial review ever post to GitHub, or only produce Jira drafts (proposed: Jira drafts only)?</li>
+<li>Should the adversarial review ever post to GitHub, or only produce Jira drafts (proposed: Jira drafts only)? <strong>Decided:</strong> Review findings become a GitHub review draft the person approves in Gossamr before it is posted, as with Jira drafts (Phase 5b). If posting turns out not to be possible for a connection (for example a token without write access to pull requests), Gossamr shows the review in an in-app PR view instead.</li>
 <li>Should Build require the plan-description draft to be <strong>applied to Jira</strong> first, or is &quot;accepted in Gossamr&quot; enough?</li>
 <li>Should the manager use a stronger model or effort than standard Pip? It costs more per wake, and today it is pinned in <code>claude/mod.rs</code>.</li>
 <li>What daily budget for Pip manager turns is acceptable on a person&#39;s subscription, and should wakes pause while the app is in the background?</li>
