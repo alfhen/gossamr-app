@@ -24,7 +24,10 @@ export function reportParagraph(spec: { kind: RunKind; project?: unknown }): str
   const ticketless = spec.kind === "investigate" && !!spec.project;
   const fields = ["status ('done', or 'blocked' only when no answer from a person could get you further: if you need a decision, ask and wait instead)"];
   fields.push(ticketless ? "newTicket (an object with title of at most 120 characters, kind task, bug or story, and body: the ticket you would put under 'New ticket:')" : "note (the text you would put under 'For Jira:')");
-  if (spec.kind === "triage") fields.push("subtasks (an array of 3 to 8 one-line summaries) only if you propose a breakdown");
+  if (spec.kind === "triage" && !ticketless) {
+    fields.push("subtasks (an array of 3 to 8 one-line summaries) only if you propose a breakdown");
+    fields.push("planRecommended (true or false) when you can tell whether a written plan should come before the build");
+  }
   if (spec.kind === "plan") fields.push("plan (the whole implementation plan as Markdown)");
   if (spec.kind === "review") {
     fields.push("verdict ('pass' or 'blocking', required)");

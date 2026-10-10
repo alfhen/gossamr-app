@@ -1,4 +1,5 @@
-//! What the person can do to a run: stop it, stop everything, open it in Terminal, see how much disk it uses.
+//! What the person can do to a run: stop it, stop a workstream's, stop everything, open it in Terminal, see how much
+//! disk it uses.
 //!
 //! Only runs Gossamr started are touched: `stop_all` walks the run index, never the full `claude agents` listing.
 
@@ -15,8 +16,10 @@ use super::cli::ShortId;
 use super::failure::Failure;
 use super::service::RunService;
 use super::toolchain::Toolchain;
+use crate::auth::Scope;
 use crate::config::TerminalChoice;
-use crate::domain::{Run, RunFailure, RunState};
+use crate::domain::workstream::HELD_PERSON;
+use crate::domain::{Actor, Run, RunFailure, RunQuery, RunState};
 use crate::error::{Error, Result};
 
 const STOP_LIMIT: Duration = Duration::from_secs(5);
@@ -220,6 +223,25 @@ impl RunService {
         self.store(&run).await?;
         self.note_person(&run, "run_stopped", None).await;
         Ok(run)
+    }
+
+    /// The person's Stop for one of `scope`'s workstreams: holds it, so nothing wakes Pip or starts on its own, then
+    /// stops each of its runs that can be stopped, as `stop` does one. Runs not yet working are left queued, and the
+    /// hold keeps anything from starting them on its own.
+    pub async fn stop_workstream(&self, scope: &Scope, id: &str) -> Result<StopAll> {
+        let ws = self.core.hold_workstream(scope, id, HELD_PERSON, Actor::Person).await?;
+        let runs = self.core.runs_in(scope, &RunQuery { workstream: Some(ws.id.clone()), ..Default::default() }).await?;
+        let mut tally = StopAll::default();
+        for run in runs.iter().filter(|r| can_stop(r.state)) {
+            match self.stop(&run.id).await {
+                Ok(_) => tally.stopped += 1,
+                Err(e) => {
+                    eprintln!("couldn't stop run {} of workstream {}: {e}", run.id, ws.id);
+                    tally.failed += 1;
+                }
+            }
+        }
+        Ok(tally)
     }
 
     /// Stops the runs Gossamr started, in any account. A session that isn't in the run index is never touched.

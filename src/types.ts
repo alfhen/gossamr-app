@@ -570,6 +570,8 @@ export interface Run {
   possibleContinuations?: { shortId: string; sessionId?: string | null; startedAt?: string | null }[];
   /** The ticket made from this run's draft once the person approved it. */
   createdItem?: ItemRef | null;
+  /** Set when the supervisor started the run by an auto-start rule, after the run named, rather than a person approving it. */
+  autoStart?: { rule: WorkstreamRule; afterRun: string } | null;
 }
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */
@@ -737,20 +739,57 @@ export interface RunQuery {
   workstream?: string;
 }
 
-/** Mirrors src-tauri/src/domain/workstream.rs. How much Pip may do on its own; `manage` is stored but has no behaviour yet. */
+/**
+ * Mirrors src-tauri/src/domain/workstream.rs. How much Pip may do on its own: in `advise` it answers and drafts; in
+ * `manage` the supervisor also wakes it when a run finishes and starts the routine handoffs its rules allow. Pip itself
+ * starts nothing in either.
+ */
 export type WorkstreamMode = "advise" | "manage";
+
+/** An auto-start rule: which finished run may start which successor on its own. */
+export type WorkstreamRule = "investigate_triage" | "triage_plan" | "plan_build" | "build_review" | "fix_round" | "review_verify";
+
+/** Every auto-start rule, in chain order. */
+export const WORKSTREAM_RULES: readonly WorkstreamRule[] = ["investigate_triage", "triage_plan", "plan_build", "build_review", "fix_round", "review_verify"];
+
+/** A workstream's own switches for the auto-start rules; a rule it doesn't name follows the global switch. */
+export type WorkstreamRules = Partial<Record<WorkstreamRule, boolean>>;
+
+/** What a ticket looked like when its workstream opened, to notice it drifting. */
+export interface WorkstreamBasis {
+  statusId: string;
+  assignee: PersonRef | null;
+  descriptionDigest: string;
+  /** The fields a draft the person approved has just written, not compared until taken again from the ticket. */
+  changing?: string[];
+}
+
+/** Why a workstream is held, as `heldReason` stores it. A tripwire is `tripwire:<kind>`. */
+export const HELD_RESTART = "restart";
+export const HELD_PERSON = "person";
+export const HELD_ALL = "hold_all";
+export const HELD_BUDGET = "budget";
+export const HELD_DAILY = "daily_cap";
+export const HELD_QUOTA = "quota";
+export const TRIPWIRE = "tripwire:";
+export const TRIPWIRES = ["marker", "basis_drift", "repeated_failure", "chain_refused"] as const;
+export type Tripwire = (typeof TRIPWIRES)[number];
+
+/** Automatic Pip turns since the person last wrote, and wakes in all, that a workstream may have unless its budget says otherwise. */
+export const AUTO_TURNS_DEFAULT = 6;
+export const WAKES_DEFAULT = 12;
 
 /** Where a workstream is, derived from its runs and never stored. */
 export type WorkstreamStage = "intake" | "investigate" | "triage" | "plan" | "build" | "review" | "verify" | "done";
 
-/** Supervisor limits, reserved; `null` is no limit set. */
+/** Supervisor limits; `null` is the default (`AUTO_TURNS_DEFAULT`, `WAKES_DEFAULT`; no token limit). */
 export interface WorkstreamBudget {
   autoTurns: number | null;
   wakes: number | null;
   tokens: number | null;
 }
 
-/** What a workstream has used of its budget, reserved. */
+/** What a workstream has used of its budget. `autoTurns` counts since the person last wrote. */
 export interface WorkstreamSpend {
   autoTurns: number;
   wakes: number;
@@ -775,6 +814,19 @@ export interface Workstream {
   closedAt: string | null;
   budget: WorkstreamBudget;
   spent: WorkstreamSpend;
+  rules: WorkstreamRules;
+  /** The ticket as it was when the workstream opened; null for a ticketless one. */
+  basis: WorkstreamBasis | null;
+}
+
+/** How much of its budget a workstream has used: `amber` from 80% of either limit, `spent` at 100%. */
+export type BudgetLevel = "ok" | "amber" | "spent";
+
+/** A workstream's budget as the page shows it, defaults filled in. */
+export interface BudgetView {
+  autoTurns: { used: number; limit: number };
+  wakes: { used: number; limit: number };
+  level: BudgetLevel;
 }
 
 /** A workstream with the stage its runs give it, their ids (newest first) and short names (`[runId, "R1"]`, oldest first). */
@@ -785,6 +837,7 @@ export interface WorkstreamView {
   labels: [string, string][];
   /** The newest finished build that published a pull request a sync hasn't found yet, while no review was queued after it. */
   waitingForPr?: string | null;
+  budget: BudgetView;
 }
 
 /** Who did something recorded in a workstream's audit. */
@@ -796,7 +849,7 @@ export interface WorkstreamEvent {
   seq: number;
   at: string;
   actor: WorkstreamActor;
-  /** e.g. `opened`, `closed`, `notes_set`, `run_approved`, `run_stopped`, `run_answered`, `run_retried`. */
+  /** e.g. `opened`, `closed`, `notes_set`, `run_approved`, `run_stopped`, `run_answered`, `run_retried`, `mode_set`, `held`, `resumed`, `rule_set`, `budget_reset`. */
   action: string;
   runId: string | null;
   proposalId: string | null;
@@ -824,7 +877,24 @@ export interface AgentSettings {
   draftOnFinish: boolean;
   /** Offer new runs the run-report tool, through which an agent hands Gossamr its result as data. */
   reportResult: boolean;
+  /** Which routine handoffs start on their own in a workstream Pip manages. */
+  autostart: AutoStartSwitches;
+  /** Pip turns the supervisor may start in a day across every workstream. Zero turns the cap off. */
+  managerTurnsPerDay: number;
 }
+
+/** The global switches for the auto-start rules; each workstream can override them. */
+export interface AutoStartSwitches {
+  investigateTriage: boolean;
+  triagePlan: boolean;
+  planBuild: boolean;
+  buildReview: boolean;
+  fixRound: boolean;
+  /** A Verify after a passing review; off until the person turns it on. */
+  reviewVerify: boolean;
+}
+
+export const AUTOSTART_DEFAULTS: AutoStartSwitches = { investigateTriage: true, triagePlan: true, planBuild: true, buildReview: true, fixRound: true, reviewVerify: false };
 
 /** What `claude rm` said: it removed the worktree, or refused and explained in its own words. */
 export type CleanupResult = { type: "removed" } | { type: "refused"; message: string };

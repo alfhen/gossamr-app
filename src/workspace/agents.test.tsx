@@ -166,10 +166,11 @@ describe("the lanes", () => {
 
 describe("grouped by workstream", () => {
   const ws: WorkstreamView = {
-    workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(60), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 } },
+    workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(60), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null },
     stage: "investigate",
     runs: ["w1"],
     labels: [["w1", "R1"]],
+    budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
   };
   const linked = () => run("working", { id: "w1", queuedAt: iso(1), spec: { ...eight()[0].spec, kind: "investigate", workstream: "ws-1" } });
 

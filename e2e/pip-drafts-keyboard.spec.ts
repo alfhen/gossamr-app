@@ -74,9 +74,13 @@ test("text typed after ArrowUp never decides a draft and lands in the input", as
 
   await input.fill("");
   await input.press("ArrowUp");
-  await page.keyboard.type("show me the drafts");
+  // A question that drafts nothing: "show me the drafts" on an open ticket has the sample Pip draft a second comment,
+  // whose card would race this test's own.
+  await page.keyboard.type("how is it going");
   await page.keyboard.press("Enter");
-  await expect(pipPane(page).getByText("show me the drafts", { exact: true })).toBeVisible();
+  await expect(pipPane(page).getByText("how is it going", { exact: true })).toBeVisible();
+  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
+  await expect(card(page, "Comment on CA-401")).toHaveCount(1);
 
   await input.fill("");
   await input.press("ArrowUp");

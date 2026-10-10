@@ -1,5 +1,7 @@
 import { useState } from "react";
-import type { AgentSettings, Run } from "../types";
+import { SwitchRow } from "../components/Switch";
+import { RULE_SWITCH, ruleText } from "../lib/workstreamHold";
+import { AUTOSTART_DEFAULTS, WORKSTREAM_RULES, type AgentSettings, type Run, type WorkstreamRule } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
 import { stoppable, KIND_LABEL } from "./agentsLogic";
 import { COPY, MAY_TOUCH } from "./runSheetLogic";
@@ -117,6 +119,12 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         </Box>
       </Sec>
 
+      <Sec title="Automatic steps">
+        <Box>
+          {settings ? <AutomaticStepsForm key={JSON.stringify(settings)} settings={settings} disabled={settingsSaving} onSave={onSettings} /> : <p className="m-0 text-ws-ink3">Loading…</p>}
+        </Box>
+      </Sec>
+
       <Sec title="Result tool">
         <Box>
           <label className="flex items-start gap-2">
@@ -208,6 +216,77 @@ function LimitsForm({ settings, disabled, onSave }: { settings: AgentSettings; d
           <option value="terminal">Terminal</option>
           <option value="iTerm">iTerm</option>
         </select>
+      </label>
+    </div>
+  );
+}
+
+/** What each automatic step does, said beside its switch. */
+const RULE_NOTE: Record<WorkstreamRule, string> = {
+  investigate_triage: "A finished investigation on a ticket starts its triage.",
+  triage_plan: "A triage that says a plan is recommended starts the plan.",
+  plan_build: "Once you approve the plan's description draft, the build starts. It may push its own branch to a draft pull request, nothing more.",
+  build_review: "Once a finished build's draft pull request shows up, an adversarial review of it starts.",
+  fix_round:
+    "A fix round sends the reviewer's blocking findings to the build, which can push to its draft PR. At most two rounds; after that it comes to you.",
+  review_verify: "A passing review starts a verify. Off by default.",
+};
+
+/** The global switches with one changed, as `runsSetSettings` saves them; a backend that sent none has the defaults. */
+export const withAutostart = (settings: AgentSettings, rule: WorkstreamRule, on: boolean): AgentSettings => ({
+  ...settings,
+  autostart: { ...AUTOSTART_DEFAULTS, ...settings.autostart, [RULE_SWITCH[rule]]: on },
+});
+
+/** The settings with Pip turns per day read from `text`, or null when it says nothing new (or nothing a number). Zero is no daily limit, as in the app. */
+export function withTurnsPerDay(settings: AgentSettings, text: string): AgentSettings | null {
+  const n = Number(text);
+  if (text.trim() === "" || !Number.isFinite(n)) return null;
+  const turns = Math.max(0, Math.round(n));
+  return turns === settings.managerTurnsPerDay ? null : { ...settings, managerTurnsPerDay: turns };
+}
+
+/**
+ * The global switches for the steps that start on their own in a workstream Pip manages, and the daily cap on the
+ * turns Pip is woken for. Each workstream can still turn a step off for itself.
+ */
+function AutomaticStepsForm({ settings, disabled, onSave }: { settings: AgentSettings; disabled: boolean; onSave(next: AgentSettings): void }) {
+  const switches = { ...AUTOSTART_DEFAULTS, ...settings.autostart };
+  const [turns, setTurns] = useState(String(settings.managerTurnsPerDay));
+  const save = () => {
+    const next = withTurnsPerDay(settings, turns);
+    if (next) onSave(next);
+    // What isn't a number, or says nothing new, shows the saved number again rather than staying in the field.
+    else setTurns(String(settings.managerTurnsPerDay));
+  };
+  return (
+    <div className="grid gap-2.5">
+      <p className="m-0 text-ws-ink2">
+        Only in a workstream set to Manage. Each step is started by Gossamr from a fixed template once the one before is done; Pip can't start, stop or approve anything. A hold, Hold all or a used-up budget stops them all.
+      </p>
+      {WORKSTREAM_RULES.map((rule) => (
+        <SwitchRow
+          key={rule}
+          label={ruleText(rule)}
+          description={RULE_NOTE[rule]}
+          checked={switches[RULE_SWITCH[rule]]}
+          disabled={disabled}
+          onChange={(on) => onSave(withAutostart(settings, rule, on))}
+        />
+      ))}
+      <label className="flex flex-wrap items-center gap-2">
+        <span className="min-w-[210px]">Pip turns per day</span>
+        <input
+          disabled={disabled}
+          aria-label="Pip turns per day"
+          inputMode="numeric"
+          value={turns}
+          onChange={(e) => setTurns(e.target.value)}
+          onBlur={save}
+          onKeyDown={(ev) => ev.key === "Enter" && ev.currentTarget.blur()}
+          className={FIELD}
+        />
+        <span className="text-sm text-ws-ink3">turns Pip is woken for, across workstreams; 0 means no daily limit</span>
       </label>
     </div>
   );

@@ -15,6 +15,9 @@ import { Icon } from "./AgentIcons";
 import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
 import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watchLogic";
+import { useClaude } from "../claudeStore";
+import { HOLD_ALL_HINT } from "./commands";
+import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 
 /** Fixed so the scrolling project list can't clip it. */
 export function RailTip({ label, hint, at }: { label: string; hint?: string; at: { x: number; y: number } | null }) {
@@ -206,6 +209,21 @@ function BellIcon() {
   );
 }
 
+/**
+ * Hold all, while anything could start on its own: a workstream in Manage that isn't held, or Pip answering in a
+ * workstream's conversation. It holds every open workstream and stops Pip's turns in them; agents carry on.
+ */
+function HoldAllButton() {
+  const managing = useWorkstreams((s) => holdAllVisible(s.list, {}));
+  const answering = useClaude((s) => holdAllVisible([], s.byTicket));
+  if (!managing && !answering) return null;
+  return (
+    <RailButton label="Hold all workstreams" hint={HOLD_ALL_HINT} onClick={() => void useWorkstreams.getState().holdAll()} className="text-lg text-ws-warn hover:bg-ws-hover">
+      <span aria-hidden>⏸</span>
+    </RailButton>
+  );
+}
+
 export function Rail() {
   const tab = useActiveTab();
   const route = useTabs((s) => s.route);
@@ -278,6 +296,7 @@ export function Rail() {
             )}
           </RailButton>
         )}
+        {agentsEnabled && <HoldAllButton />}
         <RailButton label="Settings" current={route === "settings"} onClick={() => setRoute("settings")} className={`text-lg ${plain(route === "settings")}`}>
           <span aria-hidden>⚙</span>
         </RailButton>

@@ -37,6 +37,8 @@ pub struct WorkstreamContext {
     pub recent_person_actions: Vec<WorkstreamEvent>,
     /// The finished build whose pull request a sync hasn't found yet, which a review waits for.
     pub waiting_for_pr: Option<String>,
+    /// For a wake turn: the `[Event]` lines Rust wrote about what happened. Shown before the workstream's block.
+    pub event: Option<String>,
 }
 
 fn refuse(message: impl Into<String>) -> Error {
@@ -68,7 +70,7 @@ pub async fn load(core: &Core, scope: &Scope, id: &str) -> Result<WorkstreamCont
     }
     let mut recent: Vec<WorkstreamEvent> = core.workstream_events(scope, id).await?.into_iter().filter(|e| e.actor == Actor::Person).collect();
     recent.drain(..recent.len().saturating_sub(RECENT_ACTIONS));
-    Ok(WorkstreamContext { workstream, stage: view.stage, runs, drafts, recent_person_actions: recent, waiting_for_pr: view.waiting_for_pr })
+    Ok(WorkstreamContext { workstream, stage: view.stage, runs, drafts, recent_person_actions: recent, waiting_for_pr: view.waiting_for_pr, event: None })
 }
 
 /// The workstream a turn in its conversation works in. Refused, so the turn never runs, unless it is an open

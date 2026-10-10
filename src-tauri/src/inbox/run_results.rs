@@ -261,6 +261,17 @@ impl Core {
         Ok(self.change_of(run)?.filter(|c| c.kind == CodeChangeKind::PullRequest && c.repo.eq_ignore_ascii_case(&run.spec.repo)).and_then(|c| c.number))
     }
 
+    /// The pull request a build opened in its own repository and the commit at its head, as far as a sync has cached them.
+    pub fn pull_head_of(&self, run: &Run) -> Result<Option<(u64, Option<String>)>> {
+        Ok(self.change_of(run)?.filter(|c| c.kind == CodeChangeKind::PullRequest && c.repo.eq_ignore_ascii_case(&run.spec.repo)).and_then(|c| c.number.map(|n| (n, c.sha))))
+    }
+
+    /// Whether the person approved the Gossamr Plan description draft of the plan run `run`, with text of their own: a
+    /// skipped one, or one Pip revised that the person didn't edit, doesn't count.
+    pub async fn plan_approved_of(&self, run: &Run) -> Result<bool> {
+        Ok(run.spec.kind == RunKind::Plan && self.approved_plan_of(run).await?.is_some())
+    }
+
     /// What the sheet shows about a run's result: the part meant for Jira, the tickets it names, and the pull request
     /// or branch it produced as far as a sync has cached them.
     pub async fn run_outcome(&self, id: &str) -> Result<RunOutcome> {

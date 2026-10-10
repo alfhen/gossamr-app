@@ -1,7 +1,7 @@
 import type { Run } from "../types";
 import { itemKey } from "../lib/filter";
 import { labelsByRun } from "../lib/workstreamStage";
-import { RunLabel } from "./AgentCard";
+import { AutoStarted, RunLabel } from "./AgentCard";
 import { useWorkspace } from "../workspaceStore";
 import { useAgentsEnabled } from "./agentsFlag";
 import { runTitle, stateView } from "./agentsLogic";
@@ -36,6 +36,7 @@ export function PipRunCard({ run, now, ticketTitle, label, onOpen }: CardProps) 
         <span className="min-w-0 truncate text-xs text-ws-ink3">
           <span className={`font-semibold ${tone.text}`}>{view.label}</span> · {rowText(run, now)}
         </span>
+        <AutoStarted run={run} />
       </div>
       <button type="button" onClick={onOpen} aria-label={`Open ${title}`} className="shrink-0 rounded-md border border-ws-sep2 px-2 py-px text-sm font-semibold hover:border-ws-pip hover:text-ws-pip">
         Open

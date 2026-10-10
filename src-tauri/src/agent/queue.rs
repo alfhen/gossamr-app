@@ -2,12 +2,14 @@
 //! and no more than `PIP_PROCESSES` turns run at once across all conversations. This is the bookkeeping only: it
 //! starts and stops nothing, so `AgentService` does that with what it returns.
 //!
-//! Only questions a person sent are queued today. A later "wake" item, Pip picking a conversation back up on its own,
-//! slots in through `Queued::preempted_by_user`: a wake says yes, so a person's message goes ahead of it while it
-//! waits, and it never holds a person up.
+//! Two kinds of turn are queued: questions a person sent, and wakes, Pip picking a workstream's conversation back up on
+//! its own because the supervisor saw a run finish. A wake gives way (`Queued::preempted_by_user`): a person's message
+//! goes ahead of it while it waits, and it never holds a person up. A wake arriving while another waits in the same
+//! conversation is merged into that one (`merge_wake`), so each conversation has at most one waiting.
 
 use std::collections::{HashMap, VecDeque};
 
+use super::supervisor::WakeFacts;
 use super::{AskRequest, UpdateSink};
 use crate::auth::Scope;
 
@@ -19,18 +21,36 @@ pub trait Queued {
     /// Whether a person's message sent later still goes ahead of this item while it waits. A person's own messages
     /// say no, so they keep the order they were sent in.
     fn preempted_by_user(&self) -> bool;
+
+    /// Takes `facts` into this item when it is a wake for the same workstream; false when it can't.
+    fn absorb(&mut self, _facts: &WakeFacts) -> bool {
+        false
+    }
 }
 
 /// A turn waiting to run, with all it needs to start.
 pub enum QueueItem {
     /// A question a person sent, the account it was asked in, and where its events go.
-    User { scope: Scope, req: AskRequest, sink: UpdateSink },
+    User { scope: Scope, req: Box<AskRequest>, sink: UpdateSink },
+    /// The supervisor waking Pip in a workstream with what happened, and where the turn's events go.
+    Wake { scope: Scope, facts: WakeFacts, sink: UpdateSink },
 }
 
 impl Queued for QueueItem {
     fn preempted_by_user(&self) -> bool {
         match self {
             QueueItem::User { .. } => false,
+            QueueItem::Wake { .. } => true,
+        }
+    }
+
+    fn absorb(&mut self, more: &WakeFacts) -> bool {
+        match self {
+            QueueItem::Wake { facts, .. } if facts.workstream == more.workstream => {
+                facts.merge(more);
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -116,7 +136,7 @@ impl<T: Queued> TurnQueue<T> {
     }
 
     /// Ends the running turn `request_id`, keeping the session it ended with for its conversation, and returns the
-    /// turns that may start now, oldest first. They count as running from here. Anything but a running turn is ignored.
+    /// turns that may start now: a person's before a wake, then oldest first. They count as running from here. Anything but a running turn is ignored.
     pub fn finished(&mut self, request_id: &str, session: Option<String>) -> Vec<(String, T)> {
         let Some(conversation) = self.owner.get(request_id).cloned() else { return Vec::new() };
         let Some(lane) = self.lanes.get_mut(&conversation) else { return Vec::new() };
@@ -134,9 +154,10 @@ impl<T: Queued> TurnQueue<T> {
                 .lanes
                 .iter()
                 .filter(|(_, l)| l.in_flight.is_none())
-                .filter_map(|(c, l)| l.waiting.front().map(|e| (e.order, c.clone())))
+                // A person's turn waiting anywhere goes before a wake, however long the wake has waited.
+                .filter_map(|(c, l)| l.waiting.front().map(|e| (e.item.preempted_by_user(), e.order, c.clone())))
                 .min();
-            let Some((_, conversation)) = next else { break };
+            let Some((_, _, conversation)) = next else { break };
             let lane = self.lanes.get_mut(&conversation).expect("the lane was just found");
             let entry = lane.waiting.pop_front().expect("the lane has a waiting turn");
             lane.in_flight = Some(entry.id.clone());
@@ -170,6 +191,34 @@ impl<T: Queued> TurnQueue<T> {
         lane.waiting.iter().position(|e| e.id == request_id).map(|at| at + usize::from(lane.in_flight.is_some()))
     }
 
+    /// The waiting turn `request_id`.
+    pub fn waiting(&self, request_id: &str) -> Option<&T> {
+        let lane = self.lanes.get(self.owner.get(request_id)?)?;
+        lane.waiting.iter().find(|e| e.id == request_id).map(|e| &e.item)
+    }
+
+    /// Merges `facts` into the wake waiting in `conversation`, if there is one, and returns its id.
+    pub fn merge_wake(&mut self, conversation: &str, facts: &WakeFacts) -> Option<String> {
+        let lane = self.lanes.get_mut(conversation)?;
+        lane.waiting.iter_mut().find_map(|e| e.item.absorb(facts).then(|| e.id.clone()))
+    }
+
+    /// The waiting turns of `conversation` that give way to a person, oldest first.
+    pub fn waiting_wakes(&self, conversation: &str) -> Vec<String> {
+        self.lanes.get(conversation).map(|l| l.waiting.iter().filter(|e| e.item.preempted_by_user()).map(|e| e.id.clone()).collect()).unwrap_or_default()
+    }
+
+    /// Every turn of `conversation`, the running one first, then those waiting in order.
+    pub fn turns_of(&self, conversation: &str) -> Vec<String> {
+        let Some(lane) = self.lanes.get(conversation) else { return Vec::new() };
+        lane.in_flight.iter().cloned().chain(lane.waiting.iter().map(|e| e.id.clone())).collect()
+    }
+
+    /// The conversations with a turn waiting or running.
+    pub fn conversations(&self) -> Vec<String> {
+        self.lanes.keys().cloned().collect()
+    }
+
     /// The session `conversation`'s last finished turn ended with.
     pub fn session(&self, conversation: &str) -> Option<String> {
         self.sessions.get(conversation).cloned()
@@ -198,6 +247,14 @@ mod tests {
     impl Queued for Item {
         fn preempted_by_user(&self) -> bool {
             self.wake
+        }
+
+        fn absorb(&mut self, facts: &WakeFacts) -> bool {
+            if !self.wake {
+                return false;
+            }
+            self.id = format!("{}+{}", self.id, facts.workstream);
+            true
         }
     }
 
@@ -308,6 +365,85 @@ mod tests {
         assert_eq!(ids(q.finished("a1", None)), ["a2"]);
         assert_eq!(ids(q.finished("a2", None)), ["a3"]);
         assert_eq!(ids(q.finished("a3", None)), ["w1"]);
+    }
+
+    fn facts(tag: &str) -> WakeFacts {
+        WakeFacts { workstream: tag.into(), facts: Vec::new() }
+    }
+
+    #[test]
+    fn a_person_s_turn_in_another_conversation_goes_before_an_older_wake() {
+        let wake = |id: &str| Item { id: id.into(), session: None, wake: true };
+        let mut q = TurnQueue::new(1);
+        q.enqueue("A", "a1", user("a1"));
+        q.enqueue("ws:1", "w1", wake("w1"));
+        q.enqueue("general", "g1", user("g1"));
+        assert_eq!(ids(q.finished("a1", None)), ["g1"], "the person isn't held up by a wake");
+        assert_eq!(ids(q.finished("g1", None)), ["w1"]);
+    }
+
+    #[test]
+    fn a_wake_waiting_is_found_for_a_person_s_message_to_remove() {
+        let wake = |id: &str| Item { id: id.into(), session: None, wake: true };
+        let mut q = TurnQueue::default();
+        q.enqueue("A", "a1", user("a1"));
+        q.enqueue("A", "w1", wake("w1"));
+        assert_eq!(q.waiting_wakes("A"), ["w1"]);
+        assert!(q.waiting_wakes("B").is_empty());
+        // What `AgentService::ask` does with a person's message: the waiting wake goes, then the message is queued.
+        for id in q.waiting_wakes("A") {
+            assert!(matches!(q.remove(&id), Removed::Waiting(Item { wake: true, .. })));
+        }
+        assert_eq!(q.enqueue("A", "a2", user("a2")), Enqueued::Waiting { ahead: 1 });
+        assert_eq!(q.turns_of("A"), ["a1", "a2"]);
+        assert_eq!(ids(q.finished("a1", None)), ["a2"]);
+        assert!(q.finished("a2", None).is_empty(), "the removed wake never runs");
+    }
+
+    #[test]
+    fn a_wake_in_flight_is_re_queued_behind_the_person_s_message() {
+        let wake = |id: &str| Item { id: id.into(), session: None, wake: true };
+        let mut q = TurnQueue::default();
+        assert!(matches!(q.enqueue("A", "w1", wake("w1")), Enqueued::Start(_)));
+        // The person writes: their message waits for the wake, which is cancelled and its facts queued again after it.
+        assert_eq!(q.enqueue("A", "a1", user("a1")), Enqueued::Waiting { ahead: 1 });
+        assert_eq!(q.remove("w1"), Removed::InFlight, "cancelling a running wake is the caller's");
+        assert_eq!(q.enqueue("A", "w2", wake("w2")), Enqueued::Waiting { ahead: 2 });
+        assert_eq!(q.turns_of("A"), ["w1", "a1", "w2"]);
+        assert_eq!(ids(q.finished("w1", None)), ["a1"], "the person's message runs first");
+        assert_eq!(ids(q.finished("a1", None)), ["w2"]);
+        assert_eq!(q.conversations(), ["A"]);
+    }
+
+    #[test]
+    fn wakes_during_a_turn_merge_into_one_waiting_item() {
+        let wake = |id: &str| Item { id: id.into(), session: None, wake: true };
+        let mut q = TurnQueue::default();
+        q.enqueue("A", "a1", user("a1"));
+        assert_eq!(q.merge_wake("A", &facts("x")), None, "nothing waits to merge into");
+        q.enqueue("A", "w1", wake("w1"));
+        assert_eq!(q.merge_wake("A", &facts("x")).as_deref(), Some("w1"));
+        assert_eq!(q.merge_wake("A", &facts("y")).as_deref(), Some("w1"));
+        assert_eq!(q.merge_wake("B", &facts("x")), None);
+        assert_eq!(q.waiting_wakes("A").len(), 1, "one waiting wake per conversation");
+        let started = q.finished("a1", None);
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].1.id, "w1+x+y", "both later wakes were merged into the waiting one");
+    }
+
+    #[test]
+    fn the_real_items_merge_only_wakes_of_the_same_workstream() {
+        use crate::domain::RunKind;
+        use crate::agent::supervisor::{WakeFact, WakeState};
+        let fact = |run: &str| WakeFact { run: run.into(), kind: RunKind::Triage, state: WakeState::Done, mark: String::new(), plan_recommended: None, verdict: None, blocking: 0, drafts: 0, started: None, fix_round: None, exhausted: false, waiting_for_pr: false };
+        let scope = Scope { cloud_id: "s".into(), account_id: "me".into() };
+        let sink: UpdateSink = std::sync::Arc::new(|_| {});
+        let mut item = QueueItem::Wake { scope: scope.clone(), facts: WakeFacts { workstream: "w1".into(), facts: vec![fact("r1")] }, sink: sink.clone() };
+        assert!(item.preempted_by_user());
+        assert!(item.absorb(&WakeFacts { workstream: "w1".into(), facts: vec![fact("r1"), fact("r2")] }));
+        assert!(!item.absorb(&WakeFacts { workstream: "w2".into(), facts: vec![fact("r3")] }));
+        let QueueItem::Wake { facts, .. } = &item else { unreachable!() };
+        assert_eq!(facts.facts.iter().map(|f| f.run.as_str()).collect::<Vec<_>>(), ["r1", "r2"], "a fact already there isn't added twice");
     }
 
     #[derive(Deserialize)]
