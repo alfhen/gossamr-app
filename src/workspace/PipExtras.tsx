@@ -10,12 +10,12 @@ import { PipAvatar } from "./PipAvatar";
 import { lookAt } from "./pipGaze";
 import { chipCount, unassignedIn, useItemScene, useScreen } from "./pipHooks";
 import { usePaneWidths } from "./PaneResizers";
-import { runNudges, runStatesNow } from "./pipRuns";
+import { nudgedOutside, runNudges, runStatesNow } from "./pipRuns";
 import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
-import { paneConversation } from "./workstreamsStore";
+import { paneConversation, useWorkstreams } from "./workstreamsStore";
 import { isPaneConversation } from "../lib/conversations";
 
 /** The line under the filter bar after Pip narrowed the view; hidden once the person edits the filter themselves. */
@@ -148,11 +148,16 @@ function useRunNudges(): Nudge[] {
   const ready = useRuns((s) => s.status === "ready");
   const runs = useRuns((s) => s.runs);
   const items = useWorkspace((s) => s.items);
+  const workstreams = useWorkstreams((s) => s.list);
   const [baseline, setBaseline] = useState<ReadonlySet<string> | null>(null);
   useEffect(() => {
     if (enabled && ready && baseline === null) setBaseline(new Set(runStatesNow(runs)));
   }, [enabled, ready, baseline, runs]);
-  return useMemo(() => (enabled && baseline ? runNudges(runs, baseline, (r) => (r.item ? items[itemKey(r.item)]?.title : null)) : []), [enabled, baseline, runs, items]);
+  // A managed workstream's runs are told by Pip's wake turns, so they get no nudge here.
+  return useMemo(
+    () => (enabled && baseline ? runNudges(runs, baseline, (r) => (r.item ? items[itemKey(r.item)]?.title : null), nudgedOutside(workstreams)) : []),
+    [enabled, baseline, runs, items, workstreams],
+  );
 }
 
 /** Picks suggestions for what is on screen: once the person has stayed put a moment, never one they closed, each only once a session and not too soon after the last. */

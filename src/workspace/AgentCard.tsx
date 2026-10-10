@@ -1,5 +1,7 @@
 import type { KeyboardEvent } from "react";
 import { runRef } from "../lib/composerVerbs";
+import { labelsByRun } from "../lib/workstreamStage";
+import { useRuns } from "./runsStore";
 import type { ReviewView, Run } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
@@ -86,6 +88,28 @@ export function RunLabel({ label }: { label?: string }) {
   );
 }
 
+/**
+ * "Started automatically after R7": the run a rule started this one after, by its label in the workstream (`runs`), else
+ * its short id; "Queued automatically after R7" while it hasn't left the queue. Null for a run the person started.
+ */
+export function autoStartText(run: Run, runs: readonly Run[]): string | null {
+  const after = run.autoStart?.afterRun;
+  if (!after) return null;
+  return `${run.state === "queued" ? "Queued" : "Started"} automatically after ${labelsByRun(runs).get(after) ?? runRef({ id: after })}`;
+}
+
+/** Says a rule started the run, on its card, row and sheet; such a run is stopped like any other. */
+export function AutoStarted({ run, className = "" }: { run: Run; className?: string }) {
+  const runs = useRuns((s) => s.runs);
+  const text = autoStartText(run, runs.some((r) => r.id === run.id) ? runs : [...runs, run]);
+  if (!text) return null;
+  return (
+    <span data-auto-start={run.autoStart?.rule} title="An automatic step of its workstream started this run from a fixed rule. Stop it like any run." className={`min-w-0 truncate text-xs text-ws-ink3 ${className}`}>
+      {text}
+    </span>
+  );
+}
+
 export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
@@ -120,6 +144,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
         </span>
       </div>
       <h3 className="m-0 line-clamp-2 text-[13.5px] leading-[1.3] font-semibold text-balance [overflow-wrap:anywhere]">{title}</h3>
+      <AutoStarted run={run} />
       <p className="m-0 flex min-w-0 items-center gap-1.5 font-mono text-xs text-ws-ink3" title={`${run.spec.repo} on ${branchOf(run)}`}>
         <Icon name="branch" className="size-3" />
         <span className="min-w-0 truncate">

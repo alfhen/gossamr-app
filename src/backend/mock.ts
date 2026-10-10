@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { HELD_PERSON } from "../types";
 import type {
   AdfNode,
   AssignedElsewhere,
@@ -39,6 +40,8 @@ import type {
   Transition,
   Uploaded,
   WorkFilter,
+  WorkstreamMode,
+  WorkstreamRule,
   WorkstreamsChanged,
 } from "../types";
 import { fold, type Mention } from "../lib/mentions";
@@ -47,14 +50,17 @@ import { ticketBlockText } from "./mockTicket";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
 import { targetOf, workstreamOf } from "../lib/proposals";
-import { workstreamOfConversation } from "../lib/conversations";
+import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
+import { MockSupervisor } from "./mockSupervisor";
+import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockQueueWake } from "./mockPipQueue";
+import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
 import { mockPipTurns } from "./mockPipTurns";
-import { MockWorkstreams } from "./mockWorkstreams";
+import { MockWorkstreams, textDigest } from "./mockWorkstreams";
 
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
-import { MockRuns } from "./mockRuns";
+import { MockRuns, STOPPABLE } from "./mockRuns";
 import { seedDrafts } from "./mockDrafts";
 import { exposeMockClock, type MockOptions } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
@@ -393,6 +399,10 @@ export class MockBackend implements Backend {
     this.workstreams = new MockWorkstreams(
       () => this.runs.list(),
       (ref) => this.connector.item(ref)?.title ?? null,
+      undefined,
+      undefined,
+      undefined,
+      options.wsManage ? "manage" : "advise",
     );
     this.runs.workstreams = this.workstreams;
     // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
@@ -409,8 +419,20 @@ export class MockBackend implements Backend {
     // A draft pull request a build opened turns up on the code host, which ends its workstream's wait for it.
     this.runs.onPullRequest = (change) => this.github.code.addPullRequest(change);
     this.workstreams.prOf = (runId) => this.runs.pullRequestOf(runId);
+    this.workstreams.basisOf = (ref) => {
+      const w = this.connector.item(ref);
+      return w ? { statusId: w.status.id, assignee: w.assignee, descriptionDigest: textDigest(docText(w.body)) } : null;
+    };
     this.runs.seedPlanDescriptions();
-    exposeMockClock(this.runs, this.workstreams);
+    this.supervisor = new MockSupervisor({
+      runs: this.runs,
+      workstreams: this.workstreams,
+      proposals: this.proposals,
+      wake: (ws, facts) => void mockQueueWake(ws, facts, this, options.pipPace),
+      hasWaitingWake: mockHasWaitingWake,
+      cancelWakes: mockCancelWakes,
+    });
+    exposeMockClock({ runs: this.runs, workstreams: this.workstreams, proposals: this.proposals, pip: { hold: holdMockPip } });
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
     this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));
@@ -449,6 +471,9 @@ export class MockBackend implements Backend {
   /** Scripted agent runs, with `advance()` as their clock. */
   readonly runs: MockRuns;
 
+  /** Wakes the scripted Pip in managed workstreams and starts their routine steps, on every change rather than a timer. */
+  readonly supervisor: MockSupervisor;
+
   /** Workstreams, kept in this browser; their stages follow `runs`. */
   readonly workstreams: MockWorkstreams;
 
@@ -465,7 +490,9 @@ export class MockBackend implements Backend {
   }
 
   async workstreamsClose(id: string) {
-    return this.workstreams.close(id);
+    const closed = this.workstreams.close(id);
+    mockCancelTurns((c) => c === workstreamConversation(id));
+    return closed;
   }
 
   async workstreamsSetNotes(id: string, notes: string) {
@@ -474,6 +501,48 @@ export class MockBackend implements Backend {
 
   async workstreamsEvents(id: string) {
     return this.workstreams.events(id);
+  }
+
+  async workstreamsSetMode(id: string, mode: WorkstreamMode) {
+    return this.workstreams.setMode(id, mode, "person");
+  }
+
+  /** Holds a workstream and stops Pip's turns in its conversation, as `workstreams_hold` does; its runs carry on. */
+  async workstreamsHold(id: string) {
+    const held = this.workstreams.hold(id, HELD_PERSON, "person");
+    mockCancelTurns((c) => c === workstreamConversation(id));
+    return held;
+  }
+
+  async workstreamsResume(id: string) {
+    return this.workstreams.resume(id);
+  }
+
+  async workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null) {
+    return this.workstreams.setRule(id, rule, on);
+  }
+
+  /** Holds every workstream and stops Pip's turns in all of their conversations; queued runs wait and drafts stay as they are. */
+  async workstreamsHoldAll() {
+    const held = this.workstreams.holdAll();
+    mockCancelTurns((c) => workstreamOfConversation(c) !== null);
+    return held;
+  }
+
+  /** Holds the workstream, then stops each of its runs that can be stopped, as `stop_workstream` does. */
+  async workstreamsStop(id: string) {
+    const ws = this.workstreams.hold(id, HELD_PERSON, "person");
+    mockCancelTurns((c) => c === workstreamConversation(id));
+    const tally = { stopped: 0, failed: 0 };
+    for (const run of this.runs.list().filter((r) => r.spec.workstream === ws.id && STOPPABLE.includes(r.state))) {
+      try {
+        this.runs.stop(run.id);
+        tally.stopped += 1;
+      } catch {
+        tally.failed += 1;
+      }
+    }
+    return tally;
   }
 
   onWorkstreamsChanged(listener: (c: WorkstreamsChanged) => void) {
@@ -734,6 +803,10 @@ export class MockBackend implements Backend {
 
   pipFollowUp(runId: string, message: string, reason: string, requestId: string) {
     return this.runs.pipFollowUp(runId, message, reason, requestId);
+  }
+
+  pipPersonWrote(id: string) {
+    this.workstreams.personWrote(id);
   }
 
   pipDrafted(requestId: string) {

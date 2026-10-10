@@ -32,6 +32,10 @@ dirs = "7.0.0"
 async-trait = "0.1"
 sha2 = "0.10"
 
+[dev-dependencies]
+# A paused clock, for tests of waits measured in minutes.
+tokio = { version = "1.53.1", features = ["test-util"] }
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

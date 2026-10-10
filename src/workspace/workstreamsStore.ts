@@ -2,7 +2,8 @@ import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { stageText } from "../lib/workstreamStage";
-import type { ItemRef, Run, ScreenContext, WorkstreamView } from "../types";
+import { budgetView } from "../lib/workstreamHold";
+import type { AutoStartSwitches, ItemRef, Run, ScreenContext, Workstream, WorkstreamMode, WorkstreamRule, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { PIP_INPUT_ID } from "./draftKeys";
 import { usePrefs } from "./prefs";
@@ -27,6 +28,22 @@ interface WorkstreamsState {
   askClose(id: string | null): void;
   /** Closes workstream `id`; its runs and drafts stay as they are, and its ticket's conversation is General again. False when it couldn't. */
   close(id: string): Promise<boolean>;
+  /** The global auto-start switches, as Settings has them, for what "as in Settings" means; null until read. */
+  globals: AutoStartSwitches | null;
+  /** Reads the global auto-start switches again. */
+  loadGlobals(): Promise<void>;
+  /** The person's Manage switch: in `manage` the supervisor wakes Pip and starts the routine steps. False when it couldn't. */
+  setMode(id: string, mode: WorkstreamMode): Promise<boolean>;
+  /** Holds workstream `id`: no wakes and no automatic steps; its running agents carry on. False when it couldn't. */
+  hold(id: string): Promise<boolean>;
+  /** Lifts workstream `id`'s hold, whatever held it. False when it couldn't. */
+  resume(id: string): Promise<boolean>;
+  /** The workstream's own switch for one automatic step; null follows Settings again. False when it couldn't. */
+  setRule(id: string, rule: WorkstreamRule, on: boolean | null): Promise<boolean>;
+  /** Holds every open workstream and stops Pip's turns in them, and says how many it held. Null when it couldn't. */
+  holdAll(): Promise<number | null>;
+  /** Holds workstream `id` and stops each of its agents that can be stopped. False when it couldn't. */
+  stop(id: string): Promise<boolean>;
 }
 
 let stop: (() => void) | null = null;
@@ -36,75 +53,144 @@ let seq = 0;
 const ofItem = (list: readonly WorkstreamView[], key: string, connectionId?: string) =>
   list.find((v) => v.workstream.itemKey === key && v.workstream.closedAt === null && (!connectionId || v.workstream.connectionId === connectionId)) ?? null;
 
-export const useWorkstreams = create<WorkstreamsState>()((set, get) => ({
-  backend: null,
-  list: [],
-  confirmingClose: null,
+/** "1 workstream", "2 workstreams". */
+const workstreams = (n: number) => `${n} ${n === 1 ? "workstream" : "workstreams"}`;
 
-  init(backend) {
-    get().dispose();
-    set({ backend });
-    const offWorkstreams = backend.onWorkstreamsChanged(() => void get().refresh());
-    // A run that moved on may have moved its workstream's stage on.
-    const offRuns = backend.onRunsChanged(() => void get().refresh());
-    stop = () => (offWorkstreams(), offRuns());
-    void get().refresh();
-  },
-
-  dispose() {
-    stop?.();
-    stop = null;
-    seq++;
-    set({ backend: null, list: [], confirmingClose: null });
-  },
-
-  async refresh() {
-    const { backend } = get();
-    if (!backend) return;
-    const mine = ++seq;
-    const list = await backend.workstreamsList().catch(() => null);
-    if (list && mine === seq && get().backend === backend) set({ list });
-  },
-
-  forItem: (itemKey, connectionId) => ofItem(get().list, itemKey, connectionId),
-
-  async start(item) {
+export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
+  /** Calls the backend for one of the person's controls, then reads the list again; a refusal is told in a toast as `failed`. */
+  async function act<T>(failed: string, call: (backend: Backend) => Promise<T>): Promise<{ ok: true; value: T } | { ok: false }> {
     const backend = get().backend ?? useWorkspace.getState().backend;
     if (!backend) {
       useToasts.getState().push("Not connected yet.");
-      return null;
+      return { ok: false };
     }
     try {
-      const ws = await backend.workstreamsOpen(item);
+      const value = await call(backend);
       if (get().backend === backend) await get().refresh();
-      focusPip();
-      return get().list.find((v) => v.workstream.id === ws.id) ?? { workstream: ws, stage: "intake", runs: [], labels: [] };
+      return { ok: true, value };
     } catch (e) {
-      useToasts.getState().push(`Couldn't start a workstream on ${item.key}. ${messageOf(e)}`);
-      return null;
+      useToasts.getState().push(`${failed}. ${messageOf(e)}`);
+      return { ok: false };
     }
-  },
+  }
+  const ok = async (failed: string, call: (backend: Backend) => Promise<Workstream>) => (await act(failed, call)).ok;
 
-  askClose: (confirmingClose) => set({ confirmingClose }),
+  return {
+    backend: null,
+    list: [],
+    confirmingClose: null,
+    globals: null,
 
-  async close(id) {
-    set({ confirmingClose: null });
-    const backend = get().backend ?? useWorkspace.getState().backend;
-    if (!backend) {
-      useToasts.getState().push("Not connected yet.");
-      return false;
-    }
-    try {
-      const ws = await backend.workstreamsClose(id);
-      if (get().backend === backend) await get().refresh();
-      useToasts.getState().push(`Closed the workstream on ${ws.itemKey ?? ws.title}. Its agents and drafts are kept.`, "info");
+    init(backend) {
+      get().dispose();
+      set({ backend });
+      const offWorkstreams = backend.onWorkstreamsChanged(() => void get().refresh());
+      // A run that moved on may have moved its workstream's stage on.
+      const offRuns = backend.onRunsChanged(() => void get().refresh());
+      stop = () => (offWorkstreams(), offRuns());
+      void get().refresh();
+    },
+
+    dispose() {
+      stop?.();
+      stop = null;
+      seq++;
+      set({ backend: null, list: [], confirmingClose: null, globals: null });
+    },
+
+    async refresh() {
+      const { backend } = get();
+      if (!backend) return;
+      const mine = ++seq;
+      const list = await backend.workstreamsList().catch(() => null);
+      if (list && mine === seq && get().backend === backend) set({ list });
+    },
+
+    forItem: (itemKey, connectionId) => ofItem(get().list, itemKey, connectionId),
+
+    async start(item) {
+      const backend = get().backend ?? useWorkspace.getState().backend;
+      if (!backend) {
+        useToasts.getState().push("Not connected yet.");
+        return null;
+      }
+      try {
+        const ws = await backend.workstreamsOpen(item);
+        if (get().backend === backend) await get().refresh();
+        focusPip();
+        return get().list.find((v) => v.workstream.id === ws.id) ?? { workstream: ws, stage: "intake", runs: [], labels: [], budget: budgetView(ws) };
+      } catch (e) {
+        useToasts.getState().push(`Couldn't start a workstream on ${item.key}. ${messageOf(e)}`);
+        return null;
+      }
+    },
+
+    askClose: (confirmingClose) => set({ confirmingClose }),
+
+    async close(id) {
+      set({ confirmingClose: null });
+      const backend = get().backend ?? useWorkspace.getState().backend;
+      if (!backend) {
+        useToasts.getState().push("Not connected yet.");
+        return false;
+      }
+      try {
+        const ws = await backend.workstreamsClose(id);
+        if (get().backend === backend) await get().refresh();
+        useToasts.getState().push(`Closed the workstream on ${ws.itemKey ?? ws.title}. Its agents and drafts are kept.`, "info");
+        return true;
+      } catch (e) {
+        useToasts.getState().push(`Couldn't close the workstream. ${messageOf(e)}`);
+        return false;
+      }
+    },
+
+    async loadGlobals() {
+      const backend = get().backend ?? useWorkspace.getState().backend;
+      const settings = await backend?.runsSettings().catch(() => null);
+      if (settings && (get().backend ?? useWorkspace.getState().backend) === backend) set({ globals: settings.autostart });
+    },
+
+    setMode: (id, mode) => ok(mode === "manage" ? "Couldn't let Pip manage the workstream" : "Couldn't stop Pip managing the workstream", (b) => b.workstreamsSetMode(id, mode)),
+
+    hold: (id) => ok("Couldn't hold the workstream", (b) => b.workstreamsHold(id)),
+
+    resume: (id) => ok("Couldn't resume the workstream", (b) => b.workstreamsResume(id)),
+
+    setRule: (id, rule, on) => ok("Couldn't change the automatic step", (b) => b.workstreamsSetRule(id, rule, on)),
+
+    async holdAll() {
+      const done = await act("Couldn't hold the workstreams", (b) => b.workstreamsHoldAll());
+      if (!done.ok) return null;
+      const n = done.value.length;
+      const open = get().list.length;
+      const said = n ? `Held ${workstreams(n)}. ${n === 1 ? "Its" : "Their"} agents carry on; nothing starts on its own until you resume.` : open ? "Every open workstream is held already." : "There are no open workstreams to hold.";
+      useToasts.getState().push(said, "info");
+      return n;
+    },
+
+    async stop(id) {
+      const done = await act("Couldn't stop the workstream", (b) => b.workstreamsStop(id));
+      if (!done.ok) return false;
+      const { stopped, failed } = done.value;
+      const agents = (n: number) => `${n} ${n === 1 ? "agent" : "agents"}`;
+      useToasts.getState().push(
+        `Held the workstream${stopped ? ` and stopped ${agents(stopped)}` : ""}.${failed ? ` ${agents(failed)} couldn't be stopped; see the Agents view.` : ""}`,
+        failed ? "error" : "info",
+      );
       return true;
-    } catch (e) {
-      useToasts.getState().push(`Couldn't close the workstream. ${messageOf(e)}`);
-      return false;
-    }
-  },
-}));
+    },
+  };
+});
+
+/**
+ * Whether the rail offers Hold all: while any open workstream is in Manage and not held, or Pip is answering in a
+ * workstream's conversation (`conversations`, by conversation, as claudeStore keeps them).
+ */
+export function holdAllVisible(list: readonly WorkstreamView[], conversations: Readonly<Record<string, { turns: readonly { status: string }[] } | undefined>>): boolean {
+  if (list.some((v) => v.workstream.closedAt === null && v.workstream.mode === "manage" && v.workstream.heldReason === null)) return true;
+  return Object.entries(conversations).some(([c, conv]) => workstreamOfConversation(c) !== null && !!conv?.turns.some((t) => t.status === "running"));
+}
 
 /** Opens the Pip pane, or keeps it open, and puts the cursor in its composer. */
 export function focusPip() {

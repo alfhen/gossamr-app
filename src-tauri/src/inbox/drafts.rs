@@ -643,6 +643,13 @@ impl Core {
                 Some(item) => self.after_write(&scope, &item.key).await,
                 None => self.wake.notify_one(),
             }
+            // What the person just wrote is the workstream's basis now, so the supervisor doesn't take the approved write
+            // for drift; the fields it didn't write are still compared.
+            if let Some(ws) = done.workstream().filter(|_| done.state == ProposalState::Applied) {
+                if let Err(e) = self.capture_workstream_basis(&scope, ws, true).await {
+                    eprintln!("couldn't take the basis of workstream {ws} again: {e}");
+                }
+            }
         }
         // The write went through; a failure to re-judge the other drafts must not read as a failed approval.
         let _ = self.reconcile_proposals(&scope).await;

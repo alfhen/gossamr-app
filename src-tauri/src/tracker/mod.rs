@@ -303,6 +303,8 @@ pub(crate) mod testing {
         pub live: Mutex<Option<WorkItem>>,
         /// Makes the tracker say it can't edit text.
         pub cannot_edit_text: std::sync::atomic::AtomicBool,
+        /// Makes an applied description rewrite or transition change `live`, as Jira would.
+        pub writes_live: std::sync::atomic::AtomicBool,
     }
 
     impl Recorder {
@@ -375,6 +377,15 @@ pub(crate) mod testing {
         }
         async fn apply_with_files(&self, intent: &Intent, _: &[Uploaded]) -> Result<Applied> {
             self.applied.lock().unwrap().push(intent.clone());
+            if self.writes_live.load(std::sync::atomic::Ordering::SeqCst) {
+                if let Some(live) = self.live.lock().unwrap().as_mut() {
+                    match intent {
+                        Intent::Rewrite { body: Some(change), .. } => live.body = change.to.clone(),
+                        Intent::Transition { to, .. } => live.status.id = to.clone(),
+                        _ => {}
+                    }
+                }
+            }
             self.script.lock().unwrap().pop_front().unwrap_or_else(|| Ok(Applied::default()))
         }
         async fn attach(&self, _: &ItemRef, _: &str, _: &str, _: Vec<u8>) -> Result<Uploaded> {

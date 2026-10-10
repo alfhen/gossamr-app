@@ -83,7 +83,10 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
   const cutOff = (t: MockTurn): MockTurn =>
     !restart && t.ask ? { ...t, status: "queued", text: "", steps: [] } : { ...t, status: "failed", error: t.status === "queued" ? NEVER_RAN : INTERRUPTED, ask: undefined };
   // Turns kept under General's old name are General's, as the app's schema moves them once.
-  const adopt = (t: MockTurn): MockTurn => (conversationId(t.conversation) === t.conversation ? t : { ...t, conversation: conversationId(t.conversation) });
+  const adopt = (t: MockTurn): MockTurn => {
+    const kept: MockTurn = t.kind === "wake" ? t : { ...t, kind: "user" };
+    return conversationId(t.conversation) === t.conversation ? kept : { ...kept, conversation: conversationId(t.conversation) };
+  };
   all = (Array.isArray(stored) ? stored.filter(isTurn) : []).filter((t) => t.createdAt >= horizon).map((t) => adopt(going(t) ? cutOff(t) : t));
   let resumable = all.filter((t) => going(t) && t.ask).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   if (stored !== null) save();
@@ -119,7 +122,8 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
       return out;
     },
 
-    begin(conversation: string, requestId: string, prompt: string, meta: TurnMeta, status: "queued" | "running" = "running", at = new Date(), ask?: Resumable) {
+    /** Keeps a new turn; `kind` is `wake` for one the supervisor started, whose prompt is its event lines. */
+    begin(conversation: string, requestId: string, prompt: string, meta: TurnMeta, status: "queued" | "running" = "running", at = new Date(), ask?: Resumable, kind: "user" | "wake" = "user") {
       if (all.some((t) => t.requestId === requestId)) return;
       all = [
         ...all,
@@ -137,11 +141,17 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
           sessionId: null,
           usage: null,
           createdAt: at.toISOString(),
+          kind,
           ...(ask ? { ask } : {}),
         },
       ];
       live.set(requestId, { text: "", steps: [] });
       save();
+    },
+
+    /** A waiting wake's event lines once more wakes were merged into it. */
+    setPrompt(requestId: string, prompt: string) {
+      update(requestId, (t) => ({ ...t, prompt }));
     },
 
     setStatus(requestId: string, status: StoredTurn["status"]) {
@@ -177,7 +187,15 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
 
 export type MockPipTurns = ReturnType<typeof openMockPipTurns>;
 
-export const mockPipTurns: MockPipTurns = openMockPipTurns();
+let fresh: boolean | null = null;
+
+/** `freshStart`, asked once per page: everything the sample backend opens on this page agrees on whether it restarted. */
+export function startedFresh(): boolean {
+  fresh ??= freshStart();
+  return fresh;
+}
+
+export const mockPipTurns: MockPipTurns = openMockPipTurns(Date.now(), startedFresh());
 
 /** A made-up but steady usage for a scripted turn: tokens follow the prompt and answer lengths. */
 export function mockUsage(prompt: string, text: string): TurnUsage {

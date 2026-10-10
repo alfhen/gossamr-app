@@ -9,6 +9,7 @@ import { PipResizer } from "./PaneResizers";
 import { PipAvatar } from "./PipAvatar";
 import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, PipConversation, useAnswering, workstreamConversation } from "./PipConversation";
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
+import { popoverOpen } from "./Popover";
 import { chipCount, currentContext, unassignedIn, useItemScene, useScreen } from "./pipHooks";
 import { usePip } from "./pipStore";
 import { usePrefs } from "./prefs";
@@ -23,6 +24,7 @@ import { useClaude } from "../claudeStore";
 import { inWorkstreamPane } from "../lib/proposals";
 import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
 import { stageText } from "../lib/workstreamStage";
+import { WorkstreamControls } from "./WorkstreamControls";
 
 export { AppliedCard, GENERAL_CONVERSATION, PIP_INPUT_ID, workstreamConversation } from "./PipConversation";
 
@@ -66,7 +68,7 @@ export function SeeingPanel({ lines, following, onFollow }: { lines: string[]; f
   );
 }
 
-/** Esc closes the pane unless something else should take it: a peek sheet or ticked cards to dismiss first, or a field being edited other than Pip's own. */
+/** Esc closes the pane unless something else should take it: an open popover or menu, a peek sheet or ticked cards to dismiss first, or a field being edited other than Pip's own. */
 export function escapeClosesPane(s: { peekOpen: boolean; ticked: boolean; editing: boolean; inPipInput: boolean; handled: boolean }): boolean {
   if (s.handled || s.peekOpen || s.ticked) return false;
   return !s.editing || s.inPipInput;
@@ -84,7 +86,8 @@ function usePaneEscape(onClose: () => void) {
         ticked: tabs.marked.length > 0,
         editing: editable,
         inPipInput: field?.id === PIP_INPUT_ID,
-        handled: ev.defaultPrevented || usePrefs.getState().paletteOpen || lightboxOpen(),
+        // A confirmation or popover that takes Esc itself (`data-esc-local`) closes, not the pane.
+        handled: ev.defaultPrevented || usePrefs.getState().paletteOpen || lightboxOpen() || popoverOpen() || (field instanceof HTMLElement && !!field.closest("[data-esc-local]")),
       });
       if (!close) return;
       ev.preventDefault();
@@ -195,6 +198,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
             <span className="truncate">{conversationTitle(null)}</span>
           )}
         </p>
+        {workstream && <WorkstreamControls key={workstream.workstream.id} view={workstream} />}
         <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
         {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
       </header>

@@ -43,7 +43,7 @@ fn the_tool_and_what_it_asks_for_are_pinned_so_a_change_must_bump_the_version() 
         all.push(prompt[prompt.find("If the run-report tool").unwrap()..].to_string());
     }
     let hash: String = Sha256::digest(all.join("\n").as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!((REPORT_TOOL_VERSION, hash.as_str()), (2, "5f242e5d6a54aa265b7f1ba7b644a7b8b571e3a28fbe4647f35acd74411feb4a"), "the tool, its guard or the report paragraph changed: bump REPORT_TOOL_VERSION and pin the new hash");
+    assert_eq!((REPORT_TOOL_VERSION, hash.as_str()), (3, "9f11e8b2872d77058ddd92dcbf93d7b7930455979bd331017affc478ecf0221b"), "the tool, its guard or the report paragraph changed: bump REPORT_TOOL_VERSION and pin the new hash");
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn the_published_schema_names_every_field_and_allows_nothing_else() {
     assert_eq!(schema["additionalProperties"], false);
     let mut fields: Vec<&str> = schema["properties"].as_object().unwrap().keys().map(String::as_str).collect();
     fields.sort_unstable();
-    assert_eq!(fields, ["findings", "newTicket", "note", "plan", "revise", "status", "subtasks", "verdict"]);
+    assert_eq!(fields, ["findings", "newTicket", "note", "plan", "planRecommended", "revise", "status", "subtasks", "verdict"]);
     assert_eq!(schema["properties"]["verdict"]["enum"], json!(["pass", "blocking"]));
     assert_eq!(schema["properties"]["findings"]["items"]["properties"]["severity"]["enum"], json!(["blocking", "should-fix", "nit"]));
     assert_eq!(schema["properties"]["findings"]["items"]["additionalProperties"], false);
@@ -127,6 +127,31 @@ fn a_triage_may_give_one_to_eight_subtasks_and_the_rest_is_repaired() {
     assert_eq!(encoded.report.subtasks, ["X", "Y"]);
     let ignored = accepted(json!({ "status": "done", "note": "n", "subtasks": ["a"] }), ticket_run());
     assert!(ignored.report.subtasks.is_empty() && ignored.notes[0].starts_with("subtasks ignored"));
+}
+
+#[test]
+fn a_triage_may_say_whether_it_recommends_a_plan_as_a_flag_only() {
+    assert_eq!(accepted(json!({ "status": "done", "note": "n", "planRecommended": true }), triage()).report.plan_recommended, Some(true));
+    assert_eq!(accepted(json!({ "status": "done", "note": "n", "planRecommended": false }), triage()).report.plan_recommended, Some(false));
+    assert_eq!(accepted(json!({ "status": "done", "note": "n" }), triage()).report.plan_recommended, None);
+    assert_eq!(refused(json!({ "status": "done", "note": "n", "planRecommended": "yes" }), triage()), ["planRecommended: must be true or false."]);
+    let ignored = accepted(json!({ "status": "done", "note": "n", "planRecommended": true }), plan());
+    assert!(ignored.report.plan_recommended.is_none() && ignored.notes[0].starts_with("planRecommended ignored"));
+}
+
+#[test]
+fn a_triage_s_plan_recommendation_comes_from_its_report_flag_else_its_unquoted_written_lines() {
+    let written = "Small.\n\nFor Jira:\nPlan recommended: yes, two callers.";
+    let quoted = "Small.\n\nFor Jira:\nThe ticket says:\n> Plan recommended: yes";
+    let triage_run = |text: &str, complete: bool| Run { spec: RunSpec { kind: RunKind::Triage, ..run_spec() }, ..finished(Some(text), complete) };
+    assert_eq!(resolve(&triage_run(written, true), None).plan_recommended, Some(true));
+    assert_eq!(resolve(&triage_run(quoted, true), None).plan_recommended, None);
+    assert_eq!(resolve(&triage_run(written, false), None).plan_recommended, None, "never from a summary");
+    let flagged = Report { plan_recommended: Some(false), ..report("n") };
+    assert_eq!(resolve(&triage_run(written, true), Some(&stored(Some(flagged), false))).plan_recommended, Some(false), "the flag wins");
+    assert_eq!(resolve(&triage_run(written, true), Some(&stored(Some(report("n")), false))).plan_recommended, Some(true), "a report without the flag leaves the written line");
+    let review = Run { spec: RunSpec { kind: RunKind::Review, ..run_spec() }, ..finished(Some(written), true) };
+    assert_eq!(resolve(&review, None).plan_recommended, None, "only a triage");
 }
 
 #[test]
@@ -280,7 +305,7 @@ fn stored(report: Option<Report>, stale: bool) -> StoredReport {
 }
 
 fn report(note: &str) -> Report {
-    Report { status: ReportStatus::Done, note: Some(note.into()), new_ticket: None, subtasks: vec![], plan: None, verdict: None, findings: vec![] }
+    Report { status: ReportStatus::Done, note: Some(note.into()), new_ticket: None, subtasks: vec![], plan: None, plan_recommended: None, verdict: None, findings: vec![] }
 }
 
 fn finished(result: Option<&str>, complete: bool) -> Run {
@@ -331,7 +356,7 @@ fn a_triage_takes_subtasks_from_the_report_and_a_ticketless_run_its_ticket() {
 
     let ticketless_run = Run { item: None, spec: RunSpec { project: Some(crate::domain::ContainerRef { connection_id: "c".into(), external_id: "p".into() }), ..run_spec() }, ..finished(None, false) };
     let proposal = crate::runs::result::TicketProposal { title: "T".into(), kind: ItemKind::Bug, body: "B".into() };
-    let r = resolve(&ticketless_run, Some(&stored(Some(Report { status: ReportStatus::Done, note: None, new_ticket: Some(proposal.clone()), subtasks: vec![], plan: None, verdict: None, findings: vec![] }), false)));
+    let r = resolve(&ticketless_run, Some(&stored(Some(Report { status: ReportStatus::Done, note: None, new_ticket: Some(proposal.clone()), subtasks: vec![], plan: None, plan_recommended: None, verdict: None, findings: vec![] }), false)));
     assert_eq!((r.ticket, r.note), (Some(proposal), None));
 }
 

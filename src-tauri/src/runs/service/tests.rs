@@ -1091,3 +1091,92 @@ async fn the_launch_still_refuses_a_path_that_is_not_a_clone_of_the_repository()
     assert_eq!(rig.get(&run).await.state, RunState::Failed);
     assert_eq!(rig.cli.launches(), 0);
 }
+
+mod waiting {
+    use super::*;
+    use crate::domain::workstream::HELD_PERSON;
+    use crate::domain::Actor;
+
+    impl Rig {
+        /// Approved into workstream `ws` on `key`, and left queued.
+        async fn queued_in(&self, n: u32, key: &str, ws: &str) -> Run {
+            let spec = RunSpec { workstream: Some(ws.into()), ..self.spec(n) };
+            let p = self.fx.core.draft_run(spec, Some(self.fx.item(key))).await.unwrap();
+            let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
+            self.fx.core.runs_approve(&p.id, &digest).await.unwrap()
+        }
+
+        async fn open_on(&self, key: &str) -> String {
+            self.fx.core.open_workstream(&self.fx.scope, Some(self.fx.item(key)), None).await.unwrap().id
+        }
+
+        /// The run is over, so its slot is free.
+        async fn finish(&self, run: &Run) {
+            let mut done = self.get(run).await;
+            done.state = RunState::Done;
+            self.fx.core.save_run(&done).await.unwrap();
+            self.svc.index.mark_terminal(&run.id).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn waiting_runs_start_oldest_first_up_to_the_cap_and_the_rest_wait_without_failing() {
+        let rig = build(None, |s| s.with_cap(1)).await;
+        rig.fx.add_item(2).await;
+        let (a, b) = (rig.open_on("CA-1").await, rig.open_on("CA-2").await);
+        let first = rig.queued_in(1, "CA-1", &a).await;
+        let second = rig.queued_in(2, "CA-1", &a).await;
+        let held = rig.queued_in(3, "CA-2", &b).await;
+        let loose = rig.queued(4).await;
+        rig.fx.core.hold_workstream(&rig.fx.scope, &b, HELD_PERSON, Actor::Person).await.unwrap();
+
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&first.id));
+        assert_eq!(rig.get(&first).await.state, RunState::Launching);
+        for waiting in [&second, &held, &loose] {
+            assert_eq!(rig.get(waiting).await.state, RunState::Queued, "over the cap, held or in no workstream: still queued");
+        }
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "the cap is still full");
+        assert_eq!(rig.get(&second).await.state, RunState::Queued, "never failed for the cap");
+
+        rig.finish(&first).await;
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&second.id));
+        rig.finish(&second).await;
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "a held workstream's run is skipped");
+        rig.fx.core.resume_workstream(&rig.fx.scope, &b).await.unwrap();
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&held.id));
+        assert_eq!(rig.get(&loose).await.state, RunState::Queued, "a run in no workstream is the person's to start");
+        assert_eq!(rig.cli.launches(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_closed_workstream_s_run_and_one_a_rule_started_in_an_advised_workstream_or_with_its_rule_off_wait() {
+        use crate::domain::workstream::{Mode, Rule};
+        let rig = ready().await;
+        rig.fx.add_item(2).await;
+        let (closed, managed) = (rig.open_on("CA-1").await, rig.open_on("CA-2").await);
+        let in_closed = rig.queued_in(1, "CA-1", &closed).await;
+        rig.fx.core.close_workstream(&rig.fx.scope, &closed).await.unwrap();
+        let (core, scope) = (&rig.fx.core, &rig.fx.scope);
+        core.set_workstream_mode(scope, &managed, Mode::Manage, Actor::Person).await.unwrap();
+        let auto = rig.queued_in(2, "CA-2", &managed).await;
+        let auto = rig.set(&auto, |r| r.auto_start = Some(crate::domain::AutoStarted { rule: Rule::InvestigateTriage, after_run: "r0".into() })).await;
+        core.set_workstream_mode(scope, &managed, Mode::Advise, Actor::Person).await.unwrap();
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "closed, and advised");
+        core.set_workstream_mode(scope, &managed, Mode::Manage, Actor::Person).await.unwrap();
+        core.set_workstream_rule(scope, &managed, Rule::InvestigateTriage, Some(false)).await.unwrap();
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "its rule is off");
+        core.set_workstream_rule(scope, &managed, Rule::InvestigateTriage, None).await.unwrap();
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&auto.id));
+        assert_eq!(rig.get(&in_closed).await.state, RunState::Queued);
+    }
+
+    #[tokio::test]
+    async fn nothing_waits_on_while_agents_are_off() {
+        let rig = ready().await;
+        let ws = rig.open_on("CA-1").await;
+        let run = rig.queued_in(1, "CA-1", &ws).await;
+        rig.svc.set_flag(false);
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty());
+        assert_eq!(rig.get(&run).await.state, RunState::Queued);
+    }
+}

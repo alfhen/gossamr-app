@@ -3,13 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { agentSummary, mockAsk, mockPipEvents, scriptPip } from "../backend/mockPip";
 import type { AskRequest, ClaudeEvent } from "../backend/claude";
-import type { Run, RunState, ScreenContext } from "../types";
+import type { Run, RunState, ScreenContext, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { NUDGE_GAP_MS, nudgeCandidates, pickNudge, type NudgeScene } from "./nudges";
 import { NO_FILTERS } from "./agentsLogic";
 import { useAgentsFlag } from "./agentsFlag";
 import { PipRunCard, PipRunStripView } from "./PipRunCard";
-import { STRIP_SHOWN, describeRun, runNudgeId, runNudges, runStatesNow, runSummaryPrompt, stripRuns } from "./pipRuns";
+import { STRIP_SHOWN, describeRun, nudgedOutside, runNudgeId, runNudges, runStatesNow, runSummaryPrompt, stripRuns } from "./pipRuns";
 import { buildScreenContext, contextLines, type Screen } from "./screenContext";
 import { loadTabs, activeTab, useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
@@ -32,6 +32,14 @@ beforeEach(() => {
 });
 
 describe("run nudges", () => {
+  it("leaves out the runs of a workstream Pip manages, whose wake turns tell the person", () => {
+    const view = (id: string, mode: "advise" | "manage") => ({ workstream: { id, mode } }) as WorkstreamView;
+    const runs = [run("done", { id: "managed", spec: { ...base.spec, workstream: "ws-m" } }), run("failed", { id: "advised", spec: { ...base.spec, workstream: "ws-a" } }), run("needsAnswer", { id: "loose" })];
+    const ids = runNudges(runs, new Set(), () => null, nudgedOutside([view("ws-m", "manage"), view("ws-a", "advise")])).map((n) => n.id);
+    expect(ids.sort()).toEqual(["run:advised:failed", "run:loose:needsAnswer"]);
+    expect(runNudges(runs, new Set())).toHaveLength(3);
+  });
+
   it("speak up for a run that needs the person, finished or failed, and for nothing else", () => {
     const states: RunState[] = ["queued", "launching", "working", "stopped", "unknown"];
     expect(runNudges(states.map((s) => run(s)), new Set())).toEqual([]);
@@ -213,5 +221,22 @@ describe("the sample Pip and agents", () => {
     expect(draft.intent.spec.focus).toBe("the retry loop");
     expect(draft.intent.spec.kind).toBe("investigate");
     expect(backend.runs.list().length).toBe(before);
+  });
+});
+
+describe("a run a rule started", () => {
+  it("says on its card which run it started automatically after, by the workstream's label, else its id", () => {
+    const first = run("done", { id: "run-1", queuedAt: iso(30), spec: { ...base.spec, workstream: "ws-1" } });
+    const auto = run("queued", { id: "run-2", queuedAt: iso(20), spec: { ...base.spec, workstream: "ws-1" }, autoStart: { rule: "investigate_triage", afterRun: "run-1" } });
+    useRuns.getInitialState().runs = [first, auto];
+    const card = renderToStaticMarkup(<PipRunCard run={auto} now={NOW} ticketTitle={null} onOpen={() => {}} />);
+    useRuns.getInitialState().runs = [];
+    expect(card).toContain("Queued automatically after R1");
+    const launched = renderToStaticMarkup(<PipRunCard run={{ ...auto, state: "working" }} now={NOW} ticketTitle={null} onOpen={() => {}} />);
+    expect(launched).toContain("Started automatically after");
+    expect(card).toContain('data-auto-start="investigate_triage"');
+    const alone = renderToStaticMarkup(<PipRunCard run={{ ...auto, autoStart: { rule: "build_review", afterRun: "3f9a12bc-0000-4000-8000-000000000000" } }} now={NOW} ticketTitle={null} onOpen={() => {}} />);
+    expect(alone).toContain("Queued automatically after 3f9a12bc");
+    expect(renderToStaticMarkup(<PipRunCard run={first} now={NOW} ticketTitle={null} onOpen={() => {}} />)).not.toMatch(/(Started|Queued) automatically/);
   });
 });

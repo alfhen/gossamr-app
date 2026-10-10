@@ -3,12 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { useClaude, type Turn } from "../claudeStore";
 import { docFromText } from "../lib/docs";
-import type { Intent, Proposal, RunSpec } from "../types";
+import type { Intent, Proposal, RunSpec, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { Composer, GENERAL_CONVERSATION, PipConversation, VerbNote, composerVerb, inputAfterCommand, workstreamConversation } from "./PipConversation";
+import { Composer, GENERAL_CONVERSATION, PipConversation, VerbNote, composerVerb, inputAfterCommand, wakeHeader, workstreamConversation } from "./PipConversation";
 import { useRuns } from "./runsStore";
+import { useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
 import { MockBackend } from "../backend/mock";
 import { GENERAL_CONVERSATION as FROM_PANE, PIP_INPUT_ID } from "./PipPane";
@@ -84,6 +85,29 @@ describe("PipConversation", () => {
     expect(ws).not.toContain("A General question");
   });
 
+  it("shows a wake turn under a muted line naming the run that woke Pip, with no question bubble", () => {
+    const runs = new MockBackend({ runs: { seed: "busy" } }).runs.list();
+    const [a, b] = runs.slice(0, 2).map((r, i) => ({ ...r, id: `run-${i + 1}`, queuedAt: `2026-09-30T1${i}:00:00Z`, spec: { ...r.spec, workstream: "ws-1" } }));
+    useRuns.setState({ runs: [a, b] });
+    useRuns.getInitialState().runs = [a, b];
+    const wake: Turn = { requestId: "wake-1", kind: "wake", prompt: `[Event] run ${b.id} (triage) Done; plan recommended: yes`, steps: [], text: "R2 finished. Plan R3 is queued to start automatically.", status: "done", error: null };
+    setTurns({ [workstreamConversation("ws-1")]: { sessionId: "s1", turns: [turn("q1", "Investigate it", "Drafted."), wake] } });
+    const html = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-1")} proposals={[]} />);
+    useRuns.getInitialState().runs = [];
+    expect(html.match(/data-turn-kind="wake"/g)).toHaveLength(1);
+    expect(html).toContain("Pip picked this up: run R2 finished");
+    expect(html).toContain("Plan R3 is queued to start automatically.");
+    expect(html).not.toContain("[Event]");
+    expect(html.match(/bg-ws-accent px-3/g)).toHaveLength(1);
+  });
+
+  it("names a wake's run by its short id outside a workstream's labels, and says how many more woke it", () => {
+    expect(wakeHeader("[Event] run 3f9a12bc-77 (build) Failed", new Map())).toBe("Pip picked this up: run 3f9a12bc-77 failed");
+    expect(wakeHeader("[Event] a run (investigate) Done\n[Event] run r2 (review) Done; verdict: blocking", new Map([["r2", "R2"]]))).toBe("Pip picked this up: a run finished and 1 more");
+    expect(wakeHeader("[Event] run r2 (review) Needs an answer", new Map([["r2", "R2"]]))).toBe("Pip picked this up: run R2 needs you");
+    expect(wakeHeader("", new Map())).toBe("Pip picked this up");
+  });
+
   it("renders its turns, the drafts they made and drafts from before, on its own", () => {
     setTurns({ [GENERAL_CONVERSATION]: { sessionId: "s1", turns: [turn("r1", "Draft a comment on CA-412", "I drafted a short comment.")] } });
     const proposals = [comment("p-old", null), comment("p-new", "r1")];
@@ -125,6 +149,31 @@ describe("PipConversation", () => {
     const general = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
     expect(general).toContain("I follow along as you move around");
     expect(general).not.toContain("data-empty-workstream");
+  });
+
+  it("says in a managed workstream's empty conversation that routine steps start on their own and Jira still waits", () => {
+    setTurns({});
+    const before = useWorkstreams.getInitialState().list;
+    const ws = (mode: "advise" | "manage"): WorkstreamView => ({
+      workstream: { id: "ws-405", connectionId: "mock", itemKey: "CA-405", repo: null, title: "CA-405", pipSession: null, mode, heldReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null },
+      stage: "intake",
+      runs: [],
+      labels: [],
+      budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
+    });
+    const intro = (mode: "advise" | "manage") => {
+      // Rendered on the server, a store is read through its initial state.
+      useWorkstreams.getInitialState().list = [ws(mode)];
+      return renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-405")} proposals={[]} />);
+    };
+    try {
+      expect(intro("advise")).toContain("Nothing changes until you approve.");
+      const managed = intro("manage");
+      expect(managed).toContain("the routine next steps start on their own by fixed rules (see Automatic steps), I start nothing myself, and every change to Jira still waits for you.");
+      expect(managed).not.toContain("Nothing changes until you approve.");
+    } finally {
+      useWorkstreams.getInitialState().list = before;
+    }
   });
 
   describe("commands in the composer", () => {

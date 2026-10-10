@@ -83,3 +83,96 @@ export async function surfacePullRequests(page: Page) {
     return mock.surfacePullRequests();
   });
 }
+
+/** What the sample backend's handle offers the tests (MockHandle in src/backend/mockWatch.ts). */
+type Script = { planRecommended?: boolean; verdict?: "pass" | "blocking"; marker?: boolean };
+interface Handle {
+  runs(): { id: string; kind: string; state: string }[];
+  workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
+  scriptNext(kind: string, script: Script): void;
+  jiraWrites(): { proposalId: string; type: string; key: string | null }[];
+  setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
+  holdPip(on: boolean): void;
+}
+type Mocked = { __gossamrMock?: Handle };
+const NO_MOCK = "the sample backend isn't there; is this a dev build in mock mode?";
+
+/** Every run the sample backend holds, newest first. */
+export const mockRuns = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.runs();
+  }, NO_MOCK);
+
+/** The audit of every workstream, oldest first within each. */
+export const workstreamEvents = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.workstreamEvents();
+  }, NO_MOCK);
+
+/** The next run of `kind` to finish writes what `script` says: a triage's plan recommendation, a review's verdict, a data marker. */
+export const scriptNextRun = (page: Page, kind: string, script: Script) =>
+  page.evaluate(
+    ({ kind, script, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.scriptNext(kind, script);
+    },
+    { kind, script, missing: NO_MOCK },
+  );
+
+/** Every write the sample tracker made, with the draft the person approved for it. */
+export const jiraWrites = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.jiraWrites();
+  }, NO_MOCK);
+
+/** Sets workstream `id`'s own limits for automatic turns and wakes. */
+export const setBudget = (page: Page, id: string, budget: { autoTurns?: number | null; wakes?: number | null }) =>
+  page.evaluate(
+    ({ id, budget, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.setBudget(id, budget);
+    },
+    { id, budget, missing: NO_MOCK },
+  );
+
+/** Makes the scripted Pip wait, still answering, after it starts each turn (`on`), or lets it go on: a turn to act on while it runs. */
+export const holdPip = (page: Page, on: boolean) =>
+  page.evaluate(
+    ({ on, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.holdPip(on);
+    },
+    { on, missing: NO_MOCK },
+  );
+
+/** The Manage switch of the workstream the Pip pane shows. */
+export const manageSwitch = (page: Page) => pipPane(page).getByRole("switch", { name: "Manage this workstream" });
+
+/** Turns Manage on (or off) for the workstream the Pip pane shows, as the person does with its switch. */
+export async function setManage(page: Page, on = true) {
+  const control = manageSwitch(page);
+  if ((await control.getAttribute("aria-checked")) !== String(on)) await control.click();
+  await expect(control).toHaveAttribute("aria-checked", String(on));
+}
+
+/** Pip's wake turns in the pane, the ones nobody asked; `wakeTurns` counts them. */
+export const wakes = (page: Page) => pipPane(page).locator('[data-turn-kind="wake"]');
+export const wakeTurns = (page: Page) => wakes(page).count();
+
+/** The banner saying why the pane's workstream is held, with its Resume. */
+export const heldBanner = (page: Page) => pipPane(page).locator("[data-held-banner]");
+
+/** Presses Hold all: the rail's button, or Cmd/Ctrl+Shift+Period. */
+export async function holdAll(page: Page, by: "button" | "shortcut" = "button") {
+  if (by === "button") await page.getByRole("button", { name: "Hold all workstreams" }).click();
+  else await page.keyboard.press("ControlOrMeta+Shift+Period");
+}

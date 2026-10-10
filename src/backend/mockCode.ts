@@ -220,7 +220,13 @@ export class MockCode {
 
   /** A draft pull request an agent's build opened, as a sync finds it: linked to the tickets it names by its branch. */
   addPullRequest(change: CodeChange) {
-    if (this.changes.some((c) => c.externalId === change.externalId)) return;
+    // One already shown moved on, to a new head commit: a sync finds it as it is now.
+    const at = this.changes.findIndex((c) => c.externalId === change.externalId);
+    if (at >= 0) {
+      this.changes[at] = { ...change, connectionId: this.connectionId };
+      this.listeners.forEach((l) => l({ connectionId: this.connectionId }));
+      return;
+    }
     this.changes.push({ ...change, connectionId: this.connectionId });
     for (const key of change.linkedKeys) this.links.push([key, change.externalId, "branch"]);
     this.listeners.forEach((l) => l({ connectionId: this.connectionId }));
