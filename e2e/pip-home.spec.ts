@@ -14,6 +14,7 @@ import {
   needsYouTray,
   openApp,
   openPipHome,
+  peekTicket,
   peekSheet,
   PIP_INPUT,
   pipHome,
@@ -57,6 +58,31 @@ test("Cmd/Ctrl+0 opens Pip home on General, and Pip answers there while its filt
   await page.keyboard.press("Enter");
   await expect(pipHome(page)).toHaveCount(0);
   await expect(page.getByText("Pip filtered this view")).toBeVisible();
+});
+
+test("Cmd/Ctrl+0 stays put while the person types a comment in the peek or has the palette open", async ({ page }) => {
+  await openApp(page, "runs=empty");
+  await agentsSettled(page, true);
+  await peekTicket(page, "CA-401");
+  const comment = peekSheet(page).locator("#peek-composer");
+  await comment.fill("Half a thought");
+  await comment.press("ControlOrMeta+0");
+  // Typing: the route, the peek and the unsaved comment all stay.
+  await expect(pipHome(page)).toHaveCount(0);
+  await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
+  await expect(comment).toHaveValue("Half a thought");
+
+  await comment.blur();
+  await page.keyboard.press("ControlOrMeta+k");
+  const palette = page.getByRole("combobox", { name: "Search commands and tickets" });
+  await expect(palette).toBeVisible();
+  // The palette keeps the keyboard in its search field; with the keyboard taken out of it, the key still waits.
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "0", ctrlKey: true, bubbles: true }));
+  });
+  await expect(pipHome(page)).toHaveCount(0);
+  await expect(palette).toBeVisible();
 });
 
 test("the rail's Pip home button opens it too, and Cmd/Ctrl+J there goes to its composer", async ({ page }) => {

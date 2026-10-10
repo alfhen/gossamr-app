@@ -65,8 +65,13 @@ export const BATCH_CHANGED = "These drafts changed while you were deciding, so n
  * description rewrite or a run, never one that came in after the confirm opened.
  */
 export async function confirmBatch(frozen: BatchSnapshot, drafts: readonly Proposal[], approve: (id: string) => Promise<{ error?: string | null }>): Promise<{ text: string; failed: boolean }> {
-  const picked = batchToApprove(frozen, drafts);
-  return picked ? approveBatch(picked, approve) : { text: BATCH_CHANGED, failed: true };
+  try {
+    const picked = batchToApprove(frozen, drafts);
+    return picked ? await approveBatch(picked, approve) : { text: BATCH_CHANGED, failed: true };
+  } catch (e) {
+    // Nothing above should throw, but if it does the person is told rather than left with no outcome.
+    return { text: `Couldn't approve these drafts: ${messageOf(e)}`, failed: true };
+  }
 }
 
 /** A step's drafts, each as its card in the conversation, with "Approve these N" over two or more that may go together. */
@@ -95,6 +100,8 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
     setBusy(true);
     try {
       setOutcome(await confirmBatch(covered, drafts, approve));
+    } catch (e) {
+      setOutcome({ text: `Couldn't approve these drafts: ${messageOf(e)}`, failed: true });
     } finally {
       setBusy(false);
     }

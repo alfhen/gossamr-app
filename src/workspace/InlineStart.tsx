@@ -106,7 +106,8 @@ export const useInlineStarts = create<InlineStartsState>((set, get) => {
       const { review, preflight } = await readRunDraft(b, id);
       if (current(id, mine)) patch(id, { review, preflight });
     } catch (e) {
-      if (current(id, mine)) patch(id, { error: messageOf(e) });
+      // The review on screen is the stale one the backend refused: drop it, so the person isn't asked to start it again.
+      if (current(id, mine)) patch(id, { phase: "error", review: null, displayed: null, error: messageOf(e) });
     }
   };
 

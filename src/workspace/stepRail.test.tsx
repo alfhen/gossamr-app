@@ -212,6 +212,17 @@ describe("the step rail", () => {
     expect(forged).not.toHaveBeenCalledWith("rw");
   });
 
+  it("reports a batch that throws while it is picked as failed, with the error, rather than dropping it", async () => {
+    const mixed = [fromRun("c1", comment, "r5"), fromRun("c2", comment, "r5")];
+    const frozen = freezeBatch(mixed);
+    const broken = { ...mixed[1], revisions: undefined } as unknown as Proposal;
+    const approve = vi.fn(async (_id: string) => ({ error: null }));
+    const out = await confirmBatch(frozen, [mixed[0], broken], approve);
+    expect(out.failed).toBe(true);
+    expect(out.text).toMatch(/^Couldn't approve these drafts: /);
+    expect(approve).not.toHaveBeenCalled();
+  });
+
   it("approves once per draft, in order, and reports the ones that failed", async () => {
     const calls: string[] = [];
     const approve = vi.fn(async (id: string) => {

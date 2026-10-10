@@ -19,7 +19,7 @@ import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
 import { FilterNote, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
-import { GENERAL_CONVERSATION, PipPane } from "./PipPane";
+import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
 import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
 import { applyTheme, usePrefs } from "./prefs";
@@ -89,6 +89,9 @@ function useStartOnPipHome(ready: boolean) {
   }, [ready, known, enabled]);
 }
 
+/** Whether the keyboard is in a field other than Pip's composer. */
+const typingElsewhere = (el: Element | null) => isTypingTarget(el) && el?.id !== PIP_INPUT_ID;
+
 function useGlobalKeys(agentsEnabled: boolean) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
@@ -98,7 +101,9 @@ function useGlobalKeys(agentsEnabled: boolean) {
         void useWorkstreams.getState().holdAll();
         return;
       }
-      if (agentsEnabled && isPipHomeKey(ev)) {
+      // Like Cmd/Ctrl+J it works from Pip's composer; never from another field (closing a peek would lose an unsaved
+      // comment) or behind the open palette.
+      if (agentsEnabled && isPipHomeKey(ev) && !typingElsewhere(document.activeElement) && !usePrefs.getState().paletteOpen) {
         ev.preventDefault();
         useTabs.getState().setRoute("pip");
         return;

@@ -632,7 +632,8 @@ async fn a_wake_is_charged_for_the_turn_the_queue_made_of_it_whatever_it_saw_fir
     assert_eq!(*queue.asked.lock().unwrap(), [false, true, true]);
 }
 
-/// A wake queue whose wakes all fail with `error`.
+/// A wake queue whose wakes all fail with `error`, telling their sink first when `error` says a start failed, as
+/// `AgentService::start_wake` does.
 struct Failing(&'static str);
 
 #[async_trait]
@@ -640,7 +641,10 @@ impl WakeQueue for Failing {
     fn alive(&self) -> bool {
         true
     }
-    async fn wake(&self, _ws: &str, _facts: WakeFacts, _sink: UpdateSink, _may_merge: bool) -> crate::error::Result<bool> {
+    async fn wake(&self, _ws: &str, _facts: WakeFacts, sink: UpdateSink, _may_merge: bool) -> crate::error::Result<bool> {
+        if self.0.starts_with(WAKE_NOT_STARTED) {
+            sink(Update { request_id: "wake-1".into(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(self.0.into()), usage: None } });
+        }
         Err(crate::error::Error::Claude(self.0.into()))
     }
     fn has_waiting_wake(&self, _conversation: &str) -> bool {
@@ -659,6 +663,14 @@ async fn a_wake_that_failed_before_its_sink_heard_of_it_gives_its_facts_back() {
         let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
         sup.clone().on_run(r1, Attention::Done).await;
         assert_eq!(t.wakes().await.len(), 1);
+        // The sink takes facts back on a task of its own: wait for it, then make sure nothing else follows.
+        for _ in 0..100 {
+            if dropped(t.actions().await) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
         dropped(t.actions().await)
     };
 
@@ -666,8 +678,8 @@ async fn a_wake_that_failed_before_its_sink_heard_of_it_gives_its_facts_back() {
     // was queued, so the facts are taken back and the next sweep wakes for them.
     assert_eq!(failing(PIP_NOT_RUNNING).await, 1);
     assert_eq!(failing("Not signed in to Jira").await, 1);
-    // A wake that was queued and then couldn't start was told through its sink, which takes the facts back itself.
-    assert_eq!(failing("Couldn't start: The assistant provider isn't available.").await, 0);
+    // A wake that was queued and then couldn't start was told through its sink, which takes the facts back, once.
+    assert_eq!(failing("Couldn't start: The assistant provider isn't available.").await, 1);
 }
 
 #[tokio::test]
