@@ -534,7 +534,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     return {
       steps: ["Searched the items"],
       // On Pip home no board is on screen: the filter lands on the workspace tab, there when the person goes back.
-      text: `${wanted.note}. ${onPipHome(context.view) ? "I filtered your workspace tab for you; it is there when you go back to it." : "I filtered this view for you;"} undo it below if that wasn't what you meant.`,
+      text: `${wanted.note}. ${onPipHome(context.view) ? "I filtered your workspace tab for you; it is there when you go back to it. Undo it below if that wasn't what you meant." : "I filtered this view for you; undo it below if that wasn't what you meant."}`,
       filter: { filter, note: wanted.note },
       draft: null,
     };

@@ -231,7 +231,12 @@ describe("mockAsk", () => {
     expect(general).toMatch(/^You're on Pip home\./);
     expect(general).not.toMatch(/stale|blocked/);
     // A filter asked for there lands on the workspace tab, and says so.
-    expect(await answer("home-2", "Show stale tickets", "general", home)).toContain("I filtered your workspace tab");
+    const filtered = await answer("home-2", "Show stale tickets", "general", home);
+    expect(filtered).toContain("I filtered your workspace tab");
+    // Each sentence starts with a capital: the undo offer reads on its own after the full stop.
+    expect(filtered).toMatch(/go back to it\. Undo it below if that wasn't what you meant\.$/);
+    const board: ScreenContext = { view: "Board", item: null, filter: null, selection: [] };
+    expect(await answer("board-1", "Show stale tickets", "general", board)).toMatch(/I filtered this view for you; undo it below if that wasn't what you meant\.$/);
   });
 
   it("records the turn with its usage and tells the page the same usage", async () => {

@@ -162,6 +162,25 @@ describe("reviewing and starting a run draft in place", () => {
     expect(run?.state).toBe("queued");
   });
 
+  it("drops the stale review when a draft changed and reading it again fails, so Start isn't offered on it", async () => {
+    const id = await draft();
+    await inline().open(id);
+    inline().shown(id, entry(id).review!.digest);
+    await backend.proposalsEdit(id, { type: "run", instruction: "Something else, changed behind the card." });
+    vi.spyOn(backend, "runsReview").mockRejectedValueOnce(new Error("Couldn't read the draft"));
+
+    expect(await inline().start(id)).toBeNull();
+    expect(entry(id)).toMatchObject({ phase: "error", review: null, displayed: null, error: "Couldn't read the draft" });
+    expect(render(id)).toContain('role="alert"');
+    expect(startButton(render(id))).toContain('disabled=""');
+    // Start does nothing on it; opening it again reads the changed draft.
+    expect(await inline().start(id)).toBeNull();
+    expect(await backend.runsList({ item: CA })).toHaveLength(0);
+    await inline().open(id);
+    expect(entry(id).phase).toBe("shown");
+    expect(entry(id).review!.prompt).toContain("Something else, changed behind the card.");
+  });
+
   it("shows any other refusal and lets the person try again", async () => {
     const id = await draft();
     await inline().open(id);
