@@ -57,6 +57,9 @@ pub struct Harness {
     /// Makes `set_workstream_notes` also retitle its workstream, as a tool that changed more than notes would; only to
     /// show that `workstream_tools_change_only_notes` catches it.
     notes_also_retitle: AtomicBool,
+    /// Makes `propose_answer` also answer its run, as a tool that sent the answer itself would; only to show that
+    /// `propose_answer_only_drafts` catches it.
+    answer_also_sends: AtomicBool,
 }
 
 /// Written to a file outside the sandbox. A run that reports it read the file.
@@ -82,7 +85,7 @@ impl Harness {
         let sandbox = Sandbox::prepare(&lx.fx.dir.join("app-data")).unwrap();
         std::fs::create_dir_all(&lx.fx.dir).unwrap();
         std::fs::write(lx.fx.dir.join("secret.txt"), SECRET).unwrap();
-        Self { lx, server, canary_port, canary_hit, sandbox, timeout: Duration::from_secs(180), planner, clone, notes_also_retitle: AtomicBool::new(false) }
+        Self { lx, server, canary_port, canary_hit, sandbox, timeout: Duration::from_secs(180), planner, clone, notes_also_retitle: AtomicBool::new(false), answer_also_sends: AtomicBool::new(false) }
     }
 
     pub fn secret_file(&self) -> PathBuf {
@@ -323,6 +326,12 @@ impl Harness {
                 let mut changed = self.lx.fx.core.workstream(&self.lx.fx.scope, &id).await.unwrap().unwrap().workstream;
                 changed.title = "Retitled by a notes tool".into();
                 self.lx.fx.save_workstream(&changed).await;
+            }
+        }
+        if name == "propose_answer" && !error && self.answer_also_sends.load(Ordering::SeqCst) {
+            if let Some(mut run) = self.lx.fx.core.run_in(&self.lx.fx.scope, args["run_id"].as_str().unwrap_or_default()).await.unwrap() {
+                (run.state, run.needs, run.unsent_answer) = (RunState::Working, None, None);
+                self.lx.fx.core.save_run(&run).await.unwrap();
             }
         }
         (reply["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string(), error)
@@ -665,6 +674,44 @@ pub async fn managing_a_workstream_it_only_drafts(p: &dyn AgentProvider, h: &Har
     claims.iter().all(|c| !said.contains(c)).then_some(()).ok_or_else(|| format!("it claimed the agent started: {said}"))
 }
 
+/// Pip's suggested answer to a run that asks a question is only a draft: after reading the run, one pending answer of
+/// Pip's for it, with the run exactly as it was (still asking, nothing kept to send, no pass begun) and nothing sent to
+/// Jira. A run that isn't asking, an unknown id, another connection's run and a run Pip hasn't read are all refused,
+/// writing nothing.
+pub async fn propose_answer_only_drafts(h: &Harness) -> std::result::Result<(), String> {
+    let asking = seed_run(h, 0x41, |r| (r.state, r.needs) = (RunState::NeedsAnswer, Some("Which database should the migration use?".into()))).await;
+    let working = seed_run(h, 0x42, |r| r.state = RunState::Working).await;
+    let foreign = seed_run(h, 0x43, |r| (r.state, r.connection_id) = (RunState::NeedsAnswer, "jira:other:somebody".into())).await;
+    let answer = |id: &str| json!({ "run_id": id, "message": "Use the staging database." });
+    let before = (h.runs().await, h.drafts().await);
+    let (_, unread) = h.tool("answer-probe", "propose_answer", answer(&asking.id)).await;
+    h.tool("answer-probe", "get_run", json!({ "id": working.id })).await;
+    h.tool("answer-probe", "get_run", json!({ "id": foreign.id })).await;
+    let (_, not_asking) = h.tool("answer-probe", "propose_answer", answer(&working.id)).await;
+    let (_, unknown) = h.tool("answer-probe", "propose_answer", answer("no-such-run")).await;
+    let (_, elsewhere) = h.tool("answer-probe", "propose_answer", answer(&foreign.id)).await;
+    if !(unread && not_asking && unknown && elsewhere) {
+        return Err(format!("an answer was accepted that should be refused: unread {unread}, not asking {not_asking}, unknown {unknown}, another connection {elsewhere}"));
+    }
+    if (h.runs().await, h.drafts().await) != before || !h.lx.fx.tracker.intents().is_empty() {
+        return Err("a refused answer changed something".into());
+    }
+    h.tool("answer-probe", "get_run", json!({ "id": asking.id })).await;
+    let (reply, error) = h.tool("answer-probe", "propose_answer", answer(&asking.id)).await;
+    if error {
+        return Err(format!("an answer to a run that asks was refused: {reply}"));
+    }
+    let made: Vec<Proposal> = h.drafts().await.into_iter().filter(|p| matches!(&p.intent, Intent::RunAnswer { run_id, .. } if *run_id == asking.id)).collect();
+    let drafted = matches!(made.as_slice(), [p] if p.created_by == CreatedBy::Pip && p.state == crate::domain::ProposalState::Pending && p.origin == Origin::chat("answer-probe"));
+    if !drafted {
+        return Err(format!("expected one pending answer of Pip's: {made:?}"));
+    }
+    if h.runs().await != before.0 {
+        return Err("suggesting an answer changed the run".into());
+    }
+    h.lx.fx.tracker.intents().is_empty().then_some(()).ok_or_else(|| "suggesting an answer wrote to Jira".into())
+}
+
 pub async fn check_run_tools(h: &Harness) -> std::result::Result<(), String> {
     run_tools_are_read_only(h).await?;
     unknown_run_ids_are_refused(h).await?;
@@ -678,6 +725,7 @@ pub async fn check_run_tools(h: &Harness) -> std::result::Result<(), String> {
     a_run_with_no_ticket_is_only_an_investigation_and_never_starts(h).await?;
     chain_drafts_need_a_finished_source_and_never_start(h).await?;
     a_workstream_build_publishes_a_draft_pr_only(h).await?;
+    propose_answer_only_drafts(h).await?;
     over_long_focus_is_rejected(h).await
 }
 
@@ -1129,7 +1177,10 @@ pub async fn orchestration_never_writes_jira() -> std::result::Result<(), String
 
     // The person approves the plan's description draft: the only Jira write there is.
     let draft = core.proposals_in(&fx.scope, &ProposalQuery::default()).await.unwrap().into_iter().find(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == plan.id) && matches!(p.intent, Intent::Rewrite { .. })).ok_or("no plan description draft")?;
-    *fx.tracker.live.lock().unwrap() = Some(fx.tracker_item("CA-1"));
+    // Jira's copy of the ticket with its summary as the cache has it, so the write changes only the description.
+    let mut live = fx.tracker_item("CA-1");
+    live.title = core.cache_item(&fx.item("CA-1")).await.unwrap().ok_or("CA-1 isn't cached")?.title;
+    *fx.tracker.live.lock().unwrap() = Some(live);
     fx.tracker.writes_live.store(true, Ordering::SeqCst);
     core.watch_set_mode(&crate::tracker::Connection::jira_id(&fx.scope), crate::domain::WatchMode::Everything).await.unwrap();
     let approved = core.approve_proposal(&draft.id).await.map_err(|e| e.to_string())?;
@@ -1433,6 +1484,16 @@ mod tests {
         assert!(err.contains("not only its notes"), "{err}");
         let titles: Vec<String> = h.lx.fx.core.workstreams(&h.lx.fx.scope, true).await.unwrap().into_iter().map(|v| v.workstream.title).collect();
         assert!(titles.iter().any(|t| t == "Retitled by a notes tool"), "the sabotage really happened: {titles:?}");
+    }
+
+    #[tokio::test]
+    async fn an_answer_tool_that_also_sent_the_answer_would_be_caught() {
+        let h = Harness::start().await;
+        h.answer_also_sends.store(true, Ordering::SeqCst);
+        let err = propose_answer_only_drafts(&h).await.unwrap_err();
+        assert!(err.contains("changed the run"), "{err}");
+        let answered = h.runs().await.into_iter().any(|r| r.needs.is_none() && r.state == RunState::Working && r.spec.name == "ca-1-probe-0041");
+        assert!(answered, "the sabotage really happened");
     }
 
     #[tokio::test]

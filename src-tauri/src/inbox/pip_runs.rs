@@ -548,4 +548,105 @@ impl Core {
         })
         .await
     }
+
+    /// An answer Pip suggests to a run that is asking a question, while answering `request_id`: the exact message the
+    /// person reads, may edit and sends. Nothing is sent; approving the draft answers the run the way the person's own
+    /// answer does. Refused unless the run belongs to the account and is waiting for an answer. The draft keeps what the
+    /// run asked and belongs to the run's workstream, if it has one, whichever conversation asked; there a newer answer
+    /// replaces Pip's older one, and outside one a second is refused while the first waits.
+    pub async fn propose_answer_as_pip(&self, scope: &Scope, request_id: &str, run_id: &str, message: &str) -> Result<Proposal> {
+        let message = crate::runs::result::scrub(message).trim().to_string();
+        let run = self.run_in(scope, run_id).await?.ok_or_else(|| refuse(format!("there is no run {run_id} for this account")))?;
+        if run.state != RunState::NeedsAnswer {
+            return Err(refuse(format!("Run {run_id} is {}, so it isn't waiting for an answer.", run.state.as_str())));
+        }
+        let question = crate::runs::answer::asked(run.needs.as_deref());
+        let connection_id = Connection::jira_id(scope);
+        let intent = Intent::RunAnswer { connection_id, run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string), item: run.item.clone(), message, question };
+        let at = Utc::now();
+        self.with_db_for(scope, |db| {
+            if run.spec.workstream.is_none() {
+                let query = ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() };
+                if let Some(open) = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::RunAnswer { run_id: r, .. } if *r == run.id)) {
+                    return Err(refuse(format!("An answer for run {} is already waiting (proposal {}). Revise it or leave it to the user; see list_proposals.", run.id, open.id)));
+                }
+            }
+            proposals::create(db, Draft::from_pip(request_id, run.spec.workstream.as_deref(), intent, None), at)
+        })
+        .await
+    }
+
+    /// Marks an answer draft as sent: applied, with the run it answered, by the person. `sent` is the text that went,
+    /// which is recorded as the person's revision when it differs from the draft's.
+    pub async fn answer_draft_sent(&self, id: &str, run_id: &str, sent: &str) -> Result<Proposal> {
+        self.with_proposals(|db| {
+            let mut p = db.proposal(id)?.ok_or_else(|| refuse("that draft no longer exists"))?;
+            let at = Utc::now();
+            if let Intent::RunAnswer { message, .. } = &p.intent {
+                if message.trim() != sent.trim() {
+                    let mut went = p.intent.clone();
+                    if let Intent::RunAnswer { message, .. } = &mut went {
+                        *message = sent.trim().to_string();
+                    }
+                    p.revisions.push(crate::domain::Revision { at, note: proposals::EDITED_NOTE.into(), intent: went.clone() });
+                    p.intent = went;
+                }
+            }
+            p.state = crate::domain::ProposalState::Applied;
+            p.run = Some(run_id.to_string());
+            p.error = None;
+            p.updated_at = at;
+            db.save_proposal(&p)?;
+            proposals::record(db, &p, crate::domain::Actor::Person, "draft_approved", at);
+            Ok(p)
+        })
+        .await
+    }
+
+    /// Keeps an answer draft pending with the reason sending it failed, so the person can try again. A draft decided
+    /// meanwhile is left as it is.
+    pub async fn answer_draft_failed(&self, id: &str, why: &str) -> Result<()> {
+        self.with_proposals(|db| {
+            if let Some(mut p) = db.proposal(id)?.filter(|p| p.state == crate::domain::ProposalState::Pending) {
+                p.error = Some(why.to_string());
+                p.updated_at = Utc::now();
+                db.save_proposal(&p)?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Retires the pending answer drafts for `run_id` but `except`, with `reason`: the run was answered, or stopped
+    /// asking. Returns how many there were.
+    pub async fn retire_answer_drafts(&self, run_id: &str, except: Option<&str>, reason: &str) -> Result<usize> {
+        self.retire_answers_where(run_id, reason, |p, _| Some(p.id.as_str()) != except).await
+    }
+
+    /// Retires the pending answer drafts for `run_id` that don't answer what it asks now, with `reason`: every one when
+    /// it isn't `asking`, else those that kept another `question` than the one it asks, as `answer::asked` keeps it. A
+    /// draft that kept no question stays only while the run asks one without words, as when it was drafted. Returns
+    /// how many there were.
+    pub async fn retire_answer_drafts_not_for(&self, run_id: &str, asking: bool, question: Option<&str>, reason: &str) -> Result<usize> {
+        self.retire_answers_where(run_id, reason, |_, kept| !asking || kept != question).await
+    }
+
+    /// Retires the pending answer drafts for `run_id` that `retire` picks, given each with the question it kept.
+    async fn retire_answers_where(&self, run_id: &str, reason: &str, retire: impl Fn(&Proposal, Option<&str>) -> bool) -> Result<usize> {
+        self.with_proposals(|db| {
+            let query = ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() };
+            let open: Vec<Proposal> = db
+                .proposals(&query)?
+                .into_iter()
+                .filter(|p| matches!(&p.intent, Intent::RunAnswer { run_id: r, question, .. } if r == run_id && retire(p, question.as_deref())))
+                .collect();
+            let at = Utc::now();
+            for p in &open {
+                let retired = proposals::retire(db, &p.id, reason, at)?;
+                proposals::record(db, &retired, crate::domain::Actor::Supervisor, "draft_retired", at);
+            }
+            Ok(open.len())
+        })
+        .await
+    }
 }

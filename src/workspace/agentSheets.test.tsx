@@ -226,6 +226,21 @@ describe("Stop in the run sheet", () => {
   it("is not shown once the run has ended", () => {
     for (const s of ["done", "stopped", "failed"] as const) expect(buttons(sheet(run(s)))).not.toContain("Stop");
   });
+
+  it("withdraws a run waiting for a slot, which says it starts on its own and has no Start now", () => {
+    const waiting = run("queued", { shortId: null, slotWaitSince: iso(5) });
+    const html = sheet(waiting, { slotPlace: 2 });
+    expect(buttons(html)).toContain("Stop");
+    expect(buttons(html)).not.toContain("Start now");
+    expect(html).toContain("It is approved and starts on its own when one of the running agents finishes (2nd in line). Stop it if you no longer want it.");
+    expect(html).not.toContain("Nothing runs until you start it");
+    expect(buttons(sheet(waiting, { confirmStop: true }))).toEqual(expect.arrayContaining(["Yes, stop", "Keep going"]));
+    // One that only waits to be started, as after a restart, keeps Start now and no Stop.
+    const plain = sheet(run("queued", { shortId: null }));
+    expect(buttons(plain)).toContain("Start now");
+    expect(buttons(plain)).not.toContain("Stop");
+    expect(plain).toContain("Nothing runs until you start it");
+  });
 });
 
 describe("where a run lives", () => {
@@ -592,6 +607,14 @@ describe("safety and settings", () => {
     expect(buttons(html)).toContain("Clean up finished runs (2)");
     expect(html).toContain("claude rm");
     expect(html).toContain("Removed 1 worktree. 1 kept: unpushed");
+  });
+
+  it("counts the runs waiting for a slot in what Stop all reaches", () => {
+    const runs = [run("working", { id: "w" }), run("queued", { id: "q1", shortId: null, slotWaitSince: iso(3) }), run("queued", { id: "q2", shortId: null, slotWaitSince: iso(2) })];
+    const html = renderToStaticMarkup(<AgentsSettingsView runs={runs} stopping={false} keepRunning={1} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    expect(html).toContain("Stop all (3)");
+    const waitingOnly = renderToStaticMarkup(<AgentsSettingsView runs={[runs[1]]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    expect(disabled(waitingOnly, "Stop all \\(1\\)")).toBe(false);
   });
 
   it("turns Stop all off when nothing is running", () => {

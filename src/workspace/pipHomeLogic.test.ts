@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { HELD_BUDGET, HELD_PERSON, TRIPWIRE } from "../types";
 import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
-import { batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
+import { batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -167,6 +167,8 @@ describe("shortHeld and lastHeldAt", () => {
     expect(shortHeld(HELD_PERSON)).toBe("Held by you");
     expect(shortHeld(HELD_BUDGET)).toBe("Held: budget");
     expect(shortHeld(`${TRIPWIRE}marker`)).toBe("Held: tripwire, a run's output held one of Gossamr's data markers");
+    expect(shortHeld(`${TRIPWIRE}basis_drift`, ["description"])).toBe("Held: tripwire, the ticket's description changed in Jira");
+    expect(shortHeld(`${TRIPWIRE}basis_drift`, ["status"])).toBe("Held: tripwire, the ticket was moved to Done");
   });
 
   it("takes the last hold in the audit", () => {
@@ -300,6 +302,16 @@ describe("drafts by step", () => {
     expect(groups.investigate).toBeUndefined();
   });
 
+  it("retired ones are grouped the same way for the rail's earlier drafts, oldest first, and stay out of the open groups", () => {
+    const retired = (p: Proposal, reason: string) => ({ ...p, state: { type: "retired", reason } }) as Proposal;
+    const all = [retired(draft("newer", transition, 2), "Another move of CA-401 was approved"), retired(draft("older", transition, 9), "Replaced by a newer draft"), retired(fromRun("rv", comment("CA-401"), "r5"), "x"), draft("open", transition, 1)];
+    const groups = retiredStepDrafts(all, runs);
+    expect(groups.pip?.map((p) => p.id)).toEqual(["older", "newer"]);
+    expect(groups.review?.map((p) => p.id)).toEqual(["rv"]);
+    expect(stepDrafts(all, runs).pip?.map((p) => p.id)).toEqual(["open"]);
+    expect(retiredStepDrafts([draft("open", transition, 1)], runs)).toEqual({});
+  });
+
   it("are approved together only when pending comments, moves and subtasks; never a rewrite or a run", () => {
     const drafts = [fromRun("c1", comment("CA-401"), "r5"), fromRun("rw", rewrite, "r5"), fromRun("t1", transition, "r5"), fromRun("s1", subtasks, "r5"), draft("run", startRun("CA-401", "review", "ws-1"), 3), { ...fromRun("c2", comment("CA-401"), "r5"), state: { type: "applying" } } as Proposal];
     expect(batchable(drafts).map((p) => p.id)).toEqual(["c1", "t1", "s1"]);
@@ -337,5 +349,36 @@ describe("workstreamSuggestionScene", () => {
     expect(scene.hasPendingPlanRewrite).toBe(true);
     expect(scene.hasPendingStartDraft).toBe(true);
     expect(scene.running).toBeNull();
+  });
+});
+
+describe("an answer Pip suggests to a run's question", () => {
+  const ws1 = view("ws-1", "CA-401", { runs: ["r-q"] });
+  const answer = (runId: string): Intent => ({ type: "runAnswer", connectionId: "mock", runId, shortId: null, item: ref("CA-401"), message: "Keep the old rounding.", question: "Keep it?" });
+  const asking = run("r-q", "investigate", "needsAnswer", { lastProgressAt: iso(10) });
+
+  it("is one item with the run's question in the tray, going to the reply", () => {
+    const items = needsYouItems(input({ workstreams: [ws1], runs: [asking], proposals: [draft("d-a", answer("r-q"), 5, { workstream: "ws-1" })] }));
+    expect(items).toEqual([{ key: "draft:d-a", kind: "question", workstreamId: "ws-1", label: "CA-401 · R1 asks a question · Pip suggests a reply", at: iso(10), target: { type: "draft", id: "d-a" } }]);
+    expect(needsYouCount(items, "ws-1")).toBe(1);
+  });
+
+  it("is a draft of its own once the run isn't asking, and the question alone once the reply is decided", () => {
+    const working = run("r-q", "investigate", "working");
+    expect(needsYouItems(input({ workstreams: [ws1], runs: [working], proposals: [draft("d-a", answer("r-q"), 5, { workstream: "ws-1" })] })).map((i) => i.label)).toEqual(["CA-401 · Draft answer"]);
+    const skipped = draft("d-a", answer("r-q"), 5, { workstream: "ws-1", state: { type: "skipped" } });
+    expect(needsYouItems(input({ workstreams: [ws1], runs: [asking], proposals: [skipped] })).map((i) => [i.key, i.label])).toEqual([["run:r-q", "CA-401 · R1 asks a question"]]);
+  });
+
+  it("goes under its run's step on the rail, which counts the question once", () => {
+    const p = draft("d-a", answer("r-q"), 5, { workstream: "ws-1" });
+    expect(draftStep(p, [asking])).toBe("investigate");
+    expect(stepDrafts([p], [asking]).investigate?.map((d) => d.id)).toEqual(["d-a"]);
+    expect(stepChips([asking], [], {}, [p], { now: NOW }).find((c) => c.kind === "investigate")?.needsYou).toBe(1);
+    expect(stepChips([asking], [], {}, [], { now: NOW }).find((c) => c.kind === "investigate")?.needsYou).toBe(1);
+  });
+
+  it("is never approved with the step's batch", () => {
+    expect(batchable([draft("d-a", answer("r-q"), 5)])).toEqual([]);
   });
 });

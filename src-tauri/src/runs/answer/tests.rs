@@ -247,3 +247,286 @@ async fn nothing_is_answered_when_agents_are_off() {
     assert!(rig.svc.answer(&run.id, "Yes").await.is_err());
     assert!(rig.cli.0.lock().unwrap().calls.is_empty());
 }
+
+mod drafts {
+    use super::*;
+    use crate::domain::{Actor, CreatedBy, Origin, Proposal, ProposalState};
+    use crate::proposals::Draft;
+
+    /// An answer Pip suggests for `run`, as its tool saves one.
+    async fn suggested(rig: &Rig, run: &Run, message: &str) -> Proposal {
+        rig.fx.core.propose_answer_as_pip(&rig.fx.scope, "r", &run.id, message).await.unwrap()
+    }
+
+    async fn stored(rig: &Rig, id: &str) -> Proposal {
+        rig.fx.core.proposal(id).await.unwrap().unwrap()
+    }
+
+    fn calls(rig: &Rig) -> Vec<String> {
+        rig.cli.0.lock().unwrap().calls.clone()
+    }
+
+    #[tokio::test]
+    async fn an_approved_suggestion_is_sent_exactly_as_the_persons_own_answer_and_the_draft_is_applied_and_audited() {
+        let (rig, run, ws) = asking_in(true).await;
+        let ws = ws.unwrap();
+        std::fs::create_dir_all(&run.expected_worktree).unwrap();
+        let p = suggested(&rig, &run, "Use the staging database.").await;
+        assert_eq!((p.created_by, p.workstream()), (CreatedBy::Pip, Some(ws.as_str())));
+        let answered = rig.svc.answer_draft(&p.id, "  Use the staging database.\n").await.unwrap();
+
+        let id = run.short_id.clone().unwrap();
+        assert_eq!((answered.state, answered.needs, answered.unsent_answer), (RunState::Working, None, None));
+        {
+            let cli = rig.cli.0.lock().unwrap();
+            assert_eq!(cli.calls, [format!("stop:{id}"), format!("resume:{id}")], "the same stop and resume as the person's own answer");
+            assert_eq!(cli.resumes, [ResumeCall { session_id: run.session_id.clone().unwrap(), message: format!("{REMINDER}\n\nUse the staging database."), cwd: Some(run.expected_worktree.clone()) }]);
+        }
+        let back = stored(&rig, &p.id).await;
+        assert_eq!((back.state, back.run.as_deref(), back.error), (ProposalState::Applied, Some(run.id.as_str()), None));
+        assert!(back.revisions.is_empty(), "what was sent is what Pip wrote");
+        let events = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
+        assert!(events.iter().any(|e| e.action == "draft_approved" && e.actor == Actor::Person && e.proposal_id.as_deref() == Some(p.id.as_str())), "{events:?}");
+        assert_eq!(rig.run_actions(&ws).await, [("run_answered".to_string(), Some(run.id.clone()), Some("25".to_string()))]);
+        assert!(rig.fx.tracker.intents().is_empty(), "nothing went to Jira");
+        assert_eq!(rig.fx.core.run_events(&run.id).await.unwrap().last().map(|e| e.text.as_str()), Some("You answered"));
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_changed_after_the_person_read_it_is_not_sent() {
+        let (rig, run) = asking().await;
+        let p = suggested(&rig, &run, "Pip revised this after you read it.").await;
+        let why = rig.svc.answer_draft(&p.id, "The text you read.").await.unwrap_err().to_string();
+        assert!(why.contains("The answer changed after you read it"), "{why}");
+        assert!(calls(&rig).is_empty());
+        assert_eq!((stored(&rig, &p.id).await.state, rig.get(&run).await.state), (ProposalState::Pending, RunState::NeedsAnswer));
+    }
+
+    #[tokio::test]
+    async fn an_answer_to_a_run_that_stopped_asking_stays_pending_with_the_reason() {
+        let (rig, run) = asking().await;
+        let p = suggested(&rig, &run, "Yes").await;
+        rig.session(&run, |e| {
+            e.state = Some("working".into());
+            e.pid = Some(4242);
+        });
+        let why = rig.svc.answer_draft(&p.id, "Yes").await.unwrap_err().to_string();
+        assert!(why.contains("any more"), "{why}");
+        let back = stored(&rig, &p.id).await;
+        assert_eq!(back.state, ProposalState::Pending);
+        assert!(back.error.as_deref().is_some_and(|e| e.contains("any more")), "{back:?}");
+        assert!(calls(&rig).is_empty());
+    }
+
+    #[tokio::test]
+    async fn only_a_pending_answer_draft_of_this_connection_is_sent_and_nothing_with_agents_off() {
+        let (rig, run) = asking().await;
+        let p = suggested(&rig, &run, "Yes").await;
+        rig.svc.set_flag(false);
+        assert!(rig.svc.answer_draft(&p.id, "Yes").await.is_err());
+        rig.svc.set_flag(true);
+        rig.set(&run, |r| r.connection_id = "jira:other:somebody".into()).await;
+        assert!(rig.svc.answer_draft(&p.id, "Yes").await.unwrap_err().to_string().contains("another connection"));
+        rig.set(&run, |r| r.connection_id = run.connection_id.clone()).await;
+        assert!(rig.svc.answer_draft("no-such-draft", "Yes").await.is_err());
+        rig.fx.core.skip_proposal(&p.id).await.unwrap();
+        assert!(rig.svc.answer_draft(&p.id, "Yes").await.unwrap_err().to_string().contains("already been decided"));
+        assert!(calls(&rig).is_empty());
+    }
+
+    #[tokio::test]
+    async fn two_sends_of_the_same_answer_at_once_answer_once_and_neither_waits_forever() {
+        let (rig, run) = asking().await;
+        let p = suggested(&rig, &run, "Use staging").await;
+        let both = tokio::time::timeout(Duration::from_secs(10), async { tokio::join!(rig.svc.answer_draft(&p.id, "Use staging"), rig.svc.answer_draft(&p.id, "Use staging")) }).await;
+        let (a, b) = both.expect("no deadlock");
+        assert_eq!([a.is_ok(), b.is_ok()].iter().filter(|ok| **ok).count(), 1, "{a:?} / {b:?}");
+        {
+            let cli = rig.cli.0.lock().unwrap();
+            assert_eq!((cli.stops.len(), cli.resumes.len()), (1, 1), "sent once");
+        }
+        let back = stored(&rig, &p.id).await;
+        assert_eq!((back.state, back.error), (ProposalState::Applied, None));
+        assert_eq!(rig.get(&run).await.state, RunState::Working);
+    }
+
+    #[tokio::test]
+    async fn the_persons_own_answer_retires_what_pip_suggested_and_a_sent_suggestion_retires_the_others() {
+        let (rig, run) = asking().await;
+        let p = suggested(&rig, &run, "Yes").await;
+        rig.svc.answer(&run.id, "No, keep the old rounding.").await.unwrap();
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::ANSWERED.into()));
+
+        let (rig, run) = asking().await;
+        let sent = suggested(&rig, &run, "Yes").await;
+        let intent = Intent::RunAnswer { connection_id: run.connection_id.clone(), run_id: run.id.clone(), short_id: None, item: run.item.clone(), message: "Another".into(), question: None };
+        let other = rig.fx.core.propose(&rig.fx.scope, Draft { origin: Origin::chat("r2"), created_by: CreatedBy::Pip, intent, label: None, basis: None }).await.unwrap();
+        rig.svc.answer_draft(&sent.id, "Yes").await.unwrap();
+        assert_eq!(stored(&rig, &sent.id).await.state, ProposalState::Applied);
+        assert_eq!(stored(&rig, &other.id).await.state, ProposalState::Retired(crate::runs::answer::ANSWERED.into()));
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_is_retired_when_the_run_finishes_without_one() {
+        let (rig, run) = asking().await;
+        let p = suggested(&rig, &run, "Yes").await;
+        rig.session(&run, |e| {
+            e.state = Some("done".into());
+            e.status = Some("idle".into());
+        });
+        rig.poll().await;
+        assert_eq!(rig.get(&run).await.state, RunState::Done);
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::NOT_ASKING.into()));
+        assert!(rig.svc.answer_draft(&p.id, "Yes").await.is_err());
+        assert!(rig.cli.0.lock().unwrap().resumes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_is_retired_once_the_run_is_answered_in_terminal_so_pip_can_suggest_for_its_next_question() {
+        let (rig, run) = asking().await;
+        let id = run.short_id.clone().unwrap();
+        rig.job(&id, |j| j.needs = Some("Which database?".into()));
+        rig.poll().await;
+        let p = suggested(&rig, &run, "Use staging.").await;
+        // Answered in Terminal: the session works again.
+        rig.session(&run, |e| {
+            e.state = Some("working".into());
+            e.pid = Some(4242);
+        });
+        rig.poll().await;
+        assert_eq!(rig.get(&run).await.state, RunState::Working);
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
+
+        // It asks again: Pip may suggest for the new question, and the old answer can't be sent to it.
+        rig.job(&id, |j| j.needs = Some("Which branch?".into()));
+        rig.session(&run, |e| {
+            e.state = Some("blocked".into());
+            e.pid = None;
+        });
+        rig.poll().await;
+        assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+        let next = suggested(&rig, &run, "Use main.").await;
+        assert!(matches!(&next.intent, Intent::RunAnswer { question, .. } if question.as_deref() == Some("Which branch?")), "{:?}", next.intent);
+        assert!(rig.svc.answer_draft(&p.id, "Use staging.").await.is_err());
+        assert!(calls(&rig).iter().all(|c| !c.starts_with("resume")));
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_for_an_earlier_question_is_retired_and_never_sent_to_the_new_one() {
+        let (rig, run) = asking().await;
+        let id = run.short_id.clone().unwrap();
+        rig.job(&id, |j| j.needs = Some("Which database?".into()));
+        rig.poll().await;
+        let p = suggested(&rig, &run, "Use staging.").await;
+
+        // The question changes before any poll has seen it: the send is refused.
+        rig.set(&run, |r| r.needs = Some("Which branch?".into())).await;
+        let why = rig.svc.answer_draft(&p.id, "Use staging.").await.unwrap_err().to_string();
+        assert!(why.contains("asking something else"), "{why}");
+        assert!(calls(&rig).is_empty(), "nothing was stopped or sent");
+
+        // Once a poll sees the run ask another question, the old suggestion is retired.
+        rig.set(&run, |r| r.needs = Some("Which database?".into())).await;
+        rig.job(&id, |j| j.needs = Some("Which branch?".into()));
+        rig.poll().await;
+        assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
+    }
+
+    /// A run asking "Which database?" with Pip's suggestion for it, and a way to have its session report a state.
+    async fn suggested_for_database() -> (Rig, Run, Proposal) {
+        let (rig, run) = asking().await;
+        rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some("Which database?".into()));
+        rig.poll().await;
+        let p = suggested(&rig, &run, "Use staging.").await;
+        assert!(matches!(&p.intent, Intent::RunAnswer { question, .. } if question.as_deref() == Some("Which database?")), "{:?}", p.intent);
+        (rig, run, p)
+    }
+
+    /// Has the run's session report `state`, as `claude agents` lists it, and polls.
+    async fn reports(rig: &Rig, run: &Run, state: &str) {
+        rig.session(run, |e| {
+            e.state = Some(state.into());
+            e.pid = (state == "working").then_some(4242);
+        });
+        rig.poll().await;
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_is_kept_while_the_run_is_unclear_and_kept_when_it_asks_the_same_again() {
+        let (rig, run, p) = suggested_for_database().await;
+        reports(&rig, &run, "odd").await;
+        assert_eq!(rig.get(&run).await.state, RunState::Unknown);
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Pending);
+        reports(&rig, &run, "blocked").await;
+        assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Pending, "it still answers what the run asks");
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_is_retired_when_the_run_works_again_after_being_unclear() {
+        let (rig, run, p) = suggested_for_database().await;
+        reports(&rig, &run, "odd").await;
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Pending);
+        reports(&rig, &run, "working").await;
+        assert_eq!(rig.get(&run).await.state, RunState::Working);
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_is_retired_when_the_run_asks_something_else_after_being_unclear() {
+        let (rig, run, p) = suggested_for_database().await;
+        reports(&rig, &run, "odd").await;
+        rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some("Which branch?".into()));
+        reports(&rig, &run, "blocked").await;
+        assert_eq!(rig.get(&run).await.needs.as_deref(), Some("Which branch?"));
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_that_kept_no_question_is_retired_once_the_run_asks_one_or_stops_asking() {
+        let (rig, run) = asking().await;
+        let draft = |message: &str| {
+            let intent = Intent::RunAnswer { connection_id: run.connection_id.clone(), run_id: run.id.clone(), short_id: None, item: run.item.clone(), message: message.into(), question: None };
+            Draft { origin: Origin::chat("r"), created_by: CreatedBy::Pip, intent, label: None, basis: None }
+        };
+        let p = rig.fx.core.propose(&rig.fx.scope, draft("Yes")).await.unwrap();
+        reports(&rig, &run, "odd").await;
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Pending);
+        rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some("Which branch?".into()));
+        reports(&rig, &run, "blocked").await;
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
+
+        let q = rig.fx.core.propose(&rig.fx.scope, draft("No")).await.unwrap();
+        reports(&rig, &run, "odd").await;
+        reports(&rig, &run, "working").await;
+        assert_eq!(stored(&rig, &q.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
+    }
+
+    #[tokio::test]
+    async fn an_edited_suggestion_is_sent_with_the_persons_words() {
+        let (rig, run) = asking().await;
+        std::fs::create_dir_all(&run.expected_worktree).unwrap();
+        let p = suggested(&rig, &run, "Use staging.").await;
+        rig.fx.core.edit_proposal(&p.id, &crate::inbox::Edit::RunAnswer { message: "Use production, carefully.".into() }).await.unwrap();
+        assert!(rig.svc.answer_draft(&p.id, "Use staging.").await.is_err(), "Pip's words are no longer the draft");
+        rig.svc.answer_draft(&p.id, "Use production, carefully.").await.unwrap();
+        assert_eq!(resumes(&rig).iter().map(|r| r.message.clone()).collect::<Vec<_>>(), [format!("{REMINDER}\n\nUse production, carefully.")]);
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Applied);
+    }
+
+    #[tokio::test]
+    async fn pip_suggests_only_for_a_run_that_is_asking_and_one_at_a_time_outside_a_workstream() {
+        let (rig, run) = asking().await;
+        let first = suggested(&rig, &run, "Yes").await;
+        let Intent::RunAnswer { short_id, item, .. } = &first.intent else { panic!("{:?}", first.intent) };
+        assert_eq!((short_id.as_deref(), item.as_ref()), (run.short_id.as_ref().map(|s| s.as_str()), run.item.as_ref()));
+        let again = rig.fx.core.propose_answer_as_pip(&rig.fx.scope, "r", &run.id, "No").await.unwrap_err().to_string();
+        assert!(again.contains("already waiting") && again.contains(&first.id), "{again}");
+        rig.set(&run, |r| r.state = RunState::Working).await;
+        rig.fx.core.skip_proposal(&first.id).await.unwrap();
+        let working = rig.fx.core.propose_answer_as_pip(&rig.fx.scope, "r", &run.id, "No").await.unwrap_err().to_string();
+        assert!(working.contains("isn't waiting for an answer"), "{working}");
+        assert!(rig.fx.core.propose_answer_as_pip(&rig.fx.scope, "r", "no-such-run", "No").await.is_err());
+    }
+}

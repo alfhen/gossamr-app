@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Intent, Proposal, RunSpec } from "../types";
-import { draftsForTurn, earlierDrafts, inWorkstreamPane, targetOf, withoutRunDrafts } from "./proposals";
+import { draftsForTurn, earlierDrafts, inWorkstreamPane, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
+import fixtures from "./draftHygiene.fixtures.json";
+import { isRunPlanRewrite } from "../backend/mockProposals";
 
 const ref = (key: string) => ({ connectionId: "c", externalId: key, key });
 
@@ -83,5 +85,54 @@ describe("inWorkstreamPane", () => {
     const otherWorkstream = proposal("6", subtasks("B-2"), { origin: { type: "chat", requestId: "r1", workstream: "ws-2" } });
     expect([own, onTicket, doneOnTicket, elsewhere, otherConnection, otherWorkstream].filter((p) => inWorkstreamPane(p, ws)).map((p) => p.id)).toEqual(["1", "2"]);
     expect(inWorkstreamPane(onTicket, { ...ws, itemKey: null })).toBe(false);
+  });
+});
+
+describe("inWorkstreamPane and retired drafts", () => {
+  const ws = { id: "ws-1", itemKey: "A-1", connectionId: "c", createdAt: "2026-09-29T11:00:00Z" };
+
+  it("keeps a draft on its ticket retired since the workstream opened, so it collapses instead of vanishing", () => {
+    const retired = proposal("1", subtasks("A-1"), { origin: { type: "board" }, createdBy: "user", state: { type: "retired", reason: "Another move of A-1 was approved" } });
+    expect(inWorkstreamPane(retired, ws)).toBe(true);
+    expect(inWorkstreamPane({ ...retired, updatedAt: "2026-09-29T10:00:00Z" }, ws)).toBe(false);
+    expect(inWorkstreamPane(retired, { ...ws, createdAt: undefined })).toBe(false);
+    expect(inWorkstreamPane({ ...retired, state: { type: "skipped" } }, ws)).toBe(false);
+  });
+});
+
+/** A draft as `draftHygiene.fixtures.json` describes it; `src-tauri/src/proposals.rs` builds the same. */
+type FixtureDraft = { by: Proposal["createdBy"]; origin: "chat" | "run" | "board"; workstream: string | null; intent: Intent; edited?: boolean; planRewrite?: boolean; state?: "skipped" };
+
+const PLAN_BODY = { blocks: [{ type: "heading", level: 2, content: [{ type: "text", text: "Gossamr Plan", marks: [] }] }] };
+
+function fixtureDraft(d: FixtureDraft, id: string): Proposal {
+  const origin: Proposal["origin"] =
+    d.origin === "chat" ? { type: "chat", requestId: "r", workstream: d.workstream } : d.origin === "run" ? { type: "run", runId: "run-1", shortId: null, workstream: d.workstream } : { type: "board" };
+  const intent = (d.planRewrite && d.intent.type === "rewrite" ? { ...d.intent, body: { from: { blocks: [] }, to: PLAN_BODY, fromText: "old", toText: "## Gossamr Plan" } } : d.intent) as Intent;
+  return proposal(id, intent, {
+    origin,
+    createdBy: d.by,
+    state: d.state === "skipped" ? { type: "skipped" } : { type: "pending" },
+    revisions: d.edited ? [{ at: "2026-09-29T12:00:00Z", note: "Edited", intent }] : [],
+  });
+}
+
+describe("draft hygiene fixtures, as proposals.rs runs them", () => {
+  for (const c of fixtures as unknown as ({ name: string; kind: "key"; a: Intent; b: Intent; same: boolean } | { name: string; kind: "decide"; older: FixtureDraft; newer: FixtureDraft; expect: string })[]) {
+    it(c.name, () => {
+      if (c.kind === "key") {
+        const a = supersessionKey(c.a);
+        expect(a !== null && a === supersessionKey(c.b)).toBe(c.same);
+      } else {
+        expect(supersession(fixtureDraft(c.older, "old"), fixtureDraft(c.newer, "new"), isRunPlanRewrite).type).toBe(c.expect);
+      }
+    });
+  }
+
+  it("names the edited draft when it refuses Pip", () => {
+    const older = proposal("1", { type: "transition", item: ref("A-1"), to: "x" }, { origin: { type: "chat", requestId: "r", workstream: "w" }, revisions: [{ at: "t", note: "Edited", intent: { type: "transition", item: ref("A-1"), to: "y" } }] });
+    const newer = proposal("2", { type: "transition", item: ref("A-1"), to: "z" }, { origin: { type: "chat", requestId: "r", workstream: "w" } });
+    const verdict = supersession(older, newer, () => false);
+    expect(verdict.type === "refuse" && verdict.reason).toContain("the user edited draft 1 of the same kind on A-1");
   });
 });

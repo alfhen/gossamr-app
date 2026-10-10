@@ -16,8 +16,10 @@ import { usePip } from "./pipStore";
 import { InlineStart, InlineStartContext, inlineStartId, inlineStartKey, inlineStartable, useInlineStarts } from "./InlineStart";
 import { focusPeekDraft } from "./peekDrafts";
 import { useTabs } from "./tabsStore";
+import { RetiredDraft } from "./RetiredDraft";
+import { NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 
-const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺" };
+const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺", runAnswer: "↩" };
 
 const STATE: Record<Proposal["state"]["type"], string> = { pending: "Draft", applying: "Working…", applied: "Done", skipped: "Skipped", retired: "Out of date" };
 
@@ -56,6 +58,8 @@ export function draftPreviewBody(p: Proposal, statusName: string | null, pass?: 
       return `Start an agent: ${i.item?.key ?? `${i.spec.repo}, no ticket`}\n${!i.item && i.spec.instruction.trim() ? `${clipText(i.spec.instruction)}\n` : ""}${i.spec.focus?.trim() ? `Focus from Pip: ${i.spec.focus.trim()}\n` : ""}Read the exact prompt, then start it. Nothing runs before that.`;
     case "followUp":
       return `Send the agent back for another pass${pass ? ` (pass ${pass})` : ""}. Why: ${i.reason}\n\n${i.message}\n\nNothing is sent until you read this and send it.`;
+    case "runAnswer":
+      return `${i.question ? `The agent asks: ${i.question}\n\n` : ""}${i.message}\n\nNothing is sent until you read this and send it.`;
     default:
       return unreachable(i);
   }
@@ -94,6 +98,8 @@ interface Props {
   targetTitle: string | null;
   /** For a follow-up, the pass the agent would be on once it is sent. */
   pass?: number;
+  /** For an answer, how the run it answers stands now. */
+  answer?: AnswerRun | null;
   onOpen(): void;
   /** What the a key does on a focused card, for drafts that may be approved in place. */
   onApprove?(): void;
@@ -120,7 +126,43 @@ function typeIntoInput(text: string): boolean {
  * ticket, or from the keyboard on the focused card for a draft that needs no review. Only a card reached from the keyboard
  * takes its keys; one focused by a click on its text shows no ring and no hint, and its keys do nothing.
  */
-export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpen, onApprove, onSkip, expander }: Props) {
+export function DraftPreview(props: Props) {
+  const p = props.proposal;
+  if (p.state.type !== "retired") return <DraftPreviewCard {...props} />;
+  return (
+    <RetiredDraft proposal={p} title={draftTitle(p, props.answer?.label)} state={STATE.retired}>
+      <DraftPreviewCard {...props} />
+    </RetiredDraft>
+  );
+}
+
+/**
+ * An answer's question and reply, both whole: the run's question as the agent's words (its live one while it waits), then
+ * the reply that would go. One that can't be sent any more says why.
+ */
+function AnswerBody({ intent, answer, pending, byPip }: { intent: Extract<Proposal["intent"], { type: "runAnswer" }>; answer: AnswerRun | null; pending: boolean; byPip: boolean }) {
+  const question = answer?.question ?? intent.question;
+  return (
+    <div data-run-answer className="grid gap-1.5 px-2.5 py-2">
+      {question && (
+        <blockquote data-question className="m-0 rounded-md border-l-2 border-ws-sep2 bg-ws-sel px-2 py-1 text-sm whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">
+          <b className="font-semibold">{answer?.label ?? "The agent"} asks:</b> {question}
+        </blockquote>
+      )}
+      <span className="text-xs font-semibold text-ws-ink3">{pending ? (byPip ? "Pip suggests this reply" : "Suggested reply") : "Reply"}</span>
+      <p data-reply className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
+        {intent.message}
+      </p>
+      {pending && answer && !answer.waiting && (
+        <p data-not-waiting className="m-0 text-sm font-semibold text-ws-blocked">
+          {NOT_WAITING}. Skip this draft.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer = null, onOpen, onApprove, onSkip, expander }: Props) {
   /** Focused from the keyboard: only then does the card take its keys and show them. */
   const [armed, setArmed] = useState(false);
   const [asking, setAsking] = useState<Asking | null>(null);
@@ -134,7 +176,10 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
   const pending = state === "pending" || state === "applying";
   const revision = p.revisions[p.revisions.length - 1];
   const made = p.intent.type === "create" && state === "applied" ? p.created[0] : undefined;
-  const go = pending ? (p.intent.type === "startRun" ? (expander ? "Review and start" : "Review and start →") : p.intent.type === "followUp" ? "Review and send back →" : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
+  /** An answer whose run moved on can only be skipped. */
+  const stale = p.intent.type === "runAnswer" && state === "pending" && !!answer && !answer.waiting;
+  const title = draftTitle(p, answer?.label);
+  const go = pending ? (p.intent.type === "startRun" ? (expander ? "Review and start" : "Review and start →") : p.intent.type === "followUp" ? "Review and send back →" : p.intent.type === "runAnswer" ? (stale ? "" : "Review and answer →") : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
   const create = isCreate(p) ? p : null;
   const body = create ? docText(create.intent.fields.body) || "No description." : draftPreviewBody(p, statusName, pass);
   const decide = (run?: () => void) =>
@@ -161,7 +206,7 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
   return (
     <article
       ref={ref}
-      aria-label={draftTitle(p)}
+      aria-label={title}
       data-draft={p.id}
       data-state={state}
       // While a decision waits for Enter, Esc is the card's: it cancels the ask, and stops nothing else.
@@ -178,7 +223,7 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
         if (!armed) return;
         const fromInput = ev.target === ev.currentTarget && ev.currentTarget.hasAttribute(FROM_INPUT);
         if (ev.target === ev.currentTarget) ev.currentTarget.removeAttribute(FROM_INPUT);
-        onDraftCardKey(ev, p, asking, { approve: decide(onApprove), skip: decide(onSkip), open: onOpen, ask: setAsking, type: typeIntoInput, fromInput });
+        onDraftCardKey(ev, p, asking, { approve: stale ? undefined : decide(onApprove), skip: decide(onSkip), open: onOpen, ask: setAsking, type: typeIntoInput, fromInput });
       }}
       onFocus={(ev) => {
         const byPointer = pointer.current;
@@ -198,7 +243,7 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
     >
       <div className={`flex items-center gap-2 px-2.5 py-1.5 text-sm font-semibold ${HEADER[state]}`}>
         <span aria-hidden>{ICON[p.intent.type]}</span>
-        <span className="min-w-0 truncate">{draftTitle(p)}</span>
+        <span className="min-w-0 truncate">{title}</span>
         <span className="ml-auto shrink-0 font-medium text-ws-ink3">{STATE[state]}</span>
       </div>
       {create && (
@@ -207,7 +252,7 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
           <p className="m-0 px-2.5 pt-0.5 text-sm text-ws-ink2">{draftFacts(create).join(" · ")}</p>
         </>
       )}
-      <Expandable id={`draft-body-${p.id}`} text={body} />
+      {p.intent.type === "runAnswer" ? <AnswerBody intent={p.intent} answer={answer} pending={pending} byPip={p.createdBy === "pip"} /> : <Expandable id={`draft-body-${p.id}`} text={body} />}
       {p.state.type === "retired" ? (
         <span className="mx-2.5 mb-1.5 block text-xs font-semibold text-ws-ink3">✕ {p.state.reason}</span>
       ) : (
@@ -216,6 +261,11 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
       <div className="flex items-center gap-1.5 border-t border-ws-sep px-2.5 py-1.5 text-xs text-ws-ink3">
         <span className="shrink-0 font-mono font-semibold whitespace-nowrap">{target?.key ?? "new ticket"}</span>
         {targetTitle && <span className="min-w-0 truncate">{targetTitle}</span>}
+        {stale && onSkip && (
+          <button type="button" onClick={onSkip} className="ml-auto shrink-0 rounded-md border border-ws-sep2 px-2.5 py-1 text-sm font-semibold text-ws-ink2 hover:bg-ws-hover">
+            Skip
+          </button>
+        )}
         {go &&
           (pending ? (
             <button
@@ -236,7 +286,7 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
       {expander?.open && expander.panel}
       {armed && (
         <p role="status" className={`m-0 border-t border-ws-sep px-2.5 py-1 text-xs ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "text-ws-ink3"}`}>
-          {draftKeyHint(p, asking)}
+          {draftKeyHint(p, asking, !stale)}
         </p>
       )}
     </article>
@@ -245,7 +295,10 @@ export function DraftPreview({ proposal: p, statusName, targetTitle, pass, onOpe
 
 const deciding = new Set<string>();
 
-/** Approving and skipping from a card's keys, through the store, one decision at a time per draft; a failure shows as a toast. */
+/**
+ * Approving and skipping from a card's keys, through the store, one decision at a time per draft; a failure shows as a
+ * toast. An answer is sent with the reply the card shows, as its own button sends it.
+ */
 export function draftDecisions(id: string): { approve(): void; skip(): void } {
   const decide = (verb: string, job: () => Promise<Proposal>) => {
     if (deciding.has(id)) return;
@@ -256,7 +309,15 @@ export function draftDecisions(id: string): { approve(): void; skip(): void } {
       .finally(() => deciding.delete(id));
   };
   return {
-    approve: () => decide("approve", () => useWorkspace.getState().approve(id)),
+    approve: () => {
+      const p = useWorkspace.getState().proposals[id];
+      if (p?.intent.type !== "runAnswer") return decide("approve", () => useWorkspace.getState().approve(id));
+      const shown = p.intent.message;
+      decide("send", async () => {
+        await useWorkspace.getState().sendAnswerDraft(id, shown);
+        return useWorkspace.getState().proposals[id] ?? p;
+      });
+    },
     skip: () => decide("skip", () => useWorkspace.getState().skip(id)),
   };
 }
@@ -302,6 +363,7 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
   const startable = inline && inlineStartable(p);
   const expanded = useInlineStarts((s) => startable && (s.entries[p.id]?.phase ?? "closed") !== "closed");
   const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
+  const answer = useAnswerRun(p);
   const { approve, skip } = draftDecisions(p.id);
   return (
     <DraftPreview
@@ -309,6 +371,7 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
       statusName={statusName}
       targetTitle={item?.title ?? null}
       pass={pass}
+      answer={answer}
       onOpen={() => openLiveDraft(p, { inline })}
       onApprove={approve}
       onSkip={skip}

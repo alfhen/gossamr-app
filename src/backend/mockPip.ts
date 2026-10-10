@@ -1,8 +1,8 @@
 import { and } from "../lib/filter";
-import { leftByRun, targetOf } from "../lib/proposals";
+import { WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
 import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
-import type { Intent, ItemRef, Proposal, Run, RunKind, ScreenContext, WorkFilter } from "../types";
+import type { BasisField, Intent, ItemRef, Proposal, Run, RunKind, ScreenContext, WorkFilter } from "../types";
 import { needsPerson, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
@@ -11,6 +11,8 @@ import { mockPipTurns, mockUsage } from "./mockPipTurns";
 import { GENERAL_CONVERSATION, workstreamOfConversation } from "../lib/conversations";
 import { labelsByRun } from "../lib/workstreamStage";
 import { heldText } from "../lib/workstreamHold";
+import { statusId } from "./mockConnector";
+import type { LastTrip } from "./mockWorkstreams";
 
 /** What the scripted Pip does for one question. */
 export interface PipScript {
@@ -28,6 +30,8 @@ export interface PipScript {
   rewrite?: { item: ItemRef; part: "title" | "description" } | null;
   /** A follow-up to propose for a finished run, the way propose_follow_up does. */
   followUp?: { runId: string; message: string; reason: string } | null;
+  /** Answers to suggest to runs that are asking a question, the way propose_answer does: one per run. */
+  answers?: { runId: string; message: string }[];
   /** The draft this turn was about, remembered for the rest of the conversation. */
   discussed?: string;
 }
@@ -108,6 +112,22 @@ export interface PipWorkstream {
   id: string;
   item: ItemRef | null;
   heldReason?: string | null;
+  /** The ticket fields whose drift held it, while it is held for that. */
+  drifted?: readonly BasisField[] | null;
+  /** The last tripwire that held it, while Pip hasn't been told of it in a wake since the person resumed it. */
+  lastTrip?: LastTrip | null;
+}
+
+/**
+ * The one line a wake adds after the person resumed a workstream its ticket's drift held, e.g. "The ticket's description
+ * changed while I was held; I'll work from it as it reads now." Null for any other tripwire, or before the resume.
+ */
+export function driftLine(trip: LastTrip | null | undefined): string | null {
+  if (trip?.kind !== "basis_drift" || !trip.resumedAt) return null;
+  const changed = (["summary", "description"] as const).filter((f) => trip.fields.includes(f));
+  const done = trip.fields.includes("status");
+  const what = changed.length ? `The ticket's ${changed.join(" and ")} changed${done ? " and it was moved to Done" : ""}` : done ? "The ticket was moved to Done" : "The ticket changed";
+  return `${what} while I was held; I'll work from it as it reads now.`;
 }
 
 /** A key the person named ("plan CA-401"), upper case, when it isn't the workstream's own: then it isn't this workstream's next step. */
@@ -145,6 +165,24 @@ function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[],
   };
 }
 
+const asksToMove = /^\s*(?:please\s+)?move\s+(?:it|this|([A-Z][A-Z0-9]*-\d+))\s+to\s+(.+?)\s*[.!]?\s*$/i;
+
+/** "Move it to QA": a move of the named ticket, else the workstream's or the open one, drafted the way propose_transition does. */
+function moveScript(prompt: string, context: ScreenContext, workstream: PipWorkstream | null): PipScript | null {
+  const m = asksToMove.exec(prompt);
+  if (!m) return null;
+  const key = m[1]?.toUpperCase();
+  const item: ItemRef | null = key ? { connectionId: workstream?.item?.connectionId ?? context.item?.connectionId ?? "mock", externalId: key, key } : (workstream?.item ?? context.item);
+  if (!item) return { steps: [], text: "Which ticket should I move? Name it, or open it first.", filter: null, draft: null };
+  const status = m[2].trim();
+  return {
+    steps: [`Checked the statuses for ${item.key}`, `Suggested a transition for ${item.key}`],
+    text: `I drafted a move of **${item.key}** to **${status}**. Nothing changes in Jira until you approve it.`,
+    filter: null,
+    draft: { intent: { type: "transition", item, to: statusId(item.key.split("-")[0], status) }, label: status },
+  };
+}
+
 /** Whether the screen line is Pip home's, "Pip home" and then its conversation (`screenLine` in src/workspace/screenContext.ts). */
 const onPipHome = (view: string | null | undefined) => view === "Pip home" || !!view?.startsWith("Pip home · ");
 
@@ -165,7 +203,7 @@ function workstreamAnswer(prompt: string, runs: readonly Run[], workstream: PipW
   if (asksToApprovePlan.test(prompt))
     return say(`I can't approve anything myself. The plan's update to the description of **${key}** waits in the Plan step on the right, and in ${key}'s peek: read the change there and press Update description. The build starts only after that.`, ["Read the workstream's drafts"]);
   if (asksWhyHeld.test(prompt)) {
-    const held = heldText(workstream.heldReason);
+    const held = heldText(workstream.heldReason, workstream.drifted);
     return say(
       held
         ? `${held}. While it is held I'm not woken and nothing starts on its own; agents already running carry on. Resume it from the Steps column or type /resume.`
@@ -189,11 +227,20 @@ const EVENT_LINE = /^\[Event\] (?:run (\S+)|a run) \((\w+)\) ([^;]+)(.*)$/;
 
 const KIND_WORD: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
 
+/** The reply Pip suggests to a run's question: the run's own suggestion when it made one, else a careful default grounded in its ticket. */
+export function suggestedAnswer(run: Run): string {
+  if (run.suggestedReply?.trim()) return run.suggestedReply.trim();
+  const ticket = run.item ? `what ${run.item.key} asks for` : "what you were asked";
+  return `Do what changes the least and still meets ${ticket}. If you're unsure, say why in your result instead of guessing.`;
+}
+
 /**
  * What Pip says when the supervisor wakes it: one short line for each event, at most three, from the event lines
- * alone. A run a rule started is "queued to start" until it shows Working, and nothing Pip says starts anything.
+ * alone. A run a rule started is "queued to start" until it shows Working, and nothing Pip says starts anything. A run
+ * asking a question gets a suggested reply drafted for the person to check; Pip never sends it.
  */
-function wakeScript(prompt: string, runs: readonly Run[]): PipScript {
+function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstream | null = null): PipScript {
+  const answers: { runId: string; message: string }[] = [];
   const labels = labelsByRun(runs);
   const name = (id: string | undefined) => (id ? (labels.get(id) ?? (id.length <= 12 ? id : id.slice(0, 8))) : "A run");
   const startedState = (kind: string, label: string) => {
@@ -219,10 +266,17 @@ function wakeScript(prompt: string, runs: readonly Run[]): PipScript {
         const drafts = /; (\d+) drafts?/.exec(rest)?.[1];
         return `${who} finished.${drafts ? ` It left ${drafts === "1" ? "a draft" : `${drafts} drafts`} for you.` : ""}`;
       }
+      const asking = state.trim() === "Needs an answer" ? runs.find((r) => r.id === id && r.state === "needsAnswer") : undefined;
+      if (asking) {
+        if (!answers.some((a) => a.runId === asking.id)) answers.push({ runId: asking.id, message: suggestedAnswer(asking) });
+        return `${name(id)} asks${asking.needs ? `: “${asking.needs.trim()}”` : " a question."} I drafted a reply for you to check.`;
+      }
       if (/^Needs|^Blocked/.test(state.trim())) return `${who} ${state.trim().toLowerCase()}. Open it to see what it asks.`;
       return `${who} ${state.trim().toLowerCase()}. Nothing starts after it; tell me what you want to do.`;
     });
-  return { steps: [], text: lines.join("\n\n") || "Something changed in this workstream; nothing needs you yet.", filter: null, draft: null };
+  const drift = driftLine(workstream?.lastTrip);
+  const said = lines.join("\n\n") || "Something changed in this workstream; nothing needs you yet.";
+  return { steps: answers.length ? ["Read the run", "Drafted an answer for a run"] : [], text: drift ? `${drift}\n\n${said}` : said, filter: null, draft: null, answers };
 }
 
 /** What Pip does when asked to send a finished run back: only a run that left open questions gets a follow-up, and only one at a time. */
@@ -250,7 +304,7 @@ function sendBack(context: ScreenContext, runs: readonly Run[], drafts: readonly
 function draftInQuestion(drafts: readonly Proposal[], context: ScreenContext, discussed: string | null): Proposal | undefined {
   const pending = drafts.filter((d) => d.state.type === "pending");
   if (discussed) return pending.find((d) => d.id === discussed);
-  const here = pending.filter((d) => d.intent.type !== "startRun" && d.intent.type !== "followUp" && targetOf(d.intent)?.externalId === context.item?.externalId && targetOf(d.intent)?.connectionId === context.item?.connectionId);
+  const here = pending.filter((d) => !isRunDraft(d.intent) && targetOf(d.intent)?.externalId === context.item?.externalId && targetOf(d.intent)?.connectionId === context.item?.connectionId);
   return here.length === 1 ? here[0] : undefined;
 }
 
@@ -336,9 +390,11 @@ function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
 
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
-  if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs);
+  if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs, workstream);
   const q = prompt.toLowerCase();
   if (asksToSendBack.test(prompt)) return sendBack(context, runs, drafts, discussed);
+  const move = moveScript(prompt, context, workstream);
+  if (move) return move;
   const answer = workstream ? workstreamAnswer(prompt, runs, workstream, now) : null;
   if (answer) return answer;
   const step = workstream ? chainStep(prompt, context, runs, workstream) : null;
@@ -632,12 +688,18 @@ export interface PipDrafter {
   pipRewrite(item: ItemRef, part: "title" | "description", requestId: string): Promise<unknown>;
   /** Drafts a follow-up for a finished run the way propose_follow_up does. */
   pipFollowUp(runId: string, message: string, reason: string, requestId: string): Promise<unknown>;
+  /** Drafts an answer to a run that is asking a question the way propose_answer does. */
+  pipAnswer(runId: string, message: string, requestId: string): Promise<unknown>;
   /** Drafts a run the way propose_run does: Pip names the ticket, the kind, the run it follows and a focus note, the backend builds the rest. */
   pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string): Promise<unknown>;
   /** The ticket of workstream `id`, for a turn asked in its conversation. */
   pipWorkstreamItem(id: string): ItemRef | null;
   /** Why workstream `id` is held, or null; only the scripted answer to "Why is this held?" reads it. */
   pipWorkstreamHeld(id: string): string | null;
+  /** The ticket fields whose drift held workstream `id`, while it is held for that. */
+  pipWorkstreamDrifted?(id: string): readonly BasisField[] | null;
+  /** The last tripwire that held workstream `id`, while no wake told Pip of it since the person resumed it; a wake's script reads it. */
+  pipWorkstreamTrip?(id: string): LastTrip | null;
   /** Drafts an investigation with no ticket the way propose_run does: Pip gives a repository and a prompt, the backend builds the rest. */
   pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string): Promise<unknown>;
   /** Whether a draft from the question `requestId` is kept already. */
@@ -697,7 +759,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   // Kept the way the app keeps a turn: the question now, steps as they come, the answer and its usage at the end.
   mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "running", new Date(), undefined, req.kind ?? "user");
   const wsId = workstreamOfConversation(req.conversation);
-  const workstream = wsId ? { id: wsId, item: drafter?.pipWorkstreamItem?.(wsId) ?? null, heldReason: drafter?.pipWorkstreamHeld?.(wsId) ?? null } : null;
+  const workstream = wsId ? { id: wsId, item: drafter?.pipWorkstreamItem?.(wsId) ?? null, heldReason: drafter?.pipWorkstreamHeld?.(wsId) ?? null, drifted: drafter?.pipWorkstreamDrifted?.(wsId) ?? null, lastTrip: drafter?.pipWorkstreamTrip?.(wsId) ?? null } : null;
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });
@@ -711,17 +773,30 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       mockPipTurns.step(req.requestId, label);
       emit(req.requestId, { type: "tool", label });
     }
-    if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
+    // A refused draft is Pip's to report, as the tool's refusal is in a real turn, not a turn that failed. Pip puts the
+    // draft cap, which is addressed to it, in the person's words.
+    const refusal = (e: unknown) => {
+      const why = e instanceof Error ? e.message : String(e);
+      return wsId && why === capRefusal(wsId) ? `this workstream already has ${WORKSTREAM_PENDING_CAP} drafts waiting for you. Decide some and I'll draft more` : why;
+    };
+    if (!stopped && script.draft) {
+      const refused = await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId).then(() => null, refusal);
+      if (refused) script.text = `I couldn't draft that: ${refused}`;
+    }
     if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, description: script.revise.description, summaries: script.revise.summaries }, req.requestId);
-    if (!stopped && script.rewrite) await drafter?.pipRewrite?.(script.rewrite.item, script.rewrite.part, req.requestId);
+    if (!stopped && script.rewrite) {
+      const refused = await drafter?.pipRewrite?.(script.rewrite.item, script.rewrite.part, req.requestId).then(() => null, refusal);
+      if (refused) script.text = `I couldn't draft that: ${refused}`;
+    }
     if (!stopped && script.followUp) await drafter?.pipFollowUp?.(script.followUp.runId, script.followUp.message, script.followUp.reason, req.requestId);
+    for (const answer of script.answers ?? []) {
+      if (stopped) break;
+      const refused = await drafter?.pipAnswer?.(answer.runId, answer.message, req.requestId).then(() => null, refusal);
+      if (refused) script.text = `${script.text}\n\nI couldn't draft a reply for that run: ${refused}`;
+    }
     if (!stopped && script.runDraft) {
-      // A refused draft is Pip's to report, as the tool's refusal is in a real turn, not a turn that failed.
       const { item, kind, fromRun, focus } = script.runDraft;
-      const refused = await drafter?.pipRunDraft?.(item, kind, fromRun, focus, req.requestId).then(
-        () => null,
-        (e: unknown) => (e instanceof Error ? e.message : String(e)),
-      );
+      const refused = await drafter?.pipRunDraft?.(item, kind, fromRun, focus, req.requestId).then(() => null, refusal);
       if (refused) script.text = `I couldn't draft that: ${refused}`;
     }
     if (!stopped && script.ticketlessRun) await drafter?.pipTicketlessRunDraft?.(script.ticketlessRun.repo, script.ticketlessRun.prompt, req.requestId);

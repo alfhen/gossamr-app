@@ -258,12 +258,13 @@ describe("what starts", () => {
 });
 
 describe("the checks before starting", () => {
-  it("turns Start off with the red row's reason when too many agents are running", async () => {
+  it("keeps Start on with an amber row when as many agents as allowed are running: the run waits for a slot", async () => {
     await setup({ runs: { cap: 2 } });
     await s().begin({ item: CA });
     await s().chooseRepo("acme/storefront");
-    expect(s().preflight?.blocking).toBe(true);
-    expect(blockReason()).toMatch(/agents are running/);
+    expect(s().preflight?.blocking).toBe(false);
+    expect(s().preflight?.rows.find((r) => r.level === "amber" && /will wait for a slot/.test(r.text))).toBeTruthy();
+    expect(blockReason()).toBeNull();
   });
 
   it("turns Start off when Claude is not signed in", async () => {
@@ -494,5 +495,11 @@ describe("the shared review-and-approve core", () => {
     expect(useToasts.getState().toasts.slice(-1)[0]?.text).toBe("Agent started on CA-401. It runs in the background.");
     afterRunStarted(started.run, CA, { switchToAgents: true });
     expect(useTabs.getState().route).toBe("agents");
+  });
+
+  it("says an approval over the cap waits for a slot rather than that it started", () => {
+    const waiting = { ...new MockBackend().runs.list()[0], id: "w", state: "queued" as const, slotWaitSince: "2026-09-30T11:00:00Z" };
+    afterRunStarted(waiting, CA, { switchToAgents: false });
+    expect(useToasts.getState().toasts.slice(-1)[0]?.text).toBe("Approved the agent on CA-401. Every slot is taken, so it waits and starts when one of the running agents finishes.");
   });
 });

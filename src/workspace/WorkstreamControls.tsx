@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Switch } from "../components/Switch";
 import { RULE_SWITCH, budgetNote, heldText, ruleText } from "../lib/workstreamHold";
-import { HELD_BUDGET, WORKSTREAM_RULES, type AutoStartSwitches, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
+import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { Btn } from "./AgentSheet";
 import { usePopover } from "./Popover";
 import { useWorkstreams } from "./workstreamsStore";
@@ -155,7 +155,8 @@ export interface ControlsViewProps {
  */
 export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop }: ControlsViewProps) {
   const ws = view.workstream;
-  const held = heldText(ws.heldReason);
+  const held = heldText(ws.heldReason, ws.drifted);
+  const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
   const note = budgetNote(view.budget);
   const manage = ws.mode === "manage";
   const box = useRef<HTMLDivElement>(null);
@@ -184,7 +185,14 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
       </div>
       {held && (
         <div role="status" data-held-banner={ws.heldReason} className="flex flex-wrap items-center gap-2 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1 text-sm text-ws-ink">
-          <span className="min-w-0 flex-1">{held}</span>
+          <span className="min-w-0 flex-1">
+            {held}
+            {drift && (
+              <span data-drift-hint className="block text-xs text-ws-ink2">
+                Read {ws.itemKey ?? "the ticket"} as it is now before you resume: what Pip planned may no longer fit. Resuming takes it as the new starting point.
+              </span>
+            )}
+          </span>
           <Btn tone="plain" onClick={actions.onResume} className="px-2 py-0.5">
             Resume
           </Btn>

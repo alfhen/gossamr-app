@@ -672,6 +672,10 @@ pub struct Run {
     /// Set when the supervisor started the run by an auto-start rule rather than a person approving it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_start: Option<AutoStarted>,
+    /// Set while an approved run stays `Queued` only because `max_runs` agents are running: it starts by itself, in
+    /// approval order, once a slot frees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_wait_since: Option<DateTime<Utc>>,
 }
 
 impl Run {
@@ -754,6 +758,7 @@ impl Run {
             earlier_sessions: Vec::new(),
             possible_continuations: Vec::new(),
             auto_start: None,
+            slot_wait_since: None,
         }
     }
 }
@@ -1558,6 +1563,16 @@ mod tests {
         assert_eq!(back, auto);
         assert_eq!(back.digest, plain.digest, "the rule is not part of what is approved");
         assert_eq!(back.spec.digest(), plain.spec.digest());
+    }
+
+    #[test]
+    fn a_run_waiting_for_a_slot_round_trips_and_one_that_is_not_stores_nothing_new() {
+        let plain = Run::queued("r".into(), "p".into(), "c".into(), None, spec(), "f".into(), Utc::now());
+        assert!(serde_json::to_value(&plain).unwrap().get("slotWaitSince").is_none());
+        let waiting = Run { slot_wait_since: Some(Utc::now()), ..plain.clone() };
+        let json = serde_json::to_value(&waiting).unwrap();
+        assert!(json["slotWaitSince"].is_string());
+        assert_eq!(serde_json::from_value::<Run>(json).unwrap(), waiting);
     }
 
     #[test]

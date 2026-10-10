@@ -1,4 +1,4 @@
-import { Dot, StateChip, rowText } from "./AgentParts";
+import { Dot, RowText, StateChip } from "./AgentParts";
 import { KIND_LABEL, ageText, formatTokens, repoName, runTitle, stateView } from "./agentsLogic";
 import { AutoStarted, RunLabel, RunRef, agentId, onActivate, ticketLabel, type AgentItemProps } from "./AgentCard";
 
@@ -56,7 +56,7 @@ export function AgentRow({ run, now, selected, position, total, ticketTitle, lab
         <span className="hidden shrink-0 @md:inline-flex">
           <StateChip run={run} now={now} />
         </span>
-        <span className={`min-w-0 truncate ${view.tone === "blocked" ? "text-ws-blocked" : ""}`}>{rowText(run, now)}</span>
+        <span className={`min-w-0 truncate ${view.tone === "blocked" ? "text-ws-blocked" : ""}`}><RowText run={run} now={now} /></span>
       </span>
       <span className="hidden truncate text-right text-ws-ink3 tabular-nums @6xl:block">{tokens?.replace(/ tokens?$/, "") ?? ""}</span>
       <span className="text-right text-ws-ink3 tabular-nums">{ageText(run, now)}</span>

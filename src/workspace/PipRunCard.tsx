@@ -4,8 +4,8 @@ import { labelsByRun } from "../lib/workstreamStage";
 import { AutoStarted, RunLabel } from "./AgentCard";
 import { useWorkspace } from "../workspaceStore";
 import { useAgentsEnabled } from "./agentsFlag";
-import { runTitle, stateView } from "./agentsLogic";
-import { Dot, TONE, rowText } from "./AgentParts";
+import { runTitle, stateView, waitsForSlot } from "./agentsLogic";
+import { Dot, RowText, TONE } from "./AgentParts";
 import { stripRuns } from "./pipRuns";
 import { useRuns } from "./runsStore";
 
@@ -42,7 +42,15 @@ export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = f
           <b className="min-w-0 truncate text-sm font-semibold">{title}</b>
         </span>
         <span className="min-w-0 truncate text-xs text-ws-ink3">
-          <span className={`font-semibold ${tone.text}`}>{view.label}</span> · {rowText(run, now)}
+          {waitsForSlot(run) ? (
+            <span data-slot-wait className={`font-semibold ${tone.text}`}>
+              <RowText run={run} now={now} />
+            </span>
+          ) : (
+            <>
+              <span className={`font-semibold ${tone.text}`}>{view.label}</span> · <RowText run={run} now={now} />
+            </>
+          )}
         </span>
         <AutoStarted run={run} />
       </div>

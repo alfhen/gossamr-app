@@ -1,8 +1,9 @@
+import { docText } from "../lib/docs";
 import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
-import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
-import type { ItemRef, Run, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamView, WorkstreamsChanged } from "../types";
+import { BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
+import type { BasisField, ItemRef, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamView, WorkstreamsChanged } from "../types";
 import { startedFresh } from "./mockPipTurns";
 
 const CONNECTION = "mock";
@@ -47,6 +48,48 @@ export function textDigest(text: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0;
   return `mock-${h.toString(16).padStart(8, "0")}`;
+}
+
+/** What of a ticket its workstream's basis is taken from. */
+export type BasisTicket = Pick<WorkItem, "title" | "body" | "status" | "assignee">;
+
+/** What `ticket` looks like now, kept to notice it drifting later, as `basis_of` in src-tauri/src/inbox/workstreams.rs. */
+export function basisOfItem(ticket: BasisTicket): WorkstreamBasis {
+  return { statusId: ticket.status.id, assignee: ticket.assignee, summaryDigest: textDigest(ticket.title), descriptionDigest: textDigest(docText(ticket.body)) };
+}
+
+/**
+ * The fields of `basis` that `ticket` drifted from in a way that invalidates the plan, as `drifted` does: its summary or
+ * description changed, or it moved into a Done status other than the basis's. Fields a write is changing are left out,
+ * and a basis with no summary digest isn't compared on its summary. Another status or a new assignee doesn't count.
+ */
+export function driftOf(basis: WorkstreamBasis, ticket: BasisTicket): BasisField[] {
+  const now = basisOfItem(ticket);
+  const compared = (f: BasisField) => !(basis.changing ?? []).includes(f);
+  const fields: BasisField[] = [];
+  if (compared("summary") && basis.summaryDigest && basis.summaryDigest !== now.summaryDigest) fields.push("summary");
+  if (compared("description") && basis.descriptionDigest !== now.descriptionDigest) fields.push("description");
+  if (compared("status") && ticket.status.category === "done" && basis.statusId !== now.statusId) fields.push("status");
+  return fields;
+}
+
+/** The last tripwire that held a workstream, from its audit: its kind, the basis fields that drifted, when, and when the person resumed it after. */
+export interface LastTrip {
+  kind: string;
+  fields: BasisField[];
+  at: string;
+  resumedAt: string | null;
+}
+
+/** The last tripwire in `events` (oldest first) with its `basis_drifted` fields and the person's first resume after it, as `last_trip`. */
+export function lastTripOf(events: readonly WorkstreamEvent[]): LastTrip | null {
+  const trip = [...events].reverse().find((e) => e.actor === "supervisor" && e.action === "tripwire");
+  if (!trip?.detail || !(TRIPWIRES as readonly string[]).includes(trip.detail)) return null;
+  const after = events.filter((e) => e.seq > trip.seq);
+  const drift = after.find((e) => e.actor === "supervisor" && e.action === "basis_drifted");
+  const fields = (drift?.detail ?? "").split(",").filter((f): f is BasisField => (BASIS_FIELDS as readonly string[]).includes(f));
+  const resumed = after.find((e) => e.actor === "person" && e.action === "resumed");
+  return { kind: trip.detail, fields, at: trip.at, resumedAt: resumed?.at ?? null };
 }
 
 /**
@@ -124,8 +167,8 @@ export class MockWorkstreams {
   private seq = 0;
   /** The number of the pull request run `runId` opened, as far as the code host shows it; set by the backend that owns the code. */
   prOf: (runId: string) => number | null = () => null;
-  /** What a cached ticket looks like now, kept as a new workstream's basis; set by the backend that owns the tickets. */
-  basisOf: (item: ItemRef) => WorkstreamBasis | null = () => null;
+  /** A cached ticket as it is now, by key, which a workstream's basis is taken from; set by the backend that owns the tickets. */
+  ticketOf: (key: string) => BasisTicket | null = () => null;
 
   /**
    * `runs` lists the runs there are, `titleOf` the title of a cached ticket (null when it isn't cached). `now` is the
@@ -203,7 +246,8 @@ export class MockWorkstreams {
       const work = this.titleOf(item);
       if (work === null) throw new Error(`${item.key} isn't in the cache, so there is nothing to base a workstream on`);
       itemKey = item.key;
-      basis = this.basisOf(item);
+      const ticket = this.ticketOf(item.key);
+      basis = ticket ? basisOfItem(ticket) : null;
       made = named || flat(`${item.key} ${work}`);
     } else {
       if (!named) throw new Error("a workstream with no ticket needs a title");
@@ -314,15 +358,60 @@ export class MockWorkstreams {
     return next ? this.changedTo(next, actor, "held", { detail: reason }) : ws;
   }
 
-  /** Lifts a workstream's hold, as `resume_workstream` does; lifting a budget hold also resets what was spent (`budget_reset`). */
+  /**
+   * Lifts a workstream's hold, as `resume_workstream` does; lifting a budget hold also resets what was spent
+   * (`budget_reset`), and lifting a basis-drift hold takes the basis again from the ticket as it is now (`basis_captured`).
+   */
   resume(id: string): Workstream {
     const ws = this.openOne(id);
     if (ws.heldReason === null) return ws;
     const reset = ws.heldReason === HELD_BUDGET;
-    const next: Workstream = { ...ws, heldReason: null, spent: reset ? { ...ws.spent, autoTurns: 0, wakes: 0 } : ws.spent };
+    const rebase = ws.heldReason === `${TRIPWIRE}basis_drift`;
+    let next: Workstream = { ...ws, heldReason: null, spent: reset ? { ...ws.spent, autoTurns: 0, wakes: 0 } : ws.spent };
+    if (rebase) {
+      const ticket = ws.itemKey ? this.ticketOf(ws.itemKey) : null;
+      const { drifted: _, ...rest } = next;
+      next = { ...rest, basis: ticket ? basisOfItem(ticket) : null };
+    }
     this.changedTo(next, "person", "resumed", { detail: ws.heldReason });
     if (reset) this.record(id, "person", "budget_reset");
+    if (rebase && next.basis) this.record(id, "supervisor", "basis_captured");
     return next;
+  }
+
+  /**
+   * The fields workstream `id`'s ticket drifted from its basis, as `workstream_basis_drift`: a workstream with no basis
+   * yet has it taken now and hasn't drifted; null with nothing to compare (no ticket, or not cached).
+   */
+  basisDrift(id: string): BasisField[] | null {
+    const ws = this.owned(id);
+    const ticket = ws.itemKey ? this.ticketOf(ws.itemKey) : null;
+    if (!ticket) return null;
+    if (ws.basis) return driftOf(ws.basis, ticket);
+    this.changedTo({ ...ws, basis: basisOfItem(ticket) }, "supervisor", "basis_captured");
+    return [];
+  }
+
+  /**
+   * Once a draft the person approved in workstream `id` wrote `fields` of its ticket, the basis takes those fields again
+   * from the ticket as the write left it, as `capture_workstream_basis` after a write; the others are still compared.
+   */
+  rebase(id: string, fields: readonly BasisField[]) {
+    const ws = this.all.find((w) => w.id === id && w.closedAt === null);
+    const ticket = ws?.itemKey ? this.ticketOf(ws.itemKey) : null;
+    if (!ws || !ticket || (ws.basis && !fields.length)) return;
+    const now = basisOfItem(ticket);
+    const old = ws.basis;
+    const basis: WorkstreamBasis = old
+      ? {
+          statusId: fields.includes("status") ? now.statusId : old.statusId,
+          assignee: old.assignee,
+          summaryDigest: fields.includes("summary") ? now.summaryDigest : old.summaryDigest,
+          descriptionDigest: fields.includes("description") ? now.descriptionDigest : old.descriptionDigest,
+        }
+      : now;
+    if (JSON.stringify(basis) === JSON.stringify(old)) return;
+    this.changedTo({ ...ws, basis }, "supervisor", "basis_captured");
   }
 
   /** The person's switch for one auto-start rule, as `set_workstream_rule` does; null follows the global switch again. */
@@ -418,13 +507,15 @@ export class MockWorkstreams {
 
   /**
    * A tripwire fired, as `trip_workstream` records it: the tripwire line with its kind (and run), the workstream drops to
-   * Advise and is held with `tripwire:<kind>`.
+   * Advise and is held with `tripwire:<kind>`. A basis drift records the fields that drifted (`basis_drifted`, kept in
+   * `drifted` while held) and keeps the basis until the person resumes.
    */
-  trip(id: string, kind: string, runId: string | null): Workstream {
+  trip(id: string, kind: string, runId: string | null, drifted: readonly BasisField[] = []): Workstream {
     const reason = `${TRIPWIRE}${kind}`;
     if (!validHoldReason(reason)) throw new Error(`there is no tripwire "${kind}"`);
     let ws = this.openOne(id);
     this.append(id, "supervisor", "tripwire", { runId, detail: kind });
+    if (kind === "basis_drift" && drifted.length) this.append(id, "supervisor", "basis_drifted", { detail: drifted.join(",") });
     if (ws.mode !== "advise") {
       ws = { ...ws, mode: "advise" };
       this.append(id, "supervisor", "mode_set", { detail: "advise" });
@@ -434,6 +525,7 @@ export class MockWorkstreams {
       ws = next;
       this.append(id, "supervisor", "held", { detail: reason });
     }
+    if (kind === "basis_drift" && ws.heldReason === reason) ws = { ...ws, drifted: [...drifted] };
     this.put(ws);
     this.save();
     this.changed();

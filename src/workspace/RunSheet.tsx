@@ -5,8 +5,8 @@ import type { Run, RunEvent, RunOutcome, RunReview } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
-import { StateChip } from "./AgentParts";
-import { KIND_LABEL, agentGroups, ageText, formatTokens, permissionRequest, progressText, quietMinutes, quietText, repoName, runTitle, stateView } from "./agentsLogic";
+import { StateChip, useSlotQueue } from "./AgentParts";
+import { KIND_LABEL, agentGroups, ageText, formatTokens, ordinal, permissionRequest, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition, stateView } from "./agentsLogic";
 import { openTicketByKey } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { failureAction } from "./failureActions";
@@ -74,6 +74,8 @@ export interface RunSheetViewProps {
   opened: boolean;
   /** Why this run is worth cleaning up, when it is. */
   cleanup?: string | null;
+  /** Where the run is in line for a slot, 1 for next, when it waits for one. */
+  slotPlace?: number | null;
   on: RunSheetActions;
 }
 
@@ -85,7 +87,7 @@ function OpenInTerminal({ run, on, filled = true }: { run: Run; on: RunSheetActi
   );
 }
 
-function Attention({ run, opened, answering, on }: { run: Run; opened: boolean; answering: boolean; on: RunSheetActions }) {
+function Attention({ run, opened, answering, slotPlace, on }: { run: Run; opened: boolean; answering: boolean; slotPlace: number | null; on: RunSheetActions }) {
   switch (run.state) {
     case "needsPermission": {
       const ask = permissionRequest(run.needs);
@@ -138,7 +140,7 @@ function Attention({ run, opened, answering, on }: { run: Run; opened: boolean; 
           <BoxTitle icon="clock" tone="plain">
             Waiting to start
           </BoxTitle>
-          <p className="m-0 text-ws-ink2">{waitingText(run)}</p>
+          <p className="m-0 text-ws-ink2">{waitingText(run, slotPlace)}</p>
         </Box>
       );
     default:
@@ -147,10 +149,12 @@ function Attention({ run, opened, answering, on }: { run: Run; opened: boolean; 
 }
 
 /**
- * Why a queued run waits. One in a workstream starts on its own once the workstream isn't held and a slot is free (one a
- * rule started, only while the workstream is still in Manage with that rule on); any other waits for the person.
+ * Why a queued run waits. One the person approved over the cap starts on its own when a slot frees, `place` in line. One
+ * in a workstream starts on its own once the workstream isn't held and a slot is free (one a rule started, only while the
+ * workstream is still in Manage with that rule on); any other waits for the person.
  */
-export function waitingText(run: Run): string {
+export function waitingText(run: Run, place: number | null = null): string {
+  if (run.slotWaitSince && !run.spec.workstream) return `It is approved and starts on its own when one of the running agents finishes${place ? ` (${ordinal(place)} in line)` : ""}. Stop it if you no longer want it.`;
   if (run.autoStart) return "A rule started it, and it launches on its own once a slot is free, while the workstream is in Manage, not held and has that step on. Until then it waits.";
   if (run.spec.workstream) return "It is approved and launches on its own once a slot is free and its workstream isn't held. Until then it waits.";
   return "It is approved but has not been launched, as after a restart. Nothing runs until you start it.";
@@ -259,7 +263,7 @@ function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode 
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, cleanup = null, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, cleanup = null, slotPlace = null, on }: RunSheetViewProps) {
   const view = stateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -337,7 +341,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       </div>
 
       <RunContinuation key={run.id} run={run} adopt={on.adoptSession} />
-      {attention && <Attention run={run} opened={opened} answering={answering} on={on} />}
+      {attention && <Attention run={run} opened={opened} answering={answering} slotPlace={slotPlace} on={on} />}
       {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingBreakdown} drafting={drafting} on={on} />}
       {outcome?.change && <Changes change={outcome.change} on={on} />}
 
@@ -378,6 +382,7 @@ export function RunSheet({ id }: { id: string }) {
   const earlierOpen = useRuns((s) => s.earlierOpen);
   const group = usePrefs((s) => s.agentsGroup);
   const workstreams = useWorkstreams((s) => s.list);
+  const slotLine = useSlotQueue();
   const label = useMemo(() => labelsByRun(runs).get(id), [runs, id]);
   const ticket = useWorkspace((s) => (run?.item ? s.items[itemKey(run.item)] : undefined));
   const [wide, setWide] = useState(false);
@@ -509,6 +514,6 @@ export function RunSheet({ id }: { id: string }) {
       backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
     },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} on={on} />;
 }
 

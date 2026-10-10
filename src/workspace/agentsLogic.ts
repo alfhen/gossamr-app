@@ -75,14 +75,17 @@ const VIEWS: Record<RunState, StateView> = {
 };
 
 /** What a run is called and coloured, with the quiet colour taking over from the working one. */
-export function stateView(run: Pick<Run, "state" | "lastProgressAt" | "stoppedByLimit">, now: number): StateView {
+export function stateView(run: Pick<Run, "state" | "lastProgressAt" | "stoppedByLimit" | "slotWaitSince">, now: number): StateView {
   if (run.state === "stopped" && run.stoppedByLimit) return { label: "Stopped at limit", tone: "warn", icon: "stop", live: false };
+  if (waitsForSlot(run)) return { ...VIEWS.queued, label: SLOT_WAIT };
   const view = VIEWS[run.state];
   return quietMinutes(run, now) === null ? view : { ...view, tone: "warn", live: false };
 }
 
 /** What a stopped run says it was left at: that Gossamr stopped it at a limit, that it may have carried on elsewhere, or where it stopped. */
-export function stoppedText(run: Pick<Run, "stoppedByLimit" | "error" | "lastDetail" | "possibleContinuations">): string {
+export function stoppedText(run: Pick<Run, "stoppedByLimit" | "error" | "lastDetail" | "possibleContinuations"> & Partial<Pick<Run, "launchedAt">>): string {
+  // Stopped while it waited for a slot: it never had a session, and the reason says so.
+  if (run.launchedAt === null && !run.stoppedByLimit && run.error?.trim()) return run.error.trim();
   const continued = run.possibleContinuations?.length ? "May have continued in another session" : null;
   const limit = run.stoppedByLimit ? run.error?.trim() || "Stopped at its limit" : null;
   if (continued && limit) return `${limit.replace(/\.+$/, "")}. ${continued}`;
@@ -140,8 +143,47 @@ export function resultHeadline(result: string | null): string | null {
   return sentence.length > 220 ? `${sentence.slice(0, 217)}…` : sentence;
 }
 
-/** What a run is doing right now, in the person's words, for working and waiting runs. */
-export function progressText(run: Pick<Run, "state" | "lastDetail">): string {
+export const SLOT_WAIT = "Waiting for a slot";
+
+/** An approved run that stays queued only because as many agents as the settings allow are running. */
+export const waitsForSlot = (run: Pick<Run, "state" | "slotWaitSince">) => run.state === "queued" && !!run.slotWaitSince;
+
+/**
+ * The runs that can be given a slot, as `launch_waiting` lines them up: none in a workstream that is held or closed,
+ * which waits for the person rather than for a slot. `workstreams` are the ones loaded; a run in any other stays in line.
+ */
+export function slotQueue<R extends Pick<Run, "spec">>(runs: readonly R[], workstreams: readonly WorkstreamView[]): readonly R[] {
+  const stalled = new Set(workstreams.filter((v) => v.workstream.heldReason || v.workstream.closedAt).map((v) => v.workstream.id));
+  return stalled.size ? runs.filter((r) => !r.spec.workstream || !stalled.has(r.spec.workstream)) : runs;
+}
+
+/** Where `run` is in line for a slot, 1 for next, among the queued runs waiting for one in approval order; null when it isn't waiting. */
+export function slotPosition(run: Pick<Run, "id" | "state" | "slotWaitSince">, runs: readonly Pick<Run, "id" | "state" | "slotWaitSince" | "queuedAt">[]): number | null {
+  if (!waitsForSlot(run)) return null;
+  // By the time itself: the backend writes a varying number of fractional digits, so the strings don't sort.
+  const line = runs.filter(waitsForSlot).sort((a, b) => Date.parse(a.queuedAt) - Date.parse(b.queuedAt) || a.id.localeCompare(b.id));
+  const at = line.findIndex((r) => r.id === run.id);
+  return at < 0 ? null : at + 1;
+}
+
+/** 1st, 2nd, 3rd, 4th, 11th, 12th, 21st. */
+export function ordinal(n: number): string {
+  const teen = n % 100 >= 11 && n % 100 <= 13;
+  const suffix = teen ? "th" : ({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ?? "th";
+  return `${n}${suffix}`;
+}
+
+/** "Waiting for a slot · 2nd in line", or without the place when the other runs aren't known. */
+export function slotText(run: Pick<Run, "id" | "state" | "slotWaitSince">, runs?: readonly Pick<Run, "id" | "state" | "slotWaitSince" | "queuedAt">[]): string | null {
+  if (!waitsForSlot(run)) return null;
+  const at = runs ? slotPosition(run, runs) : null;
+  return at === null ? SLOT_WAIT : `${SLOT_WAIT} · ${ordinal(at)} in line`;
+}
+
+/** What a run is doing right now, in the person's words, for working and waiting runs; `runs` places one waiting for a slot in line. */
+export function progressText(run: Pick<Run, "state" | "lastDetail"> & Partial<Pick<Run, "id" | "slotWaitSince">>, runs?: readonly Run[]): string {
+  const slot = run.id ? slotText({ id: run.id, state: run.state, slotWaitSince: run.slotWaitSince }, runs) : null;
+  if (slot) return slot;
   if (run.lastDetail?.trim()) return run.lastDetail.trim();
   if (run.state === "queued") return "Waiting to start";
   if (run.state === "launching") return "Starting up";
@@ -278,12 +320,23 @@ export function summaryLine(runs: readonly Run[], now: number): string {
   const quiet = runs.filter((r) => quietMinutes(r, now) !== null).length;
   const failed = runs.filter((r) => r.state === "failed").length;
   const unclear = runs.filter((r) => r.state === "unknown").length;
-  const running = count("running");
+  const waiting = runs.filter(waitsForSlot).length;
+  const running = count("running") - waiting;
   const done = count("done");
-  return [needs && `${needs} ${needs === 1 ? "needs" : "need"} you`, running && `${running} running`, done && `${done} ready to review`, quiet && `${quiet} quiet`, failed && `${failed} failed`, unclear && `${unclear} unclear`]
+  return [needs && `${needs} ${needs === 1 ? "needs" : "need"} you`, running && `${running} running`, waiting && `${waiting} waiting for a slot`, done && `${done} ready to review`, quiet && `${quiet} quiet`, failed && `${failed} failed`, unclear && `${unclear} unclear`]
     .filter(Boolean)
     .join(" · ") || "Nothing running";
 }
 
 /** Runs Stop all would reach in this account: the ones that can be stopped. */
 export const stoppable = (runs: readonly Run[]): Run[] => runs.filter((r) => r.state === "working" || needsPerson(r));
+
+/** Approved runs Stop all stops before they start, so none takes a slot it frees. */
+export const slotWaiters = (runs: readonly Run[]): Run[] => runs.filter(waitsForSlot);
+
+/** What Stop all would stop, in words: "3 agents", "3 agents and 2 waiting to start", "1 waiting to start". */
+export function stopAllText(agents: number, waiting: number): string {
+  const live = agents ? `${agents} ${agents === 1 ? "agent" : "agents"}` : "";
+  const queued = waiting ? `${waiting} waiting to start` : "";
+  return [live, queued].filter(Boolean).join(" and ") || "0 agents";
+}

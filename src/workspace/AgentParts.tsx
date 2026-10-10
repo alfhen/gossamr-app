@@ -1,8 +1,11 @@
+import { useMemo } from "react";
 import type { Run } from "../types";
 import { Icon, STATE_ICON } from "./AgentIcons";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { createdFrom } from "./runSheetLogic";
-import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, stateView, stoppedText, type Tone } from "./agentsLogic";
+import { useRuns } from "./runsStore";
+import { useWorkstreams } from "./workstreamsStore";
+import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stateView, stoppedText, type Tone } from "./agentsLogic";
 
 export const TONE: Record<Tone, { text: string; soft: string; color: string }> = {
   pip: { text: "text-ws-pip", soft: "bg-ws-pip-soft", color: "var(--color-ws-pip)" },
@@ -91,8 +94,16 @@ export function FailureNext({ run, failure }: { run: Run; failure: FailureState 
 
 const clamp = (lines: 2 | 3) => (lines === 2 ? "line-clamp-2" : "line-clamp-3");
 
+/** Every run that can be given a slot, from the live stores, so a run waiting for one is placed in the same line everywhere (`slotQueue`). */
+export function useSlotQueue(): readonly Run[] {
+  const runs = useRuns((s) => s.runs);
+  const workstreams = useWorkstreams((s) => s.list);
+  return useMemo(() => slotQueue(runs, workstreams), [runs, workstreams]);
+}
+
 /** What a card or row says about the run's state, in the order the person needs it. */
 export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number; onAttach(): void; failure: FailureState }) {
+  const runs = useSlotQueue();
   const quiet = quietMinutes(run, now);
   switch (run.state) {
     case "needsPermission": {
@@ -180,7 +191,9 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
           )}
           <p className="m-0 flex items-start gap-2 text-ws-ink2">
             <Dot tone={v.tone} live={v.live} />
-            <span className={`${clamp(2)} -mt-0.5 min-w-0 [overflow-wrap:anywhere]`}>{progressText(run)}</span>
+            <span data-slot-wait={run.slotWaitSince ? "" : undefined} className={`${clamp(2)} -mt-0.5 min-w-0 [overflow-wrap:anywhere]`}>
+              {progressText(run, runs)}
+            </span>
           </p>
           {quiet !== null && (
             <div className="flex flex-wrap items-center gap-2">
@@ -193,8 +206,13 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
   }
 }
 
-/** The single line a list row shows after the state chip. */
-export function rowText(run: Run, now: number): string {
+/** `rowText` as an element, placing a run waiting for a slot in line among every run (`useSlotQueue`). */
+export function RowText({ run, now }: { run: Run; now: number }) {
+  return <>{rowText(run, now, useSlotQueue())}</>;
+}
+
+/** The single line a list row shows after the state chip; `runs` places a run waiting for a slot in line. */
+export function rowText(run: Run, now: number, runs?: readonly Run[]): string {
   const quiet = quietMinutes(run, now);
   switch (run.state) {
     case "needsPermission":
@@ -212,6 +230,6 @@ export function rowText(run: Run, now: number): string {
     case "stopped":
       return stoppedText(run);
     default:
-      return quiet !== null ? `${quietText(quiet)}. ${progressText(run)}` : progressText(run);
+      return quiet !== null ? `${quietText(quiet)}. ${progressText(run, runs)}` : progressText(run, runs);
   }
 }

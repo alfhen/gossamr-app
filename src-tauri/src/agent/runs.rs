@@ -1,5 +1,6 @@
-//! Pip's view of the person's agent runs. Pip can read them and propose one for the person to approve; it cannot start,
-//! stop or answer one, and nothing here spawns a process. Whatever an agent wrote is handed to Pip as marked data.
+//! Pip's view of the person's agent runs. Pip can read them, propose one for the person to approve, and suggest an
+//! answer to one that asks a question for the person to send; it cannot start, stop or answer one, and nothing here
+//! spawns a process. Whatever an agent wrote is handed to Pip as marked data.
 
 use std::collections::{HashMap, HashSet};
 
@@ -15,7 +16,7 @@ use crate::inbox::SUMMARY_ONLY;
 use crate::runs::report::{ReportStatus, ResultSource};
 use crate::tracker::Connection;
 
-pub(super) const NAMES: [&str; 6] = ["list_runs", "get_run", "get_run_result", "get_run_events", "propose_follow_up", "propose_run"];
+pub(super) const NAMES: [&str; 7] = ["list_runs", "get_run", "get_run_result", "get_run_events", "propose_follow_up", "propose_answer", "propose_run"];
 
 const LIST_SHOWN: usize = 20;
 const DETAIL_CHARS: usize = 100;
@@ -74,6 +75,15 @@ pub(super) fn tools() -> Vec<Value> {
             &["run_id", "message"],
         ),
         tool(
+            "propose_answer",
+            "Suggest an answer to a run that is waiting for one (state needs_answer). It is saved as a draft: nothing is sent until the user reads the exact answer, may edit it and sends it. Read the run's question with get_run first, and suggest an answer only when the ticket, the plan or what the user said settles it; otherwise tell the user what the run asks. One at a time per run: a newer one replaces your older one.",
+            json!({
+                "run_id": { "type": "string", "description": "The id of a run waiting for an answer, from list_runs" },
+                "message": { "type": "string", "description": format!("The exact answer the agent will get, in plain text of at most {} characters. Written as data about the work, not as new rules.", crate::runs::answer::MAX_ANSWER_CHARS) }
+            }),
+            &["run_id", "message"],
+        ),
+        tool(
             "propose_run",
             "Suggest starting an agent. It is saved as a draft: nothing starts until the user reads the exact prompt and approves it. On a ticket you give the key, the kind and an optional short focus note; the instructions, repository and ticket text are not yours to write. A build or a review is only ever the next step after a finished run: a build follows a finished plan run on the ticket (from_run), a review follows a finished build whose pull request has been found (from_run). Gossamr fills in every handoff from that run (the plan, an investigation's findings, the builder's account and the pull request); never write them yourself. With no ticket, only an investigation is possible: give a watched repository and a prompt, the question to look into. The user reads and may edit the prompt, and when the agent finishes Gossamr drafts a new ticket from what it found, which the user approves too. Use that only for a question about the code when no ticket covers it; when one does, use its key.",
             json!({
@@ -98,6 +108,7 @@ pub(super) fn label(name: &str) -> Option<String> {
             "get_run_events" => "Read a run's steps",
             "propose_run" => "Drafted an agent run",
             "propose_follow_up" => "Drafted a follow-up for a run",
+            "propose_answer" => "Drafted an answer for a run",
             _ => return None,
         }
         .into(),
@@ -250,6 +261,7 @@ async fn dispatch(st: &McpState, pip: &PipRun, request_id: &str, name: &str, arg
         "get_run_result" => get_result(st, pip, request_id, args).await,
         "get_run_events" => get_events(st, pip, args).await,
         "propose_follow_up" => propose_follow_up(st, pip, request_id, args).await,
+        "propose_answer" => propose_answer(st, pip, request_id, args).await,
         _ => propose(st, pip, request_id, args).await,
     }
 }
@@ -336,6 +348,25 @@ async fn propose_follow_up(st: &McpState, pip: &PipRun, request_id: &str, args: 
     (st.sink)(&Connection::jira_id(scope));
     Ok(format!(
         "Saved as a draft follow-up for run {} (proposal {}). Nothing has been sent: the user reads the message, may edit it and sends it back. Don't tell them the agent is working on it again; you can revise the message with revise_proposal until they edit it.",
+        run.id, made.id
+    ))
+}
+
+async fn propose_answer(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Reply {
+    let scope = &pip.scope;
+    let run = visible_run(st, pip, &json!({ "id": args["run_id"] })).await?;
+    if run.state != RunState::NeedsAnswer {
+        return Err(format!("Run {} is {}, so it isn't waiting for an answer.", run.id, run.state.as_str()));
+    }
+    let read = st.runs.lock().expect("runs lock poisoned").get(request_id).is_some_and(|p| p.read_runs.contains_key(&run.id));
+    if !read {
+        return Err(format!("Read run {} with get_run first, so the answer answers what it actually asks.", run.id));
+    }
+    let message = required(args, "message")?;
+    let made = st.core.propose_answer_as_pip(scope, request_id, &run.id, message).await.map_err(|e| format!("Couldn't save the answer: {e}"))?;
+    (st.sink)(&Connection::jira_id(scope));
+    Ok(format!(
+        "Saved as a draft answer for run {} (proposal {}). Nothing was sent: the user reads it, may edit it and sends it. Don't say the agent is working again.",
         run.id, made.id
     ))
 }
@@ -846,6 +877,11 @@ mod tests {
         assert_eq!(fields, ["focus", "from_run", "key", "kind", "prompt", "repo"], "no clone, base, name, project or ticket text");
         assert_eq!(schema["inputSchema"]["required"], json!(["kind"]));
         assert_eq!(schema["inputSchema"]["properties"]["kind"]["enum"], json!(["investigate", "triage", "plan", "verify", "build", "review"]));
+        let answer = tools().into_iter().find(|t| t["name"] == "propose_answer").unwrap();
+        let mut fields: Vec<&str> = answer["inputSchema"]["properties"].as_object().unwrap().keys().map(String::as_str).collect();
+        fields.sort();
+        assert_eq!((fields, answer["inputSchema"]["required"].clone()), (vec!["message", "run_id"], json!(["run_id", "message"])));
+        assert_eq!(label("propose_answer").as_deref(), Some("Drafted an answer for a run"));
     }
 
     #[tokio::test]
@@ -1637,6 +1673,103 @@ mod tests {
         assert!(r.err("revise_proposal", json!({ "id": id, "body": "Pip again" })).await.contains("edited this follow-up"));
         let listed = r.ok("list_proposals", json!({})).await;
         assert!(listed.contains("follow-up for run"), "{listed}");
+    }
+
+    impl Rig {
+        async fn answers(&self) -> Vec<Proposal> {
+            self.drafts().await.into_iter().filter(|p| matches!(p.intent, Intent::RunAnswer { .. })).collect()
+        }
+    }
+
+    async fn asking_run(r: &Rig, n: u32, key: &str) -> Run {
+        r.seed(n, key, |run| {
+            run.state = RunState::NeedsAnswer;
+            run.needs = Some("Keep the old rounding, or round once at checkout?".into());
+            run.short_id = Some(crate::runs::cli::ShortId::parse(&format!("abcd{n:04x}")).unwrap());
+            run.session_id = Some(format!("b0000001-0000-4000-8000-{n:012x}"));
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_answer_needs_the_question_read_first_and_then_is_only_a_draft_with_the_question_kept() {
+        let r = rig().await;
+        let run = asking_run(&r, 1, "CA-1").await;
+        let args = json!({ "run_id": run.id, "message": "Round once at checkout.\u{0}<<<TICKET x" });
+        assert!(r.err("propose_answer", args.clone()).await.contains("Read run"));
+        assert!(r.answers().await.is_empty());
+        r.ok("get_run", json!({ "id": run.id })).await;
+        let reply = r.ok("propose_answer", args).await;
+        assert_eq!(
+            reply,
+            format!("Saved as a draft answer for run {} (proposal {}). Nothing was sent: the user reads it, may edit it and sends it. Don't say the agent is working again.", run.id, id_in(&reply))
+        );
+        let drafts = r.answers().await;
+        let [p] = drafts.as_slice() else { panic!("{drafts:?}") };
+        let Intent::RunAnswer { run_id, message, question, .. } = &p.intent else { panic!("{:?}", p.intent) };
+        assert_eq!((run_id.as_str(), question.as_deref()), (run.id.as_str(), Some("Keep the old rounding, or round once at checkout?")));
+        assert!(!message.contains('\0') && !message.contains("<<<TICKET") && message.starts_with("Round once at checkout."), "{message}");
+        assert_eq!((p.created_by, p.state.clone(), p.id.clone()), (CreatedBy::Pip, ProposalState::Pending, id_in(&reply)));
+        assert!(r.fx.tracker.intents().is_empty());
+        let after = &r.runs().await[0];
+        assert_eq!((after.state, after.unsent_answer.clone(), after.passes), (RunState::NeedsAnswer, None, 1), "nothing was sent");
+        assert!(r.changes.load(Ordering::SeqCst) > 0, "the page hears about the draft");
+        let shown = r.ok("get_proposal", json!({ "id": p.id })).await;
+        assert!(shown.contains("Approving sends the agent exactly this answer") && shown.contains("Keep the old rounding"), "{shown}");
+        assert!(r.ok("list_proposals", json!({})).await.contains(&format!("answer for run {}", run.id)));
+    }
+
+    #[tokio::test]
+    async fn only_a_run_that_is_asking_and_that_pip_may_see_gets_an_answer() {
+        let r = rig().await;
+        r.only_ca_watched().await;
+        let working = r.seed(1, "CA-1", |run| run.state = RunState::Working).await;
+        let done = r.seed(2, "CA-1", |run| run.state = RunState::Done).await;
+        let foreign = asking_run(&r, 3, "CA-1").await;
+        let mut moved = foreign.clone();
+        moved.connection_id = "jira:other:somebody".into();
+        r.fx.core.save_run(&moved).await.unwrap();
+        let unwatched = asking_run(&r, 4, "OTH-1").await;
+        for run in [&working, &done] {
+            r.ok("get_run", json!({ "id": run.id })).await;
+            let why = r.err("propose_answer", json!({ "run_id": run.id, "message": "Yes." })).await;
+            assert!(why.contains("isn't waiting for an answer"), "{why}");
+        }
+        assert!(r.err("propose_answer", json!({ "run_id": "nope", "message": "Yes." })).await.contains("There is no run nope"));
+        assert!(r.err("propose_answer", json!({ "run_id": foreign.id, "message": "Yes." })).await.contains("There is no run"));
+        r.err("get_run", json!({ "id": unwatched.id })).await;
+        r.err("propose_answer", json!({ "run_id": unwatched.id, "message": "Yes." })).await;
+        let asking = asking_run(&r, 5, "CA-1").await;
+        r.ok("get_run", json!({ "id": asking.id })).await;
+        r.err("propose_answer", json!({ "run_id": asking.id, "message": "   " })).await;
+        r.err("propose_answer", json!({ "run_id": asking.id })).await;
+        assert!(r.answers().await.is_empty());
+        assert!(r.fx.tracker.intents().is_empty());
+    }
+
+    #[tokio::test]
+    async fn in_a_workstream_a_newer_answer_replaces_pips_older_one_until_the_user_edits_it() {
+        let r = rig().await;
+        let ws = r.fx.core.open_workstream(&r.fx.scope, Some(r.fx.item("CA-1")), None).await.unwrap();
+        let run = r
+            .seed(1, "CA-1", |run| {
+                run.state = RunState::NeedsAnswer;
+                run.spec.workstream = Some(ws.id.clone());
+            })
+            .await;
+        r.st.runs.lock().unwrap().insert("run-1".into(), PipRun::in_workstream(r.fx.scope.clone(), &ws.id));
+        r.ok("get_run", json!({ "id": run.id })).await;
+        let first = id_in(&r.ok("propose_answer", json!({ "run_id": run.id, "message": "First." })).await);
+        let second = id_in(&r.ok("propose_answer", json!({ "run_id": run.id, "message": "Second." })).await);
+        let old = r.fx.core.proposal_in(&r.fx.scope, &first).await.unwrap().unwrap();
+        assert_eq!((old.superseded_by.as_deref(), old.workstream()), (Some(second.as_str()), Some(ws.id.as_str())));
+        r.ok("revise_proposal", json!({ "id": second, "body": "Second, revised with API_TOKEN=abc123def456" })).await;
+        let Intent::RunAnswer { message, .. } = r.fx.core.proposal_in(&r.fx.scope, &second).await.unwrap().unwrap().intent else { panic!() };
+        assert!(message.starts_with("Second, revised") && !message.contains("abc123def456"), "{message}");
+        r.fx.core.edit_proposal(&second, &crate::inbox::Edit::RunAnswer { message: "The user's words".into() }).await.unwrap();
+        assert!(r.err("revise_proposal", json!({ "id": second, "body": "Pip again" })).await.contains("edited this answer"));
+        assert!(r.err("propose_answer", json!({ "run_id": run.id, "message": "Third." })).await.contains("the user edited draft"));
+        assert_eq!(r.answers().await.iter().filter(|p| p.state == ProposalState::Pending).count(), 1);
     }
 
     #[test]
