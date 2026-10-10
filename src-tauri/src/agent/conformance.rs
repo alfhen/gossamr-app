@@ -1211,7 +1211,10 @@ pub async fn orchestration_never_writes_jira() -> std::result::Result<(), String
     // GitHub was only ever read.
     let reviews: Vec<_> = core.proposals_in(&fx.scope, &ProposalQuery::default()).await.unwrap().into_iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).collect();
     let states: Vec<_> = reviews.iter().map(|p| (p.state.kind(), p.superseded_by.clone())).collect();
-    if !matches!(states.as_slice(), [(crate::domain::StateKind::Pending, None), (crate::domain::StateKind::Retired, Some(by))] if *by == reviews[0].id) {
+    // Both may carry the same timestamp, so the listing's order between them isn't theirs to rely on.
+    let waiting: Vec<_> = reviews.iter().filter(|p| p.state.kind() == crate::domain::StateKind::Pending && p.superseded_by.is_none()).collect();
+    let replaced: Vec<_> = reviews.iter().filter(|p| p.state.kind() == crate::domain::StateKind::Retired).collect();
+    if !(reviews.len() == 2 && matches!((waiting.as_slice(), replaced.as_slice()), ([w], [r]) if r.superseded_by.as_deref() == Some(w.id.as_str()))) {
         return Err(format!("the reviews' GitHub drafts aren't one waiting and one it replaced: {states:?}"));
     }
     if let Some(write) = fx.github_seen().into_iter().find(|(method, _)| method != "GET") {
