@@ -304,7 +304,7 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule);
 </tr>
 <tr>
 <td>Posts only through drafts</td>
-<td>The reviewer itself never writes to GitHub. Its findings become drafts the person approves in Gossamr, the same way as Jira drafts: a <strong>GitHub review draft</strong> (a summary plus one inline comment per finding, each at the file and line it cites) and, when useful, a Jira comment draft. Gossamr posts the review only when the person approves it, always as a plain comment review (never Approve or Request changes). The person can edit, drop single comments or discard the draft, or ask Pip about any comment and have Pip rewrite the draft.</td>
+<td>The reviewer itself never writes to GitHub. Its findings become drafts the person approves in Gossamr, the same way as Jira drafts: a <strong>GitHub review draft</strong> (an inline comment for each finding that cites a file and line, placed there; findings backed by command output or an acceptance point go in the review&#39;s summary) and, when useful, a Jira comment draft. Gossamr posts the review only when the person approves it, always as a plain comment review (never Approve or Request changes). The person can edit, drop single comments or discard the draft, or ask Pip about any comment and have Pip rewrite the draft.</td>
 </tr>
 </tbody></table></div><h3 id="auto-start-rules">Auto-start rules</h3><p>These rules let a run start the next step without a per-run approval. The supervisor applies them from fixed Rust code, so they don&#39;t depend on Pip or on agent prose.</p>
 <div class="tbl"><table><thead><tr>
