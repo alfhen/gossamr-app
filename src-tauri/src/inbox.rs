@@ -25,6 +25,7 @@ mod pip_runs;
 mod pip_turns;
 mod plan_description;
 mod report;
+mod review_drafts;
 mod rewrites;
 mod ticket_context;
 mod workstreams;
@@ -1018,9 +1019,24 @@ pub(crate) mod testing {
         pub dir: PathBuf,
         /// Where clones for runs may live.
         pub home: PathBuf,
+        /// What the scripted GitHub was asked, when there is one.
+        pub github: Option<Arc<std::sync::Mutex<Vec<crate::codehost::github::testserver::Seen>>>>,
+        /// What the scripted GitHub answers from, when there is one.
+        pub github_routes: Option<crate::codehost::github::testserver::Routes>,
     }
 
     impl Fixture {
+        /// The method and target of every request the scripted GitHub received, in order.
+        /// Has the scripted GitHub answer `target` with `replies` from now on.
+        pub fn github_route(&self, target: &str, replies: Vec<crate::codehost::github::testserver::Reply>) {
+            crate::codehost::github::testserver::add_route(self.github_routes.as_ref().expect("a fixture with GitHub"), target, replies);
+        }
+
+        pub fn github_seen(&self) -> Vec<(String, String)> {
+            let seen = self.github.as_ref().expect("a fixture with GitHub");
+            seen.lock().unwrap().iter().map(|s| (s.method.clone(), s.target.clone())).collect()
+        }
+
         pub fn item(&self, key: &str) -> ItemRef {
             Core::item(&self.scope, key)
         }
@@ -1125,7 +1141,9 @@ pub(crate) mod testing {
             auth,
             Box::new(move |s, db| Arc::new(GithubHost::new(factory_http.clone(), &base, &s.token, &Connection::github_id(&s.login), &s.login, db))),
         );
-        let fx = fixture_with(Some(code)).await;
+        let mut fx = fixture_with(Some(code)).await;
+        fx.github = Some(server.seen.clone());
+        fx.github_routes = Some(server.routes.clone());
         fx.core.github_connect_token("ghp_x").await.unwrap();
         fx
     }
@@ -1152,7 +1170,7 @@ pub(crate) mod testing {
         let core = Arc::new(core);
         core.registry.register(creds.connection());
 
-        let fx = Fixture { core, scope, tracker, dir, home };
+        let fx = Fixture { core, scope, tracker, dir, home, github: None, github_routes: None };
         fx.add_item(1).await;
         let connection = fx.core.connection(&fx.scope).unwrap();
         let item = fx.core.cache_item(&connection.item("CA-1")).await.unwrap().unwrap();

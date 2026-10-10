@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { REVIEW_CHANGED, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
+import type { Intent, RunSpec } from "../types";
 import { MockBackend } from "./mock";
+import { itemRef } from "./mockConnector";
+import type { MockOptions } from "./mockWatch";
 
 const GH = "github:ada";
 
@@ -33,11 +37,11 @@ describe("the mock GitHub connection", () => {
     expect((await device.githubDevicePoll()).id).toBe(GH);
   });
 
-  it("starts signed in with the requested number of repositories, at least the five samples", async () => {
+  it("starts signed in with the requested number of repositories, at least the six samples", async () => {
     const big = new MockBackend({ githubRepos: 30 });
     expect((await big.watchCatalog(GH, "")).containers).toHaveLength(30);
     const small = new MockBackend({ githubRepos: 2 });
-    expect((await small.watchCatalog(GH, "")).containers).toHaveLength(5);
+    expect((await small.watchCatalog(GH, "")).containers).toHaveLength(6);
     const [, state] = await small.watchGet();
     expect([state.mode, state.needsChoice]).toEqual(["everything", false]);
     const twelve = await new MockBackend({ githubRepos: 12 }).watchGet();
@@ -80,7 +84,7 @@ describe("the mock GitHub connection", () => {
   it("suggests the repositories the person was active in", async () => {
     const b = new MockBackend({ githubRepos: 14 });
     const rows = await b.watchSuggestions(GH);
-    expect(rows.map((r) => r.key)).toEqual(["acme/webshop", "acme/gateway", "acme/infra"]);
+    expect(rows.map((r) => r.key)).toEqual(["acme/webshop", "acme/gateway", "acme/storefront", "acme/infra"]);
     expect(rows[0]).toMatchObject({ reported: 2, assigned: 1 });
     expect(await b.watchUnwatchedAssigned(GH)).toEqual([]);
     expect((await b.watchSuggestions()).every((r) => !r.key.startsWith("acme/"))).toBe(true);
@@ -94,5 +98,92 @@ describe("the mock GitHub connection", () => {
     expect((await b.connectionsList()).map((c) => c.id)).toEqual(["mock"]);
     expect(await b.watchGet()).toHaveLength(1);
     expect(changed).toHaveBeenCalledWith({ connectionId: GH });
+  });
+});
+
+describe("posting a review draft to the mock GitHub", () => {
+  const spec: RunSpec = { kind: "review", repo: "acme/webshop", clonePath: "/Users/sample/Code/webshop", base: "main", name: "ca-402-review", instruction: "", pr: 218, focus: null, focusFromRun: null, ticketBlock: "CA-402: sample" };
+
+  /** A backend whose review of #218 has finished, and the GitHub review draft it left. */
+  async function reviewed(options: MockOptions = {}) {
+    const backend = new MockBackend({ githubRepos: 14, ...options });
+    await backend.watchSetMode(GH, "everything");
+    const made = await backend.runsDraft(spec, itemRef("CA-402"));
+    const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+    for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
+    const draft = backend.proposals.list().find((p) => p.intent.type === "githubReview")!;
+    return { backend, draft, intent: draft.intent as Extract<Intent, { type: "githubReview" }> };
+  }
+
+  it("posts exactly one comment review with the draft's comments, once, and writes nothing to Jira", async () => {
+    const { backend, draft, intent } = await reviewed();
+    expect(backend.github.writes).toEqual([]);
+    expect(await backend.codeReviewAccess(GH, "acme/webshop")).toEqual({ canPost: true, reason: null });
+    const posted = await backend.proposalsPostReview(draft.id, draft.revisions.length);
+    expect(posted.state.type).toBe("applied");
+    expect(posted.posted?.url).toMatch(/^https:\/\/github\.com\/acme\/webshop\/pull\/218#pullrequestreview-\d+$/);
+    expect(backend.github.writes).toEqual([{ proposalId: draft.id, repo: "acme/webshop", number: 218, event: "COMMENT", commitId: "a1b2c3d4e5f6", body: intent.summary, comments: intent.comments }]);
+    expect(backend.github.writes[0].comments.map((c) => `${c.path}:${c.line}`)).toEqual(["src/consumer/retry.ts:42", "src/consumer/retry.ts:17"]);
+    await expect(backend.proposalsPostReview(draft.id, draft.revisions.length)).rejects.toThrow("that draft is applied");
+    expect(backend.github.writes).toHaveLength(1);
+    expect(backend.proposals.writes).toEqual([]);
+  });
+
+  it("refuses with GitHub's 403 when the token can't write, and remembers it", async () => {
+    const { backend, draft } = await reviewed({ reviewAccess: "none" });
+    const access = await backend.codeReviewAccess(GH, "acme/webshop");
+    expect(access.canPost).toBe(false);
+    expect(access.reason).toBe("This GitHub token can't post reviews on acme/webshop (it lacks write access to its pull requests).");
+    const back = await backend.proposalsPostReview(draft.id, draft.revisions.length);
+    expect(back.state.type).toBe("pending");
+    expect(back.error).toContain("the token can't write to pull requests in acme/webshop");
+    expect(backend.github.writes).toEqual([]);
+  });
+
+  it("can't post on a repository the sample can only read", async () => {
+    const backend = new MockBackend({ githubRepos: 14 });
+    await backend.watchSetMode(GH, "everything");
+    expect((await backend.codeReviewAccess(GH, "acme/mobile-app")).canPost).toBe(false);
+    expect((await backend.codeReviewAccess(GH, "acme/gateway")).canPost).toBe(true);
+  });
+
+  it("refuses with GitHub's 422 once a force-push took the reviewed commit out of the pull request, leaving the draft outdated", async () => {
+    const { backend, draft } = await reviewed();
+    expect(backend.movePullHead("acme/webshop", 218)).toBe(true);
+    expect(backend.github.code.headSha("acme/webshop", 218)).not.toBe("a1b2c3d4e5f6");
+    const back = await backend.proposalsPostReview(draft.id, draft.revisions.length);
+    expect([back.state.type, back.error]).toEqual(["pending", REVIEW_OUTDATED_NOTE]);
+    expect(backend.github.writes).toEqual([]);
+  });
+
+  it("posts a review whose pull request's head merely moved on, at the commit it read, as GitHub takes it", async () => {
+    const { backend, draft } = await reviewed();
+    const change = backend.github.code.change("acme/webshop", 218)!;
+    backend.github.code.addPullRequest({ ...change, sha: "f00dfeed0000" });
+    expect((await backend.proposalsPostReview(draft.id, draft.revisions.length)).state.type).toBe("applied");
+    expect(backend.github.writes.map((w) => w.commitId)).toEqual(["a1b2c3d4e5f6"]);
+  });
+
+  it("refuses a review Pip revised since the person looked at it, and posts nothing", async () => {
+    const { backend, draft } = await reviewed();
+    await backend.pipRevise(draft.id, { body: "Pip's summary." });
+    await expect(backend.proposalsPostReview(draft.id, draft.revisions.length)).rejects.toThrow(REVIEW_CHANGED);
+    expect(backend.github.writes).toEqual([]);
+    expect(backend.proposals.get(draft.id)?.state.type).toBe("pending");
+  });
+
+  it("serves every sample pull request's diff for the PR view, with the files, additions and deletions its stats say", async () => {
+    const { backend } = await reviewed();
+    for (const change of backend.github.code.changes.filter((c) => c.kind === "pullRequest")) {
+      const { files } = await backend.codePullDiff(GH, change.repo, change.number!);
+      expect([files.length, files.reduce((n, f) => n + f.additions, 0), files.reduce((n, f) => n + f.deletions, 0)], `${change.repo}#${change.number}`).toEqual([change.changedFiles, change.additions, change.deletions]);
+      expect(files.every((f) => f.patch?.startsWith("@@ "))).toBe(true);
+    }
+  });
+
+  it("serves the pull request's files to the card and the PR view", async () => {
+    const { backend } = await reviewed();
+    expect((await backend.codePullFiles(GH, "acme/webshop", 218)).map((f) => f.path)).toEqual(["src/consumer/retry.ts", "src/consumer/index.ts"]);
+    await expect(backend.codePullFiles(GH, "acme/webshop", 999)).rejects.toThrow("couldn't find pull request #999");
   });
 });

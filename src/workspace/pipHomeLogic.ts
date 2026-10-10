@@ -86,6 +86,7 @@ const DRAFT_TEXT: Record<Exclude<Intent["type"], "startRun">, string> = {
   rewrite: "Draft rewrite",
   followUp: "Draft follow-up",
   runAnswer: "Draft answer",
+  githubReview: "Draft review",
 };
 
 /** The open workstream a draft belongs to: the one it was made in, else the first whose conversation shows it; null is General. */

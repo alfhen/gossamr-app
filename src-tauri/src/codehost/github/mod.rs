@@ -1,10 +1,12 @@
-//! GitHub as a `CodeHost`, over its REST API. Everything here only reads.
+//! GitHub as a `CodeHost`, over its REST API. Reads are in `read.rs`; `write.rs` holds the one write, a comment review
+//! posted when the person approves a review draft.
 
 pub(crate) mod http;
 mod read;
 #[cfg(test)]
 pub(crate) mod testserver;
 mod wire;
+mod write;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -15,12 +17,13 @@ use url::form_urlencoded;
 
 use self::http::Api;
 use self::wire::{IssueSearch, Owner, Pull, Repo, RepoSearch, User, UserEvent};
-use super::{CodeAccount, CodeHost, Notices, PullList, Refreshed};
+use super::{CodeAccount, CodeHost, Notices, PullList, Refreshed, ReviewAccess, ReviewComments};
 use crate::db::Db;
 use crate::domain::{
-    CodeChange, CodeFile, CodeHit, CommitQuery, ContainerPage, ContainerQuery, ContainerRef, Footprint, PullRequestDetail, TreeEntry,
+    ChangedFile, CodeChange, CodeFile, CodeHit, CommitQuery, ContainerPage, ContainerQuery, ContainerRef, Footprint, PostedReview, PullRequestDetail,
+    ReviewComment, TreeEntry,
 };
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 pub use self::http::error_message;
 
@@ -40,11 +43,14 @@ pub struct GithubHost {
     connection_id: String,
     login: String,
     owners: Mutex<Option<Vec<String>>>,
+    /// Repositories (lowercased) where GitHub refused a review with a 403, with the sentence that says so. That refusal
+    /// outranks whatever the token's scopes and permissions suggest.
+    refused_reviews: Mutex<HashMap<String, String>>,
 }
 
 impl GithubHost {
     pub fn new(http: reqwest::Client, base: &str, token: &str, connection_id: &str, login: &str, db: Arc<Mutex<Db>>) -> Self {
-        Self { api: Api::new(http, base, token, connection_id, db), connection_id: connection_id.into(), login: login.into(), owners: Mutex::new(None) }
+        Self { api: Api::new(http, base, token, connection_id, db), connection_id: connection_id.into(), login: login.into(), owners: Mutex::new(None), refused_reviews: Mutex::new(HashMap::new()) }
     }
 
     /// The person's login and the organisations they belong to, which is where a repository search looks.
@@ -112,6 +118,32 @@ fn footprint_row<'a>(rows: &'a mut HashMap<String, Footprint>, connection_id: &s
         f.last_touch = Some(at.into());
     }
     f
+}
+
+/// Whether a token may post a review on `repo`, from the repository as it reads to the token and the scopes a classic
+/// token carries (`None` for a fine-grained token or an app). A classic token needs the `repo` scope, or `public_repo`
+/// on a public repository, and read access; the others need write access to the repository. For a fine-grained token
+/// those permissions are the person's role, not what the token was granted, so a token without `pull_requests: write`
+/// reads as able to post until its first post is refused with a 403, which `refused_reviews` then keeps for the host's
+/// life.
+fn review_access_of(repo: &Repo, scopes: Option<&[String]>) -> ReviewAccess {
+    let permissions = repo.permissions.as_ref();
+    let has = |s: &str| scopes.is_some_and(|all| all.iter().any(|x| x == s));
+    let lacks = match scopes {
+        Some(_) if !has("repo") && !(has("public_repo") && !repo.private) => Some(if has("public_repo") {
+            "it has only the public_repo scope, and the repository is private"
+        } else {
+            "it lacks the repo scope"
+        }),
+        Some(_) if !permissions.is_some_and(|p| p.pull || p.push || p.admin || p.maintain || p.triage) => Some("it can't read the repository"),
+        Some(_) => None,
+        None if !permissions.is_some_and(|p| p.push || p.admin || p.maintain) => Some("it lacks write access to its pull requests"),
+        None => None,
+    };
+    match lacks {
+        Some(why) => ReviewAccess { can_post: false, reason: Some(format!("This GitHub token can't post reviews on {} ({why}).", repo.full_name)) },
+        None => ReviewAccess { can_post: true, reason: None },
+    }
 }
 
 fn repo_of(repository_url: &str) -> Option<&str> {
@@ -199,6 +231,10 @@ impl CodeHost for GithubHost {
         self.detail(repo, number).await
     }
 
+    async fn pull_files(&self, repo: &str, number: u64) -> Result<Vec<ChangedFile>> {
+        self.files_of(repo, number).await
+    }
+
     async fn pull_request_change(&self, repo: &str, number: u64) -> Result<CodeChange> {
         let (pull, _): (Pull, _) = self.api.json(&format!("/repos/{repo}/pulls/{number}")).await?;
         Ok(pull.change(&self.connection_id, repo))
@@ -230,6 +266,40 @@ impl CodeHost for GithubHost {
 
     async fn search_code(&self, query: &str, repos: &[String]) -> Result<Vec<CodeHit>> {
         self.code_search(query, repos).await
+    }
+
+    async fn review_comments(&self, repo: &str, number: u64) -> Result<ReviewComments> {
+        self.review_thread(repo, number).await
+    }
+
+    async fn review_access(&self, repo: &str) -> Result<ReviewAccess> {
+        if let Some(reason) = self.refused_reviews.lock().expect("access lock poisoned").get(&repo.to_lowercase()) {
+            return Ok(ReviewAccess { can_post: false, reason: Some(reason.clone()) });
+        }
+        let (found, page): (Repo, _) = self.api.json(&format!("/repos/{repo}")).await?;
+        Ok(review_access_of(&found, page.scopes.as_deref()))
+    }
+
+    async fn posted_review(&self, repo: &str, number: u64, commit_sha: &str, summary: &str) -> Result<Option<PostedReview>> {
+        let found = self.reviews(repo, number).await?.into_iter().find(|r| {
+            r.user.as_ref().is_some_and(|u| u.login.eq_ignore_ascii_case(&self.login)) && r.state == "COMMENTED" && r.commit_id.as_deref() == Some(commit_sha) && r.body.as_deref() == Some(summary)
+        });
+        Ok(found.map(|r| PostedReview {
+            url: r.html_url.filter(|u| !u.is_empty()).unwrap_or_else(|| format!("https://github.com/{repo}/pull/{number}#pullrequestreview-{}", r.id)),
+            id: r.id,
+            at: r.submitted_at.unwrap_or_else(Utc::now),
+        }))
+    }
+
+    async fn post_review(&self, repo: &str, number: u64, commit_sha: &str, summary: &str, comments: &[ReviewComment]) -> Result<PostedReview> {
+        let posted = write::post_review(&self.api, repo, number, commit_sha, summary, comments).await;
+        if let Err(Error::CodeHost { status: 403, message }) = &posted {
+            // Only the refusal of write access lasts; one asking for single sign-on is gone once the person authorises it.
+            if *message == write::no_write_access(repo) {
+                self.refused_reviews.lock().expect("access lock poisoned").insert(repo.to_lowercase(), message.clone());
+            }
+        }
+        posted
     }
 }
 

@@ -1,0 +1,375 @@
+[
+  {
+    "name": "the sample review: two inline comments and the line-less finding in the summary",
+    "number": 218,
+    "commitSha": "a1b2c3d4e5f6",
+    "verdict": "blocking",
+    "run": "ab12cd34",
+    "findings": [
+      {
+        "severity": "blocking",
+        "text": "the retry loop never backs off, so a slow upstream gets hammered; the ticket asks for a growing delay between tries.",
+        "where": "src/consumer/retry.ts:42"
+      },
+      {
+        "severity": "should-fix",
+        "text": "no test covers the timeout path.",
+        "where": "src/consumer/retry.test.ts"
+      },
+      {
+        "severity": "nit",
+        "text": "the constant name `MAX` doesn't say what it limits.",
+        "where": "src/consumer/retry.ts:17"
+      }
+    ],
+    "files": [
+      {
+        "path": "src/consumer/retry.ts",
+        "patch": "@@ -14,6 +14,8 @@ import { Message } from \"./message\";\n import { Queue } from \"./queue\";\n import { handle } from \"./handle\";\n \n+const MAX = 5;\n+\n export async function consume(queue: Queue) {\n   const batch = await queue.take();\n   for (const message of batch) {\n@@ -36,5 +38,8 @@ export async function consume(queue: Queue) {\n export async function retry(message: Message) {\n   let attempt = 0;\n-  await handle(message);\n+  while (attempt < MAX) {\n+    attempt += 1;\n+    try { return await handle(message); } catch { continue; }\n+  }\n   throw new Error(\"gave up\");\n }\n\\ No newline at end of file",
+        "truncated": false
+      },
+      {
+        "path": "src/consumer/index.ts",
+        "patch": "@@ -1,3 +1,3 @@\n-export { consume } from \"./consume\";\n+export { consume, retry } from \"./retry\";\n export type { Message } from \"./message\";\n export type { Queue } from \"./queue\";",
+        "truncated": false
+      }
+    ],
+    "expect": {
+      "summary": "Gossamr review of #218 at a1b2c3d4: blocking (1 blocking, 1 should-fix, 1 nit).\n\nFindings without a line in the diff:\n- **Should fix:** no test covers the timeout path. (src/consumer/retry.test.ts)\n\nDrafted from agent run ab12cd34; posted only after a person approved it in Gossamr.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** the retry loop never backs off, so a slow upstream gets hammered; the ticket asks for a growing delay between tries."
+        },
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 17,
+          "side": "RIGHT",
+          "body": "**Nit:** the constant name `MAX` doesn't say what it limits."
+        }
+      ]
+    }
+  },
+  {
+    "name": "an unreadable diff puts every finding in the summary",
+    "number": 218,
+    "commitSha": "a1b2c3d4e5f6",
+    "verdict": "blocking",
+    "run": "ab12cd34",
+    "findings": [
+      {
+        "severity": "blocking",
+        "text": "the retry loop never backs off, so a slow upstream gets hammered; the ticket asks for a growing delay between tries.",
+        "where": "src/consumer/retry.ts:42"
+      },
+      {
+        "severity": "should-fix",
+        "text": "no test covers the timeout path.",
+        "where": "src/consumer/retry.test.ts"
+      },
+      {
+        "severity": "nit",
+        "text": "the constant name `MAX` doesn't say what it limits.",
+        "where": "src/consumer/retry.ts:17"
+      }
+    ],
+    "files": null,
+    "expect": {
+      "summary": "Gossamr review of #218 at a1b2c3d4: blocking (1 blocking, 1 should-fix, 1 nit).\n\nThe pull request's diff at this commit couldn't be read, so every finding is listed here.\n\nFindings without a line in the diff:\n- **Blocking:** the retry loop never backs off, so a slow upstream gets hammered; the ticket asks for a growing delay between tries. (src/consumer/retry.ts:42)\n- **Should fix:** no test covers the timeout path. (src/consumer/retry.test.ts)\n- **Nit:** the constant name `MAX` doesn't say what it limits. (src/consumer/retry.ts:17)\n\nDrafted from agent run ab12cd34; posted only after a person approved it in Gossamr.",
+      "comments": []
+    }
+  },
+  {
+    "name": "a passing review with no findings is a summary alone",
+    "number": 12,
+    "commitSha": "ffff0000ffff",
+    "verdict": "pass",
+    "run": "ab12cd34",
+    "findings": [],
+    "files": [
+      {
+        "path": "src/consumer/retry.ts",
+        "patch": "@@ -14,6 +14,8 @@ import { Message } from \"./message\";\n import { Queue } from \"./queue\";\n import { handle } from \"./handle\";\n \n+const MAX = 5;\n+\n export async function consume(queue: Queue) {\n   const batch = await queue.take();\n   for (const message of batch) {\n@@ -36,5 +38,8 @@ export async function consume(queue: Queue) {\n export async function retry(message: Message) {\n   let attempt = 0;\n-  await handle(message);\n+  while (attempt < MAX) {\n+    attempt += 1;\n+    try { return await handle(message); } catch { continue; }\n+  }\n   throw new Error(\"gave up\");\n }\n\\ No newline at end of file",
+        "truncated": false
+      },
+      {
+        "path": "src/consumer/index.ts",
+        "patch": "@@ -1,3 +1,3 @@\n-export { consume } from \"./consume\";\n+export { consume, retry } from \"./retry\";\n export type { Message } from \"./message\";\n export type { Queue } from \"./queue\";",
+        "truncated": false
+      }
+    ],
+    "expect": {
+      "summary": "Gossamr review of #12 at ffff0000: pass (0 blocking, 0 should-fix, 0 nits).\n\nDrafted from agent run ab12cd34; posted only after a person approved it in Gossamr.",
+      "comments": []
+    }
+  },
+  {
+    "name": "lines outside the diff, files not in it, line ranges, columns and the left side's only lines",
+    "number": 218,
+    "commitSha": "a1b2c3d4e5f6",
+    "verdict": "pass",
+    "run": "ab12cd34",
+    "findings": [
+      {
+        "severity": "nit",
+        "text": "between hunks.",
+        "where": "src/consumer/retry.ts:30"
+      },
+      {
+        "severity": "nit",
+        "text": "another file.",
+        "where": "src/other.ts:3"
+      },
+      {
+        "severity": "should-fix",
+        "text": "a range.",
+        "where": "src/consumer/retry.ts:40-43"
+      },
+      {
+        "severity": "nit",
+        "text": "a column.",
+        "where": "src/consumer/index.ts:1:9"
+      },
+      {
+        "severity": "nit",
+        "text": "no where at all.",
+        "where": null
+      },
+      {
+        "severity": "should-fix",
+        "text": "a command.",
+        "where": "npm test exited 1"
+      }
+    ],
+    "files": [
+      {
+        "path": "src/consumer/retry.ts",
+        "patch": "@@ -14,6 +14,8 @@ import { Message } from \"./message\";\n import { Queue } from \"./queue\";\n import { handle } from \"./handle\";\n \n+const MAX = 5;\n+\n export async function consume(queue: Queue) {\n   const batch = await queue.take();\n   for (const message of batch) {\n@@ -36,5 +38,8 @@ export async function consume(queue: Queue) {\n export async function retry(message: Message) {\n   let attempt = 0;\n-  await handle(message);\n+  while (attempt < MAX) {\n+    attempt += 1;\n+    try { return await handle(message); } catch { continue; }\n+  }\n   throw new Error(\"gave up\");\n }\n\\ No newline at end of file",
+        "truncated": false
+      },
+      {
+        "path": "src/consumer/index.ts",
+        "patch": "@@ -1,3 +1,3 @@\n-export { consume } from \"./consume\";\n+export { consume, retry } from \"./retry\";\n export type { Message } from \"./message\";\n export type { Queue } from \"./queue\";",
+        "truncated": false
+      }
+    ],
+    "expect": {
+      "summary": "Gossamr review of #218 at a1b2c3d4: pass (0 blocking, 2 should-fix, 4 nits).\n\nFindings without a line in the diff:\n- **Nit:** between hunks. (src/consumer/retry.ts:30)\n- **Nit:** another file. (src/other.ts:3)\n- **Nit:** no where at all.\n- **Should fix:** a command. (npm test exited 1)\n\nDrafted from agent run ab12cd34; posted only after a person approved it in Gossamr.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 40,
+          "side": "RIGHT",
+          "body": "**Should fix:** a range."
+        },
+        {
+          "path": "src/consumer/index.ts",
+          "line": 1,
+          "side": "RIGHT",
+          "body": "**Nit:** a column."
+        }
+      ]
+    }
+  },
+  {
+    "name": "two findings on one line share its comment",
+    "number": 218,
+    "commitSha": "a1b2c3d4e5f6",
+    "verdict": "blocking",
+    "run": "ab12cd34",
+    "findings": [
+      {
+        "severity": "blocking",
+        "text": "first.",
+        "where": "src/consumer/retry.ts:42"
+      },
+      {
+        "severity": "nit",
+        "text": "second.",
+        "where": "src/consumer/retry.ts:42"
+      }
+    ],
+    "files": [
+      {
+        "path": "src/consumer/retry.ts",
+        "patch": "@@ -14,6 +14,8 @@ import { Message } from \"./message\";\n import { Queue } from \"./queue\";\n import { handle } from \"./handle\";\n \n+const MAX = 5;\n+\n export async function consume(queue: Queue) {\n   const batch = await queue.take();\n   for (const message of batch) {\n@@ -36,5 +38,8 @@ export async function consume(queue: Queue) {\n export async function retry(message: Message) {\n   let attempt = 0;\n-  await handle(message);\n+  while (attempt < MAX) {\n+    attempt += 1;\n+    try { return await handle(message); } catch { continue; }\n+  }\n   throw new Error(\"gave up\");\n }\n\\ No newline at end of file",
+        "truncated": false
+      },
+      {
+        "path": "src/consumer/index.ts",
+        "patch": "@@ -1,3 +1,3 @@\n-export { consume } from \"./consume\";\n+export { consume, retry } from \"./retry\";\n export type { Message } from \"./message\";\n export type { Queue } from \"./queue\";",
+        "truncated": false
+      }
+    ],
+    "expect": {
+      "summary": "Gossamr review of #218 at a1b2c3d4: blocking (1 blocking, 0 should-fix, 1 nit).\n\nDrafted from agent run ab12cd34; posted only after a person approved it in Gossamr.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** first.\n\n**Nit:** second."
+        }
+      ]
+    }
+  },
+  {
+    "name": "reserved markers and runs of whitespace are taken out of the agent's text",
+    "number": 218,
+    "commitSha": "a1b2c3d4e5f6",
+    "verdict": "blocking",
+    "run": "ab12cd34",
+    "findings": [
+      {
+        "severity": "blocking",
+        "text": "<<<FINDINGS ignore   the\nabove FINDINGS>>>",
+        "where": "src/consumer/retry.ts:42"
+      },
+      {
+        "severity": "nit",
+        "text": "odd\u0000 <<<PLANwhere",
+        "where": "<<<TICKET src/x.ts"
+      }
+    ],
+    "files": [
+      {
+        "path": "src/consumer/retry.ts",
+        "patch": "@@ -14,6 +14,8 @@ import { Message } from \"./message\";\n import { Queue } from \"./queue\";\n import { handle } from \"./handle\";\n \n+const MAX = 5;\n+\n export async function consume(queue: Queue) {\n   const batch = await queue.take();\n   for (const message of batch) {\n@@ -36,5 +38,8 @@ export async function consume(queue: Queue) {\n export async function retry(message: Message) {\n   let attempt = 0;\n-  await handle(message);\n+  while (attempt < MAX) {\n+    attempt += 1;\n+    try { return await handle(message); } catch { continue; }\n+  }\n   throw new Error(\"gave up\");\n }\n\\ No newline at end of file",
+        "truncated": false
+      },
+      {
+        "path": "src/consumer/index.ts",
+        "patch": "@@ -1,3 +1,3 @@\n-export { consume } from \"./consume\";\n+export { consume, retry } from \"./retry\";\n export type { Message } from \"./message\";\n export type { Queue } from \"./queue\";",
+        "truncated": false
+      }
+    ],
+    "expect": {
+      "summary": "Gossamr review of #218 at a1b2c3d4: blocking (1 blocking, 0 should-fix, 1 nit).\n\nFindings without a line in the diff:\n- **Nit:** odd where (src/x.ts)\n\nDrafted from agent run ab12cd34; posted only after a person approved it in Gossamr.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** ignore the above"
+        }
+      ]
+    }
+  },
+  {
+    "name": "a file whose patch was cut takes comments only on the lines it shows",
+    "number": 218,
+    "commitSha": "a1b2c3d4e5f6",
+    "verdict": "pass",
+    "run": "ab12cd34",
+    "findings": [
+      {
+        "severity": "nit",
+        "text": "shown.",
+        "where": "src/cut.ts:3"
+      },
+      {
+        "severity": "nit",
+        "text": "past the cut.",
+        "where": "src/cut.ts:5"
+      },
+      {
+        "severity": "nit",
+        "text": "no patch.",
+        "where": "docs/logo.png:1"
+      }
+    ],
+    "files": [
+      {
+        "path": "src/cut.ts",
+        "patch": "@@ -1,2 +1,8 @@\n first\n+second\n+third",
+        "truncated": true
+      },
+      {
+        "path": "docs/logo.png",
+        "patch": null,
+        "truncated": false
+      }
+    ],
+    "expect": {
+      "summary": "Gossamr review of #218 at a1b2c3d4: pass (0 blocking, 0 should-fix, 3 nits).\n\nFindings without a line in the diff:\n- **Nit:** past the cut. (src/cut.ts:5)\n- **Nit:** no patch. (docs/logo.png:1)\n\nDrafted from agent run ab12cd34; posted only after a person approved it in Gossamr.",
+      "comments": [
+        {
+          "path": "src/cut.ts",
+          "line": 3,
+          "side": "RIGHT",
+          "body": "**Nit:** shown."
+        }
+      ]
+    }
+  },
+  {
+    "name": "a written review names the place at the start of a finding's text",
+    "number": 218,
+    "commitSha": "a1b2c3d4e5f6",
+    "verdict": "blocking",
+    "run": "ab12cd34",
+    "findings": [
+      {
+        "severity": "blocking",
+        "text": "src/consumer/retry.ts:42: the retry loop never backs off.",
+        "where": null
+      },
+      {
+        "severity": "should-fix",
+        "text": "src/consumer/retry.test.ts: no test covers the timeout path.",
+        "where": null
+      },
+      {
+        "severity": "should-fix",
+        "text": "`src/consumer/index.ts:1`: exports moved.",
+        "where": null
+      },
+      {
+        "severity": "nit",
+        "text": "`npm test` prints a warning.",
+        "where": null
+      },
+      {
+        "severity": "nit",
+        "text": "Note: the name is vague.",
+        "where": null
+      },
+      {
+        "severity": "nit",
+        "text": "e.g.: a nit.",
+        "where": null
+      }
+    ],
+    "files": [
+      {
+        "path": "src/consumer/retry.ts",
+        "patch": "@@ -14,6 +14,8 @@ import { Message } from \"./message\";\n import { Queue } from \"./queue\";\n import { handle } from \"./handle\";\n \n+const MAX = 5;\n+\n export async function consume(queue: Queue) {\n   const batch = await queue.take();\n   for (const message of batch) {\n@@ -36,5 +38,8 @@ export async function consume(queue: Queue) {\n export async function retry(message: Message) {\n   let attempt = 0;\n-  await handle(message);\n+  while (attempt < MAX) {\n+    attempt += 1;\n+    try { return await handle(message); } catch { continue; }\n+  }\n   throw new Error(\"gave up\");\n }\n\\ No newline at end of file",
+        "truncated": false
+      },
+      {
+        "path": "src/consumer/index.ts",
+        "patch": "@@ -1,3 +1,3 @@\n-export { consume } from \"./consume\";\n+export { consume, retry } from \"./retry\";\n export type { Message } from \"./message\";\n export type { Queue } from \"./queue\";",
+        "truncated": false
+      }
+    ],
+    "expect": {
+      "summary": "Gossamr review of #218 at a1b2c3d4: blocking (1 blocking, 2 should-fix, 3 nits).\n\nFindings without a line in the diff:\n- **Should fix:** no test covers the timeout path. (src/consumer/retry.test.ts)\n- **Nit:** `npm test` prints a warning.\n- **Nit:** Note: the name is vague.\n- **Nit:** e.g.: a nit.\n\nDrafted from agent run ab12cd34; posted only after a person approved it in Gossamr.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** the retry loop never backs off."
+        },
+        {
+          "path": "src/consumer/index.ts",
+          "line": 1,
+          "side": "RIGHT",
+          "body": "**Should fix:** exports moved."
+        }
+      ]
+    }
+  }
+]

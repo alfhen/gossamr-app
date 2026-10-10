@@ -12,6 +12,7 @@ import { PipRunCard } from "./PipRunCard";
 import { batchable, batchToApprove, freezeBatch, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
+import { openPullView } from "./pullViewStore";
 import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
 import { approveEach } from "./useCards";
@@ -201,6 +202,25 @@ function StepPullRequest({ pr, onOpen }: { pr: NonNullable<StepChip["pr"]>; onOp
   );
 }
 
+/** The pull request the Review step read, with a button that shows it in Gossamr. */
+function ReviewedPull({ repo, number, onOpen }: { repo: string; number: number; onOpen(): void }) {
+  return (
+    <p data-step-review-pr className="m-0 flex min-w-0 items-baseline gap-1.5 px-2.5 text-xs text-ws-ink3">
+      <span className="min-w-0 truncate">
+        Reviewed {repo}#{number}
+      </span>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`PR view of ${repo}#${number}`}
+        className="shrink-0 rounded border border-ws-sep2 px-1.5 font-semibold text-ws-pip hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+      >
+        PR view
+      </button>
+    </p>
+  );
+}
+
 export interface StepRailViewProps {
   view: WorkstreamView;
   /** The workstream's own runs. */
@@ -217,6 +237,8 @@ export interface StepRailViewProps {
   approve(id: string): Promise<{ error?: string | null }>;
   /** Opens the build's pull request on GitHub. */
   onOpenPr?(url: string): void;
+  /** Opens the pull request a review read in the in-app view, with its pending review draft when there is one. */
+  onPullView?(repo: string, number: number): void;
   /** Steps shown open at first; a test passes its own. */
   initialOpen?: readonly StepGroup[];
   /** A run to show: the step it is in opens, as when a wake turn's header names it. */
@@ -227,7 +249,7 @@ export interface StepRailViewProps {
  * The step rail of a workstream: Pip's notes, the workstream's controls, Pip's own drafts, then a chip for each step of
  * the chain. A chip opens to its runs and the drafts about it, where a draft is decided as in the conversation.
  */
-export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), initialOpen = [], reveal = null }: StepRailViewProps) {
+export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onPullView = (repo, number) => openPullView({ repo, number }), initialOpen = [], reveal = null }: StepRailViewProps) {
   const [open, setOpen] = useState<ReadonlySet<StepGroup>>(() => new Set(initialOpen));
   const chips = useMemo(() => stepChips([...runs], events, verdicts, proposals, { now, waitingForPr: view.waitingForPr, changes }), [runs, events, verdicts, proposals, now, view.waitingForPr, changes]);
   const revealIn = reveal ? (runs.find((r) => r.id === reveal)?.spec.kind ?? null) : null;
@@ -286,6 +308,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                 <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} />
               </button>
               {chip.pr && <StepPullRequest pr={chip.pr} onOpen={onOpenPr} />}
+              {chip.kind === "review" && chip.newest?.spec.pr && <ReviewedPull repo={chip.newest.spec.repo} number={chip.newest.spec.pr} onOpen={() => onPullView(chip.newest!.spec.repo, chip.newest!.spec.pr!)} />}
               {shown && (
                 <div id={panel} className="grid gap-1.5 pl-2">
                   {chip.runs.map((run) => (

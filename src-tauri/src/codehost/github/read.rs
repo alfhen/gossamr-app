@@ -7,11 +7,11 @@ use url::Url;
 
 use super::wire::{
     checks_state, review_state, BranchItem, CheckRuns, CodeItems, CombinedStatus, Commit, CommitSearch, Entry, Notification, Pull, PullCommit, PullFile,
-    PullHits, Review,
+    PullComment, PullHits, Review,
 };
 use super::{encode, GithubHost};
 use crate::codehost::keys::KeyMatcher;
-use crate::codehost::{Notices, Refreshed};
+use crate::codehost::{Notices, Refreshed, ReviewComments, ReviewSummary, ThreadComment};
 use crate::domain::{
     clip, ChangedFile, CheckState, CodeChange, CodeChangeKind, CodeChangeState, CodeFile, CodeHit, CommitInfo, CommitQuery, Notice, PersonRef,
     PullRequestDetail, ReviewInfo, ReviewState, TreeEntry, TreeEntryKind,
@@ -19,7 +19,11 @@ use crate::domain::{
 use crate::error::{Error, Result};
 
 const PATCH_LIMIT: usize = 4000;
+/// The most of one file's patch a review draft reads, so its comments can sit on any line a sizeable change shows.
+pub(super) const REVIEW_PATCH_LIMIT: usize = 100_000;
 const FILE_PAGES: usize = 3;
+/// Pages of a pull request's inline comments read, 100 each.
+const COMMENT_PAGES: usize = 3;
 const COMMITS_SHOWN: usize = 30;
 const BRANCH_PAGES: usize = 3;
 const COMMIT_PAGES: usize = 3;
@@ -106,6 +110,20 @@ fn names(query: &str, text: &str) -> bool {
     KeyMatcher::new([prefix]).find(text).iter().any(|k| k.eq_ignore_ascii_case(query))
 }
 
+/// A file as listed, its patch cut at `limit` characters. With `whole_lines` a cut patch ends at the last whole line
+/// before the cut, so no line a review comment could sit on is half shown.
+fn changed_file(f: PullFile, limit: usize, whole_lines: bool) -> ChangedFile {
+    let truncated = f.patch.as_ref().is_some_and(|p| p.chars().count() > limit);
+    let patch = f.patch.map(|p| {
+        let cut = clip(&p, limit);
+        match truncated && whole_lines {
+            true => cut.rfind('\n').map_or(String::new(), |i| cut[..i].to_string()),
+            false => cut,
+        }
+    });
+    ChangedFile { path: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch, truncated }
+}
+
 fn status_error(e: &Error) -> bool {
     matches!(e, Error::CodeHost { status: 403 | 404 | 422, .. })
 }
@@ -130,7 +148,7 @@ impl GithubHost {
         Ok(checks_state(&runs, status.as_ref()))
     }
 
-    async fn reviews(&self, repo: &str, number: u64) -> Result<Vec<Review>> {
+    pub(super) async fn reviews(&self, repo: &str, number: u64) -> Result<Vec<Review>> {
         Ok(self.api.paged(&format!("/repos/{repo}/pulls/{number}/reviews?per_page=100"), 3).await?.0)
     }
 
@@ -201,7 +219,7 @@ impl GithubHost {
             files_truncated: change.changed_files.is_some_and(|n| n > listed),
             files: files
                 .into_iter()
-                .map(|f| ChangedFile { path: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch.map(|p| clip(&p, PATCH_LIMIT)) })
+                .map(|f| changed_file(f, PATCH_LIMIT, false))
                 .collect(),
             commits: commits
                 .into_iter()
@@ -216,6 +234,40 @@ impl GithubHost {
                 .collect(),
             reviews,
             change,
+        })
+    }
+
+    /// The files of pull request `number` with their patches up to `REVIEW_PATCH_LIMIT` characters each. Reads only
+    /// the files list, never the pull request itself.
+    pub(super) async fn files_of(&self, repo: &str, number: u64) -> Result<Vec<ChangedFile>> {
+        let (files, _): (Vec<PullFile>, _) = self.api.paged(&format!("/repos/{repo}/pulls/{number}/files?per_page=100"), FILE_PAGES).await?;
+        Ok(files.into_iter().map(|f| changed_file(f, REVIEW_PATCH_LIMIT, true)).collect())
+    }
+
+    /// The reviews submitted on pull request `number` and their inline comments, at most `COMMENT_PAGES` pages of
+    /// them. Two reads, both GETs.
+    pub(super) async fn review_thread(&self, repo: &str, number: u64) -> Result<ReviewComments> {
+        let reviews = self.reviews(repo, number).await?;
+        let (comments, _): (Vec<PullComment>, _) = self.api.paged(&format!("/repos/{repo}/pulls/{number}/comments?per_page=100"), COMMENT_PAGES).await?;
+        let state_of = |id: Option<u64>| id.and_then(|id| reviews.iter().find(|r| r.id == id)).map(|r| r.state.clone());
+        Ok(ReviewComments {
+            comments: comments
+                .into_iter()
+                .map(|c| ThreadComment {
+                    state: state_of(c.pull_request_review_id),
+                    path: c.path,
+                    line: c.line,
+                    original_line: c.original_line,
+                    side: c.side,
+                    author: c.user.map(|u| u.login),
+                    body: c.body,
+                    at: c.created_at,
+                })
+                .collect(),
+            reviews: reviews
+                .into_iter()
+                .map(|r| ReviewSummary { author: r.user.map(|u| u.login), state: r.state, body: r.body.unwrap_or_default(), at: r.submitted_at })
+                .collect(),
         })
     }
 

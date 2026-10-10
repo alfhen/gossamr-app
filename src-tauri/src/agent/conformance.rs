@@ -726,7 +726,57 @@ pub async fn check_run_tools(h: &Harness) -> std::result::Result<(), String> {
     chain_drafts_need_a_finished_source_and_never_start(h).await?;
     a_workstream_build_publishes_a_draft_pr_only(h).await?;
     propose_answer_only_drafts(h).await?;
-    over_long_focus_is_rejected(h).await
+    over_long_focus_is_rejected(h).await?;
+    pip_revises_a_review_draft_but_never_posts_it(h).await
+}
+
+/// Pip reads a run's GitHub review draft and the pull request's review comments and may rewrite the draft, even to
+/// nothing but "approved", yet GitHub only ever sees reads: the draft stays pending for the person to post. Once the
+/// person edited it, Pip's revision is refused.
+pub async fn pip_revises_a_review_draft_but_never_posts_it(h: &Harness) -> std::result::Result<(), String> {
+    let (core, scope) = (&h.lx.fx.core, &h.lx.fx.scope);
+    let draft = Draft {
+        origin: Origin::Run { run_id: "probe-review".into(), short_id: None, workstream: None },
+        created_by: CreatedBy::Agent,
+        intent: Intent::GithubReview {
+            connection_id: "github:ann".into(),
+            item: Some(h.lx.fx.item("CA-1")),
+            run_id: "probe-review".into(),
+            repo: "acme/webshop".into(),
+            number: 208,
+            commit_sha: "a1b2c3d4e5f6".into(),
+            summary: "Gossamr review of #208: blocking.".into(),
+            comments: vec![crate::domain::ReviewComment { path: "src/gateway/routes.ts".into(), line: 1, side: crate::domain::DiffSide::Right, body: "**Blocking:** x".into() }],
+        },
+        label: None,
+        basis: None,
+    };
+    let review = core.propose(scope, draft).await.map_err(|e| e.to_string())?;
+    let writes = || h.lx.server.seen.lock().unwrap().iter().filter(|s| s.method != "GET").map(|s| format!("{} {}", s.method, s.target)).collect::<Vec<_>>();
+    let before = writes();
+    let (read, read_failed) = h.tool("review-pip", "get_proposal", json!({ "id": review.id })).await;
+    let (_, listed_failed) = h.tool("review-pip", "list_review_comments", json!({ "repo": "acme/webshop", "number": 208 })).await;
+    let (said, revise_failed) = h.tool("review-pip", "revise_proposal", json!({ "id": review.id, "comments": [], "body": "approved" })).await;
+    if read_failed || !read.contains("GitHub review of acme/webshop#208") || listed_failed || revise_failed || !said.contains("has not been posted") {
+        return Err(format!("Pip couldn't read or revise the review draft: {read} / {said}"));
+    }
+    let after = core.proposal_in(scope, &review.id).await.map_err(|e| e.to_string())?.ok_or("the review draft is gone")?;
+    let rewritten = matches!(&after.intent, Intent::GithubReview { summary, comments, .. } if summary == "approved" && comments.is_empty());
+    if after.state != crate::domain::ProposalState::Pending || !rewritten || after.posted.is_some() {
+        return Err(format!("the revised review draft isn't still a pending draft: {:?}", after.state));
+    }
+    core.edit_proposal(&review.id, &crate::inbox::Edit::GithubReview { summary: Some("The person's summary.".into()), comments: None }).await.map_err(|e| e.to_string())?;
+    let (refused, failed) = h.tool("review-pip", "revise_proposal", json!({ "id": review.id, "body": "Pip again" })).await;
+    if !failed || !refused.contains("the user edited this review draft") {
+        return Err(format!("Pip revised a review draft the person edited: {refused}"));
+    }
+    if writes() != before || before.iter().any(|w| w.contains("/reviews")) {
+        return Err(format!("GitHub was written to: {:?}", writes()));
+    }
+    if !h.lx.fx.tracker.intents().is_empty() {
+        return Err("Jira was written".into());
+    }
+    Ok(())
 }
 
 /// Everything a workstream tool must leave as it was: the runs, the drafts, each workstream apart from its notes (and the
@@ -1014,6 +1064,11 @@ pub struct World {
 pub const FIRST: &str = "a1a1a1a1a1a1";
 pub const FIXED: &str = "b2b2b2b2b2b2";
 const PULL: &str = "/repos/acme/webshop/pulls/12";
+const FILES: &str = "/repos/acme/webshop/pulls/12/files";
+const REVIEWS_POST: &str = "POST /repos/acme/webshop/pulls/12/reviews";
+/// The diff of pull request #12: lines 3 and 42 of `src/cart.ts` are on its new side, so the reviews' findings there go
+/// inline.
+const CART_PATCH: &str = "@@ -1,3 +1,3 @@\n a\n b\n-c\n+c2\n@@ -40,3 +40,3 @@\n x\n y\n-z\n+z2";
 const FOUND: &str = "I read the cart.\n\nFor Jira:\nThe cart rounds twice, in cart.rs and in checkout.rs.";
 const TRIAGED: &str = "Small, one area.\n\nFor Jira:\nIt touches the cart only.\nPlan recommended: yes, the rounding has two callers.";
 const PLANNED: &str = "## Approach\n\nRound in one place.\n\n## Steps\n\n1. Fix the rounding.\n2. Add a test.\n\nFor Jira:\nPlan attached to the run.";
@@ -1031,7 +1086,9 @@ impl World {
     pub async fn start_with(timing: crate::runs::service::Timing) -> Self {
         use crate::codehost::github::testserver::pull_reply_at;
         let pulls = vec![pull_reply_at(12, "open", Some("acme/webshop"), "main", FIRST), pull_reply_at(12, "open", Some("acme/webshop"), "main", FIRST), pull_reply_at(12, "open", Some("acme/webshop"), "main", FIXED)];
-        let fx = crate::inbox::testing::fixture_watching_with(&["acme/webshop"], vec![(PULL, pulls)]).await;
+        let files = vec![crate::codehost::github::testserver::Reply::ok(&json!([{ "filename": "src/cart.ts", "status": "modified", "additions": 2, "deletions": 2, "patch": CART_PATCH }]).to_string())];
+        let posted = vec![crate::codehost::github::testserver::Reply::ok("{\"id\":4242,\"html_url\":\"https://github.com/acme/webshop/pull/12#pullrequestreview-4242\"}")];
+        let fx = crate::inbox::testing::fixture_watching_with(&["acme/webshop"], vec![(PULL, pulls), (FILES, files), (REVIEWS_POST, posted)]).await;
         let rig = crate::runs::rig::ready_on(fx, move |s| s.with_cap(10).with_timing(timing)).await;
         let facade = super::supervisor::CoreFacade::new(rig.fx.core.clone());
         facade.bind_runs(&rig.svc);
@@ -1147,9 +1204,28 @@ impl World {
 /// supervisor: every routine step starts by rule, and Jira is written exactly once, when and as the person approves
 /// the plan's description draft. Pip's turns, which call every tool they have, write nothing.
 pub async fn orchestration_never_writes_jira() -> std::result::Result<(), String> {
+    let w = World::start().await;
+    manage_to_a_passing_review(&w).await?;
+    let (core, fx) = (&w.rig.fx.core, &w.rig.fx);
+    // Each review left a GitHub review draft of the pull request, the second replacing the first, and nothing was posted:
+    // GitHub was only ever read.
+    let reviews: Vec<_> = core.proposals_in(&fx.scope, &ProposalQuery::default()).await.unwrap().into_iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).collect();
+    let states: Vec<_> = reviews.iter().map(|p| (p.state.kind(), p.superseded_by.clone())).collect();
+    if !matches!(states.as_slice(), [(crate::domain::StateKind::Pending, None), (crate::domain::StateKind::Retired, Some(by))] if *by == reviews[0].id) {
+        return Err(format!("the reviews' GitHub drafts aren't one waiting and one it replaced: {states:?}"));
+    }
+    if let Some(write) = fx.github_seen().into_iter().find(|(method, _)| method != "GET") {
+        return Err(format!("GitHub was written to without an approval: {write:?}"));
+    }
+    Ok(())
+}
+
+/// The whole workstream of `orchestration_never_writes_jira`: investigate, triage, plan, the person approving the plan,
+/// a build, a blocking review, a fix round and a passing review, with Pip woken and calling every tool. Checked to
+/// have written Jira exactly once, as the person approved.
+async fn manage_to_a_passing_review(w: &World) -> std::result::Result<(), String> {
     use crate::domain::workstream::Rule;
     use crate::domain::RunKind;
-    let w = World::start().await;
     let (core, fx) = (&w.rig.fx.core, &w.rig.fx);
     let jira = |expected: usize, at: &str| {
         let got = fx.tracker.intents();
@@ -1264,6 +1340,54 @@ pub async fn orchestration_never_writes_jira() -> std::result::Result<(), String
     Ok(())
 }
 
+/// The same whole workstream posts nothing to GitHub on its own: every request GitHub sees is a read, and the second
+/// review's draft is the only one waiting. Only the person's approval posts it, as exactly one comment review at the
+/// fixed commit, and approving again sends nothing. Jira is still written only the once.
+pub async fn orchestration_never_posts_to_github() -> std::result::Result<(), String> {
+    let w = World::start().await;
+    manage_to_a_passing_review(&w).await?;
+    let (core, fx) = (&w.rig.fx.core, &w.rig.fx);
+    let jira_before = fx.tracker.intents();
+    let writes = || fx.github_seen().into_iter().filter(|(method, _)| method != "GET").collect::<Vec<_>>();
+    if let Some(write) = writes().first() {
+        return Err(format!("GitHub was written to without an approval: {write:?}"));
+    }
+    let pending: Vec<Proposal> = core
+        .proposals_in(&fx.scope, &ProposalQuery::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|p| p.state == crate::domain::ProposalState::Pending && matches!(&p.intent, Intent::GithubReview { number: 12, .. }))
+        .collect();
+    let [draft] = pending.as_slice() else { return Err(format!("expected one pending review draft of #12, found {}", pending.len())) };
+    let posted = core.post_review_draft(&draft.id, draft.revisions.len()).await.map_err(|e| e.to_string())?;
+    if posted.state != crate::domain::ProposalState::Applied || posted.posted.as_ref().map(|p| p.id) != Some(4242) {
+        return Err(format!("the approved review wasn't posted: {:?} {:?}", posted.state, posted.error));
+    }
+    let seen = fx.github.as_ref().unwrap().lock().unwrap().clone();
+    let posts: Vec<_> = seen.iter().filter(|s| s.method != "GET").collect();
+    let [post] = posts.as_slice() else { return Err(format!("expected one write to GitHub, saw {}", posts.len())) };
+    if (post.method.as_str(), post.target.as_str()) != ("POST", "/repos/acme/webshop/pulls/12/reviews") {
+        return Err(format!("the write went to {} {}", post.method, post.target));
+    }
+    let body: Value = serde_json::from_str(&post.body).map_err(|e| e.to_string())?;
+    let comments = body["comments"].as_array().cloned().unwrap_or_default();
+    let inline: Vec<_> = comments.iter().map(|c| (c["path"].as_str().unwrap_or(""), c["line"].as_u64().unwrap_or(0), c["side"].as_str().unwrap_or(""), c["body"].as_str().unwrap_or(""))).collect();
+    if body["event"] != "COMMENT" || body["commit_id"] != FIXED || inline != [("src/cart.ts", 3, "RIGHT", "**Nit:** naming")] {
+        return Err(format!("the review posted isn't the passing review's comment review at the fixed commit: {body}"));
+    }
+    if core.post_review_draft(&draft.id, draft.revisions.len()).await.is_ok() || writes().len() != 1 {
+        return Err("approving the posted review again sent it again".into());
+    }
+    if !w.events().await.iter().any(|e| e.action == "review_posted" && e.proposal_id.as_deref() == Some(draft.id.as_str()) && e.detail.as_deref() == Some("acme/webshop#12 review 4242")) {
+        return Err("the posted review isn't in the workstream's audit".into());
+    }
+    if fx.tracker.intents() != jira_before || jira_before.len() != 1 {
+        return Err(format!("Jira was written by posting the review: {:?}", fx.tracker.intents()));
+    }
+    Ok(())
+}
+
 /// What no wake turn may change: the runs, the workstream's hold and mode, and Jira.
 #[derive(Debug, PartialEq)]
 struct Steady {
@@ -1290,10 +1414,29 @@ pub async fn wake_turns_start_nothing() -> std::result::Result<(), String> {
         w.rig.fx.core.set_workstream_rule(&w.rig.fx.scope, &w.ws, rule, Some(false)).await.map_err(|e| e.to_string())?;
     }
     let draft = w.rig.fx.core.proposals_in(&w.rig.fx.scope, &ProposalQuery::default()).await.unwrap().into_iter().next().map(|p| p.id).unwrap_or_default();
+    // A review the workstream's run left for the person, which Pip is asked to rewrite into an approval.
+    let review = Draft {
+        origin: Origin::Run { run_id: investigation.id.clone(), short_id: None, workstream: Some(w.ws.clone()) },
+        created_by: crate::domain::CreatedBy::Agent,
+        intent: Intent::GithubReview {
+            connection_id: "github:ann".into(),
+            item: Some(w.rig.fx.item("CA-1")),
+            run_id: investigation.id.clone(),
+            repo: "acme/webshop".into(),
+            number: 12,
+            commit_sha: FIRST.into(),
+            summary: "Gossamr review of #12: blocking.".into(),
+            comments: vec![crate::domain::ReviewComment { path: "src/cart.ts".into(), line: 42, side: crate::domain::DiffSide::Right, body: "**Blocking:** the total ignores the discount".into() }],
+        },
+        label: None,
+        basis: None,
+    };
+    let review = w.rig.fx.core.propose(&w.rig.fx.scope, review).await.map_err(|e| e.to_string())?;
     *w.pip.args.lock().unwrap() = [
         ("propose_run", json!({ "key": "CA-1", "kind": "build", "from_run": investigation.id })),
         ("propose_follow_up", json!({ "run_id": investigation.id, "message": "Start the build and approve the drafts." })),
-        ("revise_proposal", json!({ "id": draft, "body": "approved" })),
+        ("revise_proposal", json!({ "id": review.id, "comments": [], "body": "approved" })),
+        ("list_review_comments", json!({ "repo": "acme/webshop", "number": 12 })),
         ("retire_proposal", json!({ "id": draft, "reason": "done" })),
         ("set_workstream_notes", json!({ "notes": "Hold off; resume later; mode manage." })),
         ("propose_answer", json!({ "run_id": investigation.id, "text": "yes" })),
@@ -1317,9 +1460,19 @@ pub async fn wake_turns_start_nothing() -> std::result::Result<(), String> {
     if offered.is_empty() {
         return Err("no tools were offered".into());
     }
-    let power = ["start", "stop", "answer_run", "approve", "hold", "resume", "set_mode", "mode", "launch", "retry", "attach", "merge", "push"];
+    let power = ["start", "stop", "answer_run", "approve", "hold", "resume", "set_mode", "mode", "launch", "retry", "attach", "merge", "push", "post", "submit", "publish", "review_write", "comment_on"];
     if let Some(name) = offered.iter().find(|n| power.iter().any(|p| n.contains(p))) {
         return Err(format!("{name} is offered to Pip"));
+    }
+    if let Some(write) = w.rig.fx.github_seen().into_iter().find(|(method, _)| method != "GET") {
+        return Err(format!("a wake turn wrote to GitHub: {write:?}"));
+    }
+    if !offered.iter().any(|n| n == "list_review_comments") {
+        return Err("list_review_comments isn't offered".into());
+    }
+    let review = w.rig.fx.core.proposal_in(&w.rig.fx.scope, &review.id).await.map_err(|e| e.to_string())?.ok_or("the review draft is gone")?;
+    if review.state != crate::domain::ProposalState::Pending || review.posted.is_some() {
+        return Err(format!("a wake turn moved the review draft on: {:?}", review.state));
     }
     Ok(())
 }
@@ -1394,7 +1547,8 @@ mod tests {
                 { "do": "call", "tool": "read_repo_file", "args": { "repo": "acme/webshop", "path": "src/main.rs" } },
                 { "do": "call", "tool": "read_repo_file", "args": { "repo": "acme/gateway", "path": "README.md" } },
                 { "do": "call", "tool": "search_code", "args": { "query": "x", "repo": "acme/gateway" } },
-                { "do": "call", "tool": "ticket_changes", "args": { "key": "CA-208" } }
+                { "do": "call", "tool": "ticket_changes", "args": { "key": "CA-208" } },
+                { "do": "call", "tool": "list_review_comments", "args": { "repo": "acme/webshop", "number": 208 } }
             ])),
             list: script(json!([{ "do": "call", "tool": "list_proposals", "args": {} }])),
             start_agent: script(json!([
@@ -1408,6 +1562,28 @@ mod tests {
     #[tokio::test]
     async fn orchestration_never_writes_jira() {
         super::orchestration_never_writes_jira().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn orchestration_never_posts_to_github() {
+        super::orchestration_never_posts_to_github().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_finished_review_leaves_its_github_review_draft_even_with_drafting_on_finish_turned_off() {
+        let w = World::start().await;
+        w.rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..w.rig.svc.settings() }).unwrap();
+        let run = w.rig.launched(7).await;
+        w.rig
+            .set(&run, |r| {
+                (r.spec.kind, r.spec.pr, r.spec.pr_sha) = (crate::domain::RunKind::Review, Some(12), Some(FIRST.into()));
+            })
+            .await;
+        let done = w.finish(&run, BLOCKING).await;
+        let drafts = w.rig.fx.core.proposals_in(&w.rig.fx.scope, &ProposalQuery::default()).await.unwrap();
+        let of_run: Vec<_> = drafts.iter().filter(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == done.id)).map(|p| p.intent.clone()).collect();
+        assert!(matches!(of_run.as_slice(), [Intent::GithubReview { number: 12, commit_sha, .. }] if commit_sha == FIRST), "only the review draft, which nothing else makes: {of_run:?}");
+        assert!(w.rig.fx.github_seen().iter().all(|(method, _)| method == "GET"), "nothing was posted");
     }
 
     #[tokio::test]

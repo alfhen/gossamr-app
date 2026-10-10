@@ -8,10 +8,17 @@ use super::{stamp, Db};
 use crate::domain::{Intent, Proposal, ProposalQuery, ProposalState, StateKind};
 use crate::error::{Error, Result};
 
+/// The error a proposal keeps when Gossamr closed while it was being applied.
+pub const INTERRUPTED_NOTE: &str = "Gossamr closed while this was being applied. Check whether it went through before trying again.";
+
 fn connection_of(p: &Proposal) -> String {
     match &p.intent {
         Intent::Create { container, .. } => container.connection_id.clone(),
         Intent::StartRun { connection_id, .. } | Intent::FollowUp { connection_id, .. } | Intent::RunAnswer { connection_id, .. } => connection_id.clone(),
+        // A review of a ticket's pull request is listed with the ticket's other drafts, so an item's query finds it; one
+        // with no ticket goes by the code host's connection.
+        Intent::GithubReview { item: Some(item), .. } => item.connection_id.clone(),
+        Intent::GithubReview { connection_id, .. } => connection_id.clone(),
         other => other.target().map(|t| t.connection_id.clone()).unwrap_or_default(),
     }
 }
@@ -106,6 +113,9 @@ impl Db {
         if matches!(p.intent, Intent::RunAnswer { .. }) {
             return Err(Error::Proposal("an answer is sent with its own button".into()));
         }
+        if matches!(p.intent, Intent::GithubReview { .. }) {
+            return Err(Error::Proposal("a review is posted to GitHub with its own button".into()));
+        }
         p.state = ProposalState::Applying;
         p.updated_at = at;
         p.error = None;
@@ -113,6 +123,28 @@ impl Db {
             "UPDATE proposals SET updated_at = ?2, data = ?3 WHERE id = ?1",
             params![id, stamp(at), serde_json::to_string(&p)?],
         )?;
+        tx.commit()?;
+        Ok(Some(p))
+    }
+
+    /// Moves a pending `GithubReview` to `Applying` and returns it, or `None` when it wasn't pending. Like
+    /// `begin_applying`, the state column is the guard, so a review is posted at most once however often it is approved.
+    /// Any other kind is refused and left as it was.
+    pub fn begin_posting_review(&self, id: &str, at: DateTime<Utc>) -> Result<Option<Proposal>> {
+        let tx = self.conn.unchecked_transaction()?;
+        let claimed = tx.execute("UPDATE proposals SET state = 'applying' WHERE id = ?1 AND state = 'pending'", params![id])?;
+        if claimed == 0 {
+            return Ok(None);
+        }
+        let data: String = tx.query_row("SELECT data FROM proposals WHERE id = ?1", params![id], |r| r.get(0))?;
+        let mut p: Proposal = serde_json::from_str(&data)?;
+        if !matches!(p.intent, Intent::GithubReview { .. }) {
+            return Err(Error::Proposal("only a review draft is posted to GitHub".into()));
+        }
+        p.state = ProposalState::Applying;
+        p.updated_at = at;
+        p.error = None;
+        tx.execute("UPDATE proposals SET updated_at = ?2, data = ?3 WHERE id = ?1", params![id, stamp(at), serde_json::to_string(&p)?])?;
         tx.commit()?;
         Ok(Some(p))
     }
@@ -126,7 +158,7 @@ impl Db {
         for mut p in stuck.iter().cloned() {
             p.state = ProposalState::Pending;
             p.updated_at = at;
-            p.error = Some("Gossamr closed while this was being applied. Check whether it went through before trying again.".into());
+            p.error = Some(INTERRUPTED_NOTE.into());
             self.save_proposal(&p)?;
         }
         Ok(stuck.len())

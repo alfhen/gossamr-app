@@ -1,8 +1,8 @@
 import { and } from "../lib/filter";
-import { WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
+import { REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
 import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
-import type { BasisField, Intent, ItemRef, Proposal, Run, RunKind, ScreenContext, WorkFilter } from "../types";
+import type { BasisField, Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
 import { needsPerson, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
@@ -24,8 +24,8 @@ export interface PipScript {
   runDraft?: { item: ItemRef; kind: RunKind; fromRun: string | null; focus: string | null } | null;
   /** An investigation with no ticket to propose: a watched repository, when the request named one, and the question. */
   ticketlessRun?: { repo: string | null; prompt: string } | null;
-  /** A change to the text of a comment, new-ticket or breakdown draft that came from a run. */
-  revise?: { id: string; body?: string; title?: string; description?: string; summaries?: string[] } | null;
+  /** A change to the text of a comment, new-ticket or breakdown draft that came from a run; for a review draft its summary (`body`) and its complete new list of comments. */
+  revise?: { id: string; body?: string; title?: string; description?: string; summaries?: string[]; comments?: ReviewComment[] } | null;
   /** A new description or title to draft for a ticket, shown to the person as a diff. */
   rewrite?: { item: ItemRef; part: "title" | "description" } | null;
   /** A follow-up to propose for a finished run, the way propose_follow_up does. */
@@ -77,6 +77,75 @@ const ANY_KEY = "([A-Za-z][A-Za-z0-9]+-\\d+)";
 const TICKET_WORDS = "(?:ticket\\s+|issue\\s+)?";
 const asksToRevise = /\b(shorten|shorter|tighten|trim|rewrite|reword|rephrase|revise)\b/;
 const asksForShorter = /\b(shorten|shorter|tighten|trim)\b/;
+
+const talksReview = /GitHub review draft (\S+) of \S+, drafted from agent run (\S+?)\./i;
+const PLACE = "([\\w./-]+:\\d+)";
+const softens = new RegExp(`\\bsoften\\b.*?\\b(?:comment|nit)\\s+(?:on|at)\\s+${PLACE}|\\bsoften (?:the )?comment (\\d+)\\b`, "i");
+const drops = new RegExp(`\\bdrop (?:the )?nit\\b|\\bdrop (?:the )?comment (?:on|at)\\s+${PLACE}|\\bdrop (?:the )?comment (\\d+)\\b`, "i");
+const adds = /\badd (?:a |another )?comment (?:on|at)\s+([\w./-]+):(\d+)\s+saying\s+(.+)$/is;
+
+/** The words a review comment says, without the severity label Gossamr put in front. */
+const reviewWords = (body: string) => body.replace(/^\*\*[^*]+:\*\*\s*/, "").trim();
+
+/** A sample gentler wording of a review comment: a suggestion rather than a verdict. */
+export const softenedComment = (body: string) => {
+  const words = reviewWords(body);
+  return `Suggestion, if you agree: ${words.charAt(0).toLowerCase()}${words.slice(1)}`;
+};
+
+/** What the scripted Pip says when the backend refuses its revision of a review draft. */
+export function reviewRefusal(why: string): string {
+  return why === REVIEW_IS_THE_USERS
+    ? `I can't change that draft: ${why}. You edited it, so it's yours and stays as you left it; nothing was posted.`
+    : `I couldn't change the draft: ${why}. It is as it was, and nothing was posted.`;
+}
+
+const STILL_A_DRAFT = "It's still a draft: nothing was posted to GitHub, and it goes there only when you post it.";
+
+/** A turn about a GitHub review draft: talking it over, or softening, dropping or adding a comment. Null when the request isn't one. */
+function reviewScript(prompt: string, drafts: readonly Proposal[], discussed: string | null): PipScript | null {
+  const talk = talksReview.exec(prompt);
+  const soften = softens.exec(prompt);
+  const drop = drops.exec(prompt);
+  const add = adds.exec(prompt);
+  if (!talk && !soften && !drop && !add) return null;
+  const reviews = drafts.filter((d) => d.state.type === "pending" && d.intent.type === "githubReview");
+  // The one talked about, else the one the conversation discussed, else the only one waiting.
+  const wanted = talk?.[1] ?? discussed;
+  const draft = reviews.find((d) => d.id === wanted) ?? (!talk && reviews.length === 1 ? reviews[0] : undefined);
+  if (!draft || draft.intent.type !== "githubReview") {
+    if (!talk) return null;
+    return { steps: [], text: "I can't find that review draft any more, or it has been decided already, so there is nothing to change.", filter: null, draft: null };
+  }
+  const review = draft.intent;
+  const listed = review.comments.map((c, i) => `${i + 1}. \`${c.path}:${c.line}\`: ${reviewWords(c.body)}`).join("\n");
+  if (talk) {
+    return {
+      steps: ["Read the draft in full", "Read the pull request's review comments"],
+      text: `I read review draft ${draft.id} of ${review.repo}#${review.number} in full, with the diff around each comment:\n\n${listed || "It has no inline comments."}\n\nTell me what to change, for example "soften the comment on ${review.comments[0] ? `${review.comments[0].path}:${review.comments[0].line}` : "a line"}" or "drop the nit", and I'll revise it. ${STILL_A_DRAFT}`,
+      filter: null,
+      draft: null,
+      discussed: draft.id,
+    };
+  }
+  const indexOf = (place: string | undefined, n: string | undefined) => (place ? review.comments.findIndex((c) => `${c.path}:${c.line}` === place) : n ? Number(n) - 1 : -1);
+  const missing = (what: string): PipScript => ({ steps: ["Read the draft in full"], text: `The draft has no ${what}, so I left it as it is. ${STILL_A_DRAFT}`, filter: null, draft: null, discussed: draft.id });
+  const revised = (comments: ReviewComment[], did: string, step: string): PipScript => ({ steps: ["Read the draft in full", step], text: `${did} ${STILL_A_DRAFT}`, filter: null, draft: null, discussed: draft.id, revise: { id: draft.id, comments } });
+  if (soften) {
+    const i = indexOf(soften[1], soften[2]);
+    if (i < 0 || i >= review.comments.length) return missing(soften[1] ? `comment on ${soften[1]}` : `comment ${soften[2]}`);
+    const c = review.comments[i];
+    return revised(review.comments.map((x, j) => (j === i ? { ...x, body: softenedComment(x.body) } : x)), `I softened the comment on ${c.path}:${c.line} into a suggestion.`, "Softened a comment");
+  }
+  if (drop) {
+    const i = drop[1] || drop[2] ? indexOf(drop[1], drop[2]) : review.comments.findIndex((c) => /^\*\*Nit:\*\*/i.test(c.body));
+    if (i < 0 || i >= review.comments.length) return missing(drop[1] ? `comment on ${drop[1]}` : drop[2] ? `comment ${drop[2]}` : "nit");
+    const c = review.comments[i];
+    return revised(review.comments.filter((_, j) => j !== i), `I dropped the comment on ${c.path}:${c.line}.`, "Dropped a comment");
+  }
+  const [, path, line, said] = add!;
+  return revised([...review.comments, { path, line: Number(line), side: "RIGHT", body: said.trim().replace(/^["“]|["”]$/g, "") }], `I added a comment on ${path}:${line}.`, "Added a comment");
+}
 
 const asksToSeeDraft = /\b(can|could|do|will) you (?:still )?(?:see|read|open|view)\b.*\b(?:draft|proposal)\b|\bwhat does (?:the|its|that|this) draft (?:say|contain)\b/i;
 
@@ -399,6 +468,8 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   if (answer) return answer;
   const step = workstream ? chainStep(prompt, context, runs, workstream) : null;
   if (step) return step;
+  const review = reviewScript(prompt, drafts, discussed);
+  if (review) return review;
   const finishing = finishes.exec(prompt);
   if (finishing) {
     const left = drafts.find((d) => d.id === finishing[1] && d.state.type === "pending" && d.origin.type === "run" && d.intent.type === "create");
@@ -683,7 +754,7 @@ export interface PipDrafter {
   /** The drafts Pip can see. */
   pipDrafts(): Proposal[];
   /** Revises a comment or new-ticket draft that came from a run, the way `revise_proposal` does. */
-  pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[] }, requestId?: string): Promise<unknown>;
+  pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[]; comments?: ReviewComment[] }, requestId?: string): Promise<unknown>;
   /** Drafts a title or description edit the way propose_description_edit does. */
   pipRewrite(item: ItemRef, part: "title" | "description", requestId: string): Promise<unknown>;
   /** Drafts a follow-up for a finished run the way propose_follow_up does. */
@@ -783,7 +854,15 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       const refused = await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId).then(() => null, refusal);
       if (refused) script.text = `I couldn't draft that: ${refused}`;
     }
-    if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, description: script.revise.description, summaries: script.revise.summaries }, req.requestId);
+    if (!stopped && script.revise) {
+      const { id, body, title, description, summaries, comments } = script.revise;
+      const revising = drafter?.pipRevise?.(id, { body, title, description, summaries, ...(comments ? { comments } : {}) }, req.requestId);
+      // A review's refusal is Pip's to report, as revise_proposal's is; the other kinds keep failing the turn as before.
+      if (comments) {
+        const refused = await revising?.then(() => null, (e: unknown) => (e instanceof Error ? e.message : String(e)));
+        if (refused) script.text = reviewRefusal(refused);
+      } else await revising;
+    }
     if (!stopped && script.rewrite) {
       const refused = await drafter?.pipRewrite?.(script.rewrite.item, script.rewrite.part, req.requestId).then(() => null, refusal);
       if (refused) script.text = `I couldn't draft that: ${refused}`;

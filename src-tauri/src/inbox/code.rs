@@ -398,7 +398,7 @@ impl Core {
         })
     }
 
-    fn require_watched(&self, id: &str, repo: &str) -> Result<()> {
+    pub(super) fn require_watched(&self, id: &str, repo: &str) -> Result<()> {
         if is_watched_repo(&self.watched_repos(id)?, repo) {
             Ok(())
         } else {

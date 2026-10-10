@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoStartSwitches, Run, RunKind, RunSpec, Workstream, WorkstreamRule } from "../types";
 import { MockBackend } from "./mock";
+import type { MockOptions } from "./mockWatch";
 import { itemRef } from "./mockConnector";
 import { MockWorkstreams, basisOfItem, driftOf, type BasisTicket } from "./mockWorkstreams";
 import { docFromText } from "../lib/docs";
@@ -130,10 +131,11 @@ const CA401 = itemRef("CA-401");
 
 /**
  * A sample backend whose new workstreams open in Manage, with its supervisor waking a recorder instead of the scripted
- * Pip, and pull requests that show only when a sync is asked for.
+ * Pip, and pull requests that show only when a sync is asked for. GitHub is signed in with every repository watched,
+ * unless `options` says otherwise.
  */
-function world() {
-  const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: true });
+function world(options: MockOptions = { githubRepos: 12 }) {
+  const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: true, ...options });
   b.supervisor.dispose();
   const wakes: { ws: string; facts: WakeFact[] }[] = [];
   const supervisor = new MockSupervisor({ runs: b.runs, workstreams: b.workstreams, proposals: b.proposals, wake: (ws, facts) => wakes.push({ ws, facts }), hasWaitingWake: () => false });
@@ -167,6 +169,28 @@ const wakeCount = (wakes: { facts: WakeFact[] }[]) => {
 
 describe("the sample supervisor", () => {
   beforeEach(() => saved.clear());
+
+  it("leaves no GitHub review draft of a pull request in a repository that isn't watched, and reads nothing of it, as Core refuses", async () => {
+    // GitHub isn't signed in, so acme/storefront, where the agents work, isn't watched.
+    const { b } = world({});
+    const ws = b.workstreams.open(CA401).id;
+    b.workstreams.setBudget(ws, { autoTurns: 12 });
+    finish(b, (await investigate(b, ws)).id);
+    finish(b, newest(b, ws, "triage")!.id);
+    finish(b, newest(b, ws, "plan")!.id);
+    const planDraft = b.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "rewrite")!;
+    await b.proposalsApprove(planDraft.id);
+    const build = newest(b, ws, "build")!;
+    finish(b, build.id);
+    b.runs.surfacePullRequests();
+    const review = newest(b, ws, "review")!;
+    finish(b, review.id);
+    expect(b.proposals.list().filter((p) => p.intent.type === "githubReview")).toEqual([]);
+    const pr = review.spec.pr!;
+    await expect(b.codePullDiff("github:ada", "acme/storefront", pr)).rejects.toThrow("acme/storefront isn't one of the repositories you watch");
+    await expect(b.codePullFiles("github:ada", "acme/storefront", pr)).rejects.toThrow("isn't one of the repositories you watch");
+    await expect(b.codeReviewAccess("github:ada", "acme/storefront")).rejects.toThrow("isn't one of the repositories you watch");
+  });
 
   it("walks a workstream from investigate to a passing review, with one wake per finished run and no Jira write before the person approves", async () => {
     const { b, wakes } = world();
@@ -223,6 +247,13 @@ describe("the sample supervisor", () => {
     expect(second.spec.prSha).not.toBe(head.sha);
     b.runs.scriptNext("review", { verdict: "pass" });
     finish(b, second.id);
+    // Each round left a GitHub review draft of the pull request; the second replaced the first, and none was posted.
+    const reviewDrafts = b.proposals.list().filter((p) => p.intent.type === "githubReview");
+    expect(reviewDrafts.map((p) => [(p.intent as { runId: string }).runId, p.state.type])).toEqual([
+      [second.id, "pending"],
+      [review.id, "retired"],
+    ]);
+    expect(reviewDrafts[1].supersededBy).toBe(reviewDrafts[0].id);
 
     // Pass ends it: Verify is off by default.
     expect(newest(b, ws, "verify")).toBeUndefined();

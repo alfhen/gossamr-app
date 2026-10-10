@@ -11,6 +11,8 @@ import { showMe } from "./jump";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { nextPass } from "./followUp";
+import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
+import { openPullView } from "./pullViewStore";
 import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, type Asking } from "./draftKeys";
 import { usePip } from "./pipStore";
 import { InlineStart, InlineStartContext, inlineStartId, inlineStartKey, inlineStartable, useInlineStarts } from "./InlineStart";
@@ -19,7 +21,7 @@ import { useTabs } from "./tabsStore";
 import { RetiredDraft } from "./RetiredDraft";
 import { NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 
-const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺", runAnswer: "↩" };
+const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺", runAnswer: "↩", githubReview: "◎" };
 
 const STATE: Record<Proposal["state"]["type"], string> = { pending: "Draft", applying: "Working…", applied: "Done", skipped: "Skipped", retired: "Out of date" };
 
@@ -60,6 +62,8 @@ export function draftPreviewBody(p: Proposal, statusName: string | null, pass?: 
       return `Send the agent back for another pass${pass ? ` (pass ${pass})` : ""}. Why: ${i.reason}\n\n${i.message}\n\nNothing is sent until you read this and send it.`;
     case "runAnswer":
       return `${i.question ? `The agent asks: ${i.question}\n\n` : ""}${i.message}\n\nNothing is sent until you read this and send it.`;
+    case "githubReview":
+      return [i.summary, ...i.comments.map((c) => `${c.path}:${c.line}: ${c.body}`), "Nothing is posted to GitHub until you approve it."].join("\n\n");
     default:
       return unreachable(i);
   }
@@ -103,6 +107,10 @@ interface Props {
   onOpen(): void;
   /** What the a key does on a focused card, for drafts that may be approved in place. */
   onApprove?(): void;
+  /** For a GitHub review, whether the token may post it, so a posts it in place; otherwise a opens. */
+  canPost?: boolean;
+  /** For a GitHub review the token can't post, what its button does instead: opens the in-app pull request view. */
+  onPullView?(): void;
   /** What the s key does on a focused card. */
   onSkip?(): void;
   /**
@@ -162,7 +170,7 @@ function AnswerBody({ intent, answer, pending, byPip }: { intent: Extract<Propos
   );
 }
 
-function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer = null, onOpen, onApprove, onSkip, expander }: Props) {
+function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer = null, onOpen, onApprove, onSkip, canPost = false, onPullView, expander }: Props) {
   /** Focused from the keyboard: only then does the card take its keys and show them. */
   const [armed, setArmed] = useState(false);
   const [asking, setAsking] = useState<Asking | null>(null);
@@ -178,8 +186,12 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
   const made = p.intent.type === "create" && state === "applied" ? p.created[0] : undefined;
   /** An answer whose run moved on can only be skipped. */
   const stale = p.intent.type === "runAnswer" && state === "pending" && !!answer && !answer.waiting;
+  /** Whether a may decide the draft in place: not an answer whose run moved on, nor a review the token can't post. */
+  const canApprove = !stale && (p.intent.type !== "githubReview" || canPost);
   const title = draftTitle(p, answer?.label);
-  const go = pending ? (p.intent.type === "startRun" ? (expander ? "Review and start" : "Review and start →") : p.intent.type === "followUp" ? "Review and send back →" : p.intent.type === "runAnswer" ? (stale ? "" : "Review and answer →") : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
+  /** A review the token can't post is read in the pull request view rather than posted. */
+  const toPullView = p.intent.type === "githubReview" && !canPost && !!onPullView;
+  const go = pending ? (p.intent.type === "githubReview" ? (toPullView ? "Open PR view →" : "Review and post →") : p.intent.type === "startRun" ? (expander ? "Review and start" : "Review and start →") : p.intent.type === "followUp" ? "Review and send back →" : p.intent.type === "runAnswer" ? (stale ? "" : "Review and answer →") : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
   const create = isCreate(p) ? p : null;
   const body = create ? docText(create.intent.fields.body) || "No description." : draftPreviewBody(p, statusName, pass);
   const decide = (run?: () => void) =>
@@ -223,7 +235,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
         if (!armed) return;
         const fromInput = ev.target === ev.currentTarget && ev.currentTarget.hasAttribute(FROM_INPUT);
         if (ev.target === ev.currentTarget) ev.currentTarget.removeAttribute(FROM_INPUT);
-        onDraftCardKey(ev, p, asking, { approve: stale ? undefined : decide(onApprove), skip: decide(onSkip), open: onOpen, ask: setAsking, type: typeIntoInput, fromInput });
+        onDraftCardKey(ev, p, asking, { approve: canApprove ? decide(onApprove) : undefined, skip: decide(onSkip), open: onOpen, ask: setAsking, type: typeIntoInput, fromInput, canApprove });
       }}
       onFocus={(ev) => {
         const byPointer = pointer.current;
@@ -270,7 +282,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
           (pending ? (
             <button
               type="button"
-              onClick={onOpen}
+              onClick={toPullView ? onPullView : onOpen}
               aria-expanded={expander ? expander.open : undefined}
               aria-controls={expander?.open ? inlineStartId(p.id) : undefined}
               className="ml-auto shrink-0 rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
@@ -286,7 +298,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
       {expander?.open && expander.panel}
       {armed && (
         <p role="status" className={`m-0 border-t border-ws-sep px-2.5 py-1 text-xs ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "text-ws-ink3"}`}>
-          {draftKeyHint(p, asking, !stale)}
+          {draftKeyHint(p, asking, canApprove)}
         </p>
       )}
     </article>
@@ -297,9 +309,10 @@ const deciding = new Set<string>();
 
 /**
  * Approving and skipping from a card's keys, through the store, one decision at a time per draft; a failure shows as a
- * toast. An answer is sent with the reply the card shows, as its own button sends it.
+ * toast. An answer is sent with the reply the card shows, as its own button sends it, and a review is posted only as
+ * `seen`, the draft as the card showed it: one revised since is refused.
  */
-export function draftDecisions(id: string): { approve(): void; skip(): void } {
+export function draftDecisions(id: string, seen?: Proposal): { approve(): void; skip(): void } {
   const decide = (verb: string, job: () => Promise<Proposal>) => {
     if (deciding.has(id)) return;
     deciding.add(id);
@@ -311,6 +324,16 @@ export function draftDecisions(id: string): { approve(): void; skip(): void } {
   return {
     approve: () => {
       const p = useWorkspace.getState().proposals[id];
+      // A review goes to GitHub by its own path, and only from here, the person's approval; never through the tracker.
+      if (p?.intent.type === "githubReview") {
+        const review = p.intent;
+        return decide("post", async () => {
+          const done = await useWorkspace.getState().postReview(id, (seen ?? p).revisions.length);
+          // A refusal may have been for want of access, which is then asked again.
+          if (done.error) useReviewAccess.getState().forget(review.connectionId, review.repo);
+          return done;
+        });
+      }
       if (p?.intent.type !== "runAnswer") return decide("approve", () => useWorkspace.getState().approve(id));
       const shown = p.intent.message;
       decide("send", async () => {
@@ -364,7 +387,9 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
   const expanded = useInlineStarts((s) => startable && (s.entries[p.id]?.phase ?? "closed") !== "closed");
   const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
   const answer = useAnswerRun(p);
-  const { approve, skip } = draftDecisions(p.id);
+  const { approve, skip } = draftDecisions(p.id, p);
+  const review = p.intent.type === "githubReview" ? p.intent : null;
+  const access = useRepoReviewAccess(review?.connectionId ?? null, review?.repo ?? null);
   return (
     <DraftPreview
       proposal={p}
@@ -372,6 +397,8 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
       targetTitle={item?.title ?? null}
       pass={pass}
       answer={answer}
+      canPost={!!access?.canPost}
+      onPullView={review ? () => openPullView({ connectionId: review.connectionId, repo: review.repo, number: review.number, proposalId: p.id }) : undefined}
       onOpen={() => openLiveDraft(p, { inline })}
       onApprove={approve}
       onSkip={skip}

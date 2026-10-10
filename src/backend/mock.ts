@@ -2,6 +2,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { HELD_PERSON } from "../types";
 import type {
+  ChangedFile,
   AdfNode,
   AssignedElsewhere,
   BasisField,
@@ -29,6 +30,7 @@ import type {
   ProposalEdit,
   ProposalQuery,
   ProposalsChanged,
+  ReviewComment,
   RunKind,
   RunQuery,
   RunSpec,
@@ -394,7 +396,7 @@ export class MockBackend implements Backend {
   /** `options.catalogSize` sets how many projects there are to choose from; the default is the four sample ones. */
   constructor(options: MockOptions = {}) {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
-    this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined);
+    this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined, options.reviewAccess === "none" ? "none" : "sample");
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
     this.agentsOn = options.agents ?? true;
     this.runs = new MockRuns(this.proposals, options.runs);
@@ -418,6 +420,8 @@ export class MockBackend implements Backend {
     };
     this.runs.ticketDoc = (ref) => this.connector.item(ref)?.body ?? null;
     this.runs.pullRequest = (repo, number) => this.github.code.change(repo, number);
+    this.runs.pullFiles = (repo, number) => this.github.code.pullFiles(repo, number);
+    this.runs.codeConnectionFor = (repo) => (this.github.isWatched(repo) ? GITHUB_CONNECTION : null);
     // A draft pull request a build opened turns up on the code host, which ends its workstream's wait for it.
     this.runs.onPullRequest = (change) => this.github.code.addPullRequest(change);
     this.workstreams.prOf = (runId) => this.runs.pullRequestOf(runId);
@@ -436,7 +440,14 @@ export class MockBackend implements Backend {
       hasWaitingWake: mockHasWaitingWake,
       cancelWakes: mockCancelWakes,
     });
-    exposeMockClock({ runs: this.runs, workstreams: this.workstreams, proposals: this.proposals, pip: { hold: holdMockPip, idle: mockPipIdle }, tickets: { edit: (key, change) => this.editTicket(key, change) } });
+    exposeMockClock({
+      runs: this.runs,
+      workstreams: this.workstreams,
+      proposals: this.proposals,
+      pip: { hold: holdMockPip, idle: mockPipIdle },
+      tickets: { edit: (key, change) => this.editTicket(key, change) },
+      github: { writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number) },
+    });
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
     this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));
@@ -799,8 +810,18 @@ export class MockBackend implements Backend {
   }
 
   /** Revises a draft the way `revise_proposal` does, from the conversation `requestId` was asked in: a draft of a workstream only from that workstream's. */
-  async pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[] }, requestId?: string) {
-    return this.proposals.pipRevise(id, change, requestId ? this.workstreamOfRequest(requestId) : null);
+  async pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[]; comments?: ReviewComment[] }, requestId?: string) {
+    const draft = this.proposals.get(id);
+    // A review draft's new comments are checked against the pull request's diff at the commit reviewed, which only this
+    // backend can read, and only while that commit is still the head, as `Core::diff_at`.
+    const files = draft?.intent.type === "githubReview" ? this.reviewedFiles(draft.intent) : null;
+    return this.proposals.pipRevise(id, change, requestId ? this.workstreamOfRequest(requestId) : null, files);
+  }
+
+  private reviewedFiles(review: Extract<Intent, { type: "githubReview" }>): ChangedFile[] | { unreadable: string } | null {
+    if (!this.github.isWatched(review.repo)) return { unreadable: `${review.repo} isn't one of the repositories you watch, so it isn't read.` };
+    if (this.github.code.change(review.repo, review.number)?.sha !== review.commitSha) return { unreadable: `the pull request has moved on from ${review.commitSha.slice(0, 8)} since the review read it` };
+    return this.github.code.pullFiles(review.repo, review.number);
   }
 
   pipWorkstreamItem(id: string): ItemRef | null {
@@ -872,6 +893,17 @@ export class MockBackend implements Backend {
 
   proposalsApprove(id: string) {
     return this.proposals.approve(id);
+  }
+
+  proposalsPostReview(id: string, revisions: number) {
+    return this.proposals.postReview(id, revisions, async (p) => this.github.postReview(p.id, p.intent));
+  }
+
+  /** Someone force-pushes pull request `number` of `repo`: its head is a new commit whose diff lacks the lines it showed, and the old one is gone from it, as `MockCode.movePullHead`. */
+  movePullHead(repo: string, number: number) {
+    const moved = this.github.code.movePullHead(repo, number);
+    if (moved) this.proposals.touch();
+    return moved;
   }
 
   onProposalsChanged(listener: (c: ProposalsChanged) => void) {
@@ -1051,6 +1083,30 @@ export class MockBackend implements Backend {
 
   async codePullRequest(ref: CodeRef) {
     return this.github.code.pullRequest(ref);
+  }
+
+  async codePullFiles(_connectionId: string, repo: string, number: number) {
+    this.requireWatched(repo);
+    const files = this.github.code.pullFiles(repo, number);
+    if (!files) throw new Error(`GitHub couldn't find pull request #${number} in ${repo}, or the token can't see it.`);
+    return files;
+  }
+
+  async codePullDiff(connectionId: string, repo: string, number: number) {
+    this.requireWatched(repo);
+    const change = this.github.code.change(repo, number);
+    if (!change) throw new Error(`GitHub couldn't find pull request #${number} in ${repo}, or the token can't see it.`);
+    return { change: { ...change }, files: await this.codePullFiles(connectionId, repo, number) };
+  }
+
+  async codeReviewAccess(_connectionId: string, repo: string) {
+    this.requireWatched(repo);
+    return this.github.reviewAccess(repo);
+  }
+
+  /** As `Core::require_watched`: a repository that isn't watched is never read, nor written to. */
+  private requireWatched(repo: string) {
+    if (!this.github.isWatched(repo)) throw new Error(`${repo} isn't one of the repositories you watch, so it isn't read.`);
   }
 
   async codeSearch(query: string) {

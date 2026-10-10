@@ -4,6 +4,7 @@ import {
   agentsSettled,
   expectPeekInPlace,
   finishOnHome,
+  githubWrites,
   homeConversation,
   homeConversationRegion,
   homeRunCards,
@@ -27,7 +28,9 @@ import {
 } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
+// GitHub is signed in with a catalog small enough to be watched whole, so the agents' repository is watched, as the
+// real app needs before it reads a pull request there or drafts a review of one.
+const MANAGED = "runs=empty&prSurface=manual&wsManage=1&mockRepos=12";
 
 /** The newest run of `kind`, as the sample backend holds it. */
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
@@ -160,9 +163,13 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await expect(stepChip(page, "review").locator("[data-step-verdict]")).toHaveText("· Pass");
   await homeSettled(page);
 
-  // The two reviews' comment drafts go together, after a confirm: one write each.
+  // The two reviews' comment drafts go together, after a confirm: one write each. The second review's GitHub review draft
+  // replaced the first's and waits apart: it is never approved with the others.
   await openStep(page, "review");
-  const drafts = stepChip(page, "review").locator('article[data-draft][data-state="pending"]');
+  const pending = stepChip(page, "review").locator('article[data-draft][data-state="pending"]');
+  await expect(pending).toHaveCount(3);
+  await expect(pending.and(page.locator('[aria-label^="GitHub review of "]'))).toHaveCount(1);
+  const drafts = pending.and(page.locator(':not([aria-label^="GitHub review of "])'));
   await expect(drafts).toHaveCount(2);
   const ids = await drafts.evaluateAll((els) => els.map((el) => el.getAttribute("data-draft")));
   const inTray = needsYouTray(page).locator("[data-needs-you-item]");
@@ -188,6 +195,25 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
     .toEqual([...ids].sort());
   await expect(inTray).toHaveCount(trayBefore - 2);
   await expect(pipHome(page)).toBeVisible();
+  // The batch left the GitHub review draft alone: nothing went to GitHub, and it still waits.
+  const github = stepChip(page, "review").locator('article[data-draft][aria-label^="GitHub review of acme/storefront#"]');
+  await expect(github).toHaveCount(1);
+  await expect(github).toHaveAttribute("data-state", "pending");
+  expect(await githubWrites(page)).toEqual([]);
+
+  // Reviewed and posted from the peek: exactly one comment review of the build's pull request, at the commit R6 read.
+  const name = (await github.getAttribute("aria-label"))!;
+  await github.getByRole("button", { name: "Review and post →" }).click();
+  const card = peekSheet(page).getByRole("article", { name });
+  await card.getByRole("button", { name: "Post review" }).click();
+  await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
+  const [write] = await githubWrites(page);
+  const pull = (await mockRuns(page)).find((r) => r.id === r6.id)!;
+  expect(`GitHub review of ${write.repo}#${write.number}`).toBe(name);
+  expect(write).toMatchObject({ event: "COMMENT", commitId: pull.prSha });
+  await expect(card.locator("[data-review-posted]")).toContainText("Posted to GitHub");
+  expect(await githubWrites(page)).toHaveLength(1);
+  expect((await jiraWrites(page)).filter((w) => w.type === "comment")).toHaveLength(2);
 });
 
 test("the Needs you tray lists a draft and a hold oldest first, goes to each, and each leaves once dealt with", async ({ page }) => {

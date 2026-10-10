@@ -486,6 +486,37 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, superviso
     result
 }
 
+/// Posts a GitHub review draft as one comment review: the only command that writes to GitHub, and only the person's
+/// approval calls it. `revisions` is how many revisions the draft had as the person saw it; one changed since is
+/// refused. A refused attempt still returns the draft, back to pending with `error` set.
+#[tauri::command]
+async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: String, revisions: usize) -> Result<Proposal> {
+    let result = core.post_review_draft(&id, revisions).await;
+    if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
+        proposals_changed(&app, &connection);
+    }
+    publish(&app, &core).await;
+    result
+}
+
+/// Whether the token may post a review on a watched repository, and why not when it can't.
+#[tauri::command]
+async fn code_review_access(core: State<'_, CoreState>, connection_id: String, repo: String) -> Result<codehost::ReviewAccess> {
+    core.code_review_access(&connection_id, &repo).await
+}
+
+/// The files a pull request changes, with patches long enough to show a review draft's comments in place.
+#[tauri::command]
+async fn code_pull_files(core: State<'_, CoreState>, connection_id: String, repo: String, number: u64) -> Result<Vec<domain::ChangedFile>> {
+    core.code_pull_files(&connection_id, &repo, number).await
+}
+
+/// A pull request with the files it changes and their patches, for the in-app pull request view.
+#[tauri::command]
+async fn code_pull_diff(core: State<'_, CoreState>, connection_id: String, repo: String, number: u64) -> Result<codehost::PullDiff> {
+    core.code_pull_diff(&connection_id, &repo, number).await
+}
+
 /// The prompt a run draft would send and the digest to approve it with.
 #[tauri::command]
 async fn runs_review(core: State<'_, CoreState>, proposal_id: String) -> Result<RunReview> {
@@ -1297,6 +1328,9 @@ pub fn run() {
             code_tree,
             code_commits,
             code_search_code,
+            code_review_access,
+            code_pull_files,
+            code_pull_diff,
             github_connect_token,
             github_import_gh_token,
             github_sign_in_options,
@@ -1309,6 +1343,7 @@ pub fn run() {
             proposals_edit,
             proposals_skip,
             proposals_approve,
+            proposals_post_review,
             runs_enabled,
             runs_set_enabled,
             runs_settings,

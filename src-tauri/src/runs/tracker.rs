@@ -237,7 +237,7 @@ impl RunService {
         self.collect_answers(&tc, &waiting).await;
         let config_dir = self.claude_config_dir(&tc).await;
 
-        let _turn = self.launching.lock().await;
+        let turn = self.launching.lock().await;
         let now = clock();
         let Ok(entries) = tc.cli.agents(true).await else { return Polled { busy } };
         busy |= finished.iter().any(|r| entries.iter().any(|e| belongs_to(e, r) && revived(e, r, now)));
@@ -245,8 +245,9 @@ impl RunService {
         for id in self.adopt_continuations(&entries, &finished, now).await {
             changed.insert(id);
         }
+        let mut reviewed = Vec::new();
         for listed in runs.iter().chain(&finished) {
-            match self.track(&tc, config_dir.as_deref(), &entries, &listed.id, now).await {
+            match self.track(&tc, config_dir.as_deref(), &entries, &listed.id, now, &mut reviewed).await {
                 Ok(Some(connection_id)) => {
                     changed.insert(connection_id);
                 }
@@ -254,7 +255,12 @@ impl RunService {
                 Err(e) => eprintln!("couldn't track run {}: {e}", listed.id),
             }
         }
+        // A review's GitHub draft reads the pull request, which can take a while, so launches don't wait for it.
+        drop(turn);
         changed.iter().for_each(|c| (self.changed)(c));
+        for run in &reviewed {
+            self.draft_review(run).await;
+        }
         Polled { busy }
     }
 
@@ -277,7 +283,9 @@ impl RunService {
     }
 
     /// Applies one run's observation. Returns its connection when anything about it changed.
-    async fn track(&self, tc: &Toolchain, config_dir: Option<&Path>, entries: &[AgentEntry], run_id: &str, now: DateTime<Utc>) -> crate::error::Result<Option<String>> {
+    /// A Review that reached Done is added to `reviewed`, for its GitHub review draft to be made once the launch lock is
+    /// let go (`draft_review`).
+    async fn track(&self, tc: &Toolchain, config_dir: Option<&Path>, entries: &[AgentEntry], run_id: &str, now: DateTime<Utc>, reviewed: &mut Vec<Run>) -> crate::error::Result<Option<String>> {
         let Some(before) = self.core.run(run_id).await? else { return Ok(None) };
         if before.state == RunState::Failed || before.worktree_removed_at.is_some() {
             return Ok(None);
@@ -403,6 +411,9 @@ impl RunService {
             }
         }
         let drafted = if run.state == RunState::Done && before.state != RunState::Done && settings.draft_on_finish { self.draft_for(&run).await } else { None };
+        if run.state == RunState::Done && before.state != RunState::Done && run.spec.kind == RunKind::Review {
+            reviewed.push(run.clone());
+        }
         // A workstream's build pushed its branch and opened a draft pull request; a review of it waits until a code
         // sync has found that, so one is asked for now rather than at the next interval.
         if run.state == RunState::Done && before.state != RunState::Done && run.spec.kind == RunKind::Build && run.spec.allow_push && run.spec.workstream.is_some() {
@@ -431,8 +442,8 @@ impl RunService {
     }
 
     /// The drafts a finished run leaves: a comment on its ticket and, for a Triage, its proposed breakdown, for a Plan the
-    /// description update that adds its plan; or a new
-    /// ticket when it has none. `None` when nothing was made. A failure is only logged: the run's result is already
+    /// description update that adds its plan; or a new ticket when it has none. A Review's GitHub review draft is made
+    /// apart (`draft_review`). `None` when nothing was made. A failure is only logged: the run's result is already
     /// saved, and the sheet's own button still drafts it.
     pub(super) async fn draft_for(&self, run: &Run) -> Option<Attention> {
         let mut why = None;
@@ -453,6 +464,15 @@ impl RunService {
             (self.drafted)(&run.connection_id);
         }
         why
+    }
+
+    /// The GitHub review draft a finished Review leaves, which only the person's approval posts. It is made whatever
+    /// `draft_on_finish` says, since nothing else makes one: it writes nothing anywhere until then. It reads the pull
+    /// request, so it is never called with the launch lock held. A failure is only logged.
+    pub(super) async fn draft_review(&self, run: &Run) {
+        if self.logged(run, self.core.auto_draft_run_review(&run.id).await) {
+            (self.drafted)(&run.connection_id);
+        }
     }
 
     fn logged(&self, run: &Run, made: crate::error::Result<Option<crate::domain::Proposal>>) -> bool {
