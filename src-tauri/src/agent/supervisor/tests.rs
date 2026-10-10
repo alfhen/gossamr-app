@@ -1428,6 +1428,41 @@ mod auto {
         (build, review)
     }
 
+    /// A Verify after a passing review checks the pull request at the commit the review read, never the base branch, and
+    /// is allowed exactly the commands that check it out. A Verify a person drafts carries no pull request a caller names.
+    #[tokio::test]
+    async fn a_verify_after_a_passing_review_checks_out_the_commit_the_review_read() {
+        let w = World::start().await;
+        w.pip.quiet.store(true, Ordering::SeqCst);
+        let (core, scope) = (&w.rig.fx.core, &w.rig.fx.scope);
+        core.set_workstream_rule(scope, &w.ws, Rule::ReviewVerify, Some(true)).await.unwrap();
+        let spec = RunSpec { kind: RunKind::Build, allow_push: true, workstream: Some(w.ws.clone()), ..w.rig.spec(7) };
+        let p = core.draft_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
+        let queued = core.runs_approve(&p.id, &core.runs_review(&p.id).await.unwrap().digest).await.unwrap();
+        let build = w.rig.svc.start_now(&queued.id).await.unwrap();
+        let build = w.finish(&build, "Rounded once.\n\nFor Jira:\nDraft PR #12 opened.").await;
+        let mut review = Run::queued("rev1".into(), "p-rev1".into(), build.connection_id.clone(), build.item.clone(), RunSpec { kind: RunKind::Review, build_from_run: Some(build.id.clone()), pr: Some(12), pr_sha: Some(FIRST.into()), workstream: Some(w.ws.clone()), ..w.rig.spec(8) }, "f".into(), Utc::now());
+        review.state = RunState::Done;
+        review.ended_at = Some(Utc::now());
+        review.result = Some("Verdict: pass\n\nFor Jira:\nNothing blocking.".into());
+        review.result_complete = true;
+        w.rig.fx.insert_run(&review).await;
+        let plan = crate::domain::ClonePlan { path: w.rig.clone.clone(), base: "main".into(), name: "ca-1-verify-0001".into() };
+        let decision = autostart::Decision::Start { rule: Rule::ReviewVerify, kind: RunKind::Verify, from_run: review.id.clone() };
+        let spec = autostart::spec_for(&decision, &review, plan, &Slots::default()).unwrap();
+        let run = core.autostart_run(scope, spec, Rule::ReviewVerify, &review.id, &AgentSettings::default()).await.unwrap();
+        assert_eq!((run.spec.kind, run.spec.pr, run.spec.pr_sha.as_deref()), (RunKind::Verify, Some(12), Some(FIRST)));
+        let allow = run.spec.read_only().unwrap().allow;
+        assert!(allow.contains(&"Bash(git fetch origin pull/12/head)".to_string()) && allow.contains(&format!("Bash(git checkout --detach {FIRST})")), "{allow:?}");
+        let prompt = crate::domain::render_prompt(&run.spec);
+        assert!(prompt.contains(&format!("Verify pull request #12 in {} at commit {FIRST}", run.spec.repo)) && !prompt.contains("as it is on `main`"), "{prompt}");
+
+        let hand = RunSpec { kind: RunKind::Verify, pr: Some(12), pr_sha: Some(FIRST.into()), ..w.rig.spec(9) };
+        let p = core.draft_run(hand, Some(w.rig.fx.item("CA-1"))).await.unwrap();
+        let review = core.runs_review(&p.id).await.unwrap();
+        assert_eq!((review.spec.pr, review.spec.pr_sha), (None, None), "only a review's own commit, never a caller's");
+    }
+
     #[tokio::test]
     async fn hold_or_hold_all_while_a_fix_round_waits_for_the_launch_lock_stops_it_and_resuming_sends_it_once() {
         for reason in [crate::domain::workstream::HELD_PERSON, crate::domain::workstream::HELD_ALL] {

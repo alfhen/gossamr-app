@@ -209,8 +209,18 @@ impl RunService {
             Ok(woken) if woken.short_id == *id => None,
             Ok(copy) => {
                 let stopped = tc.cli.stop(&copy.short_id).await.is_ok();
-                let copy_note = if stopped { "it was stopped".to_owned() } else { format!("stop it with `claude stop {}`", copy.short_id) };
-                run.earlier_sessions.push(EarlierSession { short_id: copy.short_id.clone(), session_id: None, removed: false });
+                // A copy is a new job built from the resume command line, so it has none of the flags the run was launched
+                // with: a read-only run's copy runs unrestricted. It is removed as well as stopped, and the person is told
+                // plainly if neither worked.
+                let removed = run.spec.kind.read_only() && matches!(self.remove_session(tc, &copy.short_id).await, Ok(super::cleanup::Removal::Gone));
+                let copy_note = match (stopped || removed, run.spec.kind.read_only()) {
+                    (true, false) => "it was stopped".to_owned(),
+                    (true, true) if removed => "it was stopped and removed, because a copy doesn't keep the read-only restriction".to_owned(),
+                    (true, true) => format!("it was stopped; remove it with `claude rm {}`, because a copy doesn't keep the read-only restriction", copy.short_id),
+                    (false, false) => format!("stop it with `claude stop {}`", copy.short_id),
+                    (false, true) => format!("it runs without the read-only restriction: stop it now with `claude stop {}`", copy.short_id),
+                };
+                run.earlier_sessions.push(EarlierSession { short_id: copy.short_id.clone(), session_id: None, removed });
                 Some(format!("Claude started a copy ({}) instead of continuing this agent; {copy_note}.", copy.short_id))
             }
             Err(e) => Some(format!("Couldn't wake the agent: {e}.")),

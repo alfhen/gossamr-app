@@ -102,8 +102,13 @@ export async function surfacePullRequests(page: Page) {
 
 /** What the sample backend's handle offers the tests (MockHandle in src/backend/mockWatch.ts). */
 type Script = { planRecommended?: boolean; verdict?: "pass" | "blocking"; marker?: boolean };
+/** The restriction a read-only run is launched with (`ReadOnly` in src/types.ts). */
+export type ReadOnly = { mode: string; allow: string[]; deny: string[]; guard: string };
+/** One launch as the mock launcher made it (`MockLaunch` in src/backend/mockRuns.ts). */
+export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; guard: string; autoStart: string | null; at: string };
 interface Handle {
-  runs(): { id: string; kind: string; state: string; prSha: string | null }[];
+  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number }[];
+  launches(): MockLaunch[];
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   scriptNext(kind: string, script: Script): void;
   askRun(id: string, question: string): void;
@@ -138,6 +143,14 @@ export const mockRuns = (page: Page) =>
     const mock = (globalThis as Mocked).__gossamrMock;
     if (!mock) throw new Error(missing);
     return mock.runs();
+  }, NO_MOCK);
+
+/** Every launch the sample backend made, oldest first, with the read-only restriction it would pass Claude Code. */
+export const mockLaunches = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.launches();
   }, NO_MOCK);
 
 /** The audit of every workstream, oldest first within each. */

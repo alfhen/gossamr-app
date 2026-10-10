@@ -68,7 +68,10 @@ pub(super) fn link(mut found: Vec<Candidate>, launch_pending: bool) -> Link {
 }
 
 /// The run carries on in `to`: the old session stays as an alias, and the state is the live session's from the next look.
+/// Gossamr didn't launch `to`, so the restriction it was launched with is unknown and the run no longer claims one: a
+/// read-only run taken over shows no read-only badge or rules.
 pub(super) fn take_over(run: &mut Run, to: &Candidate, now: DateTime<Utc>) {
+    run.read_only = None;
     if let Some(old) = run.short_id.take().filter(|old| *old != to.short_id) {
         run.earlier_sessions.push(EarlierSession { short_id: old, session_id: run.session_id.take(), removed: false });
     }

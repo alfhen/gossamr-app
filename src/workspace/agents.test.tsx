@@ -336,8 +336,11 @@ describe("empty, first-run and errors", () => {
     const out = renderToStaticMarkup(<AgentsIntro onDismiss={vi.fn()} />).replace(/&#x27;/g, "'");
     for (const phrase of [
       "You approve each one first. Agents are on by default; turn them off any time in Settings.",
-      "They run as you, with your own Claude settings: anything your Claude can do, they can do.",
-      "They are told not to write to Jira and to send findings back to you, but that is a request, not a lock.",
+      "A Build runs as you, with your own Claude settings: anything your Claude can do, it can do.",
+      "Read-only steps are signed in as you but run without your settings.",
+      "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself refuses their file edits and writing commands, and your own and the repository's allow rules don't apply.",
+      "Review and Verify may run the repository's tests, whose code runs as written.",
+      "A Build changes code in its worktree and is told not to write to Jira, but that is a request, not a lock.",
       "They work in their own worktree of your clone, so your own files and branch are not touched.",
       "Stop any run from its details, or Stop all above.",
       "Agents you start from Terminal are not shown here, and Gossamr's runs also show in your own",

@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import type { RunReview } from "../types";
+import type { ReadOnly, RunReview } from "../types";
+import { Icon } from "./AgentIcons";
 import { Box, BoxTitle, CopyButton, Details, MONO_BLOCK } from "./AgentSheet";
-import { COPY, FLAG_LABEL, flagCounts, highlights, splitPrompt, type Flag } from "./runSheetLogic";
+import { COPY, FLAG_LABEL, flagCounts, highlights, readOnlyHeadline, readOnlyNote, splitPrompt, type Flag } from "./runSheetLogic";
 
 const MARK: Record<Flag, string> = {
   link: "rounded bg-ws-accent-soft px-0.5 text-ws-accent underline decoration-dotted",
@@ -19,6 +20,55 @@ export function ReportExtras({ report }: { report?: RunReview["report"] }) {
       </p>
       <pre className={MONO_BLOCK}>{report.guard}</pre>
       <p className="m-0 text-xs text-ws-ink3">If the tool isn&apos;t running or the setting is off, the agent starts without it and its written answer is read as usual.</p>
+    </div>
+  );
+}
+
+/** The headline for a read-only kind: Claude Code itself refuses its edits and writes, except what the repository's tests do. Nothing for a Build. */
+export function ReadOnlyLine({ readOnly }: { readOnly?: ReadOnly | null }) {
+  if (!readOnly) return null;
+  return (
+    <p data-read-only className="m-0 inline-flex items-center gap-1.5 font-semibold text-ws-ink">
+      <Icon name="shield" className="size-3.5 text-ws-done" />
+      {readOnlyHeadline(readOnly)}
+    </p>
+  );
+}
+
+/** What a read-only launch adds, said exactly: the permission mode, the commands allowed, the rules denied and the line added to the guard. */
+export function ReadOnlyExtras({ readOnly }: { readOnly?: ReadOnly | null }) {
+  if (!readOnly) return null;
+  return (
+    <div data-read-only-extras className="grid gap-1.5">
+      <p className="m-0 text-ws-ink2">
+        This step is read-only. Claude Code is started with <code className="font-mono">--permission-mode {readOnly.mode}</code>, so it refuses anything not allowed instead of asking you
+        {readOnly.settingSources === "" && (
+          <>
+            , with <code className="font-mono">--setting-sources &apos;&apos;</code>, so none of your or the repository&apos;s Claude settings files apply
+          </>
+        )}
+        {readOnly.strictMcpConfig && (
+          <>
+            , with <code className="font-mono">--strict-mcp-config</code>, so none of your MCP servers load
+          </>
+        )}
+        , and with these rules, which it enforces itself:
+      </p>
+      <p className="m-0 text-xs font-semibold text-ws-ink2">Allowed (--allowedTools), exactly</p>
+      <ul data-read-only-allow className={`${MONO_BLOCK} m-0 list-none`}>
+        {readOnly.allow.map((r) => (
+          <li key={r}>{r}</li>
+        ))}
+      </ul>
+      <p className="m-0 text-xs font-semibold text-ws-ink2">Denied (--disallowedTools)</p>
+      <ul data-read-only-rules className={`${MONO_BLOCK} m-0 list-none`}>
+        {readOnly.deny.map((r) => (
+          <li key={r}>{r}</li>
+        ))}
+      </ul>
+      <p className="m-0 text-ws-ink2">This line is added to the text above:</p>
+      <pre className={MONO_BLOCK}>{readOnly.guard}</pre>
+      <p className="m-0 text-xs text-ws-ink3">{readOnlyNote(readOnly)}</p>
     </div>
   );
 }

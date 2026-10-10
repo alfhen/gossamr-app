@@ -177,6 +177,8 @@ describe("small helpers", () => {
     const text = MAY_TOUCH.map((t) => `${t.title} ${t.text}`).join(" ");
     expect(text).toContain("Nothing enforces that");
     expect(text).not.toMatch(/never write|can't write|cannot write/i);
+    // It is what a Build (or a run launched without the read-only rules) may touch: it says nothing of a read-only step's rules.
+    expect(text).not.toMatch(/read-only/i);
   });
 });
 
@@ -326,7 +328,7 @@ describe("the prompt of the other kinds", () => {
     const r = review({ kind: "review", instruction: "Review the pull request named below.", pr: 12, prSha: "abc", ticketBlock: "CA-1: x" });
     const parts = splitPrompt(r);
     expect(parts.map((p) => p.id)).toEqual(["base", "template", "extra", "ticket"]);
-    expect(parts[2].text).toBe("Review pull request #12 in acme/web at commit abc.");
+    expect(parts[2].text).toMatch(/^Review pull request #12 in acme\/web at commit abc\.\n\nCheck it out in your worktree with `git fetch origin pull\/12\/head` then `git checkout --detach abc`\. If either fails, stop: say so and end with 'Verdict: blocking'\. Never review or test `main` in its place\.\n\nTo run the repository's tests, /);
     expect(parts.map((p) => p.text).join("\n\n")).toBe(r.prompt);
     const push = splitPrompt(review({ kind: "build", allowPush: true, instruction: "Make the change." }));
     expect(push.find((p) => p.id === "extra")?.text).toContain("You may push");
@@ -335,6 +337,18 @@ describe("the prompt of the other kinds", () => {
 
   it("names the kind in the launch command", () => {
     expect(launchCommand(spec({ kind: "review" }), "CA-1", "g", "p")).toContain("--name 'CA-1 review'");
+  });
+
+  it("shows a read-only kind's launch with every flag SystemCli::launch adds, in its order, and the whole guard", () => {
+    const readOnly = { mode: "dontAsk", allow: ["Bash(git fetch origin main)", "Bash(npm test)"], deny: ["Edit", "Bash(git push *)"], guard: "Read-only sentence.", settingSources: "", strictMcpConfig: true };
+    const report = { allowed: "mcp__run-report__report_result", guard: "Report sentence." };
+    const cmd = launchCommand(spec({ kind: "investigate" }), "CA-1", "Guard.", "the prompt", { readOnly, report }).split("\n")[1];
+    expect(cmd).toBe(
+      "claude --bg --name 'CA-1 investigate' --worktree 'ca-1-fix-ab12' --mcp-config '<run-report config, written at launch>' --permission-mode 'dontAsk' --setting-sources '' --strict-mcp-config --allowedTools 'mcp__run-report__report_result' 'Bash(git fetch origin main)' 'Bash(npm test)' --disallowedTools 'Edit' 'Bash(git push *)' --append-system-prompt 'Guard. Read-only sentence. Report sentence.' -- 'the prompt'",
+    );
+    const build = launchCommand(spec({ kind: "build" }), "CA-1", "Guard.", "the prompt", { readOnly: null, report: null });
+    expect(build).not.toMatch(/--(permission-mode|setting-sources|strict-mcp-config|allowedTools|disallowedTools)/);
+    expect(build).toContain("--append-system-prompt 'Guard.' -- 'the prompt'");
   });
 });
 

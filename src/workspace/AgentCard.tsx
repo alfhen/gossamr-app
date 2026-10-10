@@ -6,7 +6,7 @@ import type { ReviewView, Run } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
 import { KIND_LABEL, ageSince, ageText, branchOf, formatTokens, repoName, runTitle, stateView } from "./agentsLogic";
-import { verdictChip, verdictText } from "./runSheetLogic";
+import { readOnlyHeadline, verdictChip, verdictText } from "./runSheetLogic";
 
 export const agentId = (id: string) => `agent-${id}`;
 
@@ -110,6 +110,29 @@ export function AutoStarted({ run, className = "" }: { run: Run; className?: str
   );
 }
 
+/**
+ * A small mark on a run launched read-only: Claude Code itself refused its edits and writes. Nothing for a Build, a run
+ * from before, or one that carried on in a session Gossamr didn't launch. `compact` shows the shield alone, for a list
+ * row whose title needs the room.
+ */
+export function ReadOnlyBadge({ run, compact = false }: { run: Run; compact?: boolean }) {
+  if (!run.readOnly) return null;
+  const headline = readOnlyHeadline(run.readOnly);
+  if (compact) {
+    return (
+      <span data-read-only title={headline} aria-label="Read-only" role="img" className="inline-flex shrink-0 items-center text-ws-ink3">
+        <Icon name="shield" className="size-3" />
+      </span>
+    );
+  }
+  return (
+    <span data-read-only title={headline} className="inline-flex shrink-0 items-center gap-0.5 rounded bg-ws-hover px-1 text-xs font-medium text-ws-ink2">
+      <Icon name="shield" className="size-3" />
+      Read-only
+    </span>
+  );
+}
+
 export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
@@ -137,6 +160,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
           <Icon name={KIND_ICON[run.spec.kind]} className="size-[13px] text-ws-ink3" />
           {KIND_LABEL[run.spec.kind]}
         </span>
+        <ReadOnlyBadge run={run} />
         {ticketLabel(run) && <span className="font-mono text-sm font-semibold text-ws-ink2">{ticketLabel(run)}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {review && <VerdictChip review={review} />}

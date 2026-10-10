@@ -500,6 +500,11 @@ impl Core {
             }
             spec.build_from_run = Some(self.attach_build_account(&mut spec, &from, item.as_ref()).await?);
         }
+        // Only a verify that follows a review reads a pull request, the one the review read; never one a caller names.
+        if spec.kind == RunKind::Verify {
+            spec.pr = None;
+            spec.pr_sha = None;
+        }
         if spec.kind == RunKind::Review {
             let change = self.review_target(&spec).await?;
             spec.base = change.base_ref.unwrap_or(spec.base);

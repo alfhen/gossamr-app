@@ -1,6 +1,7 @@
 import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type RunKind, type WatchChange, type WatchMode, type WatchRow, type WatchState } from "../types";
 import type { GithubWrite } from "./mockGithub";
 import type { ScriptedFinish } from "./mockRunResult";
+import type { MockLaunch } from "./mockRuns";
 
 export interface MockOptions {
   /** How many projects the catalog lists, at least the four that hold sample items. Above 12 the choice of what to watch starts unset. */
@@ -105,7 +106,9 @@ export interface MockHandle {
   /** The audit of every workstream, oldest first within each, as `workstreams_events` reads one. */
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null }[];
   /** Every run the sample backend holds, newest first: its id, kind and state. */
-  runs(): { id: string; kind: string; state: string; prSha: string | null }[];
+  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number }[];
+  /** Every launch so far, oldest first: the run, its kind, the read-only restriction the mock launcher passed (null for a Build) and the auto-start rule that started it, if one did. */
+  launches(): MockLaunch[];
   /** Makes the draft pull requests finished builds opened show on the code host now, as a code sync finding them; true when there was one. */
   surfacePullRequests(): boolean;
   /** The next run of `kind` to finish writes this: a triage's plan recommendation, a review's verdict, or a data marker. */
@@ -141,7 +144,7 @@ export interface TicketEdit {
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null }; state: string }[]; surfacePullRequests(): boolean; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null }; state: string; passes?: number }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown };
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
@@ -157,7 +160,8 @@ declare global {
 /**
  * The scripted runs never move by themselves, so in a dev browser (never a build, never a test outside a browser) the sample
  * backend puts its clock on `globalThis.__gossamrMock`: `__gossamrMock.advanceRuns()` steps every unfinished run along and
- * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs and `surfacePullRequests()` shows the
+ * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs, `launches()` lists every
+ * launch with the read-only restriction the mock launcher passed Claude Code, and `surfacePullRequests()` shows the
  * draft pull requests finished builds opened without waiting, `githubWrites()` lists the reviews posted to the sample GitHub,
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
  * `loseNextReviewAnswer(kept)` loses the next post's answer. The last sample backend made wins.
@@ -167,7 +171,8 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
     workstreamEvents: () => (workstreams ? workstreams.list(true).flatMap((v) => workstreams.events(v.workstream.id)) : []),
-    runs: () => runs.list().map((r) => ({ id: r.id, kind: r.spec.kind, state: r.state, prSha: r.spec.prSha ?? null })),
+    runs: () => runs.list().map((r) => ({ id: r.id, kind: r.spec.kind, state: r.state, prSha: r.spec.prSha ?? null, passes: r.passes ?? 1 })),
+    launches: () => runs.launches().map((l) => ({ ...l, readOnly: l.readOnly && { ...l.readOnly, allow: [...l.readOnly.allow], deny: [...l.readOnly.deny] } })),
     surfacePullRequests: () => runs.surfacePullRequests(),
     scriptNext: (kind, script) => runs.scriptNext(kind, script),
     askRun: (id, question) => void runs.ask(id, question),

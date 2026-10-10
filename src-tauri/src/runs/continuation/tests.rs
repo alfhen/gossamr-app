@@ -106,6 +106,17 @@ fn taking_over_keeps_the_old_session_as_an_alias_and_hands_the_state_to_the_list
     assert!(run.possible_continuations.is_empty());
 }
 
+/// Gossamr didn't launch the session it takes over, so a read-only run no longer claims the restriction it launched with.
+#[test]
+fn taking_over_drops_the_read_only_restriction_the_run_launched_with() {
+    let mut run = stopped_run();
+    run.read_only = run.spec.read_only();
+    assert!(run.read_only.is_some());
+    let to = Candidate { short_id: ShortId::parse("bbb748a7").unwrap(), session_id: None, started_at: None, in_worktree: true };
+    take_over(&mut run, &to, Utc::now());
+    assert_eq!(run.read_only, None);
+}
+
 #[test]
 fn an_earlier_session_still_listed_is_no_longer_the_runs_own() {
     let mut run = stopped_run();

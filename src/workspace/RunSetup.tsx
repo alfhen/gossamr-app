@@ -4,9 +4,9 @@ import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
 import { KIND_LABEL } from "./agentsLogic";
 import { PrPicker } from "./PrPicker";
-import { PromptParts, ReportExtras } from "./RunPrompt";
+import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
-import { COPY, homeShort, kindBlock, launchCommand, permissionMode, repoShortage, savedAsTyped, startBlock, startSteps, ticketlessShape, worktreeBranch, type RepoShortage } from "./runSheetLogic";
+import { COPY, homeShort, kindBlock, launchCommand, permissionMode, readOnlyNote, repoShortage, runAsYou, savedAsTyped, startBlock, startSteps, ticketlessShape, worktreeBranch, type RepoShortage } from "./runSheetLogic";
 import { containerKey } from "../lib/filter";
 import { useRunSetup, type PrSearch, type RunEditFields, type SetupPhase } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
@@ -532,6 +532,7 @@ export function RunSetupView(p: SetupViewProps) {
           <Details summary="What Gossamr adds for the model">
             <pre className={MONO_BLOCK}>{review.guard}</pre>
             <p className="m-0 text-ws-ink2">{COPY.guardNote}</p>
+            <ReadOnlyExtras readOnly={review.readOnly} />
             <ReportExtras report={review.report} />
           </Details>
         )}
@@ -540,14 +541,21 @@ export function RunSetupView(p: SetupViewProps) {
       <Sec title="Before you approve">
         <RunPreflight preflight={preflight} checking={phase === "preparing" || p.busy} steps={p.on.trustFolder && p.on.recheck ? { trust: p.on.trustFolder, recheck: p.on.recheck, rechecking: !!p.rechecking } : undefined} />
         <Box label="What agents can do">
-          <p className="m-0 text-ws-ink">{COPY.runAsYou}</p>
-          <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
+          <p className="m-0 text-ws-ink">{runAsYou(review?.readOnly)}</p>
+          {review?.readOnly ? (
+            <>
+              <ReadOnlyLine readOnly={review.readOnly} />
+              <p className="m-0 text-ws-ink2">{readOnlyNote(review.readOnly)}</p>
+            </>
+          ) : (
+            <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
+          )}
         </Box>
       </Sec>
 
       <Sec title="What happens when you press Start">
         <Steps>
-          {startSteps(p.ticketless).map((text, i) => (
+          {startSteps(p.ticketless, !!review?.readOnly).map((text, i) => (
             <li key={i} className="grid grid-cols-[20px_minmax(0,1fr)] gap-2">
               <span aria-hidden className="grid size-5 place-items-center rounded-full bg-ws-hover text-[11px] font-bold">
                 {i + 1}
@@ -558,7 +566,7 @@ export function RunSetupView(p: SetupViewProps) {
         </Steps>
         {review && (
           <Details summary="Show the exact command">
-            <CodeBox text={launchCommand(review.spec, p.item?.key ?? null, review.guard, review.prompt)} what="the command" wrap />
+            <CodeBox text={launchCommand(review.spec, p.item?.key ?? null, review.guard, review.prompt, { readOnly: review.readOnly, report: review.report })} what="the command" wrap />
             <p className="m-0 text-xs text-ws-ink3">Shown as a shell would read it. Gossamr hands each part to Claude as a separate argument, so nothing goes through a shell.</p>
           </Details>
         )}

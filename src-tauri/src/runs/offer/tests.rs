@@ -5,7 +5,7 @@ use serde_json::json;
 
 use super::*;
 use crate::config::AgentSettings;
-use crate::domain::{RunKind, RunSpec, GUARD, REPORT_GUARD};
+use crate::domain::{RunKind, RunSpec, GUARD, READ_ONLY_GUARD, REPORT_GUARD};
 use crate::runs::launcher::RunLauncher;
 use crate::runs::report::{token_hash, well_formed, ReportChannel, ReportSink, Reply};
 use crate::runs::rig::{ready_with, reporting, Rig};
@@ -45,7 +45,8 @@ async fn a_run_that_asked_for_the_tool_launches_with_a_config_file_and_a_token_t
 
     let request = first_launch(&rig);
     let launch = request.report.clone().expect("offered");
-    assert_eq!(request.guard, format!("{GUARD} {REPORT_GUARD}"));
+    assert_eq!(request.guard, format!("{GUARD} {READ_ONLY_GUARD} {REPORT_GUARD}"), "the read-only sentence, then the tool's");
+    assert!(request.read_only.is_some());
     assert_eq!(launch.config, d.join("report").join(format!("{}.json", run.id)));
     assert_eq!(std::fs::metadata(&launch.config).unwrap().permissions().mode() & 0o777, 0o600);
     let token = token_in(&launch.config);
@@ -58,6 +59,17 @@ async fn a_run_that_asked_for_the_tool_launches_with_a_config_file_and_a_token_t
 }
 
 #[tokio::test]
+async fn a_build_that_asked_for_the_tool_gets_the_tool_and_no_restriction() {
+    let d = dir("offer-build");
+    let rig = ready_with(reporting(&d)).await;
+    rig.launched_reporting(1, RunKind::Build).await;
+    let request = first_launch(&rig);
+    assert!(request.report.is_some() && request.read_only.is_none());
+    assert_eq!(request.guard, format!("{GUARD} {REPORT_GUARD}"), "as before Phase 6");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[tokio::test]
 async fn nothing_changes_for_a_run_that_did_not_ask_or_when_the_setting_or_the_server_is_off() {
     let d = dir("off");
     let channel = std::sync::Arc::new(ReportChannel::new(4242, d.join("report")));
@@ -65,13 +77,13 @@ async fn nothing_changes_for_a_run_that_did_not_ask_or_when_the_setting_or_the_s
     let rig = ready_with(reporting(&d)).await;
     rig.launched(1).await;
     let plain = first_launch(&rig);
-    assert!((plain.report.is_none(), plain.guard.as_str()) == (true, GUARD), "a run that never asked is launched as before");
+    assert!((plain.report.is_none(), plain.guard.clone()) == (true, format!("{GUARD} {READ_ONLY_GUARD}")), "a run that never asked is launched as before");
 
     let off = ready_with(|svc| svc.with_report(channel)).await;
     let run = queued_reporting(&off, 1).await;
     off.svc.launch(&run.id).await.unwrap();
     let request = first_launch(&off);
-    assert!(request.report.is_none() && request.guard == GUARD, "the setting is off");
+    assert!(request.report.is_none() && request.guard == format!("{GUARD} {READ_ONLY_GUARD}"), "the setting is off");
     assert!(off.fx.core.report_stored(&run.id).await.unwrap().is_none());
     assert_eq!(off.get(&run).await.state, RunState::Launching);
 

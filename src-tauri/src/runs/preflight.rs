@@ -110,6 +110,14 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
                 Ok(false) => rows.red(&Failure::TooOld),
                 Err(e) => rows.red(&Failure::from_cli(e, Path::new(""))),
             }
+            let read_only = spec.and_then(RunSpec::read_only);
+            if read_only.is_some() {
+                match tc.cli.supports_read_only().await {
+                    Ok(true) => rows.add(Level::Green, "Read-only steps are supported"),
+                    Ok(false) => rows.red(&Failure::CantRestrict),
+                    Err(e) => rows.red(&Failure::from_cli(e, Path::new(""))),
+                }
+            }
             let path = tc.env.get("PATH").map(|p| p.to_string_lossy().chars().take(PATH_SHOWN).collect::<String>()).unwrap_or_default();
             rows.add(Level::Green, format!("Shell environment read ({} variables). Agents get this PATH: {path}", tc.env.len()));
             if let Some(spec) = spec {
@@ -117,7 +125,10 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
                 trust_row(&mut rows, config_dir.as_deref(), &spec.clone_path);
             }
             let mode = config_dir.as_deref().and_then(default_mode);
-            if let Some(mode) = &mode {
+            if let Some(ro) = &read_only {
+                let yours = mode.as_deref().map(|m| format!("Your own mode, {m}, applies to a Build.")).unwrap_or_else(|| "Your own settings apply to a Build.".into());
+                rows.add(Level::Green, format!("This step runs read-only, in permission mode {}, without your or the repository's Claude settings and MCP servers: only the commands listed are allowed. {yours}", ro.mode));
+            } else if let Some(mode) = &mode {
                 let level = if mode == "bypassPermissions" { Level::Amber } else { Level::Green };
                 rows.add(level, format!("Agents run as you, in your permission mode: {mode}"));
             } else if config_dir.is_some() {
