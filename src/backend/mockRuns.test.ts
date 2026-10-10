@@ -261,6 +261,55 @@ describe("mock runs of every kind", () => {
     expect(await backend.runsReview(ok.id)).toMatchObject({ prTitle: "CA-402: Cache the category tree", prUrl: "https://github.com/acme/webshop/pull/212" });
   });
 
+  it("leaves one GitHub review draft when a review finishes, with inline comments at the lines the diff shows, and the next round's replaces it", async () => {
+    const backend = new MockBackend({ githubRepos: 14 });
+    await backend.watchSetMode("github:ada", "everything");
+    const ws = backend.workstreams.open(itemRef("CA-402")).id;
+    let round = 0;
+    const reviewOf218 = async () => {
+      const made = await backend.runsDraft({ ...spec, ...webshop, kind: "review", pr: 218, instruction: "", workstream: ws, name: `ca-402-review-${++round}` }, itemRef("CA-402"));
+      const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+      for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
+      expect(backend.runs.get(run.id)?.state).toBe("done");
+      return run;
+    };
+    const reviews = () => backend.proposals.list().filter((p) => p.intent.type === "githubReview");
+    const first = await reviewOf218();
+    expect(reviews()).toHaveLength(1);
+    const [draft] = reviews();
+    const intent = draft.intent as Extract<Intent, { type: "githubReview" }>;
+    expect(intent).toMatchObject({ connectionId: "github:ada", item: itemRef("CA-402"), runId: first.id, repo: "acme/webshop", number: 218, commitSha: "a1b2c3d4e5f6" });
+    expect(intent.comments.map((c) => `${c.path}:${c.line}:${c.side}`)).toEqual(["src/consumer/retry.ts:42:RIGHT", "src/consumer/retry.ts:17:RIGHT"]);
+    expect(intent.summary).toContain("Findings without a line in the diff:\n- **Should fix:** no test covers the timeout path. (src/consumer/retry.test.ts)");
+    expect(draft).toMatchObject({ createdBy: "agent", state: { type: "pending" }, origin: { type: "run", runId: first.id, workstream: ws } });
+    // The Jira comment draft from the same review is still made, and nothing was written anywhere.
+    expect(backend.proposals.list().some((p) => p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === first.id)).toBe(true);
+    expect(backend.proposals.writes).toEqual([]);
+    await expect(backend.proposalsApprove(draft.id)).rejects.toThrow("A review is posted to GitHub with its own button");
+    expect(backend.proposals.writes).toEqual([]);
+
+    const second = await reviewOf218();
+    const after = reviews();
+    expect(after.map((p) => [(p.intent as { runId: string }).runId, p.state.type])).toEqual([
+      [second.id, "pending"],
+      [first.id, "retired"],
+    ]);
+    expect(after[1].supersededBy).toBe(after[0].id);
+  });
+
+  it("leaves the GitHub review draft of a finished review with drafting on finish off, and no Jira draft", async () => {
+    const backend = new MockBackend({ githubRepos: 14 });
+    await backend.watchSetMode("github:ada", "everything");
+    await backend.runsSetSettings({ ...(await backend.runsSettings()), draftOnFinish: false });
+    const made = await backend.runsDraft({ ...spec, ...webshop, kind: "review", pr: 218, instruction: "" }, itemRef("CA-402"));
+    const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+    for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
+    expect(backend.runs.get(run.id)?.state).toBe("done");
+    const fromRun = backend.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === run.id);
+    expect(fromRun.map((p) => p.intent.type)).toEqual(["githubReview"]);
+    expect(backend.proposals.writes).toEqual([]);
+  });
+
   it("swaps an untouched template when the kind is edited and clears what belongs to the old kind", async () => {
     const backend = new MockBackend();
     const made = await backend.runsDraft({ ...spec, ...storefront, kind: "build", instruction: "", allowPush: true }, itemRef("CA-412"));

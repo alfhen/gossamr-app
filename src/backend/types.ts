@@ -29,6 +29,8 @@ import type {
   Snapshot,
   Transition,
   Uploaded,
+  ChangedFile,
+  PullDiff,
   CodeChange,
   CodeCommitQuery,
   CodeFile,
@@ -43,6 +45,7 @@ import type {
   Footprint,
   GithubSignInOptions,
   PullRequestDetail,
+  ReviewAccess,
   Stray,
   TreeEntry,
   WatchChange,
@@ -138,6 +141,12 @@ export interface Backend {
   onDevLinksChanged(listener: (change: DevLinksChanged) => void): () => void;
   /** A pull request with its files, recent commits and reviews. Watched repositories only. */
   codePullRequest(ref: CodeRef): Promise<PullRequestDetail>;
+  /** The files a pull request changes with patches long enough to show a review draft's comments in place. Watched repositories only. */
+  codePullFiles(connectionId: string, repo: string, number: number): Promise<ChangedFile[]>;
+  /** A pull request in a watched repository with the files it changes and their patches, for the in-app pull request view. Reads only. */
+  codePullDiff(connectionId: string, repo: string, number: number): Promise<PullDiff>;
+  /** Whether the token may post a review on a watched repository, and why not when it can't. Reads only. */
+  codeReviewAccess(connectionId: string, repo: string): Promise<ReviewAccess>;
   /** Pull requests, branches and commits in watched repositories matching the text; a work item key matches exactly. */
   codeSearch(query: string): Promise<CodeChange[]>;
   /** Pull request and notification events, newest first, for the Activity feed. `subject.type` is `codeChange`. */
@@ -171,6 +180,17 @@ export interface Backend {
    * back to pending and `error` set, and subtasks it did create remembered so a retry doesn't repeat them.
    */
   proposalsApprove(id: string): Promise<Proposal>;
+  /**
+   * Posts a pending `githubReview` draft to GitHub as one comment review: the only write to GitHub, and only the
+   * person's approval calls it. A refusal resolves with the draft back to pending and `error` set; GitHub finding its
+   * lines outdated sets `REVIEW_OUTDATED_NOTE`.
+   */
+  /**
+   * `revisions` is how many revisions the draft had as the person saw it: one revised since is refused (`REVIEW_CHANGED`).
+   * A draft with `maybePosted` set is looked for on GitHub rather than sent; `postAnyway`, the person's explicit choice once
+   * it wasn't found, sends it.
+   */
+  proposalsPostReview(id: string, revisions: number, postAnyway?: boolean): Promise<Proposal>;
   /** Called when drafts changed, including by a sync revising or retiring them. Returns an unsubscribe function. */
   onProposalsChanged(listener: (change: ProposalsChanged) => void): () => void;
   /** Background agent runs, newest first. */

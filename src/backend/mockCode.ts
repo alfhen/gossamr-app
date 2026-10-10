@@ -1,4 +1,5 @@
 import type {
+  ChangedFile,
   CodeChange,
   CodeCommitQuery,
   CodeFile,
@@ -22,11 +23,76 @@ const FILES: Record<string, string> = {
   "src/cart/round.ts": "export const round = (n: number) => Math.round(n * 100) / 100;\n",
 };
 
+/** What sample pull request #218 changes in its consumer: its new side shows lines 14–21 and 38–45 of retry.ts. */
+const RETRY_PATCH = [
+  '@@ -14,6 +14,8 @@ import { Message } from "./message";',
+  ' import { Queue } from "./queue";',
+  ' import { handle } from "./handle";',
+  " ",
+  "+const MAX = 5;",
+  "+",
+  " export async function consume(queue: Queue) {",
+  "   const batch = await queue.take();",
+  "   for (const message of batch) {",
+  "@@ -36,5 +38,8 @@ export async function consume(queue: Queue) {",
+  " export async function retry(message: Message) {",
+  "   let attempt = 0;",
+  "-  await handle(message);",
+  "+  while (attempt < MAX) {",
+  "+    attempt += 1;",
+  "+    try { return await handle(message); } catch { continue; }",
+  "+  }",
+  '   throw new Error("gave up");',
+  " }",
+  "\\ No newline at end of file",
+].join("\n");
+const INDEX_PATCH = ['@@ -1,3 +1,3 @@', '-export { consume } from "./consume";', '+export { consume, retry } from "./retry";', ' export type { Message } from "./message";', ' export type { Queue } from "./queue";'].join("\n");
+/** What #218's consumer change becomes once its head moves (`movePullHead`): only the top of retry.ts changes, so the old comments' lines are gone. */
+const MOVED_PATCH = ['@@ -1,3 +1,4 @@', ' import { Queue } from "./queue";', '+import { backoff } from "./backoff";', ' import { handle } from "./handle";', " "].join("\n");
+/** The files of the sample pull requests a review draft reads, by `repo#number`. */
+const PULL_FILES: Record<string, ChangedFile[]> = {
+  "acme/webshop#218": [
+    { path: "src/consumer/retry.ts", status: "modified", additions: 6, deletions: 1, patch: RETRY_PATCH, truncated: false },
+    { path: "src/consumer/index.ts", status: "modified", additions: 1, deletions: 1, patch: INDEX_PATCH, truncated: false },
+  ],
+};
+
+/** Where the other sample pull requests' changes are, by `repo#number`; their stats say how much each file changes. */
+const SAMPLE_PATHS: Record<string, string[]> = {
+  "acme/webshop#208": ["src/gateway/routes.ts", "src/gateway/client.ts", "src/checkout/submit.ts", "docs/rollout.md"],
+  "acme/gateway#14": ["src/retry.rs", "src/upstream.rs", "tests/retry.rs"],
+  "acme/webshop#212": ["src/catalog/tree.ts", "src/catalog/cache.ts"],
+  "acme/webshop#215": ["docs/size-guide.md"],
+  "acme/webshop#190": ["src/banner/Banner.tsx", "src/banner/index.ts"],
+};
+
+/** `total` shared out over `n` parts, the first ones taking what doesn't divide. */
+const shares = (total: number, n: number) => Array.from({ length: n }, (_, i) => Math.floor(total / n) + (i < total % n ? 1 : 0));
+
+/** Sample files for a pull request with no hand-written ones, whose additions, deletions and count are its stats'. */
+function sampleFiles(change: CodeChange): ChangedFile[] {
+  const key = `${change.repo.toLowerCase()}#${change.number}`;
+  const n = Math.max(1, change.changedFiles ?? 1);
+  const paths = Array.from({ length: n }, (_, i) => SAMPLE_PATHS[key]?.[i] ?? `src/change-${i + 1}.ts`);
+  const [adds, dels] = [shares(change.additions ?? 1, n), shares(change.deletions ?? 0, n)];
+  return paths.map((path, i) => {
+    const lines = [...Array.from({ length: dels[i] }, (_, j) => `-old line ${j + 1}`), ...Array.from({ length: adds[i] }, (_, j) => `+new line ${j + 1}`)];
+    const patch = `@@ -1,${dels[i] + 1} +1,${adds[i] + 1} @@\n ${path.endsWith(".md") ? "#" : "//"} ${path}\n${lines.join("\n")}`;
+    return { path, status: dels[i] && !adds[i] ? "removed" : "modified", additions: adds[i], deletions: dels[i], patch, truncated: false };
+  });
+}
+
 const hoursAgo = (now: number, h: number) => new Date(now - h * 3_600_000).toISOString();
 
 /** The sample code behind the GitHub mock: changes tied to sample tickets, with the reads Pip's tools will make. */
 export class MockCode {
   private listeners = new Set<(c: DevLinksChanged) => void>();
+  /** Pull requests whose head moved since the sample began (`movePullHead`), by `repo#number`, with their files now. */
+  private moved = new Map<string, ChangedFile[]>();
+  /** Commits a force-push took out of their pull request, as `repo#number@sha`. */
+  private dropped = new Set<string>();
+  /** Pull requests an agent's build opened (`addPullRequest`), by `repo#number`: they change the same consumer #218 does, and are read only in a watched repository, as any other. */
+  private byAgents = new Set<string>();
   private discovered = false;
   readonly changes: CodeChange[];
   /** `[ticket key, change external id, provenance]`. */
@@ -120,15 +186,19 @@ export class MockCode {
         state: "draft",
         sha: "a1b2c3d4e5f6",
         checks: "passing",
-        additions: 84,
-        deletions: 12,
-        changedFiles: 5,
+        // What its files below come to.
+        additions: 7,
+        deletions: 2,
+        changedFiles: 2,
         linkedKeys: ["CA-402"],
         updatedAt: hoursAgo(now, 1),
       }),
       pr("acme/webshop", 215, {
         title: "Fix the size-guide typo",
         headRef: "patch-1",
+        additions: 1,
+        deletions: 1,
+        changedFiles: 1,
         headRepo: "dana-lee/webshop",
         author: who("dana-lee"),
         updatedAt: hoursAgo(now, 8),
@@ -136,6 +206,9 @@ export class MockCode {
       pr("acme/webshop", 190, {
         title: "Drop the unused banner component",
         headRef: "chore/drop-banner",
+        additions: 0,
+        deletions: 40,
+        changedFiles: 2,
         state: "closed",
         updatedAt: hoursAgo(now, 90),
       }),
@@ -173,6 +246,8 @@ export class MockCode {
       ["DEVOPS-471", "pr:acme/webshop#208", "body"],
       ["DEVOPS-471", "pr:acme/gateway#14", "branch"],
       ["CA-402", "pr:acme/webshop#212", "branch"],
+      // The agent's draft pull request, whose worktree branch names the ticket.
+      ["CA-402", "pr:acme/webshop#218", "branch"],
       ["CA-208", "commit:acme/webshop@9999999ccccccc", "commit"],
       ["CA-209", "branch:acme/webshop:feature/CA-209_cache-warmup", "branch"],
     ];
@@ -228,6 +303,7 @@ export class MockCode {
       return;
     }
     this.changes.push({ ...change, connectionId: this.connectionId });
+    if (change.number != null) this.byAgents.add(`${change.repo.toLowerCase()}#${change.number}`);
     for (const key of change.linkedKeys) this.links.push([key, change.externalId, "branch"]);
     this.listeners.forEach((l) => l({ connectionId: this.connectionId }));
   }
@@ -251,6 +327,41 @@ export class MockCode {
       commits: [{ sha: "c0ffee1234567", message: `${change.title}\n\nfirst step`, author: change.author?.accountId ?? null, at: hoursAgo(this.now, 100), url: `${change.url}/commits/c0ffee1234567` }],
       reviews: change.review === "none" ? [] : [{ id: "501", reviewer: { connectionId: this.connectionId, accountId: "bob" }, state: change.review === "approved" ? "approved" : "changesRequested", at: hoursAgo(this.now, 10) }],
     };
+  }
+
+  /** The files a pull request changes with their whole patches, as a review draft reads them; null when they can't be read. */
+  pullFiles(repo: string, number: number): ChangedFile[] | null {
+    if (!this.watched(repo)) return null;
+    const key = `${repo.toLowerCase()}#${number}`;
+    const change = this.change(repo, number);
+    if (!change) return null;
+    return (this.moved.get(key) ?? PULL_FILES[key] ?? (this.byAgents.has(key) ? PULL_FILES["acme/webshop#218"] : sampleFiles(change))).map((f) => ({ ...f }));
+  }
+
+  /** The commit pull request `number` of `repo` is at now, or null when there is no such pull request. */
+  headSha(repo: string, number: number): string | null {
+    return this.changes.find((c) => c.kind === "pullRequest" && c.repo.toLowerCase() === repo.toLowerCase() && c.number === number)?.sha ?? null;
+  }
+
+  /**
+   * Someone force-pushed pull request `number`: its head is a new commit, the one it was at is no longer part of it, and
+   * its diff no longer shows the lines it did. False when there is no such pull request.
+   */
+  movePullHead(repo: string, number: number): boolean {
+    const change = this.changes.find((c) => c.kind === "pullRequest" && c.repo.toLowerCase() === repo.toLowerCase() && c.number === number);
+    if (!change) return false;
+    const key = `${repo.toLowerCase()}#${number}`;
+    if (change.sha) this.dropped.add(`${key}@${change.sha}`);
+    change.sha = `moved${(change.sha ?? "").slice(0, 7)}`;
+    change.updatedAt = new Date().toISOString();
+    const files = PULL_FILES[key] ?? [];
+    this.moved.set(key, files.map((f) => (f.path === "src/consumer/retry.ts" ? { ...f, additions: 1, deletions: 0, patch: MOVED_PATCH } : { ...f })));
+    return true;
+  }
+
+  /** Whether commit `sha` is still part of pull request `number`: a force-push (`movePullHead`) drops the one it replaced. */
+  hasCommit(repo: string, number: number, sha: string): boolean {
+    return !this.dropped.has(`${repo.toLowerCase()}#${number}@${sha}`);
   }
 
   /** Matches words of the query in titles, bodies and branch names; a work item key must appear whole. */

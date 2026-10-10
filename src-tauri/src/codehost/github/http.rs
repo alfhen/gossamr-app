@@ -132,7 +132,8 @@ impl Api {
     }
 
     /// Sends the request, trying again after a failure in transit or a 502, 503 or 504. Only reads are sent through
-    /// here, so repeating one is safe. The body is read inside the loop because it can fail in transit too.
+    /// here, so repeating one is safe; a write goes through `post_json`, which never repeats. The body is read inside
+    /// the loop because it can fail in transit too.
     async fn fetch(&self, request: impl Fn() -> reqwest::RequestBuilder) -> Result<(StatusCode, HeaderMap, String)> {
         let mut retries = RETRY_DELAYS.iter();
         loop {
@@ -230,6 +231,19 @@ impl Api {
             let _ = self.db.lock().expect("db lock poisoned").http_cache_put(&self.connection_id, &key, &entry, &stamp(Utc::now()));
         }
         Ok(page)
+    }
+
+    /// Posts `body` as JSON once and returns the status, headers and body as they came, success or not. There is no retry
+    /// of any kind: a write that failed in transit may still have gone through, so repeating it could post twice. Nothing
+    /// is cached. The rate-limit guard and bookkeeping apply as for reads.
+    pub async fn post_json(&self, target: &str, body: &serde_json::Value) -> Result<(u16, HeaderMap, String)> {
+        let url = self.url(target);
+        self.guard(&url)?;
+        let res = self.http.post(&url).bearer_auth(&self.token).header(ACCEPT, JSON).header("X-GitHub-Api-Version", API_VERSION).json(body).send().await?;
+        let (status, headers) = (res.status().as_u16(), res.headers().clone());
+        let text = res.text().await?;
+        self.note_limits(&headers);
+        Ok((status, headers, text))
     }
 
     pub async fn json<T: DeserializeOwned>(&self, target: &str) -> Result<(T, Page)> {

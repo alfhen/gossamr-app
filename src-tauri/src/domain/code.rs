@@ -192,6 +192,9 @@ pub struct ChangedFile {
     pub deletions: u64,
     /// Cut short; absent for binary files and very large diffs.
     pub patch: Option<String>,
+    /// `patch` was cut short here, so lines past its end aren't shown and can't take a review comment.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

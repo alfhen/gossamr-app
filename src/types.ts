@@ -353,7 +353,46 @@ export type Intent =
   /** Never applied with `proposalsApprove`; `runsSendFollowUp` sends the finished run back with this message, which the person may edit first. */
   | { type: "followUp"; connectionId: string; runId: string; shortId?: string | null; item: ItemRef | null; message: string; reason: string }
   /** Never applied with `proposalsApprove`; `runsAnswerDraft` sends this answer to the run that asked `question`, as the person's own answer goes. The person may edit it first. */
-  | { type: "runAnswer"; connectionId: string; runId: string; shortId: string | null; item: ItemRef | null; message: string; question: string | null };
+  | { type: "runAnswer"; connectionId: string; runId: string; shortId: string | null; item: ItemRef | null; message: string; question: string | null }
+  /** Never applied with `proposalsApprove`: a plain comment review of pull request `number` in `repo` at `commitSha`, built by Gossamr from a Review run's findings. `connectionId` is the code host's; `item` is the run's ticket, for grouping only. */
+  | { type: "githubReview"; connectionId: string; item: ItemRef | null; runId: string; repo: string; number: number; commitSha: string; summary: string; comments: ReviewComment[] };
+
+/** Which side of a diff a review comment sits on, spelled as GitHub spells it: the old file's lines or the new file's. */
+export type DiffSide = "LEFT" | "RIGHT";
+
+/** One inline comment of a review draft, at a line of the pull request's diff. */
+export interface ReviewComment {
+  path: string;
+  line: number;
+  side: DiffSide;
+  body: string;
+}
+
+/** Whether the token may post a review on a repository, and when not, why, in a sentence for the person. */
+export interface ReviewAccess {
+  canPost: boolean;
+  reason: string | null;
+}
+
+/** The review an approved `githubReview` draft became on the host. */
+export interface PostedReview {
+  id: number;
+  url: string;
+  at: string;
+}
+
+/**
+ * A review sent to GitHub without learning whether it went through, as `MaybePosted` in `domain/proposal.rs`: kept apart
+ * from `error`, so an edit doesn't clear it, until GitHub is seen to have it or the person posts anyway.
+ */
+export interface MaybePosted {
+  at: string;
+  /** The commit and summary it was sent with, by which it is looked for on the pull request. */
+  commitSha: string;
+  summary: string;
+  /** When Gossamr last looked for it and didn't find it, or couldn't look; then the person may post anyway. */
+  checkedAt?: string | null;
+}
 
 export interface TitleChange {
   from: string;
@@ -440,6 +479,10 @@ export interface Proposal {
   run: string | null;
   /** The newer draft of the same kind that replaced this one in its workstream. */
   supersededBy?: string | null;
+  /** The review an approved `githubReview` posted. */
+  posted?: PostedReview | null;
+  /** A post of a `githubReview` whose outcome isn't known; its next post looks for it on GitHub first. */
+  maybePosted?: MaybePosted | null;
 }
 
 /** Which proposals to list. Every field that is set must match. */
@@ -463,6 +506,8 @@ export type ProposalEdit =
   | { type: "followUp"; message: string }
   /** The answer an answer draft sends. */
   | { type: "runAnswer"; message: string }
+  /** A review draft's summary and comments, as the person rewords and drops them; the ones left out stay as they are. A person's edit never moves a comment or adds one. */
+  | { type: "githubReview"; summary?: string; comments?: ReviewComment[] }
   | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; report?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
@@ -1159,13 +1204,21 @@ export interface DevLink {
   confidence: number;
 }
 
+/** A pull request with the files it changes, for the in-app pull request view. Mirrors `codehost::PullDiff`. */
+export interface PullDiff {
+  change: CodeChange;
+  files: ChangedFile[];
+}
+
 export interface ChangedFile {
   path: string;
   status: string;
   additions: number;
   deletions: number;
-  /** Cut short at 4000 characters; absent for binary files and very large diffs. */
+  /** Cut short at 4000 characters (100,000 for a review draft's diff); absent for binary files and very large diffs. */
   patch: string | null;
+  /** `patch` was cut short, so lines past its end aren't shown and can't take a review comment. */
+  truncated?: boolean;
 }
 
 export interface CommitInfo {

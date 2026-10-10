@@ -29,6 +29,9 @@ pub enum Error {
     CodeHost { status: u16, message: String },
     #[error("{message}")]
     RateLimited { message: String, retry_after_secs: u64 },
+    /// GitHub refused a review because its commit or lines no longer match the pull request; already worded for the person.
+    #[error("{0}")]
+    ReviewOutdated(String),
     #[error("Jira returned {status}: {message}")]
     Api { status: u16, message: String },
 }

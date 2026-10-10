@@ -41,11 +41,20 @@ pub struct Seen {
     pub body: String,
 }
 
-type Route = (String, Vec<Reply>, usize);
+pub type Route = (String, Vec<Reply>, usize);
 
 pub struct Server {
     pub base: String,
     pub seen: Arc<Mutex<Vec<Seen>>>,
+    pub routes: Routes,
+}
+
+/// The routes a server answers from, which a test may add to while it runs (`add_route`).
+pub type Routes = Arc<Mutex<Vec<Route>>>;
+
+/// Answers `target` with `replies` from now on, ahead of any route registered for it before.
+pub fn add_route(routes: &Routes, target: &str, replies: Vec<Reply>) {
+    routes.lock().unwrap().insert(0, (target.to_string(), replies, 0));
 }
 
 impl Server {
@@ -58,15 +67,18 @@ impl Server {
     }
 }
 
-/// Serves the replies registered for a request target (path and query), in order, repeating the last. A target with
-/// no entry falls back to its path alone, then to 404.
+/// Serves the replies registered for a request target (path and query), in order, repeating the last. A route may
+/// name a method first (`POST /repos/...`), which wins over one that doesn't. A target with no entry falls back to its
+/// path alone, then to 404.
 pub async fn serve(routes: Vec<(&str, Vec<Reply>)>) -> Server {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
-    let routes: Arc<Mutex<Vec<Route>>> = Arc::new(Mutex::new(routes.into_iter().map(|(t, r)| (t.to_string(), r, 0)).collect()));
+    let routes: Routes = Arc::new(Mutex::new(routes.into_iter().map(|(t, r)| (t.to_string(), r, 0)).collect()));
+    let served = routes.clone();
     tokio::spawn(async move {
+        let routes = served;
         loop {
             let Ok((mut stream, _)) = listener.accept().await else { return };
             let mut buf = Vec::new();
@@ -100,11 +112,12 @@ pub async fn serve(routes: Vec<(&str, Vec<Reply>)>) -> Server {
                 .filter_map(|l| l.split_once(':'))
                 .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
                 .collect();
-            log.lock().unwrap().push(Seen { method, target: target.clone(), headers, body: String::from_utf8_lossy(&buf[body_start..]).to_string() });
+            log.lock().unwrap().push(Seen { method: method.clone(), target: target.clone(), headers, body: String::from_utf8_lossy(&buf[body_start..]).to_string() });
             let reply = {
                 let mut routes = routes.lock().unwrap();
                 let path = target.split('?').next().unwrap_or("").to_string();
-                let index = routes.iter().position(|(t, _, _)| *t == target).or_else(|| routes.iter().position(|(t, _, _)| *t == path));
+                let keys = [format!("{method} {target}"), format!("{method} {path}"), target.clone(), path];
+                let index = keys.iter().find_map(|k| routes.iter().position(|(t, _, _)| t == k));
                 index.map(|i| {
                     let (_, replies, used) = &mut routes[i];
                     let r = replies[(*used).min(replies.len() - 1)].clone();
@@ -125,7 +138,7 @@ pub async fn serve(routes: Vec<(&str, Vec<Reply>)>) -> Server {
             let _ = stream.write_all(response.as_bytes()).await;
         }
     });
-    Server { base, seen }
+    Server { base, seen, routes }
 }
 
 /// A pull request of `acme/webshop` as GitHub returns it. `head_repo` of `None` is a head whose repository is gone.

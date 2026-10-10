@@ -18,6 +18,17 @@ const INTENTS: Record<Intent["type"], Intent> = {
   startRun: { type: "startRun", connectionId: "mock", item: ref, spec },
   followUp: { type: "followUp", connectionId: "mock", runId: "run-1", item: ref, message: "Again.", reason: "open questions" },
   runAnswer: { type: "runAnswer", connectionId: "mock", runId: "run-1", shortId: null, item: ref, message: "Keep the old rounding.", question: "Keep the old rounding?" },
+  githubReview: {
+    type: "githubReview",
+    connectionId: "github:mock",
+    item: ref,
+    runId: "run-1",
+    repo: "acme/web",
+    number: 218,
+    commitSha: "a1b2c3d4e5f6",
+    summary: "Gossamr review of #218.",
+    comments: [{ path: "src/consumer/retry.ts", line: 42, side: "RIGHT", body: "**Blocking:** no backoff." }],
+  },
 };
 
 const STATES: ProposalState[] = [{ type: "pending" }, { type: "applying" }, { type: "applied" }, { type: "skipped" }, { type: "retired", reason: "The ticket moved on" }];
@@ -59,6 +70,38 @@ describe("draftKeyAction", () => {
 
   it("opens a rewrite on a, so its diff is read before anything changes", () => {
     expect(draftKeyAction(draft(INTENTS.rewrite), "a")).toBe("open");
+  });
+
+  it("opens a GitHub review on a unless the card knows the token may post it", () => {
+    expect(draftKeyAction(draft(INTENTS.githubReview), "a")).toBe("open");
+    expect(draftKeyAction(draft(INTENTS.githubReview), "a", false)).toBe("open");
+    expect(draftKeyHint(draft(INTENTS.githubReview))).toBe("s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.githubReview), null, false)).toBe("s skip · ↵ open");
+    expect(draftKeyAction(draft(INTENTS.githubReview), "s")).toBe("skip");
+    expect(draftKeyAction(draft(INTENTS.githubReview), "a", true)).toBe("approve");
+    expect(draftKeyHint(draft(INTENTS.githubReview), null, true)).toBe("a post · s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.githubReview), "approve", true)).toBe("↵ post this review · any other key cancels");
+    expect(draftKeyHint(draft(INTENTS.githubReview), "skip", true)).toBe("↵ skip · any other key cancels");
+    expect(draftKeyAction(draft(INTENTS.githubReview, { type: "applied" }), "a", true)).toBe(null);
+  });
+
+  it("asks for Enter before posting a review the token may post, and only opens one it can't", () => {
+    const p = draft(INTENTS.githubReview);
+    const card = {};
+    const ev = (key: string) => ({ key, target: card, currentTarget: card, metaKey: false, ctrlKey: false, altKey: false, preventDefault: () => {} });
+    const act = (canApprove: boolean) => ({ approve: vi.fn(), skip: vi.fn(), open: vi.fn(), ask: vi.fn(), canApprove });
+    const cannot = act(false);
+    expect(onDraftCardKey(ev("a"), p, null, cannot)).toBe(true);
+    expect(cannot.open).toHaveBeenCalledTimes(1);
+    expect(cannot.ask).not.toHaveBeenCalledWith("approve");
+    onDraftCardKey(ev("Enter"), p, "approve", cannot);
+    expect(cannot.approve).not.toHaveBeenCalled();
+    const can = act(true);
+    expect(onDraftCardKey(ev("a"), p, null, can)).toBe(true);
+    expect(can.ask).toHaveBeenLastCalledWith("approve");
+    expect(can.approve).not.toHaveBeenCalled();
+    onDraftCardKey(ev("Enter"), p, "approve", can);
+    expect(can.approve).toHaveBeenCalledTimes(1);
   });
 
   it("never approves a run or a follow-up from a key, whatever its state", () => {

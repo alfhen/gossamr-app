@@ -12,11 +12,15 @@ export const DRAFT_CARD = "article[data-draft]";
  */
 const INLINE: ReadonlySet<Proposal["intent"]["type"]> = new Set(["comment", "transition", "subtasks", "create", "link", "update", "runAnswer"]);
 
-/** Enter and o open; a approves where the card can, or opens where approving needs a review first; s skips. A decided draft only opens. */
-export function draftKeyAction(p: Proposal, key: string): DraftKeyAction | null {
+/**
+ * Enter and o open; a approves where the card can, or opens where approving needs a review first; s skips. A decided draft
+ * only opens. A GitHub review is posted in place only when the card knows the token may post it (`canApprove`); otherwise a
+ * opens, where the card says why it can't be posted.
+ */
+export function draftKeyAction(p: Proposal, key: string, canApprove = false): DraftKeyAction | null {
   if (key === "Enter" || key === "o") return "open";
   if (p.state.type !== "pending") return null;
-  if (key === "a") return INLINE.has(p.intent.type) ? "approve" : "open";
+  if (key === "a") return INLINE.has(p.intent.type) || (p.intent.type === "githubReview" && canApprove) ? "approve" : "open";
   if (key === "s") return "skip";
   return null;
 }
@@ -26,12 +30,14 @@ export type Asking = "approve" | "skip";
 
 /**
  * The one line a focused card shows about its keys, or what it asks while a decision waits to be confirmed. `canApprove`
- * false leaves a out, for an answer whose run isn't asking any more. An answer is sent rather than approved.
+ * false leaves a out, for an answer whose run isn't asking any more or a review the token can't post; true lets a review
+ * be posted. An answer is sent rather than approved, and a review posted.
  */
-export function draftKeyHint(p: Proposal, asking: Asking | null = null, canApprove = true): string {
+export function draftKeyHint(p: Proposal, asking: Asking | null = null, canApprove = p.intent.type !== "githubReview"): string {
   const answer = p.intent.type === "runAnswer";
-  if (asking) return `↵ ${asking === "approve" && answer ? "send this reply" : asking} · any other key cancels`;
-  if (canApprove && draftKeyAction(p, "a") === "approve") return answer ? "a send · s skip · ↵ open" : "a approve · s skip · ↵ open";
+  const review = p.intent.type === "githubReview";
+  if (asking) return `↵ ${asking === "approve" && answer ? "send this reply" : asking === "approve" && review ? "post this review" : asking} · any other key cancels`;
+  if (canApprove && draftKeyAction(p, "a", canApprove) === "approve") return answer ? "a send · s skip · ↵ open" : review ? "a post · s skip · ↵ open" : "a approve · s skip · ↵ open";
   return draftKeyAction(p, "s") ? "s skip · ↵ open" : "↵ open";
 }
 
@@ -98,6 +104,8 @@ interface CardActs {
   type?(text: string): boolean;
   /** The card was reached by ArrowUp from the empty input and this is its first key. */
   fromInput?: boolean;
+  /** Whether the card may approve a GitHub review in place, which it may only when the token can post it. */
+  canApprove?: boolean;
 }
 
 /**
@@ -109,7 +117,7 @@ interface CardActs {
 export function onDraftCardKey(ev: KeyEventLike, p: Proposal, asking: Asking | null, act: CardActs): boolean {
   if (ev.target !== ev.currentTarget || ev.metaKey || ev.ctrlKey || ev.altKey) return false;
   // Only what the draft still allows: one decided elsewhere meanwhile, or that only opens, confirms nothing.
-  const still = asking && draftKeyAction(p, asking === "approve" ? "a" : "s") === asking;
+  const still = asking && draftKeyAction(p, asking === "approve" ? "a" : "s", act.canApprove) === asking;
   const confirmed = !still ? undefined : asking === "approve" ? act.approve : act.skip;
   if (asking) act.ask(null);
   // Just reached from the empty input, a letter is more likely the start of a new question than a card key: it goes back
@@ -130,7 +138,7 @@ export function onDraftCardKey(ev: KeyEventLike, p: Proposal, asking: Asking | n
       ev.preventDefault();
       return true;
     }
-    const action = draftKeyAction(p, ev.key);
+    const action = draftKeyAction(p, ev.key, act.canApprove);
     const decide = action === "approve" ? act.approve : action === "skip" ? act.skip : undefined;
     if (decide && (action === "approve" || action === "skip")) {
       ev.preventDefault();

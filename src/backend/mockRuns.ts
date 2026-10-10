@@ -1,9 +1,10 @@
-import { AUTOSTART_DEFAULTS, SUMMARY_ONLY, type AgentSettings, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal, WorkstreamRule } from "../types";
+import { AUTOSTART_DEFAULTS, SUMMARY_ONLY, type AgentSettings, type ChangedFile, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal, WorkstreamRule } from "../types";
 import { containerRef, itemRef } from "./mockConnector";
 import { approvedPlanText, assemblePlan, planSectionOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, scriptedFinish, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
+import { reviewText } from "./mockReviewDraft";
 import { followUpBlocker, followUpProblem } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import { makerName } from "../lib/proposals";
@@ -357,9 +358,10 @@ function sampleChange(spec: RunSpec, kind: "pullRequest" | "branch", over: Parti
     review: "none",
     url: pr ? `https://github.com/${spec.repo}/pull/${number}` : `https://github.com/${spec.repo}/tree/${head}`,
     sha: null,
-    additions: pr ? 84 : null,
-    deletions: pr ? 12 : null,
-    changedFiles: pr ? 5 : null,
+    // What the consumer change the sample code host serves for an agent's pull request comes to (#218's files).
+    additions: pr ? 7 : null,
+    deletions: pr ? 2 : null,
+    changedFiles: pr ? 2 : null,
     body: "",
     linkedKeys: [],
     ...over,
@@ -518,6 +520,10 @@ export class MockRuns {
   private readonly seedDescriptions: boolean;
   /** The pull request a review reads, as GitHub has it; set by the backend that owns the code. */
   pullRequest: (repo: string, number: number) => CodeChange | null = () => null;
+  /** The files of a pull request with their patches, as a review draft reads them; null when they can't be read. Set by the backend that owns the code. */
+  pullFiles: (repo: string, number: number) => ChangedFile[] | null = () => null;
+  /** The code host's connection that watches `repo`, which a review draft of it belongs to; null when none does, as `code_connection_for`. Set by the backend that owns the code. */
+  codeConnectionFor: (repo: string) => string | null = () => null;
   /** Told of a draft pull request a build opened once the code host shows it; set by the backend that owns the code. */
   onPullRequest: (change: CodeChange) => void = () => {};
   /** The workstreams a run may be linked to, and whose audit records what the person does to one; set by the backend that keeps them. */
@@ -1007,9 +1013,14 @@ export class MockRuns {
     return this.pullRequest(repo, number) ?? own ?? null;
   }
 
-  /** What the backend does when a run reaches Done: one comment draft from a marked `For Jira:` section, never a second. */
+  /**
+   * What the backend does when a run reaches Done: one comment draft from a marked `For Jira:` section, never a second. A
+   * review's GitHub review draft is made whatever `draftOnFinish` says, as `draft_review` in `runs/tracker.rs` does, since
+   * nothing else makes one and it writes nothing until the person posts it.
+   */
   private autoDraft(run: Run) {
     const resolved = this.resolved(run);
+    this.makeReviewDraft(run, resolved);
     if (!this.limits.draftOnFinish || !resolved.complete) return;
     if (!run.item) {
       const proposal = run.spec.project ? resolved.ticket : null;
@@ -1025,6 +1036,28 @@ export class MockRuns {
       this.proposals.fromRun({ type: "subtasks", parent: run.item, summaries }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
     }
     if (run.spec.kind === "plan") this.makePlanDescription(run, false);
+  }
+
+  private reviewDrafts(runId: string): Proposal[] {
+    return this.proposals.list().filter((p) => p.intent.type === "githubReview" && p.intent.runId === runId);
+  }
+
+  /**
+   * The one GitHub review draft of a finished review, as `auto_draft_run_review` makes it: from the verdict and findings
+   * alone, with inline comments at the lines the pull request's diff shows. None without the pull request, its commit or
+   * a verdict, nor a second one in any state. Nothing is posted.
+   */
+  private makeReviewDraft(run: Run, resolved: Resolved) {
+    const { pr, prSha } = run.spec;
+    if (run.spec.kind !== "review" || run.resultComplete === false || pr == null || !prSha || !resolved.verdict || this.reviewDrafts(run.id).length) return;
+    // An unwatched repository isn't read, so it gets no review draft at all.
+    const connectionId = this.codeConnectionFor(run.spec.repo);
+    if (!connectionId) return;
+    // Lines are only placed against the diff at the commit reviewed: once the head moved on, every finding is listed.
+    const files = this.pullRequest(run.spec.repo, pr)?.sha === prSha ? this.pullFiles(run.spec.repo, pr) : null;
+    const { summary, comments } = reviewText(pr, prSha, resolved.verdict, resolved.findings, files, run.shortId ?? run.id.slice(0, 8));
+    const intent: Intent = { type: "githubReview", connectionId, item: run.item, runId: run.id, repo: run.spec.repo, number: pr, commitSha: prSha, summary, comments };
+    this.proposals.fromRun(intent, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
   }
 
   /** The description update each finished sample plan run would have left, once the tickets are known. */

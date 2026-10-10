@@ -18,6 +18,7 @@ import { FilterBar } from "./FilterBar";
 import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
+import { PullView } from "./PullView";
 import { FilterNote, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
@@ -254,6 +255,7 @@ export function Workspace({ backend }: { backend: Backend }) {
         {paletteOpen && <Palette />}
       </div>
       <ConnectGithubDialog />
+      <PullView />
       <ToastHost />
     </TicketLinksContext.Provider>
   );

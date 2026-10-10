@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { safeGithubUrl } from "../lib/githubUrl";
 import { useWorkspace } from "../workspaceStore";
 import { useDev } from "./devStore";
+import { useReviewAccess } from "./reviewAccess";
 import { useToasts, messageOf } from "./toasts";
 
 interface GithubUi {
@@ -31,6 +32,8 @@ export function openOnGithub(url: string): boolean {
 
 /** Re-reads everything a GitHub connection being added, removed or re-chosen changes. */
 export async function refreshAfterGithubChange() {
+  // Another token may write where the last couldn't, or not where it could.
+  useReviewAccess.getState().forgetAll();
   const ws = useWorkspace.getState();
   await Promise.all([ws.refreshConnections(), ws.refreshWatch(), ws.refresh()]);
   useDev.getState().invalidate();

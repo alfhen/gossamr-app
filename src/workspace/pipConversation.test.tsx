@@ -400,6 +400,37 @@ describe("PipConversation", () => {
       expect(act.open).not.toHaveBeenCalled();
     });
 
+    it("posts a GitHub review through its own path, never through approve", async () => {
+      const review = draft("p9", {
+        type: "githubReview",
+        connectionId: "github:ada",
+        item: null,
+        runId: "run-1",
+        repo: "acme/webshop",
+        number: 218,
+        commitSha: "a1b2c3d4e5f6",
+        summary: "Gossamr review of #218.",
+        comments: [{ path: "src/consumer/retry.ts", line: 42, side: "RIGHT", body: "**Blocking:** no backoff." }],
+      });
+      const postReview = vi.fn(async (): Promise<Proposal> => ({ ...review, state: { type: "applied" } }));
+      useWorkspace.setState({ postReview, proposals: { [review.id]: review } });
+      draftDecisions(review.id).approve();
+      await vi.waitFor(() => expect(postReview).toHaveBeenCalledWith("p9", 0));
+      expect(approve).not.toHaveBeenCalled();
+      // The post settles before the next decision on the same draft is taken.
+      await new Promise((done) => setTimeout(done, 0));
+      postReview.mockImplementationOnce(async () => ({ ...review, error: "GitHub refused to post the review" }));
+      draftDecisions(review.id).approve();
+      await vi.waitFor(() => expect(report).toHaveBeenCalledWith("Couldn't post that draft", "GitHub refused to post the review"));
+      expect(approve).not.toHaveBeenCalled();
+      // The card's own copy is what is posted: one revised since it rendered is posted with what the card saw, and refused.
+      await new Promise((done) => setTimeout(done, 0));
+      const revised = { ...review, revisions: [{ at: "2026-10-01T10:05:00Z", note: "Revised by Pip", intent: review.intent }] };
+      useWorkspace.setState({ proposals: { [review.id]: revised } });
+      draftDecisions(review.id, review).approve();
+      await vi.waitFor(() => expect(postReview).toHaveBeenLastCalledWith("p9", 0));
+    });
+
     it("reports a draft that failed to apply, and a refusal, through the workspace", async () => {
       const p = comment("p2", "r1");
       approve.mockImplementationOnce(async () => ({ ...p, error: "Jira said no" }));

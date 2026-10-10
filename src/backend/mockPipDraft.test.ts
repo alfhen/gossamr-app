@@ -7,7 +7,7 @@ import { mockPipTurns } from "./mockPipTurns";
 import { itemRef } from "./mockConnector";
 import { BUILD_NEEDS_PLAN, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, REVIEW_REPORTS, WAITING_FOR_PR_HINT } from "./mockRunKinds";
 import type { AskRequest } from "./claude";
-import type { Proposal, Run, RunKind, RunSpec, ScreenContext } from "../types";
+import type { Intent, Proposal, Run, RunKind, RunSpec, ScreenContext } from "../types";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 
@@ -263,5 +263,109 @@ describe("mock Pip woken by a run that asks a question, as propose_answer does",
     const b = new MockBackend();
     const run = b.runs.list().find((r) => r.state === "needsAnswer")!;
     expect(suggestedAnswer(run)).toBe(run.suggestedReply);
+  });
+});
+
+describe("mock Pip discussing and revising a GitHub review draft, as revise_proposal does", () => {
+  const GH = "github:ada";
+  const spec: RunSpec = { kind: "review", repo: "acme/webshop", clonePath: "/Users/sample/Code/webshop", base: "main", name: "ca-402-review", instruction: "", pr: 218, focus: null, focusFromRun: null, ticketBlock: "CA-402: sample" };
+  const context = { screen: "board", item: itemRef("CA-402"), selection: [] } as unknown as ScreenContext;
+  let n = 0;
+
+  /** A backend whose review of #218 has finished, with the GitHub review draft it left. */
+  async function reviewed() {
+    const b = new MockBackend({ githubRepos: 14 });
+    await b.watchSetMode(GH, "everything");
+    const made = await b.runsDraft(spec, itemRef("CA-402"));
+    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    for (let i = 0; i < 3; i++) b.runs.advance(run.id);
+    const draft = b.proposals.list().find((p) => p.intent.type === "githubReview")!;
+    return { b, draft, run };
+  }
+
+  /** Asks the scripted Pip `prompt` in one conversation, and what it said. */
+  async function ask(b: MockBackend, prompt: string, session = "review-talk") {
+    const requestId = `review-${++n}`;
+    let said = "";
+    const off = mockPipEvents.on((id, e) => {
+      if (id === requestId && e.type === "text") said += e.text;
+    });
+    await mockAsk({ requestId, prompt, context, sessionId: session } as AskRequest, b, 0);
+    off();
+    return said;
+  }
+
+  const comments = (b: MockBackend, id: string) => {
+    const p = b.proposals.get(id)!;
+    return p.intent.type === "githubReview" ? p.intent.comments.map((c) => [`${c.path}:${c.line}`, c.body]) : [];
+  };
+
+  it("talks the draft over, softens, drops and adds a comment, each a revision marked 'Revised by Pip', and posts nothing", async () => {
+    const { b, draft, run } = await reviewed();
+    const talk = await ask(b, `Let's talk about the GitHub review draft ${draft.id} of acme/webshop#218, drafted from agent run ${run.id}. Read it in full.`);
+    expect(talk).toContain(`I read review draft ${draft.id} of acme/webshop#218 in full`);
+    expect(talk).toContain("`src/consumer/retry.ts:42`");
+
+    const softened = await ask(b, "soften the comment on src/consumer/retry.ts:42");
+    expect(softened).toContain("I softened the comment on src/consumer/retry.ts:42");
+    expect(softened).toContain("nothing was posted to GitHub");
+    const [first, nit] = comments(b, draft.id);
+    expect(first[0]).toBe("src/consumer/retry.ts:42");
+    expect(first[1]).toMatch(/^Suggestion, if you agree: the retry loop never backs off/);
+    expect(nit[0]).toBe("src/consumer/retry.ts:17");
+    expect(b.proposals.get(draft.id)!.revisions.slice(-1)[0].note).toBe("Revised by Pip");
+
+    await ask(b, "drop the nit");
+    expect(comments(b, draft.id).map(([at]) => at)).toEqual(["src/consumer/retry.ts:42"]);
+
+    await ask(b, "add a comment on src/consumer/retry.ts:18 saying A blank line to spare.");
+    expect(comments(b, draft.id)).toEqual([first, ["src/consumer/retry.ts:18", "A blank line to spare."]]);
+    const after = b.proposals.get(draft.id)!;
+    expect([after.state.type, after.revisions.map((r) => r.note)]).toEqual(["pending", ["Revised by Pip", "Revised by Pip", "Revised by Pip"]]);
+    expect(b.github.writes).toEqual([]);
+    expect(b.proposals.writes).toEqual([]);
+  });
+
+  it("refuses a comment at a line the diff doesn't show, and says so", async () => {
+    const { b, draft, run } = await reviewed();
+    await ask(b, `Let's talk about the GitHub review draft ${draft.id} of acme/webshop#218, drafted from agent run ${run.id}.`, "off-diff");
+    const before = comments(b, draft.id);
+    const said = await ask(b, "add a comment on src/x.ts:99 saying Here?", "off-diff");
+    expect(said).toContain("src/x.ts:99 isn't a line the pull request's diff shows; call get_proposal to see the lines it has");
+    expect(comments(b, draft.id)).toEqual(before);
+    expect(b.proposals.get(draft.id)!.revisions).toEqual([]);
+    expect(() => b.proposals.pipRevise(draft.id, { comments: [{ path: "src/consumer/retry.ts", line: 99, side: "RIGHT", body: "x" }] }, null, b.github.code.pullFiles("acme/webshop", 218))).toThrow("src/consumer/retry.ts:99 isn't a line");
+    expect(b.github.writes).toEqual([]);
+  });
+
+  it("refuses a comment Pip adds at a new line once the head moved on from the reviewed commit, and still lets it reword", async () => {
+    const { b, draft } = await reviewed();
+    const change = b.github.code.change("acme/webshop", 218)!;
+    b.github.code.addPullRequest({ ...change, sha: "f00dfeed0000" });
+    const had = (draft.intent as Extract<Intent, { type: "githubReview" }>).comments;
+    const index = { path: "src/consumer/index.ts", line: 1, side: "RIGHT" as const, body: "This export moved." };
+    await expect(b.pipRevise(draft.id, { comments: [...had, index] })).rejects.toThrow("has moved on from a1b2c3d4 since the review read it");
+    expect(comments(b, draft.id)).toHaveLength(had.length);
+    await b.pipRevise(draft.id, { comments: [{ ...had[0], body: "Could this back off?" }] });
+    expect(comments(b, draft.id)).toEqual([[`${had[0].path}:${had[0].line}`, "Could this back off?"]]);
+  });
+
+  it("leaves a draft the person edited alone: it is theirs", async () => {
+    const { b, draft, run } = await reviewed();
+    await b.proposalsEdit(draft.id, { type: "githubReview", comments: [{ path: "src/consumer/retry.ts", line: 42, side: "RIGHT", body: "My own words." }] });
+    await ask(b, `Let's talk about the GitHub review draft ${draft.id} of acme/webshop#218, drafted from agent run ${run.id}.`, "edited");
+    const said = await ask(b, "soften the comment on src/consumer/retry.ts:42", "edited");
+    expect(said).toContain("the user edited this review draft, so Pip can't change it any more");
+    expect(said).toContain("it's yours and stays as you left it");
+    expect(comments(b, draft.id)).toEqual([["src/consumer/retry.ts:42", "My own words."]]);
+    expect(b.proposals.get(draft.id)!.revisions.map((r) => r.note)).toEqual(["Edited"]);
+    expect(b.github.writes).toEqual([]);
+  });
+
+  it("revises a workstream's review draft only from that workstream's conversation", async () => {
+    const { b, draft } = await reviewed();
+    const theirs = b.proposals.fromRun(draft.intent, null, { type: "run", runId: "run-other", shortId: null, workstream: "ws-other" } as never);
+    expect(() => b.proposals.pipRevise(theirs.id, { body: "hijacked" }, null)).toThrow("that draft belongs to another workstream");
+    expect(() => b.proposals.pipRevise(theirs.id, { body: "fine" }, "ws-other")).not.toThrow();
   });
 });

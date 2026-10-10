@@ -103,7 +103,7 @@ export async function surfacePullRequests(page: Page) {
 /** What the sample backend's handle offers the tests (MockHandle in src/backend/mockWatch.ts). */
 type Script = { planRecommended?: boolean; verdict?: "pass" | "blocking"; marker?: boolean };
 interface Handle {
-  runs(): { id: string; kind: string; state: string }[];
+  runs(): { id: string; kind: string; state: string; prSha: string | null }[];
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   scriptNext(kind: string, script: Script): void;
   askRun(id: string, question: string): void;
@@ -112,7 +112,21 @@ interface Handle {
   holdPip(on: boolean): void;
   pipIdle(): boolean;
   editTicket(key: string, change: TicketEdit): void;
+  githubWrites(): GithubWrite[];
+  movePullHead(repo: string, number: number): boolean;
+  githubPostsTried(): number;
+  loseNextReviewAnswer(kept: boolean): void;
 }
+/** One review posted to the sample GitHub (`GithubWrite` in src/backend/mockGithub.ts). */
+export type GithubWrite = {
+  proposalId: string;
+  repo: string;
+  number: number;
+  event: "COMMENT";
+  commitId: string;
+  body: string;
+  comments: { path: string; line: number; side: "LEFT" | "RIGHT"; body: string }[];
+};
 /** What `editTicket` changes on a sample ticket; the status is a status id or its name. */
 type TicketEdit = { summary?: string; description?: string; statusId?: string };
 type Mocked = { __gossamrMock?: Handle };
@@ -163,6 +177,44 @@ export const jiraWrites = (page: Page) =>
     if (!mock) throw new Error(missing);
     return mock.jiraWrites();
   }, NO_MOCK);
+
+/** Every review posted to the sample GitHub, oldest first, with the draft the person approved for it: the only GitHub writes there are. */
+export const githubWrites = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.githubWrites();
+  }, NO_MOCK);
+
+/** Someone pushes to pull request `number` of `repo`: its head moves to a new commit whose diff lacks the lines it showed. */
+export const movePullHead = (page: Page, repo: string, number: number) =>
+  page.evaluate(
+    ({ repo, number, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      return mock.movePullHead(repo, number);
+    },
+    { repo, number, missing: NO_MOCK },
+  );
+
+/** How many reviews the sample GitHub was asked to post, refused ones included. */
+export const githubPostsTried = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.githubPostsTried();
+  }, NO_MOCK);
+
+/** The next review post's answer is lost, as a 502: the sample GitHub keeps the review when `kept`, and drops it otherwise. */
+export const loseNextReviewAnswer = (page: Page, kept: boolean) =>
+  page.evaluate(
+    ({ kept, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.loseNextReviewAnswer(kept);
+    },
+    { kept, missing: NO_MOCK },
+  );
 
 /** Sets workstream `id`'s own limits for automatic turns and wakes. */
 export const setBudget = (page: Page, id: string, budget: { autoTurns?: number | null; wakes?: number | null }) =>
@@ -369,4 +421,42 @@ export async function expectVisibleFocus(page: Page) {
   await expect.poll(async () => (seen = await look()).ok, { message: "the focused element shows a focus ring", timeout: 2000 }).toBe(true).catch(() => undefined);
   expect(seen.ok, `the focused ${seen.what} shows no focus ring`).toBe(true);
   return seen.what;
+}
+
+const agentSetup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
+const agentSafety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
+/** The Agents view's cards; Pip's strip of agents shows runs too, and only the view counts. */
+const agentCards = (page: Page) => page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *)');
+const agentRunIds = async (page: Page) => (await agentCards(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")))).filter((id): id is string => !!id);
+
+/**
+ * Starts a Review of CA-402's build (pull request #218 in acme/webshop) from Review this, as review-verdict.spec does,
+ * advances it to done, and opens CA-402's peek, where its GitHub review draft waits. `query` is added to the page's.
+ */
+export async function reviewedDraft(page: Page, query = "") {
+  await page.goto(`/?mockRepos=14${query}`);
+  await page.getByRole("button", { name: "Start watching" }).click();
+  await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: /^Agents/ }).click();
+  await expect(agentCards(page).first()).toBeVisible();
+  const before = await agentRunIds(page);
+  const build = agentCards(page).filter({ hasText: "Build" }).filter({ hasText: "CA-402" });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await build.getByRole("button", { name: "Review this" }).click();
+    await expect(agentSetup(page).or(agentSafety(page))).toBeVisible();
+    if (!(await agentSafety(page).isVisible())) break;
+    await agentSafety(page).getByRole("button", { name: "Close" }).click();
+    await expect(agentSafety(page)).toHaveCount(0);
+  }
+  await agentSetup(page).getByRole("button", { name: "Start agent" }).click();
+  await expect(agentSetup(page)).toHaveCount(0);
+  await expect.poll(async () => (await agentRunIds(page)).length).toBe(before.length + 1);
+  const id = (await agentRunIds(page)).find((r) => !before.includes(r))!;
+  await advanceRuns(page, 3, id);
+  await expect(agentCards(page).and(page.locator(`[data-run-id="${id}"]`))).toHaveAttribute("data-state", "done");
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
+  await peekTicket(page, "CA-402");
+  const review = peekSheet(page).getByRole("article", { name: "GitHub review of acme/webshop#218" });
+  await expect(review).toHaveCount(1);
+  return review;
 }

@@ -3,6 +3,7 @@
 // `me` and `branches` are for the Pip tools, which wire them up next.
 #![allow(dead_code)]
 
+pub mod diff;
 pub mod events;
 pub mod github;
 pub mod keys;
@@ -10,9 +11,11 @@ pub mod links;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 
 use crate::domain::{
-    CodeChange, CodeFile, CodeHit, CommitQuery, ContainerPage, ContainerQuery, Footprint, Notice, PullRequestDetail, ReviewInfo, TreeEntry,
+    ChangedFile, CodeChange, CodeFile, CodeHit, CommitQuery, ContainerPage, ContainerQuery, Footprint, Notice, PostedReview, PullRequestDetail, ReviewComment,
+    ReviewInfo, TreeEntry,
 };
 use crate::error::Result;
 
@@ -41,6 +44,55 @@ pub struct Refreshed {
     pub reviews: Vec<ReviewInfo>,
     /// Reviews or checks couldn't be read just now, so `change` keeps what was known of them before.
     pub incomplete: bool,
+}
+
+/// A pull request with the files it changes, for showing it in Gossamr: what it is and where its head is, and each
+/// file's patch long enough for a review draft's comments.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullDiff {
+    pub change: CodeChange,
+    pub files: Vec<ChangedFile>,
+}
+
+/// Whether the token may post a review on a repository, and when not, why, in a sentence for the person.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewAccess {
+    pub can_post: bool,
+    pub reason: Option<String>,
+}
+
+/// One review already submitted on a pull request: who, how it came out, its summary and when.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReviewSummary {
+    pub author: Option<String>,
+    /// GitHub's word for it: `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED` or `PENDING`.
+    pub state: String,
+    pub body: String,
+    pub at: Option<DateTime<Utc>>,
+}
+
+/// One inline comment already on a pull request. `line` is where it sits in the current diff, or `None` when the code
+/// it was left on has changed since (`original_line` is then where it was).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ThreadComment {
+    pub path: String,
+    pub line: Option<u32>,
+    pub original_line: Option<u32>,
+    pub side: Option<String>,
+    pub author: Option<String>,
+    /// The state of the review it was left in, when it was left in one that is listed.
+    pub state: Option<String>,
+    pub body: String,
+    pub at: Option<DateTime<Utc>>,
+}
+
+/// What reviewers have already said on a pull request: the reviews and their inline comments, oldest first.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ReviewComments {
+    pub reviews: Vec<ReviewSummary>,
+    pub comments: Vec<ThreadComment>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -75,8 +127,19 @@ pub trait CodeHost: Send + Sync {
     /// One pull request with the files it changes (paths, stats, cut-short patches) and its recent commits.
     async fn pull_request(&self, repo: &str, number: u64) -> Result<PullRequestDetail>;
 
+    /// The files a pull request changes with their patches, each kept long enough for a review draft's comments
+    /// (`truncated` when cut). Reads only the files list, never the pull request itself.
+    async fn pull_files(&self, repo: &str, number: u64) -> Result<Vec<ChangedFile>>;
+
     /// Just the pull request itself, one request: state, branches and the repository its head is in.
     async fn pull_request_change(&self, repo: &str, number: u64) -> Result<CodeChange>;
+
+    /// The pull request and its files, read together: `pull_request_change` plus `pull_files`. Reads only.
+    async fn pull_diff(&self, repo: &str, number: u64) -> Result<PullDiff> {
+        let change = self.pull_request_change(repo, number).await?;
+        let files = self.pull_files(repo, number).await?;
+        Ok(PullDiff { change, files })
+    }
 
     async fn branches(&self, repo: &str) -> Result<Vec<CodeChange>>;
 
@@ -98,4 +161,19 @@ pub trait CodeHost: Send + Sync {
 
     /// Code search limited to `repos`.
     async fn search_code(&self, query: &str, repos: &[String]) -> Result<Vec<CodeHit>>;
+
+    /// The reviews already submitted on pull request `number` and their inline comments, a few pages at most. Reads only.
+    async fn review_comments(&self, repo: &str, number: u64) -> Result<ReviewComments>;
+
+    /// Whether this token may post a review on `repo`. Reads only.
+    async fn review_access(&self, repo: &str) -> Result<ReviewAccess>;
+
+    /// The comment review of pull request `number` at `commit_sha` with `summary` as its body that this token's account
+    /// already submitted, if any: how a post whose outcome was unknown is found to have gone through. Reads only.
+    async fn posted_review(&self, repo: &str, number: u64, commit_sha: &str, summary: &str) -> Result<Option<PostedReview>>;
+
+    /// The one write a code host has: posts a plain comment review of pull request `number` at `commit_sha`, once,
+    /// never an approval or a request for changes. Only the person's approval of a review draft calls it
+    /// (`Core::post_review_draft`); Pip, agents and the supervisor have no path to it.
+    async fn post_review(&self, repo: &str, number: u64, commit_sha: &str, summary: &str, comments: &[ReviewComment]) -> Result<PostedReview>;
 }

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, openApp } from "./support/app";
+import { advanceRuns, githubWrites, jiraWrites, openApp, peekSheet, peekTicket } from "./support/app";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
@@ -78,6 +78,30 @@ test("a Review the person starts from Review this finishes with a blocking verdi
   await expect(findings.nth(0)).toContainText("src/consumer/retry.ts:42");
   await expect(findings.nth(1)).toHaveAttribute("data-severity", "should-fix");
   await expect(findings.nth(2)).toHaveAttribute("data-severity", "nit");
+
+  // The finished review left exactly one GitHub review draft of #218, beside its Jira comment draft, and wrote nothing.
+  expect(await jiraWrites(page)).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(sheet(page)).toBeHidden();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
+  await peekTicket(page, "CA-402");
+  const review = peekSheet(page).getByRole("article", { name: "GitHub review of acme/webshop#218" });
+  await expect(review).toHaveCount(1);
+  await expect(peekSheet(page).getByRole("article", { name: "Comment on CA-402" })).toHaveCount(1);
+  await expect(review.locator("[data-review-summary]")).toContainText("Gossamr review of #218 at a1b2c3d4: blocking (1 blocking, 1 should-fix, 1 nit).");
+  // The finding without a line in the diff is in the summary; the other two sit at their lines.
+  await expect(review.locator("[data-review-summary]")).toContainText("no test covers the timeout path. (src/consumer/retry.test.ts)");
+  const comments = review.locator("[data-review-comment]");
+  await expect(comments).toHaveCount(2);
+  await expect(comments.nth(0)).toHaveAttribute("data-review-comment", "src/consumer/retry.ts:42");
+  await expect(comments.nth(0)).toContainText("**Blocking:** the retry loop never backs off");
+  await expect(comments.nth(1)).toHaveAttribute("data-review-comment", "src/consumer/retry.ts:17");
+  // Nothing posts it until the person does: the card offers Post review and Discard, and GitHub hasn't been written to.
+  await expect(review.getByRole("button", { name: "Discard" })).toBeVisible();
+  await expect(review.getByRole("button", { name: "Post review" })).toBeVisible();
+  await expect(review.getByRole("button", { name: /^(Apply|Approve)/ })).toHaveCount(0);
+  expect(await githubWrites(page)).toEqual([]);
+  expect(await jiraWrites(page)).toEqual([]);
 });
 
 test("a review that finished before reviews gave a verdict says it gave none", async ({ page }) => {
