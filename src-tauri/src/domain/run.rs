@@ -371,7 +371,11 @@ impl RunSpec {
             (RunKind::Review, None) => return Err(refuse("a review needs a pull request")),
             (RunKind::Review, Some(0)) => return Err(refuse("the pull request number isn't valid")),
             (RunKind::Review, Some(_)) => {}
-            (_, Some(_)) => return Err(refuse("only a review takes a pull request")),
+            // A verify after a passing review checks the commit that review read, and only that pinned commit.
+            (RunKind::Verify, Some(0)) => return Err(refuse("the pull request number isn't valid")),
+            (RunKind::Verify, Some(_)) if self.pr_sha.is_none() => return Err(refuse("a verify checks a pull request only at the commit a review read")),
+            (RunKind::Verify, Some(_)) => {}
+            (_, Some(_)) => return Err(refuse("only a review or a verify after one takes a pull request")),
             (_, None) => {}
         }
         if self.pr_sha.as_deref().is_some_and(|s| self.pr.is_none() || !(7..=64).contains(&s.len()) || !s.bytes().all(|b| b.is_ascii_hexdigit())) {
@@ -608,9 +612,29 @@ fn report_paragraph(spec: &RunSpec) -> String {
     )
 }
 
-/// What a review checks out after fetching its pull request: the pinned commit, or what the fetch brought.
+/// What a review or a verify checks out after fetching its pull request: the pinned commit, or what the fetch brought.
 fn review_checkout(spec: &RunSpec) -> &str {
     spec.pr_sha.as_deref().unwrap_or("FETCH_HEAD")
+}
+
+/// The pull request a review or a verify checks out, `None` for any other kind or without one.
+fn checks_out_pr(spec: &RunSpec) -> Option<u64> {
+    matches!(spec.kind, RunKind::Review | RunKind::Verify).then_some(spec.pr).flatten()
+}
+
+/// How a review or a verify checks out its pull request, naming the exact commands Claude Code allows, and what it does
+/// when they fail: never fall back to the base branch, which would test something else and could pass.
+fn checkout_paragraph(spec: &RunSpec, pr: u64) -> String {
+    let fallback = if spec.kind == RunKind::Review {
+        "say so and end with 'Verdict: blocking'"
+    } else {
+        "say so and that you could not check the change"
+    };
+    format!(
+        "Check it out in your worktree with `git fetch origin pull/{pr}/head` then `git checkout --detach {}`. If either fails, stop: {fallback}. Never review or test `{}` in its place.",
+        review_checkout(spec),
+        spec.base
+    )
 }
 
 /// The test commands of `TEST_RUNNERS`, as the prompt names them.
@@ -624,7 +648,7 @@ pub fn test_commands() -> Vec<&'static str> {
 fn read_only_commands(spec: &RunSpec) -> Vec<String> {
     let base = &spec.base;
     let mut commands = vec![format!("git fetch origin {base}"), format!("git checkout --detach origin/{base}")];
-    if let (RunKind::Review, Some(pr)) = (spec.kind, spec.pr) {
+    if let Some(pr) = checks_out_pr(spec) {
         commands.push(format!("git fetch origin pull/{pr}/head"));
         commands.push(format!("git checkout --detach {}", review_checkout(spec)));
     }
@@ -637,8 +661,8 @@ fn read_only_commands(spec: &RunSpec) -> Vec<String> {
 /// How a review or a verify may run the repository's tests, naming the exact commands Claude Code allows.
 fn tests_paragraph(spec: &RunSpec) -> String {
     let commands = test_commands().iter().map(|c| format!("`{c}`")).collect::<Vec<_>>().join(", ");
-    let what = if spec.kind == RunKind::Verify {
-        format!(" This checks the code as it is on `{}`: you can't check out another branch or commit.", spec.base)
+    let what = if spec.kind == RunKind::Verify && spec.pr.is_none() {
+        format!(" This checks the code as it is on `{}`: you can't check out another branch or commit. If the change isn't on `{}` yet, say so instead of checking it there.", spec.base, spec.base)
     } else {
         String::new()
     };
@@ -661,7 +685,12 @@ pub fn render_prompt(spec: &RunSpec) -> String {
     if let (RunKind::Review, Some(pr)) = (spec.kind, spec.pr) {
         let at = spec.pr_sha.as_deref().map(|sha| format!(" at commit {sha}")).unwrap_or_default();
         parts.push(format!("Review pull request #{pr} in {}{at}.", spec.repo));
-        parts.push(format!("Check it out in your worktree with `git fetch origin pull/{pr}/head` then `git checkout --detach {}`.", review_checkout(spec)));
+    }
+    if let (RunKind::Verify, Some(pr), Some(sha)) = (spec.kind, spec.pr, spec.pr_sha.as_deref()) {
+        parts.push(format!("Verify pull request #{pr} in {} at commit {sha}, the commit its review read.", spec.repo));
+    }
+    if let Some(pr) = checks_out_pr(spec) {
+        parts.push(checkout_paragraph(spec, pr));
     }
     if matches!(spec.kind, RunKind::Review | RunKind::Verify) {
         parts.push(tests_paragraph(spec));
@@ -1205,8 +1234,8 @@ mod tests {
             (RunKind::Triage, "2981657d5687135874b9adf7aae0e801ed7780fce0efe8960d15124d91cd5be8"),
             (RunKind::Plan, "825ead7a4bb8dd2be2e29ca8ae84a771a0849d4a8832411b35c0b2229811581d"),
             (RunKind::Build, "f84cf09d7e585d6c48646d8bffa4dfcb42d133ad25213ada1e4ef48c38ff6002"),
-            (RunKind::Review, "5c6ca7251bf4d941746a9039a5c8a42c1a58441efdac952ac91321449c654690"),
-            (RunKind::Verify, "de467f401c7e4c3856129506e6cd2c3a6d6e3810deaaa5716769b52df7f45c94"),
+            (RunKind::Review, "46bb9b3cafdbe3fbe3d002dc73a6bbeddc5c6560b8962e31447f125a7026afa8"),
+            (RunKind::Verify, "384266b4b4d66e50a0e2e79f1b2208940f6a50098d2b63a9be2f835327000946"),
         ];
         for (kind, digest) in pinned {
             let pr = (kind == RunKind::Review).then_some(12);
@@ -1431,9 +1460,9 @@ mod tests {
     /// read-only launch restriction joined the digest.
     const GOLDEN_DIGESTS: [&str; 4] = [
         "2981657d5687135874b9adf7aae0e801ed7780fce0efe8960d15124d91cd5be8",
-        "de467f401c7e4c3856129506e6cd2c3a6d6e3810deaaa5716769b52df7f45c94",
+        "384266b4b4d66e50a0e2e79f1b2208940f6a50098d2b63a9be2f835327000946",
         "f84cf09d7e585d6c48646d8bffa4dfcb42d133ad25213ada1e4ef48c38ff6002",
-        "5c6ca7251bf4d941746a9039a5c8a42c1a58441efdac952ac91321449c654690",
+        "46bb9b3cafdbe3fbe3d002dc73a6bbeddc5c6560b8962e31447f125a7026afa8",
     ];
 
     fn reporting(kind: RunKind) -> RunSpec {
@@ -1520,8 +1549,8 @@ mod tests {
         "e9b5a0aa569dec2e41fb68ec558cf0437961a122f355e75092af3d23faa775fd",
         "78db8d276294339dca1effe4d678a36f6cd7e8b49e80cd0774b8e1ba307e2cbf",
         "82adbcc9d3e4b5440720ef9f7ae906250667b098b42fa5625e4c4fb9ca7af210",
-        "c91edbabe4360a618329cf9bb7fa0fc123f7632827e703d2f635a3cfc14c1aab",
-        "124839e64ca19b54690a5cc86cd9c32cd9f127636d1742b2d211fc1fcc16f166",
+        "49358d23a3a37fb412717dd300a3a7f660f04a20e209ba51747d778e59f17a34",
+        "026ecfb1cb44a2ca601e40d0116f90e0a76c02eb39c37e97a4adb1ae89500a52",
     ];
 
     #[test]
@@ -2028,6 +2057,7 @@ mod tests {
         let mut specs: Vec<RunSpec> = [RunKind::Investigate, RunKind::Triage, RunKind::Plan, RunKind::Review, RunKind::Verify].iter().flat_map(|k| [of_kind(*k, (*k == RunKind::Review).then_some(12), false), reporting(*k)]).collect();
         specs.push(pinned);
         specs.push(RunSpec { base: "release/2.1".into(), ..of_kind(RunKind::Verify, None, false) });
+        specs.push(RunSpec { pr: Some(12), pr_sha: Some("a1b2c3d4e5f6".into()), ..reporting(RunKind::Verify) });
         for spec in specs {
             let (prompt, ro) = (render_prompt(&spec), spec.read_only().unwrap());
             let named = commands(&prompt);
@@ -2048,6 +2078,28 @@ mod tests {
         for kind in [RunKind::Investigate, RunKind::Triage, RunKind::Plan, RunKind::Build] {
             assert!(!render_prompt(&of_kind(kind, None, false)).contains("cargo test"), "{kind:?}");
         }
+    }
+
+    /// A review or a verify whose checkout fails stops instead of testing the base branch, which could pass on code that
+    /// isn't the change. A verify checks a pull request only at the pinned commit a review read.
+    #[test]
+    fn a_failed_checkout_never_falls_back_to_the_base_branch_and_a_verify_checks_only_a_pinned_commit() {
+        for review in [of_kind(RunKind::Review, Some(12), false), RunSpec { pr_sha: Some("a1b2c3d4e5f6".into()), ..of_kind(RunKind::Review, Some(12), false) }] {
+            let prompt = render_prompt(&review);
+            assert!(prompt.contains("If either fails, stop: say so and end with 'Verdict: blocking'. Never review or test `main` in its place."), "{prompt}");
+        }
+        let verify = RunSpec { pr: Some(12), pr_sha: Some("a1b2c3d4e5f6".into()), ..of_kind(RunKind::Verify, None, false) };
+        verify.validate().unwrap();
+        let prompt = render_prompt(&verify);
+        assert!(prompt.contains("Verify pull request #12 in acme/webshop at commit a1b2c3d4e5f6, the commit its review read."), "{prompt}");
+        assert!(prompt.contains("`git fetch origin pull/12/head` then `git checkout --detach a1b2c3d4e5f6`. If either fails, stop: say so and that you could not check the change."), "{prompt}");
+        assert!(!prompt.contains("as it is on `main`"), "{prompt}");
+        assert_eq!(verify.read_only().unwrap().allow[2..4], ["Bash(git fetch origin pull/12/head)".to_string(), "Bash(git checkout --detach a1b2c3d4e5f6)".to_string()]);
+        let unpinned = RunSpec { pr_sha: None, ..verify.clone() };
+        assert!(unpinned.validate().unwrap_err().to_string().contains("only at the commit a review read"));
+        assert!(RunSpec { pr: Some(12), pr_sha: Some("a1b2c3d4e5f6".into()), ..of_kind(RunKind::Triage, None, false) }.validate().is_err());
+        let plain = render_prompt(&of_kind(RunKind::Verify, None, false));
+        assert!(plain.contains("as it is on `main`") && plain.contains("If the change isn't on `main` yet, say so instead of checking it there."), "{plain}");
     }
 
     #[test]

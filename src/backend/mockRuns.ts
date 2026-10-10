@@ -10,7 +10,7 @@ import { docFromText, docText } from "../lib/docs";
 import { makerName } from "../lib/proposals";
 import { revisedByPipUnedited, runAnswerProblem, type MockProposals } from "./mockProposals";
 import { textDigest, type MockWorkstreams } from "./mockWorkstreams";
-import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, BUILD_NEEDS_PLAN, PIP_CHAIN_KINDS, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT, FINDINGS_LIMIT, FINDINGS_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, readOnlyRules, reviewCheckout, testsParagraph, findingsLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
+import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, BUILD_NEEDS_PLAN, PIP_CHAIN_KINDS, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT, FINDINGS_LIMIT, FINDINGS_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, checkoutParagraph, checksOutPr, readOnlyRules, testsParagraph, findingsLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
 
 const CONNECTION = "mock";
 export const GUARD =
@@ -64,10 +64,10 @@ export function renderPrompt(spec: RunSpec): string {
     `Your worktree starts at the clone's current HEAD, which may not be \`${spec.base}\`. First run \`git fetch origin ${spec.base}\` and \`${switchTo}\` in your worktree (it has no changes yet), then continue.`,
     spec.instruction.trim(),
   ];
-  if (spec.kind === "review" && spec.pr != null) {
-    parts.push(`Review pull request #${spec.pr} in ${spec.repo}${spec.prSha ? ` at commit ${spec.prSha}` : ""}.`);
-    parts.push(`Check it out in your worktree with \`git fetch origin pull/${spec.pr}/head\` then \`git checkout --detach ${reviewCheckout(spec)}\`.`);
-  }
+  if (spec.kind === "review" && spec.pr != null) parts.push(`Review pull request #${spec.pr} in ${spec.repo}${spec.prSha ? ` at commit ${spec.prSha}` : ""}.`);
+  if (spec.kind === "verify" && spec.pr != null && spec.prSha) parts.push(`Verify pull request #${spec.pr} in ${spec.repo} at commit ${spec.prSha}, the commit its review read.`);
+  const pr = checksOutPr(spec);
+  if (pr != null) parts.push(checkoutParagraph(spec, pr));
   if (spec.kind === "review" || spec.kind === "verify") parts.push(testsParagraph(spec));
   if (spec.kind === "build" && spec.allowPush) parts.push(PUSH_ALLOWED);
   if (spec.kind === "investigate" && spec.project) parts.push(NEW_TICKET_TAIL);
@@ -322,7 +322,7 @@ const STUCK_SEEDS: Seed[] = [
     minutesAgo: 150,
     over: { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit", suggestedReply: "Go ahead and build it with the plan as written", lastDetail: "plan complete; awaiting PR #176 location + scope name confirmation", tokens: 2_772, ...kindOver("CA-277", "ca-277-hobbii-mcp-gateway-8e22", "plan") },
   },
-  { key: "CA-278", name: "ca-278-cart-merge-1f2e", state: "stopped", minutesAgo: 200, over: { lastDetail: "Stopped before it finished", possibleContinuations: [{ shortId: "bbb748a7", sessionId: "bbb748a7-dca2-4f33-9da1-caa7f80584b8", startedAt: null }] } },
+  { key: "CA-278", name: "ca-278-cart-merge-1f2e", state: "stopped", minutesAgo: 200, over: { lastDetail: "Stopped before it finished", readOnly: readOnlyRules({ kind: "investigate", base: "main", pr: null, prSha: null }), possibleContinuations: [{ shortId: "bbb748a7", sessionId: "bbb748a7-dca2-4f33-9da1-caa7f80584b8", startedAt: null }] } },
   {
     key: "CA-279",
     name: "ca-279-vat-labels-3a4b",
@@ -1011,6 +1011,8 @@ export class MockRuns {
     const made = kind === "build" || kind === "review" ? this.chainSpec(source.item, kind, fromRun, null, workstream).spec : this.plainSpec(source.item, kind, fromRun, null, workstream, carried);
     let spec: RunSpec = { ...made, focus: null, focusFromRun: null };
     if (spec.kind === "build" && workstream) spec = { ...spec, allowPush: true };
+    // A verify after a passing review checks the pull request at the commit that review read, as `fill_chain_slots` does.
+    if (spec.kind === "verify" && source.spec.kind === "review" && source.spec.pr != null && source.spec.prSha) spec = { ...spec, pr: source.spec.pr, prSha: source.spec.prSha, base: source.spec.base };
     const problem = specProblem(spec, true);
     if (problem) throw new Error(problem);
     const proposal = this.proposals.fromRun({ type: "startRun", connectionId: CONNECTION, item: source.item, spec }, null, this.fromRun(source));
@@ -1302,7 +1304,7 @@ export class MockRuns {
     const offer = run.possibleContinuations?.find((c) => c.shortId === session);
     if (!offer) throw new Error("That session doesn't look like this run's any more. Look again in a moment.");
     const earlier = [...(run.earlierSessions ?? []), ...(run.shortId ? [{ shortId: run.shortId, sessionId: run.sessionId }] : [])];
-    const next = this.update(id, { shortId: session, sessionId: offer.sessionId ?? null, earlierSessions: earlier, possibleContinuations: [], state: "working", needs: null, suggestedReply: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: this.now(), lastProgressAt: this.now() });
+    const next = this.update(id, { shortId: session, sessionId: offer.sessionId ?? null, earlierSessions: earlier, possibleContinuations: [], state: "working", needs: null, suggestedReply: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: this.now(), lastProgressAt: this.now(), readOnly: null });
     this.changed();
     return next;
   }

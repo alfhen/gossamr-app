@@ -82,6 +82,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         <p className="m-0 text-ws-ink">{COPY.runAsYou}</p>
         <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
         <p className="m-0 text-ws-ink2">{COPY.readOnlySteps}</p>
+        <p className="m-0 font-semibold text-ws-ink">What a Build may touch</p>
         <ul className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
           {MAY_TOUCH.map((t) => (
             <li key={t.title} data-tone={t.tone} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5">

@@ -177,6 +177,8 @@ describe("small helpers", () => {
     const text = MAY_TOUCH.map((t) => `${t.title} ${t.text}`).join(" ");
     expect(text).toContain("Nothing enforces that");
     expect(text).not.toMatch(/never write|can't write|cannot write/i);
+    // It is what a Build (or a run launched without the read-only rules) may touch: it says nothing of a read-only step's rules.
+    expect(text).not.toMatch(/read-only/i);
   });
 });
 
@@ -326,7 +328,7 @@ describe("the prompt of the other kinds", () => {
     const r = review({ kind: "review", instruction: "Review the pull request named below.", pr: 12, prSha: "abc", ticketBlock: "CA-1: x" });
     const parts = splitPrompt(r);
     expect(parts.map((p) => p.id)).toEqual(["base", "template", "extra", "ticket"]);
-    expect(parts[2].text).toMatch(/^Review pull request #12 in acme\/web at commit abc\.\n\nCheck it out in your worktree with `git fetch origin pull\/12\/head` then `git checkout --detach abc`\.\n\nTo run the repository's tests, /);
+    expect(parts[2].text).toMatch(/^Review pull request #12 in acme\/web at commit abc\.\n\nCheck it out in your worktree with `git fetch origin pull\/12\/head` then `git checkout --detach abc`\. If either fails, stop: say so and end with 'Verdict: blocking'\. Never review or test `main` in its place\.\n\nTo run the repository's tests, /);
     expect(parts.map((p) => p.text).join("\n\n")).toBe(r.prompt);
     const push = splitPrompt(review({ kind: "build", allowPush: true, instruction: "Make the change." }));
     expect(push.find((p) => p.id === "extra")?.text).toContain("You may push");

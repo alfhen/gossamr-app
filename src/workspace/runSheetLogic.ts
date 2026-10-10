@@ -5,7 +5,7 @@ import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
 export const COPY = {
-  runAsYou: "Agents run as you, with your own Claude settings. Anything your Claude can do, they can do.",
+  runAsYou: "A Build runs as you, with your own Claude settings. Anything your Claude can do, it can do.",
   notALock: "They are told not to write to Jira and to send findings back to you. They run as you, so this is a request, not a lock.",
   runAsYouReadOnly: "A read-only step runs signed in as you, but without your own or the repository's Claude settings and MCP servers: only Claude Code's own read-only commands and the commands listed run.",
   readOnly: "Read-only: Claude Code refuses edits and writes",
@@ -25,9 +25,10 @@ export interface MayTouch {
   text: string;
 }
 
+/** What a Build may touch, and a run launched without the read-only rules (from before them, or carried on in a session Gossamr didn't launch). */
 export const MAY_TOUCH: readonly MayTouch[] = [
   { tone: "yes", title: "Starts in its own worktree.", text: "Your own checkout and branch are not changed by the launch. Nothing stops it reading any other file you can, or a Build editing one." },
-  { tone: "yes", title: "Runs whatever your Claude settings allow:", text: "your allowed commands, MCP servers and skills. For a Build, Gossamr adds no fence of its own; a read-only step is also held to the rules in its prompt view." },
+  { tone: "yes", title: "Runs whatever your Claude settings allow:", text: "your allowed commands, MCP servers and skills. Gossamr adds no fence of its own." },
   { tone: "ask", title: "Pushing a branch, opening a PR, network commands:", text: "your Claude settings decide. If they would ask you, the run stops under Needs you, and you answer in Terminal." },
   { tone: "no", title: "Writing to Jira:", text: "the agent is told not to, and to send anything for Jira back to you. Nothing enforces that: it runs as you and could use any Atlassian tool in your own Claude config." },
 ];

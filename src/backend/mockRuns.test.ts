@@ -241,7 +241,7 @@ describe("mock runs of every kind", () => {
     const backend = new MockBackend();
     await expect(backend.runsDraft({ ...spec, ...storefront, kind: "build" }, null)).rejects.toThrow("Build needs a ticket");
     await expect(backend.runsDraft({ ...spec, ...storefront, allowPush: true }, itemRef("CA-412"))).rejects.toThrow("Only a build can push");
-    await expect(backend.runsDraft({ ...spec, ...storefront, pr: 3 }, itemRef("CA-412"))).rejects.toThrow("Only a review reads a pull request");
+    await expect(backend.runsDraft({ ...spec, ...storefront, pr: 3 }, itemRef("CA-412"))).rejects.toThrow("Only a review, or a verify after one, reads a pull request");
     await expect(backend.runsDraft({ ...spec, ...storefront, kind: "review" }, itemRef("CA-412"))).rejects.toThrow("needs a pull request");
   });
 
@@ -917,6 +917,24 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     // The review blocked: the fix round resumes the build's session, so nothing new launches and it stays unrestricted.
     expect(b.runs.get(buildRun.id)).toMatchObject({ state: "working", passes: 2, readOnly: null });
     expect(b.runs.launches().map((l) => l.runId)).toEqual([r1.id, triage.id, plan.id, buildRun.id, review.id]);
+  });
+
+  it("drops the restriction of a run taken over in a session Gossamr didn't launch, as `take_over` does", async () => {
+    const b = new MockBackend({ runs: { seed: "stuck" } });
+    const run = b.runs.list().find((r) => r.item?.key === "CA-278")!;
+    expect(run.readOnly?.mode).toBe("dontAsk");
+    const adopted = b.runs.adoptSession(run.id, "bbb748a7");
+    expect(adopted).toMatchObject({ shortId: "bbb748a7", readOnly: null });
+  });
+
+  it("starts a verify after a passing review on the pull request at the commit the review read, as `fill_chain_slots` does", () => {
+    const b = new MockBackend({ runs: { seed: "kinds" } });
+    const review = b.runs.list().find((r) => r.spec.kind === "review" && r.state === "done")!;
+    const verify = b.runs.autoStart("verify", review.id, "review_verify");
+    expect(verify.spec).toMatchObject({ kind: "verify", pr: review.spec.pr, prSha: review.spec.prSha, base: review.spec.base });
+    expect(readOnlyRules(verify.spec)!.allow).toEqual(expect.arrayContaining([`Bash(git fetch origin pull/${review.spec.pr}/head)`, `Bash(git checkout --detach ${review.spec.prSha})`]));
+    expect(renderPrompt(verify.spec)).toContain(`Verify pull request #${review.spec.pr} in ${review.spec.repo} at commit ${review.spec.prSha}, the commit its review read.`);
+    expect(renderPrompt(verify.spec)).not.toContain("as it is on `");
   });
 
   it("adds no launch for an answer or a follow-up, which resume the session with what it was launched with", async () => {

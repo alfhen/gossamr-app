@@ -738,6 +738,11 @@ impl ReadOnlyScratch {
         let cli = SystemCli::new(binary.clone(), Arc::new(env.clone()));
         assert!(cli.supports_read_only().await.unwrap(), "this claude can't launch a read-only run");
         let config = cli.auth_status().await.unwrap().config_directory.expect("config directory");
+        // Managed settings are the one source `--setting-sources ''` still reads; an allow rule there would decide the result.
+        for managed in ["/Library/Application Support/ClaudeCode/managed-settings.json", "/etc/claude-code/managed-settings.json"] {
+            let allows = std::fs::read_to_string(managed).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v["permissions"]["allow"].as_array().map(|a| !a.is_empty()));
+            assert_ne!(allows, Some(true), "{managed} allows commands, so what a read-only run is refused depends on it");
+        }
         let name = format!("gossamr-{tag}-spike-{}", std::process::id());
         let cleanup = Cleanup { binary, env, cwd: repo.clone(), name: name.clone() };
         Self { cli, config, repo, name, _cleanup: cleanup, _dir: dir }
@@ -788,6 +793,10 @@ impl ReadOnlyScratch {
 ///
 /// No file may exist afterwards, in the worktree or the clone, no commit may be added, and the final answer must say it
 /// was refused.
+///
+/// The person's real config is used only to sign in: the launch reads no settings file (`--setting-sources ''`) and none of
+/// their MCP servers, so their own allow rules can't change what is refused. Only managed settings still apply, and
+/// `ReadOnlyScratch::new` fails the test when they allow anything.
 ///
 /// Run by hand: `cargo test real_read_only -- --ignored --test-threads=1`. Uses the person's real, signed-in config and
 /// makes a scratch repository, `~/Code/gossamr-read-only`, which must be trusted (see `ReadOnlyScratch::new`), and does

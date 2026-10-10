@@ -94,21 +94,31 @@ export const READ_ONLY_SETTING_SOURCES = "";
 /** The test commands as the prompt names them, as `test_commands`. */
 export const testCommands = (): string[] => TEST_RUNNERS.map((r) => r.replace(/^Bash\((.*)\)$/, "$1"));
 
-/** What a review checks out after fetching its pull request: the pinned commit, or what the fetch brought. As `review_checkout`. */
+/** What a review or a verify checks out after fetching its pull request: the pinned commit, or what the fetch brought. As `review_checkout`. */
 export const reviewCheckout = (spec: Pick<RunSpec, "prSha">) => spec.prSha ?? "FETCH_HEAD";
+
+/** The pull request a review or a verify checks out, null for any other kind or without one. As `checks_out_pr`. */
+export const checksOutPr = (spec: Pick<RunSpec, "kind" | "pr">): number | null => ((spec.kind === "review" || spec.kind === "verify") && spec.pr != null ? spec.pr : null);
+
+/** How a review or a verify checks out its pull request, and what it does when that fails, as `checkout_paragraph`. */
+export function checkoutParagraph(spec: Pick<RunSpec, "kind" | "base" | "prSha">, pr: number): string {
+  const fallback = spec.kind === "review" ? "say so and end with 'Verdict: blocking'" : "say so and that you could not check the change";
+  return `Check it out in your worktree with \`git fetch origin pull/${pr}/head\` then \`git checkout --detach ${reviewCheckout(spec)}\`. If either fails, stop: ${fallback}. Never review or test \`${spec.base}\` in its place.`;
+}
 
 /** The commands a read-only kind is allowed exactly, in the order the prompt names them, as `read_only_commands`. */
 export function readOnlyCommands(spec: Pick<RunSpec, "kind" | "base" | "pr" | "prSha">): string[] {
   const commands = [`git fetch origin ${spec.base}`, `git checkout --detach origin/${spec.base}`];
-  if (spec.kind === "review" && spec.pr != null) commands.push(`git fetch origin pull/${spec.pr}/head`, `git checkout --detach ${reviewCheckout(spec)}`);
+  const pr = checksOutPr(spec);
+  if (pr != null) commands.push(`git fetch origin pull/${pr}/head`, `git checkout --detach ${reviewCheckout(spec)}`);
   if (spec.kind === "review" || spec.kind === "verify") commands.push(...testCommands());
   return commands;
 }
 
 /** How a review or a verify may run the repository's tests, as `tests_paragraph`. */
-export function testsParagraph(spec: Pick<RunSpec, "kind" | "base">): string {
+export function testsParagraph(spec: Pick<RunSpec, "kind" | "base" | "pr">): string {
   const commands = testCommands().map((c) => `\`${c}\``).join(", ");
-  const what = spec.kind === "verify" ? ` This checks the code as it is on \`${spec.base}\`: you can't check out another branch or commit.` : "";
+  const what = spec.kind === "verify" && spec.pr == null ? ` This checks the code as it is on \`${spec.base}\`: you can't check out another branch or commit. If the change isn't on \`${spec.base}\` yet, say so instead of checking it there.` : "";
   return `To run the repository's tests, use whichever of these exact commands fits, with no other arguments: ${commands}. Claude Code refuses any other command that runs code.${what}`;
 }
 
@@ -228,7 +238,8 @@ export function specProblem(spec: RunSpec, hasItem: boolean): string | null {
   if (spec.project && hasItem) return "A run on a ticket doesn't make a new one.";
   if (spec.kind === "build" && !hasItem) return "Build needs a ticket.";
   if (spec.kind === "review" && spec.pr == null) return "A review needs a pull request.";
-  if (spec.kind !== "review" && spec.pr != null) return "Only a review reads a pull request.";
+  if (spec.kind === "verify" && spec.pr != null && !spec.prSha) return "A verify checks a pull request only at the commit a review read.";
+  if (spec.kind !== "review" && spec.kind !== "verify" && spec.pr != null) return "Only a review, or a verify after one, reads a pull request.";
   if (spec.allowPush && spec.kind !== "build") return "Only a build can push.";
   if (!!spec.plan !== !!spec.planFromRun) return "A plan and the run it came from go together.";
   if (spec.planFromRun && spec.kind !== "build") return "Only a build carries a plan.";

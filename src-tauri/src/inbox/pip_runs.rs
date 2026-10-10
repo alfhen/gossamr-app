@@ -373,7 +373,16 @@ impl Core {
                 // Its verdict is read by the app; the tool is offered when the setting allows, else the written verdict counts.
                 spec.report = true;
             }
-            RunKind::Investigate | RunKind::Verify => {}
+            // After a passing review: its pull request at the commit it read, so the verify checks the change itself and
+            // not the base branch. A review always had GitHub confirm the pull request is this repository's own.
+            RunKind::Verify => {
+                if let (RunKind::Review, Some(pr), Some(sha)) = (source.spec.kind, source.spec.pr, source.spec.pr_sha.clone()) {
+                    spec.pr = Some(pr);
+                    spec.pr_sha = Some(sha);
+                    spec.base = source.spec.base.clone();
+                }
+            }
+            RunKind::Investigate => {}
         }
         Ok(())
     }
