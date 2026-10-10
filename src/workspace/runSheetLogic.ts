@@ -10,7 +10,7 @@ export const COPY = {
   runAsYouReadOnly: "A read-only step runs signed in as you, but without your own or the repository's Claude settings and MCP servers: only Claude Code's own read-only commands and the commands listed run.",
   readOnly: "Read-only: Claude Code refuses edits and writes",
   readOnlyTests: "Read-only, except the repository's tests: Claude Code refuses edits and other writes",
-  readOnlyNote: "Claude Code refuses file edits, the commands listed and any command not allowed above, whatever your own permission mode. It reads none of your or the repository's Claude settings and loads none of your MCP servers, so their allow rules don't apply.",
+  readOnlyNote: "Claude Code refuses file edits and every command the rules above don't allow, whatever your own permission mode. It reads none of your or the repository's Claude settings and loads none of your MCP servers, so their allow rules don't apply.",
   readOnlyTestsNote: "The repository's tests run as the repository wrote them, so their code can write inside the run's worktree.",
   readOnlySteps: "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself refuses their file edits and writing commands, and they run without your own or the repository's Claude settings. Review and Verify may run the repository's tests, whose code runs as written. A Build changes code in its worktree, and what it is told about Jira and pushing is a request, not a lock.",
   receives: "The prompt, the focus note and the ticket text below are exactly what the agent receives.",
@@ -37,7 +37,7 @@ export const MAY_TOUCH: readonly MayTouch[] = [
 export const MAY_TOUCH_READ_ONLY: readonly MayTouch[] = [
   { tone: "yes", title: "Starts in its own worktree.", text: "Your own checkout and branch are not changed by the launch. It may read any other file you can." },
   { tone: "yes", title: "Runs only what is listed:", text: "Claude Code's own read-only commands and the exact commands allowed above. Your Claude settings, allowed commands and MCP servers don't apply." },
-  { tone: "no", title: "Pushing a branch, opening a PR, network commands:", text: "refused. A read-only step never stops to ask you; it says in its answer what was refused." },
+  { tone: "no", title: "Pushing a branch, opening a PR, network commands:", text: "refused unless approved. The exceptions are the exact fetches allowed above, such as `git fetch origin <base>`, and Claude Code's own read-only GitHub commands, such as `gh pr view`. A read-only step never stops to ask you; it says in its answer what was refused." },
   { tone: "no", title: "Writing to Jira:", text: "the agent is told not to, and to send anything for Jira back to you. It loads none of your MCP servers, and anything for Jira reaches it only as a draft you approve." },
 ];
 
@@ -301,6 +301,16 @@ export interface LaunchExtras {
 
 /** Where the run-report config file goes; Gossamr writes it as the run launches. */
 export const REPORT_CONFIG_SHOWN = "<run-report config, written at launch>";
+
+/**
+ * How the setup sheet offers the launch command. Without the report tool it is the exact command and can be copied.
+ * With it, the `--mcp-config` path is `REPORT_CONFIG_SHOWN`: the file, with a key for that run only, exists only once the
+ * run launches, so the command is labelled illustrative and offered without Copy.
+ */
+export function commandShown(report: LaunchExtras["report"]): { summary: string; copy: boolean; note: string | null } {
+  if (!report) return { summary: "Show the exact command", copy: true, note: null };
+  return { summary: "Show the command (illustrative)", copy: false, note: `Illustrative, so there is no Copy: ${REPORT_CONFIG_SHOWN} stands for the run-report config file, which Gossamr writes with a key for this run only as the run launches.` };
+}
 
 /**
  * The launch as a shell would read it, flag for flag as `SystemCli::launch` in runs/cli.rs builds it, with the guard

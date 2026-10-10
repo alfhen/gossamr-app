@@ -10,7 +10,7 @@ import { CLOSED_INLINE, InlineStartView, type InlineActions } from "./InlineStar
 import { RunSetupView, type SetupViewProps } from "./RunSetup";
 import { RunSheetView, type RunSheetActions } from "./RunSheet";
 import { AgentRow } from "./AgentRow";
-import { COPY, MAY_TOUCH_READ_ONLY, READ_ONLY_STEPS } from "./runSheetLogic";
+import { COPY, MAY_TOUCH_READ_ONLY, READ_ONLY_STEPS, REPORT_CONFIG_SHOWN } from "./runSheetLogic";
 
 // What the person is shown of the restriction Claude Code enforces on a read-only kind: the headline and the note where an
 // agent is started, the exact flags and rules in "What Gossamr adds for the model", the badge on the card, and the rules a
@@ -163,6 +163,19 @@ describe("the setup sheet's exact command", () => {
     expect(build).not.toContain("--permission-mode");
   });
 
+  it("offers the command exact and with Copy without the report tool, and illustrative with no Copy when it names the report config", () => {
+    const exact = setup(reviewOf({ kind: "investigate" }));
+    expect(exact).toContain("Show the exact command");
+    expect(exact).toContain('aria-label="Copy the command"');
+    expect(exact).not.toContain("data-command-illustrative");
+    const withReport = setup({ ...reviewOf({ kind: "investigate" }), report: { allowed: "mcp__run-report__report_result", guard: "Report sentence." } });
+    expect(withReport).toContain("Show the command (illustrative)");
+    expect(withReport).not.toContain("Show the exact command");
+    expect(withReport).toContain(`--mcp-config ${esc(`'${REPORT_CONFIG_SHOWN}'`)}`);
+    expect(withReport).not.toContain('aria-label="Copy the command"');
+    expect(/<p data-command-illustrative[^>]*>([^<]*)</.exec(withReport)?.[1]).toContain(esc(REPORT_CONFIG_SHOWN));
+  });
+
   it("tells the read-only steps of starting, which never stop for a permission prompt", () => {
     expect(setup(reviewOf({ kind: "investigate" }))).toContain(esc(READ_ONLY_STEPS[1]));
     expect(setup(reviewOf({ kind: "build" }))).not.toContain(esc(READ_ONLY_STEPS[1]));
@@ -194,7 +207,9 @@ describe("a run's sheet and card", () => {
   it("shows only a shield in a list row, so the title keeps its room", () => {
     const html = renderToStaticMarkup(<AgentRow run={run({ readOnly: brief.readOnly })} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
     const badge = /<span data-read-only="true"[^>]*>[\s\S]*?<\/span>/.exec(html)?.[0] ?? "";
-    expect(badge).toContain('aria-label="Read-only"');
+    expect(badge).toContain(`aria-label="${esc(COPY.readOnly)}"`);
+    const tested = renderToStaticMarkup(<AgentRow run={run({ spec: { ...run().spec, kind: "review" }, readOnly: reviewOf({ kind: "review", pr: 512, prSha: "abc1234" }).readOnly })} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    expect(/<span data-read-only="true"[^>]*>/.exec(tested)?.[0]).toContain(`aria-label="${esc(COPY.readOnlyTests)}"`);
     expect(badge).not.toMatch(/>Read-only</);
     expect(html).toMatch(/class="min-w-\[6ch\] truncate font-semibold"/);
     expect(renderToStaticMarkup(<AgentRow run={run({ readOnly: undefined })} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />)).not.toContain("data-read-only");

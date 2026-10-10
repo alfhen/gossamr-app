@@ -35,6 +35,8 @@ export const STOPPABLE: RunState[] = ["working", "needsAnswer", "needsPermission
 const TERMINAL: RunState[] = ["done", "failed", "stopped"];
 /** Why a run stopped while it waited for a slot, as `NOT_STARTED` in runs/control.rs. */
 export const NOT_STARTED = "Stopped before it started";
+/** Why no verify follows a review without a pinned commit, as `VERIFY_UNPINNED` in inbox/pip_runs.rs. */
+export const VERIFY_UNPINNED = "that review has no pull request pinned to the commit it read, so a verify after it would check the base branch instead of the change";
 /** Where `advance` takes a run next; states that wait on the person or have ended are absent from the walk's end. */
 const NEXT: Partial<Record<RunState, RunState>> = {
   queued: "launching",
@@ -1011,8 +1013,12 @@ export class MockRuns {
     const made = kind === "build" || kind === "review" ? this.chainSpec(source.item, kind, fromRun, null, workstream).spec : this.plainSpec(source.item, kind, fromRun, null, workstream, carried);
     let spec: RunSpec = { ...made, focus: null, focusFromRun: null };
     if (spec.kind === "build" && workstream) spec = { ...spec, allowPush: true };
-    // A verify after a passing review checks the pull request at the commit that review read, as `fill_chain_slots` does.
-    if (spec.kind === "verify" && source.spec.kind === "review" && source.spec.pr != null && source.spec.prSha) spec = { ...spec, pr: source.spec.pr, prSha: source.spec.prSha, base: source.spec.base };
+    // A verify after a passing review checks the pull request at the commit that review read, as `fill_chain_slots` does;
+    // a review with no pinned commit starts none, since the verify would check the base branch instead.
+    if (spec.kind === "verify" && source.spec.kind === "review") {
+      if (source.spec.pr == null || !source.spec.prSha) throw new Error(VERIFY_UNPINNED);
+      spec = { ...spec, pr: source.spec.pr, prSha: source.spec.prSha, base: source.spec.base };
+    }
     const problem = specProblem(spec, true);
     if (problem) throw new Error(problem);
     const proposal = this.proposals.fromRun({ type: "startRun", connectionId: CONNECTION, item: source.item, spec }, null, this.fromRun(source));
@@ -1448,6 +1454,8 @@ export class MockRuns {
     if (!this.known(spec.repo).some((c) => c.path === spec.clonePath)) return Promise.reject(new Error(`${spec.clonePath} isn't a git clone`));
     // A review's verdict is read by the app, so it always asks for the report, whoever drafts it.
     if (spec.kind === "review") spec = { ...spec, report: true };
+    // Only a verify that follows a review reads a pull request, the one the review read; never one a caller names, as `Core::draft_run`.
+    if (spec.kind === "verify") spec = { ...spec, pr: null, prSha: null };
     if (spec.report && spec.kind !== "review" && !this.limits.reportResult) return Promise.reject(new Error("Reporting through Gossamr is off. Turn it on in Settings > Agents, or untick it for this run."));
     let carried: Pick<RunSpec, "plan" | "planFromRun" | "planApproved"> = { plan: null, planFromRun: null, planApproved: false };
     if (spec.planFromRun) {

@@ -149,13 +149,13 @@ export function CopyButton({ text, label = "Copy", what, onCopied }: { text: str
   );
 }
 
-export function CodeBox({ text, what, wrap = false, onCopied }: { text: string; what: string; wrap?: boolean; onCopied?(): void }) {
+export function CodeBox({ text, what, wrap = false, copy = true, onCopied }: { text: string; what: string; wrap?: boolean; copy?: boolean; onCopied?(): void }) {
   return (
     <div className="flex items-start gap-2 rounded-md border border-ws-sep bg-ws-bar py-1 pr-1 pl-2.5">
       <code className={`selectable min-w-0 flex-1 py-0.5 font-mono text-sm text-ws-ink ${wrap ? "break-words whitespace-pre-wrap" : "truncate"}`} title={wrap ? undefined : text}>
         {text}
       </code>
-      <CopyButton text={text} what={what} onCopied={onCopied} />
+      {copy && <CopyButton text={text} what={what} onCopied={onCopied} />}
     </div>
   );
 }
