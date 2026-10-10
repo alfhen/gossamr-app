@@ -632,6 +632,45 @@ async fn a_wake_is_charged_for_the_turn_the_queue_made_of_it_whatever_it_saw_fir
     assert_eq!(*queue.asked.lock().unwrap(), [false, true, true]);
 }
 
+/// A wake queue whose wakes all fail with `error`.
+struct Failing(&'static str);
+
+#[async_trait]
+impl WakeQueue for Failing {
+    fn alive(&self) -> bool {
+        true
+    }
+    async fn wake(&self, _ws: &str, _facts: WakeFacts, _sink: UpdateSink, _may_merge: bool) -> crate::error::Result<bool> {
+        Err(crate::error::Error::Claude(self.0.into()))
+    }
+    fn has_waiting_wake(&self, _conversation: &str) -> bool {
+        false
+    }
+    async fn cancel_workstream_wakes(&self, _ws: &str) {}
+}
+
+#[tokio::test]
+async fn a_wake_pip_was_gone_for_gives_its_facts_back_and_one_that_failed_otherwise_keeps_them() {
+    let dropped = |actions: Vec<(Actor, String, Option<String>)>| actions.into_iter().filter(|(_, a, _)| a == "wake_dropped").count();
+
+    // Pip shut down between the supervisor's look and the wake: nothing was queued, so the next sweep wakes for it.
+    let t = setup().await;
+    let sup = Supervisor::new(CoreFacade::new(t.fx.core.clone()), Arc::new(AgentSettings::default), Arc::new(|_, _| {}), Arc::new(|_| {}));
+    sup.bind_queue(Arc::new(Failing(PIP_NOT_RUNNING)));
+    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    sup.clone().on_run(r1, Attention::Done).await;
+    assert_eq!(t.wakes().await.len(), 1);
+    assert_eq!(dropped(t.actions().await), 1, "the fact is taken back");
+
+    // Any other failure is the queued wake's own to report and retry.
+    let t = setup().await;
+    let sup = Supervisor::new(CoreFacade::new(t.fx.core.clone()), Arc::new(AgentSettings::default), Arc::new(|_, _| {}), Arc::new(|_| {}));
+    sup.bind_queue(Arc::new(Failing("couldn't start the turn")));
+    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    sup.clone().on_run(r1, Attention::Done).await;
+    assert_eq!(dropped(t.actions().await), 0);
+}
+
 #[tokio::test]
 async fn twelve_wakes_hold_and_today_s_cap_holds_across_workstreams() {
     let t = setup().await;

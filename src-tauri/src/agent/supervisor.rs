@@ -675,6 +675,9 @@ pub trait WakeQueue: Send + Sync {
     async fn cancel_workstream_wakes(&self, ws_id: &str);
 }
 
+/// Why a wake couldn't be queued at all: Pip's agent service was gone by the time it was asked.
+const PIP_NOT_RUNNING: &str = "Pip isn't running";
+
 /// Pip's agent service as a `WakeQueue`, held weakly since the service outlives nothing it is bound to.
 struct Wakes(Weak<AgentService>);
 
@@ -685,7 +688,7 @@ impl WakeQueue for Wakes {
     }
 
     async fn wake(&self, ws_id: &str, facts: WakeFacts, sink: UpdateSink, may_merge: bool) -> Result<bool> {
-        let agent = self.0.upgrade().ok_or_else(|| Error::Claude("Pip isn't running".into()))?;
+        let agent = self.0.upgrade().ok_or_else(|| Error::Claude(PIP_NOT_RUNNING.into()))?;
         agent.wake(ws_id, facts, sink, may_merge).await
     }
 
@@ -986,14 +989,21 @@ impl Supervisor {
         let facts = WakeFacts { workstream: ws_id.to_string(), facts: admitted.facts };
         let sink = self.sink(&conversation, facts.clone());
         // A wake charged as a turn of its own stays one; one admitted to merge that found nothing waiting is charged now.
-        match agent.wake(ws_id, facts, sink, !spend).await {
+        match agent.wake(ws_id, facts.clone(), sink, !spend).await {
             Ok(false) if !spend => match self.core.charge_wake(scope, ws_id, now).await {
                 Ok(true) => (self.changed)(connection),
                 Ok(false) => {}
                 Err(e) => eprintln!("couldn't count a wake in workstream {ws_id}: {e}"),
             },
             Ok(_) => {}
-            Err(e) => eprintln!("couldn't wake Pip in workstream {ws_id}: {e}"),
+            Err(e) => {
+                // Never queued, so no sink will take the facts back: they wait for the next sweep. A wake that was
+                // queued and then failed has its sink for that, the quota retry among it.
+                if matches!(&e, Error::Claude(m) if m == PIP_NOT_RUNNING) {
+                    self.unmark(facts).await;
+                }
+                eprintln!("couldn't wake Pip in workstream {ws_id}: {e}");
+            }
         }
     }
 
