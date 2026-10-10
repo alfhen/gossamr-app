@@ -289,7 +289,11 @@ function registerWake(requestId: string, e: ClaudeEvent, conversation: string, p
   const { byTicket } = useClaude.getState();
   const conv = byTicket[conversation] ?? empty;
   useClaude.setState({ byTicket: { ...byTicket, [conversation]: { ...conv, turns: [...conv.turns, turn] } } });
-  if (prompt !== undefined) return;
+  if (prompt === undefined) readWakePrompt(requestId, conversation);
+}
+
+/** Shows wake turn `requestId`'s event lines as its stored turn has them now. */
+function readWakePrompt(requestId: string, conversation: string) {
   const mine = generation;
   void claude
     .turns(conversation)
@@ -297,7 +301,7 @@ function registerWake(requestId: string, e: ClaudeEvent, conversation: string, p
     .then((stored) => {
       const kept = stored.find((t) => t.requestId === requestId);
       if (!kept || mine !== generation) return;
-      updateByRequest(requestId, (c) => ({ ...c, turns: c.turns.map((t) => (t.requestId === requestId && !t.prompt ? { ...t, prompt: kept.prompt } : t)) }));
+      updateByRequest(requestId, (c) => ({ ...c, turns: c.turns.map((t) => (t.requestId === requestId && t.kind === "wake" ? { ...t, prompt: kept.prompt } : t)) }));
     });
 }
 
@@ -318,6 +322,9 @@ export function onClaudeEvent(requestId: string, e: ClaudeEvent, meta?: EventMet
   } else if (wake && meta.prompt) {
     // More wakes were merged into this one while it waited.
     updateByRequest(requestId, (c) => ({ ...c, turns: c.turns.map((t) => (t.requestId === requestId && t.kind === "wake" ? { ...t, prompt: meta.prompt! } : t)) }));
+  } else if (wake && e.type === "queued") {
+    // The app says it waits again when more wakes were merged into it, and keeps the merged lines with the turn.
+    readWakePrompt(requestId, meta.conversation!);
   }
   updateByRequest(requestId, (c) => applyEvent(c, requestId, e));
   if (e.type === "done" && restoredLive.has(requestId)) settle(requestId);

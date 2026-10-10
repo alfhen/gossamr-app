@@ -365,15 +365,18 @@ export class MockWorkstreams {
 
   /**
    * The person wrote in the workstream's conversation, as `person_wrote_in_workstream` records it: the automatic turns
-   * count from zero again (`budget_reset`), and a hold for a used-up budget is lifted. Only a person's message does this.
+   * count from zero again (`budget_reset`), and a hold for a used-up budget is lifted unless the wakes still use it up.
+   * Only a person's message does this.
    */
   personWrote(id: string) {
     const ws = this.all.find((w) => w.id === id && w.closedAt === null);
     if (!ws) return;
     const reset = ws.spent.autoTurns > 0;
-    const resumed = ws.heldReason === HELD_BUDGET;
+    const spent = { ...ws.spent, autoTurns: 0 };
+    // The wakes may still use the budget up, and then the hold stays.
+    const resumed = ws.heldReason === HELD_BUDGET && budgetLevel({ ...ws, spent }) !== "spent";
     if (!reset && !resumed) return;
-    this.put({ ...ws, heldReason: resumed ? null : ws.heldReason, spent: { ...ws.spent, autoTurns: 0 } });
+    this.put({ ...ws, heldReason: resumed ? null : ws.heldReason, spent });
     if (resumed) this.append(id, "person", "resumed", { detail: HELD_BUDGET });
     if (reset) this.append(id, "person", "budget_reset", { detail: "message" });
     this.save();

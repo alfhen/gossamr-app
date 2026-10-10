@@ -11,6 +11,7 @@ import { useActivity } from "./activityStore";
 import { CANVASES } from "./canvases";
 import { useStepKeys } from "./browse";
 import { itemKey, usesCode, withoutCode } from "../lib/filter";
+import { isTypingTarget } from "../lib/keyboard";
 import { workspaceTicketLinks } from "./jump";
 import { workConnections } from "./domains";
 import { FilterBar } from "./FilterBar";
@@ -91,7 +92,8 @@ function useStartOnPipHome(ready: boolean) {
 function useGlobalKeys(agentsEnabled: boolean) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (agentsEnabled && isHoldAllKey(ev)) {
+      // Not while typing: the shortcut must never fire from Pip's input or any other field.
+      if (agentsEnabled && isHoldAllKey(ev) && !isTypingTarget(document.activeElement)) {
         ev.preventDefault();
         void useWorkstreams.getState().holdAll();
         return;

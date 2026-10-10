@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::autostart::{self, Decision, PullHead, ReportFacts, RuleInput, Slots};
-use super::{AgentEvent, AgentService, RunPlanner, Update, UpdateSink, WAKE_HELD};
+use super::{AgentEvent, AgentService, RunPlanner, Update, UpdateSink, WAKE_HELD, WAKE_NOT_STARTED};
 use crate::auth::Scope;
 use crate::config::AgentSettings;
 use crate::domain::workstream::{budget_level, run_labels, BudgetLevel, Mode, Rule, HELD_BUDGET, HELD_DAILY, HELD_QUOTA};
@@ -675,6 +675,9 @@ pub trait WakeQueue: Send + Sync {
     async fn cancel_workstream_wakes(&self, ws_id: &str);
 }
 
+/// Why a wake couldn't be queued at all: Pip's agent service was gone by the time it was asked.
+const PIP_NOT_RUNNING: &str = "Pip isn't running";
+
 /// Pip's agent service as a `WakeQueue`, held weakly since the service outlives nothing it is bound to.
 struct Wakes(Weak<AgentService>);
 
@@ -685,7 +688,7 @@ impl WakeQueue for Wakes {
     }
 
     async fn wake(&self, ws_id: &str, facts: WakeFacts, sink: UpdateSink, may_merge: bool) -> Result<bool> {
-        let agent = self.0.upgrade().ok_or_else(|| Error::Claude("Pip isn't running".into()))?;
+        let agent = self.0.upgrade().ok_or_else(|| Error::Claude(PIP_NOT_RUNNING.into()))?;
         agent.wake(ws_id, facts, sink, may_merge).await
     }
 
@@ -986,14 +989,21 @@ impl Supervisor {
         let facts = WakeFacts { workstream: ws_id.to_string(), facts: admitted.facts };
         let sink = self.sink(&conversation, facts.clone());
         // A wake charged as a turn of its own stays one; one admitted to merge that found nothing waiting is charged now.
-        match agent.wake(ws_id, facts, sink, !spend).await {
+        match agent.wake(ws_id, facts.clone(), sink, !spend).await {
             Ok(false) if !spend => match self.core.charge_wake(scope, ws_id, now).await {
                 Ok(true) => (self.changed)(connection),
                 Ok(false) => {}
                 Err(e) => eprintln!("couldn't count a wake in workstream {ws_id}: {e}"),
             },
             Ok(_) => {}
-            Err(e) => eprintln!("couldn't wake Pip in workstream {ws_id}: {e}"),
+            Err(e) => {
+                // A wake that failed to start was told through its sink, which takes the facts back or retries on
+                // the quota. Any other error came before the sink was ever called, so the facts go back here.
+                if !matches!(&e, Error::Claude(m) if m.starts_with(WAKE_NOT_STARTED)) {
+                    self.unmark(facts).await;
+                }
+                eprintln!("couldn't wake Pip in workstream {ws_id}: {e}");
+            }
         }
     }
 
@@ -1177,6 +1187,9 @@ impl Supervisor {
                 } else if message.as_deref().is_some_and(is_quota_error) {
                     let facts = facts.clone();
                     tokio::spawn(async move { me.on_quota(facts).await });
+                } else if message.as_deref().is_some_and(|m| m.starts_with(WAKE_NOT_STARTED)) {
+                    let facts = facts.clone();
+                    tokio::spawn(async move { me.unmark(facts).await });
                 }
             }
             emit(&conversation, u);
@@ -1221,7 +1234,9 @@ impl Supervisor {
         });
     }
 
-    /// The retry after a quota miss: lifts the quota hold, if that is still what holds it, and wakes Pip again.
+    /// The retry after a quota miss: lifts the quota hold, if that is still what holds it, and wakes Pip again. Held
+    /// for something else, the facts are let go of, so setting it going wakes Pip for them; no longer held (the person
+    /// set it going before the backoff ran out), they are delivered all the same.
     async fn retry(&self, facts: WakeFacts) {
         let ws = facts.workstream.clone();
         if let Some(q) = self.quota.lock().expect("lock poisoned").get_mut(&ws) {
@@ -1230,7 +1245,16 @@ impl Supervisor {
         let Ok(scope) = self.core.scope().await else { return };
         match self.core.lift_workstream_hold(&scope, &ws, HELD_QUOTA).await {
             Ok(Some(lifted)) => (self.changed)(&lifted.connection_id),
-            Ok(None) => return,
+            Ok(None) => {
+                let held = match self.core.workstream(&scope, &ws).await {
+                    Ok(view) => view.is_none_or(|v| v.workstream.held_reason.is_some()),
+                    Err(_) => true,
+                };
+                if held {
+                    self.unmark(facts).await;
+                    return;
+                }
+            }
             Err(e) => {
                 eprintln!("couldn't lift the quota hold of workstream {ws}: {e}");
                 return;

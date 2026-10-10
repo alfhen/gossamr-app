@@ -365,6 +365,19 @@ describe("wake turns", () => {
     await vi.waitFor(() => expect(useClaude.getState().byTicket["ws:w1"].turns[0].prompt).toBe(wake.prompt));
   });
 
+  it("reads the merged event lines from the stored turn when the app says a known wake waits again", async () => {
+    const meta = { conversation: "ws:w1", kind: "wake" as const };
+    const merged = `${wake.prompt}\n[Event] run r10 (plan) Done`;
+    vi.spyOn(claude, "turns")
+      .mockResolvedValueOnce([stored("wake-5", { conversation: "ws:w1", prompt: wake.prompt, kind: "wake", status: "queued" })])
+      .mockResolvedValueOnce([stored("wake-5", { conversation: "ws:w1", prompt: merged, kind: "wake", status: "queued" })]);
+    onClaudeEvent("wake-5", { type: "queued", ahead: 1 }, meta);
+    await vi.waitFor(() => expect(useClaude.getState().byTicket["ws:w1"].turns[0].prompt).toBe(wake.prompt));
+    onClaudeEvent("wake-5", { type: "queued", ahead: 1 }, meta);
+    await vi.waitFor(() => expect(useClaude.getState().byTicket["ws:w1"].turns[0].prompt).toBe(merged));
+    expect(useClaude.getState().byTicket["ws:w1"].turns).toHaveLength(1);
+  });
+
   it("still drops events of a person's turn it doesn't know, and keeps a stored wake's kind", async () => {
     onClaudeEvent("stranger", { type: "text", text: "lost" });
     onClaudeEvent("stranger", { type: "text", text: "lost" }, { conversation: "ws:w1", kind: "user" });
