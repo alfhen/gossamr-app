@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hunkLinesAround } from "../lib/diffHunks";
-import { REVIEW_OUTDATED_NOTE } from "../lib/proposals";
+import { REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
 import type { Proposal, ReviewAccess } from "../types";
 import { DraftCard } from "./DraftCard";
 import { usePullView, type PullDiffState } from "./pullViewStore";
@@ -149,6 +149,19 @@ describe("a GitHub review draft's card", () => {
     const outdated = render(draft({ error: REVIEW_OUTDATED_NOTE }), canPost, sample("b2b2c3c3d4d4"));
     expect(outdated).toMatch(/data-review-outdated[^>]*>Outdated</);
     expect(outdated).toMatch(/role="alert"[^>]*>GitHub says this review&#x27;s lines no longer match/);
+  });
+
+  it("says a review may already be on GitHub, and offers Post anyway only once Gossamr looked and didn't find it", () => {
+    const sent = { at: "2026-10-01T10:01:00Z", commitSha: "a1b2c3d4e5f6", summary: intent.summary, checkedAt: null };
+    const unsure = render(draft({ maybePosted: sent }), canPost);
+    expect(unsure).toMatch(/data-review-maybe-posted[^>]*>This review may already be on GitHub: Gossamr sent it at a1b2c3d4/);
+    expect(unsure).not.toContain("Post anyway");
+    expect(unsure).toMatch(/<button[^>]*>Post review<\/button>/);
+    const checked = render(draft({ maybePosted: { ...sent, checkedAt: "2026-10-01T10:02:00Z" }, error: REVIEW_NOT_FOUND_NOTE }), canPost);
+    expect(checked).toMatch(/<button[^>]*data-review-post-anyway[^>]*>Post anyway<\/button>/);
+    expect(checked).toContain("If it isn&#x27;t there, Post anyway sends it.");
+    expect(render(draft({ maybePosted: { ...sent, checkedAt: "2026-10-01T10:02:00Z" } }), cantPost)).not.toContain("Post anyway");
+    expect(render(draft(), canPost)).not.toContain("data-review-maybe-posted");
   });
 
   it("with a token that can't post, has no Post review, says why, and its Open PR view opens the pull request view with this draft", () => {

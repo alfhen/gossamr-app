@@ -1,14 +1,14 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
-import { capRefusal, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_OUTDATED_NOTE, reviewEditProblem, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
+import { capRefusal, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
 import { commentable } from "../lib/diffHunks";
 import { followUpProblem } from "../workspace/followUp";
 import { answerProblem } from "../lib/answer";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { planSectionOf } from "./mockPlanSection";
 import { readStored, writeStored } from "../workspace/storage";
-import { ReviewOutdatedError } from "./mockGithub";
-import type { ChangedFile, Intent, ItemRef, PostedReview, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, ReviewComment, WorkItemKind, WorkstreamActor } from "../types";
+import { AnswerLostError, ReviewOutdatedError } from "./mockGithub";
+import type { ChangedFile, Intent, ItemRef, MaybePosted, PostedReview, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, ReviewComment, WorkItemKind, WorkstreamActor } from "../types";
 
 /** A description update carrying a `Gossamr Plan` section that an agent run left: the plan a build follows once the person approves it. As `is_run_plan_rewrite` in `proposals.rs`. */
 export const isRunPlanRewrite = (p: Proposal) => p.origin.type === "run" && p.intent.type === "rewrite" && !!p.intent.body && !!planSectionOf(p.intent.body.to);
@@ -451,23 +451,47 @@ export class MockProposals {
   /**
    * Posts a pending review draft with `post`, as `Core::post_review_draft`: refused when it has other than the `seen`
    * revisions the person looked at, claimed first, so it goes at most once, and never through the tracker. A refusal leaves
-   * it pending with the reason, or `REVIEW_OUTDATED_NOTE` when GitHub found its lines outdated.
+   * it pending with the reason, or `REVIEW_OUTDATED_NOTE` when GitHub found its lines outdated. A post whose answer was
+   * lost stays as `maybePosted`, which edits leave alone; while it is set nothing is sent: `find` looks for it on GitHub,
+   * and when it isn't found the draft waits with `REVIEW_NOT_FOUND_NOTE` until the person chooses `postAnyway`.
    */
-  async postReview(id: string, seen: number, post: (p: Proposal & { intent: Extract<Intent, { type: "githubReview" }> }) => Promise<PostedReview>) {
+  async postReview(
+    id: string,
+    seen: number,
+    post: (p: Proposal & { intent: Extract<Intent, { type: "githubReview" }> }) => Promise<PostedReview>,
+    find: (p: Proposal & { intent: Extract<Intent, { type: "githubReview" }> }, sent: MaybePosted) => Promise<PostedReview | null>,
+    postAnyway = false,
+  ) {
     const p = this.pending(id);
     if (p.revisions.length !== seen) throw new Error(REVIEW_CHANGED);
     if (p.intent.type !== "githubReview") throw new Error("only a review draft is posted to GitHub");
     const review = { ...p, intent: p.intent };
-    this.set(id, { state: { type: "applying" }, error: null });
-    try {
-      const posted = await post(review);
-      const applied = this.set(id, { state: { type: "applied" }, posted, error: null });
+    const lookFor = postAnyway ? null : (p.maybePosted ?? null);
+    // What is about to be sent is kept with the claim, so it is looked for should no answer come.
+    const sending: MaybePosted | null = lookFor ?? { at: new Date().toISOString(), commitSha: p.intent.commitSha, summary: p.intent.summary, checkedAt: null };
+    this.set(id, { state: { type: "applying" }, error: null, maybePosted: sending });
+    const posted = (found: PostedReview) => {
+      const applied = this.set(id, { state: { type: "applied" }, posted: found, error: null, maybePosted: null });
       this.audit(applied, "person", "draft_approved");
-      this.audit(applied, "person", "review_posted", `${p.intent.repo}#${p.intent.number} review ${posted.id}`);
+      this.audit(applied, "person", "review_posted", `${review.intent.repo}#${review.intent.number} review ${found.id}`);
       return applied;
+    };
+    if (lookFor) {
+      let why = REVIEW_NOT_FOUND_NOTE;
+      try {
+        const found = await find(review, lookFor);
+        if (found) return posted(found);
+      } catch (e) {
+        why = `${REVIEW_MAYBE_POSTED_NOTE} Gossamr couldn't check just now (${e instanceof Error ? e.message : String(e)}). Try again, or check the pull request and choose Post anyway.`;
+      }
+      return this.set(id, { state: { type: "pending" }, error: why, maybePosted: { ...lookFor, checkedAt: new Date().toISOString() } });
+    }
+    try {
+      return posted(await post(review));
     } catch (e) {
+      if (e instanceof AnswerLostError) return this.set(id, { state: { type: "pending" }, error: `${REVIEW_MAYBE_POSTED_NOTE} (${e.message})` });
       const error = e instanceof ReviewOutdatedError ? REVIEW_OUTDATED_NOTE : e instanceof Error ? e.message : String(e);
-      return this.set(id, { state: { type: "pending" }, error });
+      return this.set(id, { state: { type: "pending" }, error, maybePosted: null });
     }
   }
 

@@ -8,7 +8,7 @@ use super::run_results::label_of;
 use super::Core;
 use crate::codehost::diff::{commentable, parse_where, relative_path};
 use crate::domain::{
-    clip, without_markers, Actor, Basis, ChangedFile, CreatedBy, DiffSide, Intent, Origin, Proposal, ProposalQuery, ProposalState, ReviewComment, Run, RunKind,
+    clip, without_markers, Actor, Basis, ChangedFile, CreatedBy, DiffSide, Intent, MaybePosted, Origin, Proposal, ProposalQuery, ProposalState, ReviewComment, Run, RunKind,
     RunState, WorkstreamEvent,
 };
 use crate::auth::Scope;
@@ -19,17 +19,16 @@ use crate::proposals::{self, Draft, REVIEW_COMMENTS_MAX, REVIEW_COMMENT_LIMIT, R
 /// exact text as the draft being outdated.
 pub const REVIEW_OUTDATED_NOTE: &str =
     "GitHub says this review's lines no longer match the pull request; it is outdated. Discard it or edit the comments and try again.";
-/// The error a review draft keeps when a post may have reached GitHub though no answer said so. Its next post looks for
-/// the review on GitHub first. The card reads text starting with this as the review maybe being there already.
+/// The error a review draft keeps when a post may have reached GitHub though no answer said so. The draft keeps that
+/// post as `maybe_posted`, and its next post looks for it on GitHub first.
 pub const REVIEW_MAYBE_POSTED_NOTE: &str = "GitHub may have posted this review already; Gossamr checks the pull request before sending it again.";
+/// Why a review that may be on GitHub already isn't sent again: Gossamr looked and didn't find it, which doesn't prove it
+/// isn't there. Only the person's choice to post anyway sends it.
+pub const REVIEW_NOT_FOUND_NOTE: &str =
+    "Gossamr looked on the pull request and didn't find the review it may have posted. Check the pull request; if the review isn't there, choose Post anyway to send it.";
 /// Why a post of a review draft that changed since the person looked at it is refused.
 pub const REVIEW_CHANGED: &str = "this review changed since you looked at it; read it again before posting";
 use crate::runs::report::{Finding, ReviewVerdict, Severity, FINDING_TEXT_LIMIT};
-
-/// Whether a draft's error says its last post may have gone through: noted so here, or left posting when Gossamr closed.
-fn maybe_posted(error: &str) -> bool {
-    error.starts_with(REVIEW_MAYBE_POSTED_NOTE) || error == crate::db::INTERRUPTED_NOTE
-}
 
 /// Whether a failed post may still have reached GitHub: the request may have been sent (anything in transit but a
 /// refused connection), GitHub failed on its side, or it answered with success in words that don't read.
@@ -232,21 +231,29 @@ impl Core {
     /// which anything is written to GitHub. `seen` is how many revisions the draft had when the person looked at it: one
     /// revised since (by Pip, say) is refused, so only what they read is posted. The draft is claimed first, so it is
     /// posted at most once. It never goes through the tracker. A refusal leaves it pending with the reason as its error;
-    /// GitHub saying its lines no longer match marks it outdated (`REVIEW_OUTDATED_NOTE`). A post whose outcome isn't
-    /// known (a failure in transit, a 5xx, an answer that doesn't read) is noted as maybe posted (`REVIEW_MAYBE_POSTED_NOTE`),
-    /// and the next attempt first looks on GitHub for the review it may have left, which is then recorded as posted
-    /// instead of being sent again.
-    pub async fn post_review_draft(&self, id: &str, seen: usize) -> Result<Proposal> {
+    /// GitHub saying its lines no longer match marks it outdated (`REVIEW_OUTDATED_NOTE`).
+    ///
+    /// A post whose outcome isn't known (a failure in transit, a 5xx, an answer that doesn't read, or Gossamr closing
+    /// while it was out) stays on the draft as `maybe_posted`, which edits and revisions leave alone. While it is set,
+    /// posting sends nothing: it looks on GitHub for that post (the commit and summary it was sent with) and records it as
+    /// posted when found; when not found, or when GitHub can't be asked, the draft stays pending and says so
+    /// (`REVIEW_NOT_FOUND_NOTE`). Only `post_anyway`, the person's explicit choice, then sends it again.
+    pub async fn post_review_draft(&self, id: &str, seen: usize, post_anyway: bool) -> Result<Proposal> {
         let scope = self.scope().await?;
-        let (claimed, unsure) = self
+        let (claimed, look_for) = self
             .with_db_for(&scope, |db| {
                 let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
                 if current.state == ProposalState::Pending && current.revisions.len() != seen {
                     return Err(Error::Proposal(REVIEW_CHANGED.into()));
                 }
-                let unsure = current.error.as_deref().is_some_and(maybe_posted);
-                match db.begin_posting_review(id, Utc::now())? {
-                    Some(p) => Ok((p, unsure)),
+                let look_for = current.maybe_posted.clone().filter(|_| !post_anyway);
+                // What is about to be sent is kept with the claim, so it is looked for should no answer come.
+                let sending = match (&look_for, &current.intent) {
+                    (None, Intent::GithubReview { commit_sha, summary, .. }) => Some(MaybePosted { at: Utc::now(), commit_sha: commit_sha.clone(), summary: summary.clone(), checked_at: None }),
+                    _ => None,
+                };
+                match db.begin_posting_review(id, Utc::now(), sending)? {
+                    Some(p) => Ok((p, look_for)),
                     None => Err(proposals::not_pending(&current)),
                 }
             })
@@ -254,15 +261,16 @@ impl Core {
         let Intent::GithubReview { connection_id, repo, number, commit_sha, summary, comments, .. } = &claimed.intent else {
             unreachable!("only a review draft is claimed for posting")
         };
-        let posted = match self.code_host(connection_id).await {
-            Ok(host) if unsure => match host.posted_review(repo, *number, commit_sha, summary).await {
+        let posted = match (self.code_host(connection_id).await, &look_for) {
+            // Nothing is sent while it can't be told whether the last attempt went through.
+            (Ok(host), Some(sent)) => match host.posted_review(repo, *number, &sent.commit_sha, &sent.summary).await {
                 Ok(Some(review)) => Ok(review),
-                Ok(None) => host.post_review(repo, *number, commit_sha, summary, comments).await,
-                // Nothing is sent while it can't be told whether the last attempt went through.
-                Err(e) => Err(Error::Proposal(format!("{REVIEW_MAYBE_POSTED_NOTE} Gossamr couldn't check just now ({e})."))),
+                Ok(None) => Err(Error::Proposal(REVIEW_NOT_FOUND_NOTE.into())),
+                Err(e) => Err(Error::Proposal(format!("{REVIEW_MAYBE_POSTED_NOTE} Gossamr couldn't check just now ({e}). Try again, or check the pull request and choose Post anyway."))),
             },
-            Ok(host) => host.post_review(repo, *number, commit_sha, summary, comments).await,
-            Err(e) => Err(e),
+            (Ok(host), None) => host.post_review(repo, *number, commit_sha, summary, comments).await,
+            (Err(e), Some(_)) => Err(Error::Proposal(format!("{REVIEW_MAYBE_POSTED_NOTE} Gossamr couldn't check just now ({e}). Try again, or check the pull request and choose Post anyway."))),
+            (Err(e), None) => Err(e),
         };
         let label = format!("{repo}#{number}");
         self.with_db_for(&scope, |db| {
@@ -272,7 +280,7 @@ impl Core {
             match posted {
                 Ok(review) => {
                     let detail = format!("{label} review {}", review.id);
-                    (p.state, p.error, p.posted) = (ProposalState::Applied, None, Some(review));
+                    (p.state, p.error, p.posted, p.maybe_posted) = (ProposalState::Applied, None, Some(review), None);
                     db.save_proposal(&p)?;
                     proposals::record(db, &p, Actor::Person, "draft_approved", at);
                     if let Some(ws) = p.workstream().filter(|ws| db.workstream(ws).ok().flatten().is_some()) {
@@ -281,18 +289,27 @@ impl Core {
                         }
                     }
                 }
-                Err(Error::ReviewOutdated(said)) => {
-                    eprintln!("GitHub refused review draft {id} on {label} as outdated: {said}");
-                    (p.state, p.error) = (ProposalState::Pending, Some(REVIEW_OUTDATED_NOTE.into()));
+                // Looked for and not found, or not looked for: it stays maybe posted, now checked, for the person to decide.
+                Err(e) if look_for.is_some() => {
+                    eprintln!("review draft {id} on {label} may be on GitHub already and wasn't sent again: {e}");
+                    let checked = look_for.map(|sent| MaybePosted { checked_at: Some(at), ..sent });
+                    (p.state, p.error, p.maybe_posted) = (ProposalState::Pending, Some(e.to_string()), checked);
                     db.save_proposal(&p)?;
                 }
+                // GitHub refused it, so it isn't there.
+                Err(Error::ReviewOutdated(said)) => {
+                    eprintln!("GitHub refused review draft {id} on {label} as outdated: {said}");
+                    (p.state, p.error, p.maybe_posted) = (ProposalState::Pending, Some(REVIEW_OUTDATED_NOTE.into()), None);
+                    db.save_proposal(&p)?;
+                }
+                // What was sent stays as `maybe_posted`, kept with the claim.
                 Err(e) if outcome_unknown(&e) => {
                     eprintln!("posting review draft {id} on {label} may have gone through: {e}");
                     (p.state, p.error) = (ProposalState::Pending, Some(format!("{REVIEW_MAYBE_POSTED_NOTE} ({e})")));
                     db.save_proposal(&p)?;
                 }
                 Err(e) => {
-                    (p.state, p.error) = (ProposalState::Pending, Some(e.to_string()));
+                    (p.state, p.error, p.maybe_posted) = (ProposalState::Pending, Some(e.to_string()), None);
                     db.save_proposal(&p)?;
                 }
             }
@@ -565,7 +582,7 @@ mod tests {
         let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
         let p = drafted(&fx).await;
         assert!(posts(&fx).is_empty(), "drafting posts nothing");
-        let done = fx.core.post_review_draft(&p.id, p.revisions.len()).await.unwrap();
+        let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
         assert_eq!((done.state.clone(), done.error.clone()), (ProposalState::Applied, None));
         let posted = done.posted.clone().expect("posted");
         assert_eq!((posted.id, posted.url.as_str()), (77, "https://github.com/acme/webshop/pull/12#pullrequestreview-77"));
@@ -586,8 +603,8 @@ mod tests {
         assert!(err.to_string().contains("posted to GitHub with its own button"), "{err}");
         assert!(posts(&fx).is_empty() && fx.tracker.intents().is_empty(), "the approval path sends nothing");
         assert_eq!(fx.core.proposal(&p.id).await.unwrap().unwrap().state, ProposalState::Pending, "and leaves the draft as it was");
-        fx.core.post_review_draft(&p.id, p.revisions.len()).await.unwrap();
-        let again = fx.core.post_review_draft(&p.id, p.revisions.len()).await.unwrap_err();
+        fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
+        let again = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap_err();
         assert!(again.to_string().contains("already been applied"), "{again}");
         assert_eq!(posts(&fx).len(), 1, "the second post sent nothing");
     }
@@ -596,7 +613,7 @@ mod tests {
     async fn only_a_review_draft_can_be_claimed_for_posting() {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let comment = fx.core.draft_as_user(Intent::Comment { item: fx.item("CA-1"), body: crate::domain::Doc::paragraph("hi") }, None).await.unwrap();
-        let err = fx.core.post_review_draft(&comment.id, 0).await.unwrap_err();
+        let err = fx.core.post_review_draft(&comment.id, 0, false).await.unwrap_err();
         assert!(err.to_string().contains("only a review draft"), "{err}");
         assert_eq!(fx.core.proposal(&comment.id).await.unwrap().unwrap().state, ProposalState::Pending);
         assert!(posts(&fx).is_empty() && fx.tracker.intents().is_empty());
@@ -610,9 +627,9 @@ mod tests {
         )
         .await;
         let p = drafted(&fx).await;
-        let back = fx.core.post_review_draft(&p.id, p.revisions.len()).await.unwrap();
+        let back = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
         assert_eq!((back.state.clone(), back.error.as_deref(), back.posted.clone()), (ProposalState::Pending, Some(REVIEW_OUTDATED_NOTE), None));
-        let refused = fx.core.post_review_draft(&p.id, p.revisions.len()).await.unwrap();
+        let refused = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
         assert_eq!(refused.state, ProposalState::Applied, "a later attempt may go through");
         assert_eq!(posts(&fx).len(), 2);
     }
@@ -621,7 +638,7 @@ mod tests {
     async fn a_token_that_cannot_write_leaves_the_draft_pending_with_the_reason() {
         let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![Reply::status(403, "{\"message\":\"Resource not accessible by personal access token\"}")])]).await;
         let p = drafted(&fx).await;
-        let back = fx.core.post_review_draft(&p.id, p.revisions.len()).await.unwrap();
+        let back = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
         assert_eq!(back.state, ProposalState::Pending);
         assert!(back.error.as_deref().unwrap().contains("the token can't write to pull requests in acme/webshop"), "{:?}", back.error);
         let access = fx.core.code_review_access("github:ann", "acme/webshop").await.unwrap();
@@ -632,13 +649,28 @@ mod tests {
     async fn a_review_left_posting_when_gossamr_closed_is_pending_again() {
         let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()])]).await;
         let p = drafted(&fx).await;
-        let claimed = fx.core.with_db_for(&fx.scope, |db| db.begin_posting_review(&p.id, Utc::now())).await.unwrap().unwrap();
+        let claimed = fx.core.with_db_for(&fx.scope, |db| db.begin_posting_review(&p.id, Utc::now(), None)).await.unwrap().unwrap();
         assert_eq!(claimed.state, ProposalState::Applying);
-        assert_eq!(fx.core.with_db_for(&fx.scope, |db| db.begin_posting_review(&p.id, Utc::now())).await.unwrap(), None, "claimed once");
+        assert_eq!(fx.core.with_db_for(&fx.scope, |db| db.begin_posting_review(&p.id, Utc::now(), None)).await.unwrap(), None, "claimed once");
         assert_eq!(fx.core.with_db_for(&fx.scope, |db| db.release_interrupted(Utc::now())).await.unwrap(), 1);
         let back = fx.core.proposal(&p.id).await.unwrap().unwrap();
         assert_eq!(back.state, ProposalState::Pending);
         assert!(back.error.as_deref().unwrap().contains("Check whether it went through"));
+    }
+
+    #[tokio::test]
+    async fn a_review_out_when_gossamr_closed_is_looked_for_before_anything_is_sent_again() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        let p = drafted(&fx).await;
+        let (.., summary, _) = intent_of(&p);
+        let sending = MaybePosted { at: Utc::now(), commit_sha: "a1b2c3d4e5f6".into(), summary: summary.into(), checked_at: None };
+        fx.core.with_db_for(&fx.scope, |db| db.begin_posting_review(&p.id, Utc::now(), Some(sending))).await.unwrap().unwrap();
+        fx.core.with_db_for(&fx.scope, |db| db.release_interrupted(Utc::now())).await.unwrap();
+        assert!(fx.core.proposal(&p.id).await.unwrap().unwrap().maybe_posted.is_some(), "what was out is kept");
+        fx.github_route(REVIEWS_ROUTE, vec![reviews_with(summary)]);
+        let done = fx.core.post_review_draft(&p.id, 0, false).await.unwrap();
+        assert_eq!((done.state, done.posted.map(|r| r.id)), (ProposalState::Applied, Some(88)));
+        assert!(posts(&fx).is_empty(), "nothing was sent");
     }
     #[tokio::test]
     async fn a_review_of_a_commit_the_pull_request_moved_on_from_lists_every_finding_and_places_no_line() {
@@ -675,12 +707,12 @@ mod tests {
         let p = drafted(&fx).await;
         let (.., comments) = intent_of(&p);
         fx.core.revise_review_as_pip(&fx.scope, None, &p.id, Some("Pip's words.".into()), comments.to_vec()).await.unwrap();
-        let err = fx.core.post_review_draft(&p.id, p.revisions.len()).await.unwrap_err();
+        let err = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap_err();
         assert_eq!(err.to_string(), REVIEW_CHANGED);
         assert!(posts(&fx).is_empty(), "nothing was sent");
         let now = fx.core.proposal(&p.id).await.unwrap().unwrap();
         assert_eq!(now.state, ProposalState::Pending);
-        assert_eq!(fx.core.post_review_draft(&p.id, now.revisions.len()).await.unwrap().state, ProposalState::Applied, "posted once read again");
+        assert_eq!(fx.core.post_review_draft(&p.id, now.revisions.len(), false).await.unwrap().state, ProposalState::Applied, "posted once read again");
     }
 
     const REVIEWS_ROUTE: &str = "/repos/acme/webshop/pulls/12/reviews?per_page=100";
@@ -690,7 +722,7 @@ mod tests {
         let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![Reply::status(502, "{\"message\":\"Bad Gateway\"}")])]).await;
         let p = drafted(&fx).await;
         let (.., summary, _) = intent_of(&p);
-        let back = fx.core.post_review_draft(&p.id, p.revisions.len()).await.unwrap();
+        let back = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
         assert_eq!(back.state, ProposalState::Pending);
         assert!(back.error.as_deref().unwrap().starts_with(REVIEW_MAYBE_POSTED_NOTE), "{:?}", back.error);
         assert_eq!(posts(&fx).len(), 1);
@@ -701,25 +733,87 @@ mod tests {
             { "id": 88, "user": { "login": "ann" }, "state": "COMMENTED", "commit_id": "a1b2c3d4e5f6", "body": summary, "html_url": "https://github.com/acme/webshop/pull/12#pullrequestreview-88", "submitted_at": "2026-10-01T10:00:00Z" }
         ]);
         fx.github_route(REVIEWS_ROUTE, vec![Reply::ok(&theirs.to_string())]);
-        let done = fx.core.post_review_draft(&p.id, back.revisions.len()).await.unwrap();
+        let done = fx.core.post_review_draft(&p.id, back.revisions.len(), false).await.unwrap();
         assert_eq!((done.state.clone(), done.error.clone(), done.posted.as_ref().map(|r| r.id)), (ProposalState::Applied, None, Some(88)));
         assert_eq!(posts(&fx).len(), 1, "it wasn't posted a second time");
     }
 
+    /// Review 88 by this token's login at the reviewed commit, with `summary` as its body.
+    fn reviews_with(summary: &str) -> Reply {
+        let found = serde_json::json!([{ "id": 88, "user": { "login": "ann" }, "state": "COMMENTED", "commit_id": "a1b2c3d4e5f6", "body": summary, "html_url": "https://github.com/acme/webshop/pull/12#pullrequestreview-88", "submitted_at": "2026-10-01T10:00:00Z" }]);
+        Reply::ok(&found.to_string())
+    }
+
     #[tokio::test]
-    async fn a_maybe_posted_review_that_isnt_on_github_is_sent_once_more() {
+    async fn an_edit_after_an_uncertain_post_keeps_it_maybe_posted_and_the_review_sent_with_the_old_summary_is_found() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![Reply::status(502, "{}")])]).await;
+        let p = drafted(&fx).await;
+        let sent = intent_of(&p).4.to_string();
+        let back = fx.core.post_review_draft(&p.id, 0, false).await.unwrap();
+        assert_eq!(back.maybe_posted.as_ref().map(|m| (m.commit_sha.as_str(), m.summary.as_str(), m.checked_at)), Some(("a1b2c3d4e5f6", sent.as_str(), None)));
+
+        // Pip rewords it, then the person does, which clears the error but not what may be on GitHub.
+        let (.., comments) = intent_of(&back);
+        let revised = fx.core.revise_review_as_pip(&fx.scope, None, &p.id, Some("Pip's words.".into()), comments.to_vec()).await.unwrap();
+        assert_eq!(revised.maybe_posted, back.maybe_posted, "a revision leaves it maybe posted");
+        let edited = fx.core.edit_proposal(&p.id, &super::super::drafts::Edit::GithubReview { summary: Some("My own words.".into()), comments: None }).await.unwrap();
+        assert_eq!((edited.error.as_deref(), intent_of(&edited).4), (None, "My own words."));
+        assert_eq!(edited.maybe_posted, back.maybe_posted, "and so does an edit");
+
+        // The review it sent had the old summary, and is found by it: recorded as posted, and nothing sent.
+        fx.github_route(REVIEWS_ROUTE, vec![reviews_with(&sent)]);
+        let now = fx.core.proposal(&p.id).await.unwrap().unwrap();
+        let done = fx.core.post_review_draft(&p.id, now.revisions.len(), false).await.unwrap();
+        assert_eq!((done.state.clone(), done.posted.as_ref().map(|r| r.id), done.maybe_posted.clone()), (ProposalState::Applied, Some(88), None));
+        assert_eq!(posts(&fx).len(), 1, "it wasn't posted a second time");
+    }
+
+    #[tokio::test]
+    async fn a_maybe_posted_review_github_doesnt_show_is_held_until_the_person_posts_anyway_and_then_sent_once() {
         let fx = fixture_watching_with(
             &["acme/webshop"],
             vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![Reply::status(504, "{}"), posted_reply()]), (REVIEWS_ROUTE, vec![Reply::ok("[]")])],
         )
         .await;
         let p = drafted(&fx).await;
-        let back = fx.core.post_review_draft(&p.id, 0).await.unwrap();
+        let back = fx.core.post_review_draft(&p.id, 0, false).await.unwrap();
         assert!(back.error.as_deref().unwrap().starts_with(REVIEW_MAYBE_POSTED_NOTE));
-        let done = fx.core.post_review_draft(&p.id, 0).await.unwrap();
-        assert_eq!((done.state, done.posted.map(|r| r.id)), (ProposalState::Applied, Some(77)));
-        assert_eq!(posts(&fx).len(), 2);
-        assert!(fx.github_seen().iter().any(|(_, t)| t == REVIEWS_ROUTE), "it looked first");
+        for _ in 0..2 {
+            let held = fx.core.post_review_draft(&p.id, 0, false).await.unwrap();
+            assert_eq!((held.state.clone(), held.error.as_deref()), (ProposalState::Pending, Some(REVIEW_NOT_FOUND_NOTE)));
+            let unsure = held.maybe_posted.expect("still maybe posted");
+            assert!(unsure.checked_at.is_some(), "looked for");
+            assert_eq!(posts(&fx).len(), 1, "nothing sent without the person's say");
+        }
+        assert!(fx.github_seen().iter().any(|(_, t)| t == REVIEWS_ROUTE), "it looked");
+
+        let done = fx.core.post_review_draft(&p.id, 0, true).await.unwrap();
+        assert_eq!((done.state, done.posted.map(|r| r.id), done.maybe_posted), (ProposalState::Applied, Some(77), None));
+        assert_eq!(posts(&fx).len(), 2, "posted once more, once");
+    }
+
+    #[tokio::test]
+    async fn a_maybe_posted_review_github_cant_be_asked_about_is_held_and_says_so() {
+        let fx = fixture_watching_with(
+            &["acme/webshop"],
+            vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![Reply::status(502, "{}")]), (REVIEWS_ROUTE, vec![Reply::status(500, "{\"message\":\"boom\"}")])],
+        )
+        .await;
+        let p = drafted(&fx).await;
+        fx.core.post_review_draft(&p.id, 0, false).await.unwrap();
+        let held = fx.core.post_review_draft(&p.id, 0, false).await.unwrap();
+        assert_eq!(held.state, ProposalState::Pending);
+        assert!(held.error.as_deref().unwrap().contains("couldn't check just now"), "{:?}", held.error);
+        assert!(held.maybe_posted.is_some_and(|m| m.checked_at.is_some()));
+        assert_eq!(posts(&fx).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_review_definitely_refused_isnt_left_maybe_posted() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![Reply::status(422, "{\"errors\":[\"Line could not be resolved\"]}")])]).await;
+        let p = drafted(&fx).await;
+        let back = fx.core.post_review_draft(&p.id, 0, false).await.unwrap();
+        assert_eq!((back.error.as_deref(), back.maybe_posted), (Some(REVIEW_OUTDATED_NOTE), None));
     }
 
     #[tokio::test]
@@ -727,7 +821,7 @@ mod tests {
         let refused = Reply::status(422, "{\"message\":\"Unprocessable Entity\",\"errors\":[\"User can only have one pending review per pull request\"]}");
         let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![refused])]).await;
         let p = drafted(&fx).await;
-        let back = fx.core.post_review_draft(&p.id, 0).await.unwrap();
+        let back = fx.core.post_review_draft(&p.id, 0, false).await.unwrap();
         assert_eq!(back.state, ProposalState::Pending);
         assert_eq!(back.error.as_deref(), Some("GitHub didn't accept the review: User can only have one pending review per pull request."));
     }

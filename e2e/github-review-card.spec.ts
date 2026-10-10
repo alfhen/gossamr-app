@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { githubWrites, jiraWrites, movePullHead, openPip, pipPane, reviewedDraft } from "./support/app";
+import { githubPostsTried, githubWrites, jiraWrites, movePullHead, openPip, pipPane, reviewedDraft } from "./support/app";
 
 const RETRY = "src/consumer/retry.ts";
 const pullView = (page: Page) => page.getByRole("dialog", { name: "Pull request acme/webshop#218" });
@@ -71,9 +71,9 @@ test("a token that can't post says why, offers the PR view with the review's com
   await expect(card.getByRole("button", { name: "Open PR view →" })).toBeVisible();
   await page.keyboard.press("a");
   await page.keyboard.press("Enter");
-  // The mock GitHub refuses such a post before keeping it, so no write proves nothing: a post that was tried would have
-  // come back refused, as an error on the draft and a toast. A moment on, there is neither, and the draft still waits.
-  await page.waitForTimeout(500);
+  // The mock GitHub refuses such a post before keeping it, so no write proves nothing; it counts every post asked of it,
+  // which a key asks for as it is handled. None was, so nothing is on its way back as an error on the draft or a toast.
+  await expect.poll(() => githubPostsTried(page)).toBe(0);
   await expect(page.getByText("Couldn't post that draft")).toHaveCount(0);
   await expect(page.getByText("can't write to pull requests")).toHaveCount(0);
   await expect(review.getByRole("alert")).toHaveCount(0);

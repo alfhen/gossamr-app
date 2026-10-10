@@ -1363,7 +1363,7 @@ pub async fn orchestration_never_posts_to_github() -> std::result::Result<(), St
         .filter(|p| p.state == crate::domain::ProposalState::Pending && matches!(&p.intent, Intent::GithubReview { number: 12, .. }))
         .collect();
     let [draft] = pending.as_slice() else { return Err(format!("expected one pending review draft of #12, found {}", pending.len())) };
-    let posted = core.post_review_draft(&draft.id, draft.revisions.len()).await.map_err(|e| e.to_string())?;
+    let posted = core.post_review_draft(&draft.id, draft.revisions.len(), false).await.map_err(|e| e.to_string())?;
     if posted.state != crate::domain::ProposalState::Applied || posted.posted.as_ref().map(|p| p.id) != Some(4242) {
         return Err(format!("the approved review wasn't posted: {:?} {:?}", posted.state, posted.error));
     }
@@ -1379,7 +1379,7 @@ pub async fn orchestration_never_posts_to_github() -> std::result::Result<(), St
     if body["event"] != "COMMENT" || body["commit_id"] != FIXED || inline != [("src/cart.ts", 3, "RIGHT", "**Nit:** naming")] {
         return Err(format!("the review posted isn't the passing review's comment review at the fixed commit: {body}"));
     }
-    if core.post_review_draft(&draft.id, draft.revisions.len()).await.is_ok() || writes().len() != 1 {
+    if core.post_review_draft(&draft.id, draft.revisions.len(), false).await.is_ok() || writes().len() != 1 {
         return Err("approving the posted review again sent it again".into());
     }
     if !w.events().await.iter().any(|e| e.action == "review_posted" && e.proposal_id.as_deref() == Some(draft.id.as_str()) && e.detail.as_deref() == Some("acme/webshop#12 review 4242")) {

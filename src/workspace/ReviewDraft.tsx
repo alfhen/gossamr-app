@@ -292,6 +292,12 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
           </ul>
         )}
         <p className="m-0 text-sm text-ws-ink3">Posted as one comment review at the reviewed commit, never as an approval or a request for changes. Nothing goes to GitHub until you approve it here.</p>
+        {open && p.maybePosted && (
+          <p data-review-maybe-posted role="note" className="m-0 rounded-md border border-ws-sep2 bg-ws-bar px-2 py-1 text-sm text-ws-ink2">
+            This review may already be on GitHub: Gossamr sent it at {p.maybePosted.commitSha.slice(0, 8)} and got no answer. Post review looks for it on the pull request first and sends nothing while it can&apos;t be sure.
+            {p.maybePosted.checkedAt && canPost && " If it isn't there, Post anyway sends it."}
+          </p>
+        )}
         {open && access && !access.canPost && (
           <p data-review-access="cant-post" className="m-0 text-sm text-ws-ink2">
             {access.reason ?? "This GitHub token can't post reviews on this repository."}
@@ -328,6 +334,11 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
               <button type="button" disabled={working} onClick={onSkip} className={button}>
                 Discard
               </button>
+              {canPost && p.maybePosted?.checkedAt && (
+                <button type="button" data-review-post-anyway disabled={working || state === "applying" || !!problem} title={problem ?? "Sends this review though it may already be on GitHub."} onClick={() => onApprove(edit, { postAnyway: true })} className={button}>
+                  Post anyway
+                </button>
+              )}
               {canPost && (
                 <button type="button" disabled={working || state === "applying" || !!problem} title={problem ?? undefined} onClick={() => onApprove(edit)} className={primary}>
                   {working || state === "applying" ? "Posting…" : "Post review"}

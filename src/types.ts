@@ -381,6 +381,19 @@ export interface PostedReview {
   at: string;
 }
 
+/**
+ * A review sent to GitHub without learning whether it went through, as `MaybePosted` in `domain/proposal.rs`: kept apart
+ * from `error`, so an edit doesn't clear it, until GitHub is seen to have it or the person posts anyway.
+ */
+export interface MaybePosted {
+  at: string;
+  /** The commit and summary it was sent with, by which it is looked for on the pull request. */
+  commitSha: string;
+  summary: string;
+  /** When Gossamr last looked for it and didn't find it, or couldn't look; then the person may post anyway. */
+  checkedAt?: string | null;
+}
+
 export interface TitleChange {
   from: string;
   to: string;
@@ -468,6 +481,8 @@ export interface Proposal {
   supersededBy?: string | null;
   /** The review an approved `githubReview` posted. */
   posted?: PostedReview | null;
+  /** A post of a `githubReview` whose outcome isn't known; its next post looks for it on GitHub first. */
+  maybePosted?: MaybePosted | null;
 }
 
 /** Which proposals to list. Every field that is set must match. */

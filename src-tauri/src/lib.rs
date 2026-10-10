@@ -488,10 +488,11 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, superviso
 
 /// Posts a GitHub review draft as one comment review: the only command that writes to GitHub, and only the person's
 /// approval calls it. `revisions` is how many revisions the draft had as the person saw it; one changed since is
-/// refused. A refused attempt still returns the draft, back to pending with `error` set.
+/// refused. A refused attempt still returns the draft, back to pending with `error` set. `post_anyway` is the person's
+/// choice to send a review that may be on GitHub already, which Gossamr looked for and didn't find.
 #[tauri::command]
-async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: String, revisions: usize) -> Result<Proposal> {
-    let result = core.post_review_draft(&id, revisions).await;
+async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: String, revisions: usize, post_anyway: Option<bool>) -> Result<Proposal> {
+    let result = core.post_review_draft(&id, revisions, post_anyway.unwrap_or(false)).await;
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
     }

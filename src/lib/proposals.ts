@@ -38,8 +38,11 @@ export const isReviewDraft = (intent: Intent) => intent.type === "githubReview";
 /** The error a review draft keeps when GitHub said its lines no longer match the pull request, as `REVIEW_OUTDATED_NOTE` in `inbox/review_drafts.rs`. The card reads it as outdated. */
 export const REVIEW_OUTDATED_NOTE = "GitHub says this review's lines no longer match the pull request; it is outdated. Discard it or edit the comments and try again.";
 
-/** The error a review draft keeps when a post may have reached GitHub though no answer said so, as `REVIEW_MAYBE_POSTED_NOTE` in `inbox/review_drafts.rs`: its next post looks on GitHub first. */
+/** The error a review draft keeps when a post may have reached GitHub though no answer said so, as `REVIEW_MAYBE_POSTED_NOTE` in `inbox/review_drafts.rs`: the draft keeps `maybePosted`, and its next post looks on GitHub first. */
 export const REVIEW_MAYBE_POSTED_NOTE = "GitHub may have posted this review already; Gossamr checks the pull request before sending it again.";
+
+/** Why a review that may be on GitHub already isn't sent again once Gossamr looked and didn't find it, as `REVIEW_NOT_FOUND_NOTE` in `inbox/review_drafts.rs`: only Post anyway sends it. */
+export const REVIEW_NOT_FOUND_NOTE = "Gossamr looked on the pull request and didn't find the review it may have posted. Check the pull request; if the review isn't there, choose Post anyway to send it.";
 
 /** Why a review draft that changed since the person looked at it isn't posted, as `REVIEW_CHANGED` in `inbox/review_drafts.rs`. */
 export const REVIEW_CHANGED = "this review changed since you looked at it; read it again before posting";

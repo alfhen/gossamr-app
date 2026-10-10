@@ -597,6 +597,32 @@ async fn a_post_refused_for_single_sign_on_isnt_remembered_as_the_repository_ref
 }
 
 #[tokio::test]
+async fn a_403_that_isnt_about_the_tokens_access_keeps_githubs_words_and_isnt_remembered() {
+    let server = serve(vec![
+        ("/repos/acme/webshop", vec![Reply::ok("{\"full_name\":\"acme/webshop\",\"name\":\"webshop\",\"private\":true,\"permissions\":{\"pull\":true,\"push\":true}}")]),
+        (REVIEWS_POST, vec![Reply::status(403, "{\"message\":\"Repository was archived so is read-only.\"}")]),
+    ])
+    .await;
+    let host = host(&server);
+    let err = host.post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &[]).await.unwrap_err();
+    let Error::CodeHost { status: 403, message } = &err else { panic!("{err:?}") };
+    assert!(message.contains("Repository was archived so is read-only"), "{message}");
+    assert_ne!(*message, super::write::no_write_access("acme/webshop"));
+    assert!(host.refused_reviews.lock().unwrap().is_empty(), "it says nothing lasting about the token");
+    assert!(host.review_access("acme/webshop").await.unwrap().can_post);
+}
+
+#[tokio::test]
+async fn only_a_422_naming_a_whole_word_of_the_reviews_place_is_outdated() {
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::status(422, "{\"message\":\"Validation Failed\",\"errors\":[\"Too many inline comments; the pipeline allows at most 50\"]}")])]).await;
+    let err = host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
+    assert!(matches!(&err, Error::CodeHost { status: 422, message } if message.contains("Too many inline comments")), "{err:?}");
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::status(422, "{\"message\":\"Validation Failed\",\"errors\":[\"pull_request_review_thread.line must be part of the diff\"]}")])]).await;
+    let err = host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
+    assert!(matches!(&err, Error::ReviewOutdated(said) if said.contains("must be part of the diff")), "{err:?}");
+}
+
+#[tokio::test]
 async fn a_rate_limited_post_says_so_rather_than_blaming_the_token() {
     let server = serve(vec![(REVIEWS_POST, vec![Reply::status(403, "{\"message\":\"API rate limit exceeded\"}").header("x-ratelimit-remaining", "0").header("x-ratelimit-reset", "4102444800")])]).await;
     let host = host(&server);

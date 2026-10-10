@@ -147,6 +147,24 @@ pub struct PostedReview {
     pub at: DateTime<Utc>,
 }
 
+/// A review Gossamr sent to GitHub without learning whether it went through: the post failed in transit or on GitHub's
+/// side, or Gossamr closed while it was out. Kept apart from the draft's `error`, so an edit or a revision doesn't
+/// clear it, until GitHub is seen to have the review or the person chooses to post anyway.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaybePosted {
+    /// When it was sent.
+    pub at: DateTime<Utc>,
+    /// The commit it was sent against.
+    pub commit_sha: String,
+    /// The summary it was sent with, by which it is found on the pull request whatever the draft says now.
+    pub summary: String,
+    /// When Gossamr last looked on the pull request for it and didn't find it, or couldn't look. Set, the person may
+    /// choose to post anyway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<DateTime<Utc>>,
+}
+
 impl Intent {
     /// The existing item the intent was drafted against, if any.
     pub fn target(&self) -> Option<&ItemRef> {
@@ -371,6 +389,9 @@ pub struct Proposal {
     /// The review an approved `GithubReview` posted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub posted: Option<PostedReview>,
+    /// The post of a `GithubReview` whose outcome isn't known; its next post looks for it on GitHub first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maybe_posted: Option<MaybePosted>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -562,6 +583,7 @@ mod tests {
             run: None,
             superseded_by: None,
             posted: None,
+            maybe_posted: None,
         }
     }
 
@@ -956,8 +978,12 @@ mod tests {
     fn proposals_stored_before_reviews_were_posted_still_read() {
         let p = proposal(review("acme/webshop", 218), &work_item("1", "todo"));
         let json = serde_json::to_value(&p).unwrap();
-        assert!(json.get("posted").is_none(), "an unset field isn't written");
+        assert!(json.get("posted").is_none() && json.get("maybePosted").is_none(), "an unset field isn't written");
         assert_eq!(serde_json::from_value::<Proposal>(json).unwrap(), p);
+        let unsure = Proposal { maybe_posted: Some(MaybePosted { at: now(), commit_sha: "a1b2c3d4e5f6".into(), summary: "Sent.".into(), checked_at: None }), ..p.clone() };
+        let json = serde_json::to_value(&unsure).unwrap();
+        assert_eq!((json["maybePosted"]["commitSha"].as_str(), json["maybePosted"]["summary"].as_str()), (Some("a1b2c3d4e5f6"), Some("Sent.")));
+        assert_eq!(serde_json::from_value::<Proposal>(json).unwrap(), unsure);
         let posted = Proposal { posted: Some(PostedReview { id: 7, url: "https://github.com/acme/webshop/pull/218#pullrequestreview-7".into(), at: now() }), ..p };
         let json = serde_json::to_value(&posted).unwrap();
         assert_eq!(json["posted"]["id"], 7);
