@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pip as Manager</title>
+<style>
+/* Layout: sticky section index on the left, a single reading column on the right; stacks to one column on phones. */
+:root {
+  --bg: #f6f8f8; --surface: #ffffff; --ink: #172426; --muted: #5a6b6e; --rule: #dbe3e4;
+  --accent: #0f766e; --accent-soft: #e2f2ef; --code-bg: #eef3f3; --gate: #b45309;
+  --font-display: "Iowan Old Style", "Charter", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1617; --surface: #162022; --ink: #e3ecec; --muted: #93a6a8; --rule: #2a3a3c;
+  --accent: #4fd1c0; --accent-soft: #173a36; --code-bg: #1b2a2c; --gate: #f2a65a; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0f1617; --surface: #162022; --ink: #e3ecec; --muted: #93a6a8; --rule: #2a3a3c;
+  --accent: #4fd1c0; --accent-soft: #173a36; --code-bg: #1b2a2c; --gate: #f2a65a; color-scheme: dark; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 var(--font-body); padding-inline: 16px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 40px 80px; display: grid; grid-template-columns: 220px minmax(0,1fr); gap: 48px; }
+@media (max-width: 860px) { .wrap { grid-template-columns: minmax(0,1fr); gap: 24px; padding-block: 24px 56px; } nav.toc { position: static !important; } }
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; font-size: 13px; }
+nav.toc .lbl { text-transform: uppercase; letter-spacing: .08em; font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+nav.toc a { display: flex; gap: 10px; padding: 5px 8px; border-radius: 6px; color: var(--ink); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { background: var(--accent-soft); outline: none; }
+nav.toc .n { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 1.2em; }
+main { min-width: 0; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 28px; margin-bottom: 8px; }
+.eyebrow { text-transform: uppercase; letter-spacing: .1em; font-size: 12px; color: var(--accent); font-weight: 600; }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: clamp(34px, 5vw, 48px); line-height: 1.1; margin: 8px 0 14px; text-wrap: balance; }
+.lede { font-size: 17px; max-width: 64ch; color: var(--ink); margin: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 18px; font-size: 13px; color: var(--muted); }
+.meta b { color: var(--ink); font-weight: 600; }
+.pill { display: inline-block; padding: 1px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 12px; }
+.method { margin: 28px 0 8px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 20px 22px; }
+.method h2 { margin-top: 0 !important; font-size: 18px !important; border: 0 !important; padding: 0 !important; }
+.method p { max-width: 70ch; }
+.verified { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.verified li { padding-left: 22px; position: relative; }
+.verified li::before { content: "✓"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+h2 { font-family: var(--font-display); font-weight: 600; font-size: 26px; line-height: 1.25; margin: 56px 0 14px; padding-top: 18px; border-top: 1px solid var(--rule); text-wrap: balance; scroll-margin-top: 20px; }
+h3 { font-size: 16px; margin: 32px 0 10px; letter-spacing: .01em; scroll-margin-top: 20px; }
+p, li { max-width: 72ch; }
+ul, ol { padding-left: 1.3em; }
+li + li { margin-top: 4px; }
+a { color: var(--accent); }
+strong { font-weight: 650; }
+code { font-family: var(--font-mono); font-size: .86em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.tbl { overflow-x: auto; margin: 14px 0 20px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); min-width: 9em; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--code-bg); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+td.num, .scores td:not(:first-child) { font-variant-numeric: tabular-nums; }
+.scores td, .scores th { min-width: 6em; }
+.diagram { overflow-x: auto; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 8px; margin: 14px 0 22px; }
+.diagram pre { margin: 0; padding: 16px 18px; font: 12.5px/1.5 var(--font-mono); color: var(--ink); }
+figure.flow { margin: 18px 0 8px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 8px; }
+.flowscroll { overflow-x: auto; }
+figure.flow svg { display: block; min-width: 760px; width: 100%; height: auto; }
+.box { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
+.box.pip { fill: var(--accent-soft); }
+.box.opt { stroke-dasharray: 4 3; }
+.ln { stroke: var(--muted); stroke-width: 1.5; }
+.arr { fill: var(--muted); }
+.nm { fill: var(--ink); font: 600 13px var(--font-body); text-anchor: middle; }
+.who { fill: var(--muted); font: 11px var(--font-body); text-anchor: middle; }
+.gate { fill: var(--gate); }
+.gk { fill: var(--surface); font: 700 10px var(--font-body); text-anchor: middle; }
+.auto { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
+.ak { fill: var(--accent); font: 700 10px var(--font-body); text-anchor: middle; }
+.loop { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.decided { margin: 20px 0 0; border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; }
+.decided h3 { margin: 0 0 6px; }
+.cap { fill: var(--muted); font: 12px var(--font-body); }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Sections">
+  <div class="lbl">Sections</div>
+  <ol><li><a href="#how-this-was-produced"><span class="n">·</span>How this was produced</a></li><li><a href="#1-summary"><span class="n">1</span>Summary</a></li><li><a href="#2-what-exists-today-that-we-build-on"><span class="n">2</span>What exists today that we build on</a></li><li><a href="#3-the-model-pip-as-manager"><span class="n">3</span>The model: Pip as manager</a></li><li><a href="#4-architecture"><span class="n">4</span>Architecture</a></li><li><a href="#5-user-experience"><span class="n">5</span>User experience</a></li><li><a href="#6-safety-control-and-cost"><span class="n">6</span>Safety, control and cost</a></li><li><a href="#7-phased-delivery-plan"><span class="n">7</span>Phased delivery plan</a></li><li><a href="#8-risks-and-mitigations"><span class="n">8</span>Risks and mitigations</a></li><li><a href="#9-open-questions-for-the-product-owner"><span class="n">9</span>Open questions for the product owner</a></li></ol>
+</nav>
+<main>
+<header class="top">
+  <div class="eyebrow">Gossamr · Product proposal</div>
+  <h1>Pip as Manager</h1>
+  <p class="lede">Make Gossamr agents-first. The person talks mainly to Pip. Pip runs each piece of work as a workstream: investigate, triage, plan, build and review runs follow each other, the routine handoffs start automatically, builds publish draft pull requests, and an adversarial reviewer tries to break each change. The draft-approval UI stays, and nothing reaches Jira until the person approves it.</p>
+  <div class="meta">
+    <span><b>Date</b> 9 Oct 2026</span>
+    <span><b>Status</b> <span class="pill">Revised · for decision</span></span>
+    <span><b>Based on</b> <code>main</code> at <code>1d0b449</code></span>
+    <span><b>Delivery</b> 7 phases, about 8½ weeks through phase 5</span>
+  </div>
+</header>
+
+<section class="method" id="how-this-was-produced">
+  <h2>How this was produced</h2>
+  <p>Four agents mapped the parts of Gossamr involved: Pip and the Claude integration, agent runs, drafts and the Jira write path, and the workspace UI. Three agents then wrote independent designs from different angles. A judge checked each design's claims against the code and scored them from 1 to 5, and a final agent combined them. The reuse-first design is the backbone. It takes the conversation UX from the second design and the operational guards from the safety design.</p>
+  <div class="tbl scores"><table>
+    <thead><tr><th>Design</th><th>Fit to goal</th><th>Feasible here</th><th>Safety</th><th>UX</th><th>Incremental</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Reuse-first</strong> (backbone)</td><td>3.5</td><td>4.5</td><td>4</td><td>3</td><td>5</td></tr>
+      <tr><td>Safety-first</td><td>4</td><td>2</td><td>3.5</td><td>4</td><td>3</td></tr>
+      <tr><td>Conversation-first</td><td>4.5</td><td>3</td><td>4</td><td>4.5</td><td>4</td></tr>
+    </tbody>
+  </table></div>
+  <p>I checked four claims that the plan depends on against the code myself:</p>
+  <ul class="verified">
+    <li>A Build gets the Plan run's raw answer, not the plan the person edited (<code>run_results.rs</code> <code>plan_of_run</code>), but its prompt says the plan was "read, edited and approved". This is a bug in today's app.</li>
+    <li>A Review can't be drafted until the Build has a pull request (<code>attach_build_account</code>).</li>
+    <li>At the agent limit, the pre-launch checks block approval (<code>preflight.rs</code>), so "wait for a slot" also needs a change there.</li>
+    <li>The tracker's poll and <code>start()</code> take the same non-reentrant lock, so the supervisor must never launch runs from inside the poll.</li>
+  </ul>
+  <div class="decided">
+    <h3>Decided since the first draft</h3>
+    <ul>
+      <li><strong>Builds publish.</strong> Every workstream Build pushes its branch and opens a draft pull request. The "Publish gate" from the first draft is gone.</li>
+      <li><strong>Review is adversarial.</strong> The reviewer tries to show the change isn't ready and returns a pass or blocking verdict (section 3).</li>
+      <li><strong>Some runs start automatically.</strong> Routine handoffs such as Build→Review and Triage→Plan follow fixed auto-start rules (section 3). This replaces the optional "standing grant" phase.</li>
+    </ul>
+  </div>
+</section>
+
+<h2 id="1-summary">1. Summary</h2><p>At the moment the person runs the work and Pip gives advice. Pip answers one message at a time. It can read runs and draft an Investigate, Triage, Plan or Verify run, and after that it stops. Nothing wakes Pip when a sub-agent finishes, and moving from Plan to Build to Review is done with buttons on the run sheet. This proposal makes Pip the manager. Each piece of work becomes a <strong>workstream</strong>, which is a durable thread tied to one ticket or one ticketless question. In that thread Pip plans the steps (investigate, triage, plan, build, review), drafts a Gossamr run for each one, gets woken automatically when a run changes state, reads the result and drafts the next step. The person mostly talks to Pip, on a new Pip home screen, and approves things inline. Nothing reaches Jira until the person approves a draft, and Pip still has no tool that starts, stops, answers or approves anything. Some runs now <strong>start automatically</strong> as the next step in a chain: Investigate→Triage, Triage→Plan when Triage recommends a plan, Build→Review, and a fix round after a blocking review. The Rust supervisor starts them from fixed rules, with handoffs filled in by Core, so neither Pip nor any agent output decides that a run starts. Every other run start still needs the person&#39;s approval of the exact prompt. Builds always publish a draft pull request, and Review is an <strong>adversarial reviewer</strong> that tries to break the change before a person sees it. The new parts are a workstream record, a Rust supervisor that wakes Pip and applies the auto-start rules, saved conversations with a turn queue, and Pip being able to draft Build and Review as successors of finished runs.</p>
+<h2 id="2-what-exists-today-that-we-build-on">2. What exists today that we build on</h2><div class="tbl"><table><thead><tr>
+<th>Piece</th>
+<th>Where</th>
+<th>Why it matters</th>
+</tr>
+</thead><tbody><tr>
+<td>Sub-agents = Gossamr runs (<code>claude --bg --worktree</code>), six kinds with fixed Rust templates</td>
+<td><code>domain/run.rs:84-125</code>, <code>runs/service.rs</code>, <code>runs/cli.rs:384-393</code></td>
+<td>Delegation is already built. Pip never needs Claude Code&#39;s own Task/<code>--agents</code>, which the tests forbid (<code>claude/mod.rs:205-228</code>).</td>
+</tr>
+<tr>
+<td>Digest-bound run approval</td>
+<td><code>RunSpec::digest</code> <code>domain/run.rs:308-340</code>; <code>runs_review</code>/<code>runs_approve</code> <code>inbox/drafts.rs:443-509</code>, <code>lib.rs:507-527</code></td>
+<td>This is the consent gate that every step keeps going through.</td>
+</tr>
+<tr>
+<td>Typed handoffs filled in by Core</td>
+<td><code>attach_plan</code> / <code>attach_build_account</code> <code>inbox/run_results.rs:269-343</code></td>
+<td>Plan→Build and Build→Review pass the real output from the source run. No model writes the handoff text.</td>
+</tr>
+<tr>
+<td>Run supervision loop and hooks</td>
+<td><code>runs/tracker.rs:212-438</code> (poll, <code>track</code>, <code>draft_for</code>); <code>RunNotifier</code> <code>tracker.rs:59</code>; <code>with_notifier</code> <code>service.rs:209-217</code></td>
+<td>This is where a wake-up for Pip connects.</td>
+</tr>
+<tr>
+<td>Pip&#39;s MCP server with pluggable tool modules</td>
+<td><code>agent/mcp.rs:173-265</code>, <code>agent/runs.rs</code>, <code>agent/github.rs</code></td>
+<td>A new <code>agent/workstream.rs</code> module plugs in the same way.</td>
+</tr>
+<tr>
+<td>Pip run drafting</td>
+<td><code>inbox/pip_runs.rs:146</code> <code>draft_run_as_pip</code>, <code>pip_kinds()</code> <code>domain/run.rs:99</code></td>
+<td>Already lets Pip &quot;propose a sub-agent so the user can approve it&quot;.</td>
+</tr>
+<tr>
+<td>Draft spine</td>
+<td><code>proposals::create</code> <code>proposals.rs:139</code>; <code>Core::approve_proposal</code> <code>inbox/drafts.rs:543</code>; <code>DraftCard</code>, <code>DraftPreview</code>, <code>RewriteDiff</code></td>
+<td>This stays the only route for writes to Jira.</td>
+</tr>
+<tr>
+<td>Pip pane, turns, inline drafts</td>
+<td><code>PipPane.tsx</code> (TurnView 106-143), <code>claudeStore.ts</code>, <code>lib/proposals.ts:36</code></td>
+<td>Becomes the conversation component on Pip home.</td>
+</tr>
+<tr>
+<td>Mock mode</td>
+<td><code>mockPip.ts</code>, <code>mockRuns.ts</code> (<code>advance</code>), <code>mockRunKinds.ts</code>, <code>src-tauri/test-support/fake-claude.sh</code></td>
+<td>Lets every phase be prototyped and tested without Claude.</td>
+</tr>
+</tbody></table></div><h2 id="3-the-model-pip-as-manager">3. The model: Pip as manager</h2><h3 id="roles">Roles</h3><div class="tbl"><table><thead><tr>
+<th>Role</th>
+<th>What it is</th>
+<th>What it may do</th>
+</tr>
+</thead><tbody><tr>
+<td><strong>Pip (manager)</strong></td>
+<td>The same sandboxed, tool-less <code>claude -p</code> process as today, one per turn, resumed from the workstream&#39;s session</td>
+<td>Judgement only: plan the steps, write a step&#39;s focus line, read results, word Jira drafts, suggest replies, explain. It acts only through MCP tools that read, propose or annotate.</td>
+</tr>
+<tr>
+<td><strong>Supervisor (Rust, no model)</strong></td>
+<td>New <code>agent/supervisor.rs</code></td>
+<td>Watches the runs linked to each workstream, wakes Pip, enforces budgets and holds work after a restart. It starts runs in two cases only: runs a person approved, once a slot frees up, and <strong>successor runs that match an auto-start rule</strong> (§3, Auto-start rules). It never approves drafts and never touches the tracker.</td>
+</tr>
+<tr>
+<td><strong>Sub-agents</strong></td>
+<td>Existing Gossamr runs with today&#39;s GUARD, limits and templates</td>
+<td>Do the work in a worktree. They never talk to Pip or to each other directly.</td>
+</tr>
+<tr>
+<td><strong>Person</strong></td>
+<td></td>
+<td>Approves every Jira draft and every run start that isn&#39;t covered by an auto-start rule, answers permission and trust prompts, and can steer or stop anything, including auto-started runs.</td>
+</tr>
+</tbody></table></div><figure class="flow"><div class="flowscroll"><svg viewBox="0 0 980 176" role="img" aria-label="Workstream stages. Investigate needs the person's approval, Triage and Plan start automatically, Build starts when the person approves the plan, Review starts automatically, and a blocking review loops back to Build for at most two fix rounds."><path d="M 744 30 C 744 8, 612 8, 612 30" class="loop"/><polygon points="607,24 612,31 617,24" class="arr"/><text x="756" y="22" class="cap">blocking review: fix round, at most 2</text><rect x="30" y="34" width="108" height="52" rx="6" class="box pip"/><text x="84" y="58" class="nm">Intake</text><text x="84" y="76" class="who">Pip itself</text><line x1="138" y1="60" x2="162" y2="60" class="ln"/><polygon points="156,55 162,60 156,65" class="arr"/><rect x="162" y="34" width="108" height="52" rx="6" class="box"/><text x="216" y="58" class="nm">Investigate</text><text x="216" y="76" class="who">sub-agent run</text><circle cx="216" cy="110" r="9" class="gate"/><text x="216" y="114" class="gk">✓</text><text x="216" y="134" class="who">you approve</text><line x1="270" y1="60" x2="294" y2="60" class="ln"/><polygon points="288,55 294,60 288,65" class="arr"/><rect x="294" y="34" width="108" height="52" rx="6" class="box"/><text x="348" y="58" class="nm">Triage</text><text x="348" y="76" class="who">sub-agent run</text><circle cx="348" cy="110" r="9" class="auto"/><text x="348" y="114" class="ak">A</text><text x="348" y="134" class="who">automatic</text><line x1="402" y1="60" x2="426" y2="60" class="ln"/><polygon points="420,55 426,60 420,65" class="arr"/><rect x="426" y="34" width="108" height="52" rx="6" class="box"/><text x="480" y="58" class="nm">Plan</text><text x="480" y="76" class="who">sub-agent run</text><circle cx="480" cy="110" r="9" class="auto"/><text x="480" y="114" class="ak">A</text><text x="480" y="134" class="who">if Triage says so</text><line x1="534" y1="60" x2="558" y2="60" class="ln"/><polygon points="552,55 558,60 552,65" class="arr"/><rect x="558" y="34" width="108" height="52" rx="6" class="box"/><text x="612" y="58" class="nm">Build</text><text x="612" y="76" class="who">draft PR</text><circle cx="612" cy="110" r="9" class="gate"/><text x="612" y="114" class="gk">✓</text><text x="612" y="134" class="who">plan approved</text><line x1="666" y1="60" x2="690" y2="60" class="ln"/><polygon points="684,55 690,60 684,65" class="arr"/><rect x="690" y="34" width="108" height="52" rx="6" class="box"/><text x="744" y="58" class="nm">Review</text><text x="744" y="76" class="who">adversarial</text><circle cx="744" cy="110" r="9" class="auto"/><text x="744" y="114" class="ak">A</text><text x="744" y="134" class="who">automatic</text><line x1="798" y1="60" x2="822" y2="60" class="ln"/><polygon points="816,55 822,60 816,65" class="arr"/><rect x="822" y="34" width="108" height="52" rx="6" class="box opt"/><text x="876" y="58" class="nm">Verify</text><text x="876" y="76" class="who">optional</text><circle cx="876" cy="110" r="9" class="gate"/><text x="876" y="114" class="gk">✓</text><text x="876" y="134" class="who">you approve</text><text x="30" y="166" class="cap">Every Jira draft from any step still waits for your approval. Auto-starts happen only in Manage mode, within budget, from runs that finished cleanly.</text></svg></div></figure><h3 id="stages">Stages</h3><div class="tbl"><table><thead><tr>
+<th>Stage</th>
+<th>Sub-agent</th>
+<th>Input (Core-built)</th>
+<th>Output</th>
+<th>Handoff to next</th>
+<th>Pip checks in when</th>
+</tr>
+</thead><tbody><tr>
+<td>Intake</td>
+<td>Pip itself, plus GitHub read tools for cheap questions</td>
+<td>Person&#39;s request, ticket, <code>[Workstream]</code> block</td>
+<td>Proposed step list (Pip&#39;s notes), first run draft(s)</td>
+<td>Pip drafts Investigate and/or Triage</td>
+<td>Always: first run approval</td>
+</tr>
+<tr>
+<td>Investigate</td>
+<td><code>Investigate</code> (ticketed or ticketless)</td>
+<td>Ticket block, Pip&#39;s <code>focus</code> (≤300 chars)</td>
+<td>&quot;For Jira&quot; note → comment draft; ticketless → new-ticket draft</td>
+<td><strong>New</strong> <code>findings</code>/<code>findings_from_run</code> slot, filled by Core from <code>Resolved.note</code>. Triage <strong>auto-starts</strong> on a ticketed Investigate</td>
+<td>Run approval for the first run; ambiguous repo (<code>pip_run_target</code> refuses)</td>
+</tr>
+<tr>
+<td>Triage</td>
+<td><code>Triage</code></td>
+<td>Ticket + findings</td>
+<td>Subtasks draft, &quot;Plan recommended: yes/no&quot;, comment draft</td>
+<td>Plan <strong>auto-starts</strong> when Triage recommends a plan; otherwise Pip says why it isn&#39;t needed</td>
+<td>If &quot;no plan&quot; and the next step would be Build, Pip asks</td>
+</tr>
+<tr>
+<td>Plan</td>
+<td><code>Plan</code></td>
+<td>Ticket + findings</td>
+<td>&quot;Gossamr Plan&quot; description draft (diff)</td>
+<td>Approving the plan draft is the gate for Build. Build then starts with <code>from_run=plan</code> and Core&#39;s <code>attach_plan</code> (see the plan-edit fix below)</td>
+<td>Always: the person approves (and may edit) the plan</td>
+</tr>
+<tr>
+<td>Build</td>
+<td><code>Build</code></td>
+<td>Core-attached plan</td>
+<td>Branch pushed and a <strong>draft PR opened, always</strong></td>
+<td>Review <strong>auto-starts</strong> once the PR is found</td>
+<td>When the plan is approved (Build starts from that approval, or from RunSetup if the person prefers to read it)</td>
+</tr>
+<tr>
+<td>Review</td>
+<td><code>Review</code>, <strong>adversarial</strong></td>
+<td>Build account + PR + <code>pr_sha</code>/base (from <code>review_target</code>)</td>
+<td>Verdict (pass / blocking findings) as a structured report, plus a review comment draft</td>
+<td>Blocking findings → a fix FollowUp to the Build <strong>auto-starts</strong>, then Review runs again on the new commit (at most 2 rounds)</td>
+<td>After a pass, or when the round limit is hit with blockers left</td>
+</tr>
+<tr>
+<td>Verify (optional)</td>
+<td><code>Verify</code></td>
+<td>Ticket + branch</td>
+<td>Pass/fail note</td>
+<td>Closing transition + summary comment drafts</td>
+<td>—</td>
+</tr>
+</tbody></table></div><p>The stage is <strong>derived</strong> from the kinds and states of the linked runs (<code>workstream::stage(&amp;[Run])</code>). It is not stored as a second state machine, so it can&#39;t drift from the tracker.</p>
+<h3 id="handoffs-three-fixes-the-designs-got-wrong-or-missed">Handoffs: three fixes the designs got wrong or missed</h3><ol>
+<li><strong>Plan edits must reach the Build.</strong> <code>plan_of_run</code> (<code>run_results.rs:269-289</code>) takes the Plan run&#39;s own answer, so edits the person makes to the Gossamr Plan description draft never reach the Build. Meanwhile <code>PLAN_FOLLOW</code> tells the Build agent that a person &quot;read, edited and approved&quot; the plan. Fix: <code>attach_plan</code> should prefer the text of the run&#39;s plan-description draft once that draft is Applied, including the person&#39;s edits, and fall back to the raw answer only when the person chose to build without settling the plan. That fallback gets a visible notice in RunSetup.</li>
+<li><strong>Build → Review needs a PR, and the PR has to be found.</strong> Builds always publish, so a workstream Build is drafted with <code>allow_push=true</code>. The prompt then carries <code>PUSH_ALLOWED</code> (<code>domain/run.rs:71</code>): push, open a <strong>draft</strong> PR, never mark it ready and never merge. Today Pip-drafted Builds force <code>allow_push=false</code> (<code>inbox/pip_runs.rs:127,177</code>), so that changes for workstream Builds. <code>attach_build_account</code> still refuses a build with no PR (<code>run_results.rs:321</code>), and <code>change_of</code> finds the PR only from cached code changes after a GitHub sync (<code>run_results.rs:200-208</code>). When a Build reaches Done, the supervisor marks the step &quot;waiting for PR&quot;, requests a code sync for that repo, and starts the Review when the PR appears. If no PR appears within the sync window, the step is held and Pip tells the person.</li>
+<li><strong>Review pins come from <code>draft_run</code>, not <code>attach_build_account</code>.</strong> <code>attach_build_account</code> sets only <code>pr</code> and <code>build_account</code>. <code>pr_sha</code>/<code>base</code> come from <code>review_target</code>. Pip&#39;s chained Review must therefore go through a Pip variant that runs the same <code>review_target</code> step. It must not go through <code>Core::draft_run</code>, which stamps <code>Origin::Board</code>/<code>CreatedBy::User</code> and would make Pip&#39;s drafts look like the person&#39;s.</li>
+</ol>
+<h3 id="adversarial-review">Adversarial review</h3><p>Today&#39;s Review prompt already treats the builder&#39;s account as &quot;a claim to verify&quot; (<code>REVIEW_INSTRUCTION</code>, <code>BUILD_ACCOUNT_PREFACE</code> in <code>domain/run.rs</code>). The adversarial reviewer goes further:</p>
+<div class="tbl"><table><thead><tr>
+<th>Change</th>
+<th>Detail</th>
+</tr>
+</thead><tbody><tr>
+<td>Stance</td>
+<td>The reviewer&#39;s job is to show the change is <strong>not</strong> ready: find a failing case, an unmet acceptance point, a missing test, a regression or a security issue. Passing is the conclusion only when it tried and failed to find any of these.</td>
+</tr>
+<tr>
+<td>Evidence</td>
+<td>It may check out the PR head in its own worktree and run the existing tests and read-only commands, as Verify does today. Every finding must cite a file and line, a command and its output, or the acceptance point it fails.</td>
+</tr>
+<tr>
+<td>Independence</td>
+<td>It gets the ticket, the diff and the build account (labelled as a claim). It does <strong>not</strong> get Pip&#39;s notes or the plan&#39;s reasoning, so it judges the result rather than the intent.</td>
+</tr>
+<tr>
+<td>Verdict</td>
+<td><code>report: true</code> is always on for Review, so the result is machine-readable: <code>verdict: pass | blocking</code>, and findings with a severity (<code>blocking</code>, <code>should-fix</code>, <code>nit</code>). The supervisor reads only the verdict and the count of blocking findings. It never reads the prose.</td>
+</tr>
+<tr>
+<td>Fix loop</td>
+<td><code>blocking</code> → an auto-started FollowUp to the same Build session with the blocking findings (Core-filled, marker-wrapped), then a fresh Review on the new commit. At most 2 rounds; then it stops and Pip brings it to the person. <code>should-fix</code> and <code>nit</code> are listed for the person and Pip, but never start a run.</td>
+</tr>
+<tr>
+<td>Posts only through drafts</td>
+<td>The reviewer itself never writes to GitHub. Its findings become drafts the person approves in Gossamr, the same way as Jira drafts: a <strong>GitHub review draft</strong> (an inline comment for each finding that cites a file and line, placed there; findings backed by command output or an acceptance point go in the review&#39;s summary) and, when useful, a Jira comment draft. Gossamr posts the review only when the person approves it, always as a plain comment review (never Approve or Request changes). The person can edit, drop single comments or discard the draft, or ask Pip about any comment and have Pip rewrite the draft.</td>
+</tr>
+</tbody></table></div><h3 id="auto-start-rules">Auto-start rules</h3><p>These rules let a run start the next step without a per-run approval. The supervisor applies them from fixed Rust code, so they don&#39;t depend on Pip or on agent prose.</p>
+<div class="tbl"><table><thead><tr>
+<th>When this finishes</th>
+<th>And</th>
+<th>This starts automatically</th>
+<th>Default</th>
+</tr>
+</thead><tbody><tr>
+<td>Investigate (on a ticket)</td>
+<td>Done, no tripwire</td>
+<td>Triage</td>
+<td>On</td>
+</tr>
+<tr>
+<td>Triage</td>
+<td><code>plan recommended: yes</code> in its structured report</td>
+<td>Plan</td>
+<td>On</td>
+</tr>
+<tr>
+<td>Plan</td>
+<td>The person <strong>approved</strong> the Gossamr Plan draft</td>
+<td>Build (publishes a draft PR)</td>
+<td>On, the plan approval is the gate</td>
+</tr>
+<tr>
+<td>Build</td>
+<td>Done and its PR was found</td>
+<td>Review (adversarial)</td>
+<td>On</td>
+</tr>
+<tr>
+<td>Review</td>
+<td><code>verdict: blocking</code>, fewer than 2 fix rounds so far</td>
+<td>FollowUp to the Build, then Review again</td>
+<td>On</td>
+</tr>
+<tr>
+<td>Review</td>
+<td><code>verdict: pass</code></td>
+<td>Verify (if the workstream has it enabled)</td>
+<td>Off</td>
+</tr>
+</tbody></table></div><p>Conditions on every auto-start:</p>
+<ul>
+<li>The workstream is in <strong>Manage</strong> mode, isn&#39;t held, and is within its budget.</li>
+<li>The source run finished as Done. Failed, stopped or needs-something never auto-starts anything.</li>
+<li>The new spec comes from the kind&#39;s fixed template plus Core-filled handoff slots. Pip&#39;s <code>focus</code> line is <strong>not</strong> carried into an auto-started run, so nothing Pip wrote decides what it does. Agent output does decide <strong>whether</strong> some rules fire: Triage&#39;s <code>plan recommended</code> and Review&#39;s <code>verdict</code>. The fix round goes further, because its FollowUp carries the Review&#39;s findings text, which an agent wrote, into the push-capable Build session. See the fix-round risk in §8.</li>
+<li>The spec&#39;s digest is recorded in <code>workstream_events</code> with the rule that started it, and the run card shows &quot;started automatically after R7&quot;. The person can stop it like any other run.</li>
+<li>The person can switch each rule off per workstream or globally in Settings.</li>
+</ul>
+<h3 id="parallelism">Parallelism</h3><ul>
+<li>Within a workstream, Pip may draft several runs in one turn, for example Investigate in two repos, or Verify alongside Review. Build is limited to one per workstream at a time.</li>
+<li>Across workstreams, runs share the existing <code>max_runs</code> cap (1-6, default 3). Approved runs over the cap <strong>wait</strong> instead of failing (Phase 5).</li>
+<li>Pip turns: one in flight per conversation, at most 2 Pip processes globally (configurable). Events that arrive during a turn are merged into the next wake.</li>
+</ul>
+<h3 id="when-pip-checks-in-with-the-person">When Pip checks in with the person</h3><ul>
+<li><strong>Always:</strong> the first run in a workstream, every run start not covered by an auto-start rule, every Jira draft, approving the plan (which starts the Build), answering a sub-agent&#39;s question, NeedsPermission/SystemBlocked/folder trust (the Terminal, via <code>attach</code>), ambiguous repo or clone, any hold, running out of budget, and a review that still blocks after 2 fix rounds.</li>
+<li><strong>By judgement:</strong> results that conflict, Triage says the ticket is unclear, scope would grow, a Review finds blockers.</li>
+<li><strong>Never:</strong> Pip never says a run started until the run shows Working. The prompt keeps &quot;You cannot start, stop or answer a run&quot;, because that stays true.</li>
+</ul>
+<h2 id="4-architecture">4. Architecture</h2><div class="diagram"><pre> Person ─▶ Pip home (route 'pip')  ◀── 'claude' {conversation, kind:user|wake}, 'workstreams-changed', 'proposals-changed', 'runs-changed'
+   │  composer verbs (/stop /answer /retry /hold) ─▶ existing user-only commands (runs_stop, runs_answer, runs_retry_launch)
+   │  approvals ─▶ proposals_approve │ runs_review → runs_approve(digest) │ runs_answer_draft │ follow-up send
+   ▼
+ ask_claude ─▶ agent::queue (per-conversation FIFO, user pre-empts wake, global cap 2)
+                    ▲                                    │
+                    │ enqueue_wake(ws, facts)            ▼
+ agent::supervisor ─┘                       AgentService::ask(AskRequest, backend UpdateSink)
+   ▲  (spawned task, never inline)                       │ claude -p --resume &lt;ws session>  (flags UNCHANGED)
+   │  OnceLock&lt;Weak&lt;AgentService>> set after lib.rs:1068 ▼
+   │                                       gossamr MCP: core + github + runs + agent/workstream.rs
+   │                                         reads / propose_* / notes only ─▶ proposals::create (single chokepoint)
+   │
+ RunTracker.poll ─▶ FanoutNotifier { RunNotices (today), Supervisor::on_run }  + periodic reconcile sweep
+   │ (launching lock held during notify)
+   ▼
+ RunService.launch ◀── runs a person approved (runs_approve), Queued-at-cap runs, or auto-start successors (launch_waiting, after lock drop)
+
+ SQLite: workstreams · pip_turns · workstream_events (audit) · runs.spec.workstream · proposals(+origin/workstream columns)</pre></div><h3 id="where-orchestration-state-lives">Where orchestration state lives</h3><p>All durable state lives in Rust/SQLite. The frontend only displays it.</p>
+<div class="tbl"><table><thead><tr>
+<th>Data</th>
+<th>Storage</th>
+<th>Notes</th>
+</tr>
+</thead><tbody><tr>
+<td><code>Workstream { id, connection_id, item_key?, repo?, title, pip_session?, mode, held_reason?, budget, spent, notes?, created_at, closed_at? }</code></td>
+<td>New <code>domain/workstream.rs</code>, <code>db/workstreams.rs</code>, table in <code>db/schema.rs</code></td>
+<td><code>mode</code> is the autonomy level (§6). No step state machine; the stage is derived.</td>
+</tr>
+<tr>
+<td>Run ↔ workstream</td>
+<td><code>RunSpec.workstream: Option&lt;String&gt;</code></td>
+<td><strong>Must be added to <code>RunSpec::digest</code> by hand</strong> (<code>run.rs:308-340</code> builds an explicit canonical JSON) and left out when <code>None</code>, so old digests stay valid. Not rendered into the prompt.</td>
+</tr>
+<tr>
+<td>Draft ↔ workstream</td>
+<td><code>Origin::Chat { request_id, workstream }</code> (<code>#[serde(default)]</code>); run-origin drafts inherit it from <code>run.spec.workstream</code> in <code>run_results.rs</code>/<code>plan_description.rs</code></td>
+<td>Add <code>origin_kind</code>/<code>workstream</code> <strong>columns</strong> on <code>proposals</code> (today a single JSON blob, <code>schema.rs:101-108</code>) and <code>ProposalQuery.workstream</code>.</td>
+</tr>
+<tr>
+<td>Provenance</td>
+<td><code>CreatedBy::Agent</code> as a <strong>unit variant</strong>, so it stays <code>Copy</code> and the TS union becomes <code>&#39;user&#39;|&#39;pip&#39;|&#39;autopilot&#39;|&#39;agent&#39;</code>; the run id and kind are already in <code>Origin::Run</code></td>
+<td>Replaces the <code>CreatedBy::User</code> overload for run-result drafts (<code>run_results.rs:422,478,523</code>, <code>plan_description.rs:161</code>). Rewrite <code>require_pip_may_revise</code> (<code>proposals.rs:260-278</code>) to allow Agent drafts in the same workstream, keeping the &quot;Edited&quot; lock.</td>
+</tr>
+<tr>
+<td>Transcripts</td>
+<td>New <code>pip_turns(conversation, request_id, role user|pip|wake, prompt, text, steps_json, status, usage_json, created_at)</code></td>
+<td>Replaces in-memory <code>claudeStore</code>. Wake turns must be registered by the backend, because <code>updateByRequest</code> drops unknown requestIds.</td>
+</tr>
+<tr>
+<td>Pip session per workstream</td>
+<td><code>Workstream.pip_session</code></td>
+<td>It must be pinned in the resume allowlist separately from the 50-entry LRU (<code>OWN_SESSIONS_KEPT</code>, <code>inbox.rs:50</code>), or long workstreams silently stop resuming.</td>
+</tr>
+<tr>
+<td>Audit</td>
+<td><code>workstream_events</code> append-only table (actor Person/Pip/Supervisor/Run, action, ids, digest)</td>
+<td>Exportable. A hash chain is optional and comes later.</td>
+</tr>
+<tr>
+<td>Supervisor queue</td>
+<td>In memory, rebuilt from run states and <code>workstream_events</code> on startup</td>
+<td>An idempotency key <code>(workstream, run, state)</code> makes sure a duplicate wake is a no-op.</td>
+</tr>
+</tbody></table></div><h3 id="rust-modules">Rust modules</h3><div class="tbl"><table><thead><tr>
+<th>Module</th>
+<th>New/changed</th>
+<th>Purpose</th>
+</tr>
+</thead><tbody><tr>
+<td><code>agent/queue.rs</code></td>
+<td>New</td>
+<td>Per-conversation FIFO of <code>User(AskRequest) | Wake(WakeFacts)</code>. One turn in flight per conversation, global cap 2. A user message cancels a pending or in-flight wake. Wakes merge.</td>
+</tr>
+<tr>
+<td><code>agent/supervisor.rs</code></td>
+<td>New</td>
+<td><code>on_run(run, attention)</code> <strong>spawns</strong> a task and never does work inline, because <code>notify</code> runs under <code>RunService.launching</code> (<code>tracker.rs:239</code>). It runs a periodic sweep over linked runs to catch the events the notifier never emits: a person-Stopped run, a Done-after-continuation that drafted nothing, or <code>draft_on_finish</code> turned off (<code>tracker.rs:396-407</code>). It holds budgets, the hold state and recovery.</td>
+</tr>
+<tr>
+<td><code>agent/workstream.rs</code></td>
+<td>New MCP module</td>
+<td><code>get_workstream</code>, <code>list_workstreams</code>, <code>set_workstream_notes</code> (≤2 KB, scrubbed, fed back as data), <code>propose_answer</code>. Chained into <code>tool_list</code>/<code>run_tool</code>/<code>tool_label</code> like <code>runs.rs</code>.</td>
+</tr>
+<tr>
+<td><code>agent/mod.rs</code></td>
+<td>Changed</td>
+<td><code>AskRequest</code> gets <code>conversation</code> and <code>workstream</code>. <code>PipRun</code> gets <code>workstream</code>. Turns go through the queue. Usage is recorded per turn.</td>
+</tr>
+<tr>
+<td><code>agent/context.rs</code></td>
+<td>Changed</td>
+<td><code>system_prompt(Role::{Assistant, Manager})</code>. <code>compose()</code> adds a <code>[Workstream]</code> block (stage, notes, linked runs, the workstream&#39;s drafts, the person&#39;s recent overrides) and an <code>[Event]</code> block for wakes. &quot;[Open drafts, from everyone]&quot; (<code>context.rs:245</code>) is <strong>scoped and capped</strong> when in a workstream.</td>
+</tr>
+<tr>
+<td><code>claude/stream.rs</code></td>
+<td>Changed</td>
+<td>Stop dropping <code>result.usage</code>/<code>total_cost_usd</code>, and emit them on <code>Done</code> so Pip turns can be budgeted.</td>
+</tr>
+<tr>
+<td><code>claude/mod.rs</code></td>
+<td><strong>Unchanged</strong></td>
+<td>Same flags, tests, sandbox and token handling.</td>
+</tr>
+<tr>
+<td><code>domain/run.rs</code></td>
+<td>Changed</td>
+<td><code>pip_chain_kinds()</code> (Build only with <code>from_run</code>=Done Plan; Review only with <code>from_run</code>=Done Build with PR). Add a <code>findings</code> slot plus a <code>&lt;&lt;&lt;FINDINGS</code> marker in <code>MARKERS</code>/<code>without_markers</code>. Add <code>workstream</code> to the digest. An adversarial <code>REVIEW_INSTRUCTION</code> with a required verdict in its report.</td>
+</tr>
+<tr>
+<td><code>agent/autostart.rs</code></td>
+<td>New</td>
+<td>The auto-start rule table, as pure functions from <code>(finished run, its structured report, workstream)</code> to an optional successor <code>RunSpec</code>. Unit-tested on its own and shared with the mock as a JSON fixture.</td>
+</tr>
+<tr>
+<td><code>inbox/pip_runs.rs</code>, <code>inbox/run_results.rs</code></td>
+<td>Changed</td>
+<td>A Pip chain variant of <code>draft_run</code> that runs <code>attach_plan</code>/<code>attach_build_account</code>/<code>attach_findings</code>/<code>review_target</code> and stamps Pip provenance. Plan-edit propagation.</td>
+</tr>
+<tr>
+<td><code>agent/runs.rs</code> <code>kind_of</code> (494-501)</td>
+<td>Changed</td>
+<td>From &quot;refuse Build/Review&quot; to &quot;Build/Review only as successors with a valid <code>from_run</code>&quot;. Workstream Builds get <code>allow_push=true</code> (draft PR only).</td>
+</tr>
+<tr>
+<td><code>domain/proposal.rs</code>, <code>proposals.rs</code>, <code>db/proposals.rs</code>, <code>tracker/jira/mod.rs</code></td>
+<td>Changed</td>
+<td><code>Intent::RunAnswer { run_id, message }</code> with &quot;own button&quot; refusals in <code>begin_applying</code> (87-91) and the Jira adapter (331-332). Per-workstream draft cap and exclusivity in <code>create()</code>. Sibling-transition retirement in <code>reconcile_pending</code>.</td>
+</tr>
+<tr>
+<td><code>runs/service.rs</code>, <code>runs/preflight.rs</code>, <code>runs/tracker.rs</code></td>
+<td>Changed</td>
+<td>Approved runs over the cap stay Queued. <strong>Preflight&#39;s red CapReached row (<code>preflight.rs:144-152</code>) becomes amber &quot;will wait for a slot&quot;</strong>, or RunSetup can&#39;t approve at all. <code>launch_waiting()</code> runs <strong>after</strong> the poll&#39;s <code>launching</code> guard is dropped, because tokio&#39;s Mutex isn&#39;t re-entrant and <code>start()</code> locks it again.</td>
+</tr>
+<tr>
+<td><code>lib.rs</code></td>
+<td>Changed</td>
+<td>Commands <code>workstream_*</code>, <code>pip_turns</code>, <code>runs_answer_draft</code>, <code>workstreams_hold_all</code>. The supervisor is wired as a <code>FanoutNotifier</code> at <code>lib.rs:1042</code> with a <code>OnceLock&lt;Weak&lt;AgentService&gt;&gt;</code> filled after <code>AgentService::new</code> (<code>lib.rs:1068</code>). This resolves the startup ordering cycle: RunService → McpServer → AgentService. A backend-owned emitter for <code>claude</code> events that the person didn&#39;t start.</td>
+</tr>
+</tbody></table></div><h3 id="frontend-stores">Frontend stores</h3><ul>
+<li><code>claudeStore.ts</code>: conversations keyed <code>general</code> and <code>ws:&lt;id&gt;</code>, loaded from <code>pip_turns</code>. <code>ask</code> appends a <code>queued</code> turn instead of refusing (<code>PipPane.tsx:267</code>, <code>askPip.ts:14-16</code>). Keep the <code>byTicket</code> API so the classic <code>ClaudeDrawer</code> works until build-plan 2f removes it.</li>
+<li>New <code>workstreamsStore.ts</code>: mirrors <code>workstreams_list</code>/<code>workstream_get</code> and listens to <code>workstreams-changed</code>.</li>
+<li><code>useWorkspace</code>, <code>useRuns</code> and <code>useRunSetup</code> are unchanged apart from the workstream filters.</li>
+<li>Mock: <code>mockWorkstreams.ts</code>, <code>mockSupervisor.ts</code> (driven by an optional auto-clock on <code>MockRuns.advance</code>), and <code>mockPip</code> scripts for wake turns.</li>
+</ul>
+<h2 id="5-user-experience">5. User experience</h2><p><strong>Talking to Pip.</strong> A new route <code>&#39;pip&#39;</code> in <code>tabsStore.Route</code> (<code>tabsStore.ts:10</code>) becomes the landing page when agents are enabled (opt-in at first). It has three columns:</p>
+<ol>
+<li>A <strong>Workstreams</strong> list with General at the top, one row per workstream (&quot;PAY-412 Refund rounding · Plan running · 1 needs you&quot;), and a <strong>Needs you</strong> tray at the bottom that collects pending drafts, step approvals, questions and failures across workstreams, sorted by how long each has waited.</li>
+<li>The <strong>conversation</strong>, which is <code>PipConversation</code> taken out of <code>PipPane</code>.</li>
+<li>The <strong>step rail</strong>: five chips derived from the runs, each expanding to its <code>PipRunCard</code>s and that step&#39;s drafts, with &quot;Pip&#39;s plan&quot; (notes) at the top.</li>
+</ol>
+<p>The person starts work by typing (&quot;take PAY-412 to a reviewed PR&quot;), by pressing ⌘N on a selected ticket, or from the palette (&quot;Ask Pip to plan ABC-1&quot;, <code>commands.ts:181</code>). Suggestion chips become workstream-aware.</p>
+<p><strong>Watching sub-agents.</strong> Working ticks update only the rail and a composer footer (&quot;4 agents working · 2 need you&quot;), never the transcript. Wake turns render with a muted header (&quot;Pip picked this up: run abc12 finished&quot;) and are at most about three lines plus cards, so they are clearly separate from what the person typed. Native notifications open the app on the workstream. Deep-linking to the exact card is best-effort, because macOS notifications have no click handler here and <code>OpenOnFocus</code> approximates one.</p>
+<p><strong>Approving drafts.</strong> The draft spine stays as it is.</p>
+<div class="tbl"><table><thead><tr>
+<th>Draft</th>
+<th>How it&#39;s approved</th>
+</tr>
+</thead><tbody><tr>
+<td>Comment, transition, subtasks, create</td>
+<td>Inline card: <code>a</code> approve, <code>e</code> edit, <code>s</code> skip, <code>o</code> open full, <code>t</code> talk it over. There is a per-step &quot;Approve these 3&quot; behind a confirm that still calls <code>approve_proposal</code> for each draft (<code>useCards.ts:129-140</code> pattern).</td>
+</tr>
+<tr>
+<td>Description rewrite</td>
+<td>Never approved inline. <code>a</code> opens <code>RewriteDiff</code>.</td>
+</tr>
+<tr>
+<td>Run start (Investigate/Triage/Plan/Verify)</td>
+<td>Inline &quot;Review and start&quot; expander showing the exact rendered prompt and the preflight rows from <code>runs_review</code>. <strong>Start</strong> is enabled only after that digest is displayed. The CHANGED path forces a re-read.</td>
+</tr>
+<tr>
+<td>Run start (Build/Review)</td>
+<td>Usually automatic: Build starts when the plan is approved, Review when the PR appears. A Build started by hand still opens the full <code>RunSetup</code> sheet.</td>
+</tr>
+<tr>
+<td>Answer, FollowUp</td>
+<td>Editable text inline, then ⌘⏎ to send.</td>
+</tr>
+</tbody></table></div><p><strong>Steering and interrupting.</strong> Composer verbs are handled by the frontend and call the existing user-only commands: <code>/stop R7</code>, <code>/answer R9 …</code>, <code>/retry R7</code>, <code>/hold</code>, <code>/resume</code>. They are person actions and Pip gets no new tool. Each one is written to <code>workstream_events</code> and shown to Pip in the next <code>[Workstream]</code> block (&quot;the person stopped R7&quot;). <code>@R7 also check X</code> makes Pip draft a FollowUp. Esc closes a sheet first, then cancels Pip&#39;s turn (<code>cancel_claude</code>). A message sent mid-turn queues, and pre-empts a wake.</p>
+<p><strong>Board, list and peek alongside Pip home.</strong> These are deliberately <strong>not</strong> moved into a new &quot;Stage&quot; column, because that would refactor Esc/focus handling that tests pin. The canvas stays a route one keystroke away (⌘1). PeekSheet and AgentSheets stay overlays. On other routes, ⌘J opens the docked pane showing the workstream of the selected ticket, or General. <code>set_view_filter</code> is relaxed from &quot;workspace conversation only&quot; (<code>PipExtras.tsx:48-51</code>) to &quot;the focused conversation&quot;. The Agents route gains &quot;By workstream&quot; grouping (<code>agentsLogic.groupRuns</code>). Activity gains a &quot;Pip &amp; agents&quot; chip that reads <code>workstream_events</code>. The peek&#39;s &quot;Agents on this ticket&quot; links to the workstream. With the agents flag off, the app behaves exactly as today.</p>
+<h2 id="6-safety-control-and-cost">6. Safety, control and cost</h2><h3 id="approval-invariants-unchanged-and-enforced-by-tests">Approval invariants (unchanged and enforced by tests)</h3><div class="tbl"><table><thead><tr>
+<th>Invariant</th>
+<th>How it holds</th>
+</tr>
+</thead><tbody><tr>
+<td>No Jira write without the person&#39;s approval</td>
+<td>The only route is <code>approve_proposal → begin/execute/finish → WorkTracker::apply</code>. The supervisor gets a narrow <code>SupervisorCore</code> facade with no tracker handle and no <code>approve_proposal</code>/<code>transition</code>/<code>comment</code>/<code>create_subtasks</code>/<code>attach</code>. New conformance test <code>orchestration_never_writes_jira</code>: run a full mock workstream and assert that <code>tracker.intents()</code> is empty until a person approves.</td>
+</tr>
+<tr>
+<td>Runs start only from a person&#39;s approval or a fixed rule</td>
+<td>The supervisor launches only runs Queued by <code>runs_approve</code> or specs produced by <code>agent/autostart.rs</code>. Auto-started specs are built from templates and Core-filled slots, and their digests are logged with the rule.</td>
+</tr>
+<tr>
+<td>Pip has no power tools</td>
+<td>The conformance suite (<code>agent/conformance.rs:298-319</code>) keeps forbidding start/stop/answer/attach/rm/approve, and a sibling probe covers <code>agent/workstream.rs</code>. Pip deliberately gets <strong>no</strong> stop or hold tool, so injected text can&#39;t stall work.</td>
+</tr>
+<tr>
+<td>Pip&#39;s process is unchanged</td>
+<td><code>claude/mod.rs</code> flags and tests stay as they are. Wake turns are ordinary asks with a fresh per-request token.</td>
+</tr>
+<tr>
+<td>Handoff text comes from Core</td>
+<td>Plan, findings, build account, review findings and PR are filled by <code>attach_*</code>. Pip supplies kind, <code>from_run</code> and a ≤300-char focus for runs it drafts, and auto-started runs carry no focus at all.</td>
+</tr>
+<tr>
+<td>Person edits are final</td>
+<td>The &quot;Edited&quot; lock is kept under the new <code>CreatedBy::Agent</code>.</td>
+</tr>
+</tbody></table></div><h3 id="autonomy-levels-per-workstream-capped-by-a-global-safety-setting">Autonomy levels (per workstream, capped by a global Safety setting)</h3><div class="tbl"><table><thead><tr>
+<th>Level</th>
+<th>Behaviour</th>
+<th>Default</th>
+</tr>
+</thead><tbody><tr>
+<td><strong>Advise</strong></td>
+<td>Today&#39;s Pip inside a workstream. It speaks only when asked, and run nudges stay in the frontend.</td>
+<td>For workstreams adopted from existing runs</td>
+</tr>
+<tr>
+<td><strong>Manage</strong></td>
+<td>The supervisor wakes Pip on run events and applies the auto-start rules. Pip reads results and drafts the steps no rule covers. Every Jira write still needs the person.</td>
+<td>Default for new workstreams once Phase 3 has shipped and soaked</td>
+</tr>
+</tbody></table></div><p>A caveat for auto-start: Investigate, Triage, Plan and Review are read-only <strong>by instruction only</strong>. <code>docs/agents-cli-findings.md</code> calls this &quot;a request, not a lock&quot;. Runs use the person&#39;s own permission mode with full tools, repository hooks may fire (unverified), and Review and Verify run the repo&#39;s tests. An auto-started run therefore does what a run the person approved would do, without the person reading its prompt first. Two things limit the risk. First, the prompt is a fixed template plus Core-filled slots, so the person has in effect approved it once by turning the rule on. Second, the tripwires below hold the workstream before anything chains on. A real permission restriction for the read-only kinds (<code>--permission-mode plan</code> with <code>--bg</code>, currently unverified, or a restricted allowed-tools list) is still recommended before auto-start is on by default.</p>
+<h3 id="budgets-and-cost">Budgets and cost</h3><ul>
+<li><strong>Pip turns:</strong> usage is captured from <code>stream.rs</code>. Per workstream, at most 6 automatic turns since the person&#39;s last message (only a human message resets it) and 12 wakes in total. Globally, there is a daily cap on manager turns. At 80% the workstream shows amber, and at 100% it is Held with a &quot;say carry on&quot; message.</li>
+<li><strong>Sub-agents:</strong> per-run limits (<code>limits.rs</code>) are unchanged. A per-workstream token sum across children is shown and enforced the same way.</li>
+<li><strong>Shared quota:</strong> Pip and every run draw on the person&#39;s subscription window. On a rate-limit or auth error the supervisor backs off exponentially, marks the workstream &quot;paused: quota&quot;, and never retries in a loop.</li>
+<li><strong>Model:</strong> the manager stays on Sonnet/medium (<code>claude/mod.rs:23-30</code>) until evals show a stronger model picks next steps measurably better (open question).</li>
+</ul>
+<h3 id="prompt-injection-between-agents">Prompt injection between agents</h3><ul>
+<li>Wake prompts are generated by Rust and contain <strong>only</strong> ids, kinds, states, counts and parsed flags, for example <code>[Event] run abc12 (triage) Done; plan recommended: yes; 2 drafts</code>. They contain no agent prose, and no ticket keys that <code>keys_in</code> would treat as &quot;handed&quot;. Reachability for a wake comes from the workstream&#39;s own <code>item_key</code> (it must be watched or explicitly handed when the workstream opened), not from prompt text.</li>
+<li>Agent output reaches Pip only through the run tools (AGENT_OUTPUT-wrapped, redacted, defanged). It reaches another agent only through Core-filled, marker-wrapped, length-capped slots.</li>
+<li>Pip&#39;s notes and answers go through <code>scrub()</code>, and marker strings are rejected.</li>
+<li><strong>Tripwires</strong> (hold the workstream and drop it to Advise): marker or defang hits in a child&#39;s output; Basis drift on the ticket since the workstream opened (status, assignee or description changed in Jira, via the existing <code>Basis</code>); two failures of the same step; Pip asking for a Build/Review the gate refused three times.</li>
+</ul>
+<h3 id="sandboxing">Sandboxing</h3><p>Pip&#39;s sandbox is unchanged. Sub-agents keep their worktrees, their GUARD, Gossamr never writing folder trust, run-index-only stop/rm, and no <code>--discard-unpushed</code>. A workstream Build may push its own branch and open a <strong>draft</strong> PR, and nothing else: <code>PUSH_ALLOWED</code> forbids marking it ready or merging, and Review never writes to GitHub itself: its findings reach the PR only as a review draft that Gossamr posts after the person approves it.</p>
+<h3 id="kill-switches">Kill switches</h3><ul>
+<li><strong>Per workstream:</strong> Hold (no wakes, no queued launches; running children continue), Stop (stops its children through <code>control::stop</code>), Close.</li>
+<li><strong>Hold all</strong> (rail button visible while anything is active, plus a shortcut): holds every workstream, cancels in-flight Pip turns (<code>cancel</code>, then <code>finish()</code> revokes MCP tokens), skips queued launches, optionally stops workstream runs, and leaves drafts inert.</li>
+<li><strong>After restart:</strong> every workstream comes back <strong>Held(restart)</strong>. Resuming re-checks preflight. The existing &quot;Stop all&quot; stays.</li>
+</ul>
+<h3 id="audit">Audit</h3><p><code>workstream_events</code> records workstream opens and closes, every wake (reason, turn id, usage), every Pip tool call in a workstream (name, focus text), every draft created, retired or approved and by whom, every run approval (spec digest), hold, tripwire, budget threshold and person verb. A &quot;What happened&quot; tab shows it and an export produces JSON.</p>
+<h3 id="data-retention">Data retention</h3><p>Transcripts and events contain ticket text and agent output. They are pruned on the same 90-day horizon as items, deleted when the workstream is deleted, and deleted on sign-out or connection removal.</p>
+<h2 id="7-phased-delivery-plan">7. Phased delivery plan</h2><p>Every phase can ship on its own, behind the agents flag, and has mock parity. Estimates are rough.</p>
+<div class="tbl"><table><thead><tr>
+<th>Phase</th>
+<th>Scope</th>
+<th>Key files</th>
+<th>Done when</th>
+</tr>
+</thead><tbody><tr>
+<td><strong>0. Groundwork, no new authority</strong> (≈1 wk)</td>
+<td><code>pip_turns</code> table and loading; Rust turn queue (user pre-emption, global cap 2) replacing the one-turn refusal; extract <code>PipConversation</code>/Composer; keyboard card focus on <code>LiveDraftPreview</code>; capture usage in <code>stream.rs</code>; cap the open-drafts block. Ordered after build-plan 2f if possible; otherwise keep <code>byTicket</code> compatible.</td>
+<td><code>db/schema.rs</code>, <code>agent/queue.rs</code> (new), <code>agent/mod.rs</code>, <code>claude/stream.rs</code>, <code>agent/context.rs</code>, <code>lib.rs</code>, <code>claudeStore.ts</code>, <code>PipPane.tsx</code>, <code>PipConversation.tsx</code> (new), <code>askPip.ts</code></td>
+<td>The conversation survives ⌘R and a restart; a second message queues; drafts are approvable from the keyboard; turn usage is recorded; cargo and vitest pass unchanged.</td>
+</tr>
+<tr>
+<td><strong>1. Workstreams as the spine</strong> (≈1.5 wk)</td>
+<td>Workstream domain/table/commands; <code>RunSpec.workstream</code> explicitly in the digest; <code>Origin::Chat.workstream</code>; proposal columns + <code>ProposalQuery</code>; <code>CreatedBy::Agent</code> unit variant + <code>require_pip_may_revise</code>; run-result drafts inherit the workstream; <code>[Workstream]</code> block; MCP <code>get_workstream</code>/<code>list_workstreams</code>/<code>set_workstream_notes</code>; derived stage; composer verbs; &quot;By workstream&quot; in Agents; adopt the existing workspace conversation as General; <code>workstream_events</code>.</td>
+<td><code>domain/workstream.rs</code>, <code>db/workstreams.rs</code>, <code>inbox/workstreams.rs</code>, <code>agent/workstream.rs</code> (new); <code>domain/run.rs</code>, <code>domain/proposal.rs</code>, <code>proposals.rs</code>, <code>inbox/run_results.rs</code>, <code>plan_description.rs</code>, <code>pip_runs.rs</code>, <code>agent/mcp.rs</code>, <code>conformance.rs</code>; <code>types.ts</code>, <code>workstreamsStore.ts</code>, <code>AgentsView.tsx</code>, <code>agentsLogic.ts</code>, mocks</td>
+<td>Runs and drafts group under a workstream; old rows still deserialize; old digests are unchanged and a test proves <code>workstream</code> changes the digest; the conformance probe shows the new tools change nothing.</td>
+</tr>
+<tr>
+<td><strong>2. Pip drafts the whole chain</strong> (≈1.5 wk)</td>
+<td><code>pip_chain_kinds()</code>; Pip chain variant of <code>draft_run</code> (with <code>attach_*</code> + <code>review_target</code>, Pip provenance, workstream Builds publish a draft PR); <code>findings</code> slot + <code>attach_findings</code>; plan-edit propagation; adversarial <code>REVIEW_INSTRUCTION</code> with a required verdict report; &quot;waiting for PR&quot; handling; <code>Role::Manager</code> prompt; <code>findRunDraft</code> recognises Pip chain drafts.</td>
+<td><code>domain/run.rs</code>, <code>agent/runs.rs</code>, <code>inbox/pip_runs.rs</code>, <code>inbox/run_results.rs</code>, <code>runs/report</code>, <code>agent/context.rs</code>, <code>conformance.rs</code>, <code>runSheetLogic.ts</code>, <code>mockRunKinds.ts</code>, <code>mockRuns.ts</code></td>
+<td>In one workstream Pip can draft investigate → … → review, each opening with Core-attached handoffs; Build/Review without the right Done source are refused (tests); an edited and applied plan is what the Build carries; every Build ends with a draft PR; a Review returns a pass/blocking verdict.</td>
+</tr>
+<tr>
+<td><strong>3. Supervisor wake-up and auto-start</strong> (≈2 wk)</td>
+<td><code>agent/supervisor.rs</code> with FanoutNotifier (spawned, never inline), late-bound <code>OnceLock&lt;Weak&lt;AgentService&gt;&gt;</code>, all attentions <strong>including <code>DraftedTicket</code></strong>, a sweep for Stopped/silent Done; Rust <code>[Event]</code> prompts; backend sink and <code>claude</code> events with <code>conversation</code>/<code>kind</code>; Manage mode, budgets, Held-on-restart, idempotency key, quota backoff; Hold all; frontend nudges suppressed for Managed workstreams; <code>agent/autostart.rs</code> rule table with per-rule switches, the 2-round fix loop, and &quot;started automatically&quot; on run cards.</td>
+<td><code>agent/supervisor.rs</code>, <code>agent/autostart.rs</code> (new), <code>agent/mod.rs</code>, <code>agent/context.rs</code>, <code>runs/tracker.rs</code>, <code>lib.rs</code>, <code>claude.ts</code>, <code>claudeStore.ts</code>, <code>pipRuns.ts</code>, <code>PipExtras.tsx</code>, <code>mockSupervisor.ts</code> (new)</td>
+<td>With Manage on, a finished run produces exactly one Pip turn; a Triage that recommends a plan starts the Plan, a Build with a PR starts its Review, and a blocking Review starts at most 2 fix rounds, all without a click; Pip&#39;s own turns still start nothing (probe); a restart leaves workstreams Held with at most one wake per terminal run; budget exhaustion pauses.</td>
+</tr>
+<tr>
+<td><strong>4. Pip home</strong> (≈1.5 wk)</td>
+<td><code>&#39;pip&#39;</code> route (opt-in default), workstream list + Needs-you tray, step rail, inline review-and-start for Investigate/Triage/Plan/Verify, per-step batch approve, wake-turn rendering, Activity chip, peek link, relaxed <code>set_view_filter</code>, palette/suggestions.</td>
+<td><code>tabsStore.ts</code>, <code>Workspace.tsx</code>, <code>Rail.tsx</code>, <code>PipHome.tsx</code>, <code>StepRail.tsx</code>, <code>NeedsYouTray.tsx</code> (new); <code>DraftPreview.tsx</code>, <code>runSetupStore.ts</code>, <code>useCards.ts</code>, <code>ActivityView.tsx</code>, <code>activityLogic.ts</code>, <code>commands.ts</code>, <code>suggestions.ts</code>, <code>prefs.ts</code></td>
+<td>A person can take a ticket from intake to review mostly by talking to Pip, approving inline; keyboard walkthrough without a mouse; agents flag off means today&#39;s workspace.</td>
+</tr>
+<tr>
+<td><strong>5. Questions, capacity, draft hygiene</strong> (≈1 wk)</td>
+<td><code>Intent::RunAnswer</code> + <code>propose_answer</code> + <code>runs_answer_draft</code>; queue-at-cap (service + amber preflight row + <code>launch_waiting</code> after the lock drops, ordered against <code>answer</code>&#39;s 5 s settle); per-workstream pending-draft cap and same-kind supersession; sibling-transition retirement; Basis-drift tripwire.</td>
+<td><code>domain/proposal.rs</code>, <code>proposals.rs</code>, <code>db/proposals.rs</code>, <code>tracker/jira/mod.rs</code>, <code>runs/answer.rs</code>, <code>runs/service.rs</code>, <code>runs/preflight.rs</code>, <code>runs/tracker.rs</code>, <code>DraftCard.tsx</code>, mocks</td>
+<td>A NeedsAnswer child shows Pip&#39;s suggested reply and approving it resumes the run; a 4th approved run waits and launches later; approving one transition retires its siblings; no lock deadlock under a concurrency test.</td>
+</tr>
+<tr>
+<td><strong>5b. GitHub review drafts</strong> (≈1 wk)</td>
+<td>A <code>GithubReview</code> draft kind (summary + inline comments at cited file/line, built by Core from the Review&#39;s structured findings, never from free prose); a GitHub write path limited to <code>POST /repos/{o}/{r}/pulls/{n}/reviews</code> with <code>event: COMMENT</code>, called only from the person&#39;s approval; a draft card with the diff hunk around each comment, per-comment drop/edit and an outdated-commit warning; write-access check on the token, with an in-app PR view (files, diff, the review&#39;s comments) as the fallback when posting isn&#39;t allowed; Pip can read a review draft in full (<code>get_proposal</code>) and the PR&#39;s existing review comments, discuss them with the person, and revise the draft (reword, drop or add a comment at a line the diff contains) through the same <code>require_pip_may_revise</code> rule as Jira drafts, so a draft the person edited stays theirs; a revision is still only a draft; conformance test that nothing posts to GitHub without an approval.</td>
+<td><code>domain/proposal.rs</code>, <code>proposals.rs</code>, <code>codehost/github/write.rs</code> (new), <code>codehost/mod.rs</code>, <code>inbox/drafts.rs</code>, <code>agent/supervisor.rs</code>, <code>DraftCard.tsx</code>, <code>DraftPreview.tsx</code>, <code>PullView.tsx</code> (new), mocks</td>
+<td>A blocking or passing Review produces one GitHub review draft; approving it posts exactly one COMMENT review with its inline comments (mock GitHub); editing or dropping a comment changes what is posted; a token without write access shows the in-app PR view instead; asking Pip to soften or drop a comment produces a revised draft and posts nothing; no code path posts without approval.</td>
+</tr>
+<tr>
+<td><strong>6. Enforced read-only runs</strong></td>
+<td>A real permission restriction for Investigate, Triage, Plan and Review (plan mode with <code>--bg</code>, or a restricted allowed-tools list), verified against the real CLI, so auto-started read-only runs can&#39;t write even if an injection asks them to.</td>
+<td><code>runs/cli.rs</code>, <code>runs/launcher.rs</code>, <code>domain/run.rs</code>, <code>real_tests.rs</code>, <code>conformance.rs</code></td>
+<td>A read-only run that tries to write is refused by Claude Code itself, shown by a real-runtime test; then auto-start can default to on for everyone.</td>
+</tr>
+</tbody></table></div><p><strong>Cross-cutting test work in every phase:</strong></p>
+<ul>
+<li>A shared JSON fixture of supervisor decisions (wake or not, hold or not, budget) that both the Rust tests and <code>mockSupervisor.ts</code> must pass.</li>
+<li>Golden-scenario evals: scripted stream-json replies plus <code>test-support/fake-claude.sh</code> run scenarios that check Pip picks the right next step, stops at budget and never claims a run started.</li>
+<li>A restart-dedup test.</li>
+</ul>
+<h2 id="8-risks-and-mitigations">8. Risks and mitigations</h2><div class="tbl"><table><thead><tr>
+<th>Risk</th>
+<th>Mitigation</th>
+</tr>
+</thead><tbody><tr>
+<td>Wake loops and cost (Pip proposes → run finishes → Pip proposes…)</td>
+<td>Wakes only on terminal or needs states; per-workstream auto-turn and wake budgets reset only by a human; global cap of 2 Pip processes; usage measured from Phase 0.</td>
+</tr>
+<tr>
+<td>Approval fatigue keeps the person as orchestrator</td>
+<td>Auto-start rules cover the routine handoffs; inline review-and-start, the Needs-you tray and per-step batches cover the rest.</td>
+</tr>
+<tr>
+<td>Auto-start chains spend without anyone watching</td>
+<td>Rules apply only in Manage mode, within the workstream budget, from Done runs, and never more than 2 fix rounds. Tripwires hold the workstream. Each rule can be switched off.</td>
+</tr>
+<tr>
+<td>Injection steers a push-capable Build</td>
+<td>The first Build starts only from the person&#39;s plan approval, and its handoff is the approved plan, filled by Core. Push is limited to a draft PR; <code>PUSH_ALLOWED</code> forbids ready-for-review and merging. Security review before Phase 2 ships.</td>
+</tr>
+<tr>
+<td>Fix rounds carry agent-written text into the push-capable Build</td>
+<td>A blocking Review auto-starts a FollowUp to the Build, and that FollowUp contains the Review&#39;s findings, which an agent wrote and which may quote hostile PR or ticket content. Mitigations: only findings marked <code>blocking</code> that cite a file and line are passed; each is length-capped, marker-wrapped and introduced by a fixed sentence saying it is data describing a defect, not an instruction; the FollowUp&#39;s own instruction is a fixed template (fix these findings in this PR, change nothing else); the Build can still only push its own branch to a draft PR; at most 2 rounds; tripwires on marker or defang hits hold the workstream; a person reviews and merges the PR on GitHub. The product owner chose automatic fix rounds, at most 2, with these mitigations (open question 2).</td>
+</tr>
+<tr>
+<td>A weak reviewer passes bad work</td>
+<td>The adversarial stance and evidence requirement, no access to Pip&#39;s notes, and a structured verdict. A human still reviews and merges the PR on GitHub. Golden-scenario evals with seeded bugs check that Review catches them.</td>
+</tr>
+<tr>
+<td>Deadlocks and lock contention (notify under <code>launching</code>; <code>answer</code> holds it through a 5 s settle)</td>
+<td>The supervisor always spawns; <code>launch_waiting</code> runs after the guard drops; a dedicated concurrency test.</td>
+</tr>
+<tr>
+<td>Startup wiring cycle</td>
+<td><code>OnceLock&lt;Weak&lt;AgentService&gt;&gt;</code> late binding; the supervisor no-ops until bound.</td>
+</tr>
+<tr>
+<td>Review stalls on the PR/GitHub-sync dependency</td>
+<td>&quot;Waiting for PR&quot; step state, a targeted code-sync request, and the wake fires on PR discovery.</td>
+</tr>
+<tr>
+<td>Long <code>--resume</code> sessions grow or drop out of the 50-entry allowlist</td>
+<td>Pin workstream sessions separately; <code>compose()</code> stays self-sufficient; start a fresh session with the <code>[Workstream]</code> block when resume fails.</td>
+</tr>
+<tr>
+<td>Polling latency (4 s/30 s, slower when unfocused; Done needs 2 idle polls), App Nap, laptop sleep</td>
+<td>Show &quot;waiting for agent&quot; clearly; resume a sweep on wake from sleep and on focus; don&#39;t promise unattended speed.</td>
+</tr>
+<tr>
+<td>NeedsPermission, folder trust and ambiguous clones stall unattended work</td>
+<td>Surface them in the Needs-you tray with Attach/Trust; Pip only explains.</td>
+</tr>
+<tr>
+<td>Many concurrent <code>claude</code> processes on a laptop</td>
+<td>Cap Pip at 2, runs at <code>max_runs</code>; record process count and memory in diagnostics.</td>
+</tr>
+<tr>
+<td>Mock/Rust drift (<code>mockRunKinds</code>, <code>mockRuns</code>, <code>mockProposals</code>)</td>
+<td>Shared fixtures; the mock still lacks reconcile and real races, so require one real-runtime soak per phase.</td>
+</tr>
+<tr>
+<td>Two conversation models until 2f</td>
+<td>Prefer landing Phase 0 after 2f; otherwise keep <code>byTicket</code> working.</td>
+</tr>
+<tr>
+<td>Duplicate Subtasks/Create drafts across runs (reconcile always keeps them)</td>
+<td>Per-workstream same-kind supersession and Pip&#39;s dedup refusing rather than warning inside a workstream.</td>
+</tr>
+</tbody></table></div><h2 id="9-open-questions-for-the-product-owner">9. Open questions for the product owner</h2><ol>
+<li>Is the auto-start rule table right? In particular, should approving the plan start the Build directly, or should the person still see the Build&#39;s RunSetup?</li>
+<li>Should the fix round start automatically (it carries the reviewer&#39;s findings, written by an agent, into the Build session that can push), or should the person approve each fix round? If automatic, how many rounds before it comes back to the person (proposed: 2)? <strong>Decided:</strong> fix rounds start automatically, at most 2 before the review comes back to the person.</li>
+<li>Should auto-start wait for the enforced read-only permission (Phase 6) before it is on by default, or ship on by default in Phase 3?</li>
+<li>Should Manage be the default for new workstreams once Phase 3 has proven itself, or stay opt-in per workstream?</li>
+<li>Is a workstream always one ticket (plus subtasks), or can it span an epic or several repos? Single-ticket is assumed for v1.</li>
+<li>Should the adversarial review ever post to GitHub, or only produce Jira drafts (proposed: Jira drafts only)? <strong>Decided:</strong> Review findings become a GitHub review draft the person approves in Gossamr before it is posted, as with Jira drafts (Phase 5b). If posting turns out not to be possible for a connection (for example a token without write access to pull requests), Gossamr shows the review in an in-app PR view instead.</li>
+<li>Should Build require the plan-description draft to be <strong>applied to Jira</strong> first, or is &quot;accepted in Gossamr&quot; enough?</li>
+<li>Should the manager use a stronger model or effort than standard Pip? It costs more per wake, and today it is pinned in <code>claude/mod.rs</code>.</li>
+<li>What daily budget for Pip manager turns is acceptable on a person&#39;s subscription, and should wakes pause while the app is in the background?</li>
+<li>Should Pip home become the landing screen for everyone with agents enabled, and does this land before or after build-plan 2f (classic inbox removal)? <strong>Decided:</strong> Pip home is the landing screen for everyone with agents enabled, from Phase 4. The classic inbox stays one key away, and a setting lets a person start on the inbox instead.</li>
+<li>Structured reports (<code>report_result</code>) are now required for Triage and Review, because auto-start reads them. Should they be on for every workstream run?</li>
+<li>Should Hold all also stop runs the person started outside workstreams, or only workstream runs (proposed)?</li>
+</ol>
+
+
+<footer>Prepared with Claude Code from the Gossamr repository. File and line references point to <code>main</code> at <code>1d0b449</code> and will drift as the code changes.</footer>
+</main>
+</div>
+</body>
+</html>
