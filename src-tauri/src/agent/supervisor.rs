@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::autostart::{self, Decision, PullHead, ReportFacts, RuleInput, Slots};
-use super::{AgentEvent, AgentService, RunPlanner, Update, UpdateSink, WAKE_HELD};
+use super::{AgentEvent, AgentService, RunPlanner, Update, UpdateSink, WAKE_HELD, WAKE_NOT_STARTED};
 use crate::auth::Scope;
 use crate::config::AgentSettings;
 use crate::domain::workstream::{budget_level, run_labels, BudgetLevel, Mode, Rule, HELD_BUDGET, HELD_DAILY, HELD_QUOTA};
@@ -998,7 +998,7 @@ impl Supervisor {
             Ok(_) => {}
             Err(e) => {
                 // Never queued, so no sink will take the facts back: they wait for the next sweep. A wake that was
-                // queued and then failed has its sink for that, the quota retry among it.
+                // queued and then failed to start, or hit the quota, has its sink for that.
                 if matches!(&e, Error::Claude(m) if m == PIP_NOT_RUNNING) {
                     self.unmark(facts).await;
                 }
@@ -1187,6 +1187,9 @@ impl Supervisor {
                 } else if message.as_deref().is_some_and(is_quota_error) {
                     let facts = facts.clone();
                     tokio::spawn(async move { me.on_quota(facts).await });
+                } else if message.as_deref().is_some_and(|m| m.starts_with(WAKE_NOT_STARTED)) {
+                    let facts = facts.clone();
+                    tokio::spawn(async move { me.unmark(facts).await });
                 }
             }
             emit(&conversation, u);

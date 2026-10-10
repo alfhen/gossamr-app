@@ -662,13 +662,35 @@ async fn a_wake_pip_was_gone_for_gives_its_facts_back_and_one_that_failed_otherw
     assert_eq!(t.wakes().await.len(), 1);
     assert_eq!(dropped(t.actions().await), 1, "the fact is taken back");
 
-    // Any other failure is the queued wake's own to report and retry.
+    // Any other failure is the queued wake's own to report through its sink.
     let t = setup().await;
     let sup = Supervisor::new(CoreFacade::new(t.fx.core.clone()), Arc::new(AgentSettings::default), Arc::new(|_, _| {}), Arc::new(|_| {}));
     sup.bind_queue(Arc::new(Failing("couldn't start the turn")));
     let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
     sup.clone().on_run(r1, Attention::Done).await;
     assert_eq!(dropped(t.actions().await), 0);
+}
+
+#[tokio::test]
+async fn a_wake_that_couldn_t_start_gives_its_facts_back_for_the_next_sweep() {
+    let t = setup().await;
+    // An agent service whose provider is gone: the wake is queued, then fails to start.
+    let server = McpServer::start(t.fx.core.clone(), FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
+    let config = AppConfig { agent_provider: "gone".into(), ..AppConfig::default() };
+    let svc = Arc::new(AgentService::new(t.fx.core.clone(), server, vec![Arc::new(t.fake.clone())], config));
+    let sup = supervisor(&t.fx, &svc, &t.settings, &t.emitted);
+    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    sup.clone().on_run(r1, Attention::Done).await;
+    for _ in 0..100 {
+        if t.actions().await.iter().any(|(_, a, _)| a == "wake_dropped") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let wake = t.wake_turns().await;
+    assert_eq!(wake.len(), 1);
+    assert!(wake[0].error.as_deref().is_some_and(|e| e.starts_with(WAKE_NOT_STARTED)), "{:?}", wake[0].error);
+    assert_eq!(t.actions().await.iter().filter(|(_, a, _)| a == "wake_dropped").count(), 1, "the fact is taken back");
 }
 
 #[tokio::test]

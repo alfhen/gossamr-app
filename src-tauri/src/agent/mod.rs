@@ -230,6 +230,9 @@ pub const REMOVED: &str = "Removed before it started";
 /// so the supervisor wakes Pip for them once the workstream is set going again.
 pub const WAKE_HELD: &str = "Held before it started";
 
+/// How a wake that couldn't be started ends: Pip never saw its facts, so they count as not woken.
+pub const WAKE_NOT_STARTED: &str = "Couldn't start";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Update {
@@ -502,8 +505,9 @@ impl AgentService {
         self.wakes.lock().expect("lock poisoned").insert(request_id.clone(), WakeInFlight { conversation, scope: scope.clone(), facts, sink: sink.clone() });
         if let Err(e) = self.start(scope.clone(), req, sink.clone()).await {
             self.wakes.lock().expect("lock poisoned").remove(&request_id);
-            recorded(self.core.pip_turn_finish(&scope, &request_id, "", false, Some(&e.to_string()), None, None).await);
-            sink(Update { request_id: request_id.clone(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(e.to_string()), usage: None } });
+            let message = format!("{WAKE_NOT_STARTED}: {e}");
+            recorded(self.core.pip_turn_finish(&scope, &request_id, "", false, Some(&message), None, None).await);
+            sink(Update { request_id: request_id.clone(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(message), usage: None } });
             self.release(&request_id, None);
             return Err(e);
         }
