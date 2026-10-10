@@ -289,16 +289,19 @@ pub trait ClaudeCli: Send + Sync {
     async fn version(&self) -> CliResult<String>;
     async fn auth_status(&self) -> CliResult<AuthStatus>;
     async fn supports_bg(&self) -> CliResult<bool>;
-    /// Whether this `claude` takes the flags a read-only run is launched with. A read-only run is never launched
-    /// without them.
+    /// Whether this `claude` takes the flags a read-only run is launched with (`--permission-mode dontAsk`,
+    /// `--disallowedTools`, `--setting-sources` and `--strict-mcp-config`). A read-only run is never launched without them.
     async fn supports_read_only(&self) -> CliResult<bool>;
-    /// Starts a background session. A read-only request adds `--permission-mode dontAsk`, its allow rules (with the
-    /// report tool's, when offered) and its deny rules, so Claude Code itself refuses the run's writes.
+    /// Starts a background session. A read-only request adds `--permission-mode dontAsk`, `--setting-sources` with no
+    /// source, `--strict-mcp-config`, its allow rules (with the report tool's, when offered) and its deny rules, so Claude
+    /// Code itself refuses the run's writes whatever the person's or the repository's settings allow.
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched>;
     async fn agents(&self, all: bool) -> CliResult<Vec<AgentEntry>>;
-    /// Wakes a stopped session with `message`. Carries no other flag: any flag makes `claude` start a copy. The job keeps
-    /// the flags it was launched with and the wake reapplies them, so a read-only run stays restricted and a Build stays
-    /// as it was.
+    /// Wakes a stopped session with `message`. Carries no other flag: any flag makes `claude` start a copy. When the
+    /// session continues in place (the `Launched` id is the session's own), the job keeps the flags it was launched with
+    /// and the wake reapplies them, so a read-only run stays restricted and a Build stays as it was. When `claude` starts
+    /// a copy instead (the session is running, open elsewhere, or its state can't be checked or read), the copy is a new
+    /// job from this command line and has none of them; `runs/answer.rs` stops and removes it.
     async fn resume(&self, session_id: &str, message: &str, cwd: Option<&Path>) -> CliResult<Launched>;
     async fn stop(&self, id: &ShortId) -> CliResult<()>;
     async fn rm(&self, id: &ShortId) -> CliResult<()>;
@@ -391,7 +394,7 @@ impl ClaudeCli for SystemCli {
 
     async fn supports_read_only(&self) -> CliResult<bool> {
         let help = self.succeed(&["--help"]).await?.stdout;
-        Ok(help.contains("dontAsk") && help.contains("--disallowedTools"))
+        Ok(["dontAsk", "--disallowedTools", "--setting-sources", "--strict-mcp-config"].iter().all(|flag| help.contains(flag)))
     }
 
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched> {
@@ -408,6 +411,12 @@ impl ClaudeCli for SystemCli {
         }
         if let Some(ro) = &req.read_only {
             args.extend(["--permission-mode", &ro.mode]);
+            if let Some(sources) = &ro.setting_sources {
+                args.extend(["--setting-sources", sources]);
+            }
+            if ro.strict_mcp_config {
+                args.push("--strict-mcp-config");
+            }
             allowed.extend(ro.allow.iter().map(String::as_str));
         }
         if !allowed.is_empty() {
@@ -866,6 +875,8 @@ mod tests {
                 allow: vec!["Bash(git fetch origin main)".into(), "Bash(git checkout --detach origin/main)".into()],
                 deny: vec!["Edit".into(), "Write".into(), "mcp__gossamr".into(), "Bash(git push *)".into(), "Bash(git -c *)".into()],
                 guard: "read-only sentence".into(),
+                setting_sources: Some(String::new()),
+                strict_mcp_config: true,
             }
         }
 
@@ -896,6 +907,9 @@ mod tests {
                     "ce-6-x-ab12",
                     "--permission-mode",
                     "dontAsk",
+                    "--setting-sources",
+                    "",
+                    "--strict-mcp-config",
                     "--allowedTools",
                     "Bash(git fetch origin main)",
                     "Bash(git checkout --detach origin/main)",
@@ -927,12 +941,15 @@ mod tests {
             let calls = rig.calls();
             let args: Vec<&str> = calls.lines().skip(2).collect();
             assert_eq!(
-                &args[5..14],
+                &args[5..17],
                 [
                     "--mcp-config",
                     "/data/report/run-2.json",
                     "--permission-mode",
                     "dontAsk",
+                    "--setting-sources",
+                    "",
+                    "--strict-mcp-config",
                     "--allowedTools",
                     "mcp__run-report__report_result",
                     "Bash(git fetch origin main)",

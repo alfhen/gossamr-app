@@ -364,7 +364,7 @@ impl RunService {
         }
         // Fails closed: a read-only kind is never launched without the restriction.
         if spec.kind.read_only() && !tc.cli.supports_read_only().await.map_err(|e| Failure::from_cli(e, clone))? {
-            return Err(Failure::TooOld);
+            return Err(Failure::CantRestrict);
         }
         Ok(())
     }

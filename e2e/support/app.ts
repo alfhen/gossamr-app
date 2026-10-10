@@ -107,7 +107,7 @@ export type ReadOnly = { mode: string; allow: string[]; deny: string[]; guard: s
 /** One launch as the mock launcher made it (`MockLaunch` in src/backend/mockRuns.ts). */
 export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; autoStart: string | null; at: string };
 interface Handle {
-  runs(): { id: string; kind: string; state: string; prSha: string | null }[];
+  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number }[];
   launches(): MockLaunch[];
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   scriptNext(kind: string, script: Script): void;

@@ -38,7 +38,7 @@ fn absent_refusal(text: &str) -> bool {
     ["no session", "no such", "not found", "unknown session", "does not exist", "doesn't exist", "already removed"].iter().any(|phrase| text.contains(phrase))
 }
 
-enum Removal {
+pub(super) enum Removal {
     Gone,
     /// Claude's own words.
     Refused(String),
@@ -73,7 +73,7 @@ impl RunService {
 
     /// `claude rm` on one session, retried while Claude's lock on a just-stopped worktree clears. A session that is
     /// already gone counts as removed.
-    async fn remove_session(&self, tc: &super::toolchain::Toolchain, id: &ShortId) -> Result<Removal> {
+    pub(super) async fn remove_session(&self, tc: &super::toolchain::Toolchain, id: &ShortId) -> Result<Removal> {
         let mut tries = 0;
         loop {
             match tc.cli.rm(id).await {

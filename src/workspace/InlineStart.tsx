@@ -3,7 +3,7 @@ import { create } from "zustand";
 import type { Preflight, Proposal, Run, RunKind, RunReview } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Box, BoxTitle, Btn, Details, MONO_BLOCK } from "./AgentSheet";
-import { PromptParts, ReportExtras } from "./RunPrompt";
+import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
 import { COPY, startBlock } from "./runSheetLogic";
 import { DRAFT_CARD, PIP_INPUT_ID } from "./draftKeys";
@@ -313,6 +313,7 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
             <pre className={MONO_BLOCK}>{review.guard}</pre>
             <p className="m-0 text-ws-ink2">{COPY.guardNote}</p>
             <ReportExtras report={review.report} />
+            <ReadOnlyExtras readOnly={review.readOnly} />
           </Details>
         </>
       ) : (
@@ -325,7 +326,14 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
       <RunPreflight preflight={preflight} checking={phase === "loading"} steps={{ trust: on.trustFolder, recheck: on.recheck, rechecking: entry.rechecking }} />
       <Box label="What agents can do">
         <p className="m-0 text-ws-ink">{COPY.runAsYou}</p>
-        <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
+        {review?.readOnly ? (
+          <>
+            <ReadOnlyLine readOnly={review.readOnly} />
+            <p className="m-0 text-ws-ink2">{COPY.readOnlyNote}</p>
+          </>
+        ) : (
+          <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
+        )}
       </Box>
       <div className="flex flex-wrap items-center gap-2">
         <Btn

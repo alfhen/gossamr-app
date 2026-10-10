@@ -75,6 +75,10 @@ describe("reviewing and starting a run draft in place", () => {
     expect(html).not.toContain("<textarea");
     expect(html).toContain('aria-label="Checks before you approve"');
     expect(html).toContain(COPY.runAsYou);
+    // An investigation is read-only: the line, and the rules the backend would launch it with, are in the review.
+    expect(review.readOnly?.mode).toBe("dontAsk");
+    expect(html).toContain(COPY.readOnly);
+    expect(html).toContain("data-read-only-rules");
     expect(startButton(html)).toContain('disabled=""');
     expect(inlineStartBlock(entry(id))).toBe("Showing the prompt…");
 

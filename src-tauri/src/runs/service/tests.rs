@@ -205,7 +205,8 @@ async fn a_read_only_run_never_launches_on_a_claude_without_the_restriction_and_
     let run = rig.queued(1).await;
     rig.svc.launch(&run.id).await.unwrap();
     let failed = rig.get(&run).await;
-    assert_eq!((failed.state, failed.error.as_deref()), (RunState::Failed, Some(Failure::TooOld.to_string().as_str())));
+    assert_eq!((failed.state, failed.error.as_deref()), (RunState::Failed, Some(Failure::CantRestrict.to_string().as_str())));
+    assert!(!Failure::CantRestrict.to_string().contains("background agents"), "--bg works; only the restriction is missing");
     assert_eq!((failed.read_only, rig.cli.launches()), (None, 0), "nothing reached the CLI");
 
     let build = approved(&rig, build_spec(&rig, 2)).await;
@@ -938,8 +939,14 @@ mod preflight_rows {
         assert!(has(&p, Level::Green, "Agents get this PATH: "));
         assert!(has(&p, Level::Green, &format!("Clone: {} on main", rig.clone.display())));
         assert!(has(&p, Level::Green, "0 of 3 agents running"));
-        assert!(has(&p, Level::Green, "your permission mode: auto"));
+        assert!(has(&p, Level::Green, "Read-only steps are supported"));
+        assert!(has(&p, Level::Green, "This step runs read-only, in permission mode dontAsk, without your or the repository's Claude settings and MCP servers"));
+        assert!(has(&p, Level::Green, "Your own mode, auto, applies to a Build."));
+        assert!(!has(&p, Level::Green, "Agents run as you"), "a read-only step doesn't run in the person's mode: {p:?}");
         assert!(has(&p, Level::Green, &format!("What runs: {}", &spec.digest()[..12])));
+        let built = rows(&rig, Some(build_spec(&rig, 2))).await;
+        assert!(has(&built, Level::Green, "Agents run as you, in your permission mode: auto"));
+        assert!(!has(&built, Level::Green, "read-only"), "{built:?}");
         assert!(!format!("{p:?}").contains("never shown"));
         assert_eq!(std::fs::read(&settings).unwrap(), before);
 
@@ -958,6 +965,12 @@ mod preflight_rows {
 
         let rig = rig_with(|c| c.with(|s| s.bg = false)).await;
         assert!(has(&rows(&rig, None).await, Level::Red, "too old"));
+
+        let rig = ready().await;
+        rig.cli.with(|s| s.read_only = false);
+        let p = rows(&rig, Some(rig.spec(1))).await;
+        assert!(p.blocking && has(&p, Level::Red, "can't run a step read-only"), "{p:?}");
+        assert!(!rows(&rig, Some(build_spec(&rig, 2))).await.blocking, "a build doesn't need it");
 
         let rig = ready().await;
         std::fs::remove_dir_all(&rig.clone).unwrap();
@@ -1010,17 +1023,16 @@ mod through_the_real_spawner {
 
     const FAKE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/fake-claude.sh");
     /// Never passed: none of these would make a run safer than the person's own setup, and some would loosen it.
-    const FORBIDDEN: [&str; 6] = [
+    /// `--setting-sources` and `--strict-mcp-config` narrow it, and are passed for a read-only kind only.
+    const FORBIDDEN: [&str; 4] = [
         "--dangerously-skip-permissions",
         "--settings",
-        "--setting-sources",
-        "--strict-mcp-config",
         "--model",
         "--session-id",
     ];
 
-    /// Passed only for a read-only kind, once each.
-    const READ_ONLY_FLAGS: [&str; 3] = ["--permission-mode", "--allowedTools", "--disallowedTools"];
+    /// Passed only for a read-only kind, once each; a Build gets none of them.
+    const READ_ONLY_FLAGS: [&str; 5] = ["--permission-mode", "--setting-sources", "--strict-mcp-config", "--allowedTools", "--disallowedTools"];
 
     struct Real {
         rig: Rig,
@@ -1079,7 +1091,7 @@ mod through_the_real_spawner {
         let launch = log.split("---\n").find(|call| call.contains("\n--bg\n")).unwrap();
         let ro = run.spec.read_only().unwrap();
         let expected = format!(
-            "cwd={}\n--bg\n--name\nGossamr: CA-1 investigate\n--worktree\neng-1-fix-cart-0001\n--permission-mode\ndontAsk\n--allowedTools\n{}\n--disallowedTools\n{}\n--append-system-prompt\n{GUARD} {READ_ONLY_GUARD}\n--\n",
+            "cwd={}\n--bg\n--name\nGossamr: CA-1 investigate\n--worktree\neng-1-fix-cart-0001\n--permission-mode\ndontAsk\n--setting-sources\n\n--strict-mcp-config\n--allowedTools\n{}\n--disallowedTools\n{}\n--append-system-prompt\n{GUARD} {READ_ONLY_GUARD}\n--\n",
             real.rig.clone.display(),
             ro.allow.join("\n"),
             ro.deny.join("\n"),

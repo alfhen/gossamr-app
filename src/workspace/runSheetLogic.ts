@@ -7,6 +7,9 @@ import type { IconName } from "./AgentIcons";
 export const COPY = {
   runAsYou: "Agents run as you, with your own Claude settings. Anything your Claude can do, they can do.",
   notALock: "They are told not to write to Jira and to send findings back to you. They run as you, so this is a request, not a lock.",
+  readOnly: "Read-only: Claude Code blocks edits and writes",
+  readOnlyNote: "Claude Code refuses file edits, the commands listed and anything that would ask for permission, whatever your own permission mode. Commands you allowed in your own Claude settings still run, except the ones listed. Review and Verify may run the repository's tests, whose code runs as written.",
+  readOnlySteps: "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself blocks their file edits and writing commands. A Build changes code in its worktree, and what it is told about Jira and pushing is a request, not a lock.",
   receives: "The prompt, the focus note and the ticket text below are exactly what the agent receives.",
   guardNote: "This is a request to the model, not a block.",
   startsNow: "Starts right away. You can stop it once it's working.",
@@ -20,8 +23,8 @@ export interface MayTouch {
 }
 
 export const MAY_TOUCH: readonly MayTouch[] = [
-  { tone: "yes", title: "Starts in its own worktree.", text: "Your own checkout and branch are not changed by the launch. Nothing stops it reading or editing any other file you can." },
-  { tone: "yes", title: "Runs whatever your Claude settings allow:", text: "your allowed commands, MCP servers and skills. Gossamr adds no fence of its own." },
+  { tone: "yes", title: "Starts in its own worktree.", text: "Your own checkout and branch are not changed by the launch. Nothing stops it reading any other file you can, or a Build editing one." },
+  { tone: "yes", title: "Runs whatever your Claude settings allow:", text: "your allowed commands, MCP servers and skills. For a Build, Gossamr adds no fence of its own; a read-only step is also held to the rules in its prompt view." },
   { tone: "ask", title: "Pushing a branch, opening a PR, network commands:", text: "your Claude settings decide. If they would ask you, the run stops under Needs you, and you answer in Terminal." },
   { tone: "no", title: "Writing to Jira:", text: "the agent is told not to, and to send anything for Jira back to you. Nothing enforces that: it runs as you and could use any Atlassian tool in your own Claude config." },
 ];

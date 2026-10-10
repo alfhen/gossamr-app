@@ -6,7 +6,7 @@ import type { ReviewView, Run } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
 import { KIND_LABEL, ageSince, ageText, branchOf, formatTokens, repoName, runTitle, stateView } from "./agentsLogic";
-import { verdictChip, verdictText } from "./runSheetLogic";
+import { COPY, verdictChip, verdictText } from "./runSheetLogic";
 
 export const agentId = (id: string) => `agent-${id}`;
 
@@ -110,6 +110,17 @@ export function AutoStarted({ run, className = "" }: { run: Run; className?: str
   );
 }
 
+/** A small mark on a run launched read-only: Claude Code itself refused its edits and writes. Nothing for a Build or a run from before. */
+export function ReadOnlyBadge({ run }: { run: Run }) {
+  if (!run.readOnly) return null;
+  return (
+    <span data-read-only title={COPY.readOnly} className="inline-flex shrink-0 items-center gap-0.5 rounded bg-ws-hover px-1 text-xs font-medium text-ws-ink2">
+      <Icon name="shield" className="size-3" />
+      Read-only
+    </span>
+  );
+}
+
 export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
@@ -137,6 +148,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
           <Icon name={KIND_ICON[run.spec.kind]} className="size-[13px] text-ws-ink3" />
           {KIND_LABEL[run.spec.kind]}
         </span>
+        <ReadOnlyBadge run={run} />
         {ticketLabel(run) && <span className="font-mono text-sm font-semibold text-ws-ink2">{ticketLabel(run)}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {review && <VerdictChip review={review} />}

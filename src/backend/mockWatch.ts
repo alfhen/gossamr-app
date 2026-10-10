@@ -106,7 +106,7 @@ export interface MockHandle {
   /** The audit of every workstream, oldest first within each, as `workstreams_events` reads one. */
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null }[];
   /** Every run the sample backend holds, newest first: its id, kind and state. */
-  runs(): { id: string; kind: string; state: string; prSha: string | null }[];
+  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number }[];
   /** Every launch so far, oldest first: the run, its kind, the read-only restriction the mock launcher passed (null for a Build) and the auto-start rule that started it, if one did. */
   launches(): MockLaunch[];
   /** Makes the draft pull requests finished builds opened show on the code host now, as a code sync finding them; true when there was one. */
@@ -140,7 +140,7 @@ export interface TicketEdit {
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null }; state: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null }; state: string; passes?: number }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown };
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
@@ -166,7 +166,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
     workstreamEvents: () => (workstreams ? workstreams.list(true).flatMap((v) => workstreams.events(v.workstream.id)) : []),
-    runs: () => runs.list().map((r) => ({ id: r.id, kind: r.spec.kind, state: r.state, prSha: r.spec.prSha ?? null })),
+    runs: () => runs.list().map((r) => ({ id: r.id, kind: r.spec.kind, state: r.state, prSha: r.spec.prSha ?? null, passes: r.passes ?? 1 })),
     launches: () => runs.launches().map((l) => ({ ...l, readOnly: l.readOnly && { ...l.readOnly, allow: [...l.readOnly.allow], deny: [...l.readOnly.deny] } })),
     surfacePullRequests: () => runs.surfacePullRequests(),
     scriptNext: (kind, script) => runs.scriptNext(kind, script),

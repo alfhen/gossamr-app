@@ -337,7 +337,9 @@ describe("empty, first-run and errors", () => {
     for (const phrase of [
       "You approve each one first. Agents are on by default; turn them off any time in Settings.",
       "They run as you, with your own Claude settings: anything your Claude can do, they can do.",
-      "They are told not to write to Jira and to send findings back to you, but that is a request, not a lock.",
+      "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself blocks their file edits and writing commands.",
+      "A Build changes code in its worktree.",
+      "All are told not to write to Jira and to send findings back to you, but that is a request, not a lock.",
       "They work in their own worktree of your clone, so your own files and branch are not touched.",
       "Stop any run from its details, or Stop all above.",
       "Agents you start from Terminal are not shown here, and Gossamr's runs also show in your own",

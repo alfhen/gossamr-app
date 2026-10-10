@@ -33,8 +33,8 @@ export function AgentsIntro({ onDismiss }: { onDismiss(): void }) {
         <Explain icon="term" title="They run as you">
           They run as you, with your own Claude settings: anything your Claude can do, they can do.
         </Explain>
-        <Explain icon="shield" title="Told, not locked">
-          They are told not to write to Jira and to send findings back to you, but that is a request, not a lock.
+        <Explain icon="shield" title="Read-only steps are locked">
+          Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself blocks their file edits and writing commands. A Build changes code in its worktree. All are told not to write to Jira and to send findings back to you, but that is a request, not a lock.
         </Explain>
         <Explain icon="branch" title="Where they work">
           They work in their own worktree of your clone, so your own files and branch are not touched.

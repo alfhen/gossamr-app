@@ -4,7 +4,7 @@ import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
 import { KIND_LABEL } from "./agentsLogic";
 import { PrPicker } from "./PrPicker";
-import { PromptParts, ReportExtras } from "./RunPrompt";
+import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
 import { COPY, homeShort, kindBlock, launchCommand, permissionMode, repoShortage, savedAsTyped, startBlock, startSteps, ticketlessShape, worktreeBranch, type RepoShortage } from "./runSheetLogic";
 import { containerKey } from "../lib/filter";
@@ -533,6 +533,7 @@ export function RunSetupView(p: SetupViewProps) {
             <pre className={MONO_BLOCK}>{review.guard}</pre>
             <p className="m-0 text-ws-ink2">{COPY.guardNote}</p>
             <ReportExtras report={review.report} />
+            <ReadOnlyExtras readOnly={review.readOnly} />
           </Details>
         )}
       </Sec>
@@ -541,7 +542,14 @@ export function RunSetupView(p: SetupViewProps) {
         <RunPreflight preflight={preflight} checking={phase === "preparing" || p.busy} steps={p.on.trustFolder && p.on.recheck ? { trust: p.on.trustFolder, recheck: p.on.recheck, rechecking: !!p.rechecking } : undefined} />
         <Box label="What agents can do">
           <p className="m-0 text-ws-ink">{COPY.runAsYou}</p>
-          <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
+          {review?.readOnly ? (
+            <>
+              <ReadOnlyLine readOnly={review.readOnly} />
+              <p className="m-0 text-ws-ink2">{COPY.readOnlyNote}</p>
+            </>
+          ) : (
+            <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
+          )}
         </Box>
       </Sec>
 
