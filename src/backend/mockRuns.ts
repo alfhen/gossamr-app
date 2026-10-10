@@ -743,11 +743,26 @@ export class MockRuns {
     this.reports.set(run.id, { ...row, report, revision: 1, calls: 1 });
   }
 
-  /** Has a working run ask the person `question`, or one that asks already ask another, for tests and for trying the sheet. */
+  /** Has a working run ask the person `question`, or one that asks already or is unclear ask another, for tests and for trying the sheet. */
   ask(id: string, question: string): Run {
     const run = this.get(id);
-    if (run?.state !== "working" && run?.state !== "needsAnswer") throw new Error("only a working run can ask");
+    if (run?.state !== "working" && run?.state !== "needsAnswer" && run?.state !== "unknown") throw new Error("only a working run can ask");
     const next = this.update(id, { state: "needsAnswer", needs: question, lastProgressAt: this.now() });
+    this.changed();
+    return next;
+  }
+
+  /** Has a running run go unclear for now, as `track` does when Claude reports a state it can't read, for tests. */
+  lose(id: string): Run {
+    const next = this.update(id, { state: "unknown", needs: null, error: "Claude reported the state \"odd\". Open in Terminal to look." });
+    this.changed();
+    return next;
+  }
+
+  /** Has an unclear run show as working again, for tests. */
+  regain(id: string): Run {
+    if (this.get(id)?.state !== "unknown") throw new Error("only an unclear run can be found again");
+    const next = this.update(id, { state: "working", error: null, lastProgressAt: this.now() });
     this.changed();
     return next;
   }
@@ -765,11 +780,11 @@ export class MockRuns {
     const next = { ...run, ...patch };
     this.runs = this.runs.map((r) => (r.id === id ? next : r));
     // An answer Pip suggested has nothing left to answer once the run finished or stopped without one, or moved on from
-    // that question, as `track` does. Only `answerKeeping` takes a run out of a question with its drafts, and decides them.
-    if (run.state === "needsAnswer" && this.answering !== id) {
-      const movedOn = next.state !== "unknown" && (next.state !== "needsAnswer" || askedOf(next.needs) !== askedOf(run.needs));
-      if (TERMINAL.includes(next.state)) this.retireAnswers(id, null, NOT_ASKING);
-      else if (movedOn) this.retireAnswers(id, null, MOVED_ON);
+    // the question it answers, as `track` does: each draft is held to the question the run asks now, so one unclear in
+    // between still lets go of them. Only `answerKeeping` takes a run out of a question with its drafts, and decides them.
+    const question = askedOf(next.needs);
+    if (this.answering !== id && next.state !== "unknown" && (next.state !== run.state || question !== askedOf(run.needs))) {
+      this.retireAnswersNotFor(id, next.state === "needsAnswer", question, TERMINAL.includes(next.state) ? NOT_ASKING : MOVED_ON);
     }
     return next;
   }
@@ -777,6 +792,12 @@ export class MockRuns {
   /** Retires the pending answer drafts for `runId` but `except`, with `reason`, as `retire_answer_drafts`. */
   private retireAnswers(runId: string, except: string | null, reason: string) {
     const open = this.proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "runAnswer" && p.intent.runId === runId && p.id !== except);
+    for (const p of open) this.proposals.audit(this.proposals.retire(p.id, reason), "supervisor", "draft_retired");
+  }
+
+  /** Retires the pending answer drafts for `runId` that don't answer what it asks now, as `retire_answer_drafts_not_for`. */
+  private retireAnswersNotFor(runId: string, asking: boolean, question: string | null, reason: string) {
+    const open = this.proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "runAnswer" && p.intent.runId === runId && (!asking || (p.intent.question ?? null) !== question));
     for (const p of open) this.proposals.audit(this.proposals.retire(p.id, reason), "supervisor", "draft_retired");
   }
 

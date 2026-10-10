@@ -638,6 +638,43 @@ describe("mock answer drafts, as propose_answer and runs_answer_draft", () => {
     expect(b.runs.get(run.id)).toMatchObject({ state: "needsAnswer", needs: "A different question?" });
   });
 
+  it("keeps the draft while the run is unclear, and when it asks the same again", async () => {
+    const { b, run } = await asking();
+    const p = await b.runs.proposeAnswer(run.id, "Yes.", "r");
+    b.runs.lose(run.id);
+    expect(b.proposals.get(p.id)?.state.type).toBe("pending");
+    b.runs.ask(run.id, "Should the refund path keep the old rounding?");
+    expect(b.proposals.get(p.id)?.state.type).toBe("pending");
+  });
+
+  it("retires the draft when an unclear run works again or asks something else, as the question it asks now decides", async () => {
+    const working = await asking();
+    const p = await working.b.runs.proposeAnswer(working.run.id, "Yes.", "r");
+    working.b.runs.lose(working.run.id);
+    working.b.runs.regain(working.run.id);
+    expect(working.b.proposals.get(p.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
+
+    const other = await asking();
+    const q = await other.b.runs.proposeAnswer(other.run.id, "Yes.", "r");
+    other.b.runs.lose(other.run.id);
+    other.b.runs.ask(other.run.id, "Which branch?");
+    expect(other.b.proposals.get(q.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
+  });
+
+  it("retires a draft that kept no question once the run asks one or stops asking", async () => {
+    const { b, run } = await asking();
+    const draft = (message: string) => b.proposals.draft({ type: "runAnswer", connectionId: run.connectionId, runId: run.id, shortId: null, item: CA401, message, question: null });
+    const p = draft("Yes.");
+    b.runs.lose(run.id);
+    expect(b.proposals.get(p.id)?.state.type).toBe("pending");
+    b.runs.ask(run.id, "Which branch?");
+    expect(b.proposals.get(p.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
+    const q = draft("No.");
+    b.runs.lose(run.id);
+    b.runs.regain(run.id);
+    expect(b.proposals.get(q.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
+  });
+
   it("replaces Pip's older answer for the run in its workstream", async () => {
     const { b, ws, run } = await asking();
     const older = await b.runs.proposeAnswer(run.id, "Yes.", "r1");

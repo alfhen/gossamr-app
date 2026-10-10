@@ -394,12 +394,14 @@ impl RunService {
             touched = true;
         }
         // An answer Pip suggested has nothing left to answer once the run finished or stopped without one, or moved on
-        // from that question: answered in Terminal, or asking another. Only `answer` takes a run out of a question with
-        // the drafts left to it, and it decides them itself. A run that is only unclear for now keeps them.
-        let moved_on = run.state != RunState::Unknown && (run.state != RunState::NeedsAnswer || super::answer::asked(run.needs.as_deref()) != super::answer::asked(before.needs.as_deref()));
-        if before.state == RunState::NeedsAnswer && (ended || moved_on) {
+        // from the question it answers: answered in Terminal, or asking another. Each draft is held to the question the
+        // run asks now, not the one it asked last poll, so a run that was unclear in between still lets go of the
+        // answers to what it asked before. Only `answer` takes a run out of a question with the drafts left to it, and it
+        // decides them itself. A run that is only unclear for now keeps them.
+        let question = super::answer::asked(run.needs.as_deref());
+        if run.state != RunState::Unknown && (run.state != before.state || question != super::answer::asked(before.needs.as_deref())) {
             let why = if ended { super::answer::NOT_ASKING } else { super::answer::MOVED_ON };
-            match self.core.retire_answer_drafts(run_id, None, why).await {
+            match self.core.retire_answer_drafts_not_for(run_id, run.state == RunState::NeedsAnswer, question.as_deref(), why).await {
                 Ok(0) => {}
                 Ok(_) => (self.drafted)(&run.connection_id),
                 Err(e) => eprintln!("couldn't retire the answers suggested for run {run_id}: {e}"),
