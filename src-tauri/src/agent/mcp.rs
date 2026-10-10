@@ -256,7 +256,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "revise_proposal",
-            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made, nor a description update carrying a run's Gossamr Plan: a build follows that plan, so only the user changes it. Pass the field that fits its kind: body for a comment or the message of a follow-up for a run, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, title and/or description (the complete new text) for a ticket text edit, focus and/or kind (investigate, triage, plan or verify) for an agent run on a ticket, prompt for an investigation with no ticket. An agent run the user has edited is theirs and can't be revised.",
+            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made, nor a description update carrying a run's Gossamr Plan: a build follows that plan, so only the user changes it. Pass the field that fits its kind: body for a comment, the message of a follow-up for a run or the answer to a run's question, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, title and/or description (the complete new text) for a ticket text edit, focus and/or kind (investigate, triage, plan or verify) for an agent run on a ticket, prompt for an investigation with no ticket. An agent run the user has edited is theirs and can't be revised.",
             json!({ "id": id, "body": { "type": "string" }, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "focus": { "type": "string" }, "kind": { "type": "string" }, "prompt": { "type": "string" } }),
             &["id"],
         ),
@@ -865,6 +865,17 @@ mod tests {
         }
         let described: Vec<Value> = tool_list().into_iter().filter(|t| t["name"] != "search_items").collect();
         assert!(described.iter().all(|t| t["inputSchema"]["required"].is_array()));
+    }
+
+    #[test]
+    fn revise_proposal_names_the_field_for_every_kind_it_revises_by_body() {
+        let revise = tool_list().into_iter().find(|t| t["name"] == "revise_proposal").unwrap();
+        let said = revise["description"].as_str().unwrap();
+        let fields = said.split("Pass the field that fits its kind: ").nth(1).unwrap();
+        let body = fields.split(", status_id").next().unwrap();
+        for kind in ["a comment", "a follow-up for a run", "the answer to a run's question"] {
+            assert!(body.contains(kind), "{kind}: {body}");
+        }
     }
 
     #[tokio::test]

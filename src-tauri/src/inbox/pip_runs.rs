@@ -620,12 +620,25 @@ impl Core {
     /// Retires the pending answer drafts for `run_id` but `except`, with `reason`: the run was answered, or stopped
     /// asking. Returns how many there were.
     pub async fn retire_answer_drafts(&self, run_id: &str, except: Option<&str>, reason: &str) -> Result<usize> {
+        self.retire_answers_where(run_id, reason, |p, _| Some(p.id.as_str()) != except).await
+    }
+
+    /// Retires the pending answer drafts for `run_id` that don't answer what it asks now, with `reason`: every one when
+    /// it isn't `asking`, else those that kept another `question` than the one it asks, as `answer::asked` keeps it. A
+    /// draft that kept no question stays only while the run asks one without words, as when it was drafted. Returns
+    /// how many there were.
+    pub async fn retire_answer_drafts_not_for(&self, run_id: &str, asking: bool, question: Option<&str>, reason: &str) -> Result<usize> {
+        self.retire_answers_where(run_id, reason, |_, kept| !asking || kept != question).await
+    }
+
+    /// Retires the pending answer drafts for `run_id` that `retire` picks, given each with the question it kept.
+    async fn retire_answers_where(&self, run_id: &str, reason: &str, retire: impl Fn(&Proposal, Option<&str>) -> bool) -> Result<usize> {
         self.with_proposals(|db| {
             let query = ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() };
             let open: Vec<Proposal> = db
                 .proposals(&query)?
                 .into_iter()
-                .filter(|p| matches!(&p.intent, Intent::RunAnswer { run_id: r, .. } if r == run_id) && Some(p.id.as_str()) != except)
+                .filter(|p| matches!(&p.intent, Intent::RunAnswer { run_id: r, question, .. } if r == run_id && retire(p, question.as_deref())))
                 .collect();
             let at = Utc::now();
             for p in &open {

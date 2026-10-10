@@ -433,6 +433,76 @@ mod drafts {
         assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
     }
 
+    /// A run asking "Which database?" with Pip's suggestion for it, and a way to have its session report a state.
+    async fn suggested_for_database() -> (Rig, Run, Proposal) {
+        let (rig, run) = asking().await;
+        rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some("Which database?".into()));
+        rig.poll().await;
+        let p = suggested(&rig, &run, "Use staging.").await;
+        assert!(matches!(&p.intent, Intent::RunAnswer { question, .. } if question.as_deref() == Some("Which database?")), "{:?}", p.intent);
+        (rig, run, p)
+    }
+
+    /// Has the run's session report `state`, as `claude agents` lists it, and polls.
+    async fn reports(rig: &Rig, run: &Run, state: &str) {
+        rig.session(run, |e| {
+            e.state = Some(state.into());
+            e.pid = (state == "working").then_some(4242);
+        });
+        rig.poll().await;
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_is_kept_while_the_run_is_unclear_and_kept_when_it_asks_the_same_again() {
+        let (rig, run, p) = suggested_for_database().await;
+        reports(&rig, &run, "odd").await;
+        assert_eq!(rig.get(&run).await.state, RunState::Unknown);
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Pending);
+        reports(&rig, &run, "blocked").await;
+        assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Pending, "it still answers what the run asks");
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_is_retired_when_the_run_works_again_after_being_unclear() {
+        let (rig, run, p) = suggested_for_database().await;
+        reports(&rig, &run, "odd").await;
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Pending);
+        reports(&rig, &run, "working").await;
+        assert_eq!(rig.get(&run).await.state, RunState::Working);
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_is_retired_when_the_run_asks_something_else_after_being_unclear() {
+        let (rig, run, p) = suggested_for_database().await;
+        reports(&rig, &run, "odd").await;
+        rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some("Which branch?".into()));
+        reports(&rig, &run, "blocked").await;
+        assert_eq!(rig.get(&run).await.needs.as_deref(), Some("Which branch?"));
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_that_kept_no_question_is_retired_once_the_run_asks_one_or_stops_asking() {
+        let (rig, run) = asking().await;
+        let draft = |message: &str| {
+            let intent = Intent::RunAnswer { connection_id: run.connection_id.clone(), run_id: run.id.clone(), short_id: None, item: run.item.clone(), message: message.into(), question: None };
+            Draft { origin: Origin::chat("r"), created_by: CreatedBy::Pip, intent, label: None, basis: None }
+        };
+        let p = rig.fx.core.propose(&rig.fx.scope, draft("Yes")).await.unwrap();
+        reports(&rig, &run, "odd").await;
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Pending);
+        rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some("Which branch?".into()));
+        reports(&rig, &run, "blocked").await;
+        assert_eq!(stored(&rig, &p.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
+
+        let q = rig.fx.core.propose(&rig.fx.scope, draft("No")).await.unwrap();
+        reports(&rig, &run, "odd").await;
+        reports(&rig, &run, "working").await;
+        assert_eq!(stored(&rig, &q.id).await.state, ProposalState::Retired(crate::runs::answer::MOVED_ON.into()));
+    }
+
     #[tokio::test]
     async fn an_edited_suggestion_is_sent_with_the_persons_words() {
         let (rig, run) = asking().await;
