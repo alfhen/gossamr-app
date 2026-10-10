@@ -32,7 +32,7 @@ import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
-import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
+import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -551,7 +551,7 @@ export function AgentsView() {
         const change = changes[run.id] ?? null;
         return change && reviewThisControl(run, change).enabled ? () => void useRunSetup.getState().begin(reviewThisOptions(run, change)) : undefined;
       }}
-      reviewOf={(run) => verdicts[run.id]}
+      reviewOf={(run) => shownVerdict(run, verdicts)}
       on={actions}
     />
   );

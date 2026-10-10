@@ -5,7 +5,7 @@ import { SCRIPTED_RESULT } from "../backend/mockRuns";
 import type { Run, RunOutcome, ReviewView } from "../types";
 import { AgentCard } from "./AgentCard";
 import { RunSheetView, type RunSheetActions } from "./RunSheet";
-import { verdictChip, verdictText } from "./runSheetLogic";
+import { shownVerdict, verdictChip, verdictText } from "./runSheetLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const backend = new MockBackend({ githubRepos: 14, runs: { seed: "kinds", epoch: NOW } });
@@ -65,6 +65,13 @@ describe("a review's verdict", () => {
     expect(pass).toContain(">Pass<");
     expect(card(null)).not.toContain("data-verdict");
     expect(card()).not.toContain("data-verdict");
+  });
+
+  it("is shown only while the review is done, not after a follow-up sends it back to work", () => {
+    const verdict = { verdict: "blocking", blocking: 1, shouldFix: 0, nits: 0, findings: [], source: "structured" } as unknown as ReviewView;
+    const verdicts = { r1: verdict };
+    expect(shownVerdict({ id: "r1", state: "done" }, verdicts)).toBe(verdict);
+    expect(shownVerdict({ id: "r1", state: "working" }, verdicts)).toBeUndefined();
   });
 
   it("is said in words", () => {

@@ -117,6 +117,19 @@ fn open(db: &Db, connection_id: &str, id: &str) -> Result<Workstream> {
     Ok(ws)
 }
 
+/// Whether a pushed build is still waiting for its pull request. The code cache is only advisory here: a lookup that
+/// fails leaves the view without the flag rather than failing the view.
+fn waiting_for(build: &Run, lookup: Result<Option<u64>>) -> Option<String> {
+    match lookup {
+        Ok(None) => Some(build.id.clone()),
+        Ok(Some(_)) => None,
+        Err(e) => {
+            eprintln!("couldn't look up the pull request of build {}: {e}", build.id);
+            None
+        }
+    }
+}
+
 /// The newest finished build among `runs` that pushes a branch, when no review was queued after it: the one whose pull
 /// request a review needs.
 fn pushed_build(runs: &[Run]) -> Option<&Run> {
@@ -286,9 +299,7 @@ impl Core {
     fn view_of(&self, workstream: Workstream, runs: &[Run]) -> Result<WorkstreamView> {
         let mut view = WorkstreamView::of(workstream, runs);
         if let Some(build) = pushed_build(runs) {
-            if self.pull_request_of(build)?.is_none() {
-                view.waiting_for_pr = Some(build.id.clone());
-            }
+            view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
         Ok(view)
     }
@@ -742,6 +753,15 @@ mod tests {
         assert_eq!(waiting(&fx, &ws.id).await, None, "the pull request was found");
         let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
         assert!(serde_json::to_value(&view).unwrap().get("waitingForPr").is_none(), "not written when unset");
+    }
+
+    #[tokio::test]
+    async fn a_failed_pull_request_lookup_leaves_the_view_without_the_flag() {
+        let fx = fixture().await;
+        let build = insert_run(&fx, "r-build", None, RunKind::Build, RunState::Done).await;
+        assert_eq!(waiting_for(&build, Ok(None)).as_deref(), Some("r-build"));
+        assert_eq!(waiting_for(&build, Ok(Some(301))), None);
+        assert_eq!(waiting_for(&build, Err(crate::error::Error::NotSignedIn)), None, "an advisory lookup never fails the view");
     }
 
     #[tokio::test]

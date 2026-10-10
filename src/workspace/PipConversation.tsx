@@ -294,6 +294,12 @@ interface ComposerProps {
 }
 
 /** Where a question is written: suggestions, the quoted text, attached images and the input with Ask or Stop. */
+/** Whether a command typed in `asked` may still change the composer: not once the person has moved to another conversation,
+ * where its note and the input it would clear belong to something else. */
+export function outcomeBelongs(asked: string, shown: string): boolean {
+  return asked === shown;
+}
+
 export function Composer({ conversation, attached, chips, looking, scene }: ComposerProps) {
   const sessionId = useClaude((s) => s.byTicket[conversation]?.sessionId ?? null);
   const running = useAnswering(conversation);
@@ -306,6 +312,9 @@ export function Composer({ conversation, attached, chips, looking, scene }: Comp
   const [note, setNote] = useState<VerbOutcome | null>(null);
   // A note is about the conversation it was typed in.
   useEffect(() => setNote(null), [conversation]);
+  /** The conversation shown now, for a command that finishes after the person moved to another one. */
+  const shown = useRef(conversation);
+  shown.current = conversation;
 
   useEffect(() => {
     document.getElementById(PIP_INPUT_ID)?.focus();
@@ -326,7 +335,9 @@ export function Composer({ conversation, attached, chips, looking, scene }: Comp
     setNote(null);
     const command = composerVerb(text, conversation, agentsOn);
     if (command) {
+      const asked = conversation;
       void command.then((outcome) => {
+        if (!outcomeBelongs(asked, shown.current)) return;
         setNote(outcome);
         setInput((now) => inputAfterCommand(outcome, prompt, now));
       });

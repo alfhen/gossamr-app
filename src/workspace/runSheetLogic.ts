@@ -502,6 +502,12 @@ export function verdictText(review: Pick<ReviewView, "verdict" | "blocking">): s
 }
 
 /** A review's verdict as its card's chip shows it: "Blocking · 2" or "Pass". */
+/** The verdict to show for a run: only while it is done, since a review sent back to work by a follow-up or an answer
+ * has no verdict until it finishes again. */
+export function shownVerdict(run: Pick<Run, "id" | "state">, verdicts: Readonly<Record<string, ReviewView | null>>): ReviewView | null | undefined {
+  return run.state === "done" ? verdicts[run.id] : undefined;
+}
+
 export const verdictChip = (review: Pick<ReviewView, "verdict" | "blocking">) => (review.verdict === "pass" ? "Pass" : `Blocking · ${review.blocking}`);
 
 export const SEVERITY_LABEL: Record<ReviewSeverity, string> = { blocking: "Blocking", "should-fix": "Should fix", nit: "Nit" };
