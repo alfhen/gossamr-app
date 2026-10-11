@@ -6,7 +6,7 @@ import { KIND_LABEL } from "./agentsLogic";
 import { PrPicker } from "./PrPicker";
 import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPrompt";
 import { RunPreflight } from "./RunPreflight";
-import { COPY, homeShort, kindBlock, launchCommand, permissionMode, readOnlyNote, repoShortage, runAsYou, savedAsTyped, startBlock, startSteps, ticketlessShape, worktreeBranch, type RepoShortage } from "./runSheetLogic";
+import { COPY, commandShown, homeShort, kindBlock, launchCommand, permissionMode, readOnlyNote, repoShortage, runAsYou, savedAsTyped, startBlock, startSteps, ticketlessShape, worktreeBranch, type RepoShortage } from "./runSheetLogic";
 import { containerKey } from "../lib/filter";
 import { useRunSetup, type PrSearch, type RunEditFields, type SetupPhase } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
@@ -564,14 +564,21 @@ export function RunSetupView(p: SetupViewProps) {
             </li>
           ))}
         </Steps>
-        {review && (
-          <Details summary="Show the exact command">
-            <CodeBox text={launchCommand(review.spec, p.item?.key ?? null, review.guard, review.prompt, { readOnly: review.readOnly, report: review.report })} what="the command" wrap />
-            <p className="m-0 text-xs text-ws-ink3">Shown as a shell would read it. Gossamr hands each part to Claude as a separate argument, so nothing goes through a shell.</p>
-          </Details>
-        )}
+        {review && <LaunchCommand review={review} itemKey={p.item?.key ?? null} />}
       </Sec>
     </SheetFrame>
+  );
+}
+
+/** The launch as a shell would read it: exact and copyable, or illustrative and without Copy when it names the run-report config. */
+function LaunchCommand({ review, itemKey }: { review: RunReview; itemKey: string | null }) {
+  const shown = commandShown(review.report);
+  return (
+    <Details summary={shown.summary}>
+      <CodeBox text={launchCommand(review.spec, itemKey, review.guard, review.prompt, { readOnly: review.readOnly, report: review.report })} what="the command" wrap copy={shown.copy} />
+      {shown.note && <p data-command-illustrative className="m-0 text-xs text-ws-ink2">{shown.note}</p>}
+      <p className="m-0 text-xs text-ws-ink3">Shown as a shell would read it. Gossamr hands each part to Claude as a separate argument, so nothing goes through a shell.</p>
+    </Details>
   );
 }
 

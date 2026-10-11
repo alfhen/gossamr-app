@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { renderPrompt } from "../backend/mockRuns";
 import type { CodeChange, Preflight, Proposal, Run, RunReview, RunSpec, RunState } from "../types";
-import { MAY_TOUCH, canStartNow, defaultRepo, kindBlock, permissionMode, prChoices, reviewablePr, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, linkedRepo, FINDINGS_INTRO, PLAN_INTRO, PLAN_INTRO_UNEDITED, repoChoices, repoShortage, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
+import { COPY, MAY_TOUCH, MAY_TOUCH_READ_ONLY, REPORT_CONFIG_SHOWN, canStartNow, commandShown, defaultRepo, kindBlock, permissionMode, prChoices, reviewablePr, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, linkedRepo, FINDINGS_INTRO, PLAN_INTRO, PLAN_INTRO_UNEDITED, repoChoices, repoShortage, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
 
 const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
   kind: "investigate",
@@ -349,6 +349,29 @@ describe("the prompt of the other kinds", () => {
     const build = launchCommand(spec({ kind: "build" }), "CA-1", "Guard.", "the prompt", { readOnly: null, report: null });
     expect(build).not.toMatch(/--(permission-mode|setting-sources|strict-mcp-config|allowedTools|disallowedTools)/);
     expect(build).toContain("--append-system-prompt 'Guard.' -- 'the prompt'");
+  });
+});
+
+describe("how the launch command is offered", () => {
+  it("is exact and copyable without the report tool, and illustrative with no Copy when it names the report config", () => {
+    expect(commandShown(null)).toEqual({ summary: "Show the exact command", copy: true, note: null });
+    const shown = commandShown({ allowed: "mcp__run-report__report_result", guard: "g" });
+    expect(shown).toMatchObject({ summary: "Show the command (illustrative)", copy: false });
+    expect(shown.note).toContain(REPORT_CONFIG_SHOWN);
+  });
+});
+
+describe("what a read-only step may touch", () => {
+  it("says commands the rules don't allow are refused, not the listed ones", () => {
+    expect(COPY.readOnlyNote).toContain("every command the rules above don't allow");
+    expect(COPY.readOnlyNote).not.toContain("the commands listed");
+  });
+
+  it("refuses unapproved network commands, except the allowed fetches and read-only GitHub commands", () => {
+    const network = MAY_TOUCH_READ_ONLY.find((t) => t.title.startsWith("Pushing a branch"))!;
+    expect(network.text).toMatch(/^refused unless approved\./);
+    expect(network.text).toContain("`git fetch origin <base>`");
+    expect(network.text).toContain("read-only GitHub commands");
   });
 });
 

@@ -120,7 +120,7 @@ export function ReadOnlyBadge({ run, compact = false }: { run: Run; compact?: bo
   const headline = readOnlyHeadline(run.readOnly);
   if (compact) {
     return (
-      <span data-read-only title={headline} aria-label="Read-only" role="img" className="inline-flex shrink-0 items-center text-ws-ink3">
+      <span data-read-only title={headline} aria-label={headline} role="img" className="inline-flex shrink-0 items-center text-ws-ink3">
         <Icon name="shield" className="size-3" />
       </span>
     );

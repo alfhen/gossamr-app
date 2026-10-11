@@ -1463,6 +1463,39 @@ mod auto {
         assert_eq!((review.spec.pr, review.spec.pr_sha), (None, None), "only a review's own commit, never a caller's");
     }
 
+    /// A passing review with no commit pinned starts no Verify: it would check the base branch instead of what the review
+    /// read. The refusal is said in the audit as a step that couldn't start, never skipped in silence.
+    #[tokio::test]
+    async fn no_verify_follows_a_passing_review_without_a_pinned_commit() {
+        let w = World::start().await;
+        w.pip.quiet.store(true, Ordering::SeqCst);
+        let (core, scope) = (&w.rig.fx.core, &w.rig.fx.scope);
+        core.set_workstream_rule(scope, &w.ws, Rule::ReviewVerify, Some(true)).await.unwrap();
+        let spec = RunSpec { kind: RunKind::Build, allow_push: true, workstream: Some(w.ws.clone()), ..w.rig.spec(7) };
+        let p = core.draft_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
+        let queued = core.runs_approve(&p.id, &core.runs_review(&p.id).await.unwrap().digest).await.unwrap();
+        let build = w.rig.svc.start_now(&queued.id).await.unwrap();
+        let build = w.finish(&build, "Rounded once.\n\nFor Jira:\nDraft PR #12 opened.").await;
+        let mut review = Run::queued("rev2".into(), "p-rev2".into(), build.connection_id.clone(), build.item.clone(), RunSpec { kind: RunKind::Review, build_from_run: Some(build.id.clone()), pr: Some(12), pr_sha: None, workstream: Some(w.ws.clone()), ..w.rig.spec(8) }, "f".into(), Utc::now());
+        review.state = RunState::Done;
+        review.ended_at = Some(Utc::now());
+        review.result = Some("Verdict: pass\n\nFor Jira:\nNothing blocking.".into());
+        review.result_complete = true;
+        w.rig.fx.insert_run(&review).await;
+
+        let plan = crate::domain::ClonePlan { path: w.rig.clone.clone(), base: "main".into(), name: "ca-1-verify-0002".into() };
+        let decision = autostart::Decision::Start { rule: Rule::ReviewVerify, kind: RunKind::Verify, from_run: review.id.clone() };
+        let spec = autostart::spec_for(&decision, &review, plan, &Slots::default()).unwrap();
+        let err = core.autostart_run(scope, spec, Rule::ReviewVerify, &review.id, &AgentSettings::default()).await.unwrap_err();
+        assert!(err.to_string().contains(crate::inbox::VERIFY_UNPINNED), "{err}");
+
+        w.sweep().await;
+        let runs = core.runs_in(scope, &crate::domain::RunQuery::default()).await.unwrap();
+        assert!(runs.iter().all(|r| r.spec.kind != RunKind::Verify), "no verify of the base branch: {runs:?}");
+        let failed: Vec<Option<String>> = core.workstream_events(scope, &w.ws).await.unwrap().into_iter().filter(|e| e.action == "autostart_failed").map(|e| e.detail).collect();
+        assert_eq!(failed, [Some("review_verify after rev2".to_string())]);
+    }
+
     #[tokio::test]
     async fn hold_or_hold_all_while_a_fix_round_waits_for_the_launch_lock_stops_it_and_resuming_sends_it_once() {
         for reason in [crate::domain::workstream::HELD_PERSON, crate::domain::workstream::HELD_ALL] {

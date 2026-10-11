@@ -135,6 +135,10 @@ test("a person-started investigation shows and launches read-only, and its auto-
   await expect(command).toContainText("--permission-mode 'dontAsk' --setting-sources '' --strict-mcp-config --allowedTools 'Bash(git fetch origin main)'");
   await expect(command).toContainText("--disallowedTools 'Edit' 'Write'");
   await expect(command).toContainText(READ_ONLY_GUARD_START);
+  // With the report tool off it names no placeholder config, so it is exact and can be copied.
+  await expect(command).not.toContainText("--mcp-config");
+  await expect(command.getByRole("button", { name: "Copy the command" })).toBeVisible();
+  await expect(command.locator("[data-command-illustrative]")).toHaveCount(0);
 
   // The digest the checks show is the one the approval carries. That the restriction is part of that digest is proven
   // by mockRuns.test.ts and the Rust `pre_phase_6_digest` tests, not here: both sides of this check come from one digest.

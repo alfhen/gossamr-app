@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { Intent, RunSpec, ScreenContext } from "../types";
+import type { Intent, Run, RunSpec, ScreenContext } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { FINDINGS_LIMIT, FINDINGS_PREFACE, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, READ_ONLY_GUARD, readOnlyRules, specProblem, withoutMarkers } from "./mockRunKinds";
 import { MockSupervisor } from "./mockSupervisor";
 import { mockAsk } from "./mockPip";
-import { GUARD as GUARD_TEXT, MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
+import { GUARD as GUARD_TEXT, MOVED_ON, VERIFY_UNPINNED, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
 const spec: RunSpec = {
   kind: "investigate",
@@ -948,6 +948,23 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     expect(readOnlyRules(verify.spec)!.allow).toEqual(expect.arrayContaining([`Bash(git fetch origin pull/${review.spec.pr}/head)`, `Bash(git checkout --detach ${review.spec.prSha})`]));
     expect(renderPrompt(verify.spec)).toContain(`Verify pull request #${review.spec.pr} in ${review.spec.repo} at commit ${review.spec.prSha}, the commit its review read.`);
     expect(renderPrompt(verify.spec)).not.toContain("as it is on `");
+  });
+
+  it("starts no verify after a review with no pinned commit, which would check the base branch instead", () => {
+    const b = new MockBackend({ runs: { seed: "kinds" } });
+    const review = b.runs.list().find((r) => r.spec.kind === "review" && r.state === "done")!;
+    (b.runs as unknown as { update(id: string, patch: Partial<Run>): Run }).update(review.id, { spec: { ...review.spec, prSha: null } });
+    const before = b.runs.list().length;
+    expect(() => b.runs.autoStart("verify", review.id, "review_verify")).toThrow(VERIFY_UNPINNED);
+    expect(b.runs.list()).toHaveLength(before);
+  });
+
+  it("drafts a person's verify with no pull request, whatever the caller names, as `Core::draft_run` does", async () => {
+    const backend = new MockBackend();
+    for (const named of [{ pr: 3, prSha: "abc1234" }, { pr: 3, prSha: null }]) {
+      const made = await backend.runsDraft({ ...spec, ...storefront, kind: "verify", ...named }, itemRef("CA-412"));
+      expect(made.intent.type === "startRun" && made.intent.spec).toMatchObject({ kind: "verify", pr: null, prSha: null });
+    }
   });
 
   it("adds no launch for an answer or a follow-up, which resume the session with what it was launched with", async () => {
