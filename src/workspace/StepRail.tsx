@@ -278,8 +278,17 @@ export interface StepRailViewProps {
  * The step rail of a workstream: Pip's notes, the workstream's controls, Pip's own drafts, then a chip for each step of
  * the chain. A chip opens to its runs and the drafts about it, where a draft is decided as in the conversation.
  */
-/** Whether the plan's description update waits among the Plan step's drafts: approving it is how the plan is approved. A rewrite of the title alone isn't one. */
-export const planWaits = (drafts: readonly Proposal[] | undefined) => !!drafts?.some((p) => p.intent.type === "rewrite" && !!p.intent.body && p.state.type === "pending");
+/** The plan's description update waiting among the Plan step's drafts: approving it is how the plan is approved. A rewrite of the title alone isn't one. */
+export const waitingPlan = (drafts: readonly Proposal[] | undefined) => drafts?.find((p) => p.intent.type === "rewrite" && !!p.intent.body && p.state.type === "pending");
+/** Whether the plan's description update waits among the Plan step's drafts. */
+export const planWaits = (drafts: readonly Proposal[] | undefined) => !!waitingPlan(drafts);
+
+/** The result whose open questions go with the waiting description update: that of the plan it came from, else the step's newest. */
+export function planResultFor(waiting: Proposal | undefined, runs: readonly Run[], newest: Run | null | undefined): string | null | undefined {
+  const origin = waiting?.origin;
+  const from = origin?.type === "run" ? runs.find((r) => r.id === origin.runId) : undefined;
+  return (from ?? newest ?? undefined)?.result;
+}
 
 /**
  * Under the Plan step while its description update waits: that approving it approves the plan and lets Build start, and
@@ -376,7 +385,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                 </span>
                 {!quiet && <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} ws={view.workstream} />}
               </button>
-              {chip.kind === "plan" && planWaits(drafts.plan) && <PlanApproval questions={planOpenQuestions(chip.newest?.result)} />}
+              {chip.kind === "plan" && planWaits(drafts.plan) && <PlanApproval questions={planOpenQuestions(planResultFor(waitingPlan(drafts.plan), runs, chip.newest))} />}
               {chip.pr && <StepPullRequest pr={chip.pr} onOpen={onOpenPr} />}
               {chip.kind === "review" && chip.newest?.spec.pr && <ReviewedPull repo={chip.newest.spec.repo} number={chip.newest.spec.pr} onOpen={() => onPullView(chip.newest!.spec.repo, chip.newest!.spec.pr!)} />}
               {shown && (
