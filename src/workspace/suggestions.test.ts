@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HELD_PERSON } from "../types";
-import { placeholderFor, suggestionsFor, workstreamChips, type SuggestionScene, type WorkstreamSuggestionScene } from "./suggestions";
+import { PLAN_UPDATE_CHIP, chipPageAction, placeholderFor, suggestionsFor, workstreamChips, type SuggestionScene, type WorkstreamSuggestionScene } from "./suggestions";
 
 const base: SuggestionScene = { route: "pip", quote: false, marked: 0, item: null, pendingDrafts: 0, itemDrafts: 0, unassignedInView: 0, shown: 10, filtered: false };
 const ws: WorkstreamSuggestionScene = { key: "PAY-412", stage: "intake", mode: "manage", heldReason: null, hasPendingPlanRewrite: false, hasPendingStartDraft: false, investigated: false };
@@ -15,13 +15,20 @@ describe("workstream-aware suggestion chips", () => {
     expect(suggestionsFor({ ...base, workstream: { ...ws, stage: "build", investigated: true } })).not.toContain("Plan this");
   });
 
-  it("says where to approve a plan, why it is held, what happened, and what a run is doing", () => {
-    expect(workstreamChips({ ...ws, stage: "plan", investigated: true, hasPendingPlanRewrite: true })).toEqual(["Approve the plan"]);
+  it("shows the plan update waiting, why it is held, what happened, and what a run is doing", () => {
+    expect(workstreamChips({ ...ws, stage: "plan", investigated: true, hasPendingPlanRewrite: true })).toEqual(["Show me the plan update"]);
+    expect(workstreamChips({ ...ws, stage: "plan", investigated: true, hasPendingPlanRewrite: true })).not.toContain("Approve the plan");
     expect(workstreamChips({ ...ws, heldReason: HELD_PERSON })[0]).toBe("Why is this held?");
     expect(workstreamChips({ ...ws, stage: "triage", investigated: true, woke: true, running: "R2" })).toEqual(["What happened while I was away?", "What is R2 doing?"]);
     const all = workstreamChips({ ...ws, heldReason: HELD_PERSON, hasPendingPlanRewrite: true, woke: true, running: "R3", stage: "investigate", investigated: true });
     expect(all.length).toBeLessThanOrEqual(6);
-    expect(all).toEqual(["Why is this held?", "Approve the plan", "What happened while I was away?", "What is R3 doing?"]);
+    expect(all).toEqual(["Why is this held?", "Show me the plan update", "What happened while I was away?", "What is R3 doing?"]);
+  });
+
+  it("does the plan update chip on the page, and asks Pip every other chip", () => {
+    expect(chipPageAction(PLAN_UPDATE_CHIP)).toBe("showPlanUpdate");
+    expect(PLAN_UPDATE_CHIP).toBe("Show me the plan update");
+    for (const chip of ["Why is this held?", "What is waiting to start?", "Catch me up", "Approve the plan", "Plan this"]) expect(chipPageAction(chip)).toBeNull();
   });
 
   it("on Pip home, never offers to filter the board it doesn't show: not in a workstream, not in General", () => {

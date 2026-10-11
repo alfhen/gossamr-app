@@ -3,7 +3,7 @@ import { MockBackend } from "../backend/mock";
 import { heldText } from "../lib/workstreamHold";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
-import { batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
+import { planRewriteDraft, batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -23,7 +23,7 @@ const run = (id: string, kind: RunKind, state: RunState, over: Partial<Run> = {}
   ...over,
 });
 
-const view = (id: string, key: string | null, over: { heldReason?: string | null; stage?: WorkstreamStage; runs?: string[]; waitingForPr?: string | null; createdAt?: string } = {}): WorkstreamView => ({
+const view = (id: string, key: string | null, over: { heldReason?: string | null; stage?: WorkstreamStage; runs?: string[]; waitingForPr?: string | null; createdAt?: string; reviewBlocking?: boolean } = {}): WorkstreamView => ({
   workstream: {
     id,
     connectionId: "mock",
@@ -45,6 +45,7 @@ const view = (id: string, key: string | null, over: { heldReason?: string | null
   runs: over.runs ?? [],
   labels: (over.runs ?? []).map((r, n) => [r, `R${n + 1}`]),
   waitingForPr: over.waitingForPr ?? null,
+  ...(over.reviewBlocking ? { reviewBlocking: true } : {}),
   budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
 });
 
@@ -228,6 +229,16 @@ describe("workstreamStatus", () => {
     expect(workstreamStatus(view("ws-1", "CA-401", { runs: all }), [run("r1", "build", "working")], 1)).toBe("Build running");
   });
 
+  it("says changes are needed, never Done, while the newest finished review is blocking, even with its draft waiting", () => {
+    const reviewed = [run("r1", "build", "done", { queuedAt: iso(60) }), run("r2", "review", "done", { queuedAt: iso(30) })];
+    expect(status(reviewed, { stage: "review", reviewBlocking: true })).toBe("Review · changes needed");
+    expect(workstreamStatus(view("ws-1", "CA-401", { runs: all, stage: "review", reviewBlocking: true }), reviewed, 1)).toBe("Review · changes needed");
+    expect(status(reviewed, { stage: "review" })).toBe("Idle");
+    expect(status(reviewed, { stage: "done" })).toBe("Done");
+    // A fix round going says so first.
+    expect(status([...reviewed, run("r3", "build", "working")], { stage: "review", reviewBlocking: true })).toBe("Build running");
+  });
+
   it("only reads the workstream's own runs", () => {
     expect(workstreamStatus(view("ws-1", "CA-401", { runs: ["r1"] }), [run("r9", "build", "working")])).toBe("Idle");
   });
@@ -363,13 +374,14 @@ describe("composerFooter", () => {
     const ws = view("ws-1", "CA-401", { runs: ["a", "b", "c", "d"] });
     const runs = [run("a", "investigate", "working"), run("b", "triage", "queued"), run("c", "plan", "launching"), run("d", "build", "done"), run("x", "plan", "working", { item: ref("CA-999"), spec: { ...base.spec, kind: "plan", workstream: null } })];
     const items = needsYouItems(input({ workstreams: [ws], proposals: [draft("p1", comment("CA-401"), 5), draft("p2", comment("CA-401"), 4)] }));
-    expect(composerFooter(runs, items)).toBe("3 agents working · 1 queued · 2 need you");
-    expect(composerFooter([runs[0]], items.slice(0, 1))).toBe("1 agent working · 1 needs you");
+    // "Running", the word the Agents view's lane uses for runs at work.
+    expect(composerFooter(runs, items)).toBe("3 running · 1 queued · 2 need you");
+    expect(composerFooter([runs[0]], items.slice(0, 1))).toBe("1 running · 1 needs you");
     // A run outside any workstream is working as much as one in it.
-    expect(composerFooter([runs[4]], [])).toBe("1 agent working · nothing needs you");
+    expect(composerFooter([runs[4]], [])).toBe("1 running · nothing needs you");
     // Waiting at the cap is not working.
-    expect(composerFooter([runs[1]], [])).toBe("No agents working · 1 queued · nothing needs you");
-    expect(composerFooter([], [])).toBe("No agents working · nothing needs you");
+    expect(composerFooter([runs[1]], [])).toBe("Nothing running · 1 queued · nothing needs you");
+    expect(composerFooter([], [])).toBe("Nothing running · nothing needs you");
   });
 });
 
@@ -389,6 +401,10 @@ describe("workstreamSuggestionScene", () => {
     expect(scene.hasPendingPlanRewrite).toBe(true);
     expect(scene.hasPendingStartDraft).toBe(true);
     expect(scene.running).toBeNull();
+    // The draft 'Show me the plan update' brings into view: the plan's own, not one from another step or a decided one.
+    expect(planRewriteDraft(ws, [run("r3", "plan", "done")], [rewrite])?.id).toBe("p-rw");
+    expect(planRewriteDraft(ws, [run("r3", "investigate", "done")], [rewrite])).toBeNull();
+    expect(planRewriteDraft(ws, [run("r3", "plan", "done")], [{ ...rewrite, state: { type: "applied" } } as Proposal])).toBeNull();
   });
 });
 
@@ -399,8 +415,20 @@ describe("an answer Pip suggests to a run's question", () => {
 
   it("is one item with the run's question in the tray, going to the reply", () => {
     const items = needsYouItems(input({ workstreams: [ws1], runs: [asking], proposals: [draft("d-a", answer("r-q"), 5, { workstream: "ws-1" })] }));
-    expect(items).toEqual([{ key: "draft:d-a", kind: "question", workstreamId: "ws-1", label: "CA-401 · R1 asks a question · Pip suggests a reply", at: iso(10), target: { type: "draft", id: "d-a" } }]);
+    expect(items).toEqual([{ key: "draft:d-a", kind: "question", workstreamId: "ws-1", label: "CA-401 · R1 asks a question · Pip suggests a reply", head: "CA-401", reason: "R1 asks a question · Pip suggests a reply", at: iso(10), target: { type: "draft", id: "d-a" } }]);
     expect(needsYouCount(items, "ws-1")).toBe(1);
+  });
+
+  it("heads each item with its ticket and the ticket's title when cached, the wait on its own", () => {
+    const failed = run("r-f", "build", "failed", { item: ref("CA-401") });
+    const items = needsYouItems(input({ workstreams: [ws1], runs: [asking, failed], proposals: [draft("d-a", answer("r-q"), 5, { workstream: "ws-1" })], titleOf: (key) => (key === "CA-401" ? "Welcome flow refresh" : null) }));
+    expect(items.map((i) => [i.head, i.reason])).toEqual(
+      expect.arrayContaining([
+        ["CA-401 · Welcome flow refresh", "R1 asks a question · Pip suggests a reply"],
+        ["CA-401 · Welcome flow refresh", expect.stringMatching(/failed$/)],
+      ]),
+    );
+    expect(items.every((i) => i.label === `CA-401 · ${i.reason}`)).toBe(true);
   });
 
   it("is a draft of its own once the run isn't asking, and the question alone once the reply is decided", () => {

@@ -463,7 +463,7 @@ export function WorkstreamControl({ item, workstream, onStart, onOpen, confirmin
   return (
     <span data-workstream={workstream.workstream.id} className="inline-flex items-center gap-2 rounded-md bg-ws-pip-soft px-2.5 py-0.5 text-sm text-ws-pip">
       <span title={workstream.workstream.title}>
-        <span aria-hidden>◆ </span>Workstream · <b data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>{stageText(workstream.stage, workstream.waitingForPr)}</b>
+        <span aria-hidden>◆ </span>Workstream · <b data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>{stageText(workstream.stage, workstream.waitingForPr, workstream.reviewBlocking)}</b>
       </span>
       <button type="button" onClick={onOpen} className="font-semibold underline">
         Open in Pip
@@ -613,8 +613,14 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       if (menuOpen) return setMenuOpen(false);
       const inside = !!document.activeElement?.closest("#peek-sheet");
       useTabs.getState().select(null);
-      // Over Pip home, Pip home hands the keyboard back to what opened the peek.
-      if (inside && useTabs.getState().route !== "pip") requestAnimationFrame(() => (canvasElement(ref) ?? document.getElementById("workspace-main"))?.focus());
+      // Over Pip home, Pip home hands the keyboard back to what opened the peek. Elsewhere it goes to the ticket's card, or
+      // to the canvas when the card doesn't take focus (as when the peek was opened from the palette), never nowhere.
+      if (inside && useTabs.getState().route !== "pip")
+        requestAnimationFrame(() => {
+          const card = canvasElement(ref);
+          card?.focus();
+          if (!card || document.activeElement !== card) document.getElementById("workspace-main")?.focus();
+        });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

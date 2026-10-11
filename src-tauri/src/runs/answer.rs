@@ -143,6 +143,8 @@ impl RunService {
                 run.needs = None;
                 run.suggested_reply = None;
                 run.unsent_answer = None;
+                // What it said while it asked ("waiting for an answer") is over; the tracker fills in what it does next.
+                run.last_detail = None;
                 run.error = None;
                 run.failure = None;
                 run.ended_at = None;

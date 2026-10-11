@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { footerHints, RANK_CLASS } from "./footerHints";
+import { footerHints, pipHomeHints, RANK_CLASS } from "./footerHints";
 import { launcherStyle } from "./PipExtras";
 import { ShortcutHint } from "./ShortcutHint";
 import { VIEW_MODES } from "./tabsStore";
@@ -24,6 +24,16 @@ describe("canvas footer hints", () => {
     expect(out).toContain("Scroll to zoom");
     expect(out).toContain("hidden @md:inline");
     expect(out).toContain("⌘J");
+  });
+});
+
+describe("Pip home's footer hints", () => {
+  it("says a opens a run draft rather than approving it, as its card does", () => {
+    const decide = pipHomeHints().find((h) => h.id === "decide")!;
+    expect(decide.keys).toEqual(["a", "s"]);
+    expect(decide.text).toBe("approve or skip a draft · a opens a run draft");
+    const out = renderToStaticMarkup(<ShortcutHint view="list" hints={pipHomeHints()} />);
+    expect(out).toContain("a opens a run draft");
   });
 });
 

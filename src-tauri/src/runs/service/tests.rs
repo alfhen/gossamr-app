@@ -938,7 +938,7 @@ mod preflight_rows {
         assert!(has(&p, Level::Green, "Background agents are supported"));
         assert!(has(&p, Level::Green, "Agents get this PATH: "));
         assert!(has(&p, Level::Green, &format!("Clone: {} on main", rig.clone.display())));
-        assert!(has(&p, Level::Green, "0 of 3 agents running"));
+        assert!(has(&p, Level::Green, "0 of 3 agent slots in use (including ones waiting on you)"));
         assert!(has(&p, Level::Green, "Read-only steps are supported"));
         assert!(has(&p, Level::Green, "This step runs read-only, in permission mode dontAsk, without your or the repository's Claude settings and MCP servers"));
         assert!(has(&p, Level::Green, "Your own mode, auto, applies to a Build."));
@@ -992,7 +992,7 @@ mod preflight_rows {
         rig.svc.launch(&run.id).await.unwrap();
         let p = rows(&rig, Some(rig.spec(2))).await;
         assert!(!p.blocking, "{p:?}");
-        assert!(has(&p, Level::Amber, "1 of 1 agents are running. This one will wait for a slot and start when one finishes."));
+        assert!(has(&p, Level::Amber, "1 of 1 agent slots are in use, including ones waiting on you. This one will wait for a slot and start when one finishes."));
         assert!(!p.rows.iter().any(|r| r.level == Level::Red));
     }
 
@@ -1013,7 +1013,7 @@ mod preflight_rows {
         let rig = ready().await;
         let p = rows(&rig, None).await;
         assert!(!p.rows.iter().any(|r| r.text.contains("Clone:") || r.text.contains("What runs")));
-        assert!(has(&p, Level::Green, "agents running"));
+        assert!(has(&p, Level::Green, "agent slots in use"));
     }
 }
 

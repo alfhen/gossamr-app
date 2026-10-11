@@ -432,10 +432,20 @@ describe("the first agent start", () => {
     usePrefs.setState({ agentsIntroSeen: false });
     await s().begin({ item: itemRef("ENG-1") });
     expect(s().open).toBe(false);
-    expect(useRuns.getState().sheet).toEqual({ type: "safety" });
+    expect(useRuns.getState().sheet).toEqual({ type: "safety", intro: true });
     useRuns.getState().closeSheet();
     await s().begin({ item: itemRef("ENG-1") });
     expect(s().open).toBe(true);
+  });
+
+  it("opens the setup sheet the person asked for once they continue past the safety sheet, as asked", async () => {
+    usePrefs.setState({ agentsIntroSeen: false });
+    await s().begin({ item: itemRef("ENG-1"), kind: "triage" });
+    expect(s().open).toBe(false);
+    useRuns.getState().continueIntro();
+    await vi.waitFor(() => expect(s().open).toBe(true));
+    expect(s()).toMatchObject({ kind: "triage", item: itemRef("ENG-1") });
+    expect(useRuns.getState().sheet).toBeNull();
   });
 });
 

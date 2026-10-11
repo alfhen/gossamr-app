@@ -4,8 +4,9 @@ import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import type { ItemRef, Proposal, RunKind, RunSpec } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { DraftPreview, LiveDraftPreview, openLiveDraft } from "./DraftPreview";
-import { CLOSED_INLINE, InlineStartContext, InlineStartView, inlineStartBlock, inlineStartKey, inlineStartable, useInlineStarts, type InlineActions } from "./InlineStart";
+import { DraftPreview, KEY_HINT, LiveDraftPreview, collapseReview, openLiveDraft } from "./DraftPreview";
+import { escapeCollapses } from "./draftKeys";
+import { CLOSED_INLINE, InlineStartContext, InlineStartView, inlineStartBlock, inlineStartKey, inlineStartable, revealReview, tabToStart, useInlineStarts, type InlineActions } from "./InlineStart";
 import { usePrefs } from "./prefs";
 import { COPY } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
@@ -202,9 +203,20 @@ describe("reviewing and starting a run draft in place", () => {
     const id = await draft();
     usePrefs.setState({ agentsIntroSeen: false });
     await inline().open(id);
-    expect(useRuns.getState().sheet).toEqual({ type: "safety" });
+    expect(useRuns.getState().sheet).toEqual({ type: "safety", intro: true });
     expect(inline().entries[id]).toBeUndefined();
     useRuns.getState().closeSheet();
+  });
+
+  it("opens the review in place once the person presses Got it, continue on the safety sheet, without a second click", async () => {
+    const id = await draft();
+    usePrefs.setState({ agentsIntroSeen: false });
+    await inline().open(id);
+    expect(inline().entries[id]).toBeUndefined();
+    useRuns.getState().continueIntro();
+    expect(useRuns.getState().sheet).toBeNull();
+    await vi.waitFor(() => expect(inline().entries[id]?.phase).toBe("shown"));
+    expect(inline().entries[id]?.review).not.toBeNull();
   });
 });
 
@@ -255,15 +267,84 @@ describe("which run drafts start in place", () => {
     expect(begin).not.toHaveBeenCalled();
   });
 
-  it("shows the review under the card once open, with the expander saying so", () => {
+  it("shows the review under the card once open, and hides the card's own 'Review and start' meanwhile", () => {
     const p = runDraft("plan");
     const panel = <InlineStartView id={p.id} entry={{ ...CLOSED_INLINE, phase: "loading" }} on={noop} />;
     const html = renderToStaticMarkup(<DraftPreview proposal={p} statusName={null} targetTitle={null} onOpen={vi.fn()} expander={{ open: true, panel }} />);
-    expect(html).toMatch(/aria-expanded="true" aria-controls="inline-start-p-plan-t"[^>]*>Review and start<\/button>/);
     expect(html).toContain('id="inline-start-p-plan-t"');
     expect(html).toContain("Reading the draft…");
-    // Closed, the panel isn't there.
-    expect(renderToStaticMarkup(<DraftPreview proposal={p} statusName={null} targetTitle={null} onOpen={vi.fn()} expander={{ open: false, panel }} />)).not.toContain("inline-start-p-plan-t");
+    // The review has its own Start and Hide; the card's button is gone while it is open.
+    expect(html).not.toContain(">Review and start</button>");
+    expect(html).toContain(">Start agent</button>");
+    // The review takes focus from code (tabindex -1), so Enter on it starts nothing.
+    expect(html).toMatch(/<div tabindex="-1" id="inline-start-p-plan-t" role="group" aria-label="Review and start"/);
+    // While it is open the card takes Esc itself, so Esc hides the review rather than stopping Pip.
+    expect(html).toMatch(/<article[^>]*data-esc-local=""/);
+    // Closed, the panel isn't there, and the card's button is back.
+    const closed = renderToStaticMarkup(<DraftPreview proposal={p} statusName={null} targetTitle={null} onOpen={vi.fn()} expander={{ open: false, panel }} />);
+    expect(closed).not.toContain("inline-start-p-plan-t");
+    expect(closed).toMatch(/aria-expanded="false"[^>]*>Review and start<\/button>/);
+    expect(closed).not.toContain("data-esc-local");
+  });
+
+  it("hides an open review on Esc and keeps the keyboard on the card, unless a decision waits for Enter", () => {
+    const esc = (over: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) => ({ key: "Escape", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...over });
+    expect(escapeCollapses(esc(), null)).toBe(true);
+    // A pending skip or approve keeps Esc for cancelling itself.
+    expect(escapeCollapses(esc(), "skip")).toBe(false);
+    expect(escapeCollapses(esc(), "approve")).toBe(false);
+    expect(escapeCollapses(esc({ shiftKey: true }), null)).toBe(false);
+    expect(escapeCollapses({ ...esc(), key: "Enter" }, null)).toBe(false);
+
+    const p = runDraft("investigate");
+    useInlineStarts.setState({ entries: { [p.id]: { ...CLOSED_INLINE, phase: "shown" } } });
+    const order: string[] = [];
+    const card = { focus: vi.fn(() => order.push("focus")) };
+    collapseReview(card, () => (order.push("close"), inline().close(p.id)));
+    expect(entry(p.id).phase).toBe("closed");
+    expect(card.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(order).toEqual(["close", "focus"]);
+  });
+
+  it("brings a review just opened to the top of its scroll box and puts the keyboard on it, Start one Tab away", () => {
+    const box = { scrollTop: 100, getBoundingClientRect: () => ({ top: 50, bottom: 650 }) };
+    const panel = { focus: vi.fn(), getBoundingClientRect: () => ({ top: 450, bottom: 1250 }), closest: vi.fn(() => box) };
+    revealReview(panel);
+    expect(panel.focus).toHaveBeenCalledWith({ preventScroll: true });
+    // Its top 8px under the box's top: scrolled by 400 - 8.
+    expect(box.scrollTop).toBe(492);
+    // With nothing to scroll, it is only focused.
+    const loose = { ...panel, focus: vi.fn(), closest: vi.fn(() => null) };
+    revealReview(loose);
+    expect(loose.focus).toHaveBeenCalled();
+
+    const tab = (over: Partial<{ shiftKey: boolean; target: unknown }> = {}) => ({ key: "Tab", shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, target: panel, currentTarget: panel, ...over });
+    const start = { disabled: false, focus: vi.fn() };
+    expect(tabToStart(tab(), start)).toBe(true);
+    expect(start.focus).toHaveBeenCalledTimes(1);
+    // Shift+Tab, a Tab from a control inside the review, or Start still off: the browser's own Tab.
+    expect(tabToStart(tab({ shiftKey: true }), start)).toBe(false);
+    expect(tabToStart(tab({ target: {} }), start)).toBe(false);
+    expect(tabToStart(tab(), { ...start, disabled: true })).toBe(false);
+    expect(start.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a ticket draft's peek on one press of its button, and its key hint never changes the card's height", () => {
+    // The hint hangs outside the card's box and takes no clicks: showing or hiding it moves nothing under a pointer.
+    for (const cls of ["absolute", "top-full", "pointer-events-none"]) expect(KEY_HINT.split(" ")).toContain(cls);
+    const comment: Proposal = { ...runDraft("investigate"), id: "p-comment", intent: { type: "comment", item: CA, body: { blocks: [] } } as unknown as Proposal["intent"] };
+    const onOpen = vi.fn();
+    const html = renderToStaticMarkup(<DraftPreview proposal={comment} statusName={null} targetTitle={null} onOpen={onOpen} />);
+    expect(html).toContain(">Review on CA-401 →</button>");
+    // Not reached from the keyboard, the card shows no hint at all.
+    expect(html).not.toContain('role="status"');
+    // The button's one press: on Pip home the peek opens on the ticket, with nothing else to press first.
+    useTabs.getState().select(null);
+    vi.stubGlobal("document", { querySelector: () => null, querySelectorAll: () => [] });
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    openLiveDraft(comment, { inline: true });
+    expect(useTabs.getState().selected).toBe("mock:CA-401");
   });
 
   it("opens the full setup sheet for a build, a review and a draft with no ticket, on Pip home too", () => {

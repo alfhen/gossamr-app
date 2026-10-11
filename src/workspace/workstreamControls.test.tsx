@@ -4,7 +4,7 @@ import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { useClaude } from "../claudeStore";
 import { workstreamConversation } from "../lib/conversations";
-import { budgetView, heldText } from "../lib/workstreamHold";
+import { TURN_HELP, budgetView, heldText } from "../lib/workstreamHold";
 import { AUTOSTART_DEFAULTS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandActions } from "./commands";
@@ -46,7 +46,7 @@ describe("the workstream's controls", () => {
       expect(html).toContain(">Resume</button>");
       expect(html).not.toContain(">Hold</button>");
     }
-    expect(render(viewOf({ heldReason: HELD_BUDGET }))).toContain("Budget used up. Say carry on to continue");
+    expect(render(viewOf({ heldReason: HELD_BUDGET }))).toContain("Held: automatic turns used up. Resume, or write to Pip, to give it 6 more");
     expect(render(viewOf({ heldReason: HELD_RESTART }))).toContain("Held after a restart");
   });
 
@@ -60,9 +60,29 @@ describe("the workstream's controls", () => {
     const own = viewOf({ budget: { autoTurns: 2, wakes: null, tokens: null }, spent: { autoTurns: 2, wakes: 2, tokens: 0 }, heldReason: HELD_BUDGET });
     expect(own.budget.level).toBe("spent");
     expect(render(own)).not.toContain("data-budget");
-    expect(render(own)).toContain("Budget used up. Say carry on to continue");
+    expect(render(own)).toContain("Held: automatic turns used up. Resume, or write to Pip, to give it 2 more");
+    expect(render(own)).toContain("data-turn-help");
     // Spent, but held for something else: the line says so.
     expect(render({ ...own, workstream: { ...own.workstream, heldReason: HELD_PERSON } })).toContain('data-budget="spent"');
+  });
+
+  it("defines an automatic turn wherever the budget is shown", () => {
+    const amber = render(viewOf({ spent: { autoTurns: 5, wakes: 5, tokens: 0 } }));
+    const help = TURN_HELP.replace(/'/g, "&#x27;");
+    expect(amber).toMatch(new RegExp(`data-budget="amber" title="${help}"`));
+    expect(amber).toContain("<summary");
+    expect(amber).toContain(help);
+    expect(render(viewOf())).not.toContain("data-turn-help");
+  });
+
+  it("says for a tripwire that took Manage away that automatic steps are paused and Resume turns them back on, and marks Manage paused", () => {
+    const paused = render(viewOf({ heldReason: `${TRIPWIRE}basis_drift`, drifted: ["description"], resumeMode: "manage", mode: "advise" }));
+    expect(paused).toContain("Held: the ticket&#x27;s description changed in Jira. Automatic steps are paused. Resume turns them back on.");
+    expect(paused).toContain("data-manage-paused");
+    expect(paused).toMatch(/role="switch" aria-checked="false"/);
+    const advised = render(viewOf({ heldReason: `${TRIPWIRE}marker`, mode: "advise" }));
+    expect(advised).toContain("Resume only lifts the hold; Manage stays off.");
+    expect(advised).not.toContain("data-manage-paused");
   });
 
   it("asks before Stop, which sits behind a menu so the pane's own Stop stays the one button of that name", () => {

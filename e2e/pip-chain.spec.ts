@@ -196,7 +196,7 @@ test("in one workstream Pip drafts investigate, triage with findings, plan, a bu
   expect(await runCount(page)).toBe(before + 2);
   await advanceRuns(page, 3);
   // Starting it opened the Agents view; the workstream's stage is read on the ticket's peek again.
-  await expect(await stageChip(page)).toHaveText("Done");
+  await expect(await stageChip(page)).toHaveText("Review · changes needed");
 
   // Its blocking verdict is on the Agents card and the run sheet.
   await page.getByRole("button", { name: /^Agents/ }).click();

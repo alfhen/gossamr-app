@@ -235,7 +235,7 @@ test("a used-up budget holds the workstream, so nothing in it launches or wakes 
   await finish(page, triage.id);
   await expect(wakes(page)).toHaveCount(2);
   await expect.poll(async () => (await actions(page, "held")).map((e) => e.detail)).toEqual(["budget"]);
-  await expect(heldBanner(page)).toHaveText(/^Budget used up\. Say carry on to continue/);
+  await expect(heldBanner(page)).toHaveText(/^Held: automatic turns used up\. Resume, or write to Pip, to give it \d+ more/);
 
   // The second wake used the budget up. The plan it reports had started already, but held, it never launches.
   const plan = await started(page, "plan");
@@ -294,7 +294,7 @@ test("the budget warns in amber before it runs out, then holds with what to say"
 
   await finish(page, (await started(page, "triage", triage.id)).id);
   await expect(wakes(page)).toHaveCount(5);
-  await expect(heldBanner(page)).toHaveText(/^Budget used up\. Say carry on to continue/);
+  await expect(heldBanner(page)).toHaveText(/^Held: automatic turns used up\. Resume, or write to Pip, to give it \d+ more/);
   await expect(amber).toHaveCount(0);
   await expect(pipPane(page).getByRole("button", { name: "Resume" })).toBeVisible();
   expect(await jiraWrites(page)).toEqual([]);

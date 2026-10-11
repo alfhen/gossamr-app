@@ -195,7 +195,7 @@ export function ConversationLine({ conversation, workstream }: { conversation: s
         <>
           {/* Only the title is cut: where the workstream stands is what the person most needs to see. */}
           <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
-          <span className="shrink-0 whitespace-pre">{` · ${stageText(workstream.stage, workstream.waitingForPr)}`}</span>
+          <span className="shrink-0 whitespace-pre">{` · ${stageText(workstream.stage, workstream.waitingForPr, workstream.reviewBlocking)}`}</span>
         </>
       ) : (
         <span className="truncate">{conversationTitle(null)}</span>
@@ -244,7 +244,8 @@ export function PipPane({ onClose }: { onClose(): void }) {
         <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
         {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
       </header>
-      <PipConversation key={conversation} conversation={conversation} proposals={proposalList} primary={primary} />
+      {/* About one ticket, outside a workstream, the pane lists that ticket's drafts and folds the rest. */}
+      <PipConversation key={conversation} conversation={conversation} proposals={proposalList} primary={primary} ticket={workstream ? null : context.item} />
       <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} />
     </aside>
   );

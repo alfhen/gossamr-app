@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { changedLines, diffLines, withGaps, type DiffRow } from "../lib/textDiff";
+import { changedLines, changedPairs, diffLines, diffWords, withGaps, type DiffRow, type WordPart } from "../lib/textDiff";
 import { withRunNamed } from "../lib/runNames";
 import type { Intent, ProposalEdit } from "../types";
 
@@ -8,8 +8,30 @@ export type Rewrite = Extract<Intent, { type: "rewrite" }>;
 const MARK = { add: "+", del: "−", same: " " } as const;
 const SAID = { add: "Added: ", del: "Removed: ", same: "Unchanged: " } as const;
 const TONE = { add: "bg-ws-done-soft text-ws-ink", del: "bg-ws-blocked-soft text-ws-ink2 line-through decoration-ws-blocked/50", same: "text-ws-ink3" } as const;
+/** The words a changed line lost or gained, stronger than the line's own tint. */
+const WORD = { add: "rounded-sm bg-ws-done/30 text-ws-ink", del: "rounded-sm bg-ws-blocked/25 text-ws-ink" } as const;
+/** Said beside a line whose only change is whitespace, which no highlight shows. */
+export const ONLY_SPACING = "only spacing changed";
+
+/** A changed line's text with the words its pair doesn't have marked. */
+function Words({ parts, kind }: { parts: WordPart[]; kind: "add" | "del" }) {
+  return (
+    <>
+      {parts.map((w, i) =>
+        w.changed ? (
+          <mark key={i} data-word-changed className={WORD[kind]}>
+            {w.text}
+          </mark>
+        ) : (
+          <span key={i}>{w.text}</span>
+        ),
+      )}
+    </>
+  );
+}
 
 function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
+  const pairs = useMemo(() => changedPairs(rows), [rows]);
   return (
     <div role="group" aria-label={`${what} changes`} data-diff={what} className="overflow-hidden rounded-md border border-ws-sep bg-ws-win font-mono text-[12.5px] leading-snug">
       {rows.map((r, i) =>
@@ -18,17 +40,30 @@ function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
             {r.count} unchanged lines
           </div>
         ) : (
-          <div key={i} data-line={r.kind} className={`flex gap-2 px-2 py-px ${TONE[r.kind]}`}>
-            <span aria-hidden className="w-3 shrink-0 select-none text-center">
-              {MARK[r.kind]}
-            </span>
-            <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-              <span className="sr-only">{SAID[r.kind]}</span>
-              {r.text || " "}
-            </span>
-          </div>
+          <Line key={i} row={r} pair={pairs.has(i) ? (rows[pairs.get(i)!] as { text: string }).text : null} />
         ),
       )}
+    </div>
+  );
+}
+
+/** One line of a diff; a removed or added line paired with its other version marks the words that changed, or says only spacing did. */
+function Line({ row: r, pair }: { row: Exclude<DiffRow, { kind: "gap" }>; pair: string | null }) {
+  const words = r.kind !== "same" && pair !== null ? diffWords(r.kind === "del" ? r.text : pair, r.kind === "del" ? pair : r.text) : null;
+  return (
+    <div data-line={r.kind} className={`flex gap-2 px-2 py-px ${TONE[r.kind]}`}>
+      <span aria-hidden className="w-3 shrink-0 select-none text-center">
+        {MARK[r.kind]}
+      </span>
+      <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
+        <span className="sr-only">{SAID[r.kind]}</span>
+        {words && r.kind !== "same" && !words.spacingOnly ? <Words parts={r.kind === "del" ? words.from : words.to} kind={r.kind} /> : r.text || " "}
+        {words?.spacingOnly && r.kind === "add" && (
+          <span data-spacing-only className="ml-2 font-sans text-xs text-ws-ink3">
+            ({ONLY_SPACING})
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -90,7 +125,9 @@ export function RewriteView({ intent, title, body, editing, disabled, onTitle, o
   const titleRows = useMemo(() => (intent.title ? withGaps(diffLines(intent.title.from, title)) : []), [intent.title, title]);
   const bodyRows = useMemo(() => {
     const rows = intent.body ? withGaps(diffLines(intent.body.fromText, body)) : [];
-    return runName ? rows.map((r) => (r.kind === "gap" ? r : { ...r, text: withRunNamed(r.text, runName) })) : rows;
+    // Only the new text came from this run; a removed line names the run that wrote the old text, often another one,
+    // and naming both "the CA-401 plan" made a changed line look unchanged.
+    return runName ? rows.map((r) => (r.kind === "gap" || r.kind === "del" ? r : { ...r, text: withRunNamed(r.text, runName) })) : rows;
   }, [intent.body, body, runName]);
   return (
     <div className="grid gap-2.5">

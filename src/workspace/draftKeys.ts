@@ -91,6 +91,17 @@ const show = (card: Focusable) => {
 /** Marks a card that ArrowUp from the empty input just reached; the card clears it on its first key or when it loses focus. */
 export const FROM_INPUT = "data-from-input";
 
+/** The card's own keys. Pressed while a decision waits for Enter, one of these cancels it and does nothing else. */
+const CARD_KEYS = new Set(["a", "s", "o", "Enter", "Escape"]);
+
+/**
+ * Whether Esc on a card whose review is open under it, or inside that review, hides the review: a plain Esc while no
+ * decision waits for Enter (one that does keeps Esc for cancelling itself).
+ */
+export function escapeCollapses(ev: Pick<KeyEventLike, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">, asking: Asking | null): boolean {
+  return ev.key === "Escape" && !asking && plain(ev);
+}
+
 /** Letters the conversation steps between cards with; they are never typing. */
 const STEPS = new Set(["j", "k"]);
 
@@ -111,8 +122,8 @@ interface CardActs {
 /**
  * A key on the card itself, never one typed into a field or pressed on a button inside it, and never with a modifier.
  * Approving and skipping take two keys, a or s and then Enter, so a person who thinks they are still typing in the input
- * never decides a draft: any other key cancels, and a letter that is not one of the card's keys goes back to the input
- * together with the a or s before it. Returns whether it acted.
+ * never decides a draft: any other key cancels. One of the card's own keys (a, s, o, Enter, Esc) only cancels; a letter
+ * that is not one of them goes back to the input together with the a or s before it. Returns whether it acted.
  */
 export function onDraftCardKey(ev: KeyEventLike, p: Proposal, asking: Asking | null, act: CardActs): boolean {
   if (ev.target !== ev.currentTarget || ev.metaKey || ev.ctrlKey || ev.altKey) return false;
@@ -134,7 +145,8 @@ export function onDraftCardKey(ev: KeyEventLike, p: Proposal, asking: Asking | n
       confirmed();
       return true;
     }
-    if (asking && ev.key === "Escape") {
+    // Any other of the card's own keys only cancels: it never goes on to ask, open or approve in turn.
+    if (asking && CARD_KEYS.has(ev.key)) {
       ev.preventDefault();
       return true;
     }

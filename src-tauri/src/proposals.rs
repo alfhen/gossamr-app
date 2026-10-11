@@ -1343,6 +1343,7 @@ mod tests {
             rules: Default::default(),
             basis: None,
             drifted: Vec::new(),
+            resume_mode: None,
         };
         db.insert_workstream(&ws).unwrap();
     }

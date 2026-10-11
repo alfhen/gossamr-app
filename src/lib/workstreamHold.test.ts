@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
 import type { Workstream } from "../types";
-import { budgetLevel, budgetView, heldText, ruleText } from "./workstreamHold";
+import { TURN_HELP, budgetLevel, budgetView, heldBanner, heldText, ruleText, tripwireResumeText } from "./workstreamHold";
 
 describe("heldText", () => {
   it("says nothing for a workstream that isn't held", () => {
@@ -14,7 +14,8 @@ describe("heldText", () => {
     expect(heldText(HELD_RESTART)).toBe("Held after a restart");
     expect(heldText(HELD_PERSON)).toBe("Held by you");
     expect(heldText(HELD_ALL)).toBe("Held: Hold all");
-    expect(heldText(HELD_BUDGET)).toBe("Budget used up. Say carry on to continue");
+    expect(heldText(HELD_BUDGET)).toBe("Held: automatic turns used up. Resume, or write to Pip, to give it 6 more");
+    expect(heldText(HELD_BUDGET, null, 3)).toBe("Held: automatic turns used up. Resume, or write to Pip, to give it 3 more");
     expect(heldText(HELD_DAILY)).toBe("Held: today's Pip turns are used up");
     expect(heldText(HELD_QUOTA)).toBe("Paused: quota");
   });
@@ -45,6 +46,19 @@ describe("heldText", () => {
     expect(heldText(drift)).toBe("Held: the ticket changed since the workstream opened");
     expect(heldText("tripwire:marker", ["description"])).toContain("data markers");
     expect(heldText(HELD_PERSON, ["description"])).toBe("Held by you");
+  });
+
+  it("says for a tripwire that took Manage away that automatic steps are paused and Resume turns them back on", () => {
+    const drift = `${TRIPWIRE}basis_drift`;
+    expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: "manage" })).toBe("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
+    expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: null })).toBe("Held: the ticket's description changed in Jira. Resume only lifts the hold; Manage stays off.");
+    expect(tripwireResumeText(`${TRIPWIRE}marker`, "manage")).toBe("Automatic steps are paused. Resume turns them back on.");
+    // Any other hold says only why; the budget's says how many turns resuming gives.
+    expect(tripwireResumeText(HELD_PERSON, "manage")).toBeNull();
+    expect(heldBanner({ heldReason: HELD_PERSON, resumeMode: "manage" })).toBe("Held by you");
+    expect(heldBanner({ heldReason: HELD_BUDGET }, 4)).toBe("Held: automatic turns used up. Resume, or write to Pip, to give it 4 more");
+    expect(heldBanner({ heldReason: null })).toBeNull();
+    expect(TURN_HELP).toMatch(/^An automatic turn is each time Pip acts without you asking/);
   });
 
   it("names every rule", () => {

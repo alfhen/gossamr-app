@@ -12,9 +12,10 @@ import { PipRunCard } from "./PipRunCard";
 import { batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
-import { openPullView } from "./pullViewStore";
+import { openPullView, usePullView } from "./pullViewStore";
 import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
+import { useToasts } from "./toasts";
 import { approveEach } from "./useCards";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { useWorkstreams } from "./workstreamsStore";
@@ -168,8 +169,20 @@ export function EarlierStepDrafts({ step, drafts, initialOpen = false }: { step:
   );
 }
 
+/**
+ * What the chip says of a run a rule started: a queued one waits for Resume while the workstream is held, and for Manage
+ * while it is in Advise, since nothing starts on its own then; otherwise it was started automatically.
+ */
+export function autoNote(chip: StepChip, ws: Pick<WorkstreamView["workstream"], "heldReason" | "mode">): string | null {
+  if (!chip.auto) return null;
+  if (chip.newest?.state === "queued" && ws.heldReason) return "waits for Resume";
+  if (chip.newest?.state === "queued" && ws.mode === "advise") return "waits for Manage";
+  return "started automatically";
+}
+
 /** The chip's one line: the newest run's label and state, then what else is worth a glance. */
-function ChipLine({ chip, label }: { chip: StepChip; label?: string }) {
+function ChipLine({ chip, label, ws }: { chip: StepChip; label?: string; ws: WorkstreamView["workstream"] }) {
+  const auto = autoNote(chip, ws);
   if (!chip.newest) return <span className="text-xs text-ws-ink3">Not started</span>;
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-ws-ink3">
@@ -178,7 +191,7 @@ function ChipLine({ chip, label }: { chip: StepChip; label?: string }) {
         {chip.state}
       </span>
       {chip.runs.length > 1 && <span>· {chip.runs.length} runs</span>}
-      {chip.auto && <span data-step-auto>· started automatically</span>}
+      {auto && <span data-step-auto>· {auto}</span>}
       {chip.verdict && <span data-step-verdict>· {chip.verdict}</span>}
       {chip.fixRound && <span data-step-fix-round>· {chip.fixRound}</span>}
     </span>
@@ -200,6 +213,21 @@ function StepPullRequest({ pr, onOpen }: { pr: NonNullable<StepChip["pr"]>; onOp
       </button>
     </p>
   );
+}
+
+/** What the rail's PR view says when no GitHub connection is known to read the pull request from. */
+export const NO_PULL_VIEW = "Connect GitHub to see this pull request in Gossamr. Opened it on GitHub instead.";
+
+/**
+ * The Review step's PR view: the pull request in Gossamr when a GitHub connection can read it; else, said so in a note, its
+ * page on GitHub, rather than nothing at all.
+ */
+export function pullViewOrGithub(repo: string, number: number) {
+  openPullView({ repo, number });
+  const shown = usePullView.getState().target;
+  if (shown?.repo === repo && shown.number === number) return;
+  useToasts.getState().push(NO_PULL_VIEW, "info");
+  openOnGithub(`https://github.com/${repo}/pull/${number}`);
 }
 
 /** The pull request the Review step read, with a button that shows it in Gossamr. */
@@ -237,7 +265,7 @@ export interface StepRailViewProps {
   approve(id: string): Promise<{ error?: string | null }>;
   /** Opens the build's pull request on GitHub. */
   onOpenPr?(url: string): void;
-  /** Opens the pull request a review read in the in-app view, with its pending review draft when there is one. */
+  /** Opens the pull request a review read in the in-app view, with its pending review draft when there is one; on GitHub when no connection can read it. */
   onPullView?(repo: string, number: number): void;
   /** Steps shown open at first; a test passes its own. */
   initialOpen?: readonly StepGroup[];
@@ -249,7 +277,7 @@ export interface StepRailViewProps {
  * The step rail of a workstream: Pip's notes, the workstream's controls, Pip's own drafts, then a chip for each step of
  * the chain. A chip opens to its runs and the drafts about it, where a draft is decided as in the conversation.
  */
-export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onPullView = (repo, number) => openPullView({ repo, number }), initialOpen = [], reveal = null }: StepRailViewProps) {
+export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onPullView = pullViewOrGithub, initialOpen = [], reveal = null }: StepRailViewProps) {
   const [open, setOpen] = useState<ReadonlySet<StepGroup>>(() => new Set(initialOpen));
   const chips = useMemo(() => stepChips([...runs], events, verdicts, proposals, { now, waitingForPr: view.waitingForPr, changes }), [runs, events, verdicts, proposals, now, view.waitingForPr, changes]);
   const next = nextStep(chips);
@@ -318,7 +346,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                     </span>
                   )}
                 </span>
-                {!quiet && <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} />}
+                {!quiet && <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} ws={view.workstream} />}
               </button>
               {chip.pr && <StepPullRequest pr={chip.pr} onOpen={onOpenPr} />}
               {chip.kind === "review" && chip.newest?.spec.pr && <ReviewedPull repo={chip.newest.spec.repo} number={chip.newest.spec.pr} onOpen={() => onPullView(chip.newest!.spec.repo, chip.newest!.spec.pr!)} />}

@@ -231,7 +231,7 @@ function WorkstreamSection({ group, children }: { group: WorkstreamGroup; childr
         <h3 className={`m-0 min-w-0 truncate text-sm font-semibold ${group.id ? "text-ws-ink" : "text-ws-ink2"}`}>{group.title}</h3>
         {group.stage && (
           <span data-stage={group.stage} data-waiting-for-pr={group.waitingForPr || undefined} className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
-            {stageText(group.stage, group.waitingForPr)}
+            {stageText(group.stage, group.waitingForPr, group.reviewBlocking)}
           </span>
         )}
         <span className="text-xs text-ws-ink3">{group.runs.length}</span>

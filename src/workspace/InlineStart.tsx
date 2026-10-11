@@ -7,6 +7,7 @@ import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPr
 import { RunPreflight } from "./RunPreflight";
 import { COPY, readOnlyNote, runAsYou, startBlock } from "./runSheetLogic";
 import { DRAFT_CARD, PIP_INPUT_ID } from "./draftKeys";
+import { scrollTopFor } from "./peekDrafts";
 import { afterRunStarted, approveRunDraft, readRunDraft } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { messageOf, useToasts } from "./toasts";
@@ -84,6 +85,46 @@ export function inlineStartKey(ev: { key: string; metaKey: boolean; ctrlKey: boo
   return inlineStartBlock(entry) === null ? "start" : "held";
 }
 
+/** Reviews just opened by the person, which come into view and take the keyboard once they render; only then, never on a re-render. */
+const revealOnMount = new Set<string>();
+
+/** What scrolls a review into view: Pip home's conversation, or its Steps column. */
+const REVIEW_SCROLLER = '[data-pip-conversation-body], aside[aria-label="Steps"]';
+
+/** A gap kept above a review brought to the top. */
+const REVIEW_MARGIN = 8;
+
+interface Box {
+  top: number;
+  bottom: number;
+}
+
+interface Revealable {
+  focus(options?: FocusOptions): void;
+  getBoundingClientRect(): Box;
+  closest(selector: string): unknown;
+}
+
+/**
+ * Brings a review just opened to the top of what scrolls it and puts the keyboard in it: on the review itself, where Enter
+ * does nothing, so only ⌘↵ or the Start button starts; Tab from there goes to Start. Only that one box scrolls, never
+ * Pip home around it, as `scrollIntoView` would once the box can't scroll far enough.
+ */
+export function revealReview(panel: Revealable) {
+  panel.focus({ preventScroll: true });
+  const box = panel.closest(REVIEW_SCROLLER) as ({ scrollTop: number } & Pick<Revealable, "getBoundingClientRect">) | null;
+  if (!box) return;
+  const to = scrollTopFor(panel.getBoundingClientRect(), box.getBoundingClientRect(), box.scrollTop, "start");
+  if (to !== null) box.scrollTop = Math.max(0, to - REVIEW_MARGIN);
+}
+
+/** Tab on the review itself goes straight to Start, past the prompt and the checks, while Start is on; true when it went. */
+export function tabToStart(ev: { key: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean; target: unknown; currentTarget: unknown }, start: { disabled: boolean; focus(): void } | null): boolean {
+  if (ev.key !== "Tab" || ev.shiftKey || ev.metaKey || ev.ctrlKey || ev.altKey || ev.target !== ev.currentTarget || !start || start.disabled) return false;
+  start.focus();
+  return true;
+}
+
 /** The newest request for each draft, from one counter, so an answer for an earlier open, close or start never lands. */
 const requests = new Map<string, number>();
 let counter = 0;
@@ -116,7 +157,8 @@ export const useInlineStarts = create<InlineStartsState>((set, get) => {
 
     async open(id) {
       const b = backend();
-      if (!b || !useRuns.getState().ensureAgentsIntro()) return;
+      if (!b || !useRuns.getState().ensureAgentsIntro(() => void get().open(id))) return;
+      revealOnMount.add(id);
       const mine = bump(id);
       patch(id, { ...CLOSED_INLINE, phase: "loading" });
       try {
@@ -129,6 +171,7 @@ export const useInlineStarts = create<InlineStartsState>((set, get) => {
 
     close(id) {
       bump(id);
+      revealOnMount.delete(id);
       set((s) => {
         const { [id]: _gone, ...rest } = s.entries;
         return { entries: rest };
@@ -263,9 +306,14 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
       });
     };
   }, []);
+  // Opened by the person just now: it comes into view, under the chips no more, with the keyboard in it.
+  useLayoutEffect(() => {
+    if (ref.current && revealOnMount.delete(id)) revealReview(ref.current);
+  }, [id]);
   return (
     <div
       ref={ref}
+      tabIndex={-1}
       onFocus={() => (holding.current = true)}
       onBlur={(ev) => {
         if (ev.relatedTarget && !ev.currentTarget.contains(ev.relatedTarget as Node)) holding.current = false;
@@ -277,13 +325,14 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
       data-inline-start={phase}
       // ⌘↵ starts from anywhere in the review, on the same terms as the Start button.
       onKeyDown={(ev) => {
+        if (tabToStart(ev, ev.currentTarget.querySelector<HTMLButtonElement>("[data-inline-start-button]"))) return void ev.preventDefault();
         const key = inlineStartKey(ev, entry);
         if (!key) return;
         ev.preventDefault();
         ev.stopPropagation();
         if (key === "start") on.start();
       }}
-      className="grid gap-3 border-t border-ws-sep px-2.5 py-2.5 text-sm"
+      className="grid gap-3 border-t border-ws-sep px-2.5 py-2.5 text-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ws-pip"
     >
       {phase === "changed" && (
         <Box tone="warn" label="The draft changed">

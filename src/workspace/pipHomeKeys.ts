@@ -16,6 +16,8 @@ export interface PipHomeKeyState {
   at: number;
   /** What that one is. */
   kind: PipHomeItemKind | null;
+  /** Whether the Steps column has steps to show: a workstream is selected. Without one, column moves pass it by. */
+  steps?: boolean;
 }
 
 /** What a key on Pip home does: go to a column, focus the item at `index` in this one, or act on the item with focus. */
@@ -39,15 +41,18 @@ export function isTypingTarget(target: unknown): boolean {
   return typeof el.closest === "function" && !!el.closest("[contenteditable]:not([contenteditable=false])");
 }
 
-const step = (column: PipHomeColumn, by: 1 | -1): PipHomeColumn => {
-  const at = PIP_HOME_COLUMNS.indexOf(column);
-  return PIP_HOME_COLUMNS[(at + by + PIP_HOME_COLUMNS.length) % PIP_HOME_COLUMNS.length];
+/** The column `by` from `column`, wrapping around; the Steps column only when it has steps (`steps`). */
+const step = (column: PipHomeColumn, by: 1 | -1, steps = true): PipHomeColumn => {
+  const columns = PIP_HOME_COLUMNS.filter((c) => steps || c !== "rail" || c === column);
+  const at = columns.indexOf(column);
+  return columns[(at + by + columns.length) % columns.length];
 };
 
 /**
  * Which way a key moves between Pip home's columns: F6 and Cmd/Ctrl+] go right, Shift+F6 and Cmd/Ctrl+[ left, wrapping
- * around. Like Cmd/Ctrl+J they work from Pip's composer too, which is how the person leaves it; never from another field
- * (a budget, an answer to a run), where shortcuts don't fire while the person types.
+ * around, past the Steps column while no workstream gives it steps. Like Cmd/Ctrl+J they work from Pip's composer too,
+ * which is how the person leaves it; never from another field (a budget, an answer to a run), where shortcuts don't fire
+ * while the person types.
  */
 function columnStep(ev: PipHomeKeyEvent): 1 | -1 | 0 {
   if (ev.altKey) return 0;
@@ -63,7 +68,7 @@ function columnStep(ev: PipHomeKeyEvent): 1 | -1 | 0 {
  */
 export function pipHomeKey(ev: PipHomeKeyEvent, state: PipHomeKeyState): PipHomeKeyAction | null {
   const by = columnStep(ev);
-  if (by) return state.overlay || (isTypingTarget(ev.target) && (ev.target as { id?: unknown }).id !== PIP_INPUT_ID) ? null : { type: "column", to: step(state.column, by) };
+  if (by) return state.overlay || (isTypingTarget(ev.target) && (ev.target as { id?: unknown }).id !== PIP_INPUT_ID) ? null : { type: "column", to: step(state.column, by, state.steps ?? true) };
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return null;
   if (state.overlay || isTypingTarget(ev.target) || state.column === "conversation") return null;
   const move = ev.key === "j" || ev.key === "ArrowDown" ? 1 : ev.key === "k" || ev.key === "ArrowUp" ? -1 : 0;
@@ -86,4 +91,16 @@ export function pipHomeKey(ev: PipHomeKeyEvent, state: PipHomeKeyState): PipHome
     default:
       return null;
   }
+}
+
+/** What may take Tab, before the ones that are disabled, hidden or taken out of the order are left out. */
+export const TABBABLE = 'a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Where Tab from the last stop on Pip home goes: round to the first stop on the page (the app's rail), never to the page
+ * itself, where focus would show nowhere. `stops` are the page's Tab stops in order; null leaves Tab to the browser.
+ */
+export function wrapTab<T>(ev: Pick<PipHomeKeyEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">, stops: readonly T[], active: T | null, onPipHome: boolean): T | null {
+  if (ev.key !== "Tab" || ev.shiftKey || ev.metaKey || ev.ctrlKey || ev.altKey || !onPipHome || stops.length < 2) return null;
+  return active !== null && stops[stops.length - 1] === active ? stops[0] : null;
 }

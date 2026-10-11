@@ -402,7 +402,8 @@ export async function inlineStart(page: Page, card: Locator, by: "click" | "keyb
     await expect(safety).toHaveCount(0);
     if (by === "keyboard") await refocus();
   }
-  await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveAttribute("aria-expanded", "true");
+  // Open, the review has its own Start and Hide; the card's own button is hidden meanwhile.
+  await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
   return review;
 }
 

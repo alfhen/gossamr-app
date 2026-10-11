@@ -4,6 +4,7 @@ import { MockBackend } from "../backend/mock";
 import type { Run, RunState } from "../types";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
 import { rowText } from "./AgentParts";
+import { CodeBox } from "./AgentSheet";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -37,8 +38,10 @@ describe("a run stopped at its limit", () => {
     expect(html).toContain("After a resume the limits no longer stop this run.");
   });
 
-  it("starts the box with the reply Claude suggested, and the list says why it stopped", () => {
-    expect(sheet(limit({ suggestedReply: "Go ahead and build it with the plan as written" }))).toContain("Go ahead and build it with the plan as written");
+  it("offers the reply Claude suggested beside the box, and the list says why it stopped", () => {
+    const html = sheet(limit({ suggestedReply: "Go ahead and build it with the plan as written" }));
+    expect(html).toContain("Claude suggests:</b> “Go ahead and build it with the plan as written”");
+    expect(/<textarea[^>]*>([^<]*)<\/textarea>/.exec(html)?.[1]).toBe("Please carry on from where you stopped.");
     expect(rowText(limit(), NOW)).toBe("Stopped by Gossamr: it passed the 60 minute limit");
   });
 
@@ -83,5 +86,54 @@ describe("a run that may have continued in another session", () => {
     expect(buttons(sheet(offered(["bbb748a7"], "done")))).toContain("Adopt session bbb748a7");
     expect(buttons(sheet(offered(["bbb748a7"], "working"))).some((b) => b.startsWith("Adopt session"))).toBe(false);
     expect(buttons(sheet(run("stopped"))).some((b) => b.startsWith("Adopt session"))).toBe(false);
+  });
+});
+
+describe("answering from the sheet", () => {
+  const asking = (over: Partial<Run> = {}) => run("needsAnswer", { needs: "Keep the old rounding?", endedAt: null, ...over });
+  const sendOff = (html: string) => /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Send answer/.test(html);
+
+  it("starts with an empty box and Send off, Claude's suggestion beside it with Use this, and what Gossamr adds folded away", () => {
+    const html = sheet(asking({ suggestedReply: "Yes, keep it." }));
+    expect(/<textarea[^>]*>([^<]*)<\/textarea>/.exec(html)?.[1]).toBe("");
+    expect(sendOff(html)).toBe(true);
+    expect(html).toContain("Claude suggests:</b> “Yes, keep it.”");
+    expect(buttons(html)).toContain("Use this");
+    expect(html).toMatch(/<details[^>]*><summary[^>]*>[\s\S]*?What Gossamr adds<\/summary>/);
+    expect(html).not.toContain("Added in front of your answer");
+  });
+
+  it("still starts with the person's own answer that didn't get through, and offers no suggestion over it", () => {
+    const html = sheet(run("stopped", { unsentAnswer: "Use staging.", suggestedReply: "Yes, keep it." }));
+    expect(/<textarea[^>]*>([^<]*)<\/textarea>/.exec(html)?.[1]).toBe("Use staging.");
+    expect(html).not.toContain("Claude suggests");
+    expect(sendOff(html)).toBe(false);
+  });
+
+  it("says the answer was sent until the run reports progress", () => {
+    const working = run("working", { endedAt: null });
+    expect(sheet(working, { answerSent: true })).toMatch(/role="status" data-answer-sent[^>]*>[\s\S]*Answer sent. Claude is picking it back up./);
+    expect(sheet(working)).not.toContain("data-answer-sent");
+  });
+});
+
+describe("a failed launch's own-terminal command", () => {
+  const trust = () => run("failed", { shortId: null, error: "Claude hasn't been opened in this folder", failure: { type: "untrustedFolder", path: "/Users/sample/Code/storefront" } as Run["failure"] });
+
+  it("enables Retry once the command was copied, as the Terminal button does", () => {
+    const before = sheet(trust());
+    const after = sheet(trust(), { opened: true });
+    const retryOff = (html: string) => /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Retry<\/button>/.test(html);
+    expect(before).toContain("Or run this in your own terminal");
+    expect(retryOff(before)).toBe(true);
+    expect(retryOff(after)).toBe(false);
+  });
+
+  it("counts copying the command by hand, selected, as copying it with the button", () => {
+    const copied = vi.fn();
+    const box = CodeBox({ text: "cd /x && claude", what: "the command", onCopied: copied });
+    const code = (box.props.children as React.ReactElement[]).find((c) => c?.type === "code") as React.ReactElement<{ onCopy?(): void }>;
+    code.props.onCopy?.();
+    expect(copied).toHaveBeenCalledTimes(1);
   });
 });

@@ -131,6 +131,26 @@ describe("mock runs", () => {
     await expect(backend.runsAnswer(asking.id, "Again")).rejects.toThrow(/isn't waiting for an answer/);
   });
 
+  it("records the answer in the run's timeline and clears what it said while it asked, as answer_keeping does", async () => {
+    const backend = new MockBackend();
+    const asking = backend.runs.list().find((r) => r.state === "needsAnswer")!;
+    expect(asking.lastDetail).toBe("Waiting for an answer");
+    expect((await backend.runsEvents(asking.id)).some((e) => e.kind === "answered")).toBe(false);
+    const after = await backend.runsAnswer(asking.id, "Yes");
+    expect(after.lastDetail).toBeNull();
+    const events = await backend.runsEvents(asking.id);
+    expect(events.filter((e) => e.kind === "answered").map((e) => [e.text, e.at])).toEqual([["You answered", after.lastProgressAt]]);
+    expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i + 1));
+    expect(JSON.stringify(events)).not.toContain('"Yes"');
+  });
+
+  it("says how many agent slots are in use, counting the runs waiting on the person, in its pre-flight", async () => {
+    const backend = new MockBackend();
+    const rows = (await backend.runsPreflight(null)).rows.map((r) => r.text);
+    expect(rows).toContainEqual(expect.stringMatching(/^\d+ of \d+ agent slots in use \(including ones waiting on you\)$/));
+    expect(rows.some((t) => / agents running$/.test(t))).toBe(false);
+  });
+
   it("refuses to stop a run that is only queued", async () => {
     const backend = new MockBackend();
     const run = await backend.runsApprove((await draft(backend)).id, mockDigest(spec));
@@ -732,7 +752,7 @@ describe("mock runs over the cap wait for a slot, as runs_approve and launch_wai
     expect(live()).toBe(3);
     const preflight = await b.runsPreflight(null);
     expect(preflight.blocking).toBe(false);
-    expect(preflight.rows.find((r) => r.level === "amber")?.text).toBe("3 of 3 agents are running. This one will wait for a slot and start when one finishes.");
+    expect(preflight.rows.find((r) => r.level === "amber")?.text).toBe("3 of 3 agent slots are in use, including ones waiting on you. This one will wait for a slot and start when one finishes.");
 
     const fourth = await approve(4);
     expect(fourth).toMatchObject({ state: "queued", slotWaitSince: expect.any(String) });

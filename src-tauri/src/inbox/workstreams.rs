@@ -2,6 +2,8 @@
 //! runs give it, closing it, Pip's notes, its mode, holds and rule switches, and its audit. Nothing here starts, stops
 //! or answers a run or writes to Jira.
 
+use std::collections::HashMap;
+
 use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -10,10 +12,11 @@ use super::Core;
 use crate::auth::Scope;
 use crate::db::Db;
 use crate::agent::supervisor::{decide_wake, level_word, WakeFact, TRIP_BASIS};
-use crate::domain::workstream::{BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, budget_level, budget_limits, run_labels, stage, tripwire, valid_hold_reason, BudgetLevel, Mode, Rule, Stage, WorkstreamBasis, HELD_ALL, HELD_BUDGET, HELD_PERSON, HELD_QUOTA, HELD_RESTART};
+use crate::domain::workstream::{BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, budget_level, budget_limits, review_blocking, run_labels, stage, tripwire, valid_hold_reason, BudgetLevel, Mode, Rule, Stage, WorkstreamBasis, HELD_ALL, HELD_BUDGET, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE};
 use crate::domain::{has_markers, Actor, Category, ItemRef, Run, RunKind, RunQuery, RunState, WorkItem, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
+use crate::runs::report::{resolve, ReviewVerdict};
 use crate::tracker::Connection;
 
 /// Pip's notes are kept up to this many bytes, after scrubbing.
@@ -43,6 +46,9 @@ pub struct WorkstreamView {
     /// review was queued after it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_for_pr: Option<String>,
+    /// The newest finished review asked for changes and nothing is in progress: the stage is Review, not Done.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub review_blocking: bool,
     pub budget: BudgetView,
 }
 
@@ -74,10 +80,24 @@ impl BudgetView {
     }
 }
 
+/// The verdicts of the finished reviews among `runs`, by run id, each as its sheet resolves it: from its current report,
+/// else its written answer. A review with no verdict is left out.
+fn verdicts_of(db: &Db, runs: &[Run]) -> Result<HashMap<String, ReviewVerdict>> {
+    let mut verdicts = HashMap::new();
+    for run in runs.iter().filter(|r| r.spec.kind == RunKind::Review && r.state == RunState::Done) {
+        if let Some(verdict) = resolve(run, db.report(&run.id)?.as_ref()).verdict {
+            verdicts.insert(run.id.clone(), verdict);
+        }
+    }
+    Ok(verdicts)
+}
+
 impl WorkstreamView {
-    fn of(workstream: Workstream, runs: &[Run]) -> Self {
+    fn of(workstream: Workstream, runs: &[Run], verdicts: &HashMap<String, ReviewVerdict>) -> Self {
+        let verdict = |r: &Run| verdicts.get(&r.id).copied();
         WorkstreamView {
-            stage: stage(runs),
+            stage: stage(runs, verdict),
+            review_blocking: review_blocking(runs, verdict),
             runs: runs.iter().map(|r| r.id.clone()).collect(),
             labels: run_labels(runs),
             budget: BudgetView::of(&workstream),
@@ -291,6 +311,7 @@ impl Core {
                 rules: Default::default(),
                 basis,
                 drifted: Vec::new(),
+                resume_mode: None,
             };
             db.insert_workstream(&ws)?;
             db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "opened", at))?;
@@ -306,16 +327,17 @@ impl Core {
             .with_db_for(scope, |db| {
                 let Some(ws) = db.workstream(id)?.filter(|w| w.connection_id == connection_id) else { return Ok(None) };
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), workstream: Some(ws.id.clone()), ..Default::default() })?;
-                Ok(Some((ws, runs)))
+                let verdicts = verdicts_of(db, &runs)?;
+                Ok(Some((ws, runs, verdicts)))
             })
             .await?;
-        found.map(|(ws, runs)| self.view_of(ws, &runs)).transpose()
+        found.map(|(ws, runs, verdicts)| self.view_of(ws, &runs, &verdicts)).transpose()
     }
 
     /// A workstream's view from its runs, with the build still waiting for its pull request. That is read from the
     /// code cache, so it is looked up outside the account's database.
-    fn view_of(&self, workstream: Workstream, runs: &[Run]) -> Result<WorkstreamView> {
-        let mut view = WorkstreamView::of(workstream, runs);
+    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &HashMap<String, ReviewVerdict>) -> Result<WorkstreamView> {
+        let mut view = WorkstreamView::of(workstream, runs, verdicts);
         if let Some(build) = pushed_build(runs) {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
@@ -325,17 +347,19 @@ impl Core {
     /// `scope`'s workstreams, newest first, each with its stage; closed ones only when asked for.
     pub async fn workstreams(&self, scope: &Scope, include_closed: bool) -> Result<Vec<WorkstreamView>> {
         let connection_id = Connection::jira_id(scope);
-        let (workstreams, runs) = self
+        let (workstreams, runs, verdicts) = self
             .with_db_for(scope, |db| {
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?;
-                Ok((db.workstreams(&connection_id, include_closed)?, runs))
+                let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.is_some()).cloned().collect();
+                let verdicts = verdicts_of(db, &linked)?;
+                Ok((db.workstreams(&connection_id, include_closed)?, runs, verdicts))
             })
             .await?;
         workstreams
             .into_iter()
             .map(|ws| {
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())).cloned().collect();
-                self.view_of(ws, &linked)
+                self.view_of(ws, &linked, &verdicts)
             })
             .collect()
     }
@@ -406,16 +430,21 @@ impl Core {
         .await
     }
 
-    /// Sets how much Pip may do on its own in an open workstream. Setting the mode it has records nothing.
+    /// Sets how much Pip may do on its own in an open workstream. Setting the mode it has records nothing. The person
+    /// setting it forgets the mode a tripwire took away, so resuming leaves their choice.
     pub async fn set_workstream_mode(&self, scope: &Scope, id: &str, mode: Mode, actor: Actor) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
         self.with_db_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
+            // The person choosing a mode while a tripwire holds it wins over the mode resuming would put back.
+            let chosen = actor == Actor::Person && ws.resume_mode.take().is_some();
             if ws.mode != mode {
                 ws.mode = mode;
                 db.save_workstream(&ws)?;
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, actor, "mode_set", at).detail(mode.as_str()))?;
+            } else if chosen {
+                db.save_workstream(&ws)?;
             }
             Ok(ws)
         })
@@ -443,7 +472,8 @@ impl Core {
 
     /// The person lifts a workstream's hold. Lifting a budget hold also starts its automatic turns and wakes again from
     /// zero (`budget_reset`); lifting a basis-drift hold takes the basis again from the ticket as the cache has it now
-    /// (`basis_captured`; forgotten when it isn't cached, so a sweep takes it later). A workstream that isn't held
+    /// (`basis_captured`; forgotten when it isn't cached, so a sweep takes it later). Lifting a tripwire puts back the
+    /// mode it took away (`mode_set` by the person), unless the person chose one meanwhile. A workstream that isn't held
     /// records nothing.
     pub async fn resume_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
@@ -456,6 +486,10 @@ impl Core {
                 ws.spent.auto_turns = 0;
                 ws.spent.wakes = 0;
             }
+            let restore = if reason.starts_with(TRIPWIRE) { ws.resume_mode.take() } else { None };
+            if let Some(mode) = restore {
+                ws.mode = mode;
+            }
             let rebase = reason == tripwire(TRIP_BASIS);
             if rebase {
                 let work = match &ws.item_key {
@@ -467,6 +501,9 @@ impl Core {
             }
             db.save_workstream(&ws)?;
             db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "resumed", at).detail(reason))?;
+            if let Some(mode) = restore {
+                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "mode_set", at).detail(mode.as_str()))?;
+            }
             if reset {
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "budget_reset", at))?;
             }
@@ -604,7 +641,7 @@ impl Core {
     }
 
     /// A tripwire fired in workstream `id`: it is recorded with its kind (and run), the workstream drops to Advise and
-    /// is held with `tripwire:<kind>`. A drifted basis records the fields that drifted (`basis_drifted`, kept in
+    /// is held with `tripwire:<kind>`; the mode it dropped from is kept in `resume_mode` for resuming to put back. A drifted basis records the fields that drifted (`basis_drifted`, kept in
     /// `drifted` while held) and is kept until the person resumes, which takes it again from the ticket as it is then.
     pub async fn trip_workstream(&self, scope: &Scope, id: &str, kind: &str, run: Option<&str>, fields: &[&str]) -> Result<Workstream> {
         let reason = tripwire(kind);
@@ -624,6 +661,9 @@ impl Core {
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_drifted", at).detail(fields.join(",")))?;
             }
             if ws.mode != Mode::Advise {
+                if ws.held_reason.is_none() {
+                    ws.resume_mode = Some(ws.mode);
+                }
                 ws.mode = Mode::Advise;
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "mode_set", at).detail(Mode::Advise.as_str()))?;
             }
@@ -1256,6 +1296,69 @@ mod tests {
         let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
         assert_eq!(resumed.basis, Some(after));
         assert!(resumed.drifted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resuming_a_trip_from_manage_puts_manage_back_and_one_from_advise_stays_advise() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
+        let held = fx.core.trip_workstream(&fx.scope, &ws.id, TRIP_BASIS, None, &[BASIS_DESCRIPTION]).await.unwrap();
+        assert_eq!((held.mode, held.resume_mode), (Mode::Advise, Some(Mode::Manage)), "the trip drops to Advise and remembers Manage");
+        assert_eq!(serde_json::to_value(&held).unwrap()["resumeMode"], "manage");
+
+        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!((resumed.held_reason.as_deref(), resumed.mode, resumed.resume_mode), (None, Mode::Manage, None));
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        let resumed_at = events.iter().position(|e| e.action == "resumed").unwrap();
+        assert_eq!((events[resumed_at + 1].actor, events[resumed_at + 1].action.as_str(), events[resumed_at + 1].detail.as_deref()), (Actor::Person, "mode_set", Some("manage")));
+        assert!(crate::domain::workstream::starts_steps(&resumed), "routine steps start on their own again");
+
+        // From Advise there is nothing to put back.
+        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Advise, Actor::Person).await.unwrap();
+        let held = fx.core.trip_workstream(&fx.scope, &ws.id, "marker", Some("r1"), &[]).await.unwrap();
+        assert_eq!(held.resume_mode, None);
+        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(resumed.mode, Mode::Advise);
+        assert_eq!(last(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), (Actor::Person, "resumed", Some("tripwire:marker")));
+        assert!(fx.tracker.intents().is_empty(), "nothing is written to Jira");
+    }
+
+    #[tokio::test]
+    async fn the_person_choosing_a_mode_while_tripped_wins_over_the_one_resuming_would_put_back() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
+        fx.core.trip_workstream(&fx.scope, &ws.id, "repeated_failure", Some("r1"), &[]).await.unwrap();
+        let chosen = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Advise, Actor::Person).await.unwrap();
+        assert_eq!((chosen.mode, chosen.resume_mode), (Mode::Advise, None), "choosing the mode it has still forgets the one to put back");
+        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(resumed.mode, Mode::Advise);
+        assert_eq!(last(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), (Actor::Person, "resumed", Some("tripwire:repeated_failure")));
+    }
+
+    #[tokio::test]
+    async fn a_view_whose_newest_review_is_blocking_is_at_review_and_a_passing_one_is_done() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let written = |text: &'static str| {
+            move |r: &mut Run| {
+                r.result = Some(text.into());
+                r.result_complete = true;
+            }
+        };
+        insert_at(&fx, "r-build", &ws.id, RunKind::Build, RunState::Done, 0, |_| {}).await;
+        insert_at(&fx, "r-review", &ws.id, RunKind::Review, RunState::Done, 10, written("- [blocking] src/cart.ts:42: The total skips the discount.\nVerdict: blocking")).await;
+        let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+        assert_eq!((view.stage, view.review_blocking), (Stage::Review, true));
+        assert_eq!(serde_json::to_value(&view).unwrap()["reviewBlocking"], true);
+        let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
+        assert_eq!((listed.stage, listed.review_blocking), (Stage::Review, true), "the list and the single view agree");
+
+        insert_at(&fx, "r-review2", &ws.id, RunKind::Review, RunState::Done, 20, written("Verdict: pass")).await;
+        let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+        assert_eq!((view.stage, view.review_blocking), (Stage::Done, false));
+        assert!(serde_json::to_value(&view).unwrap().get("reviewBlocking").is_none(), "left out when false");
     }
 
     #[tokio::test]

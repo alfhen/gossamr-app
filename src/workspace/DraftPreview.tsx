@@ -13,7 +13,7 @@ import { useRuns } from "./runsStore";
 import { nextPass } from "./followUp";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
 import { openPullView, sameCommit, usePullDiff } from "./pullViewStore";
-import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, type Asking } from "./draftKeys";
+import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, escapeCollapses, focusAfterLeaving, onDraftCardKey, type Asking } from "./draftKeys";
 import { usePip } from "./pipStore";
 import { InlineStart, InlineStartContext, inlineStartId, inlineStartKey, inlineStartable, useInlineStarts } from "./InlineStart";
 import { focusPeekDraft } from "./peekDrafts";
@@ -117,7 +117,19 @@ interface Props {
    * A run draft started in place on Pip home: its action shows or hides `panel`, the review under the card, instead of
    * opening the setup sheet; `onKey` takes the review's own keys (⌘↵) pressed on the card itself, and says whether it did.
    */
-  expander?: { open: boolean; panel: ReactNode; onKey?(ev: KeyboardEvent<HTMLElement>): boolean };
+  expander?: { open: boolean; panel: ReactNode; onKey?(ev: KeyboardEvent<HTMLElement>): boolean; onClose?(): void };
+}
+
+/**
+ * The key hint of a card reached from the keyboard: it hangs just under the card, over what follows, and takes no clicks,
+ * so showing or hiding it never changes the card's height or moves a button between a press and its click.
+ */
+export const KEY_HINT = "pointer-events-none absolute top-full left-2.5 z-10 m-0 mt-1 max-w-[calc(100%-1.25rem)] rounded-md border border-ws-sep2 px-2 py-0.5 text-xs shadow-sm";
+
+/** Hides the open review under `card` and keeps the keyboard on the card. */
+export function collapseReview(card: { focus(options?: FocusOptions): void }, close: () => void) {
+  close();
+  card.focus({ preventScroll: true });
 }
 
 /** Hands typing that landed on a card back to Pip's input, after what is already there. */
@@ -175,6 +187,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
   const [armed, setArmed] = useState(false);
   const [asking, setAsking] = useState<Asking | null>(null);
   const ref = useRef<HTMLElement>(null);
+  const hint = useRef<HTMLParagraphElement>(null);
   /** Set by a press of the pointer until the focus it causes has arrived. */
   const pointer = useRef(false);
   /** Set once a decision was made from the keys, so the card hands focus on if that decision takes it away. */
@@ -207,9 +220,12 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
       run();
     });
 
-  // The hint renders under the card once it is armed, so the card is brought into view again with it.
+  // The hint hangs under the card once it is armed from the keyboard, so the card is brought into view again with it (its
+  // scroll margin leaves room for the hint). Never for a pointer's focus, which doesn't arm the card.
   useLayoutEffect(() => {
-    if (armed) ref.current?.scrollIntoView?.({ block: "nearest" });
+    if (!armed) return;
+    ref.current?.scrollIntoView?.({ block: "nearest" });
+    hint.current?.scrollIntoView?.({ block: "nearest" });
   }, [armed, asking]);
 
   // A card decided from its keys can leave the conversation, as one under "Drafts waiting" does; focus moves on first.
@@ -227,8 +243,9 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
       aria-label={title}
       data-draft={p.id}
       data-state={state}
-      // While a decision waits for Enter, Esc is the card's: it cancels the ask, and stops nothing else.
-      data-esc-local={asking ? "" : undefined}
+      // While a decision waits for Enter, Esc is the card's: it cancels the ask, and stops nothing else. So it is while the
+      // card's review is open under it: Esc hides the review.
+      data-esc-local={asking || expander?.open ? "" : undefined}
       tabIndex={0}
       aria-keyshortcuts={draftKeyShortcuts(p)}
       onMouseDown={() => {
@@ -236,6 +253,14 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
         setTimeout(() => (pointer.current = false), 0);
       }}
       onKeyDown={(ev) => {
+        // Esc hides an open review, from the card or from inside the review, and leaves the keyboard on the card; a pending
+        // ask keeps Esc for cancelling itself.
+        if (expander?.open && expander.onClose && escapeCollapses(ev, asking)) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          collapseReview(ev.currentTarget, expander.onClose);
+          return;
+        }
         // ⌘↵ starts an open review from the card that opened it too, on the same terms as its Start.
         if (ev.target === ev.currentTarget && expander?.open && expander.onKey?.(ev)) return;
         if (!armed) return;
@@ -252,64 +277,66 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
         if (ev.target !== ev.currentTarget) return;
         ev.currentTarget.removeAttribute(FROM_INPUT);
         setAsking(null);
-        // A press inside the card (on Start in its review, say) takes the focus as it goes down; the hint goes once the
-        // click is over, so nothing moves under the pointer and the click lands where it was aimed.
-        if (pointer.current) return void window.addEventListener("mouseup", () => setTimeout(() => setArmed(false), 0), { once: true, capture: true });
+        // The hint hangs outside the card's box, so it goes at once: nothing under a pointer moves as it does.
         setArmed(false);
       }}
-      className={`scroll-my-2 overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "applied" ? "opacity-70" : state === "skipped" || state === "retired" ? "opacity-45" : ""}`}
+      className={`relative scroll-mt-2 scroll-mb-9 rounded-xl border border-ws-sep2 bg-ws-win shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "applied" ? "opacity-70" : state === "skipped" || state === "retired" ? "opacity-45" : ""}`}
     >
-      <div className={`flex items-center gap-2 px-2.5 py-1.5 text-sm font-semibold ${HEADER[state]}`}>
-        <span aria-hidden>{ICON[p.intent.type]}</span>
-        <span className="min-w-0 truncate">{title}</span>
-        <span className="ml-auto shrink-0 font-medium text-ws-ink3">{STATE[state]}</span>
-      </div>
-      {create && (
-        <>
-          <p className="m-0 px-2.5 pt-2 font-semibold [overflow-wrap:anywhere]">{create.intent.fields.title}</p>
-          <p className="m-0 px-2.5 pt-0.5 text-sm text-ws-ink2">{draftFacts(create).join(" · ")}</p>
-        </>
-      )}
-      {p.intent.type === "runAnswer" ? <AnswerBody intent={p.intent} answer={answer} pending={pending} byPip={p.createdBy === "pip"} /> : <Expandable id={`draft-body-${p.id}`} text={body} />}
-      {p.state.type === "retired" ? (
-        <span className="mx-2.5 mb-1.5 block text-xs font-semibold text-ws-ink3">✕ {p.state.reason}</span>
-      ) : (
-        pending && revision && <span className="mx-2.5 mb-1.5 block text-xs font-semibold text-ws-pip">↻ {revision.note}</span>
-      )}
-      <div className="flex items-center gap-1.5 border-t border-ws-sep px-2.5 py-1.5 text-xs text-ws-ink3">
-        <span className="shrink-0 font-mono font-semibold whitespace-nowrap">{target?.key ?? "new ticket"}</span>
-        {targetTitle && <span className="min-w-0 truncate">{targetTitle}</span>}
-        {stale && onSkip && (
-          <button type="button" onClick={onSkip} className="ml-auto shrink-0 rounded-md border border-ws-sep2 px-2.5 py-1 text-sm font-semibold text-ws-ink2 hover:bg-ws-hover">
-            Skip
-          </button>
+      <div data-draft-body className="overflow-hidden rounded-[inherit]">
+        <div className={`flex items-center gap-2 px-2.5 py-1.5 text-sm font-semibold ${HEADER[state]}`}>
+          <span aria-hidden>{ICON[p.intent.type]}</span>
+          <span className="min-w-0 truncate">{title}</span>
+          <span className="ml-auto shrink-0 font-medium text-ws-ink3">{STATE[state]}</span>
+        </div>
+        {create && (
+          <>
+            <p className="m-0 px-2.5 pt-2 font-semibold [overflow-wrap:anywhere]">{create.intent.fields.title}</p>
+            <p className="m-0 px-2.5 pt-0.5 text-sm text-ws-ink2">{draftFacts(create).join(" · ")}</p>
+          </>
         )}
-        {go &&
-          (pending ? (
-            <button
-              type="button"
-              onClick={toPullView ? onPullView : onOpen}
-              aria-expanded={expander ? expander.open : undefined}
-              aria-controls={expander?.open ? inlineStartId(p.id) : undefined}
-              className="ml-auto shrink-0 rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-            >
-              {go}
+        {p.intent.type === "runAnswer" ? <AnswerBody intent={p.intent} answer={answer} pending={pending} byPip={p.createdBy === "pip"} /> : <Expandable id={`draft-body-${p.id}`} text={body} />}
+        {p.state.type === "retired" ? (
+          <span className="mx-2.5 mb-1.5 block text-xs font-semibold text-ws-ink3">✕ {p.state.reason}</span>
+        ) : (
+          pending && revision && <span className="mx-2.5 mb-1.5 block text-xs font-semibold text-ws-pip">↻ {revision.note}</span>
+        )}
+        <div className="flex items-center gap-1.5 border-t border-ws-sep px-2.5 py-1.5 text-xs text-ws-ink3">
+          <span className="shrink-0 font-mono font-semibold whitespace-nowrap">{target?.key ?? "new ticket"}</span>
+          {targetTitle && <span className="min-w-0 truncate">{targetTitle}</span>}
+          {stale && onSkip && (
+            <button type="button" onClick={onSkip} className="ml-auto shrink-0 rounded-md border border-ws-sep2 px-2.5 py-1 text-sm font-semibold text-ws-ink2 hover:bg-ws-hover">
+              Skip
             </button>
-          ) : (
-            <button type="button" onClick={onOpen} className="ml-auto shrink-0 rounded-md border border-ws-sep2 px-2.5 py-1 text-sm font-semibold text-ws-ink2 hover:bg-ws-hover">
-              {go}
-            </button>
-          ))}
+          )}
+          {go &&
+            // An open review has its own Start and Hide; the card's button would only say the same again.
+            !expander?.open &&
+            (pending ? (
+              <button
+                type="button"
+                onClick={toPullView ? onPullView : onOpen}
+                aria-expanded={expander ? expander.open : undefined}
+                aria-controls={expander?.open ? inlineStartId(p.id) : undefined}
+                className="ml-auto shrink-0 rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+              >
+                {go}
+              </button>
+            ) : (
+              <button type="button" onClick={onOpen} className="ml-auto shrink-0 rounded-md border border-ws-sep2 px-2.5 py-1 text-sm font-semibold text-ws-ink2 hover:bg-ws-hover">
+                {go}
+              </button>
+            ))}
+        </div>
+        {expander?.open && expander.panel}
+        {warning && (
+          <p data-preview-warning className="m-0 border-t border-ws-sep bg-ws-blocked-soft px-2.5 py-1 text-xs font-semibold text-ws-blocked">
+            {warning}
+          </p>
+        )}
       </div>
-      {expander?.open && expander.panel}
       {armed && (
-        <p role="status" className={`m-0 border-t border-ws-sep px-2.5 py-1 text-xs ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "text-ws-ink3"}`}>
+        <p ref={hint} role="status" className={`${KEY_HINT} ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-win text-ws-ink3"}`}>
           {draftKeyHint(p, asking, canApprove)}
-        </p>
-      )}
-      {warning && (
-        <p data-preview-warning className="m-0 border-t border-ws-sep bg-ws-blocked-soft px-2.5 py-1 text-xs font-semibold text-ws-blocked">
-          {warning}
         </p>
       )}
     </article>
@@ -413,7 +440,7 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
       onOpen={() => openLiveDraft(p, { inline })}
       onApprove={approve}
       onSkip={skip}
-      expander={startable ? { open: expanded, panel: <InlineStart proposal={p} />, onKey: (ev) => startKey(p.id, ev) } : undefined}
+      expander={startable ? { open: expanded, panel: <InlineStart proposal={p} />, onKey: (ev) => startKey(p.id, ev), onClose: () => useInlineStarts.getState().close(p.id) } : undefined}
     />
   );
 }

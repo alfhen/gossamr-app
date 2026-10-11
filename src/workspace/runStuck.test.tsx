@@ -33,14 +33,11 @@ describe("a run Gossamr stopped at its limit", () => {
     expect(stoppedText(stopped({ lastDetail: "Reading the cart" }))).toBe("Reading the cart");
   });
 
-  it("is resumed with words of the person's, starting from what Claude suggested or a plain nudge", () => {
+  it("is resumed with words of the person's, starting from a plain nudge; what Claude suggested is only offered", () => {
     expect(resumable(limit) && answerable(limit)).toBe(true);
     expect(answerDraft(limit)).toBe(RESUME_TEXT);
-    expect(answerDraft({ ...limit, suggestedReply: "Go ahead" })).toBe("Go ahead");
-    expect(answerDraft({ ...limit, suggestedReply: "" })).toBe(RESUME_TEXT);
-    expect(answerDraft({ ...limit, suggestedReply: "  \n" })).toBe(RESUME_TEXT);
-    expect(answerDraft({ ...limit, suggestedReply: "", unsentAnswer: "Use staging." })).toBe("Use staging.");
-    expect(answerDraft({ ...stopped(), suggestedReply: "" })).toBe("");
+    expect(answerDraft({ ...limit, unsentAnswer: "Use staging." })).toBe("Use staging.");
+    expect(answerDraft(stopped())).toBe("");
     expect(resumable(stopped())).toBe(false);
     expect(resumable({ ...limit, unsentAnswer: "Yes" })).toBe(false);
     expect(answerable({ ...limit, unsentAnswer: "Yes" })).toBe(true);

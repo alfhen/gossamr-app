@@ -43,9 +43,9 @@ test("a run's question wakes Pip, which suggests a reply the person checks and s
   await expect(card.locator("[data-question]")).toHaveText(`R1 asks: ${QUESTION}`);
   await expect(card.locator("[data-reply]")).toContainText("CA-401");
   // One item in the tray for the question and its reply, and the reply under Investigate on the rail.
-  const tray = needsYouTray(page).getByRole("button", { name: /^CA-401 · R1 asks a question · Pip suggests a reply · / });
+  const tray = needsYouTray(page).getByRole("button", { name: /^CA-401 · Welcome flow refresh · R1 asks a question · Pip suggests a reply · / });
   await expect(tray).toHaveCount(1);
-  await expect(needsYouTray(page).getByRole("button", { name: /^CA-401 · R1 asks a question/ })).toHaveCount(1);
+  await expect(needsYouTray(page).getByRole("button", { name: /^CA-401 · Welcome flow refresh · R1 asks a question/ })).toHaveCount(1);
   await expect(stepChip(page, "investigate").locator("[data-step-needs-you]")).toHaveText("1 needs you");
   await stepChip(page, "investigate").locator("[data-step-chip]").click();
   await expect(stepRail(page).locator('[data-step-drafts="investigate"]').getByRole("article", { name: "Answer for R1" })).toBeVisible();

@@ -108,7 +108,7 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   const turns = await homeConversationRegion(page).locator("[data-turn-kind]").count();
   await advanceRuns(page, 2, r2.id);
   await expect(chipState(page, "triage")).toHaveText("Working");
-  await expect(homeConversationRegion(page).locator("[data-composer-footer]")).toHaveText(/^1 agent working · /);
+  await expect(homeConversationRegion(page).locator("[data-composer-footer]")).toHaveText(/^1 running · /);
   expect(await homeConversationRegion(page).locator("[data-turn-kind]").count()).toBe(turns);
   await finishOnHome(page, r2.id);
   await expect(wakes).toHaveCount(2);
@@ -229,7 +229,7 @@ test("the Needs you tray lists a draft and a hold oldest first, goes to each, an
   await stepRail(page).getByRole("button", { name: "Hold", exact: true }).click();
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("2 need you");
   // Oldest first: the draft came before the hold, which sorts by when it was held.
-  await expect.poll(async () => (await items.allTextContents()).map((l) => l.replace(/ · (?:now|\d+[mhd])$/, ""))).toEqual(["CA-401 · Start Investigate", "CA-401 · Held by you"]);
+  await expect.poll(async () => (await items.allTextContents()).map((l) => l.replace(/ · (?:now|\d+[mhd])$/, ""))).toEqual(["CA-401 · Welcome flow refresh · Start Investigate", "CA-401 · Welcome flow refresh · Held by you"]);
 
   // From General, the draft's item selects the workstream again and focuses its card; skipped there, it leaves.
   await workstreamRow(page, "General").click();

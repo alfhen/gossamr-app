@@ -4,6 +4,7 @@ import { itemKey } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { agentId } from "./AgentCard";
 import { AgentsSettingsView } from "./AgentsSettings";
+import { pickerOpen } from "./AgentSheet";
 import { agentTicketChoices } from "./commands";
 import { PaletteView } from "./Palette";
 import { RunSetup } from "./RunSetup";
@@ -18,7 +19,7 @@ import type { AgentSettings } from "../types";
 
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || !!t.closest("input, textarea, select, [contenteditable], [data-esc-local]"));
 
-function Settings() {
+function Settings({ intro = false }: { intro?: boolean }) {
   const backend = useBackend();
   const runs = useRuns((s) => s.runs);
   const stopping = useRuns((s) => s.stopping);
@@ -77,7 +78,7 @@ function Settings() {
     setReport(cleanupReport(removed, refused));
   };
   const cleanup = offer ? { count: offer.runs.length, reason: offer.reason, report, busy: cleaning } : report ? { count: 0, reason: "", report, busy: false } : null;
-  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} settingsSaving={settingsSaving} cleanup={cleanup} onSettings={save} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
+  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} settingsSaving={settingsSaving} cleanup={cleanup} onSettings={save} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} intro={intro} onContinue={() => useRuns.getState().continueIntro()} />;
 }
 
 /** Asks which ticket to start an agent on. Picking opens the setup sheet; nothing is drafted before that. */
@@ -135,7 +136,7 @@ export function AgentSheets() {
     if (!runSheetOpen) return;
     const onKey = (ev: KeyboardEvent) => {
       const store = useRuns.getState();
-      const action = sheetKey(ev.key, { typing: typing(ev.target), modifier: ev.metaKey || ev.ctrlKey || ev.altKey, pickerOpen: !!document.querySelector("[role=combobox]"), browsing: store.sheet?.type === "run" });
+      const action = sheetKey(ev.key, { typing: typing(ev.target), modifier: ev.metaKey || ev.ctrlKey || ev.altKey, pickerOpen: pickerOpen(), browsing: store.sheet?.type === "run" });
       if (!action) return;
       ev.preventDefault();
       if (action === "close") store.closeSheet();
@@ -148,7 +149,7 @@ export function AgentSheets() {
 
   return (
     <>
-      {setupOpen ? <RunSetup ticketTitle={ticketTitle} /> : sheet?.type === "run" ? <RunSheet key={sheet.id} id={sheet.id} /> : sheet?.type === "safety" ? <Settings /> : null}
+      {setupOpen ? <RunSetup ticketTitle={ticketTitle} /> : sheet?.type === "run" ? <RunSheet key={sheet.id} id={sheet.id} /> : sheet?.type === "safety" ? <Settings intro={!!sheet.intro} /> : null}
       {picking && <AgentTicketPicker />}
     </>
   );

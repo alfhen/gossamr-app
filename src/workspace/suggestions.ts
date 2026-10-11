@@ -53,15 +53,26 @@ const MOST = 6;
 /** Where the chain goes next from a workstream's stage, once it was investigated. */
 const NEXT_AFTER_INVESTIGATION: Partial<Record<WorkstreamStage, string[]>> = { investigate: ["Triage this", "Plan this"], triage: ["Plan this"] };
 
+/** The chip that shows the plan's description update waiting for the person, where they read and approve it. */
+export const PLAN_UPDATE_CHIP = "Show me the plan update";
+
+/** Something a chip does on the page itself instead of asking Pip: bring the plan's description update into view. */
+export type ChipPageAction = "showPlanUpdate";
+
+/** What pressing `chip` does: a page action for the chips that have one, otherwise null, and it is asked of Pip. */
+export function chipPageAction(chip: string): ChipPageAction | null {
+  return chip === PLAN_UPDATE_CHIP ? "showPlanUpdate" : null;
+}
+
 /**
- * Chips for a workstream's conversation: what holds it, a plan waiting for approval (which Pip answers by saying where
- * to approve it, since Pip approves nothing), a run draft waiting to be read and started, what happened while the person
- * was away, the run at work, and the next step to ask for. Empty when none applies.
+ * Chips for a workstream's conversation: what holds it, a plan waiting for approval (shown on the page, since Pip approves
+ * nothing), a run draft waiting to be read and started, what happened while the person was away, the run at work, and the
+ * next step to ask for. Empty when none applies.
  */
 export function workstreamChips(w: WorkstreamSuggestionScene): string[] {
   const chips = [
     ...(w.heldReason ? ["Why is this held?"] : []),
-    ...(w.hasPendingPlanRewrite ? ["Approve the plan"] : []),
+    ...(w.hasPendingPlanRewrite ? [PLAN_UPDATE_CHIP] : []),
     ...(w.hasPendingStartDraft ? ["What is waiting to start?"] : []),
     ...(w.woke ? ["What happened while I was away?"] : []),
     ...(w.running ? [`What is ${w.running} doing?`] : []),

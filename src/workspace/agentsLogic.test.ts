@@ -273,12 +273,13 @@ describe("the header", () => {
 });
 
 describe("grouping by workstream", () => {
-  const view = (id: string, title: string): WorkstreamView => ({
+  const view = (id: string, title: string, stage: WorkstreamView["stage"] = "intake", over: Partial<WorkstreamView> = {}): WorkstreamView => ({
     workstream: { id, connectionId: "mock", itemKey: null, repo: null, title, pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(600), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null },
-    stage: "intake",
+    stage,
     runs: [],
     labels: [],
     budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
+    ...over,
   });
   const inWs = (state: RunState, id: string, workstream: string | null, queued: number, over: Partial<Run> = {}) => run(state, { id, queuedAt: iso(queued), spec: { ...base.spec, workstream }, ...over });
   const runs = [
@@ -288,7 +289,7 @@ describe("grouping by workstream", () => {
     inWs("needsAnswer", "loose1", null, 50),
     inWs("done", "loose2", null, 400, { endedAt: iso(1) }),
   ];
-  const workstreams = [view("ws-a", "CA-401 Retry the payment"), view("ws-b", "CA-402 Cart totals")];
+  const workstreams = [view("ws-a", "CA-401 Retry the payment", "plan"), view("ws-b", "CA-402 Cart totals", "investigate")];
 
   it("puts each workstream's runs under its title and stage, and the rest under No workstream, last", () => {
     const groups = groupRunsByWorkstream(runs, workstreams, NO_FILTERS, NOW);
@@ -297,6 +298,14 @@ describe("grouping by workstream", () => {
       ["ws-a", "CA-401 Retry the payment", "plan", ["a2", "a1"]],
       [null, NO_WORKSTREAM_TITLE, null, ["loose2", "loose1"]],
     ]);
+  });
+
+  it("takes the stage from the workstream's view, which knows each review's verdict, and from the runs only without one", () => {
+    const reviewed = [inWs("done", "r1", "ws-r", 10, { spec: { ...base.spec, kind: "review", workstream: "ws-r" } })];
+    const [blocking] = groupRunsByWorkstream(reviewed, [view("ws-r", "CA-403", "review", { reviewBlocking: true })], NO_FILTERS, NOW);
+    expect([blocking.stage, blocking.reviewBlocking]).toEqual(["review", true]);
+    const [closed] = groupRunsByWorkstream(reviewed, [], NO_FILTERS, NOW);
+    expect([closed.stage, closed.reviewBlocking]).toEqual(["review", false]);
   });
 
   it("orders workstreams by their latest activity", () => {

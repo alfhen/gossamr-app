@@ -1,6 +1,6 @@
 import { runPhrase } from "../lib/runNames";
 import type { Run, WorkstreamView } from "../types";
-import { needsPerson, runTitle, stateView } from "./agentsLogic";
+import { needsAttention, needsPerson, runTitle, stateView } from "./agentsLogic";
 import type { Nudge } from "./nudges";
 import type { AgentsSuggestionScene } from "./suggestions";
 
@@ -38,12 +38,15 @@ export const STRIP_SHOWN = 3;
 
 const GOING = new Set<Run["state"]>(["queued", "launching", "working"]);
 
-/** The runs Pip's pane keeps in view: the ones waiting on the person first, then the ones still working. */
-export function stripRuns(runs: readonly Run[]): Run[] {
+/**
+ * The runs Pip's pane keeps in view, in order: the ones waiting on the person first, failed ones they haven't looked at
+ * among them as the Needs you tray lists them, then the ones still working. The pane shows the first `STRIP_SHOWN`.
+ */
+export function stripRuns(runs: readonly Run[], seenFailed: ReadonlySet<string> = new Set()): Run[] {
   const newest = (a: Run, b: Run) => b.lastProgressAt.localeCompare(a.lastProgressAt) || a.id.localeCompare(b.id);
-  const needs = runs.filter(needsPerson).sort(newest);
+  const needs = runs.filter((r) => needsAttention(r, seenFailed)).sort(newest);
   const going = runs.filter((r) => GOING.has(r.state)).sort(newest);
-  return [...needs, ...going].slice(0, STRIP_SHOWN);
+  return [...needs, ...going];
 }
 
 /** The open run in words for "What I can see right now", such as "Investigate CA-1 · Working". */

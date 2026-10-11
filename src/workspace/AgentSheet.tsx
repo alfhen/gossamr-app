@@ -35,12 +35,26 @@ export interface FrameProps {
   onClose(): void;
   children: ReactNode;
   footer?: ReactNode;
+  /** When this changes, the body scrolls back to the top, so a new state shows with the title above it. */
+  topOn?: unknown;
 }
 
+/**
+ * Whether a picker is open over the screen, a palette or a mention list, which takes Esc and Enter itself. A combobox
+ * that is closed, such as the peek's comment box behind a sheet, is not one.
+ */
+export const pickerOpen = () => !!document.querySelector('[role=combobox][aria-expanded="true"]');
+
 /** The frame the agent sheets share with the ticket peek: it slides over the screen from the right. */
-export function SheetFrame({ label, title, hint, wide, min = 520, draft = false, onWide, onClose, children, footer }: FrameProps) {
+export function SheetFrame({ label, title, hint, wide, min = 520, draft = false, onWide, onClose, children, footer, topOn }: FrameProps) {
   const peek = usePaneWidths().peek;
   const frame = useRef<HTMLElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const firstTop = useRef(true);
+  useEffect(() => {
+    if (firstTop.current) return void (firstTop.current = false);
+    body.current?.scrollTo?.({ top: 0 });
+  }, [topOn]);
   const [opener] = useState(() => (typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null)));
   useEffect(() => {
     if (!frame.current?.contains(document.activeElement)) frame.current?.focus({ preventScroll: true });
@@ -70,7 +84,9 @@ export function SheetFrame({ label, title, hint, wide, min = 520, draft = false,
           ×
         </button>
       </div>
-      <div className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] pt-4 pb-8">{children}</div>
+      <div ref={body} data-sheet-body className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] pt-4 pb-8">
+        {children}
+      </div>
       {footer && <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-ws-sep bg-ws-win px-[22px] py-2.5">{footer}</div>}
     </aside>
   );
@@ -152,7 +168,8 @@ export function CopyButton({ text, label = "Copy", what, onCopied }: { text: str
 export function CodeBox({ text, what, wrap = false, copy = true, onCopied }: { text: string; what: string; wrap?: boolean; copy?: boolean; onCopied?(): void }) {
   return (
     <div className="flex items-start gap-2 rounded-md border border-ws-sep bg-ws-bar py-1 pr-1 pl-2.5">
-      <code className={`selectable min-w-0 flex-1 py-0.5 font-mono text-sm text-ws-ink ${wrap ? "break-words whitespace-pre-wrap" : "truncate"}`} title={wrap ? undefined : text}>
+      {/* Copying it by hand, selected, counts as much as the button does. */}
+      <code onCopy={onCopied} className={`selectable min-w-0 flex-1 py-0.5 font-mono text-sm text-ws-ink ${wrap ? "break-words whitespace-pre-wrap" : "truncate"}`} title={wrap ? undefined : text}>
         {text}
       </code>
       {copy && <CopyButton text={text} what={what} onCopied={onCopied} />}

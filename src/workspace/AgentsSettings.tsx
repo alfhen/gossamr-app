@@ -4,7 +4,7 @@ import { RULE_SWITCH, ruleText } from "../lib/workstreamHold";
 import { AUTOSTART_DEFAULTS, WORKSTREAM_RULES, type AgentSettings, type Run, type WorkstreamRule } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
 import { slotWaiters, stopAllText, stoppable, KIND_LABEL } from "./agentsLogic";
-import { COPY, MAY_TOUCH } from "./runSheetLogic";
+import { COPY, MAY_TOUCH, SAFETY_SUMMARY } from "./runSheetLogic";
 import { Icon } from "./AgentIcons";
 import { usePrefs } from "./prefs";
 
@@ -30,17 +30,44 @@ export interface SettingsViewProps {
   onCleanup(): void;
   onStopAll(): void;
   onClose(): void;
+  /** Opened once, in place of the person's first agent action; "Got it, continue" closes it and carries on with that. */
+  intro?: boolean;
+  onContinue?(): void;
 }
 
 /** Safety and settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
-export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose }: SettingsViewProps) {
+export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose, intro = false, onContinue }: SettingsViewProps) {
   const [asking, setAsking] = useState(false);
   const active = stoppable(runs);
   const waiting = slotWaiters(runs);
   const reach = active.length + waiting.length;
   return (
-    <SheetFrame label="Agents safety and settings" title="Agents" hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>} wide={false} onClose={onClose}>
+    <SheetFrame
+      label="Agents safety and settings"
+      title="Agents"
+      hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>}
+      wide={false}
+      onClose={onClose}
+      footer={
+        intro ? (
+          <>
+            <Btn tone="primary" autoFocus onClick={onContinue ?? onClose}>
+              Got it, continue
+            </Btn>
+            <span className="text-sm text-ws-ink3">This shows once. It stays under Agents, Safety and settings.</span>
+          </>
+        ) : undefined
+      }
+    >
       <h2 className="m-0 text-[20px] leading-tight font-semibold">Safety and settings</h2>
+      <ul data-safety-summary className="m-0 grid list-none gap-1.5 p-0">
+        {SAFETY_SUMMARY.map((t) => (
+          <li key={t.text} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5 text-ws-ink">
+            <Icon name={t.icon} className="mt-0.5 size-3.5 text-ws-ink2" />
+            <span>{t.text}</span>
+          </li>
+        ))}
+      </ul>
 
       <Sec title="Stop everything">
         <Box>

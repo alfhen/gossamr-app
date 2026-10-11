@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Run } from "../types";
-import { Box, BoxTitle, Btn } from "./AgentSheet";
-import { ANSWER_REMINDER, answerDraft, canSendAnswer, resumable } from "./runSheetLogic";
+import { Box, BoxTitle, Btn, Details } from "./AgentSheet";
+import { ANSWER_REMINDER, answerDraft, canSendAnswer, resumable, suggestedAnswer } from "./runSheetLogic";
 
 export interface AnswerActions {
   answer(text: string): void;
@@ -11,6 +11,7 @@ export interface AnswerActions {
 /** The agent's question with a box to answer it in; for a run stopped with an answer that didn't get through, that answer to send again; for a run Gossamr stopped at a limit, the words to resume it with. */
 export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean; on: AnswerActions }) {
   const [text, setText] = useState(() => answerDraft(run));
+  const suggestion = suggestedAnswer(run);
   const limit = resumable(run);
   const again = run.state === "stopped" && !limit;
   const ready = canSendAnswer(text) && !answering;
@@ -35,14 +36,26 @@ export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean
         rows={3}
         value={text}
         disabled={answering}
-        placeholder={limit ? "What to tell it" : "Your answer"}
+        placeholder={limit ? "What to tell it" : suggestion ? "Write your answer, or use Claude's suggestion below" : "Write your answer"}
         onChange={(ev) => setText(ev.target.value)}
         onKeyDown={(ev) => {
           if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) (ev.preventDefault(), send());
         }}
         className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2.5 py-1.5 leading-normal text-ws-ink outline-offset-2 disabled:opacity-60"
       />
-      <p className="m-0 text-xs text-ws-ink3">Added in front of your answer: {ANSWER_REMINDER}</p>
+      {suggestion && (
+        <div data-suggested-answer className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-ws-ink2">
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+            <b className="font-semibold text-ws-ink">Claude suggests:</b> “{suggestion}”
+          </span>
+          <Btn tone="ghost" disabled={answering} onClick={() => setText(suggestion)} aria-label="Use this suggestion">
+            Use this
+          </Btn>
+        </div>
+      )}
+      <Details summary="What Gossamr adds">
+        <p className="m-0 text-xs text-ws-ink3">This goes in front of your answer: {ANSWER_REMINDER}</p>
+      </Details>
       <div className="flex flex-wrap items-center gap-2">
         <Btn tone="primary" icon="play" disabled={!ready} title={canSendAnswer(text) ? undefined : "Write an answer first"} onClick={send}>
           {answering ? "Sending…" : limit ? "Resume" : again ? "Start it again with your answer" : "Send answer"}

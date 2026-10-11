@@ -41,6 +41,21 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
 /** What R1 means in a command. */
 export const RUN_REF_NOTE = "R1 is a run in this workstream; a run's id works anywhere.";
 
+/** How a command names its run outside a workstream, where cards show no R labels. */
+export const RUN_ID_REF = "<run id>";
+
+/** What a run's id is, and what R1 is, outside a workstream. */
+export const GENERAL_RUN_REF_NOTE = "A run's id is on its card. R1, R2… are the names a workstream gives its runs, and work in its conversation.";
+
+/**
+ * The commands as the Commands popover lists them: in a workstream all of them, naming runs R1 as its cards do; elsewhere
+ * the run commands only, naming the run by its id.
+ */
+export function commandHelp(workstream: boolean): readonly CommandHelp[] {
+  if (workstream) return COMMAND_HELP;
+  return COMMAND_HELP.filter((c) => !(WORKSTREAM_VERBS as readonly string[]).includes(c.verb)).map((c) => ({ ...c, usage: c.usage.replace(/\bR1\b/, RUN_ID_REF) }));
+}
+
 const usages = (verbs: readonly string[]) => COMMAND_HELP.filter((c) => verbs.includes(c.verb)).map((c) => c.usage);
 const listed = (words: string[]) => (words.length > 1 ? `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}` : words.join(""));
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Switch } from "../components/Switch";
-import { RULE_SWITCH, budgetNote, heldText, ruleText } from "../lib/workstreamHold";
+import { RULE_SWITCH, TURN_HELP, budgetNote, heldBanner, ruleText } from "../lib/workstreamHold";
 import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { Btn } from "./AgentSheet";
 import { usePopover } from "./Popover";
@@ -140,6 +140,16 @@ export function StopConfirm({ onStop, onKeep }: { onStop(): void; onKeep(): void
   );
 }
 
+/** What counts as an automatic turn, under the budget's line or banner. */
+function TurnHelp() {
+  return (
+    <details data-turn-help className="text-xs text-ws-ink2">
+      <summary className="cursor-pointer">What&apos;s an automatic turn?</summary>
+      {TURN_HELP}
+    </details>
+  );
+}
+
 export interface ControlsViewProps {
   view: WorkstreamView;
   globals: AutoStartSwitches | null;
@@ -155,7 +165,7 @@ export interface ControlsViewProps {
  */
 export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop }: ControlsViewProps) {
   const ws = view.workstream;
-  const held = heldText(ws.heldReason, ws.drifted);
+  const held = heldBanner(ws, view.budget.autoTurns.limit);
   const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
   const note = budgetNote(view.budget);
   const manage = ws.mode === "manage";
@@ -171,6 +181,11 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         <label className="flex items-center gap-1.5" title="In Manage, Pip is woken when a run finishes and the routine next steps start on their own. Pip itself still starts nothing.">
           <Switch checked={manage} aria-label="Manage this workstream" onChange={actions.onManage} />
           <span className="font-semibold text-ws-ink2">Manage</span>
+          {ws.resumeMode === "manage" && (
+            <span data-manage-paused className="text-xs text-ws-ink3">
+              paused
+            </span>
+          )}
         </label>
         <AutomaticSteps rules={ws.rules} globals={globals} actions={actions} />
         <span className="ml-auto flex items-center gap-1">
@@ -192,6 +207,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
                 Read {ws.itemKey ?? "the ticket"} as it is now before you resume: what Pip planned may no longer fit. Resuming takes it as the new starting point.
               </span>
             )}
+            {ws.heldReason === HELD_BUDGET && <TurnHelp />}
           </span>
           <Btn tone="plain" onClick={actions.onResume} className="px-2 py-0.5">
             Resume
@@ -199,9 +215,12 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         </div>
       )}
       {note && !(note.level === "spent" && ws.heldReason === HELD_BUDGET) && (
-        <p data-budget={note.level} className={`m-0 text-sm ${note.level === "amber" ? "text-ws-warn" : "text-ws-blocked"}`}>
-          {note.text}
-        </p>
+        <div className="grid gap-0.5">
+          <p data-budget={note.level} title={TURN_HELP} className={`m-0 text-sm ${note.level === "amber" ? "text-ws-warn" : "text-ws-blocked"}`}>
+            {note.text}
+          </p>
+          <TurnHelp />
+        </div>
       )}
     </div>
   );

@@ -7,7 +7,7 @@ import type { Intent, Proposal, RunSpec, WorkstreamView, Run, WorkContainer, Wor
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { CommandsList, Composer, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, VerbNote, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
+import { CommandsList, Composer, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, showPlanUpdate, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
@@ -79,6 +79,23 @@ describe("PipConversation", () => {
     expect(GENERAL_CONVERSATION).toBe("general");
     expect(workstreamConversation("ws-7")).toBe("ws:ws-7");
     expect(PIP_INPUT_ID).toBe("pip-input");
+  });
+
+  it("in a pane about one ticket, lists that ticket's drafts and folds the rest into one '+N drafts on other tickets' row (D22)", () => {
+    const other = (id: string, key: string) => draft(id, { type: "comment", item: itemRef(key), body: docFromText(`Comment ${id}`) });
+    const drafts = [comment("c1", null), other("o1", "DEVOPS-471"), comment("c2", null), other("o2", "WEB-101")];
+    expect(draftsForTicket(drafts, itemRef("CA-412"))).toEqual({ shown: [drafts[0], drafts[2]], others: [drafts[1], drafts[3]] });
+    expect(draftsForTicket(drafts, null)).toEqual({ shown: drafts, others: [] });
+    expect([otherTicketsRow(1), otherTicketsRow(2)]).toEqual(["+1 draft on other tickets", "+2 drafts on other tickets"]);
+
+    const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={drafts} ticket={itemRef("CA-412")} />);
+    expect(cardsIn(html).map((c) => c.id)).toEqual(["c1", "c2"]);
+    expect(html).toMatch(/Drafts waiting <span class="font-normal">4<\/span>/);
+    expect(html).toMatch(/<button type="button" data-other-tickets="true" aria-expanded="false"[^>]*><span aria-hidden="true">▸ <\/span>\+2 drafts on other tickets<\/button>/);
+    // With no ticket in view, every draft is listed and nothing is folded.
+    const all = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={drafts} />);
+    expect(cardsIn(all).map((c) => c.id)).toEqual(["c1", "o1", "c2", "o2"]);
+    expect(all).not.toContain("data-other-tickets");
   });
 
   it("shows a workstream's conversation apart from General", () => {
@@ -257,12 +274,16 @@ describe("PipConversation", () => {
     expect(renderToStaticMarkup(<CommandsList workstream manage={false} />)).not.toContain("data-manage-note");
   });
 
-  it("lists the commands in the popover: the run commands everywhere, /hold and /resume in a workstream", () => {
+  it("lists the commands in the popover: the run commands everywhere, /hold and /resume in a workstream, R1 only there", () => {
     const ws = renderToStaticMarkup(<CommandsList workstream manage={false} />);
     for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/hold", "/resume"]) expect(ws).toContain(`>${usage}</dt>`);
     expect(ws).toContain("R1 is a run in this workstream; a run&#x27;s id works anywhere.");
+    // Outside a workstream, where cards show no R labels, the examples name a run by its id and say what R1 is.
     const general = renderToStaticMarkup(<CommandsList workstream={false} manage={false} />);
-    expect(general).toContain(">/stop R1</dt>");
+    for (const usage of ["/stop &lt;run id&gt;", "/retry &lt;run id&gt;", "/answer &lt;run id&gt; your answer"]) expect(general).toContain(`>${usage}</dt>`);
+    expect(general).not.toMatch(/>\/\w+ R1/);
+    expect(general).toContain("A run&#x27;s id is on its card. R1, R2… are the names a workstream gives its runs, and work in its conversation.");
+    expect(general).not.toContain("R1 is a run in this workstream");
     expect(general).not.toContain('data-command="hold"');
     expect(general).not.toContain('data-command="resume"');
   });
@@ -499,8 +520,10 @@ describe("PipConversation", () => {
       const [card] = render([run], [turn("r1", "Q", "A")]);
       const act = { ...draftDecisions(run.id), open: vi.fn(), ask: vi.fn() };
       onDraftCardKey(key("a", card), run, null, act);
-      onDraftCardKey(key("Enter", card), run, "approve", act);
-      expect(act.open).toHaveBeenCalledTimes(2);
+      expect(act.open).toHaveBeenCalledTimes(1);
+      // An Enter while an ask the draft can't confirm waits only cancels it: it neither approves nor opens again.
+      expect(onDraftCardKey(key("Enter", card), run, "approve", act)).toBe(true);
+      expect(act.open).toHaveBeenCalledTimes(1);
       expect(act.ask).not.toHaveBeenCalledWith("approve");
       expect(approve).not.toHaveBeenCalled();
     });
@@ -588,5 +611,40 @@ describe("ticket links", () => {
       }
       expect(await b.peekItem(ref("CA-9999"))).toBeNull();
     });
+  });
+});
+
+describe("'Show me the plan update'", () => {
+  const ws = { workstream: { id: "ws-9", itemKey: "CA-412", connectionId: "mock", title: "CA-412 Fix it", mode: "manage", heldReason: null, closedAt: null }, stage: "plan", runs: ["r-plan"], labels: [["r-plan", "R1"]] } as unknown as WorkstreamView;
+  const plan = { id: "r-plan", item: itemRef("CA-412"), spec: { ...spec, kind: "plan", workstream: "ws-9" }, state: "done" } as unknown as Run;
+  const rewrite = draft("p-plan", { type: "rewrite", item: itemRef("CA-412"), part: "description" } as unknown as Intent, { origin: { type: "run", runId: "r-plan", shortId: null } });
+  const before = { list: useWorkstreams.getState().list, runs: useRuns.getState().runs, proposals: useWorkspace.getState().proposals };
+  beforeEach(() => {
+    useWorkstreams.setState({ list: [ws] });
+    useRuns.setState({ runs: [plan] });
+    useWorkspace.setState({ proposals: { [rewrite.id]: rewrite } });
+  });
+  afterEach(() => {
+    useWorkstreams.setState({ list: before.list });
+    useRuns.setState({ runs: before.runs });
+    useWorkspace.setState({ proposals: before.proposals });
+    vi.restoreAllMocks();
+  });
+
+  it("brings the plan's description update into view with the keyboard on its card, and asks Pip nothing", () => {
+    const ask = vi.spyOn(useClaude.getState(), "ask");
+    const card = { focus: vi.fn(), scrollIntoView: vi.fn() };
+    const asked: string[] = [];
+    const root = { querySelector: (s: string) => (asked.push(s), s === 'article[data-draft="p-plan"]' ? card : null), closest: () => null };
+    showPlanUpdate(workstreamConversation("ws-9"), root);
+    expect(card.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(card.focus).toHaveBeenCalledTimes(1);
+    expect(ask).not.toHaveBeenCalled();
+    // In General, or with no plan update waiting, it does nothing at all.
+    showPlanUpdate(GENERAL_CONVERSATION, root);
+    useWorkspace.setState({ proposals: {} });
+    showPlanUpdate(workstreamConversation("ws-9"), root);
+    expect(card.focus).toHaveBeenCalledTimes(1);
+    expect(ask).not.toHaveBeenCalled();
   });
 });

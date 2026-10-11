@@ -19,6 +19,13 @@ export const COPY = {
   changed: "This draft changed. Read it again.",
 } as const;
 
+/** The three lines at the top of the safety sheet, true for each kind: what read-only steps may do, what a Build may do, and what always waits for the person. */
+export const SAFETY_SUMMARY: readonly { icon: "check" | "hand" | "lock"; text: string }[] = [
+  { icon: "check", text: "Investigate, Triage, Plan, Review and Verify only read: Claude Code refuses their edits and writes. Review and Verify may run the repository's tests." },
+  { icon: "hand", text: "Build changes code in its own worktree, with your own Claude settings. It pushes its branch and opens a draft pull request only if you allow it, and staying out of Jira is a request, not a lock." },
+  { icon: "lock", text: "Gossamr posts nothing to Jira or GitHub until you approve it." },
+];
+
 export interface MayTouch {
   tone: "yes" | "ask" | "no";
   title: string;
@@ -273,7 +280,10 @@ export const resumable = (run: Pick<Run, "state" | "unsentAnswer" | "stoppedByLi
 
 export const RESUME_TEXT = "Please carry on from where you stopped.";
 
-export const answerDraft = (run: Pick<Run, "state" | "unsentAnswer" | "suggestedReply" | "stoppedByLimit">) => run.unsentAnswer ?? (run.suggestedReply?.trim() ? run.suggestedReply : null) ?? (resumable(run) ? RESUME_TEXT : "");
+export const answerDraft = (run: Pick<Run, "state" | "unsentAnswer" | "stoppedByLimit">) => run.unsentAnswer ?? (resumable(run) ? RESUME_TEXT : "");
+
+/** What Claude suggested answering, offered beside the box for the person to take, never put in it for them. */
+export const suggestedAnswer = (run: Pick<Run, "suggestedReply" | "unsentAnswer">) => (run.unsentAnswer ? null : run.suggestedReply?.trim() || null);
 
 /** Stopped or finished runs that may have carried on in a session Gossamr could not be sure of. A stopped run holding an answer to send stays with its own session until that is sent. */
 export const offeredSessions = (run: Pick<Run, "state" | "possibleContinuations" | "unsentAnswer">) => (run.state === "done" || (run.state === "stopped" && !run.unsentAnswer) ? (run.possibleContinuations ?? []) : []);

@@ -7,7 +7,8 @@ import type { WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { isPipHomeKey } from "./commands";
 import { footerHints } from "./footerHints";
-import { HomeConversation, PipHome, StepsColumn, WorkstreamList, rowTitle, type WorkstreamListProps } from "./PipHome";
+import { wrapTab } from "./pipHomeKeys";
+import { HomeConversation, NO_WORKSTREAMS, PipHome, StepsColumn, WorkstreamList, rowTitle, type WorkstreamListProps } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
@@ -83,11 +84,12 @@ describe("the workstream list on Pip home", () => {
     expect(list({ showClosed: true, closed: [] })).toContain("No closed workstreams.");
   });
 
-  it("offers to start a workstream, opening the palette already asking for one; with none open it says how", async () => {
-    const { START_WORKSTREAM } = await import("./PipHome");
+  it("offers to start a workstream, opening the palette already asking for one; with none open it says what one is", async () => {
+    const { START_WORKSTREAM } = await import("./commands");
     expect(list()).toMatch(/<button type="button"[^>]*>Start a workstream…<\/button>/);
     expect(list()).not.toContain("No workstreams yet");
-    expect(list({ list: [] })).toContain("No workstreams yet. Start one on a ticket below, or from its peek.");
+    expect(list({ list: [] })).toContain("No workstreams yet. A workstream follows one ticket from investigation to a reviewed pull request, with Pip keeping track.");
+    expect(NO_WORKSTREAMS.match(/[.!?](\s|$)/g)).toHaveLength(2);
     usePrefs.getState().setPaletteOpen(true, START_WORKSTREAM);
     expect(usePrefs.getState()).toMatchObject({ paletteOpen: true, paletteSeed: "start a workstream on " });
     // Closed, and opened again with ⌘K, the palette starts empty.
@@ -116,6 +118,16 @@ describe("Pip home", () => {
     expect(html).not.toContain("Manage this workstream");
     // The steps drop below the conversation on a narrow window, across both columns.
     expect(html).toMatch(/aria-label="Steps" class="col-span-2 [^"]*min-\[1100px\]:col-span-1/);
+  });
+
+  it("with no workstream, has nothing to Tab to after the composer, so Tab from its last control wraps round to the page's first", () => {
+    const html = renderToStaticMarkup(<PipHome />);
+    const steps = html.slice(html.indexOf('aria-label="Steps"'));
+    // The Steps column of General is a word, not a stop: focusable only from code, with no control in it.
+    expect(html).toMatch(/<aside aria-label="Steps" class="[^"]*" tabindex="-1">/);
+    expect(steps.slice(0, steps.indexOf("</aside>"))).not.toMatch(/<(button|input|a |select|textarea)/);
+    const stops = ["rail", "general", "pip-input", "commands"];
+    expect(wrapTab({ key: "Tab", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false }, stops, "commands", true)).toBe("rail");
   });
 
   it("shows a workstream's own conversation, and beside it Pip's notes, its controls and its steps", async () => {

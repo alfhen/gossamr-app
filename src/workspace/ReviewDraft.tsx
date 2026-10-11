@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type TextareaHTMLAttributes } from "react";
 import { Link } from "../components/Adf";
+import { useAutoHeight } from "../components/autoHeight";
 import { hunkLinesAround } from "../lib/diffHunks";
 import { REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
 import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } from "../types";
@@ -8,6 +9,7 @@ import { peekFocusAfterLeaving } from "./peekDrafts";
 import { openPullView, sameCommit, usePullDiff, type PullDiffState } from "./pullViewStore";
 import { takesBackendText } from "./RewriteDiff";
 import { FromRun } from "./RunProvenance";
+import { useWorkspace } from "../workspaceStore";
 
 type Review = Extract<Proposal["intent"], { type: "githubReview" }>;
 
@@ -78,12 +80,37 @@ export const pullViewOf = (p: Proposal) => () => {
   openPullView({ connectionId: r.connectionId, repo: r.repo, number: r.number, proposalId: p.id });
 };
 
+/**
+ * Open PR view with the person's unsent edit: saved first, the same save Post review makes, and taken into the store, so
+ * the view shows the words the card does. A refused edit rejects and opens nothing.
+ */
+export async function editThenPullView(p: Proposal, edit: ProposalEdit | null, to: { saveEdit(id: string, edit: ProposalEdit): Promise<Proposal>; took(saved: Proposal): void; open(): void }): Promise<void> {
+  if (edit) to.took(await to.saveEdit(p.id, edit));
+  to.open();
+}
+
+/** What Post review sends, said beside it: how many inline comments, and that it is a comment review, never a verdict. */
+export function postsWhat(comments: number): string {
+  const inline = comments > 0 ? `${comments} inline comment${comments === 1 ? "" : "s"} and ` : "";
+  return `Posts ${inline}the summary as a comment review (not Approve or Request changes), at the reviewed commit.`;
+}
+
+/** Under the review's text boxes: what GitHub does with their words. */
+export const MARKDOWN_HINT = "Markdown, formatted on GitHub";
+
+/** A review's text box, as tall as its words, so a long comment never hides behind a scroll of its own. */
+function GrowingText(props: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useAutoHeight(ref, props.value);
+  return <textarea ref={ref} {...props} />;
+}
+
 /** The lines of the diff around a comment, as a unified hunk with the comment's line marked. */
 export function ReviewHunk({ file, line, side }: { file: ChangedFile | null | undefined; line: number; side: DiffSide }) {
   const around = file?.patch ? hunkLinesAround(file.patch, line, side) : null;
   if (!around) return <p className="m-0 text-xs text-ws-ink3">{file ? "The pull request's diff doesn't show this line now." : "This file isn't in the pull request's diff now."}</p>;
   return (
-    <div data-review-hunk className="overflow-x-auto rounded border border-ws-sep bg-ws-bar py-0.5 font-mono text-xs leading-5">
+    <div data-review-hunk className="rounded border border-ws-sep bg-ws-bar py-0.5 font-mono text-xs leading-5">
       {around.lines.map((l, i) => {
         const target = i === around.at;
         return (
@@ -91,7 +118,7 @@ export function ReviewHunk({ file, line, side }: { file: ChangedFile | null | un
             key={i}
             data-hunk-line={l.kind}
             data-hunk-target={target ? "" : undefined}
-            className={`flex whitespace-pre ${l.kind === "added" ? "bg-ws-done-soft" : l.kind === "deleted" ? "bg-ws-blocked-soft" : ""} ${target ? "font-semibold outline-1 outline-ws-pip outline-solid -outline-offset-1" : ""}`}
+            className={`flex ${l.kind === "added" ? "bg-ws-done-soft" : l.kind === "deleted" ? "bg-ws-blocked-soft" : ""} ${target ? "font-semibold outline-1 outline-ws-pip outline-solid -outline-offset-1" : ""}`}
           >
             <span aria-hidden className="w-4 shrink-0 text-center text-ws-pip">
               {target ? "▸" : ""}
@@ -99,7 +126,8 @@ export function ReviewHunk({ file, line, side }: { file: ChangedFile | null | un
             <span aria-hidden className="w-9 shrink-0 pr-1.5 text-right text-ws-ink3 select-none">
               {(side === "LEFT" ? l.left : l.right) ?? ""}
             </span>
-            <span className="pr-2">{l.raw}</span>
+            {/* A long line wraps rather than run off the card's edge. */}
+            <span className="min-w-0 pr-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{l.raw}</span>
           </div>
         );
       })}
@@ -124,6 +152,9 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
   const base = useRef(review);
   /** The draft changed under the person's unsaved edit, which the card then merged in (`followDraft`). */
   const [followed, setFollowed] = useState(false);
+  /** Open PR view is saving the person's edit; and why that save was refused. */
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   // Pip may revise the draft while the card is open, and a sent edit comes back from the backend: follow it, and once the
   // person has typed, merge it with what they typed rather than keep a list the draft no longer has.
   useEffect(() => {
@@ -160,7 +191,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
   const head = diff.status === "ready" ? diff.diff.change.sha : null;
   const state = p.state.type;
   const open = state === "pending" || state === "applying";
-  const shownError = error ?? p.error;
+  const shownError = error ?? saveError ?? p.error;
   /** GitHub said the review's lines no longer match the pull request. */
   const outdated = p.error === REVIEW_OUTDATED_NOTE;
   const moved = open && !!head && !sameCommit(head, review.commitSha);
@@ -170,7 +201,22 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
   const kept = comments.filter((c) => !c.dropped).map(({ path, line, side, body }) => ({ path, line, side, body }));
   const problem = edit ? reviewEditProblem(review, { summary, comments: kept }) : null;
   const canPost = !!access?.canPost;
-  const pullView = pullViewOf(p);
+  const pullView = () => {
+    // Not disabled while it saves: a disabled button would drop the focus the view gives back on closing.
+    if (saving) return;
+    const backend = useWorkspace.getState().backend;
+    setSaveError(null);
+    setSaving(true);
+    editThenPullView(p, backend ? edit : null, {
+      saveEdit: (id, e) => backend!.proposalsEdit(id, e),
+      // What the backend now holds is what the card shows: it is no longer an unsent edit.
+      took: (saved) => ((edited.current = false), useWorkspace.setState((s) => ({ proposals: { ...s.proposals, [saved.id]: saved } }))),
+      open: pullViewOf(p),
+    })
+      .catch((e) => setSaveError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setSaving(false));
+  };
+  const hint = `review-markdown-${p.id}`;
   const change = (i: number, next: Partial<Held>) => {
     edited.current = true;
     setComments((was) => was.map((c, j) => (j === i ? { ...c, ...next } : c)));
@@ -226,8 +272,9 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
         <label className="grid gap-1 text-sm font-semibold" htmlFor={`review-summary-${p.id}`}>
           Review summary
           {open ? (
-            <textarea
+            <GrowingText
               id={`review-summary-${p.id}`}
+              aria-describedby={hint}
               data-review-summary
               value={summary}
               disabled={working || state === "applying"}
@@ -236,7 +283,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
                 edited.current = true;
                 setSummary(e.target.value);
               }}
-              className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2 py-1.5 text-base font-normal [overflow-wrap:anywhere]"
+              className="w-full scroll-mb-16 resize-none rounded-md border border-ws-sep2 bg-ws-win px-2 py-1.5 text-base font-normal [overflow-wrap:anywhere]"
             />
           ) : (
             <span data-review-summary className="font-normal whitespace-pre-wrap [overflow-wrap:anywhere]">
@@ -267,13 +314,14 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
                     <>
                       {files ? <ReviewHunk file={files.find((f) => f.path === c.path)} line={c.line} side={c.side} /> : <p className="m-0 text-xs text-ws-ink3">{diff.status === "error" ? `Couldn't read the diff: ${diff.error}` : "Loading the diff…"}</p>}
                       {open ? (
-                        <textarea
+                        <GrowingText
                           aria-label={`Comment on ${place}`}
+                          aria-describedby={hint}
                           value={c.body}
                           disabled={working || state === "applying"}
                           rows={Math.min(10, Math.max(2, c.body.split("\n").length + 1))}
                           onChange={(e) => change(i, { body: e.target.value })}
-                          className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-base [overflow-wrap:anywhere]"
+                          className="w-full scroll-mb-16 resize-none rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-base [overflow-wrap:anywhere]"
                         />
                       ) : (
                         <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{c.body}</span>
@@ -285,7 +333,14 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
             })}
           </ul>
         )}
-        <p className="m-0 text-sm text-ws-ink3">Posted as one comment review at the reviewed commit, never as an approval or a request for changes. Nothing goes to GitHub until you approve it here.</p>
+        {open && (
+          <p id={hint} data-review-markdown className="m-0 text-xs text-ws-ink3">
+            {MARKDOWN_HINT}
+          </p>
+        )}
+        <p data-review-posts className="m-0 text-sm text-ws-ink3">
+          {postsWhat(open ? kept.length : review.comments.length)} Nothing goes to GitHub until you post it here.
+        </p>
         {open && p.maybePosted && (
           <p data-review-maybe-posted role="note" className="m-0 rounded-md border border-ws-sep2 bg-ws-bar px-2 py-1 text-sm text-ws-ink2">
             This review may already be on GitHub: Gossamr sent it at {p.maybePosted.commitSha.slice(0, 8)} and got no answer. Post review looks for it on the pull request first and sends nothing while it can&apos;t be sure.
@@ -315,7 +370,14 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
           </p>
         )}
         <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
-          <button type="button" onClick={pullView} className={`${open && !canPost ? primary : button} ${open && !canPost ? "" : "mr-auto"}`}>
+          <button
+            type="button"
+            data-review-pull-view
+            disabled={open && !!problem}
+            title={open && problem ? problem : open && edit ? "Your edit is saved first, so the view shows what you see here." : undefined}
+            onClick={pullView}
+            className={`${open && !canPost ? primary : button} ${open && !canPost ? "" : "mr-auto"}`}
+          >
             Open PR view
           </button>
           {open && (

@@ -45,6 +45,19 @@ async fn an_answer_to_a_workstream_run_is_recorded_by_its_length_only_and_a_refu
     assert!(events.iter().all(|e| !format!("{e:?}").contains("staging")), "the answer's text stays with the run");
 }
 
+#[tokio::test]
+async fn an_answer_clears_what_the_run_said_while_it_asked_and_records_you_answered() {
+    let (rig, run) = asking().await;
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.detail = Some("Waiting for an answer".into()));
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.last_detail.as_deref(), Some("Waiting for an answer"));
+    let answered = rig.svc.answer(&run.id, "Use the staging database.").await.unwrap();
+    assert_eq!(answered.last_detail, None);
+    assert_eq!(rig.get(&run).await.last_detail, None, "it is stored cleared, not only returned");
+    let events = rig.fx.core.run_events(&run.id).await.unwrap();
+    assert_eq!(events.last().map(|e| (e.kind.as_str(), e.text.as_str())), Some(("answered", "You answered")));
+}
+
 fn resumes(rig: &Rig) -> Vec<ResumeCall> {
     rig.cli.0.lock().unwrap().resumes.clone()
 }

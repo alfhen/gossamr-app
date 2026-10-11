@@ -261,6 +261,33 @@ describe("onDraftCardKey", () => {
     expect(a.approve).not.toHaveBeenCalled();
   });
 
+  it("only cancels on a card key pressed while a decision waits: s then a neither asks to approve nor opens", () => {
+    for (const [first, then] of [["s", "a"], ["a", "s"], ["s", "o"], ["a", "Escape"], ["s", "s"]]) {
+      const a = acts();
+      press(a, draft(INTENTS.comment), [first]);
+      const ev = key(then, card());
+      expect(onDraftCardKey(ev, draft(INTENTS.comment), a.asking, a)).toBe(true);
+      expect(ev.preventDefault).toHaveBeenCalled();
+      expect(a.asking).toBeNull();
+      expect(a.ask).not.toHaveBeenCalledWith(first === "s" ? "approve" : "skip");
+      expect(a.ask).toHaveBeenCalledTimes(2);
+      expect(a.open).not.toHaveBeenCalled();
+      expect(a.approve).not.toHaveBeenCalled();
+      expect(a.skip).not.toHaveBeenCalled();
+      expect(a.typed).toEqual([]);
+    }
+    // On a run draft, a after s cancels the skip and doesn't open the draft either.
+    const run = acts();
+    press(run, draft(INTENTS.startRun), ["s", "a"]);
+    expect(run.open).not.toHaveBeenCalled();
+    expect(run.asking).toBeNull();
+    // A letter that is not a card key still goes back to the input with the s before it.
+    const b = acts();
+    press(b, draft(INTENTS.comment), ["s", "x"]);
+    expect(b.typed).toEqual(["sx"]);
+    expect(b.skip).not.toHaveBeenCalled();
+  });
+
   it("leaves j and k to the conversation, even while asking", () => {
     const a = acts();
     expect(press(a, draft(INTENTS.comment), ["a", "j"])).toBe(false);

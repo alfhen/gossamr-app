@@ -1,9 +1,9 @@
 import { docText } from "../lib/docs";
 import { budgetLevel, budgetView } from "../lib/workstreamHold";
-import { byQueue, runLabels, stage } from "../lib/workstreamStage";
+import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
 import { BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
-import type { BasisField, ItemRef, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamView, WorkstreamsChanged } from "../types";
+import type { BasisField, ItemRef, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamView, WorkstreamsChanged } from "../types";
 import { startedFresh } from "./mockPipTurns";
 
 const CONNECTION = "mock";
@@ -167,6 +167,8 @@ export class MockWorkstreams {
   private seq = 0;
   /** The number of the pull request run `runId` opened, as far as the code host shows it; set by the backend that owns the code. */
   prOf: (runId: string) => number | null = () => null;
+  /** A finished review's verdict as its sheet resolves it, null without one; set by the backend that owns the runs. */
+  verdictOf: (run: Run) => ReviewVerdict | null = () => null;
   /** A cached ticket as it is now, by key, which a workstream's basis is taken from; set by the backend that owns the tickets. */
   ticketOf: (key: string) => BasisTicket | null = () => null;
 
@@ -228,9 +230,10 @@ export class MockWorkstreams {
 
   private view(ws: Workstream, runs: readonly Run[]): WorkstreamView {
     const linked = runs.filter((r) => r.spec.workstream === ws.id).sort((a, b) => byQueue(b, a));
-    const view: WorkstreamView = { workstream: ws, stage: stage(linked), runs: linked.map((r) => r.id), labels: runLabels(linked), budget: budgetView(ws) };
+    const judged = linked.map((r) => ({ ...r, verdict: r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null }));
+    const view: WorkstreamView = { workstream: ws, stage: stage(judged), runs: linked.map((r) => r.id), labels: runLabels(linked), budget: budgetView(ws) };
     const waiting = waitingForPr(linked, this.prOf);
-    return waiting ? { ...view, waitingForPr: waiting } : view;
+    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */
@@ -343,9 +346,18 @@ export class MockWorkstreams {
     return next;
   }
 
-  /** Sets how much Pip may do on its own, as `set_workstream_mode` does; the same mode records nothing. */
+  /**
+   * Sets how much Pip may do on its own, as `set_workstream_mode` does; the same mode records nothing. The person setting
+   * it forgets the mode a tripwire took away (`resumeMode`), so resuming leaves their choice.
+   */
   setMode(id: string, mode: WorkstreamMode, actor: WorkstreamActor = "person"): Workstream {
-    const ws = this.openOne(id);
+    let ws = this.openOne(id);
+    if (actor === "person" && ws.resumeMode) {
+      const { resumeMode: _, ...rest } = ws;
+      ws = rest;
+      this.put(ws);
+      this.save();
+    }
     if (ws.mode === mode) return ws;
     return this.changedTo({ ...ws, mode }, actor, "mode_set", { detail: mode });
   }
@@ -361,19 +373,24 @@ export class MockWorkstreams {
   /**
    * Lifts a workstream's hold, as `resume_workstream` does; lifting a budget hold also resets what was spent
    * (`budget_reset`), and lifting a basis-drift hold takes the basis again from the ticket as it is now (`basis_captured`).
+   * Lifting a tripwire puts back the mode it took away (`mode_set` by the person), unless the person chose one meanwhile.
    */
   resume(id: string): Workstream {
     const ws = this.openOne(id);
     if (ws.heldReason === null) return ws;
     const reset = ws.heldReason === HELD_BUDGET;
     const rebase = ws.heldReason === `${TRIPWIRE}basis_drift`;
-    let next: Workstream = { ...ws, heldReason: null, spent: reset ? { ...ws.spent, autoTurns: 0, wakes: 0 } : ws.spent };
+    const restore = ws.heldReason.startsWith(TRIPWIRE) ? (ws.resumeMode ?? null) : null;
+    const { resumeMode: _, ...kept } = ws;
+    let next: Workstream = { ...kept, heldReason: null, mode: restore ?? ws.mode, spent: reset ? { ...ws.spent, autoTurns: 0, wakes: 0 } : ws.spent };
+    if (!restore && ws.resumeMode) next = { ...next, resumeMode: ws.resumeMode };
     if (rebase) {
       const ticket = ws.itemKey ? this.ticketOf(ws.itemKey) : null;
       const { drifted: _, ...rest } = next;
       next = { ...rest, basis: ticket ? basisOfItem(ticket) : null };
     }
     this.changedTo(next, "person", "resumed", { detail: ws.heldReason });
+    if (restore) this.record(id, "person", "mode_set", { detail: restore });
     if (reset) this.record(id, "person", "budget_reset");
     if (rebase && next.basis) this.record(id, "supervisor", "basis_captured");
     return next;
@@ -508,7 +525,8 @@ export class MockWorkstreams {
   /**
    * A tripwire fired, as `trip_workstream` records it: the tripwire line with its kind (and run), the workstream drops to
    * Advise and is held with `tripwire:<kind>`. A basis drift records the fields that drifted (`basis_drifted`, kept in
-   * `drifted` while held) and keeps the basis until the person resumes.
+   * `drifted` while held) and keeps the basis until the person resumes. The mode it dropped from is kept in `resumeMode`
+   * for resuming to put back.
    */
   trip(id: string, kind: string, runId: string | null, drifted: readonly BasisField[] = []): Workstream {
     const reason = `${TRIPWIRE}${kind}`;
@@ -517,7 +535,7 @@ export class MockWorkstreams {
     this.append(id, "supervisor", "tripwire", { runId, detail: kind });
     if (kind === "basis_drift" && drifted.length) this.append(id, "supervisor", "basis_drifted", { detail: drifted.join(",") });
     if (ws.mode !== "advise") {
-      ws = { ...ws, mode: "advise" };
+      ws = { ...ws, mode: "advise", ...(ws.heldReason === null ? { resumeMode: ws.mode } : {}) };
       this.append(id, "supervisor", "mode_set", { detail: "advise" });
     }
     const next = held(ws, reason);

@@ -520,6 +520,8 @@ export class MockRuns {
   readonly pipRun: boolean;
   private picked = new Map<string, string>();
   private followUps = new Map<string, { text: string; detail: string }[]>();
+  /** When the person answered each run, oldest first: each is a "You answered" entry in its timeline. */
+  private answeredAt = new Map<string, string[]>();
   /** Copies made in `~/Gossamr/agents` through `cloneFresh`. */
   private fresh = new Map<string, LocalClone>();
   /** Pull requests and branches by run id, standing in for what a sync would have cached. */
@@ -1246,11 +1248,13 @@ export class MockRuns {
     this.answering = id;
     let next: Run;
     try {
-      next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), ...resumed });
+      next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: null, ...resumed });
     } finally {
       this.answering = null;
     }
     this.markStale(id);
+    // The timeline entry `answer_keeping` records.
+    this.answeredAt.set(id, [...(this.answeredAt.get(id) ?? []), next.lastProgressAt]);
     this.changed();
     // Only the length: the answer's text stays with the run.
     this.workstreams?.record(next.spec.workstream, "person", "run_answered", { runId: id, detail: String([...text].length) });
@@ -1445,8 +1449,8 @@ export class MockRuns {
     if (spec?.kind === "build" && spec.allowPush) add("amber", "This agent may push a branch and open a draft pull request if your Claude settings allow it. Your permission mode is auto: with auto mode, anything Claude's classifier approves runs without asking.");
     const live = this.runs.filter((r) => RUNNING.includes(r.state)).length;
     // Not red: an approved run over the cap waits for a slot and starts by itself once one frees.
-    if (live >= this.limits.maxRuns) add("amber", `${live} of ${this.limits.maxRuns} agents are running. This one will wait for a slot and start when one finishes.`);
-    else add("green", `${live} of ${this.limits.maxRuns} agents running`);
+    if (live >= this.limits.maxRuns) add("amber", `${live} of ${this.limits.maxRuns} agent slots are in use, including ones waiting on you. This one will wait for a slot and start when one finishes.`);
+    else add("green", `${live} of ${this.limits.maxRuns} agent slots in use (including ones waiting on you)`);
     if (spec) add("green", `What runs: ${mockDigest(spec).slice(5)}`);
     return { rows, blocking: rows.some((r) => r.level === "red") };
   }
@@ -1910,7 +1914,11 @@ export class MockRuns {
     if (run.state === "done") lines.push(["done", "Wrote up what it found", run.result]);
     if (run.state === "stopped") lines.push(["stop", "Stopped", null]);
     for (const f of this.followUps.get(id) ?? []) lines.splice(lines.length - (run.state === "done" ? 1 : 0), 0, ["follow_up", f.text, f.detail]);
-    return lines.map(([kind, text, detail], i) => ({ runId: id, seq: i + 1, at: at(i * 2), kind, text, detail }));
+    const events = lines.map(([kind, text, detail], i): RunEvent => ({ runId: id, seq: i + 1, at: at(i * 2), kind, text, detail }));
+    const answers = (this.answeredAt.get(id) ?? []).map((when): RunEvent => ({ runId: id, seq: 0, at: when, kind: "answered", text: "You answered", detail: null }));
+    if (!answers.length) return events;
+    // In time order, as the backend's store gives them: an answer lands where it happened.
+    return [...events, ...answers].sort((a, b) => a.at.localeCompare(b.at)).map((e, i) => ({ ...e, seq: i + 1 }));
   }
 
   outcome(id: string): RunOutcome {

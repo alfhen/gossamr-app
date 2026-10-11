@@ -68,12 +68,62 @@
     "stage": "review"
   },
   {
-    "name": "a finished review is done",
+    "name": "a finished review that passed is done",
+    "runs": [
+      { "kind": "build", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "review", "state": "done", "queuedAt": "2026-09-29T11:00:00Z", "verdict": "pass" }
+    ],
+    "stage": "done"
+  },
+  {
+    "name": "a finished review that is blocking is review, changes needed",
+    "runs": [
+      { "kind": "build", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "review", "state": "done", "queuedAt": "2026-09-29T11:00:00Z", "verdict": "blocking" }
+    ],
+    "stage": "review",
+    "reviewBlocking": true
+  },
+  {
+    "name": "a blocking review then a newer passing one is done",
+    "runs": [
+      { "kind": "review", "state": "done", "queuedAt": "2026-09-29T11:00:00Z", "verdict": "blocking" },
+      { "kind": "review", "state": "done", "queuedAt": "2026-09-29T12:00:00Z", "verdict": "pass" }
+    ],
+    "stage": "done"
+  },
+  {
+    "name": "a passing review then a newer blocking one is review",
+    "runs": [
+      { "kind": "review", "state": "done", "queuedAt": "2026-09-29T11:00:00Z", "verdict": "pass" },
+      { "kind": "review", "state": "done", "queuedAt": "2026-09-29T12:00:00Z", "verdict": "blocking" }
+    ],
+    "stage": "review",
+    "reviewBlocking": true
+  },
+  {
+    "name": "a finished review with no verdict is review",
     "runs": [
       { "kind": "build", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
       { "kind": "review", "state": "done", "queuedAt": "2026-09-29T11:00:00Z" }
     ],
+    "stage": "review"
+  },
+  {
+    "name": "a finished verification after a blocking review is done",
+    "runs": [
+      { "kind": "review", "state": "done", "queuedAt": "2026-09-29T11:00:00Z", "verdict": "blocking" },
+      { "kind": "verify", "state": "done", "queuedAt": "2026-09-29T12:00:00Z" }
+    ],
     "stage": "done"
+  },
+  {
+    "name": "a review working after a blocking review is review",
+    "runs": [
+      { "kind": "review", "state": "done", "queuedAt": "2026-09-29T11:00:00Z", "verdict": "blocking" },
+      { "kind": "review", "state": "working", "queuedAt": "2026-09-29T12:00:00Z" }
+    ],
+    "stage": "review"
   },
   {
     "name": "a verification in progress is verify",

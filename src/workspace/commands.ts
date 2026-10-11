@@ -1,5 +1,5 @@
 import { itemKey } from "../lib/filter";
-import type { ContainerRef, Intent, RunKind, WorkContainer, WorkFilter, WorkItem, WorkstreamView } from "../types";
+import type { ContainerRef, Intent, PersonRef, RunKind, WorkContainer, WorkFilter, WorkItem, WorkstreamView } from "../types";
 import type { SavedView } from "./filters";
 import { THEMES, THEME_LABEL, type ThemeMode } from "./prefs";
 import { CODE_FILTERS, CODE_FILTER_LABEL } from "../lib/devLinks";
@@ -289,20 +289,41 @@ export function workstreamCommands(list: readonly WorkstreamView[], query: strin
 /**
  * "Start a workstream on KEY" for a query like "start a workstream on ca-401" or "workstream checkout", the rest of the
  * words finding the ticket as `ticketCommands` does: from anywhere, Pip home included, without peeking the ticket first.
- * A ticket whose workstream is open already is left to `workstreamCommands`.
+ * A ticket whose workstream is open already is left to `workstreamCommands`. Asked with no ticket yet ("start a workstream
+ * on ", as Pip home's 'Start a workstream…' asks), it offers a few to start with: the person's own open tickets (`me`),
+ * then the other open ones, newest first.
  */
-export function startWorkstreamCommands(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[], a: Pick<CommandActions, "startWorkstreamOn">, limit = 3): Command[] {
-  const rest = /^\s*(?:start\s+)?(?:a\s+)?workstream\s+(?:on\s+)?(.+)$/i.exec(query)?.[1]?.trim();
-  // "start a workstream on " is the question still being asked (as Pip home's 'Start a workstream…' opens it), not a ticket called "on".
-  if (!rest || /^on$/i.test(rest)) return [];
+export function startWorkstreamCommands(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[], a: Pick<CommandActions, "startWorkstreamOn">, limit = 3, me: readonly PersonRef[] = []): Command[] {
+  const asked = /^\s*(?:start\s+)?(?:a\s+)?workstream(?:\s+(?:on\b\s*)?(.*))?$/i.exec(query);
+  if (!asked) return [];
+  const rest = asked[1]?.trim() ?? "";
+  // "start a workstream" alone names no ticket; "start a workstream on " is the question still being asked.
+  if (!rest && !/\bon\s*$/i.test(query)) return [];
   const taken = new Set(open.filter((v) => v.workstream.closedAt === null && v.workstream.itemKey).map((v) => `${v.workstream.connectionId}:${v.workstream.itemKey}`));
+  const free = (item: WorkItem) => !taken.has(`${item.item.connectionId}:${item.item.key}`);
+  const start = (item: WorkItem): Command => ({ id: `workstream:start:${itemKey(item.item)}`, group: "Agents", icon: "◇", label: `Start a workstream on ${item.item.key}`, hint: item.title, keywords: "workstream pip conversation track ticket", run: () => a.startWorkstreamOn(item) });
+  if (!rest) {
+    const mine = (item: WorkItem) => !!item.assignee && me.some((m) => m.connectionId === item.assignee!.connectionId && m.accountId === item.assignee!.accountId);
+    return items
+      .filter((i) => i.status.category !== "done" && free(i))
+      .sort((x, y) => Number(mine(y)) - Number(mine(x)) || y.updated.localeCompare(x.updated))
+      .slice(0, SUGGESTED_TICKETS)
+      .map(start);
+  }
   const byKey = new Map(items.map((i) => [itemKey(i.item), i]));
-  return ticketCommands(items, rest, () => {}, limit + taken.size).flatMap((c) => {
-    const item = byKey.get(c.id.slice("ticket:".length));
-    if (!item || taken.has(`${item.item.connectionId}:${item.item.key}`)) return [];
-    return [{ id: `workstream:start:${itemKey(item.item)}`, group: "Agents" as const, icon: "◇", label: `Start a workstream on ${item.item.key}`, hint: item.title, keywords: "workstream pip conversation track ticket", run: () => a.startWorkstreamOn(item) }];
-  }).slice(0, limit);
+  return ticketCommands(items, rest, () => {}, limit + taken.size)
+    .flatMap((c) => {
+      const item = byKey.get(c.id.slice("ticket:".length));
+      return item && free(item) ? [start(item)] : [];
+    })
+    .slice(0, limit);
 }
+
+/** How many tickets 'Start a workstream…' offers before anything is typed. */
+export const SUGGESTED_TICKETS = 5;
+
+/** What Pip home's 'Start a workstream…' opens the palette with: the words its 'Start a workstream on KEY' entries answer to. */
+export const START_WORKSTREAM = "start a workstream on ";
 
 /**
  * "Ask Pip to plan KEY" for a query that starts with "plan", the rest of the words finding the ticket as `agentCommands`

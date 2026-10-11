@@ -282,9 +282,10 @@ export const useRunSetup = create<SetupState>((set, get) => {
     ...closed,
     backend: null,
 
-    async begin({ item = null, proposalId, kind = "investigate", pr, repo: wanted, planFromRun = null, buildFromRun = null }) {
+    async begin(options) {
+      const { item = null, proposalId, kind = "investigate", pr, repo: wanted, planFromRun = null, buildFromRun = null } = options;
       const backend = useWorkspace.getState().backend;
-      if (!backend || !useRuns.getState().ensureAgentsIntro()) return;
+      if (!backend || !useRuns.getState().ensureAgentsIntro(() => void get().begin(options))) return;
       const mine = ++run;
       useRuns.getState().closeSheet();
       const reportAvailable = !!(await backend.runsSettings().catch(() => null))?.reportResult;

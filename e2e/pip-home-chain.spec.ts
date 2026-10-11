@@ -38,7 +38,8 @@ async function expandNewest(page: Page) {
     await expect(safety(page)).toHaveCount(0);
   }
   const review = card.getByRole("group", { name: "Review and start" });
-  await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveAttribute("aria-expanded", "true");
+  // Open, the review has its own Start and Hide; the card's own button is hidden meanwhile.
+  await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
   return review;
 }
 
@@ -68,7 +69,7 @@ test("an investigation is reviewed and started in place on Pip home: the exact p
   await homeWorkstream(page);
   await ask(page, "investigate this");
   await expect(runCards(page)).toHaveCount(1);
-  const waiting = needsYouTray(page).getByRole("button", { name: /^CA-401 · Start Investigate · / });
+  const waiting = needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · Start Investigate · / });
   await expect(waiting).toHaveCount(1);
   // The step rail has it under Investigate too.
   await expect(stepChip(page, "investigate").locator("[data-step-needs-you]")).toHaveText("1 needs you");

@@ -253,6 +253,8 @@ export interface WorkstreamGroup {
   stage: WorkstreamStage | null;
   /** The workstream's build whose pull request hasn't been found yet, if any. */
   waitingForPr?: string | null;
+  /** The workstream's newest finished review asked for changes. */
+  reviewBlocking?: boolean;
   runs: Run[];
   /** Run id to its short name in the workstream (`R1` for the first queued), counted over all its runs so a filter never renumbers them. */
   labels: Record<string, string>;
@@ -278,7 +280,9 @@ export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonl
     const view = byId.get(id);
     const mine = sortRuns(all.filter((r) => shown.has(r.id)));
     if (!mine.length) continue;
-    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, stage: stage(all), waitingForPr: view?.waitingForPr ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
+    // The view knows each review's verdict; without one (a closed workstream) the runs alone give the stage.
+    const staged = view ? { stage: view.stage, reviewBlocking: view.reviewBlocking ?? false } : { stage: stage(all), reviewBlocking: false };
+    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, ...staged, waitingForPr: view?.waitingForPr ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
   }
   const latest = (g: WorkstreamGroup) => ageSince(g.runs[0]);
   groups.sort((a, b) => latest(b).localeCompare(latest(a)) || a.title.localeCompare(b.title));
@@ -309,9 +313,12 @@ export function stepRun(order: readonly string[], current: string | null, delta:
   return order[Math.min(order.length - 1, Math.max(0, at + delta))];
 }
 
+/** A run that needs the person, or a failed one they haven't looked at yet: what the rail badge and the Needs you tray count. */
+export const needsAttention = (run: Pick<Run, "id" | "state">, seenFailed: ReadonlySet<string>) => needsPerson(run) || (run.state === "failed" && !seenFailed.has(run.id));
+
 /** Runs that need the person, plus failed ones they haven't looked at yet. Quiet runs never count. */
 export function attentionCount(runs: readonly Run[], seenFailed: ReadonlySet<string>): number {
-  return runs.filter((r) => needsPerson(r) || (r.state === "failed" && !seenFailed.has(r.id))).length;
+  return runs.filter((r) => needsAttention(r, seenFailed)).length;
 }
 
 export function summaryLine(runs: readonly Run[], now: number): string {

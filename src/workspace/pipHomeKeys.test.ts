@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { pipHomeHints } from "./footerHints";
-import { isTypingTarget, pipHomeKey, type PipHomeKeyEvent, type PipHomeKeyState } from "./pipHomeKeys";
+import { isTypingTarget, pipHomeKey, wrapTab, type PipHomeKeyEvent, type PipHomeKeyState } from "./pipHomeKeys";
 import { ShortcutHint } from "./ShortcutHint";
 
 const key = (k: string, over: Partial<PipHomeKeyEvent> = {}): PipHomeKeyEvent => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: null, ...over });
@@ -39,6 +39,20 @@ describe("pipHomeKey: columns", () => {
     expect(pipHomeKey(key("F6", { altKey: true }), at())).toBeNull();
     expect(pipHomeKey(key("]"), at())).toBeNull();
     expect(pipHomeKey(key("[", { metaKey: true, shiftKey: true }), at())).toBeNull();
+  });
+
+  it("passes the Steps column by while no workstream gives it steps, both ways and with ⌘] and ⌘[", () => {
+    const none = (column: PipHomeKeyState["column"]) => at({ column, steps: false });
+    expect(pipHomeKey(key("F6"), none("conversation"))).toEqual({ type: "column", to: "list" });
+    expect(pipHomeKey(key("F6"), none("list"))).toEqual({ type: "column", to: "conversation" });
+    expect(pipHomeKey(key("F6", { shiftKey: true }), none("list"))).toEqual({ type: "column", to: "conversation" });
+    expect(pipHomeKey(key("]", { metaKey: true }), none("conversation"))).toEqual({ type: "column", to: "list" });
+    expect(pipHomeKey(key("[", { ctrlKey: true }), none("list"))).toEqual({ type: "column", to: "conversation" });
+    // Left in the Steps column somehow, the keys still leave it.
+    expect(pipHomeKey(key("F6"), none("rail"))).toEqual({ type: "column", to: "list" });
+    expect(pipHomeKey(key("F6", { shiftKey: true }), none("rail"))).toEqual({ type: "column", to: "conversation" });
+    // With steps, the rail is a stop again.
+    expect(pipHomeKey(key("F6"), at({ column: "conversation", steps: true }))).toEqual({ type: "column", to: "rail" });
   });
 
   it("does nothing while something is open over Pip home", () => {
@@ -113,11 +127,30 @@ describe("pipHomeKey: stepping and opening", () => {
   });
 });
 
+describe("wrapTab", () => {
+  const stops = ["rail-search", "general", "composer", "commands"];
+  it("takes Tab from the last stop on Pip home round to the first stop on the page, never to the page itself", () => {
+    expect(wrapTab(key("Tab"), stops, "commands", true)).toBe("rail-search");
+  });
+
+  it("leaves every other Tab to the browser", () => {
+    expect(wrapTab(key("Tab"), stops, "composer", true)).toBeNull();
+    expect(wrapTab(key("Tab", { shiftKey: true }), stops, "commands", true)).toBeNull();
+    expect(wrapTab(key("Tab", { ctrlKey: true }), stops, "commands", true)).toBeNull();
+    // Off Pip home, as in a sheet after it in the page, or with nothing focused.
+    expect(wrapTab(key("Tab"), stops, "commands", false)).toBeNull();
+    expect(wrapTab(key("Tab"), stops, null, true)).toBeNull();
+    expect(wrapTab(key("F6"), stops, "commands", true)).toBeNull();
+  });
+});
+
 describe("Pip home's footer hint", () => {
   it("names the column keys first, then j and k, Enter, the draft keys, ⌘↵ and Esc, each kept by rank as it narrows", () => {
     const hints = pipHomeHints();
     expect(hints.map((h) => h.keys.join(" "))).toEqual(["F6 ⌘]", "j k", "↵", "a s", "⌘↵", "Esc", "⌘K"]);
     expect(hints.slice(0, 2).every((h) => h.rank === 0)).toBe(true);
+    // a on a run draft opens it; only a draft that needs no review is approved by a.
+    expect(hints.find((h) => h.id === "decide")?.text).toBe("approve or skip a draft · a opens a run draft");
     const html = renderToStaticMarkup(createElement(ShortcutHint, { view: "list", hints }));
     expect(html).toContain("<kbd");
     expect(html).toContain("next column");

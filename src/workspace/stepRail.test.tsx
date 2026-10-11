@@ -2,9 +2,12 @@ import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WorkstreamEvent, WorkstreamView } from "../types";
+import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WatchState, WorkstreamEvent, WorkstreamView } from "../types";
 import { freezeBatch } from "./pipHomeLogic";
-import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, EarlierStepDrafts, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
+import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, EarlierStepDrafts, NO_PULL_VIEW, pullViewOrGithub, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
+import { usePullView } from "./pullViewStore";
+import { useToasts } from "./toasts";
+import { useWorkspace } from "../workspaceStore";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -122,6 +125,17 @@ describe("the step rail", () => {
     // A running investigation says so.
     const running = renderToStaticMarkup(<StepRailView {...props({ runs: [run("r1", "investigate", "working", 5)], view: { ...view, runs: ["r1"], labels: [["r1", "R1"]] } })} />);
     expect(stepOf(running, "investigate")).toMatch(/data-run-label="R1"[\s\S]*Working/);
+  });
+
+  it("says a queued run a rule started waits for Resume while held and for Manage while in Advise", () => {
+    const queued = [...RUNS.slice(0, 4), run("r5", "review", "queued", 50, { autoStart: { rule: "build_review", afterRun: "r4" }, endedAt: null })];
+    const at = (over: Partial<WorkstreamView["workstream"]>) => stepOf(renderToStaticMarkup(<StepRailView {...props({ runs: queued, view: { ...view, workstream: { ...view.workstream, ...over } } })} />), "review");
+    expect(at({ heldReason: "tripwire:basis_drift", mode: "advise", resumeMode: "manage" })).toMatch(/data-step-auto[^>]*>· waits for Resume</);
+    expect(at({ mode: "advise" })).toMatch(/data-step-auto[^>]*>· waits for Manage</);
+    expect(at({})).toMatch(/data-step-auto[^>]*>· started automatically</);
+    // A run that already started says how it started, held or not.
+    const started = renderToStaticMarkup(<StepRailView {...props({ view: { ...view, workstream: { ...view.workstream, heldReason: "person", mode: "advise" } } })} />);
+    expect(stepOf(started, "review")).toContain("· started automatically");
   });
 
   it("marks the next step and keeps the later steps nothing has reached to one quiet line each", () => {
@@ -306,5 +320,35 @@ describe("earlier drafts on the rail", () => {
     expect(html).toContain("Pip&#x27;s drafts");
     expect(html).toContain("1 earlier draft");
     expect(renderToStaticMarkup(<EarlierStepDrafts step="plan" drafts={[]} />)).toBe("");
+  });
+});
+
+describe("the Review step's PR view with no GitHub connection (D17)", () => {
+  const openUrl = vi.fn(() => Promise.resolve());
+  const watching = (connectionId: string): WatchState => ({ connectionId, mode: "selected", needsChoice: false, catalogSize: null, watches: [] });
+  beforeEach(() => {
+    openUrl.mockClear();
+    useWorkspace.setState({ backend: { openUrl } as never, proposals: {}, watch: [] });
+  });
+  afterEach(() => {
+    useToasts.getState().clear();
+    usePullView.setState({ target: null, opener: null });
+    useWorkspace.setState({ backend: null, watch: [] });
+  });
+
+  it("says so in a note and opens the pull request on GitHub, rather than doing nothing", () => {
+    pullViewOrGithub("acme/storefront", 519);
+    expect(usePullView.getState().target).toBeNull();
+    expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toEqual([[NO_PULL_VIEW, "info"]]);
+    expect(NO_PULL_VIEW).toBe("Connect GitHub to see this pull request in Gossamr. Opened it on GitHub instead.");
+    expect(openUrl).toHaveBeenCalledWith("https://github.com/acme/storefront/pull/519");
+  });
+
+  it("with a code host watched, opens the in-app view and nothing else", () => {
+    useWorkspace.setState({ watch: [watching("github:ada")] });
+    pullViewOrGithub("acme/storefront", 519);
+    expect(usePullView.getState().target).toEqual({ connectionId: "github:ada", repo: "acme/storefront", number: 519, proposalId: null });
+    expect(useToasts.getState().toasts).toEqual([]);
+    expect(openUrl).not.toHaveBeenCalled();
   });
 });

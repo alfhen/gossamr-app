@@ -171,8 +171,10 @@ test("Pip home's 'Start a workstream…' opens the palette asking for the ticket
   await expect(pipHome(page).getByText("No workstreams yet.")).toBeVisible();
   await pipHome(page).getByRole("button", { name: "Start a workstream…" }).click();
   const dialog = page.getByRole("dialog", { name: "Command palette" });
-  await expect(dialog.getByRole("combobox")).toHaveValue("start a workstream on ");
-  await expect(dialog.getByRole("option", { name: /^Start a workstream on/ })).toHaveCount(0);
+  // It asks for the ticket alone, offering tickets before anything is typed.
+  await expect(dialog.getByRole("combobox")).toHaveValue("");
+  await expect(dialog.getByRole("combobox")).toHaveAttribute("placeholder", /type a ticket key or words/);
+  await expect(dialog.getByRole("option", { name: /^Start a workstream on/ }).first()).toBeVisible();
   await page.keyboard.type("CA-401");
   const option = dialog.getByRole("option", { name: /^Start a workstream on CA-401/ });
   await expect(option).toBeVisible();
@@ -209,7 +211,7 @@ test("Needs you: Pip's investigation draft waits in the tray and on its row, goe
 
   await askPip(page, "investigate this");
   await settled(page);
-  const item = needsYouTray(page).getByRole("button", { name: /^CA-401 · Start Investigate · / });
+  const item = needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · Start Investigate · / });
   await expect(item).toHaveCount(1);
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
 
@@ -233,7 +235,7 @@ test("Needs you: holding the workstream adds 'Held by you', its item goes to Res
   await agentsSettled(page, true);
   await homeWorkstream(page);
   const row = workstreamRow(page, "CA-401");
-  const held = needsYouTray(page).getByRole("button", { name: "CA-401 · Held by you" });
+  const held = needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · Held by you$/ });
   await expect(held).toHaveCount(0);
 
   await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
@@ -258,8 +260,8 @@ test("Needs you from the board: the rail's Pip home popover lists the same items
   await settled(page);
   await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
   const onHome = await needsYouTray(page).locator("[data-needs-you-item]").allTextContents();
-  expect(onHome.some((t) => t.startsWith("CA-401 · Start Investigate"))).toBe(true);
-  expect(onHome).toContain("CA-401 · Held by you");
+  expect(onHome.some((t) => t.startsWith("CA-401 · Welcome flow refresh · Start Investigate"))).toBe(true);
+  expect(onHome).toContain("CA-401 · Welcome flow refresh · Held by you");
 
   // Back on the board, the Pip home button counts them, and its menu shows the same list.
   await page.getByRole("button", { name: "All projects" }).click();
@@ -286,7 +288,7 @@ test("Needs you from the board: the rail's Pip home popover lists the same items
   await expect(popover).toHaveCount(0);
 
   await button.click({ button: "right" });
-  await popover.getByRole("button", { name: /^CA-401 · Start Investigate/ }).click();
+  await popover.getByRole("button", { name: /^CA-401 · .+ · Start Investigate/ }).click();
   await expect(popover).toHaveCount(0);
   await expect(pipHome(page)).toBeVisible();
   await expect(workstreamRow(page, "CA-401")).toHaveAttribute("aria-selected", "true");
@@ -402,16 +404,16 @@ test("a review opened with Enter on its card starts with one click on Start, or 
     await expect(card).toBeFocused();
   };
   await refocus();
-  // From the keyboard, then one click: the card's hint goes only once the click is over, so Start doesn't move under it.
+  // From the keyboard, then one click: the review takes the keyboard as it opens, and Start is pressed once.
   const review = await inlineStart(page, card, "keyboard", refocus);
   const start = review.getByRole("button", { name: "Start agent" });
   await expect(start).toBeEnabled();
-  await expect(card.locator(':scope > p[role="status"]')).toBeVisible();
+  await expect(review).toBeFocused();
   await start.click();
   await expect.poll(async () => (await mockRuns(page)).length).toBe(1);
   await expect(review).toHaveCount(0);
 
-  // A second draft: Enter opens its review and the focus stays on the card, where Cmd/Ctrl+Enter starts it.
+  // A second draft: Enter opens its review with the keyboard in it, where Enter starts nothing and Cmd/Ctrl+Enter starts it.
   await askPip(page, "investigate this");
   await settled(page);
   const next = homeConversationRegion(page).locator('article[data-draft][data-state="pending"]').last();
@@ -420,7 +422,9 @@ test("a review opened with Enter on its card starts with one click on Start, or 
   await page.keyboard.press("Enter");
   const second = next.getByRole("group", { name: "Review and start" });
   await expect(second.getByRole("button", { name: "Start agent" })).toBeEnabled();
-  await expect(next).toBeFocused();
+  await expect(second).toBeFocused();
+  await page.keyboard.press("Enter");
+  expect(await mockRuns(page)).toHaveLength(1);
   await page.keyboard.press("ControlOrMeta+Enter");
   await expect.poll(async () => (await mockRuns(page)).length).toBe(2);
 });
@@ -430,11 +434,11 @@ test("a wake turn is compact, names its run as a button that opens it on the rai
   await agentsSettled(page, true);
   await homeWorkstream(page);
   const footer = homeConversationRegion(page).locator("[data-composer-footer]");
-  await expect(footer).toHaveText("No agents working · nothing needs you");
+  await expect(footer).toHaveText("Nothing running · nothing needs you");
 
   await askPip(page, "Investigate CA-401");
   await settled(page);
-  await expect(footer).toHaveText("No agents working · 1 needs you");
+  await expect(footer).toHaveText("Nothing running · 1 needs you");
   const card = homeConversationRegion(page).getByRole("article", { name: "Start an agent: CA-401" }).last();
   const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -445,7 +449,7 @@ test("a wake turn is compact, names its run as a button that opens it on the rai
   }
   await card.getByRole("group", { name: "Review and start" }).getByRole("button", { name: "Start agent" }).click();
   // Waiting its turn is not working yet: the footer says queued.
-  await expect(footer).toHaveText("No agents working · 1 queued · nothing needs you");
+  await expect(footer).toHaveText("Nothing running · 1 queued · nothing needs you");
 
   const turns = homeConversationRegion(page).locator("[data-turn-kind]");
   const before = await turns.count();
@@ -453,7 +457,7 @@ test("a wake turn is compact, names its run as a button that opens it on the rai
   // Launching and working: the rail and the footer follow; the conversation doesn't.
   await advanceRuns(page, 2, r1.id);
   await expect(stepChip(page, "investigate").locator("[data-step-state]")).toHaveText("Working");
-  await expect(footer).toHaveText("1 agent working · nothing needs you");
+  await expect(footer).toHaveText("1 running · nothing needs you");
   await expect(turns).toHaveCount(before);
 
   await advanceRuns(page, 1, r1.id);
@@ -463,7 +467,7 @@ test("a wake turn is compact, names its run as a button that opens it on the rai
   await expect(wake.locator(".bg-ws-accent")).toHaveCount(0);
   // Triage starts by the rule, queued until it launches; the footer counts it.
   await expect(stepChip(page, "triage").locator("[data-step-auto]")).toBeVisible();
-  await expect(footer).toHaveText(/^No agents working · 1 queued · /);
+  await expect(footer).toHaveText(/^Nothing running · 1 queued · /);
 
   await wake.getByRole("button", { name: "run R1" }).click();
   const railCard = stepChip(page, "investigate").locator(`article[data-run-id="${r1.id}"]`);
