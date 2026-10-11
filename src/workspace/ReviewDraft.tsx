@@ -165,8 +165,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
   const base = useRef(review);
   /** The draft changed under the person's unsaved edit, which the card then merged in (`followDraft`). */
   const [followed, setFollowed] = useState(false);
-  /** Open PR view is saving the person's edit; and why that save was refused. */
-  const [saving, setSaving] = useState(false);
+  /** Why Open PR view's save of the person's edit was refused. */
   const [saveError, setSaveError] = useState<string | null>(null);
   // Pip may revise the draft while the card is open, and a sent edit comes back from the backend: follow it, and once the
   // person has typed, merge it with what they typed rather than keep a list the draft no longer has.
@@ -214,12 +213,14 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
   const kept = comments.filter((c) => !c.dropped).map(({ path, line, side, body }) => ({ path, line, side, body }));
   const problem = edit ? reviewEditProblem(review, { summary, comments: kept }) : null;
   const canPost = !!access?.canPost;
+  // Open PR view is saving the person's edit. A ref, set at once, so a second click in the same tick can't save and open twice.
+  const savingNow = useRef(false);
   const pullView = () => {
     // Not disabled while it saves: a disabled button would drop the focus the view gives back on closing.
-    if (saving) return;
+    if (savingNow.current) return;
+    savingNow.current = true;
     const backend = useWorkspace.getState().backend;
     setSaveError(null);
-    setSaving(true);
     editThenPullView(p, backend ? edit : null, {
       saveEdit: (id, e) => backend!.proposalsEdit(id, e),
       // What the backend now holds is what the card shows: it is no longer an unsent edit.
@@ -227,7 +228,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
       open: pullViewOf(p),
     })
       .catch((e) => setSaveError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setSaving(false));
+      .finally(() => (savingNow.current = false));
   };
   const hint = `review-markdown-${p.id}`;
   const change = (i: number, next: Partial<Held>) => {

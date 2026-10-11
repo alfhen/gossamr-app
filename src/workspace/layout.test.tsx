@@ -9,7 +9,7 @@ import { Header, ProjectMenu, ViewSegment } from "./Header";
 import { HOLD_ALL_NOTE, Rail, RailButton, RailTip } from "./Rail";
 import { COMPOSER_CLEAR, ToastHost, toastPlacement } from "./ToastHost";
 import { useToasts, LIFETIME_MS, MAX_QUEUED, STALE_MS } from "./toasts";
-import { MORE_BUTTON, tabWindow } from "./TabBar";
+import { MORE_BUTTON, sameWindow, tabWindow } from "./TabBar";
 import { canvasRoom } from "./Workspace";
 import { RowBadges } from "./ListView";
 import { useAgentsFlag } from "./agentsFlag";
@@ -236,6 +236,8 @@ describe("nothing covers anything", () => {
     expect(tabWindow(spans, room, 0, 1)).toEqual({ start: 1, end: 1, offset: 202, width: 120, squeeze: 120 });
     // A tab that fits is never squeezed.
     expect(tabWindow(spans, 2 * MORE_BUTTON + 250, 0, 1).squeeze).toBeUndefined();
+    // A tab that grows past the room at the same width must still be squeezed: the strip doesn't keep the old window.
+    expect(sameWindow({ start: 1, end: 1, offset: 202, width: 120 }, { start: 1, end: 1, offset: 202, width: 120, squeeze: 120 })).toBe(false);
   });
 
   it("gives a narrow row's badges as named icons with tooltips, none of them dropped", () => {

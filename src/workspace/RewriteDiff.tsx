@@ -126,7 +126,7 @@ function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
 
 /** One line of a diff; a removed or added line paired with its other version marks the words that changed, or says only spacing did. */
 function Line({ row: r, pair }: { row: Exclude<DiffRow, { kind: "gap" }>; pair: string | null }) {
-  const words = r.kind !== "same" && pair !== null ? diffWords(r.kind === "del" ? r.text : pair, r.kind === "del" ? pair : r.text) : null;
+  const words = useMemo(() => (r.kind !== "same" && pair !== null ? diffWords(r.kind === "del" ? r.text : pair, r.kind === "del" ? pair : r.text) : null), [r.kind, r.text, pair]);
   return (
     <div data-line={r.kind} className={`flex gap-2 px-2 py-px ${TONE[r.kind]}`}>
       <span aria-hidden className="w-3 shrink-0 select-none text-center">
