@@ -230,6 +230,14 @@ describe("nothing covers anything", () => {
     expect(tabWindow([], 100, 0, -1)).toEqual({ start: 0, end: 0, offset: 0 });
   });
 
+  it("squeezes the one tab shown, rather than cutting off its close button, when even it is wider than the room", () => {
+    const spans = [0, 1, 2].map((i) => ({ left: i * 202, size: 200 }));
+    const room = 2 * MORE_BUTTON + 120;
+    expect(tabWindow(spans, room, 0, 1)).toEqual({ start: 1, end: 1, offset: 202, width: 120, squeeze: 120 });
+    // A tab that fits is never squeezed.
+    expect(tabWindow(spans, 2 * MORE_BUTTON + 250, 0, 1).squeeze).toBeUndefined();
+  });
+
   it("gives a narrow row's badges as named icons with tooltips, none of them dropped", () => {
     const all = { needsMe: true, blocked: true, draft: { id: "d1", to: "Done" }, moreDrafts: 2 } as const;
     const full = renderToStaticMarkup(<RowBadges {...all} compact={false} />);
