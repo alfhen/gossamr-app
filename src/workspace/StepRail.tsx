@@ -1,7 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { itemKey } from "../lib/filter";
 import { inWorkstreamPane } from "../lib/proposals";
-import type { CodeChange, Proposal, ReviewView, Run, WorkstreamEvent, WorkstreamView } from "../types";
+import type {
+  CodeChange,
+  Proposal,
+  ReviewView,
+  Run,
+  WorkstreamEvent,
+  WorkstreamView,
+} from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { RunLabel } from "./AgentCard";
 import { TONE } from "./AgentParts";
@@ -10,7 +23,18 @@ import { Btn } from "./AgentSheet";
 import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
-import { batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
+import {
+  batchable,
+  batchToApprove,
+  freezeBatch,
+  nextStep,
+  retiredStepDrafts,
+  stepChips,
+  stepDrafts,
+  type BatchSnapshot,
+  type StepChip,
+  type StepGroup,
+} from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
 import { openPullView, usePullView } from "./pullViewStore";
@@ -26,19 +50,34 @@ const NO_CHANGES: Readonly<Record<string, CodeChange | null>> = {};
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** "Approved 2.", or "Approved 1. Failed: Comment on CA-401: …" naming each draft that didn't go through. */
-export async function approveBatch(drafts: readonly Proposal[], approve: (id: string) => Promise<{ error?: string | null }>): Promise<{ text: string; failed: boolean }> {
+export async function approveBatch(
+  drafts: readonly Proposal[],
+  approve: (id: string) => Promise<{ error?: string | null }>,
+): Promise<{ text: string; failed: boolean }> {
   const titles = new Map(drafts.map((p) => [p.id, draftTitle(p)]));
   // A refusal that throws is a failure of that one draft; the rest still go.
   const done = await approveEach(
     drafts.map((p) => p.id),
     (id) => approve(id).catch((e: unknown) => ({ error: messageOf(e) })),
   );
-  if (!done.failed.length) return { text: `Approved ${done.ok}.`, failed: false };
-  return { text: `Approved ${done.ok}. Failed: ${done.failed.map((f) => `${titles.get(f.id)}: ${f.error}`).join("; ")}`, failed: true };
+  if (!done.failed.length)
+    return { text: `Approved ${done.ok}.`, failed: false };
+  return {
+    text: `Approved ${done.ok}. Failed: ${done.failed.map((f) => `${titles.get(f.id)}: ${f.error}`).join("; ")}`,
+    failed: true,
+  };
 }
 
 /** Asks before approving a step's drafts together; Esc keeps them as they are. */
-export function BatchConfirm({ count, onConfirm, onCancel }: { count: number; onConfirm(): void; onCancel(): void }) {
+export function BatchConfirm({
+  count,
+  onConfirm,
+  onCancel,
+}: {
+  count: number;
+  onConfirm(): void;
+  onCancel(): void;
+}) {
   return (
     <div
       role="group"
@@ -46,14 +85,26 @@ export function BatchConfirm({ count, onConfirm, onCancel }: { count: number; on
       data-esc-local
       className="flex flex-wrap items-center gap-2 rounded-lg border border-ws-sep2 bg-ws-win px-2.5 py-2 text-sm"
       onKeyDown={(ev: KeyboardEvent<HTMLDivElement>) => {
-        if (ev.key === "Escape") (ev.stopPropagation(), ev.preventDefault(), onCancel());
+        if (ev.key === "Escape")
+          (ev.stopPropagation(), ev.preventDefault(), onCancel());
       }}
     >
-      <span className="text-ws-ink2">Approve all {count}? Each is written to Jira as its card shows it.</span>
-      <Btn tone="primary" autoFocus onClick={onConfirm} className="px-2 py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
+      <span className="text-ws-ink2">
+        Approve all {count}? Each is written to Jira as its card shows it.
+      </span>
+      <Btn
+        tone="primary"
+        autoFocus
+        onClick={onConfirm}
+        className="px-2 py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+      >
         Yes, approve {count}
       </Btn>
-      <Btn tone="ghost" onClick={onCancel} className="px-2 py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
+      <Btn
+        tone="ghost"
+        onClick={onCancel}
+        className="px-2 py-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+      >
         Cancel
       </Btn>
     </div>
@@ -61,27 +112,52 @@ export function BatchConfirm({ count, onConfirm, onCancel }: { count: number; on
 }
 
 /** Said when a draft a confirm covered was decided or revised before Yes: nothing goes. */
-export const BATCH_CHANGED = "These drafts changed while you were deciding, so nothing was approved. Look again.";
+export const BATCH_CHANGED =
+  "These drafts changed while you were deciding, so nothing was approved. Look again.";
 
 /**
  * Approves what a confirm covered (`frozen`) out of the step's drafts now, as `batchToApprove` picks them: never a
  * description rewrite or a run, never one that came in after the confirm opened.
  */
-export async function confirmBatch(frozen: BatchSnapshot, drafts: readonly Proposal[], approve: (id: string) => Promise<{ error?: string | null }>): Promise<{ text: string; failed: boolean }> {
+export async function confirmBatch(
+  frozen: BatchSnapshot,
+  drafts: readonly Proposal[],
+  approve: (id: string) => Promise<{ error?: string | null }>,
+): Promise<{ text: string; failed: boolean }> {
   try {
     const picked = batchToApprove(frozen, drafts);
-    return picked ? await approveBatch(picked, approve) : { text: BATCH_CHANGED, failed: true };
+    return picked
+      ? await approveBatch(picked, approve)
+      : { text: BATCH_CHANGED, failed: true };
   } catch (e) {
     // Nothing above should throw, but if it does the person is told rather than left with no outcome.
-    return { text: `Couldn't approve these drafts: ${messageOf(e)}`, failed: true };
+    return {
+      text: `Couldn't approve these drafts: ${messageOf(e)}`,
+      failed: true,
+    };
   }
 }
 
 /** A step's drafts, each as its card in the conversation, with "Approve these N" over two or more that may go together. */
-export function StepDrafts({ step, drafts, approve, initialConfirming = false }: { step: StepGroup; drafts: readonly Proposal[]; approve(id: string): Promise<{ error?: string | null }>; initialConfirming?: boolean }) {
+export function StepDrafts({
+  step,
+  drafts,
+  approve,
+  initialConfirming = false,
+}: {
+  step: StepGroup;
+  drafts: readonly Proposal[];
+  approve(id: string): Promise<{ error?: string | null }>;
+  initialConfirming?: boolean;
+}) {
   /** The drafts the open confirm covers, fixed when it opened; null while it is closed. */
-  const [frozen, setFrozen] = useState<BatchSnapshot | null>(() => (initialConfirming ? freezeBatch(drafts) : null));
-  const [outcome, setOutcome] = useState<{ text: string; failed: boolean } | null>(null);
+  const [frozen, setFrozen] = useState<BatchSnapshot | null>(() =>
+    initialConfirming ? freezeBatch(drafts) : null,
+  );
+  const [outcome, setOutcome] = useState<{
+    text: string;
+    failed: boolean;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const ask = useRef<HTMLButtonElement>(null);
   const said = useRef<HTMLParagraphElement>(null);
@@ -91,7 +167,8 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
   useEffect(() => {
     if (!outcome || !refocus.current) return;
     refocus.current = false;
-    if (!document.activeElement || document.activeElement === document.body) said.current?.focus();
+    if (!document.activeElement || document.activeElement === document.body)
+      said.current?.focus();
   }, [outcome]);
   const cancel = () => {
     setFrozen(null);
@@ -104,7 +181,10 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
     try {
       setOutcome(await confirmBatch(covered, drafts, approve));
     } catch (e) {
-      setOutcome({ text: `Couldn't approve these drafts: ${messageOf(e)}`, failed: true });
+      setOutcome({
+        text: `Couldn't approve these drafts: ${messageOf(e)}`,
+        failed: true,
+      });
     } finally {
       setBusy(false);
     }
@@ -113,7 +193,11 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
   return (
     <div data-step-drafts={step} className="grid gap-2">
       {frozen ? (
-        <BatchConfirm count={frozen.length} onConfirm={() => void confirm(frozen)} onCancel={cancel} />
+        <BatchConfirm
+          count={frozen.length}
+          onConfirm={() => void confirm(frozen)}
+          onCancel={cancel}
+        />
       ) : (
         together.length >= 2 && (
           <div>
@@ -127,9 +211,16 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
               {busy ? "Approving…" : `Approve these ${together.length}`}
             </button>
           </div>
-        ))}
+        )
+      )}
       {outcome && (
-        <p ref={said} role="status" tabIndex={-1} data-batch-outcome className={`m-0 rounded text-sm [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${outcome.failed ? "text-ws-blocked" : "text-ws-ink2"}`}>
+        <p
+          ref={said}
+          role="status"
+          tabIndex={-1}
+          data-batch-outcome
+          className={`m-0 rounded text-sm [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${outcome.failed ? "text-ws-blocked" : "text-ws-ink2"}`}
+        >
           {outcome.text}
         </p>
       )}
@@ -141,7 +232,15 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
 }
 
 /** A step's retired drafts, collapsed to "N earlier drafts"; open, each says what it was and why it went. */
-export function EarlierStepDrafts({ step, drafts, initialOpen = false }: { step: StepGroup; drafts: readonly Proposal[]; initialOpen?: boolean }) {
+export function EarlierStepDrafts({
+  step,
+  drafts,
+  initialOpen = false,
+}: {
+  step: StepGroup;
+  drafts: readonly Proposal[];
+  initialOpen?: boolean;
+}) {
   const [open, setOpen] = useState(initialOpen);
   if (!drafts.length) return null;
   const list = `earlier-drafts-${step}`;
@@ -159,10 +258,19 @@ export function EarlierStepDrafts({ step, drafts, initialOpen = false }: { step:
         </span>
         {drafts.length} earlier draft{drafts.length === 1 ? "" : "s"}
       </button>
-      <ul id={list} hidden={!open} className="m-0 grid list-none gap-0.5 p-0 pl-4 text-ws-ink3">
+      <ul
+        id={list}
+        hidden={!open}
+        className="m-0 grid list-none gap-0.5 p-0 pl-4 text-ws-ink3"
+      >
         {drafts.map((p) => (
-          <li key={p.id} data-earlier-draft={p.id} className="[overflow-wrap:anywhere]">
-            <span className="font-semibold text-ws-ink2">{draftTitle(p)}</span> · {p.state.type === "retired" ? p.state.reason : ""}
+          <li
+            key={p.id}
+            data-earlier-draft={p.id}
+            className="[overflow-wrap:anywhere]"
+          >
+            <span className="font-semibold text-ws-ink2">{draftTitle(p)}</span>{" "}
+            · {p.state.type === "retired" ? p.state.reason : ""}
           </li>
         ))}
       </ul>
@@ -174,21 +282,38 @@ export function EarlierStepDrafts({ step, drafts, initialOpen = false }: { step:
  * What the chip says of a run a rule started: a queued one waits for Resume while the workstream is held, and for Manage
  * while it is in Advise, since nothing starts on its own then; otherwise it was started automatically.
  */
-export function autoNote(chip: StepChip, ws: Pick<WorkstreamView["workstream"], "heldReason" | "mode">): string | null {
+export function autoNote(
+  chip: StepChip,
+  ws: Pick<WorkstreamView["workstream"], "heldReason" | "mode">,
+): string | null {
   if (!chip.auto) return null;
-  if (chip.newest?.state === "queued" && ws.heldReason) return "waits for Resume";
-  if (chip.newest?.state === "queued" && ws.mode === "advise") return "waits for Manage";
+  if (chip.newest?.state === "queued" && ws.heldReason)
+    return "waits for Resume";
+  if (chip.newest?.state === "queued" && ws.mode === "advise")
+    return "waits for Manage";
   return "started automatically";
 }
 
 /** The chip's one line: the newest run's label and state, then what else is worth a glance. */
-function ChipLine({ chip, label, ws }: { chip: StepChip; label?: string; ws: WorkstreamView["workstream"] }) {
+function ChipLine({
+  chip,
+  label,
+  ws,
+}: {
+  chip: StepChip;
+  label?: string;
+  ws: WorkstreamView["workstream"];
+}) {
   const auto = autoNote(chip, ws);
-  if (!chip.newest) return <span className="text-xs text-ws-ink3">Not started</span>;
+  if (!chip.newest)
+    return <span className="text-xs text-ws-ink3">Not started</span>;
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-ws-ink3">
       <RunLabel label={label} />
-      <span data-step-state className={`font-semibold ${chip.tone ? TONE[chip.tone].text : ""}`}>
+      <span
+        data-step-state
+        className={`font-semibold ${chip.tone ? TONE[chip.tone].text : ""}`}
+      >
         {chip.state}
       </span>
       {chip.runs.length > 1 && <span>· {chip.runs.length} runs</span>}
@@ -200,10 +325,21 @@ function ChipLine({ chip, label, ws }: { chip: StepChip; label?: string; ws: Wor
 }
 
 /** The build's pull request under the Build chip, as a link to it on GitHub: "Draft PR #301 CA-401: …". */
-function StepPullRequest({ pr, onOpen }: { pr: NonNullable<StepChip["pr"]>; onOpen(url: string): void }) {
+function StepPullRequest({
+  pr,
+  onOpen,
+}: {
+  pr: NonNullable<StepChip["pr"]>;
+  onOpen(url: string): void;
+}) {
   return (
-    <p data-step-pr className="m-0 flex min-w-0 items-baseline gap-1.5 px-2.5 text-xs text-ws-ink3">
-      <span className="shrink-0">{pr.state === "draft" ? "Draft PR" : "PR"}</span>
+    <p
+      data-step-pr
+      className="m-0 flex min-w-0 items-baseline gap-1.5 px-2.5 text-xs text-ws-ink3"
+    >
+      <span className="shrink-0">
+        {pr.state === "draft" ? "Draft PR" : "PR"}
+      </span>
       <button
         type="button"
         onClick={() => onOpen(pr.url)}
@@ -217,7 +353,8 @@ function StepPullRequest({ pr, onOpen }: { pr: NonNullable<StepChip["pr"]>; onOp
 }
 
 /** What the rail's PR view says when no GitHub connection is known to read the pull request from. */
-export const NO_PULL_VIEW = "Connect GitHub to see this pull request in Gossamr. Opened it on GitHub instead.";
+export const NO_PULL_VIEW =
+  "Connect GitHub to see this pull request in Gossamr. Opened it on GitHub instead.";
 
 /**
  * The Review step's PR view: the pull request in Gossamr when a GitHub connection can read it; else, said so in a note, its
@@ -232,9 +369,20 @@ export function pullViewOrGithub(repo: string, number: number) {
 }
 
 /** The pull request the Review step read, with a button that shows it in Gossamr. */
-function ReviewedPull({ repo, number, onOpen }: { repo: string; number: number; onOpen(): void }) {
+function ReviewedPull({
+  repo,
+  number,
+  onOpen,
+}: {
+  repo: string;
+  number: number;
+  onOpen(): void;
+}) {
   return (
-    <p data-step-review-pr className="m-0 flex min-w-0 items-baseline gap-1.5 px-2.5 text-xs text-ws-ink3">
+    <p
+      data-step-review-pr
+      className="m-0 flex min-w-0 items-baseline gap-1.5 px-2.5 text-xs text-ws-ink3"
+    >
       <span className="min-w-0 truncate">
         Reviewed {repo}#{number}
       </span>
@@ -278,8 +426,14 @@ export interface StepRailViewProps {
  * The step rail of a workstream: Pip's notes, the workstream's controls, Pip's own drafts, then a chip for each step of
  * the chain. A chip opens to its runs and the drafts about it, where a draft is decided as in the conversation.
  */
-/** Whether the plan's description update waits among the Plan step's drafts: approving it is how the plan is approved. */
-export const planWaits = (drafts: readonly Proposal[] | undefined) => !!drafts?.some((p) => p.intent.type === "rewrite" && p.state.type === "pending");
+/** Whether the plan's description update waits among the Plan step's drafts: approving it is how the plan is approved. A rewrite of the title alone isn't one. */
+export const planWaits = (drafts: readonly Proposal[] | undefined) =>
+  !!drafts?.some(
+    (p) =>
+      p.intent.type === "rewrite" &&
+      !!p.intent.body &&
+      p.state.type === "pending",
+  );
 
 /**
  * Under the Plan step while its description update waits: that approving it approves the plan and lets Build start, and
@@ -287,11 +441,20 @@ export const planWaits = (drafts: readonly Proposal[] | undefined) => !!drafts?.
  */
 export function PlanApproval({ questions }: { questions: readonly string[] }) {
   return (
-    <div data-plan-approve className="grid gap-1 rounded-md border border-ws-pip/40 bg-ws-pip-soft px-2.5 py-1.5 text-sm text-ws-ink2">
+    <div
+      data-plan-approve
+      className="grid gap-1 rounded-md border border-ws-pip/40 bg-ws-pip-soft px-2.5 py-1.5 text-sm text-ws-ink2"
+    >
       <p className="m-0 font-semibold text-ws-pip">{APPROVE_PLAN}</p>
       {questions.length > 0 && (
         <>
-          <p className="m-0">The plan leaves {questions.length === 1 ? "an open question" : `${questions.length} open questions`} for you. Answer first if they change the plan:</p>
+          <p className="m-0">
+            The plan leaves{" "}
+            {questions.length === 1
+              ? "an open question"
+              : `${questions.length} open questions`}{" "}
+            for you. Answer first if they change the plan:
+          </p>
           <ul data-plan-questions className="m-0 grid list-disc gap-0.5 pl-4">
             {questions.map((q) => (
               <li key={q} className="[overflow-wrap:anywhere]">
@@ -305,16 +468,47 @@ export function PlanApproval({ questions }: { questions: readonly string[] }) {
   );
 }
 
-export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onPullView = pullViewOrGithub, initialOpen = [], reveal = null }: StepRailViewProps) {
-  const [open, setOpen] = useState<ReadonlySet<StepGroup>>(() => new Set(initialOpen));
-  const chips = useMemo(() => stepChips([...runs], events, verdicts, proposals, { now, waitingForPr: view.waitingForPr, changes }), [runs, events, verdicts, proposals, now, view.waitingForPr, changes]);
+export function StepRailView({
+  view,
+  runs,
+  events,
+  verdicts,
+  changes = NO_CHANGES,
+  proposals,
+  now,
+  titleOf,
+  onOpenRun,
+  approve,
+  onOpenPr = (url) => void openOnGithub(url),
+  onPullView = pullViewOrGithub,
+  initialOpen = [],
+  reveal = null,
+}: StepRailViewProps) {
+  const [open, setOpen] = useState<ReadonlySet<StepGroup>>(
+    () => new Set(initialOpen),
+  );
+  const chips = useMemo(
+    () =>
+      stepChips([...runs], events, verdicts, proposals, {
+        now,
+        waitingForPr: view.waitingForPr,
+        changes,
+      }),
+    [runs, events, verdicts, proposals, now, view.waitingForPr, changes],
+  );
   const next = nextStep(chips);
-  const revealIn = reveal ? (runs.find((r) => r.id === reveal)?.spec.kind ?? null) : null;
+  const revealIn = reveal
+    ? (runs.find((r) => r.id === reveal)?.spec.kind ?? null)
+    : null;
   useEffect(() => {
-    if (revealIn) setOpen((was) => (was.has(revealIn) ? was : new Set([...was, revealIn])));
+    if (revealIn)
+      setOpen((was) => (was.has(revealIn) ? was : new Set([...was, revealIn])));
   }, [reveal, revealIn]);
   const drafts = useMemo(() => stepDrafts(proposals, runs), [proposals, runs]);
-  const retired = useMemo(() => retiredStepDrafts(proposals, runs), [proposals, runs]);
+  const retired = useMemo(
+    () => retiredStepDrafts(proposals, runs),
+    [proposals, runs],
+  );
   const labels = useMemo(() => new Map(view.labels), [view.labels]);
   const id = view.workstream.id;
   const toggle = (step: StepGroup) =>
@@ -327,17 +521,24 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
     <div data-step-rail={id} className="grid content-start gap-3">
       <section aria-label="Pip's notes" className="grid gap-1">
         <h3 className="m-0 text-sm font-semibold">Pip&apos;s notes</h3>
-        <p className="selectable m-0 text-sm whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{view.workstream.notes?.trim() || "No notes yet."}</p>
+        <p className="selectable m-0 text-sm whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">
+          {view.workstream.notes?.trim() || "No notes yet."}
+        </p>
       </section>
       <WorkstreamControls key={id} view={view} />
       {(drafts.pip || retired.pip) && (
         <section aria-label="Pip's drafts" className="grid gap-1.5">
-          <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Pip&apos;s drafts</h3>
+          <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+            Pip&apos;s drafts
+          </h3>
           <StepDrafts step="pip" drafts={drafts.pip ?? []} approve={approve} />
           <EarlierStepDrafts step="pip" drafts={retired.pip ?? []} />
         </section>
       )}
-      <ol aria-label="Steps of the workstream" className="m-0 grid list-none gap-1.5 p-0">
+      <ol
+        aria-label="Steps of the workstream"
+        className="m-0 grid list-none gap-1.5 p-0"
+      >
         {chips.map((chip) => {
           const shown = open.has(chip.kind);
           const panel = `step-${id}-${chip.kind}`;
@@ -345,9 +546,20 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
           // A step nothing has reached yet, and that isn't next, is one quiet line: the route shows without six boxes alike.
           const quiet = !isNext && !chip.newest && chip.needsYou === 0;
           // The next step has an accent bar down its left edge, not a full outline, so it never reads as the keyboard's focus ring.
-          const box = isNext ? `border-ws-sep shadow-[inset_3px_0_0_var(--color-ws-pip)] ${shown ? "bg-ws-win" : ""}` : quiet ? `border-transparent py-0.5 ${shown ? "bg-ws-win" : ""}` : shown ? "border-ws-sep2 bg-ws-win" : "border-ws-sep";
+          const box = isNext
+            ? `border-ws-sep shadow-[inset_3px_0_0_var(--color-ws-pip)] ${shown ? "bg-ws-win" : ""}`
+            : quiet
+              ? `border-transparent py-0.5 ${shown ? "bg-ws-win" : ""}`
+              : shown
+                ? "border-ws-sep2 bg-ws-win"
+                : "border-ws-sep";
           return (
-            <li key={chip.kind} data-step={chip.kind} data-state={chip.newest?.state ?? "none"} className="grid gap-1.5">
+            <li
+              key={chip.kind}
+              data-step={chip.kind}
+              data-state={chip.newest?.state ?? "none"}
+              className="grid gap-1.5"
+            >
               <button
                 type="button"
                 data-step-chip={chip.kind}
@@ -362,31 +574,81 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                   <span aria-hidden className="text-xs text-ws-ink3">
                     {shown ? "▾" : "▸"}
                   </span>
-                  <b className={`text-sm ${quiet ? "font-normal text-ws-ink2" : "font-semibold"}`}>{chip.label}</b>
+                  <b
+                    className={`text-sm ${quiet ? "font-normal text-ws-ink2" : "font-semibold"}`}
+                  >
+                    {chip.label}
+                  </b>
                   {isNext && (
-                    <span data-step-next-tag className="rounded-full bg-ws-pip-soft px-1.5 text-[10px] leading-4 font-semibold text-ws-pip">
+                    <span
+                      data-step-next-tag
+                      className="rounded-full bg-ws-pip-soft px-1.5 text-[10px] leading-4 font-semibold text-ws-pip"
+                    >
                       Next
                     </span>
                   )}
                   {chip.needsYou > 0 && (
-                    <span data-step-needs-you className="ml-auto shrink-0 rounded-full bg-ws-pip px-1.5 text-[10px] leading-4 font-semibold text-ws-on-pip">
-                      {chip.needsYou} {chip.needsYou === 1 ? "needs" : "need"} you
+                    <span
+                      data-step-needs-you
+                      className="ml-auto shrink-0 rounded-full bg-ws-pip px-1.5 text-[10px] leading-4 font-semibold text-ws-on-pip"
+                    >
+                      {chip.needsYou} {chip.needsYou === 1 ? "needs" : "need"}{" "}
+                      you
                     </span>
                   )}
                 </span>
-                {!quiet && <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} ws={view.workstream} />}
+                {!quiet && (
+                  <ChipLine
+                    chip={chip}
+                    label={chip.newest ? labels.get(chip.newest.id) : undefined}
+                    ws={view.workstream}
+                  />
+                )}
               </button>
-              {chip.kind === "plan" && planWaits(drafts.plan) && <PlanApproval questions={planOpenQuestions(chip.newest?.result)} />}
+              {chip.kind === "plan" && planWaits(drafts.plan) && (
+                <PlanApproval
+                  questions={planOpenQuestions(chip.newest?.result)}
+                />
+              )}
               {chip.pr && <StepPullRequest pr={chip.pr} onOpen={onOpenPr} />}
-              {chip.kind === "review" && chip.newest?.spec.pr && <ReviewedPull repo={chip.newest.spec.repo} number={chip.newest.spec.pr} onOpen={() => onPullView(chip.newest!.spec.repo, chip.newest!.spec.pr!)} />}
+              {chip.kind === "review" && chip.newest?.spec.pr && (
+                <ReviewedPull
+                  repo={chip.newest.spec.repo}
+                  number={chip.newest.spec.pr}
+                  onOpen={() =>
+                    onPullView(chip.newest!.spec.repo, chip.newest!.spec.pr!)
+                  }
+                />
+              )}
               {shown && (
                 <div id={panel} className="grid gap-1.5 pl-2">
                   {chip.runs.map((run) => (
-                    <PipRunCard key={run.id} run={run} now={now} ticketTitle={titleOf(run)} label={labels.get(run.id)} onOpen={() => onOpenRun(run)} focusable />
+                    <PipRunCard
+                      key={run.id}
+                      run={run}
+                      now={now}
+                      ticketTitle={titleOf(run)}
+                      label={labels.get(run.id)}
+                      onOpen={() => onOpenRun(run)}
+                      focusable
+                    />
                   ))}
-                  <StepDrafts step={chip.kind} drafts={drafts[chip.kind] ?? []} approve={approve} />
-                  <EarlierStepDrafts step={chip.kind} drafts={retired[chip.kind] ?? []} />
-                  {!chip.runs.length && !drafts[chip.kind] && !retired[chip.kind] && <p className="m-0 text-sm text-ws-ink3">Nothing here yet.</p>}
+                  <StepDrafts
+                    step={chip.kind}
+                    drafts={drafts[chip.kind] ?? []}
+                    approve={approve}
+                  />
+                  <EarlierStepDrafts
+                    step={chip.kind}
+                    drafts={retired[chip.kind] ?? []}
+                  />
+                  {!chip.runs.length &&
+                    !drafts[chip.kind] &&
+                    !retired[chip.kind] && (
+                      <p className="m-0 text-sm text-ws-ink3">
+                        Nothing here yet.
+                      </p>
+                    )}
                 </div>
               )}
             </li>
@@ -403,15 +665,31 @@ const NO_EVENTS: readonly WorkstreamEvent[] = [];
 export function StepRail({ view }: { view: WorkstreamView }) {
   const id = view.workstream.id;
   const allRuns = useRuns((s) => s.runs);
-  const runs = useMemo(() => allRuns.filter((r) => view.runs.includes(r.id) || r.spec.workstream === id), [allRuns, view.runs, id]);
+  const runs = useMemo(
+    () =>
+      allRuns.filter(
+        (r) => view.runs.includes(r.id) || r.spec.workstream === id,
+      ),
+    [allRuns, view.runs, id],
+  );
   const events = useWorkstreams((s) => s.events[id]) ?? NO_EVENTS;
   const verdicts = useReviewVerdicts(runs);
   // Asked again as soon as the workstream stops waiting for its build's pull request: a sync found it.
   const changes = useBuildChanges(runs, view.waitingForPr ?? null);
   const allProposals = useWorkspace((s) => s.proposals);
-  const proposals = useMemo(() => Object.values(allProposals).filter((p) => inWorkstreamPane(p, view.workstream)), [allProposals, view.workstream]);
+  const proposals = useMemo(
+    () =>
+      Object.values(allProposals).filter((p) =>
+        inWorkstreamPane(p, view.workstream),
+      ),
+    [allProposals, view.workstream],
+  );
   const items = useWorkspace((s) => s.items);
-  const reveal = usePipHome((s) => (s.focusTarget?.type === "run" && s.focusTarget.where === "rail" ? s.focusTarget.id : null));
+  const reveal = usePipHome((s) =>
+    s.focusTarget?.type === "run" && s.focusTarget.where === "rail"
+      ? s.focusTarget.id
+      : null,
+  );
   useEffect(() => {
     void useWorkstreams.getState().loadEvents(id);
   }, [id]);
@@ -424,7 +702,9 @@ export function StepRail({ view }: { view: WorkstreamView }) {
       changes={changes}
       proposals={proposals}
       now={Date.now()}
-      titleOf={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
+      titleOf={(run) =>
+        run.item ? (items[itemKey(run.item)]?.title ?? null) : null
+      }
       onOpenRun={(run) => useRuns.getState().openRun(run.id, { stay: true })}
       approve={(draft) => useWorkspace.getState().approve(draft)}
       reveal={reveal}

@@ -19,7 +19,13 @@ import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
 import { PullView } from "./PullView";
-import { FilterNote, LAUNCHER_CLEAR, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
+import {
+  FilterNote,
+  LAUNCHER_CLEAR,
+  PipLauncher,
+  SelectionAsk,
+  usePipView,
+} from "./PipExtras";
 import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
 import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
@@ -29,7 +35,13 @@ import { togglePip, useWorkstreams } from "./workstreamsStore";
 import { PipHome } from "./PipHome";
 import { Rail } from "./Rail";
 import { isHoldAllKey, isPipHomeKey } from "./commands";
-import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./pipHomeKeys";
+import {
+  TABBABLE,
+  nextRegion,
+  regionStep,
+  wrapTab,
+  type WorkspaceRegion,
+} from "./pipHomeKeys";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
 import { ConnectGithubDialog } from "./ConnectGithub";
@@ -46,9 +58,14 @@ function Canvas() {
   const tab = useActiveTab();
   const items = useItemsByFilter(tab.filter);
   const wantsCode = usesCode(tab.filter);
-  const candidates = useItemsByFilter(wantsCode ? withoutCode(tab.filter) : NOTHING);
+  const candidates = useItemsByFilter(
+    wantsCode ? withoutCode(tab.filter) : NOTHING,
+  );
   useEffect(() => {
-    if (wantsCode) useDev.getState().ensure(candidates.slice(0, FILTER_LIMIT).map((i) => i.item));
+    if (wantsCode)
+      useDev
+        .getState()
+        .ensure(candidates.slice(0, FILTER_LIMIT).map((i) => i.item));
   }, [wantsCode, candidates]);
   const anything = useWorkspace((s) => Object.keys(s.items).length > 0);
   const connection = useWorkspace((s) => workConnections(s.connections)[0]);
@@ -56,10 +73,20 @@ function Canvas() {
   const filterOrder = useMemo(() => items.map((i) => itemKey(i.item)), [items]);
   useStepKeys(filterOrder);
   if (!anything) {
-    const waiting = !connection || connection.syncing || (!connection.lastSyncAt && !connection.error);
+    const waiting =
+      !connection ||
+      connection.syncing ||
+      (!connection.lastSyncAt && !connection.error);
     return (
-      <div role="status" className="grid h-full place-items-center p-10 text-center text-ws-ink3">
-        <p>{waiting ? "Fetching your tickets for the first time. This can take a minute." : "No tickets are cached yet. Use Sync now in Settings to try again."}</p>
+      <div
+        role="status"
+        className="grid h-full place-items-center p-10 text-center text-ws-ink3"
+      >
+        <p>
+          {waiting
+            ? "Fetching your tickets for the first time. This can take a minute."
+            : "No tickets are cached yet. Use Sync now in Settings to try again."}
+        </p>
       </div>
     );
   }
@@ -68,17 +95,27 @@ function Canvas() {
 
 /** What the main area shows on `route`. Agents and Pip home are there only while Agents are on; until the route moves on, nothing is. */
 export function mainScreen(route: Route, agentsEnabled: boolean): Route | null {
-  return (route === "agents" || route === "pip") && !agentsEnabled ? null : route;
+  return (route === "agents" || route === "pip") && !agentsEnabled
+    ? null
+    : route;
 }
 
 /** Whether the docked Pip pane is in the window: as the person left it, except on Pip home, whose own conversation takes its place. */
-export const showsPipPane = (route: Route, agentsEnabled: boolean, pipOpen: boolean) => pipOpen && mainScreen(route, agentsEnabled) !== "pip";
+export const showsPipPane = (
+  route: Route,
+  agentsEnabled: boolean,
+  pipOpen: boolean,
+) => pipOpen && mainScreen(route, agentsEnabled) !== "pip";
 
 /**
  * How much of the main area's right side the workspace leaves to the open peek, so the canvas reflows beside it
  * instead of running under it. Other screens keep the peek as an overlay; an expanded peek covers everything anyway.
  */
-export const canvasRoom = (route: Route, peekOpen: boolean, peekWidth: number) => (route === "workspace" && peekOpen ? peekWidth : 0);
+export const canvasRoom = (
+  route: Route,
+  peekOpen: boolean,
+  peekWidth: number,
+) => (route === "workspace" && peekOpen ? peekWidth : 0);
 
 /** Pip home is where the app opens only once per load, so coming back to the workspace later doesn't send the person away again. */
 let landed = false;
@@ -93,12 +130,14 @@ function useStartOnPipHome(ready: boolean) {
   useEffect(() => {
     if (!ready || !known || landed) return;
     landed = true;
-    if (enabled && usePrefs.getState().startOnPipHome) useTabs.getState().setRoute("pip");
+    if (enabled && usePrefs.getState().startOnPipHome)
+      useTabs.getState().setRoute("pip");
   }, [ready, known, enabled]);
 }
 
 /** Whether the keyboard is in a field other than Pip's composer. */
-const typingElsewhere = (el: Element | null) => isTypingTarget(el) && el?.id !== PIP_INPUT_ID;
+const typingElsewhere = (el: Element | null) =>
+  isTypingTarget(el) && el?.id !== PIP_INPUT_ID;
 
 /** The region of the workspace layout `el` is in: the peek, Pip's pane, or the main area around them. */
 function regionOf(el: Element | null): WorkspaceRegion {
@@ -107,18 +146,37 @@ function regionOf(el: Element | null): WorkspaceRegion {
   return "main";
 }
 
-/** Puts the keyboard in `region`: the peek's title, Pip's input, or the main area, from where Tab goes on into it. */
+/** Where the keyboard goes in `region`: the peek's title, or the peek itself when it has none (a draft's peek, whose title is a field), Pip's input, or the main area. */
+export function regionTarget(
+  region: WorkspaceRegion,
+  doc: Pick<Document, "querySelector" | "getElementById">,
+): HTMLElement | null {
+  if (region === "peek")
+    return (
+      doc.querySelector<HTMLElement>("#peek-sheet h2") ??
+      doc.getElementById("peek-sheet")
+    );
+  return doc.getElementById(region === "pip" ? PIP_INPUT_ID : MAIN_ID);
+}
+
+/** Puts the keyboard in `region`, from where Tab goes on into it. */
 function enterRegion(region: WorkspaceRegion) {
-  const el =
-    region === "peek" ? document.querySelector<HTMLElement>("#peek-sheet h2") : region === "pip" ? document.getElementById(PIP_INPUT_ID) : document.getElementById(MAIN_ID);
+  const el = regionTarget(region, document);
   if (!el) return;
-  if (!el.hasAttribute("tabindex") && region === "peek") el.setAttribute("tabindex", "-1");
+  if (!el.hasAttribute("tabindex") && region === "peek")
+    el.setAttribute("tabindex", "-1");
   el.focus({ preventScroll: region !== "peek" });
 }
 
 /** The page's Tab stops in order: enabled, shown and not taken out of the order. */
 const tabStops = () =>
-  Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && !el.closest("[hidden], [inert]") && el.getClientRects().length > 0);
+  Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter(
+    (el) =>
+      el.tabIndex >= 0 &&
+      !(el as HTMLButtonElement).disabled &&
+      !el.closest("[hidden], [inert]") &&
+      el.getClientRects().length > 0,
+  );
 
 /**
  * The workspace layout's regions by keyboard, as Pip home has its columns (D29): F6 and Shift+F6 step between the main
@@ -128,11 +186,33 @@ const tabStops = () =>
 function useRegionKeys() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.defaultPrevented || useTabs.getState().route === "pip" || usePrefs.getState().paletteOpen || document.querySelector('[aria-modal="true"]')) return;
-      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      const present: WorkspaceRegion[] = ["main", ...(document.getElementById("peek-sheet") ? (["peek"] as const) : []), ...(document.querySelector("aside[data-pip-root]") ? (["pip"] as const) : [])];
+      if (
+        ev.defaultPrevented ||
+        useTabs.getState().route === "pip" ||
+        usePrefs.getState().paletteOpen ||
+        document.querySelector('[aria-modal="true"]')
+      )
+        return;
+      const active =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      const present: WorkspaceRegion[] = [
+        "main",
+        ...(document.getElementById("peek-sheet") ? (["peek"] as const) : []),
+        ...(document.querySelector("aside[data-pip-root]")
+          ? (["pip"] as const)
+          : []),
+      ];
       // A KeyboardEvent's fields are getters on its prototype, so they are named, not spread.
-      const by = regionStep({ key: ev.key, metaKey: ev.metaKey, ctrlKey: ev.ctrlKey, altKey: ev.altKey, shiftKey: ev.shiftKey, target: active });
+      const by = regionStep({
+        key: ev.key,
+        metaKey: ev.metaKey,
+        ctrlKey: ev.ctrlKey,
+        altKey: ev.altKey,
+        shiftKey: ev.shiftKey,
+        target: active,
+      });
       if (by) {
         ev.preventDefault();
         return enterRegion(nextRegion(present, regionOf(active), by));
@@ -151,14 +231,23 @@ function useGlobalKeys(agentsEnabled: boolean) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       // Not while typing: the shortcut must never fire from Pip's input or any other field.
-      if (agentsEnabled && isHoldAllKey(ev) && !isTypingTarget(document.activeElement)) {
+      if (
+        agentsEnabled &&
+        isHoldAllKey(ev) &&
+        !isTypingTarget(document.activeElement)
+      ) {
         ev.preventDefault();
         void useWorkstreams.getState().holdAll();
         return;
       }
       // Like Cmd/Ctrl+J it works from Pip's composer; never from another field (closing a peek would lose an unsaved
       // comment) or behind the open palette.
-      if (agentsEnabled && isPipHomeKey(ev) && !typingElsewhere(document.activeElement) && !usePrefs.getState().paletteOpen) {
+      if (
+        agentsEnabled &&
+        isPipHomeKey(ev) &&
+        !typingElsewhere(document.activeElement) &&
+        !usePrefs.getState().paletteOpen
+      ) {
         ev.preventDefault();
         useTabs.getState().setRoute("pip");
         return;
@@ -190,8 +279,12 @@ export function Workspace({ backend }: { backend: Backend }) {
   const paletteOpen = usePrefs((s) => s.paletteOpen);
   const setPipOpen = usePrefs((s) => s.setPipOpen);
   const choice = useWorkspace((s) => s.watch.find((w) => w.needsChoice));
-  const choiceConnection = useWorkspace((s) => s.connections.find((c) => c.id === choice?.connectionId));
-  const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
+  const choiceConnection = useWorkspace((s) =>
+    s.connections.find((c) => c.id === choice?.connectionId),
+  );
+  const hasGithub = useWorkspace((s) =>
+    s.connections.some((c) => c.kind === "github"),
+  );
   const agentsEnabled = useAgentsEnabled();
   useGlobalKeys(agentsEnabled);
   useRegionKeys();
@@ -223,7 +316,10 @@ export function Workspace({ backend }: { backend: Backend }) {
   }, [theme]);
 
   useEffect(() => {
-    useWorkspace.getState().init(backend).catch(() => {});
+    useWorkspace
+      .getState()
+      .init(backend)
+      .catch(() => {});
     useActivity.getState().init(backend);
     useDev.getState().init(backend);
     return () => {
@@ -240,7 +336,8 @@ export function Workspace({ backend }: { backend: Backend }) {
   useEffect(() => {
     if (!agentsEnabled) {
       const now = useTabs.getState().route;
-      if (now === "agents" || now === "pip") useTabs.getState().setRoute("workspace");
+      if (now === "agents" || now === "pip")
+        useTabs.getState().setRoute("workspace");
       return;
     }
     useRuns.getState().init(backend);
@@ -266,21 +363,43 @@ export function Workspace({ backend }: { backend: Backend }) {
       <div className="grid h-full place-items-center bg-ws-win px-6">
         <div className="grid max-w-[480px] justify-items-center gap-3 text-center">
           <p className="selectable m-0 text-ws-blocked">{error}</p>
-          <button type="button" className="rounded-md bg-ws-pip px-3.5 py-1.5 font-semibold text-ws-on-pip" onClick={() => useWorkspace.getState().init(backend).catch(() => {})}>
+          <button
+            type="button"
+            className="rounded-md bg-ws-pip px-3.5 py-1.5 font-semibold text-ws-on-pip"
+            onClick={() =>
+              useWorkspace
+                .getState()
+                .init(backend)
+                .catch(() => {})
+            }
+          >
             Try again
           </button>
         </div>
       </div>
     );
   }
-  if (status !== "ready") return <div className="grid h-full place-items-center bg-ws-win text-ws-ink3">Loading…</div>;
+  if (status !== "ready")
+    return (
+      <div className="grid h-full place-items-center bg-ws-win text-ws-ink3">
+        Loading…
+      </div>
+    );
 
   if (choice) {
     return (
       <>
         <div className="ws-root relative h-full overflow-clip bg-ws-win text-ws-ink">
-          <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-10" />
-          <ChooseWatch key={choice.connectionId} backend={backend} state={choice} connection={choiceConnection} />
+          <div
+            data-tauri-drag-region
+            className="absolute inset-x-0 top-0 h-10"
+          />
+          <ChooseWatch
+            key={choice.connectionId}
+            backend={backend}
+            state={choice}
+            connection={choiceConnection}
+          />
         </div>
         <ToastHost />
       </>
@@ -291,16 +410,31 @@ export function Workspace({ backend }: { backend: Backend }) {
     <TicketLinksContext.Provider value={workspaceTicketLinks}>
       {/* Clipped, not hidden: an overflow-hidden root is still a scroll container, and a scrollIntoView or focus() deep inside
           (a card in the peek, say) would scroll the whole app up under the person. A clipped one never scrolls. */}
-      <div className="ws-root grid h-full overflow-clip bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `58px minmax(0,1fr)${paneShown ? ` ${pipWidth}px` : ""}` }}>
+      <div
+        className="ws-root grid h-full overflow-clip bg-ws-win text-ws-ink"
+        style={{
+          gridTemplateColumns: `58px minmax(0,1fr)${paneShown ? ` ${pipWidth}px` : ""}`,
+        }}
+      >
         <Rail />
         <main
           id={MAIN_ID}
           tabIndex={-1}
-          style={{ ["--ws-launcher-clear" as string]: `${launcherShown ? LAUNCHER_CLEAR : 0}px` }}
+          style={{
+            ["--ws-launcher-clear" as string]: `${launcherShown ? LAUNCHER_CLEAR : 0}px`,
+          }}
           className="relative flex min-h-0 min-w-0 flex-col outline-none"
         >
-          <div data-canvas-column style={{ paddingRight: room }} className="flex min-h-0 min-w-0 flex-1 flex-col motion-safe:transition-[padding] motion-safe:duration-200">
-            {route === "workspace" ? <Header /> : <div data-tauri-drag-region className="h-[34px] shrink-0" />}
+          <div
+            data-canvas-column
+            style={{ paddingRight: room }}
+            className="flex min-h-0 min-w-0 flex-1 flex-col motion-safe:transition-[padding] motion-safe:duration-200"
+          >
+            {route === "workspace" ? (
+              <Header />
+            ) : (
+              <div data-tauri-drag-region className="h-[34px] shrink-0" />
+            )}
             {route === "workspace" && <FilterBar />}
             {route === "workspace" && <FilterNote />}
             <div className="min-h-0 flex-1">
@@ -315,7 +449,12 @@ export function Workspace({ backend }: { backend: Backend }) {
           {agentsEnabled && <AgentSheets />}
           {launcherShown && <PipLauncher />}
           <SelectionAsk />
-          <ToastHost placement={toastPlacement(screen, screen === "pip" ? (peekOpen ? peekWidth : 0) : room)} />
+          <ToastHost
+            placement={toastPlacement(
+              screen,
+              screen === "pip" ? (peekOpen ? peekWidth : 0) : room,
+            )}
+          />
         </main>
         {paneShown && <PipPane onClose={() => setPipOpen(false)} />}
         {paletteOpen && <Palette />}

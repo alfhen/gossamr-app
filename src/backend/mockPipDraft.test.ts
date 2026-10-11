@@ -1,74 +1,172 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "./mock";
-import { mockAsk, mockPipEvents, openQuestions, scriptPip, suggestedAnswer } from "./mockPip";
+import {
+  mockAsk,
+  mockPipEvents,
+  openQuestions,
+  scriptPip,
+  suggestedAnswer,
+} from "./mockPip";
 import { eventLine } from "./mockSupervisor";
 import { mockPipTurns } from "./mockPipTurns";
 import { itemRef } from "./mockConnector";
-import { BUILD_NEEDS_PLAN, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, REVIEW_REPORTS, WAITING_FOR_PR_HINT } from "./mockRunKinds";
+import {
+  BUILD_NEEDS_PLAN,
+  REVIEW_NEEDS_BUILD,
+  REVIEW_NO_FOCUS,
+  REVIEW_REPORTS,
+  WAITING_FOR_PR_HINT,
+} from "./mockRunKinds";
 import type { AskRequest } from "./claude";
 import { planOpenQuestions } from "../workspace/agentsLogic";
-import type { Intent, Proposal, Run, RunKind, RunSpec, ScreenContext } from "../types";
+import type {
+  Intent,
+  Proposal,
+  Run,
+  RunKind,
+  RunSpec,
+  ScreenContext,
+} from "../types";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 
 describe("mock Pip reading a draft in full", () => {
-  const b = new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
+  const b = new MockBackend({
+    runs: { seed: "kinds", epoch: NOW, planDescription: true },
+  });
   const run = b.runs.list().find((r) => r.spec.kind === "plan")!;
   const drafts = b.proposals.list();
-  const context = { screen: "board", item: run.item } as unknown as ScreenContext;
+  const context = {
+    screen: "board",
+    item: run.item,
+  } as unknown as ScreenContext;
 
   it("answers 'can you see its draft description update' with the draft's open questions", () => {
-    const reply = scriptPip("can you see its draft description update?", context, [], [], NOW, drafts);
+    const reply = scriptPip(
+      "can you see its draft description update?",
+      context,
+      [],
+      [],
+      NOW,
+      drafts,
+    );
     expect(reply.steps).toEqual(["Read the draft in full"]);
     expect(reply.text).toContain("Do the Klaviyo flows read the subject lines");
-    expect(reply.text).toContain("Should the second email keep its two-day delay");
+    expect(reply.text).toContain(
+      "Should the second email keep its two-day delay",
+    );
     expect(reply.text).not.toMatch(/can't see|truncated/);
     expect(reply.discussed).toBeTruthy();
   });
 
   it("asks which draft when none is on screen", () => {
-    const reply = scriptPip("can you see the draft?", { screen: "board", item: null } as unknown as ScreenContext, [], [], NOW, drafts);
+    const reply = scriptPip(
+      "can you see the draft?",
+      { screen: "board", item: null } as unknown as ScreenContext,
+      [],
+      [],
+      NOW,
+      drafts,
+    );
     expect(reply.text).toContain("Which draft");
   });
 
   it("finds an open-questions section under a heading or after a lead-in and stops at the next heading", () => {
-    expect(openQuestions("a\n\n## Open questions\n\n- one\n- two\n\n## Next\n\nx")).toBe("- one\n- two");
-    expect(openQuestions("a\n\nOpen questions: who owns it?")).toBe("who owns it?");
+    expect(
+      openQuestions("a\n\n## Open questions\n\n- one\n- two\n\n## Next\n\nx"),
+    ).toBe("- one\n- two");
+    expect(openQuestions("a\n\nOpen questions: who owns it?")).toBe(
+      "who owns it?",
+    );
     expect(openQuestions("nothing here")).toBeNull();
   });
 });
 
 describe("open questions in a run result", () => {
   it("stop before the For Jira section", () => {
-    expect(openQuestions("## Open questions for a person\n\n- one?\n\nFor Jira:\nsummary")).toBe("- one?");
+    expect(
+      openQuestions(
+        "## Open questions for a person\n\n- one?\n\nFor Jira:\nsummary",
+      ),
+    ).toBe("- one?");
   });
 });
 
 describe("mock Pip woken by a finished plan (N6)", () => {
   it("says approving the description update lets Build start, and lists the questions the plan left open", () => {
-    const b = new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
+    const b = new MockBackend({
+      runs: { seed: "kinds", epoch: NOW, planDescription: true },
+    });
     const plan = b.runs.list().find((r) => r.spec.kind === "plan")!;
-    const reply = scriptPip(`[Event] run ${plan.id} (plan) Done; 1 draft`, { screen: "board", item: null } as unknown as ScreenContext, [], [plan], NOW).text;
-    expect(reply).toContain("Approve the description update to let Build start.");
+    const reply = scriptPip(
+      `[Event] run ${plan.id} (plan) Done; 1 draft`,
+      { screen: "board", item: null } as unknown as ScreenContext,
+      [],
+      [plan],
+      NOW,
+    ).text;
+    expect(reply).toContain(
+      "Approve the description update to let Build start.",
+    );
     const questions = planOpenQuestions(plan.result);
     expect(questions.length).toBeGreaterThan(0);
     for (const q of questions) expect(reply).toContain(`- ${q}`);
     // Any other finished step says nothing of the sort.
     const other = { ...plan, spec: { ...plan.spec, kind: "triage" as const } };
-    expect(scriptPip(`[Event] run ${plan.id} (triage) Done`, { screen: "board", item: null } as unknown as ScreenContext, [], [other], NOW).text).not.toContain("Approve the description update");
+    expect(
+      scriptPip(
+        `[Event] run ${plan.id} (triage) Done`,
+        { screen: "board", item: null } as unknown as ScreenContext,
+        [],
+        [other],
+        NOW,
+      ).text,
+    ).not.toContain("Approve the description update");
+    // Nor a plan that left no draft: there is no description update to approve.
+    expect(
+      scriptPip(
+        `[Event] run ${plan.id} (plan) Done`,
+        { screen: "board", item: null } as unknown as ScreenContext,
+        [],
+        [plan],
+        NOW,
+      ).text,
+    ).not.toContain("Approve the description update");
   });
 });
 
 describe("mock Pip drafting the next step of a workstream, as propose_run does", () => {
-  const rustRuns = readFileSync(new URL("../../src-tauri/src/agent/runs.rs", import.meta.url), "utf8");
-  const rustPip = readFileSync(new URL("../../src-tauri/src/inbox/pip_runs.rs", import.meta.url), "utf8");
-  const rustPlan = readFileSync(new URL("../../src-tauri/src/inbox/plan_description.rs", import.meta.url), "utf8");
+  const rustRuns = readFileSync(
+    new URL("../../src-tauri/src/agent/runs.rs", import.meta.url),
+    "utf8",
+  );
+  const rustPip = readFileSync(
+    new URL("../../src-tauri/src/inbox/pip_runs.rs", import.meta.url),
+    "utf8",
+  );
+  const rustPlan = readFileSync(
+    new URL("../../src-tauri/src/inbox/plan_description.rs", import.meta.url),
+    "utf8",
+  );
   const CA401 = itemRef("CA-401");
-  const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront" };
-  const base: RunSpec = { kind: "investigate", ...storefront, base: "main", name: "x", instruction: "", focus: null, focusFromRun: null, ticketBlock: null };
+  const storefront = {
+    repo: "acme/storefront",
+    clonePath: "/Users/sample/Code/storefront",
+  };
+  const base: RunSpec = {
+    kind: "investigate",
+    ...storefront,
+    base: "main",
+    name: "x",
+    instruction: "",
+    focus: null,
+    focusFromRun: null,
+    ticketBlock: null,
+  };
   let n = 0;
-  const specOf = (p: Proposal) => (p.intent.type === "startRun" ? p.intent.spec : null)!;
+  const specOf = (p: Proposal) =>
+    (p.intent.type === "startRun" ? p.intent.spec : null)!;
 
   /** A backend with a workstream on CA-401 and Pip's conversation in it as request `ws-chain`, and General as `general-chain`. */
   async function workstream() {
@@ -80,31 +178,72 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
   }
 
   /** A run of `kind` the person started on `item` in workstream `ws`, stepped to done unless `steps` says otherwise. */
-  async function ran(b: MockBackend, kind: RunKind, ws: string | null, steps = 3, item = CA401) {
-    const made = await b.runsDraft({ ...base, kind, name: `ca-401-${kind}-${(n++).toString(16).padStart(4, "0")}`, ...(ws ? { workstream: ws } : {}) }, item);
-    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+  async function ran(
+    b: MockBackend,
+    kind: RunKind,
+    ws: string | null,
+    steps = 3,
+    item = CA401,
+  ) {
+    const made = await b.runsDraft(
+      {
+        ...base,
+        kind,
+        name: `ca-401-${kind}-${(n++).toString(16).padStart(4, "0")}`,
+        ...(ws ? { workstream: ws } : {}),
+      },
+      item,
+    );
+    const run = await b.runsApprove(
+      made.id,
+      (await b.runsReview(made.id)).digest,
+    );
     for (let i = 0; i < steps; i++) b.runs.advance(run.id);
     return b.runs.get(run.id)!;
   }
 
   /** The person adds `extra` to the plan run's description draft and approves it. */
   async function settle(b: MockBackend, plan: Run, extra: string) {
-    const draft = b.proposals.list({ states: ["pending"] }).find((p) => p.origin.type === "run" && p.origin.runId === plan.id && p.intent.type === "rewrite")!;
-    if (draft.intent.type !== "rewrite" || !draft.intent.body) throw new Error("a description draft");
-    await b.proposalsEdit(draft.id, { type: "rewrite", body: `${draft.intent.body.toText}\n\n${extra}` });
+    const draft = b.proposals
+      .list({ states: ["pending"] })
+      .find(
+        (p) =>
+          p.origin.type === "run" &&
+          p.origin.runId === plan.id &&
+          p.intent.type === "rewrite",
+      )!;
+    if (draft.intent.type !== "rewrite" || !draft.intent.body)
+      throw new Error("a description draft");
+    await b.proposalsEdit(draft.id, {
+      type: "rewrite",
+      body: `${draft.intent.body.toText}\n\n${extra}`,
+    });
     await b.proposalsApprove(draft.id);
     return draft;
   }
 
   it("refuses with the backend's words", () => {
-    const constant = (name: string) => new RegExp(`const ${name}: &str = "([^"]*)";`).exec(rustRuns)?.[1];
+    const constant = (name: string) =>
+      new RegExp(`const ${name}: &str = "([^"]*)";`).exec(rustRuns)?.[1];
     expect(constant("BUILD_NEEDS_PLAN")).toBe(BUILD_NEEDS_PLAN);
     expect(constant("REVIEW_NEEDS_BUILD")).toBe(REVIEW_NEEDS_BUILD);
     expect(constant("REVIEW_NO_FOCUS")).toBe(REVIEW_NO_FOCUS);
-    const rustWorkstreams = readFileSync(new URL("../../src-tauri/src/inbox/workstreams.rs", import.meta.url), "utf8");
-    expect(new RegExp(`const WAITING_FOR_PR_HINT: &str = "([^"]*)";`).exec(rustWorkstreams)?.[1]).toBe(WAITING_FOR_PR_HINT);
-    const rustDrafts = readFileSync(new URL("../../src-tauri/src/inbox/drafts.rs", import.meta.url), "utf8");
-    expect(/const REVIEW_REPORTS: &str = "([^"]*)";/.exec(rustDrafts)?.[1]).toBe(REVIEW_REPORTS);
+    const rustWorkstreams = readFileSync(
+      new URL("../../src-tauri/src/inbox/workstreams.rs", import.meta.url),
+      "utf8",
+    );
+    expect(
+      new RegExp(`const WAITING_FOR_PR_HINT: &str = "([^"]*)";`).exec(
+        rustWorkstreams,
+      )?.[1],
+    ).toBe(WAITING_FOR_PR_HINT);
+    const rustDrafts = readFileSync(
+      new URL("../../src-tauri/src/inbox/drafts.rs", import.meta.url),
+      "utf8",
+    );
+    expect(
+      /const REVIEW_REPORTS: &str = "([^"]*)";/.exec(rustDrafts)?.[1],
+    ).toBe(REVIEW_REPORTS);
     for (const words of [
       "the person hasn't settled the plan yet: they approve or skip the Gossamr Plan draft first",
       "the plan of that run hasn't been put to the person on the ticket.",
@@ -128,16 +267,33 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
   it("drafts a build only from a plan the person approved or skipped, never one they weren't shown or Pip revised", async () => {
     const { b, ws } = await workstream();
     const plan = await ran(b, "plan", ws);
-    const draft = b.proposals.list({ states: ["pending"] }).find((p) => p.origin.type === "run" && p.origin.runId === plan.id && p.intent.type === "rewrite")!;
-    expect(() => b.proposals.pipRevise(draft.id, { description: "Pip's plan" }, ws)).toThrow("carries the Gossamr Plan a build follows");
+    const draft = b.proposals
+      .list({ states: ["pending"] })
+      .find(
+        (p) =>
+          p.origin.type === "run" &&
+          p.origin.runId === plan.id &&
+          p.intent.type === "rewrite",
+      )!;
+    expect(() =>
+      b.proposals.pipRevise(draft.id, { description: "Pip's plan" }, ws),
+    ).toThrow("carries the Gossamr Plan a build follows");
     // A draft Gossamr retired for a newer plan was never decided by the person.
     await ran(b, "plan", ws);
     expect(b.proposals.get(draft.id)?.state.type).toBe("retired");
-    await expect(b.pipRunDraft(CA401, "build", plan.id, null, "ws-chain")).rejects.toThrow("was retired (replaced by a newer plan) before the person decided on it");
+    await expect(
+      b.pipRunDraft(CA401, "build", plan.id, null, "ws-chain"),
+    ).rejects.toThrow(
+      "was retired (replaced by a newer plan) before the person decided on it",
+    );
     const skipped = await ran(b, "plan", ws);
-    const its = b.proposals.list({ states: ["pending"] }).find((p) => p.origin.type === "run" && p.origin.runId === skipped.id)!;
+    const its = b.proposals
+      .list({ states: ["pending"] })
+      .find((p) => p.origin.type === "run" && p.origin.runId === skipped.id)!;
     await b.proposalsSkip(its.id);
-    expect(specOf(await b.pipRunDraft(CA401, "build", skipped.id, null, "ws-chain"))).toMatchObject({ planFromRun: skipped.id, planApproved: false });
+    expect(
+      specOf(await b.pipRunDraft(CA401, "build", skipped.id, null, "ws-chain")),
+    ).toMatchObject({ planFromRun: skipped.id, planApproved: false });
   });
 
   it("drafts a triage and a plan carrying the workstream's investigation's findings", async () => {
@@ -145,68 +301,177 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
     const investigation = await ran(b, "investigate", ws);
     const triage = await b.pipRunDraft(CA401, "triage", null, null, "ws-chain");
     expect(triage.createdBy).toBe("pip");
-    expect(specOf(triage)).toMatchObject({ kind: "triage", findingsFromRun: investigation.id, workstream: ws });
-    expect(specOf(triage).findings).toMatch(/^The consumer retries failed messages immediately/);
-    const plan = await b.pipRunDraft(CA401, "plan", investigation.id, null, "ws-chain");
-    expect(specOf(plan)).toMatchObject({ kind: "plan", findingsFromRun: investigation.id });
+    expect(specOf(triage)).toMatchObject({
+      kind: "triage",
+      findingsFromRun: investigation.id,
+      workstream: ws,
+    });
+    expect(specOf(triage).findings).toMatch(
+      /^The consumer retries failed messages immediately/,
+    );
+    const plan = await b.pipRunDraft(
+      CA401,
+      "plan",
+      investigation.id,
+      null,
+      "ws-chain",
+    );
+    expect(specOf(plan)).toMatchObject({
+      kind: "plan",
+      findingsFromRun: investigation.id,
+    });
     // In General nothing is taken from a workstream unless Pip names the run.
-    const loose = specOf(await b.pipRunDraft(CA401, "triage", null, null, "general-chain"));
-    expect([loose.findings ?? null, loose.findingsFromRun ?? null]).toEqual([null, null]);
+    const loose = specOf(
+      await b.pipRunDraft(CA401, "triage", null, null, "general-chain"),
+    );
+    expect([loose.findings ?? null, loose.findingsFromRun ?? null]).toEqual([
+      null,
+      null,
+    ]);
   });
 
   it("drafts a build only after a finished plan the person settled, with the edited plan and a draft pull request in a workstream", async () => {
     const { b, ws } = await workstream();
     const runs = () => b.runs.list().length;
-    await expect(b.pipRunDraft(CA401, "build", null, null, "ws-chain")).rejects.toThrow(BUILD_NEEDS_PLAN);
+    await expect(
+      b.pipRunDraft(CA401, "build", null, null, "ws-chain"),
+    ).rejects.toThrow(BUILD_NEEDS_PLAN);
     const working = await ran(b, "plan", ws, 2);
-    await expect(b.pipRunDraft(CA401, "build", working.id, null, "ws-chain")).rejects.toThrow("that plan run hasn't finished");
+    await expect(
+      b.pipRunDraft(CA401, "build", working.id, null, "ws-chain"),
+    ).rejects.toThrow("that plan run hasn't finished");
     b.runs.advance(working.id);
-    await expect(b.pipRunDraft(CA401, "build", working.id, null, "ws-chain")).rejects.toThrow("the person hasn't settled the plan yet: they approve or skip the Gossamr Plan draft first");
+    await expect(
+      b.pipRunDraft(CA401, "build", working.id, null, "ws-chain"),
+    ).rejects.toThrow(
+      "the person hasn't settled the plan yet: they approve or skip the Gossamr Plan draft first",
+    );
     await settle(b, working, "Marker: the person's line.");
     const investigation = await ran(b, "investigate", ws);
-    await expect(b.pipRunDraft(CA401, "build", investigation.id, null, "ws-chain")).rejects.toThrow(`A build can only follow a finished plan run; run ${investigation.id} is a investigate run.`);
-    await expect(b.pipRunDraft(CA401, "build", working.id, null, "general-chain")).rejects.toThrow(`run ${working.id} belongs to another workstream; ask in that workstream's conversation`);
+    await expect(
+      b.pipRunDraft(CA401, "build", investigation.id, null, "ws-chain"),
+    ).rejects.toThrow(
+      `A build can only follow a finished plan run; run ${investigation.id} is a investigate run.`,
+    );
+    await expect(
+      b.pipRunDraft(CA401, "build", working.id, null, "general-chain"),
+    ).rejects.toThrow(
+      `run ${working.id} belongs to another workstream; ask in that workstream's conversation`,
+    );
     const loose = await ran(b, "plan", null);
-    await expect(b.pipRunDraft(CA401, "build", loose.id, null, "ws-chain")).rejects.toThrow(`run ${loose.id} isn't part of this workstream; Pip can only follow a run of the workstream it is asked in`);
-    await expect(b.pipRunDraft(itemRef("CA-402"), "build", loose.id, null, "general-chain")).rejects.toThrow("that plan run is about another ticket");
+    await expect(
+      b.pipRunDraft(CA401, "build", loose.id, null, "ws-chain"),
+    ).rejects.toThrow(
+      `run ${loose.id} isn't part of this workstream; Pip can only follow a run of the workstream it is asked in`,
+    );
+    await expect(
+      b.pipRunDraft(
+        itemRef("CA-402"),
+        "build",
+        loose.id,
+        null,
+        "general-chain",
+      ),
+    ).rejects.toThrow("that plan run is about another ticket");
     const count = runs();
 
-    const build = await b.pipRunDraft(CA401, "build", working.id, "Keep it small", "ws-chain");
+    const build = await b.pipRunDraft(
+      CA401,
+      "build",
+      working.id,
+      "Keep it small",
+      "ws-chain",
+    );
     expect(build.createdBy).toBe("pip");
-    expect(build.origin).toEqual({ type: "chat", requestId: "ws-chain", workstream: ws });
-    expect(specOf(build)).toMatchObject({ kind: "build", planFromRun: working.id, planApproved: true, allowPush: true, focus: "Keep it small", focusFromRun: working.id, workstream: ws });
+    expect(build.origin).toEqual({
+      type: "chat",
+      requestId: "ws-chain",
+      workstream: ws,
+    });
+    expect(specOf(build)).toMatchObject({
+      kind: "build",
+      planFromRun: working.id,
+      planApproved: true,
+      allowPush: true,
+      focus: "Keep it small",
+      focusFromRun: working.id,
+      workstream: ws,
+    });
     expect(specOf(build).plan).toContain("Marker: the person's line.");
     const prompt = (await b.runsReview(build.id)).prompt;
     expect(prompt).toContain("gh pr create --draft");
     expect(prompt).toContain("Never mark the pull request ready");
-    await expect(b.pipRunDraft(CA401, "build", working.id, null, "ws-chain")).rejects.toThrow(`An identical draft is already open (proposal ${build.id})`);
-    await expect(b.proposalsEdit(build.id, { type: "run", allowPush: false })).rejects.toThrow("a workstream's build always publishes a draft pull request");
+    await expect(
+      b.pipRunDraft(CA401, "build", working.id, null, "ws-chain"),
+    ).rejects.toThrow(
+      `An identical draft is already open (proposal ${build.id})`,
+    );
+    await expect(
+      b.proposalsEdit(build.id, { type: "run", allowPush: false }),
+    ).rejects.toThrow(
+      "a workstream's build always publishes a draft pull request",
+    );
     expect(runs()).toBe(count);
 
     // Outside a workstream Pip's build doesn't push, as before.
-    const general = await b.pipRunDraft(CA401, "build", loose.id, null, "general-chain").catch(async (e: Error) => {
-      expect(e.message).toContain("hasn't settled the plan");
-      await settle(b, loose, "Another line.");
-      return b.pipRunDraft(CA401, "build", loose.id, null, "general-chain");
-    });
+    const general = await b
+      .pipRunDraft(CA401, "build", loose.id, null, "general-chain")
+      .catch(async (e: Error) => {
+        expect(e.message).toContain("hasn't settled the plan");
+        await settle(b, loose, "Another line.");
+        return b.pipRunDraft(CA401, "build", loose.id, null, "general-chain");
+      });
     expect(specOf(general)).toMatchObject({ allowPush: false });
   });
 
   it("drafts a review only of a finished build whose pull request was found, pinned to it, reporting and with no focus", async () => {
     const { b, ws } = await workstream();
-    await expect(b.pipRunDraft(CA401, "review", null, null, "ws-chain")).rejects.toThrow(REVIEW_NEEDS_BUILD);
+    await expect(
+      b.pipRunDraft(CA401, "review", null, null, "ws-chain"),
+    ).rejects.toThrow(REVIEW_NEEDS_BUILD);
     const unpublished = await ran(b, "build", ws);
-    await expect(b.pipRunDraft(CA401, "review", unpublished.id, null, "ws-chain")).rejects.toThrow("that build has no pull request in this repository yet");
-    await expect(b.pipRunDraft(CA401, "review", unpublished.id, "the tests", "ws-chain")).rejects.toThrow(REVIEW_NO_FOCUS);
+    await expect(
+      b.pipRunDraft(CA401, "review", unpublished.id, null, "ws-chain"),
+    ).rejects.toThrow("that build has no pull request in this repository yet");
+    await expect(
+      b.pipRunDraft(CA401, "review", unpublished.id, "the tests", "ws-chain"),
+    ).rejects.toThrow(REVIEW_NO_FOCUS);
 
-    const seeded = new MockBackend({ runs: { seed: "kinds" }, githubRepos: 14 });
-    mockPipTurns.begin("general", "general-review", "review it", { imageCount: 0 });
-    const build = seeded.runs.list().find((r) => r.spec.kind === "build" && r.state === "done" && r.item?.key === "CA-402")!;
-    const review = await seeded.pipRunDraft(build.item!, "review", build.id, null, "general-review");
+    const seeded = new MockBackend({
+      runs: { seed: "kinds" },
+      githubRepos: 14,
+    });
+    mockPipTurns.begin("general", "general-review", "review it", {
+      imageCount: 0,
+    });
+    const build = seeded.runs
+      .list()
+      .find(
+        (r) =>
+          r.spec.kind === "build" &&
+          r.state === "done" &&
+          r.item?.key === "CA-402",
+      )!;
+    const review = await seeded.pipRunDraft(
+      build.item!,
+      "review",
+      build.id,
+      null,
+      "general-review",
+    );
     expect(review.createdBy).toBe("pip");
-    expect(specOf(review)).toMatchObject({ kind: "review", pr: 218, buildFromRun: build.id, report: true, focus: null, allowPush: false });
+    expect(specOf(review)).toMatchObject({
+      kind: "review",
+      pr: 218,
+      buildFromRun: build.id,
+      report: true,
+      focus: null,
+      allowPush: false,
+    });
     expect(specOf(review).prSha).toBeTruthy();
-    expect((await seeded.runsReview(review.id)).prompt).toContain(`Review pull request #218 in acme/webshop at commit ${specOf(review).prSha}.`);
+    expect((await seeded.runsReview(review.id)).prompt).toContain(
+      `Review pull request #218 in acme/webshop at commit ${specOf(review).prSha}.`,
+    );
   });
 
   it("turns a refused draft into what Pip says, not a failed turn", async () => {
@@ -215,33 +480,102 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
     const stop = mockPipEvents.on((id, e) => {
       if (id === "ws-refused" && e.type === "text") said += e.text;
     });
-    await mockAsk({ requestId: "ws-refused", prompt: "build it", context: { screen: "board", item: CA401, selection: [] } as unknown as ScreenContext, conversation: `ws:${ws}` } as AskRequest, b, 0);
+    await mockAsk(
+      {
+        requestId: "ws-refused",
+        prompt: "build it",
+        context: {
+          screen: "board",
+          item: CA401,
+          selection: [],
+        } as unknown as ScreenContext,
+        conversation: `ws:${ws}`,
+      } as AskRequest,
+      b,
+      0,
+    );
     stop();
     expect(said).toBe(`I couldn't draft that: ${BUILD_NEEDS_PLAN}`);
-    expect(b.proposals.list().filter((p) => p.intent.type === "startRun")).toEqual([]);
-    expect(mockPipTurns.turns(`ws:${ws}`).find((t) => t.requestId === "ws-refused")).toMatchObject({ status: "done", error: null });
+    expect(
+      b.proposals.list().filter((p) => p.intent.type === "startRun"),
+    ).toEqual([]);
+    expect(
+      mockPipTurns.turns(`ws:${ws}`).find((t) => t.requestId === "ws-refused"),
+    ).toMatchObject({ status: "done", error: null });
   });
 
   it("says which ticket fields drifted when asked why a workstream is held", () => {
     const context = { screen: "board", item: null } as unknown as ScreenContext;
-    const ws = { id: "ws1", item: CA401, heldReason: "tripwire:basis_drift", drifted: ["summary", "description"] as const };
-    expect(scriptPip("Why is this held?", context, [], [], NOW, [], null, ws).text).toMatch(/^Held: the ticket's summary and description changed in Jira\./);
+    const ws = {
+      id: "ws1",
+      item: CA401,
+      heldReason: "tripwire:basis_drift",
+      drifted: ["summary", "description"] as const,
+    };
+    expect(
+      scriptPip("Why is this held?", context, [], [], NOW, [], null, ws).text,
+    ).toMatch(/^Held: the ticket's summary and description changed in Jira\./);
   });
 
   it("names the workstream's newest finished run of the kind before as the one to follow", () => {
     const ws = { id: "ws1", item: CA401 };
-    const run = (id: string, kind: RunKind, state: Run["state"], at: string) => ({ id, item: CA401, spec: { kind, workstream: "ws1" }, state, queuedAt: at, endedAt: state === "done" ? at : null }) as unknown as Run;
-    const runs = [run("p1", "plan", "done", "2026-09-30T10:00:00Z"), run("p2", "plan", "done", "2026-09-30T11:00:00Z"), run("i1", "investigate", "done", "2026-09-30T09:00:00Z")];
+    const run = (id: string, kind: RunKind, state: Run["state"], at: string) =>
+      ({
+        id,
+        item: CA401,
+        spec: { kind, workstream: "ws1" },
+        state,
+        queuedAt: at,
+        endedAt: state === "done" ? at : null,
+      }) as unknown as Run;
+    const runs = [
+      run("p1", "plan", "done", "2026-09-30T10:00:00Z"),
+      run("p2", "plan", "done", "2026-09-30T11:00:00Z"),
+      run("i1", "investigate", "done", "2026-09-30T09:00:00Z"),
+    ];
     const context = { screen: "board", item: null } as unknown as ScreenContext;
-    expect(scriptPip("build it", context, [], runs, NOW, [], null, ws).runDraft).toEqual({ item: CA401, kind: "build", fromRun: "p2", focus: null });
-    expect(scriptPip("triage this", context, [], runs, NOW, [], null, ws).runDraft).toMatchObject({ kind: "triage", fromRun: "i1" });
+    expect(
+      scriptPip("build it", context, [], runs, NOW, [], null, ws).runDraft,
+    ).toEqual({ item: CA401, kind: "build", fromRun: "p2", focus: null });
+    expect(
+      scriptPip("triage this", context, [], runs, NOW, [], null, ws).runDraft,
+    ).toMatchObject({ kind: "triage", fromRun: "i1" });
     // A question about a step drafts nothing.
-    expect(scriptPip("what did the triage find?", context, [], runs, NOW, [], null, ws).runDraft ?? null).toBeNull();
-    expect(scriptPip("plan this", context, [], runs, NOW, [], null, ws).runDraft).toMatchObject({ kind: "plan", fromRun: "i1" });
-    expect(scriptPip("review it", context, [], runs, NOW, [], null, ws).runDraft).toMatchObject({ kind: "review", fromRun: null });
+    expect(
+      scriptPip(
+        "what did the triage find?",
+        context,
+        [],
+        runs,
+        NOW,
+        [],
+        null,
+        ws,
+      ).runDraft ?? null,
+    ).toBeNull();
+    expect(
+      scriptPip("plan this", context, [], runs, NOW, [], null, ws).runDraft,
+    ).toMatchObject({ kind: "plan", fromRun: "i1" });
+    expect(
+      scriptPip("review it", context, [], runs, NOW, [], null, ws).runDraft,
+    ).toMatchObject({ kind: "review", fromRun: null });
     // A plan still working is named, so the backend says it hasn't finished.
-    expect(scriptPip("build it", context, [], [run("w1", "plan", "working", "2026-09-30T12:00:00Z")], NOW, [], null, ws).runDraft).toMatchObject({ fromRun: "w1" });
-    expect(scriptPip("build it", context, [], runs, NOW, [], null, null).runDraft ?? null).toBeNull();
+    expect(
+      scriptPip(
+        "build it",
+        context,
+        [],
+        [run("w1", "plan", "working", "2026-09-30T12:00:00Z")],
+        NOW,
+        [],
+        null,
+        ws,
+      ).runDraft,
+    ).toMatchObject({ fromRun: "w1" });
+    expect(
+      scriptPip("build it", context, [], runs, NOW, [], null, null).runDraft ??
+        null,
+    ).toBeNull();
   });
 });
 
@@ -251,8 +585,25 @@ describe("mock Pip woken by a run that asks a question, as propose_answer does",
   it("drafts exactly one suggested reply for the person to check, and starts or answers nothing", async () => {
     const b = new MockBackend({ runs: { seed: "empty" } });
     const ws = b.workstreams.open(CA401).id;
-    const made = await b.runsDraft({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-asks", instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws }, CA401);
-    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    const made = await b.runsDraft(
+      {
+        kind: "investigate",
+        repo: "acme/storefront",
+        clonePath: "/Users/sample/Code/storefront",
+        base: "main",
+        name: "ca-401-asks",
+        instruction: "",
+        focus: null,
+        focusFromRun: null,
+        ticketBlock: null,
+        workstream: ws,
+      },
+      CA401,
+    );
+    const run = await b.runsApprove(
+      made.id,
+      (await b.runsReview(made.id)).digest,
+    );
     b.runs.advance(run.id);
     b.runs.advance(run.id);
     b.runs.ask(run.id, "Should the refund path keep the old rounding?");
@@ -261,18 +612,53 @@ describe("mock Pip woken by a run that asks a question, as propose_answer does",
     const stop = mockPipEvents.on((id, e) => {
       if (id === "wake-asks" && e.type === "text") said += e.text;
     });
-    const prompt = eventLine([{ run: run.id, kind: "investigate", state: "needsAnswer" }]);
-    await mockAsk({ requestId: "wake-asks", prompt, context: { screen: "board", item: CA401, selection: [] } as unknown as ScreenContext, conversation: `ws:${ws}`, kind: "wake" } as AskRequest, b, 0);
+    const prompt = eventLine([
+      { run: run.id, kind: "investigate", state: "needsAnswer" },
+    ]);
+    await mockAsk(
+      {
+        requestId: "wake-asks",
+        prompt,
+        context: {
+          screen: "board",
+          item: CA401,
+          selection: [],
+        } as unknown as ScreenContext,
+        conversation: `ws:${ws}`,
+        kind: "wake",
+      } as AskRequest,
+      b,
+      0,
+    );
     stop();
-    const answers = b.proposals.list().filter((p) => p.intent.type === "runAnswer");
+    const answers = b.proposals
+      .list()
+      .filter((p) => p.intent.type === "runAnswer");
     expect(answers).toHaveLength(1);
-    expect(answers[0]).toMatchObject({ createdBy: "pip", state: { type: "pending" }, origin: { type: "chat", requestId: "wake-asks", workstream: ws } });
-    expect(answers[0].intent).toMatchObject({ runId: run.id, question: "Should the refund path keep the old rounding?" });
-    expect((answers[0].intent as { message: string }).message).toContain("CA-401");
-    expect(said).toBe("R1 asks: “Should the refund path keep the old rounding?” I drafted a reply for you to check.");
+    expect(answers[0]).toMatchObject({
+      createdBy: "pip",
+      state: { type: "pending" },
+      origin: { type: "chat", requestId: "wake-asks", workstream: ws },
+    });
+    expect(answers[0].intent).toMatchObject({
+      runId: run.id,
+      question: "Should the refund path keep the old rounding?",
+    });
+    expect((answers[0].intent as { message: string }).message).toContain(
+      "CA-401",
+    );
+    expect(said).toBe(
+      "R1 asks: “Should the refund path keep the old rounding?” I drafted a reply for you to check.",
+    );
     // Nothing started, stopped or answered: the runs are as they were, and no other draft was made.
     expect(b.runs.list().map((r) => [r.id, r.state])).toEqual(runsBefore);
-    expect(b.proposals.list().filter((p) => p.intent.type !== "runAnswer" && p.state.type === "pending")).toEqual([]);
+    expect(
+      b.proposals
+        .list()
+        .filter(
+          (p) => p.intent.type !== "runAnswer" && p.state.type === "pending",
+        ),
+    ).toEqual([]);
   });
 
   it("suggests the run's own reply when it offered one", async () => {
@@ -284,8 +670,23 @@ describe("mock Pip woken by a run that asks a question, as propose_answer does",
 
 describe("mock Pip discussing and revising a GitHub review draft, as revise_proposal does", () => {
   const GH = "github:ada";
-  const spec: RunSpec = { kind: "review", repo: "acme/webshop", clonePath: "/Users/sample/Code/webshop", base: "main", name: "ca-402-review", instruction: "", pr: 218, focus: null, focusFromRun: null, ticketBlock: "CA-402: sample" };
-  const context = { screen: "board", item: itemRef("CA-402"), selection: [] } as unknown as ScreenContext;
+  const spec: RunSpec = {
+    kind: "review",
+    repo: "acme/webshop",
+    clonePath: "/Users/sample/Code/webshop",
+    base: "main",
+    name: "ca-402-review",
+    instruction: "",
+    pr: 218,
+    focus: null,
+    focusFromRun: null,
+    ticketBlock: "CA-402: sample",
+  };
+  const context = {
+    screen: "board",
+    item: itemRef("CA-402"),
+    selection: [],
+  } as unknown as ScreenContext;
   let n = 0;
 
   /** A backend whose review of #218 has finished, with the GitHub review draft it left. */
@@ -293,9 +694,14 @@ describe("mock Pip discussing and revising a GitHub review draft, as revise_prop
     const b = new MockBackend({ githubRepos: 14 });
     await b.watchSetMode(GH, "everything");
     const made = await b.runsDraft(spec, itemRef("CA-402"));
-    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    const run = await b.runsApprove(
+      made.id,
+      (await b.runsReview(made.id)).digest,
+    );
     for (let i = 0; i < 3; i++) b.runs.advance(run.id);
-    const draft = b.proposals.list().find((p) => p.intent.type === "githubReview")!;
+    const draft = b.proposals
+      .list()
+      .find((p) => p.intent.type === "githubReview")!;
     return { b, draft, run };
   }
 
@@ -306,54 +712,110 @@ describe("mock Pip discussing and revising a GitHub review draft, as revise_prop
     const off = mockPipEvents.on((id, e) => {
       if (id === requestId && e.type === "text") said += e.text;
     });
-    await mockAsk({ requestId, prompt, context, sessionId: session } as AskRequest, b, 0);
+    await mockAsk(
+      { requestId, prompt, context, sessionId: session } as AskRequest,
+      b,
+      0,
+    );
     off();
     return said;
   }
 
   const comments = (b: MockBackend, id: string) => {
     const p = b.proposals.get(id)!;
-    return p.intent.type === "githubReview" ? p.intent.comments.map((c) => [`${c.path}:${c.line}`, c.body]) : [];
+    return p.intent.type === "githubReview"
+      ? p.intent.comments.map((c) => [`${c.path}:${c.line}`, c.body])
+      : [];
   };
 
   it("talks the draft over, softens, drops and adds a comment, each a revision marked 'Revised by Pip', and posts nothing", async () => {
     const { b, draft, run } = await reviewed();
-    const talk = await ask(b, `Let's talk about the GitHub review draft ${draft.id} of acme/webshop#218, drafted from agent run ${run.id}. Read it in full.`);
+    const talk = await ask(
+      b,
+      `Let's talk about the GitHub review draft ${draft.id} of acme/webshop#218, drafted from agent run ${run.id}. Read it in full.`,
+    );
     expect(talk).toContain("I read the review of acme/webshop#218 in full");
     // The person reads draft and run names, never their ids or Pip's tools.
-    for (const id of [draft.id, run.id, run.shortId ?? run.id]) expect(talk).not.toContain(id);
+    for (const id of [draft.id, run.id, run.shortId ?? run.id])
+      expect(talk).not.toContain(id);
     expect(talk).not.toMatch(/\b(get|list|propose|revise|retire|set)_[a-z_]+/);
     expect(talk).toContain("`src/consumer/retry.ts:42`");
 
-    const softened = await ask(b, "soften the comment on src/consumer/retry.ts:42");
-    expect(softened).toContain("I softened the comment on src/consumer/retry.ts:42");
+    const softened = await ask(
+      b,
+      "soften the comment on src/consumer/retry.ts:42",
+    );
+    expect(softened).toContain(
+      "I softened the comment on src/consumer/retry.ts:42",
+    );
     expect(softened).toContain("nothing was posted to GitHub");
     const [first, nit] = comments(b, draft.id);
     expect(first[0]).toBe("src/consumer/retry.ts:42");
-    expect(first[1]).toMatch(/^Suggestion, if you agree: the retry loop never backs off/);
+    expect(first[1]).toMatch(
+      /^Suggestion, if you agree: the retry loop never backs off/,
+    );
     expect(nit[0]).toBe("src/consumer/retry.ts:17");
-    expect(b.proposals.get(draft.id)!.revisions.slice(-1)[0].note).toBe("Revised by Pip");
+    expect(b.proposals.get(draft.id)!.revisions.slice(-1)[0].note).toBe(
+      "Revised by Pip",
+    );
 
     await ask(b, "drop the nit");
-    expect(comments(b, draft.id).map(([at]) => at)).toEqual(["src/consumer/retry.ts:42"]);
+    expect(comments(b, draft.id).map(([at]) => at)).toEqual([
+      "src/consumer/retry.ts:42",
+    ]);
 
-    await ask(b, "add a comment on src/consumer/retry.ts:18 saying A blank line to spare.");
-    expect(comments(b, draft.id)).toEqual([first, ["src/consumer/retry.ts:18", "A blank line to spare."]]);
+    await ask(
+      b,
+      "add a comment on src/consumer/retry.ts:18 saying A blank line to spare.",
+    );
+    expect(comments(b, draft.id)).toEqual([
+      first,
+      ["src/consumer/retry.ts:18", "A blank line to spare."],
+    ]);
     const after = b.proposals.get(draft.id)!;
-    expect([after.state.type, after.revisions.map((r) => r.note)]).toEqual(["pending", ["Revised by Pip", "Revised by Pip", "Revised by Pip"]]);
+    expect([after.state.type, after.revisions.map((r) => r.note)]).toEqual([
+      "pending",
+      ["Revised by Pip", "Revised by Pip", "Revised by Pip"],
+    ]);
     expect(b.github.writes).toEqual([]);
     expect(b.proposals.writes).toEqual([]);
   });
 
   it("refuses a comment at a line the diff doesn't show, and says so", async () => {
     const { b, draft, run } = await reviewed();
-    await ask(b, `Let's talk about the GitHub review draft ${draft.id} of acme/webshop#218, drafted from agent run ${run.id}.`, "off-diff");
+    await ask(
+      b,
+      `Let's talk about the GitHub review draft ${draft.id} of acme/webshop#218, drafted from agent run ${run.id}.`,
+      "off-diff",
+    );
     const before = comments(b, draft.id);
-    const said = await ask(b, "add a comment on src/x.ts:99 saying Here?", "off-diff");
-    expect(said).toContain("src/x.ts:99 isn't a line the pull request's diff shows; call get_proposal to see the lines it has");
+    const said = await ask(
+      b,
+      "add a comment on src/x.ts:99 saying Here?",
+      "off-diff",
+    );
+    expect(said).toContain(
+      "src/x.ts:99 isn't a line the pull request's diff shows; call get_proposal to see the lines it has",
+    );
     expect(comments(b, draft.id)).toEqual(before);
     expect(b.proposals.get(draft.id)!.revisions).toEqual([]);
-    expect(() => b.proposals.pipRevise(draft.id, { comments: [{ path: "src/consumer/retry.ts", line: 99, side: "RIGHT", body: "x" }] }, null, b.github.code.pullFiles("acme/webshop", 218))).toThrow("src/consumer/retry.ts:99 isn't a line");
+    expect(() =>
+      b.proposals.pipRevise(
+        draft.id,
+        {
+          comments: [
+            {
+              path: "src/consumer/retry.ts",
+              line: 99,
+              side: "RIGHT",
+              body: "x",
+            },
+          ],
+        },
+        null,
+        b.github.code.pullFiles("acme/webshop", 218),
+      ),
+    ).toThrow("src/consumer/retry.ts:99 isn't a line");
     expect(b.github.writes).toEqual([]);
   });
 
@@ -361,30 +823,75 @@ describe("mock Pip discussing and revising a GitHub review draft, as revise_prop
     const { b, draft } = await reviewed();
     const change = b.github.code.change("acme/webshop", 218)!;
     b.github.code.addPullRequest({ ...change, sha: "f00dfeed0000" });
-    const had = (draft.intent as Extract<Intent, { type: "githubReview" }>).comments;
-    const index = { path: "src/consumer/index.ts", line: 1, side: "RIGHT" as const, body: "This export moved." };
-    await expect(b.pipRevise(draft.id, { comments: [...had, index] })).rejects.toThrow("has moved on from a1b2c3d4 since the review read it");
+    const had = (draft.intent as Extract<Intent, { type: "githubReview" }>)
+      .comments;
+    const index = {
+      path: "src/consumer/index.ts",
+      line: 1,
+      side: "RIGHT" as const,
+      body: "This export moved.",
+    };
+    await expect(
+      b.pipRevise(draft.id, { comments: [...had, index] }),
+    ).rejects.toThrow("has moved on from a1b2c3d4 since the review read it");
     expect(comments(b, draft.id)).toHaveLength(had.length);
-    await b.pipRevise(draft.id, { comments: [{ ...had[0], body: "Could this back off?" }] });
-    expect(comments(b, draft.id)).toEqual([[`${had[0].path}:${had[0].line}`, "Could this back off?"]]);
+    await b.pipRevise(draft.id, {
+      comments: [{ ...had[0], body: "Could this back off?" }],
+    });
+    expect(comments(b, draft.id)).toEqual([
+      [`${had[0].path}:${had[0].line}`, "Could this back off?"],
+    ]);
   });
 
   it("leaves a draft the person edited alone: it is theirs", async () => {
     const { b, draft, run } = await reviewed();
-    await b.proposalsEdit(draft.id, { type: "githubReview", comments: [{ path: "src/consumer/retry.ts", line: 42, side: "RIGHT", body: "My own words." }] });
-    await ask(b, `Let's talk about the GitHub review draft ${draft.id} of acme/webshop#218, drafted from agent run ${run.id}.`, "edited");
-    const said = await ask(b, "soften the comment on src/consumer/retry.ts:42", "edited");
-    expect(said).toContain("the user edited this review draft, so Pip can't change it any more");
+    await b.proposalsEdit(draft.id, {
+      type: "githubReview",
+      comments: [
+        {
+          path: "src/consumer/retry.ts",
+          line: 42,
+          side: "RIGHT",
+          body: "My own words.",
+        },
+      ],
+    });
+    await ask(
+      b,
+      `Let's talk about the GitHub review draft ${draft.id} of acme/webshop#218, drafted from agent run ${run.id}.`,
+      "edited",
+    );
+    const said = await ask(
+      b,
+      "soften the comment on src/consumer/retry.ts:42",
+      "edited",
+    );
+    expect(said).toContain(
+      "the user edited this review draft, so Pip can't change it any more",
+    );
     expect(said).toContain("it's yours and stays as you left it");
-    expect(comments(b, draft.id)).toEqual([["src/consumer/retry.ts:42", "My own words."]]);
-    expect(b.proposals.get(draft.id)!.revisions.map((r) => r.note)).toEqual(["Edited"]);
+    expect(comments(b, draft.id)).toEqual([
+      ["src/consumer/retry.ts:42", "My own words."],
+    ]);
+    expect(b.proposals.get(draft.id)!.revisions.map((r) => r.note)).toEqual([
+      "Edited",
+    ]);
     expect(b.github.writes).toEqual([]);
   });
 
   it("revises a workstream's review draft only from that workstream's conversation", async () => {
     const { b, draft } = await reviewed();
-    const theirs = b.proposals.fromRun(draft.intent, null, { type: "run", runId: "run-other", shortId: null, workstream: "ws-other" } as never);
-    expect(() => b.proposals.pipRevise(theirs.id, { body: "hijacked" }, null)).toThrow("that draft belongs to another workstream");
-    expect(() => b.proposals.pipRevise(theirs.id, { body: "fine" }, "ws-other")).not.toThrow();
+    const theirs = b.proposals.fromRun(draft.intent, null, {
+      type: "run",
+      runId: "run-other",
+      shortId: null,
+      workstream: "ws-other",
+    } as never);
+    expect(() =>
+      b.proposals.pipRevise(theirs.id, { body: "hijacked" }, null),
+    ).toThrow("that draft belongs to another workstream");
+    expect(() =>
+      b.proposals.pipRevise(theirs.id, { body: "fine" }, "ws-other"),
+    ).not.toThrow();
   });
 });
