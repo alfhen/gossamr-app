@@ -27,7 +27,9 @@ mod plan_description;
 mod report;
 mod rewrites;
 mod ticket_context;
+mod workstreams;
 pub use pip_runs::PipRunAsk;
+pub use workstreams::{WorkstreamView, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 pub use rewrites::TextSeen;
 mod watch;
 
@@ -792,11 +794,12 @@ impl Core {
         .await
     }
 
-    /// Whether Pip started `session_id` in its sandbox folder, which is the only place it can be resumed from.
+    /// Whether Pip started `session_id` in its sandbox folder, which is the only place it can be resumed from: one of the
+    /// last sessions it started, or the session of an open workstream, which stays resumable however long it runs.
     pub async fn is_pip_session(&self, session_id: &str) -> Result<bool> {
         self.with_db(|db| {
             let own: Vec<String> = db.meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-            Ok(own.iter().any(|s| s == session_id))
+            Ok(own.iter().any(|s| s == session_id) || db.is_open_workstream_session(session_id)?)
         })
         .await
     }
@@ -849,6 +852,24 @@ mod tests {
         assert!(fx.core.is_pip_session("new-1").await.unwrap() && fx.core.is_pip_session("ws-1").await.unwrap());
         assert_eq!(fx.core.claude_session_for("CA-1").await.unwrap().as_deref(), Some("new-1"));
         assert!(!fx.core.is_pip_session("old-1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_workstream_s_session_stays_resumable_however_many_others_are_remembered() {
+        let fx = super::testing::fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.remember_claude_session(None, "ws-session").await.unwrap();
+        fx.core.remember_claude_session(None, "loose-session").await.unwrap();
+        fx.core.set_workstream_session(&fx.scope, &ws.id, "ws-session").await.unwrap();
+        for n in 0..60 {
+            fx.core.remember_claude_session(None, &format!("other-{n}")).await.unwrap();
+        }
+        assert!(fx.core.is_pip_session("ws-session").await.unwrap(), "pinned by its workstream");
+        assert!(!fx.core.is_pip_session("loose-session").await.unwrap(), "the list itself still keeps only the last 50");
+        assert!(fx.core.is_pip_session("other-59").await.unwrap() && !fx.core.is_pip_session("other-0").await.unwrap());
+
+        fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert!(!fx.core.is_pip_session("ws-session").await.unwrap(), "closing the workstream lets it go");
     }
 
     #[tokio::test]
@@ -1033,6 +1054,21 @@ pub(crate) mod testing {
             item.item = connection.item(&key);
             item.title = format!("Ticket {n}");
             self.core.with_db_for(&self.scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
+        }
+
+        /// Stores `run` as it is, without a draft or an approval.
+        pub async fn insert_run(&self, run: &crate::domain::Run) {
+            self.core.with_db_for(&self.scope, |db| db.insert_run(run)).await.unwrap();
+        }
+
+        /// Stores `ws` as it is, whatever its connection.
+        pub async fn insert_workstream(&self, ws: &crate::domain::Workstream) {
+            self.core.with_db_for(&self.scope, |db| db.insert_workstream(ws)).await.unwrap();
+        }
+
+        /// Overwrites the stored `ws`, as nothing but a misbehaving tool would.
+        pub async fn save_workstream(&self, ws: &crate::domain::Workstream) {
+            self.core.with_db_for(&self.scope, |db| db.save_workstream(ws)).await.unwrap();
         }
     }
 

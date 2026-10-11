@@ -173,8 +173,8 @@ impl Core {
             let flattened = tracker::flattened_by_rewrite(&Connection::jira(&scope, ""), &ticket);
             let intent = Intent::Rewrite { item: item.clone(), title: None, body: Some(BodyChange { from: work.body.clone(), to }), flattened };
             let draft = Draft {
-                origin: Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) },
-                created_by: CreatedBy::User,
+                origin: Origin::of_run(run),
+                created_by: CreatedBy::Agent,
                 intent,
                 label: Some(label_of(run)),
                 basis: Some(Basis::of(&work)),
@@ -270,8 +270,8 @@ mod tests {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let run = plan_with(&fx, PLAN).await;
         let made = fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().unwrap();
-        assert_eq!((made.created_by, made.state.clone()), (CreatedBy::User, ProposalState::Pending));
-        assert_eq!(made.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+        assert_eq!((made.created_by, made.state.clone()), (CreatedBy::Agent, ProposalState::Pending));
+        assert_eq!(made.origin, Origin::of_run(&run));
         assert_eq!(made.label, Some(format!("From agent run {}", run.short_id.as_ref().unwrap())));
         assert!(made.basis.is_some());
         let (from, to) = rewrite_of(&made);
@@ -471,14 +471,14 @@ mod tests {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let run = plan_with(&fx, PLAN).await;
         let made = fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().unwrap();
-        require_pip_may_revise(&made).unwrap();
-        let revised = fx.core.revise_as_pip(&fx.scope, &made.id, {
+        require_pip_may_revise(&made, None).unwrap();
+        let revised = fx.core.revise_as_pip(&fx.scope, None, &made.id, {
             let (from, _) = rewrite_of(&made);
             Intent::Rewrite { item: fx.item("CA-1"), title: None, body: Some(BodyChange { from: from.clone(), to: Doc::from_markdown("Hi\n\n## Gossamr Plan\n\nPip's tighter plan.", &[]) }), flattened: vec![] }
         }).await.unwrap();
         assert_eq!(revised.revisions.last().unwrap().note, "Revised by Pip");
         let edited = fx.core.edit_proposal(&made.id, &Edit::Rewrite { title: None, body: Some("Hi\n\n## Gossamr Plan\n\nThe person's words.".into()) }).await.unwrap();
-        assert!(require_pip_may_revise(&edited).unwrap_err().to_string().contains("edited this description draft"));
+        assert!(require_pip_may_revise(&edited, None).unwrap_err().to_string().contains("edited this description draft"));
     }
 
     #[tokio::test]
@@ -540,5 +540,19 @@ mod tests {
         let made = fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().unwrap();
         let Intent::Rewrite { flattened, .. } = &made.intent else { panic!() };
         assert!(!flattened.is_empty(), "the tables are named so the person is told before approving");
+    }
+
+    #[tokio::test]
+    async fn the_description_update_of_a_plan_in_a_workstream_is_the_agent_s_in_that_workstream() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let run = plan_with(&fx, PLAN).await;
+        let mut linked = run.clone();
+        linked.spec.workstream = Some(ws.id.clone());
+        fx.core.save_run(&linked).await.unwrap();
+        let made = fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().unwrap();
+        assert_eq!((made.created_by, made.workstream()), (CreatedBy::Agent, Some(ws.id.as_str())));
+        assert!(crate::proposals::require_pip_may_revise(&made, Some(&ws.id)).is_ok());
+        assert!(crate::proposals::require_pip_may_revise(&made, Some("other")).is_err());
     }
 }

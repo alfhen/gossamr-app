@@ -21,6 +21,7 @@ mod reports;
 mod runs;
 mod schema;
 mod watch;
+mod workstreams;
 
 pub use cache::{stamp, SyncState, Upserted};
 pub use code::CachedHttp;

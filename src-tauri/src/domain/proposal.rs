@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ContainerRef, Doc, Identity, ItemKind, ItemRef, Link, LinkKind, PersonRef, Priority, RunSpec, WorkItem,
+    ContainerRef, Doc, Identity, ItemKind, ItemRef, Link, LinkKind, PersonRef, Priority, Run, RunSpec, WorkItem,
     Workflow,
 };
 
@@ -109,11 +109,52 @@ impl Intent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Origin {
-    Chat { request_id: String },
+    /// Drafted by Pip while answering `request_id`, in the conversation of `workstream` when it belongs to one.
+    Chat {
+        request_id: String,
+        #[serde(default)]
+        workstream: Option<String>,
+    },
     Board,
     Autopilot { event_id: String },
-    /// Made by the person from what an agent run reported. The text is the agent's, which is why it is marked.
-    Run { run_id: String, short_id: Option<String> },
+    /// Made from what an agent run reported. The text is the agent's, which is why it is marked. `workstream` is the
+    /// run's own, copied when the draft is made.
+    Run {
+        run_id: String,
+        short_id: Option<String>,
+        #[serde(default)]
+        workstream: Option<String>,
+    },
+}
+
+impl Origin {
+    /// What Pip drafts while answering `request_id`, outside any workstream.
+    pub fn chat(request_id: &str) -> Self {
+        Origin::Chat { request_id: request_id.into(), workstream: None }
+    }
+
+    /// A draft made from `run`'s result, in the run's workstream.
+    pub fn of_run(run: &Run) -> Self {
+        Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string), workstream: run.spec.workstream.clone() }
+    }
+
+    /// The workstream the draft was made in, if any.
+    pub fn workstream(&self) -> Option<&str> {
+        match self {
+            Origin::Chat { workstream, .. } | Origin::Run { workstream, .. } => workstream.as_deref(),
+            Origin::Board | Origin::Autopilot { .. } => None,
+        }
+    }
+
+    /// The `type` tag as stored, for the column lists narrow on.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Origin::Chat { .. } => "chat",
+            Origin::Board => "board",
+            Origin::Autopilot { .. } => "autopilot",
+            Origin::Run { .. } => "run",
+        }
+    }
 }
 
 /// Fingerprint of the item as it was when the proposal was drafted.
@@ -141,13 +182,15 @@ impl Basis {
     }
 }
 
-/// Who drafted a proposal.
+/// Who drafted a proposal. `Agent` is a run's result turned into a draft by Gossamr; drafts stored before it existed
+/// say `User` for that, and are treated alike wherever it matters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CreatedBy {
     User,
     Pip,
     Autopilot,
+    Agent,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -203,6 +246,8 @@ pub struct ProposalQuery {
     pub states: Option<Vec<StateKind>>,
     pub item: Option<ItemRef>,
     pub connection_id: Option<String>,
+    #[serde(default)]
+    pub workstream: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -258,6 +303,14 @@ impl Proposal {
     /// The existing item the proposal is about, if any.
     pub fn target(&self) -> Option<&ItemRef> {
         self.intent.target()
+    }
+
+    /// The workstream the draft belongs to: the one it was made in, else the one a run it would start is linked to.
+    pub fn workstream(&self) -> Option<&str> {
+        self.origin.workstream().or(match &self.intent {
+            Intent::StartRun { spec, .. } => spec.workstream.as_deref(),
+            _ => None,
+        })
     }
 
     /// Applies a reconcile verdict. Only a pending proposal changes, and never to `Applied`.
@@ -408,7 +461,7 @@ mod tests {
             id: "p1".into(),
             created_at: now(),
             updated_at: now(),
-            origin: Origin::Chat { request_id: "r".into() },
+            origin: Origin::chat("r"),
             created_by: CreatedBy::Pip,
             intent,
             label: None,
@@ -567,10 +620,10 @@ mod tests {
 
     #[test]
     fn serialises_origin_and_state_the_way_the_page_reads_them() {
-        let chat = serde_json::to_value(Origin::Chat { request_id: "r1".into() }).unwrap();
-        assert_eq!(chat, serde_json::json!({ "type": "chat", "requestId": "r1" }));
-        let from_run = serde_json::to_value(Origin::Run { run_id: "r".into(), short_id: Some("ab12cd34".into()) }).unwrap();
-        assert_eq!(from_run, serde_json::json!({ "type": "run", "runId": "r", "shortId": "ab12cd34" }));
+        let chat = serde_json::to_value(Origin::chat("r1")).unwrap();
+        assert_eq!(chat, serde_json::json!({ "type": "chat", "requestId": "r1", "workstream": null }));
+        let from_run = serde_json::to_value(Origin::Run { run_id: "r".into(), short_id: Some("ab12cd34".into()), workstream: Some("w1".into()) }).unwrap();
+        assert_eq!(from_run, serde_json::json!({ "type": "run", "runId": "r", "shortId": "ab12cd34", "workstream": "w1" }));
         let retired = serde_json::to_value(ProposalState::Retired("gone".into())).unwrap();
         assert_eq!(retired, serde_json::json!({ "type": "retired", "reason": "gone" }));
         assert_eq!(serde_json::to_value(ProposalState::Applying).unwrap(), serde_json::json!({ "type": "applying" }));
@@ -684,5 +737,52 @@ mod tests {
     fn a_rewrite_stored_without_flattened_still_reads() {
         let json = serde_json::json!({ "type": "rewrite", "item": item_ref("1"), "title": null, "body": { "from": { "blocks": [] }, "to": { "blocks": [] } } });
         assert!(matches!(serde_json::from_value::<Intent>(json).unwrap(), Intent::Rewrite { flattened, .. } if flattened.is_empty()));
+    }
+
+    #[test]
+    fn agent_is_a_copyable_maker_that_serialises_as_agent() {
+        let by = CreatedBy::Agent;
+        let copied = by;
+        assert_eq!((by, copied), (CreatedBy::Agent, CreatedBy::Agent));
+        assert_eq!(serde_json::to_value(by).unwrap(), serde_json::json!("agent"));
+        assert_eq!(serde_json::from_value::<CreatedBy>(serde_json::json!("agent")).unwrap(), CreatedBy::Agent);
+        assert_eq!(serde_json::from_value::<CreatedBy>(serde_json::json!("user")).unwrap(), CreatedBy::User);
+    }
+
+    #[test]
+    fn proposals_stored_before_workstreams_still_read_and_round_trip() {
+        let stored = |origin: serde_json::Value, by: &str| {
+            serde_json::json!({
+                "id": "p1", "createdAt": "2026-09-01T10:00:00Z", "updatedAt": "2026-09-01T10:00:00Z",
+                "origin": origin, "createdBy": by,
+                "intent": { "type": "comment", "item": item_ref("1"), "body": { "blocks": [] } },
+                "label": null, "basis": null, "state": { "type": "pending" }, "revisions": [], "created": [], "error": null, "run": null
+            })
+        };
+        let chat: Proposal = serde_json::from_value(stored(serde_json::json!({ "type": "chat", "requestId": "q1" }), "pip")).unwrap();
+        assert_eq!((chat.origin.clone(), chat.workstream()), (Origin::chat("q1"), None));
+        let from_run: Proposal = serde_json::from_value(stored(serde_json::json!({ "type": "run", "runId": "r", "shortId": null }), "user")).unwrap();
+        assert_eq!(from_run.origin, Origin::Run { run_id: "r".into(), short_id: None, workstream: None });
+        assert_eq!(from_run.created_by, CreatedBy::User);
+        for p in [chat, from_run] {
+            let back: Proposal = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+            assert_eq!(back, p);
+        }
+    }
+
+    #[test]
+    fn a_draft_belongs_to_its_origin_s_workstream_or_else_the_one_of_the_run_it_would_start() {
+        let item = work_item("1", "todo");
+        let mut p = comment_on(&item);
+        assert_eq!(p.workstream(), None);
+        p.origin = Origin::Chat { request_id: "r".into(), workstream: Some("w1".into()) };
+        assert_eq!(p.workstream(), Some("w1"));
+        let spec = RunSpec { workstream: Some("w2".into()), ..run_spec() };
+        let mut start = proposal(Intent::StartRun { connection_id: "c".into(), item: None, spec }, &item);
+        assert_eq!(start.workstream(), Some("w2"));
+        start.origin = Origin::Board;
+        assert_eq!((start.workstream(), start.origin.kind()), (Some("w2"), "board"));
+        let query: ProposalQuery = serde_json::from_value(serde_json::json!({ "workstream": "w1" })).unwrap();
+        assert_eq!(query.workstream.as_deref(), Some("w1"));
     }
 }

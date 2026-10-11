@@ -48,6 +48,17 @@ async fn stopping_a_working_run_stops_its_session_and_keeps_the_worktree() {
 }
 
 #[tokio::test]
+async fn stopping_a_workstream_run_is_recorded_in_its_audit_and_a_refused_stop_is_not() {
+    let rig = ready().await;
+    let (run, ws) = rig.launched_in_workstream(1).await;
+    assert!(rig.svc.stop(&run.id).await.is_err(), "still launching");
+    assert!(rig.run_actions(&ws).await.is_empty());
+    rig.poll().await;
+    rig.svc.stop(&run.id).await.unwrap();
+    assert_eq!(rig.run_actions(&ws).await, [("run_stopped".to_string(), Some(run.id.clone()), None)]);
+}
+
+#[tokio::test]
 async fn a_run_waiting_on_the_person_can_be_stopped() {
     let (rig, run) = working().await;
     rig.session(&run, |e| {

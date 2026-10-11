@@ -103,8 +103,10 @@ impl Core {
 
     /// An investigation with no ticket that Pip proposes while answering `request_id`. `prompt` is the one thing of
     /// Pip's that becomes the instruction, in full, for the person to read and edit; the clone, branch and project are
-    /// Rust's. It ends as a draft ticket in `project` once approved and finished, like one the person started.
-    pub async fn draft_ticketless_run_as_pip(&self, scope: &Scope, request_id: &str, prompt: String, repo: String, project: ContainerRef, plan: ClonePlan) -> Result<Proposal> {
+    /// Rust's. It ends as a draft ticket in `project` once approved and finished, like one the person started. Asked in
+    /// a workstream's conversation, the run belongs to that workstream, which must be an open one with no ticket.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn draft_ticketless_run_as_pip(&self, scope: &Scope, request_id: &str, workstream: Option<&str>, prompt: String, repo: String, project: ContainerRef, plan: ClonePlan) -> Result<Proposal> {
         self.require_watched_repo(&repo)?;
         let clone_path = self.resolve_clone(&plan.path)?;
         let connection_id = Connection::jira_id(scope);
@@ -128,23 +130,28 @@ impl Core {
             allow_push: false,
             project: Some(project),
             report: false,
+            workstream: workstream.map(Into::into),
         };
         let at = Utc::now();
         self.with_db_for(scope, |db| {
+            if let Some(ws) = workstream {
+                super::workstreams::require_linkable(db, &connection_id, ws, None)?;
+            }
             let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
             let same = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::StartRun { item: None, spec: s, .. } if (s.kind, &s.repo, &s.instruction) == (spec.kind, &spec.repo, &spec.instruction)));
             if let Some(same) = same {
                 return Err(refuse(format!("An identical draft is already open (proposal {}). Don't propose it again; see list_proposals.", same.id)));
             }
-            proposals::create(db, Draft::from_pip(request_id, Intent::StartRun { connection_id, item: None, spec }, None), at)
+            proposals::create(db, Draft::from_pip(request_id, workstream, Intent::StartRun { connection_id, item: None, spec }, None), at)
         })
         .await
     }
 
     /// A run Pip proposes while answering `request_id`. Its prompt is the kind's own template, its ticket text the cached
     /// ticket, its clone and branch what `plan` found; only `focus` and `from_run` are Pip's words. Nothing starts: the
-    /// person reads the exact prompt and approves it in the setup sheet.
-    pub async fn draft_run_as_pip(&self, scope: &Scope, request_id: &str, ask: PipRunAsk, repo: String, plan: ClonePlan) -> Result<Proposal> {
+    /// person reads the exact prompt and approves it in the setup sheet. Asked in a workstream's conversation, the run
+    /// belongs to that workstream, which must be an open one on the same ticket.
+    pub async fn draft_run_as_pip(&self, scope: &Scope, request_id: &str, workstream: Option<&str>, ask: PipRunAsk, repo: String, plan: ClonePlan) -> Result<Proposal> {
         let PipRunAsk { key, kind, focus, from_run } = ask;
         let key = key.as_str();
         if !pip_kinds().contains(&kind) {
@@ -159,6 +166,9 @@ impl Core {
         let at = Utc::now();
         self.with_db_for(scope, |db| {
             let work = db.item(&item)?.ok_or_else(|| refuse(format!("{key} isn't in the cache, so there is nothing to base a run on")))?;
+            if let Some(ws) = workstream {
+                super::workstreams::require_linkable(db, &connection_id, ws, Some(&item))?;
+            }
             let spec = RunSpec {
                 kind,
                 repo,
@@ -179,13 +189,14 @@ impl Core {
                 allow_push: false,
                 project: None,
                 report: false,
+                workstream: workstream.map(Into::into),
             };
             let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), item: Some(item.clone()), ..Default::default() };
             let same = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::StartRun { spec: s, .. } if same_ask(s, &spec)));
             if let Some(same) = same {
                 return Err(refuse(format!("An identical draft is already open (proposal {}). Don't propose it again; see list_proposals.", same.id)));
             }
-            let mut draft = Draft::from_pip(request_id, Intent::StartRun { connection_id, item: Some(item.clone()), spec }, None);
+            let mut draft = Draft::from_pip(request_id, workstream, Intent::StartRun { connection_id, item: Some(item.clone()), spec }, None);
             draft.basis = Some(Basis::of(&work));
             proposals::create(db, draft, at)
         })
@@ -203,6 +214,7 @@ impl Core {
             p.error = None;
             p.updated_at = Utc::now();
             db.save_proposal(&p)?;
+            proposals::record(db, &p, crate::domain::Actor::Person, "draft_approved", p.updated_at);
             Ok(p)
         })
         .await
@@ -231,7 +243,8 @@ impl Core {
 
     /// A follow-up Pip proposes for a finished run while answering `request_id`: the exact message the person will read,
     /// edit and send. Nothing is sent; approving the draft resumes the run. Refused unless the run belongs to the
-    /// account and can be sent back, and when one is already waiting for it.
+    /// account and can be sent back, and when one is already waiting for it. The draft belongs to the run's workstream,
+    /// if it has one, whichever conversation asked.
     pub async fn propose_follow_up_as_pip(&self, scope: &Scope, request_id: &str, run_id: &str, message: &str, reason: Option<&str>) -> Result<Proposal> {
         let message = crate::runs::result::scrub(message).trim().to_string();
         let flat = |t: &str| crate::runs::result::scrub(t).split_whitespace().collect::<Vec<_>>().join(" ");
@@ -252,7 +265,8 @@ impl Core {
             if let Some(open) = open {
                 return Err(refuse(format!("A follow-up for run {} is already waiting (proposal {}). Revise it or leave it to the user; see list_proposals.", run.id, open.id)));
             }
-            proposals::create(db, Draft::from_pip(request_id, intent, None), at)
+            // It belongs to the run's workstream, whichever conversation Pip drafted it in.
+            proposals::create(db, Draft::from_pip(request_id, run.spec.workstream.as_deref(), intent, None), at)
         })
         .await
     }

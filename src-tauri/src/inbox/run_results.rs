@@ -424,8 +424,7 @@ impl Core {
         if intent.target().is_none_or(|t| t.connection_id != Connection::jira_id(&scope)) {
             return Err(refuse("that item belongs to another connection"));
         }
-        let origin = Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) };
-        self.propose(&scope, Draft { origin, created_by: CreatedBy::User, intent, label: Some(label), basis: None }).await
+        self.propose(&scope, Draft { origin: Origin::of_run(run), created_by: CreatedBy::Agent, intent, label: Some(label), basis: None }).await
     }
 
     async fn pending_same(&self, same: impl Fn(&Intent) -> bool) -> Result<Option<Proposal>> {
@@ -480,8 +479,8 @@ impl Core {
             return Err(refuse("that item belongs to another connection"));
         }
         let mut draft = Draft {
-            origin: Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) },
-            created_by: CreatedBy::User,
+            origin: Origin::of_run(&run),
+            created_by: CreatedBy::Agent,
             intent: Intent::Subtasks { parent: item.clone(), summaries },
             label: Some(label_of(&run)),
             basis: None,
@@ -525,8 +524,8 @@ impl Core {
             return Err(refuse("that project belongs to another connection"));
         }
         let draft = Draft {
-            origin: Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) },
-            created_by: CreatedBy::User,
+            origin: Origin::of_run(run),
+            created_by: CreatedBy::Agent,
             intent: Intent::Create { container, fields: ticket_fields(proposal), link: None },
             label: Some(label_of(run)),
             basis: None,
@@ -694,8 +693,8 @@ pub(in crate::inbox) mod tests {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let run = run_with(&fx, |_| {}).await;
         let p = fx.core.draft_run_comment(&run.id).await.unwrap();
-        assert_eq!((p.state.clone(), p.created_by), (crate::domain::ProposalState::Pending, CreatedBy::User));
-        assert_eq!(p.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+        assert_eq!((p.state.clone(), p.created_by), (crate::domain::ProposalState::Pending, CreatedBy::Agent));
+        assert_eq!(p.origin, Origin::of_run(&run));
         assert_eq!(p.label, Some(format!("From agent run {}", run.short_id.as_ref().unwrap())));
         assert_eq!(body_of(&p), "Looked into this with an agent (it was asked to only read code and change nothing).\nAdd a backoff to the consumer.");
         assert!(matches!(&p.intent, Intent::Comment { item, .. } if *item == fx.item("CA-1")));
@@ -809,8 +808,8 @@ pub(in crate::inbox) mod tests {
         let run = run_with(&fx, |_| {}).await;
         let p = fx.core.draft_run_blocker(&run.id, " ca-2 ").await.unwrap();
         assert!(matches!(&p.intent, Intent::Link { from, to, kind: LinkKind::Blocks } if *from == fx.item("CA-2") && *to == fx.item("CA-1")));
-        assert_eq!((p.label.as_deref(), p.created_by), (Some("Blocked by CA-2"), CreatedBy::User));
-        assert_eq!(p.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+        assert_eq!((p.label.as_deref(), p.created_by), (Some("Blocked by CA-2"), CreatedBy::Agent));
+        assert_eq!(p.origin, Origin::of_run(&run));
         assert!(fx.tracker.intents().is_empty());
         let err = fx.core.draft_run_blocker(&run.id, "CA-2").await.unwrap_err();
         assert!(err.to_string().contains(&p.id), "{err}");
@@ -842,8 +841,8 @@ pub(in crate::inbox) mod tests {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let run = run_with(&fx, |_| {}).await;
         let auto = fx.core.auto_draft_run_comment(&run.id).await.unwrap().unwrap();
-        assert_eq!((auto.state.clone(), auto.created_by), (crate::domain::ProposalState::Pending, CreatedBy::User));
-        assert_eq!(auto.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+        assert_eq!((auto.state.clone(), auto.created_by), (crate::domain::ProposalState::Pending, CreatedBy::Agent));
+        assert_eq!(auto.origin, Origin::of_run(&run));
         assert_eq!(body_of(&auto), "Looked into this with an agent (it was asked to only read code and change nothing).\nAdd a backoff to the consumer.");
         assert!(fx.tracker.intents().is_empty());
         assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().draft, Some(RunDraft { id: auto.id.clone(), state: crate::domain::ProposalState::Pending }));
@@ -876,8 +875,8 @@ pub(in crate::inbox) mod tests {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let run = ticketless(&fx, TICKET_RESULT, |_| {}).await;
         let p = fx.core.auto_draft_run_ticket(&run.id).await.unwrap().unwrap();
-        assert_eq!((p.state.clone(), p.created_by), (ProposalState::Pending, CreatedBy::User));
-        assert_eq!(p.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+        assert_eq!((p.state.clone(), p.created_by), (ProposalState::Pending, CreatedBy::Agent));
+        assert_eq!(p.origin, Origin::of_run(&run));
         assert_eq!(p.label, Some(format!("From agent run {}", run.short_id.as_ref().unwrap())));
         let (container, fields) = create_of(&p);
         assert_eq!(*container, project(&fx).await);
@@ -931,7 +930,7 @@ pub(in crate::inbox) mod tests {
         let (container, fields) = create_of(&p);
         assert_eq!((fields.title.as_str(), fields.kind, container.clone()), ("The consumer retries in a loop.", ItemKind::Task, project(&fx).await));
         assert!(fields.body.plain_text().starts_with("The consumer retries in a loop.\nIt never backs off."));
-        assert_eq!(p.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+        assert_eq!(p.origin, Origin::of_run(&run));
     }
 
     #[tokio::test]
@@ -1083,8 +1082,8 @@ pub(in crate::inbox) mod tests {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let run = triage_with(&fx, BREAKDOWN).await;
         let p = fx.core.draft_run_subtasks(&run.id).await.unwrap().unwrap();
-        assert_eq!((p.state.clone(), p.created_by), (ProposalState::Pending, CreatedBy::User));
-        assert_eq!(p.origin, Origin::Run { run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string) });
+        assert_eq!((p.state.clone(), p.created_by), (ProposalState::Pending, CreatedBy::Agent));
+        assert_eq!(p.origin, Origin::of_run(&run));
         assert_eq!(p.label, Some(format!("From agent run {}", run.short_id.as_ref().unwrap())));
         assert!(matches!(&p.intent, Intent::Subtasks { parent, summaries } if *parent == fx.item("CA-1") && summaries == &["Add a backoff", "Report the lag", "Survive a restart"]));
         assert!(fx.tracker.intents().is_empty());
@@ -1164,7 +1163,7 @@ pub(in crate::inbox) mod tests {
         assert_eq!(review.plan.as_deref(), Some(text.as_str()));
         assert!(review.prompt.contains(&format!("Plan from run {}:\n<<<PLAN\n## Approach", plan.id)) && review.prompt.contains("do not push"));
         let revised = Intent::StartRun { connection_id: "c".into(), item: Some(fx.item("CA-1")), spec: RunSpec { plan: Some("Pip's plan".into()), ..spec } };
-        assert!(fx.core.revise_as_pip(&fx.scope, &p.id, revised).await.is_err(), "Pip can't touch a build the person drafted");
+        assert!(fx.core.revise_as_pip(&fx.scope, None, &p.id, revised).await.is_err(), "Pip can't touch a build the person drafted");
         let run = fx.core.runs_approve(&p.id, &review.digest).await.unwrap();
         assert_eq!((run.digest, run.spec.kind), (review.digest, RunKind::Build));
         assert!(fx.tracker.intents().is_empty());
@@ -1397,7 +1396,7 @@ pub(in crate::inbox) mod tests {
         assert!(!made.cut);
         let body = body_of(&made.proposal);
         assert!(body.contains("Round in one place.") && body.contains("2. Add a test.") && !body.contains("For Jira") && !body.contains("Cut here"), "{body}");
-        assert_eq!(made.proposal.created_by, CreatedBy::User);
+        assert_eq!(made.proposal.created_by, CreatedBy::Agent);
         assert_eq!(made.proposal.label, Some(format!("Plan from agent run {}", plan.short_id.as_ref().unwrap())));
         assert!(fx.core.draft_run_plan_comment(&plan.id).await.unwrap_err().to_string().contains("already waiting"));
 
@@ -1485,7 +1484,7 @@ pub(in crate::inbox) mod tests {
             assert!(review.prompt.contains(&format!("What the builder says it did (run {}):\n<<<BUILD\nFixed the rounding", build.id)));
             assert!(review.prompt.contains("Review pull request #12 in acme/webshop at commit a1b2c3d4e5f6.") && review.prompt.contains("claim to check"));
             let revised = Intent::StartRun { connection_id: "c".into(), item: Some(fx.item("CA-1")), spec: RunSpec { build_account: Some("Pip's account".into()), ..spec } };
-            assert!(fx.core.revise_as_pip(&fx.scope, &p.id, revised).await.is_err(), "Pip can't touch a review the person drafted");
+            assert!(fx.core.revise_as_pip(&fx.scope, None, &p.id, revised).await.is_err(), "Pip can't touch a review the person drafted");
             let run = fx.core.runs_approve(&p.id, &review.digest).await.unwrap();
             assert_eq!((run.digest, run.spec.kind), (review.digest, RunKind::Review));
             assert!(fx.tracker.intents().is_empty());
@@ -1621,5 +1620,57 @@ pub(in crate::inbox) mod tests {
             let review = fx.core.runs_review(&p.id).await.unwrap();
             assert!(fx.core.runs_approve(&p.id, &review.digest).await.is_ok());
         }
+    }
+
+    #[tokio::test]
+    async fn run_result_drafts_are_the_agent_s_carry_the_run_s_workstream_and_are_audited_there() {
+        use crate::domain::Actor;
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        fx.add_item(2).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let run = approved(&fx, RunSpec { workstream: Some(ws.id.clone()), ..next_spec(&fx) }, Some(fx.item("CA-1")), RESULT, |_| {}).await;
+        let comment = fx.core.draft_run_comment(&run.id).await.unwrap();
+        assert_eq!((comment.created_by, comment.workstream()), (CreatedBy::Agent, Some(ws.id.as_str())));
+        assert!(matches!(&comment.origin, Origin::Run { workstream: Some(w), .. } if *w == ws.id));
+        let blocker = fx.core.draft_run_blocker(&run.id, "CA-2").await.unwrap();
+        assert_eq!((blocker.created_by, blocker.workstream()), (CreatedBy::Agent, Some(ws.id.as_str())));
+
+        let in_ws = fx.core.proposals(&ProposalQuery { workstream: Some(ws.id.clone()), ..Default::default() }).await.unwrap();
+        let mut ids: Vec<&str> = in_ws.iter().map(|p| p.id.as_str()).collect();
+        ids.sort();
+        let mut expected = vec![comment.id.as_str(), blocker.id.as_str(), run.proposal_id.as_str()];
+        expected.sort();
+        assert_eq!(ids, expected, "the run's own draft and what it left");
+
+        assert!(proposals::require_pip_may_revise(&comment, Some(&ws.id)).is_ok());
+        assert!(proposals::require_pip_may_revise(&comment, None).unwrap_err().to_string().contains("another workstream"));
+
+        fx.core.skip_proposal(&blocker.id).await.unwrap();
+        fx.core.skip_proposal(&blocker.id).await.unwrap();
+        assert_eq!(fx.core.approve_proposal(&comment.id).await.unwrap().state, ProposalState::Applied);
+
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        let drafts: Vec<(Actor, &str, Option<&str>)> =
+            events.iter().filter(|e| e.action.starts_with("draft_")).map(|e| (e.actor, e.action.as_str(), e.proposal_id.as_deref())).collect();
+        assert_eq!(
+            drafts,
+            [
+                (Actor::Person, "draft_created", Some(run.proposal_id.as_str())),
+                (Actor::Run, "draft_created", Some(comment.id.as_str())),
+                (Actor::Run, "draft_created", Some(blocker.id.as_str())),
+                (Actor::Person, "draft_skipped", Some(blocker.id.as_str())),
+                (Actor::Person, "draft_approved", Some(comment.id.as_str())),
+            ],
+            "skipping twice is recorded once"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_outside_any_workstream_leaves_agent_drafts_in_none() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = run_with(&fx, |_| {}).await;
+        let p = fx.core.draft_run_comment(&run.id).await.unwrap();
+        assert_eq!((p.created_by, p.workstream()), (CreatedBy::Agent, None));
+        assert!(proposals::require_pip_may_revise(&p, Some("any")).is_ok());
     }
 }

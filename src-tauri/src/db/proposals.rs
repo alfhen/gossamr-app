@@ -20,9 +20,19 @@ impl Db {
     pub fn insert_proposal(&self, p: &Proposal) -> Result<()> {
         let item_id = p.target().map(|t| t.external_id.clone());
         self.conn.execute(
-            "INSERT INTO proposals (id, connection_id, item_id, state, created_at, updated_at, data)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![p.id, connection_of(p), item_id, p.state.kind().as_str(), stamp(p.created_at), stamp(p.updated_at), serde_json::to_string(p)?],
+            "INSERT INTO proposals (id, connection_id, item_id, state, created_at, updated_at, data, origin_kind, workstream)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                p.id,
+                connection_of(p),
+                item_id,
+                p.state.kind().as_str(),
+                stamp(p.created_at),
+                stamp(p.updated_at),
+                serde_json::to_string(p)?,
+                p.origin.kind(),
+                p.workstream()
+            ],
         )?;
         Ok(())
     }
@@ -30,8 +40,8 @@ impl Db {
     /// Replaces a stored proposal. Returns false when there is none with that id.
     pub fn save_proposal(&self, p: &Proposal) -> Result<bool> {
         let n = self.conn.execute(
-            "UPDATE proposals SET state = ?2, updated_at = ?3, data = ?4 WHERE id = ?1",
-            params![p.id, p.state.kind().as_str(), stamp(p.updated_at), serde_json::to_string(p)?],
+            "UPDATE proposals SET state = ?2, updated_at = ?3, data = ?4, origin_kind = ?5, workstream = ?6 WHERE id = ?1",
+            params![p.id, p.state.kind().as_str(), stamp(p.updated_at), serde_json::to_string(p)?, p.origin.kind(), p.workstream()],
         )?;
         Ok(n > 0)
     }
@@ -59,6 +69,10 @@ impl Db {
         if let Some(c) = &q.connection_id {
             sql.push_str(" AND connection_id = ?");
             args.push(Sql::Text(c.clone()));
+        }
+        if let Some(w) = &q.workstream {
+            sql.push_str(" AND workstream = ?");
+            args.push(Sql::Text(w.clone()));
         }
         sql.push_str(" ORDER BY created_at DESC, id");
         let mut stmt = self.conn.prepare(&sql)?;

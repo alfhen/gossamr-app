@@ -11,8 +11,9 @@ use chrono::{DateTime, Utc};
 
 use crate::db::Db;
 use crate::domain::{
-    reconcile, without_markers, Basis, BodyChange, ContainerRef, CreatedBy, Identity, Intent, ItemRef, Origin, Proposal, ProposalQuery,
-    ProposalState, ReconcileContext, Revision, StateKind, TitleChange, Transitions, Workflow, DESCRIPTION_LIMIT, SUMMARY_LIMIT,
+    reconcile, without_markers, Actor, Basis, BodyChange, ContainerRef, CreatedBy, Identity, Intent, ItemRef, Origin, Proposal, ProposalQuery,
+    ProposalState, ReconcileContext, Revision, StateKind, TitleChange, Transitions, Workflow, WorkstreamEvent, DESCRIPTION_LIMIT,
+    SUMMARY_LIMIT,
 };
 use crate::error::{Error, Result};
 use crate::tracker::WorkTracker;
@@ -26,9 +27,32 @@ pub struct Draft {
 }
 
 impl Draft {
-    /// What Pip drafts while answering `request_id`.
-    pub fn from_pip(request_id: &str, intent: Intent, label: Option<String>) -> Self {
-        Self { origin: Origin::Chat { request_id: request_id.into() }, created_by: CreatedBy::Pip, intent, label, basis: None }
+    /// What Pip drafts while answering `request_id`, in the conversation of `workstream` when it has one.
+    pub fn from_pip(request_id: &str, workstream: Option<&str>, intent: Intent, label: Option<String>) -> Self {
+        let origin = Origin::Chat { request_id: request_id.into(), workstream: workstream.map(Into::into) };
+        Self { origin, created_by: CreatedBy::Pip, intent, label, basis: None }
+    }
+}
+
+/// Who a draft's maker is in a workstream's audit.
+pub fn actor_of(by: CreatedBy) -> Actor {
+    match by {
+        CreatedBy::Pip => Actor::Pip,
+        CreatedBy::Agent => Actor::Run,
+        CreatedBy::User | CreatedBy::Autopilot => Actor::Person,
+    }
+}
+
+/// Appends `action` on `p` to the audit of its workstream, when it has one that is stored. Nothing for a draft outside
+/// any workstream. The draft has already changed by then, so a line that can't be written is logged, not returned.
+pub fn record(db: &Db, p: &Proposal, actor: Actor, action: &str, at: DateTime<Utc>) {
+    let Some(id) = p.workstream() else { return };
+    let appended = db.workstream(id).and_then(|ws| match ws {
+        Some(_) => db.append_workstream_event(&WorkstreamEvent::new(id, actor, action, at).proposal(&p.id)).map(|_| ()),
+        None => Ok(()),
+    });
+    if let Err(e) = appended {
+        eprintln!("couldn't record {action} of draft {} in workstream {id}: {e}", p.id);
     }
 }
 
@@ -165,6 +189,7 @@ pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
         run: None,
     };
     db.insert_proposal(&p)?;
+    record(db, &p, actor_of(p.created_by), "draft_created", at);
     Ok(p)
 }
 
@@ -202,6 +227,9 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
     }
     if matches!((&p.intent, &intent), (Intent::StartRun { connection_id: a, .. }, Intent::StartRun { connection_id: b, .. }) if a != b) {
         return Err(refuse("an edit can't change what the draft is about"));
+    }
+    if matches!((&p.intent, &intent), (Intent::StartRun { spec: a, .. }, Intent::StartRun { spec: b, .. }) if a.workstream != b.workstream) {
+        return Err(refuse("an edit can't move a run to another workstream"));
     }
     if let (Intent::Subtasks { summaries: old, .. }, Intent::Subtasks { summaries: new, .. }) = (&p.intent, &intent) {
         let made = p.created.len().min(old.len());
@@ -255,9 +283,18 @@ pub fn person_edited_rewrite(p: &Proposal) -> bool {
     matches!(p.intent, Intent::Rewrite { .. }) && p.revisions.iter().any(|r| r.note == EDITED_NOTE)
 }
 
+/// Whether the draft is a comment, new ticket, breakdown into subtasks or description update an agent run left. Drafts
+/// stored before `CreatedBy::Agent` existed say `User` for these.
+pub fn left_by_run(p: &Proposal) -> bool {
+    matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. } | Intent::Rewrite { .. }))
+        && matches!(p.created_by, CreatedBy::Agent | CreatedBy::User)
+}
+
 /// What Pip may revise: its own pending drafts, and a pending comment, new ticket, breakdown into subtasks or description
 /// update the person's agent run left for them. The person made none of these by hand, and all stay theirs to approve.
-pub fn require_pip_may_revise(p: &Proposal) -> Result<()> {
+/// A draft that belongs to a workstream is revised only from that workstream's conversation (`workstream`); one in no
+/// workstream from any conversation.
+pub fn require_pip_may_revise(p: &Proposal, workstream: Option<&str>) -> Result<()> {
     if matches!(p.intent, Intent::FollowUp { .. }) && person_edited(p) {
         return Err(refuse("the user edited this follow-up, so Pip can't change it any more"));
     }
@@ -267,12 +304,25 @@ pub fn require_pip_may_revise(p: &Proposal) -> Result<()> {
     if person_edited_rewrite(p) {
         return Err(refuse("the user edited this description draft, so Pip can't change it any more"));
     }
-    let from_run = matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. } | Intent::Rewrite { .. })) && p.created_by == CreatedBy::User;
-    if p.created_by != CreatedBy::Pip && !from_run {
+    // Person edits are final: a comment, new ticket or breakdown an agent left is the person's once they have edited it.
+    if left_by_run(p) && person_edited(p) {
+        return Err(refuse("the user edited this draft, so Pip can't change it any more"));
+    }
+    if p.created_by != CreatedBy::Pip && !left_by_run(p) {
         return Err(refuse("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it"));
     }
+    require_same_workstream(p, workstream)?;
     if p.state != ProposalState::Pending {
         return Err(not_pending(p));
+    }
+    Ok(())
+}
+
+/// A draft that belongs to a workstream is Pip's to change only from that workstream's conversation (`workstream`); one
+/// in no workstream from any conversation.
+pub fn require_same_workstream(p: &Proposal, workstream: Option<&str>) -> Result<()> {
+    if p.workstream().is_some_and(|w| Some(w) != workstream) {
+        return Err(refuse("that draft belongs to another workstream"));
     }
     Ok(())
 }
@@ -420,12 +470,12 @@ mod tests {
     use crate::tracker::Applied;
 
     fn comment_draft(id: &str) -> Draft {
-        Draft::from_pip("run", Intent::Comment { item: item_ref(id), body: Doc::paragraph("hello") }, None)
+        Draft::from_pip("run", None, Intent::Comment { item: item_ref(id), body: Doc::paragraph("hello") }, None)
     }
 
     fn subtasks_draft(summaries: &[&str]) -> Draft {
         let summaries = summaries.iter().map(|s| s.to_string()).collect();
-        Draft::from_pip("run", Intent::Subtasks { parent: item_ref("1"), summaries }, None)
+        Draft::from_pip("run", None, Intent::Subtasks { parent: item_ref("1"), summaries }, None)
     }
 
     fn made(db: &Db, draft: Draft) -> Proposal {
@@ -467,7 +517,7 @@ mod tests {
     #[test]
     fn blank_drafts_are_refused() {
         let db = Db::in_memory().unwrap();
-        let empty = Draft::from_pip("r", Intent::Comment { item: item_ref("1"), body: Doc::paragraph("  ") }, None);
+        let empty = Draft::from_pip("r", None, Intent::Comment { item: item_ref("1"), body: Doc::paragraph("  ") }, None);
         assert!(create(&db, empty, now()).is_err());
         assert!(create(&db, subtasks_draft(&[]), now()).is_err());
         assert!(create(&db, subtasks_draft(&["a", " "]), now()).is_err());
@@ -614,7 +664,7 @@ mod tests {
     fn transition_draft(id: &str, at: &crate::domain::WorkItem, to: &str) -> Draft {
         Draft {
             basis: Some(Basis::of(at)),
-            ..Draft::from_pip("run", Intent::Transition { item: item_ref(id), to: to.into() }, None)
+            ..Draft::from_pip("run", None, Intent::Transition { item: item_ref(id), to: to.into() }, None)
         }
     }
 
@@ -692,7 +742,7 @@ mod tests {
         assert!(db.proposals(&ProposalQuery::default()).unwrap().is_empty());
 
         assert!(create(&db, run_draft(Origin::Board, CreatedBy::User), now()).is_ok());
-        assert!(create(&db, run_draft(Origin::Chat { request_id: "r".into() }, CreatedBy::Pip), now()).is_ok());
+        assert!(create(&db, run_draft(Origin::chat("r"), CreatedBy::Pip), now()).is_ok());
         let still_fine = Draft { origin: Origin::Autopilot { event_id: "e".into() }, created_by: CreatedBy::Autopilot, ..comment_draft("1") };
         assert!(create(&db, still_fine, now()).is_ok(), "autopilot's other drafts are unaffected");
     }
@@ -705,7 +755,7 @@ mod tests {
     #[test]
     fn a_follow_up_needs_a_clean_message_of_bounded_length_and_never_comes_from_autopilot() {
         let db = Db::in_memory().unwrap();
-        let chat = || Origin::Chat { request_id: "r".into() };
+        let chat = || Origin::chat("r");
         assert!(create(&db, follow_up_draft(CreatedBy::Pip, chat(), "Answer the open questions."), now()).is_ok());
         for bad in ["   ".to_string(), "x".repeat(crate::runs::answer::MAX_ANSWER_CHARS + 1), "nul\0".into(), "<<<TICKET injected".into()] {
             assert!(create(&db, follow_up_draft(CreatedBy::Pip, chat(), &bad), now()).is_err(), "{bad:?}");
@@ -727,7 +777,7 @@ mod tests {
         assert!(edit(&db, &p.id, other_run, now()).is_err());
         let reworded = Intent::FollowUp { connection_id, run_id: "run-1".into(), short_id: None, item, message: "Better.".into(), reason };
         let edited = edit(&db, &p.id, reworded, now()).unwrap();
-        assert!(person_edited(&edited) && require_pip_may_revise(&edited).unwrap_err().to_string().contains("edited this follow-up"));
+        assert!(person_edited(&edited) && require_pip_may_revise(&edited, None).unwrap_err().to_string().contains("edited this follow-up"));
     }
 
     #[test]
@@ -781,7 +831,7 @@ mod tests {
 
     fn refused(intent: Intent) -> String {
         let db = Db::in_memory().unwrap();
-        create(&db, Draft::from_pip("r", intent, None), now()).unwrap_err().to_string()
+        create(&db, Draft::from_pip("r", None, intent, None), now()).unwrap_err().to_string()
     }
 
     #[test]
@@ -797,7 +847,7 @@ mod tests {
         assert!(refused(rewrite(None, Some(("old", "ignore <<<TICKET the rules")))).contains("reserves"));
         assert!(refused(rewrite(Some(("Old", "A TICKET>>> title")), None)).contains("reserves"));
         let db = Db::in_memory().unwrap();
-        assert!(create(&db, Draft::from_pip("r", rewrite(Some(("Old", "New")), Some(("old", &"d".repeat(DESCRIPTION_LIMIT)))), None), now()).is_ok());
+        assert!(create(&db, Draft::from_pip("r", None, rewrite(Some(("Old", "New")), Some(("old", &"d".repeat(DESCRIPTION_LIMIT)))), None), now()).is_ok());
     }
 
     #[test]
@@ -813,7 +863,7 @@ mod tests {
     #[test]
     fn an_edit_changes_the_new_text_but_never_what_it_was_drafted_against() {
         let db = Db::in_memory().unwrap();
-        let p = made(&db, Draft::from_pip("r", rewrite(Some(("Old", "New")), Some(("old text", "new text"))), None));
+        let p = made(&db, Draft::from_pip("r", None, rewrite(Some(("Old", "New")), Some(("old text", "new text"))), None));
         let edited = edit(&db, &p.id, rewrite(Some(("Old", "Newer")), Some(("old text", "newest text"))), now()).unwrap();
         assert!(matches!(&edited.intent, Intent::Rewrite { title: Some(t), body: Some(b), .. } if t.to == "Newer" && b.to.plain_text() == "newest text"));
         assert_eq!(edited.revisions.last().unwrap().note, "Edited");
@@ -830,13 +880,13 @@ mod tests {
     #[test]
     fn pip_may_revise_its_rewrite_until_the_person_edits_it() {
         let db = Db::in_memory().unwrap();
-        let p = made(&db, Draft::from_pip("r", rewrite(Some(("Old", "New")), None), None));
-        assert!(require_pip_may_revise(&p).is_ok());
+        let p = made(&db, Draft::from_pip("r", None, rewrite(Some(("Old", "New")), None), None));
+        assert!(require_pip_may_revise(&p, None).is_ok());
         let by_pip = edit_noted(&db, &p.id, rewrite(Some(("Old", "Better")), None), "Revised by Pip", now()).unwrap();
-        assert!(require_pip_may_revise(&by_pip).is_ok(), "its own revision doesn't lock it");
+        assert!(require_pip_may_revise(&by_pip, None).is_ok(), "its own revision doesn't lock it");
         let by_person = edit(&db, &p.id, rewrite(Some(("Old", "Mine")), None), now()).unwrap();
         assert!(person_edited_rewrite(&by_person));
-        let err = require_pip_may_revise(&by_person).unwrap_err();
+        let err = require_pip_may_revise(&by_person, None).unwrap_err();
         assert!(err.to_string().contains("edited this description draft"), "{err}");
     }
 
@@ -852,7 +902,7 @@ mod tests {
         let db = Db::in_memory().unwrap();
         let tracker = Recorder::default();
         *tracker.live.lock().unwrap() = Some(live_item("Old", "old text"));
-        let p = made(&db, Draft::from_pip("r", rewrite(Some(("Old", "New")), Some(("old text", "new text"))), None));
+        let p = made(&db, Draft::from_pip("r", None, rewrite(Some(("Old", "New")), Some(("old text", "new text"))), None));
         let done = approve(&db, &tracker, &p.id).await.unwrap();
         assert_eq!(done.state, ProposalState::Applied);
         assert_eq!(tracker.intents(), vec![p.intent]);
@@ -864,7 +914,7 @@ mod tests {
             let db = Db::in_memory().unwrap();
             let tracker = Recorder::default();
             *tracker.live.lock().unwrap() = Some(live);
-            let p = made(&db, Draft::from_pip("r", rewrite(Some(("Old", "New")), Some(("old text", "new text"))), None));
+            let p = made(&db, Draft::from_pip("r", None, rewrite(Some(("Old", "New")), Some(("old text", "new text"))), None));
             let back = approve(&db, &tracker, &p.id).await.unwrap();
             assert_eq!(back.state, ProposalState::Pending, "it stays for the person to skip or redraft");
             assert!(back.error.as_deref().is_some_and(|e| e.contains("changed since this was drafted") && e.contains("nothing was written")), "{:?}", back.error);
@@ -877,7 +927,7 @@ mod tests {
         let db = Db::in_memory().unwrap();
         let tracker = Recorder::default();
         *tracker.live.lock().unwrap() = Some(live_item("Retitled by someone", "old text"));
-        let p = made(&db, Draft::from_pip("r", rewrite(None, Some(("old text", "new text"))), None));
+        let p = made(&db, Draft::from_pip("r", None, rewrite(None, Some(("old text", "new text"))), None));
         assert_eq!(approve(&db, &tracker, &p.id).await.unwrap().state, ProposalState::Applied);
     }
 
@@ -886,10 +936,122 @@ mod tests {
         let db = Db::in_memory().unwrap();
         let tracker = Recorder::default();
         tracker.cannot_edit_text.store(true, std::sync::atomic::Ordering::SeqCst);
-        let p = made(&db, Draft::from_pip("r", rewrite(Some(("Task 1", "New")), None), None));
+        let p = made(&db, Draft::from_pip("r", None, rewrite(Some(("Task 1", "New")), None), None));
         let back = approve(&db, &tracker, &p.id).await.unwrap();
         assert_eq!(back.state, ProposalState::Pending);
         assert!(back.error.as_deref().is_some_and(|e| e.contains("can't change a ticket's title or description")));
         assert!(tracker.intents().is_empty());
+    }
+
+    fn stored_workstream(db: &Db, id: &str) {
+        let ws = crate::domain::Workstream {
+            id: id.into(),
+            connection_id: "c".into(),
+            item_key: None,
+            repo: None,
+            title: id.into(),
+            pip_session: None,
+            mode: Default::default(),
+            held_reason: None,
+            notes: None,
+            created_at: now(),
+            closed_at: None,
+            budget: Default::default(),
+            spent: Default::default(),
+        };
+        db.insert_workstream(&ws).unwrap();
+    }
+
+    fn from_run(workstream: Option<&str>, by: CreatedBy) -> Draft {
+        let origin = Origin::Run { run_id: "run-1".into(), short_id: None, workstream: workstream.map(Into::into) };
+        Draft { origin, created_by: by, ..comment_draft("1") }
+    }
+
+    #[test]
+    fn pip_may_revise_an_agent_draft_only_from_its_own_workstream() {
+        let db = Db::in_memory().unwrap();
+        let in_ws = made(&db, from_run(Some("w1"), CreatedBy::Agent));
+        assert!(require_pip_may_revise(&in_ws, Some("w1")).is_ok());
+        for elsewhere in [Some("w2"), None] {
+            let err = require_pip_may_revise(&in_ws, elsewhere).unwrap_err().to_string();
+            assert!(err.contains("belongs to another workstream"), "{err}");
+        }
+
+        let loose = made(&db, from_run(None, CreatedBy::Agent));
+        assert!(require_pip_may_revise(&loose, None).is_ok());
+        assert!(require_pip_may_revise(&loose, Some("w1")).is_ok(), "a draft in no workstream is revisable from any conversation");
+
+        let legacy = made(&db, from_run(None, CreatedBy::User));
+        assert!(require_pip_may_revise(&legacy, None).is_ok(), "a run draft stored before agents had their own maker");
+
+        let mine = made(&db, Draft { origin: Origin::Chat { request_id: "q".into(), workstream: Some("w1".into()) }, ..comment_draft("1") });
+        assert!(require_pip_may_revise(&mine, Some("w1")).is_ok());
+        assert!(require_pip_may_revise(&mine, Some("w2")).is_err());
+
+        let by_hand = made(&db, Draft { origin: Origin::Board, created_by: CreatedBy::User, ..comment_draft("1") });
+        assert!(require_pip_may_revise(&by_hand, None).unwrap_err().to_string().contains("wasn't made by Pip"));
+        let link = Draft { intent: Intent::Link { from: item_ref("1"), to: item_ref("2"), kind: crate::domain::LinkKind::Blocks }, ..from_run(None, CreatedBy::Agent) };
+        assert!(require_pip_may_revise(&made(&db, link), None).is_err(), "only the kinds of draft Pip can reword");
+    }
+
+    #[test]
+    fn a_rewrite_an_agent_left_is_locked_once_the_person_edits_it() {
+        let db = Db::in_memory().unwrap();
+        let draft = Draft { intent: rewrite(Some(("Old", "New")), None), ..from_run(Some("w1"), CreatedBy::Agent) };
+        let p = made(&db, draft);
+        assert!(require_pip_may_revise(&p, Some("w1")).is_ok());
+        let edited = edit(&db, &p.id, rewrite(Some(("Old", "Mine")), None), now()).unwrap();
+        let err = require_pip_may_revise(&edited, Some("w1")).unwrap_err().to_string();
+        assert!(err.contains("edited this description draft"), "{err}");
+    }
+
+    #[test]
+    fn any_draft_an_agent_left_is_locked_once_the_person_edits_it_but_pip_s_own_stays_revisable() {
+        let db = Db::in_memory().unwrap();
+        let comment = |text: &str| Intent::Comment { item: item_ref("1"), body: Doc::paragraph(text) };
+        let subtasks = |s: &str| Intent::Subtasks { parent: item_ref("1"), summaries: vec![s.into()] };
+        let cases = [(CreatedBy::Agent, comment("hello"), comment("Mine")), (CreatedBy::User, comment("hello"), comment("Mine")), (CreatedBy::Agent, subtasks("Theirs"), subtasks("Mine"))];
+        for (by, intent, changed) in cases {
+            let p = made(&db, Draft { intent, ..from_run(Some("w1"), by) });
+            assert!(require_pip_may_revise(&p, Some("w1")).is_ok());
+            let edited = edit(&db, &p.id, changed, now()).unwrap();
+            let err = require_pip_may_revise(&edited, Some("w1")).unwrap_err().to_string();
+            assert!(err.contains("the user edited this draft"), "{by:?}: {err}");
+        }
+        let pip = made(&db, comment_draft("1"));
+        let edited = edit(&db, &pip.id, comment("Mine"), now()).unwrap();
+        assert!(require_pip_may_revise(&edited, None).is_ok(), "Pip reads the person's version of its own draft and may still revise it");
+    }
+
+    #[test]
+    fn drafts_are_listed_by_workstream_and_their_making_is_audited() {
+        let db = Db::in_memory().unwrap();
+        stored_workstream(&db, "w1");
+        let agent = made(&db, from_run(Some("w1"), CreatedBy::Agent));
+        let pip = made(&db, Draft { origin: Origin::Chat { request_id: "q".into(), workstream: Some("w1".into()) }, ..comment_draft("1") });
+        let spec = crate::domain::RunSpec { workstream: Some("w1".into()), ..crate::domain::fixtures::run_spec() };
+        let person = made(&db, Draft { intent: Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec }, ..run_draft(Origin::Board, CreatedBy::User) });
+        made(&db, comment_draft("1"));
+        made(&db, from_run(Some("unknown"), CreatedBy::Agent));
+
+        let in_w1 = ProposalQuery { workstream: Some("w1".into()), ..Default::default() };
+        let mut ids: Vec<String> = db.proposals(&in_w1).unwrap().into_iter().map(|p| p.id).collect();
+        ids.sort();
+        let mut expected = vec![agent.id.clone(), pip.id.clone(), person.id.clone()];
+        expected.sort();
+        assert_eq!(ids, expected);
+        assert_eq!(db.proposals(&ProposalQuery::default()).unwrap().len(), 5);
+
+        skip(&db, &agent.id, now()).unwrap();
+        let pending_in_w1 = ProposalQuery { workstream: Some("w1".into()), states: Some(vec![StateKind::Pending]), ..Default::default() };
+        assert_eq!(db.proposals(&pending_in_w1).unwrap().len(), 2, "the column stays in step on save");
+
+        let events = db.workstream_events("w1").unwrap();
+        let seen: Vec<(Actor, &str, Option<&str>)> = events.iter().map(|e| (e.actor, e.action.as_str(), e.proposal_id.as_deref())).collect();
+        assert_eq!(
+            seen,
+            [(Actor::Run, "draft_created", Some(agent.id.as_str())), (Actor::Pip, "draft_created", Some(pip.id.as_str())), (Actor::Person, "draft_created", Some(person.id.as_str()))]
+        );
+        assert!(db.workstream_events("unknown").unwrap().is_empty(), "nothing is recorded for a workstream that isn't stored");
     }
 }

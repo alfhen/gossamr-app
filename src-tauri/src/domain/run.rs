@@ -188,6 +188,9 @@ pub struct RunSpec {
     /// Whether the agent is asked to report its result through the run-report tool when Gossamr offers it.
     #[serde(default)]
     pub report: bool,
+    /// The workstream the run belongs to. Part of what the person approves, but never part of the prompt.
+    #[serde(default)]
+    pub workstream: Option<String>,
 }
 
 /// Where a run would be set up, worked out by whoever knows the person's clones.
@@ -299,6 +302,9 @@ impl RunSpec {
                 return Err(refuse("the run the focus came from isn't valid"));
             }
         }
+        if self.workstream.as_deref().is_some_and(|w| w.is_empty() || too_long(w, 64) || w.chars().any(char::is_control)) {
+            return Err(refuse("the workstream isn't valid"));
+        }
         if self.ticket_block.as_deref().is_some_and(|t| too_long(t, TICKET_BLOCK_LIMIT)) {
             return Err(refuse(format!("the ticket text is limited to {TICKET_BLOCK_LIMIT} characters")));
         }
@@ -352,8 +358,16 @@ impl RunSpec {
         if self.report {
             canonical["reportTool"] = REPORT_TOOL_VERSION.into();
         }
+        if let Some(workstream) = &self.workstream {
+            canonical["workstream"] = workstream.as_str().into();
+        }
         Sha256::digest(canonical.to_string().as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
     }
+}
+
+/// Whether `text` holds any of the markers that fence data in a run's prompt.
+pub fn has_markers(text: &str) -> bool {
+    MARKERS.iter().any(|m| text.contains(m))
 }
 
 pub fn without_markers(text: &str) -> String {
@@ -705,6 +719,9 @@ pub struct RunQuery {
     pub states: Option<Vec<RunState>>,
     pub item: Option<ItemRef>,
     pub connection_id: Option<String>,
+    /// Runs linked to this workstream.
+    #[serde(default)]
+    pub workstream: Option<String>,
 }
 
 /// What the person reads before approving: the prompt as it will be sent, its parts, and the digest that binds
@@ -1465,5 +1482,48 @@ mod tests {
         assert!(run.follow_up_blocker().is_some());
         run.stopped_by_limit = true;
         assert_eq!(run.follow_up_blocker(), None);
+    }
+
+    #[test]
+    fn a_workstream_changes_the_digest_and_none_keeps_every_golden() {
+        assert_eq!(spec().workstream, None);
+        assert_eq!(spec().digest(), "7534d3cc2194330252913a230041a452e813b32198b0ceab89d01b20dae06b16");
+        let digests: Vec<String> = [(RunKind::Triage, None), (RunKind::Verify, None), (RunKind::Build, None), (RunKind::Review, Some(12))].iter().map(|(k, pr)| of_kind(*k, *pr, false).digest()).collect();
+        assert_eq!(digests, GOLDEN_DIGESTS);
+        let reported: Vec<String> = [RunKind::Investigate, RunKind::Triage, RunKind::Plan, RunKind::Build, RunKind::Review, RunKind::Verify].iter().map(|k| reporting(*k).digest()).collect();
+        assert_eq!(reported, REPORT_GOLDEN_DIGESTS);
+        let one = RunSpec { workstream: Some("ws-1".into()), ..spec() };
+        let two = RunSpec { workstream: Some("ws-2".into()), ..spec() };
+        assert_ne!(one.digest(), spec().digest());
+        assert_ne!(one.digest(), two.digest());
+        assert_eq!(one.digest(), RunSpec { workstream: Some("ws-1".into()), ..spec() }.digest());
+        one.validate().unwrap();
+        for bad in ["", "a\nb", &"w".repeat(65)] {
+            assert!(RunSpec { workstream: Some(bad.into()), ..spec() }.validate().is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_spec_stored_before_workstreams_reads_as_none_with_the_same_digest() {
+        let mut json = serde_json::to_value(spec()).unwrap();
+        assert!(json.as_object_mut().unwrap().remove("workstream").is_some());
+        let back: RunSpec = serde_json::from_value(json).unwrap();
+        assert_eq!(back.workstream, None);
+        assert_eq!(back.digest(), spec().digest());
+        assert_eq!(back.digest(), "7534d3cc2194330252913a230041a452e813b32198b0ceab89d01b20dae06b16");
+    }
+
+    #[test]
+    fn the_workstream_is_not_in_the_prompt() {
+        let linked = RunSpec { workstream: Some("ws-secret-id".into()), ..spec() };
+        assert_eq!(render_prompt(&linked), render_prompt(&spec()));
+        assert!(!render_prompt(&linked).contains("ws-secret-id"));
+        assert_eq!(RunReview::of(&linked).prompt, RunReview::of(&spec()).prompt);
+    }
+
+    #[test]
+    fn markers_are_found_wherever_they_sit() {
+        assert!(has_markers("x <<<PLAN y") && has_markers("TICKET>>>"));
+        assert!(!has_markers("<<PLAN >>"));
     }
 }

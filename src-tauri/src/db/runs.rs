@@ -108,6 +108,10 @@ impl Db {
             sql.push_str(" AND connection_id = ?");
             args.push(Sql::Text(c.clone()));
         }
+        if let Some(w) = &q.workstream {
+            sql.push_str(" AND json_extract(data, '$.spec.workstream') = ?");
+            args.push(Sql::Text(w.clone()));
+        }
         sql.push_str(" ORDER BY queued_at DESC, id");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(args), |r| r.get::<_, String>(0))?;
@@ -276,7 +280,7 @@ mod tests {
     #[test]
     fn a_pip_revision_between_review_and_approve_is_refused() {
         let db = Db::in_memory().unwrap();
-        let by_pip = Draft::from_pip("r", start_run("eng-1-cart-0001"), None);
+        let by_pip = Draft::from_pip("r", None, start_run("eng-1-cart-0001"), None);
         let p = proposals::create(&db, by_pip, now()).unwrap();
         let read = digest_of(&p);
 
@@ -300,7 +304,7 @@ mod tests {
         proposals::skip(&db, &skipped.id, now()).unwrap();
         assert!(approve(&db, &skipped, &digest_of(&skipped)).unwrap_err().to_string().contains("skipped"));
 
-        let comment = Draft::from_pip("r", Intent::Comment { item: item_ref("1"), body: crate::domain::Doc::paragraph("hi") }, None);
+        let comment = Draft::from_pip("r", None, Intent::Comment { item: item_ref("1"), body: crate::domain::Doc::paragraph("hi") }, None);
         let c = proposals::create(&db, comment, now()).unwrap();
         assert!(approve(&db, &c, "x").unwrap_err().to_string().contains("doesn't start a run"));
         assert!(approve(&db, &Proposal { id: "missing".into(), ..c }, "x").unwrap_err().to_string().contains("no longer exists"));
@@ -362,7 +366,7 @@ mod tests {
         let mut run_draft = drafted(&db, "eng-1-cart-0001");
         run_draft.state = ProposalState::Applying;
         db.save_proposal(&run_draft).unwrap();
-        let comment = Draft::from_pip("r", Intent::Comment { item: item_ref("1"), body: crate::domain::Doc::paragraph("hi") }, None);
+        let comment = Draft::from_pip("r", None, Intent::Comment { item: item_ref("1"), body: crate::domain::Doc::paragraph("hi") }, None);
         let c = proposals::create(&db, comment, now()).unwrap();
         proposals::begin(&db, &c.id, now()).unwrap();
 
@@ -393,6 +397,24 @@ mod tests {
         assert_eq!(ids(RunQuery { states: Some(vec![RunState::Done]), ..Default::default() }), ["c", "b"]);
         assert_eq!(ids(RunQuery { item: Some(item_ref("1")), ..Default::default() }), ["c", "a"]);
         assert!(ids(RunQuery { connection_id: Some("other".into()), ..Default::default() }).is_empty());
+    }
+
+    #[test]
+    fn runs_are_filtered_by_their_workstream() {
+        let db = Db::in_memory().unwrap();
+        let mk = |id: &str, workstream: Option<&str>, mins: i64| {
+            let spec = crate::domain::RunSpec { name: format!("name-{id}"), workstream: workstream.map(Into::into), ..run_spec() };
+            db.insert_run(&Run::queued(id.into(), format!("p{id}"), "c".into(), None, spec, "f".into(), now() + Duration::minutes(mins))).unwrap();
+        };
+        mk("a", Some("ws-1"), 0);
+        mk("b", None, 1);
+        mk("c", Some("ws-1"), 2);
+        mk("d", Some("ws-2"), 3);
+        let ids = |w: &str| db.runs(&RunQuery { workstream: Some(w.into()), ..Default::default() }).unwrap().into_iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(ids("ws-1"), ["c", "a"]);
+        assert_eq!(ids("ws-2"), ["d"]);
+        assert!(ids("ws-3").is_empty());
+        assert_eq!(db.runs(&RunQuery::default()).unwrap().len(), 4);
     }
 
     #[test]

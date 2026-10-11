@@ -267,7 +267,7 @@ async fn list(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     if let Some(key) = &key {
         reachable(st, pip, key).await?;
     }
-    let query = RunQuery { states, item: key.as_deref().map(|k| item_ref(scope, k)), connection_id: None };
+    let query = RunQuery { states, item: key.as_deref().map(|k| item_ref(scope, k)), connection_id: None, workstream: None };
     let found = st.core.runs_in(scope, &query).await.map_err(|e| format!("Couldn't read the runs: {e}"))?;
     let runs = visible(&st.core, scope, &pip.handed, found).await;
     if runs.is_empty() {
@@ -532,7 +532,7 @@ async fn propose_on_ticket(st: &McpState, pip: &PipRun, request_id: &str, key: &
     let plan = st.planner.plan(&repo, key, &title).await?;
     let made = st
         .core
-        .draft_run_as_pip(scope, request_id, PipRunAsk { key: key.to_string(), kind, focus, from_run }, repo.clone(), plan)
+        .draft_run_as_pip(scope, request_id, pip.workstream.as_deref(), PipRunAsk { key: key.to_string(), kind, focus, from_run }, repo.clone(), plan)
         .await
         .map_err(|e| format!("Couldn't save the draft: {e}"))?;
     (st.sink)(&Connection::jira_id(scope));
@@ -556,7 +556,7 @@ async fn propose_ticketless(st: &McpState, pip: &PipRun, request_id: &str, kind:
     let plan = st.planner.plan(&repo, "", &prompt).await?;
     let made = st
         .core
-        .draft_ticketless_run_as_pip(scope, request_id, prompt, repo.clone(), project, plan)
+        .draft_ticketless_run_as_pip(scope, request_id, pip.workstream.as_deref(), prompt, repo.clone(), project, plan)
         .await
         .map_err(|e| format!("Couldn't save the draft: {e}"))?;
     (st.sink)(&Connection::jira_id(scope));
@@ -1028,7 +1028,7 @@ mod tests {
         assert!(reply.contains("has not started") && reply.contains("Don't tell the user it is under way"), "{reply}");
         let drafts: Vec<Proposal> = r.drafts().await.into_iter().filter(|p| matches!(p.intent, Intent::StartRun { .. }) && p.state == ProposalState::Pending && p.created_by == CreatedBy::Pip).collect();
         let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
-        assert_eq!(draft.origin, Origin::Chat { request_id: "run-1".into() });
+        assert_eq!(draft.origin, Origin::chat("run-1"));
         assert_eq!(draft.id, id_in(&reply));
         let spec = spec_of(draft);
         assert_eq!(spec.kind, RunKind::Investigate);
@@ -1045,6 +1045,28 @@ mod tests {
         assert_eq!(r.runs().await, before, "no run was created or changed");
         assert_eq!(r.planner.asked.lock().unwrap().len(), 1);
         assert_eq!(r.changes.load(Ordering::SeqCst), 1);
+        assert!(r.fx.tracker.intents().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_run_proposed_in_a_workstream_s_conversation_is_linked_to_it_and_one_from_general_is_not() {
+        let r = rig().await;
+        let ws = r.fx.core.open_workstream(&r.fx.scope, Some(r.fx.item("CA-1")), None).await.unwrap();
+        r.st.runs.lock().unwrap().insert("in-ws".into(), PipRun::in_workstream(r.fx.scope.clone(), &ws.id));
+        let reply = call_tool(&r.st, "in-ws", &json!({ "name": "propose_run", "arguments": { "key": "CA-1", "kind": "investigate" } })).await;
+        let text = reply["content"][0]["text"].as_str().unwrap();
+        assert_eq!(reply["isError"], false, "{text}");
+        let linked = r.fx.core.proposal_in(&r.fx.scope, &id_in(text)).await.unwrap().unwrap();
+        assert_eq!(linked.origin, Origin::Chat { request_id: "in-ws".into(), workstream: Some(ws.id.clone()) });
+        assert_eq!(spec_of(&linked).workstream.as_deref(), Some(ws.id.as_str()));
+
+        let loose = r.fx.core.proposal_in(&r.fx.scope, &id_in(&r.ok("propose_run", json!({ "key": "CA-1", "kind": "triage" })).await)).await.unwrap().unwrap();
+        assert_eq!((loose.origin.workstream(), spec_of(&loose).workstream), (None, None));
+
+        // A workstream's conversation can't link a run on another ticket to it.
+        let other = call_tool(&r.st, "in-ws", &json!({ "name": "propose_run", "arguments": { "key": "CA-2", "kind": "investigate" } })).await;
+        assert_eq!(other["isError"], true);
+        assert!(other["content"][0]["text"].as_str().unwrap().contains("another ticket"));
         assert!(r.fx.tracker.intents().is_empty());
     }
 
@@ -1172,7 +1194,7 @@ mod tests {
         let before = r.runs().await;
         let (reply, draft) = ticketless(&r).await;
         assert!(reply.contains("no ticket in acme/webshop") && reply.contains("has not started") && reply.contains("Don't tell the user it is under way"), "{reply}");
-        assert_eq!((draft.created_by, draft.state.clone(), draft.origin.clone()), (CreatedBy::Pip, ProposalState::Pending, Origin::Chat { request_id: "run-1".into() }));
+        assert_eq!((draft.created_by, draft.state.clone(), draft.origin.clone()), (CreatedBy::Pip, ProposalState::Pending, Origin::chat("run-1")));
         let (item, spec) = match &draft.intent {
             Intent::StartRun { item, spec, .. } => (item.clone(), spec.clone()),
             other => panic!("{other:?}"),
@@ -1373,7 +1395,7 @@ mod tests {
         let [ticket] = tickets.as_slice() else { panic!("{tickets:?}") };
         let Intent::Create { container, fields, .. } = &ticket.intent else { unreachable!() };
         assert_eq!((container.clone(), fields.title.as_str()), (spec_of(&rig.fx.core.proposal(&id).await.unwrap().unwrap()).project.unwrap(), "Round the cart total once"));
-        assert_eq!((ticket.state.clone(), ticket.created_by), (ProposalState::Pending, CreatedBy::User));
+        assert_eq!((ticket.state.clone(), ticket.created_by), (ProposalState::Pending, CreatedBy::Agent));
         assert!(rig.fx.tracker.intents().is_empty(), "nothing is created in Jira before approval");
 
         let made = rig.fx.item("CA-812");
@@ -1409,7 +1431,7 @@ mod tests {
         assert!(block.chars().count() < 2_500, "{}", block.chars().count());
         assert!(!block.contains("rrrr"), "no result text in the prompt");
         assert!(block.lines().count() <= 1 + 8);
-        let prompt = crate::agent::context::compose(&Default::default(), None, &[], &[], &runs, "hi");
+        let prompt = crate::agent::context::compose(&Default::default(), None, &[], &[], &runs, None, "hi");
         assert!(prompt.chars().count() < 6_000);
 
         for run in &runs {
@@ -1468,6 +1490,26 @@ mod tests {
         assert_eq!((p.created_by, p.state.clone()), (CreatedBy::Pip, ProposalState::Pending));
         assert!(r.fx.tracker.intents().is_empty());
         assert_eq!(r.runs().await[0].passes, 1, "nothing was resumed");
+    }
+
+    #[tokio::test]
+    async fn a_follow_up_belongs_to_its_run_s_workstream_whichever_conversation_drafted_it() {
+        let r = rig().await;
+        let ws = r.fx.core.open_workstream(&r.fx.scope, Some(r.fx.item("CA-1")), None).await.unwrap();
+        let run = r
+            .seed(1, "CA-1", |run| {
+                run.state = RunState::Done;
+                run.result = Some("Done.".into());
+                run.short_id = Some(crate::runs::cli::ShortId::parse("abcd1234").unwrap());
+                run.session_id = Some("b0000001-0000-4000-8000-000000000000".into());
+                run.spec.workstream = Some(ws.id.clone());
+            })
+            .await;
+        r.ok("get_run", json!({ "id": run.id })).await;
+        r.ok("propose_follow_up", json!({ "run_id": run.id, "message": "Check the logs too." })).await;
+        let drafts = r.follow_ups().await;
+        let [p] = drafts.as_slice() else { panic!("{drafts:?}") };
+        assert_eq!(p.workstream(), Some(ws.id.as_str()), "asked in General, it is still the workstream's");
     }
 
     #[tokio::test]

@@ -7,9 +7,20 @@ use std::time::Duration;
 const FAST: Timing = Timing { recover_window: Duration::from_millis(300), worktree_grace: Duration::from_millis(300), poll: Duration::from_millis(10), stop_wait: Duration::from_millis(100), stop_settle: Duration::ZERO, rm_wait: Duration::from_millis(5) };
 
 async fn asking() -> (Rig, Run) {
+    let (rig, run, _) = asking_in(false).await;
+    (rig, run)
+}
+
+/// A run asking a question; with `workstream`, one in a workstream opened on its ticket, whose id comes back too.
+async fn asking_in(workstream: bool) -> (Rig, Run, Option<String>) {
     let mut rig = ready().await;
     rig.svc = std::sync::Arc::new(std::sync::Arc::into_inner(rig.svc).expect("sole owner").with_timing(FAST));
-    let run = rig.launched(1).await;
+    let (run, ws) = if workstream {
+        let (run, ws) = rig.launched_in_workstream(1).await;
+        (run, Some(ws))
+    } else {
+        (rig.launched(1).await, None)
+    };
     rig.job(run.short_id.as_ref().unwrap(), |j| j.suggested_reply = Some("Yes, go ahead".into()));
     rig.session(&run, |e| {
         e.state = Some("blocked".into());
@@ -18,7 +29,20 @@ async fn asking() -> (Rig, Run) {
     rig.poll().await;
     let run = rig.get(&run).await;
     assert_eq!(run.state, RunState::NeedsAnswer);
-    (rig, run)
+    (rig, run, ws)
+}
+
+#[tokio::test]
+async fn an_answer_to_a_workstream_run_is_recorded_by_its_length_only_and_a_refused_one_is_not() {
+    let (rig, run, ws) = asking_in(true).await;
+    let ws = ws.unwrap();
+    assert!(rig.svc.answer(&run.id, &"x".repeat(MAX_ANSWER_CHARS + 1)).await.is_err());
+    assert!(rig.run_actions(&ws).await.is_empty());
+    rig.svc.answer(&run.id, "Use the staging database.").await.unwrap();
+    let actions = rig.run_actions(&ws).await;
+    assert_eq!(actions, [("run_answered".to_string(), Some(run.id.clone()), Some("25".to_string()))]);
+    let events = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
+    assert!(events.iter().all(|e| !format!("{e:?}").contains("staging")), "the answer's text stays with the run");
 }
 
 fn resumes(rig: &Rig) -> Vec<ResumeCall> {

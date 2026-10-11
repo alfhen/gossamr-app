@@ -9,6 +9,7 @@ pub mod mcp;
 pub mod queue;
 mod runs;
 pub mod sandbox;
+pub mod workstream;
 
 #[cfg(test)]
 pub(crate) mod conformance;
@@ -142,11 +143,35 @@ pub trait AgentProvider: Send + Sync {
     fn cancel(&self, run_id: &str);
 }
 
-/// The conversation a request belongs to when the page doesn't say: the workspace's Pip pane.
-pub const WORKSPACE_CONVERSATION: &str = "workspace";
+/// The conversation a request belongs to when the page doesn't say: Pip's general conversation, outside any workstream.
+pub const GENERAL_CONVERSATION: &str = "general";
 
-fn workspace() -> String {
-    WORKSPACE_CONVERSATION.into()
+/// What the general conversation was called before workstreams; its turns were moved to `general`.
+const LEGACY_WORKSPACE_CONVERSATION: &str = "workspace";
+
+/// A workstream's conversation is `ws:<id>`.
+const WORKSTREAM_PREFIX: &str = "ws:";
+
+fn general() -> String {
+    GENERAL_CONVERSATION.into()
+}
+
+/// The conversation `raw` names, with the legacy `workspace` read as `general` so a page that still sends it keeps
+/// working.
+pub fn conversation_id(raw: &str) -> String {
+    match raw {
+        LEGACY_WORKSPACE_CONVERSATION => GENERAL_CONVERSATION.into(),
+        other => other.into(),
+    }
+}
+
+/// The workstream whose conversation `conversation` is, if it is one.
+pub fn workstream_of_conversation(conversation: &str) -> Option<&str> {
+    conversation.strip_prefix(WORKSTREAM_PREFIX).filter(|id| !id.is_empty())
+}
+
+fn conversation<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
+    Ok(conversation_id(&String::deserialize(d)?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,8 +184,9 @@ pub struct AskRequest {
     pub context: ScreenContext,
     #[serde(default)]
     pub images: Vec<ImageInput>,
-    /// Where the turn is kept: `workspace` for the Pip pane, a ticket key for the classic drawer.
-    #[serde(default = "workspace")]
+    /// Where the turn is kept: `general` for the Pip pane, `ws:<id>` for a workstream's conversation, a ticket key for
+    /// the classic drawer. `workspace` is read as `general`.
+    #[serde(default = "general", deserialize_with = "conversation")]
     pub conversation: String,
     /// How the page showed the question, kept with it so the conversation reads the same after a restart.
     #[serde(default)]
@@ -306,7 +332,8 @@ impl AgentService {
 
     /// Queues a question. It starts now when its conversation has nothing running and there is room, and otherwise
     /// once the turns ahead of it have ended; either way its events go to `sink`.
-    pub async fn ask(self: &Arc<Self>, req: AskRequest, sink: UpdateSink) -> Result<AskOutcome> {
+    pub async fn ask(self: &Arc<Self>, mut req: AskRequest, sink: UpdateSink) -> Result<AskOutcome> {
+        req.conversation = conversation_id(&req.conversation);
         // Checked and reserved under the queue's lock, and held until the turn is queued, so a second send of the same id
         // can't pass the check while the first is still being recorded.
         let _sending = {
@@ -376,9 +403,17 @@ impl AgentService {
             .cloned()
             .ok_or_else(|| Error::Claude(format!("The assistant provider “{id}” isn't available.")))?;
         check_images(&req.images, provider.capabilities())?;
+        // A turn in a workstream's conversation works in that workstream, which must be an open one of this account.
+        let workstream = match workstream_of_conversation(&req.conversation) {
+            Some(id) => Some(workstream::for_turn(&self.core, &scope, id).await?),
+            None => None,
+        };
 
         let mut context = req.context.in_connection(&crate::tracker::Connection::jira_id(&scope));
         let mut handed: std::collections::HashSet<String> = context::keys_in(&req.prompt).into_iter().collect();
+        if let Some(key) = workstream.as_ref().and_then(|w| w.workstream.item_key.as_ref()) {
+            handed.insert(key.to_uppercase());
+        }
         if let Some(r) = &context.item {
             handed.insert(r.key.to_uppercase());
             context.unwatched_item = !self.core.is_item_watched(&scope, &r.key).await?;
@@ -404,7 +439,9 @@ impl AgentService {
             false => Vec::new(),
         };
         let sandbox = Sandbox::prepare(&self.core.data_dir())?;
-        let session = match req.session_id.filter(|_| provider.capabilities().resume) {
+        // A workstream's conversation continues its own session when the page has none to give.
+        let asked = req.session_id.or_else(|| workstream.as_ref().and_then(|w| w.workstream.pip_session.clone()));
+        let session = match asked.filter(|_| provider.capabilities().resume) {
             Some(id) if self.core.is_pip_session(&id).await? => Some(id),
             _ => None,
         };
@@ -413,7 +450,7 @@ impl AgentService {
         let agent_req = AgentRequest {
             run_id: run_id.clone(),
             system: context::system_prompt(provider.capabilities().reads_code, self.core.can_edit_text(&scope)?),
-            prompt: context::compose(&context, item.as_deref(), &links, &drafts, &runs, &req.prompt),
+            prompt: context::compose(&context, item.as_deref(), &links, &drafts, &runs, workstream.as_ref(), &req.prompt),
             mcp: self.mcp.endpoint(&run_id)?,
             sandbox,
             session,
@@ -421,7 +458,9 @@ impl AgentService {
         };
 
         // Registered before the run starts, since the agent may call the tools straight away.
-        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), mcp::PipRun { scope: scope.clone(), handed, read, read_runs: Default::default() });
+        let workstream_id = workstream.map(|w| w.workstream.id);
+        let pip = mcp::PipRun { scope: scope.clone(), handed, read, read_runs: Default::default(), workstream: workstream_id.clone() };
+        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), pip);
         self.running.lock().expect("lock poisoned").insert(run_id.clone(), provider.clone());
         self.live.lock().expect("lock poisoned").insert(run_id.clone(), LiveTurn::default());
         recorded(self.core.pip_turn_status(&scope, &run_id, "running").await);
@@ -473,6 +512,9 @@ impl AgentService {
             }
             if let Some(id) = &session {
                 let _ = this.core.remember_claude_session(key.as_deref(), id).await;
+                if let Some(ws) = &workstream_id {
+                    recorded(this.core.set_workstream_session(&scope, ws, id).await);
+                }
             }
             this.finish(&run_id);
             this.release(&run_id, session);
@@ -527,7 +569,7 @@ mod tests {
         assert_eq!(with.images[0].media_type, "image/png");
         let without: AskRequest = serde_json::from_str(r#"{"requestId":"r","prompt":"p","sessionId":null}"#).unwrap();
         assert!(without.images.is_empty());
-        assert_eq!((without.conversation.as_str(), without.meta), (WORKSPACE_CONVERSATION, None));
+        assert_eq!((without.conversation.as_str(), without.meta), (GENERAL_CONVERSATION, None));
 
         let kept: AskRequest = serde_json::from_str(
             r#"{"requestId":"r","prompt":"p","sessionId":null,"conversation":"CA-1","meta":{"quote":"q","looking":"CA-1","imageCount":2}}"#,
@@ -537,6 +579,19 @@ mod tests {
         assert_eq!(kept.meta, Some(TurnMeta { quote: Some("q".into()), looking: Some("CA-1".into()), image_count: 2 }));
         let partial: AskRequest = serde_json::from_str(r#"{"requestId":"r","prompt":"p","sessionId":null,"meta":{}}"#).unwrap();
         assert_eq!(partial.meta, Some(TurnMeta::default()));
+    }
+
+    #[test]
+    fn the_legacy_workspace_conversation_is_read_as_general_and_ws_names_a_workstream() {
+        let legacy: AskRequest = serde_json::from_str(r#"{"requestId":"r","prompt":"p","sessionId":null,"conversation":"workspace"}"#).unwrap();
+        assert_eq!(legacy.conversation, GENERAL_CONVERSATION);
+        let ws: AskRequest = serde_json::from_str(r#"{"requestId":"r","prompt":"p","sessionId":null,"conversation":"ws:w1"}"#).unwrap();
+        assert_eq!(ws.conversation, "ws:w1");
+        assert_eq!((conversation_id("workspace"), conversation_id("general"), conversation_id("CA-1")), ("general".into(), "general".into(), "CA-1".into()));
+        assert_eq!(workstream_of_conversation("ws:w1"), Some("w1"));
+        for none in ["ws:", "general", "workspace", "CA-1", "w1"] {
+            assert_eq!(workstream_of_conversation(none), None, "{none}");
+        }
     }
 
     mod recording {
@@ -603,14 +658,14 @@ mod tests {
                 session_id: None,
                 context: ScreenContext::default(),
                 images: Vec::new(),
-                conversation: WORKSPACE_CONVERSATION.into(),
+                conversation: GENERAL_CONVERSATION.into(),
                 meta: Some(TurnMeta { quote: None, looking: Some("the board".into()), image_count: 0 }),
             }
         }
 
         async fn settled(svc: &AgentService, id: &str) -> PipTurn {
             for _ in 0..200 {
-                let turns = svc.turns(WORKSPACE_CONVERSATION).await.unwrap();
+                let turns = svc.turns(GENERAL_CONVERSATION).await.unwrap();
                 if let Some(t) = turns.into_iter().find(|t| t.request_id == id && t.status != "running") {
                     return t;
                 }
@@ -647,7 +702,7 @@ mod tests {
             let svc = service(&fx, Fake { events: vec![], gate: None, refuse: true }).await;
             let err = svc.ask(ask("q1"), Arc::new(|_| {})).await.unwrap_err();
             assert!(err.to_string().contains("isn't installed"));
-            let turns = svc.turns(WORKSPACE_CONVERSATION).await.unwrap();
+            let turns = svc.turns(GENERAL_CONVERSATION).await.unwrap();
             assert_eq!(turns.len(), 1);
             assert_eq!(turns[0].status, "failed");
             assert!(turns[0].error.as_deref().unwrap_or_default().contains("isn't installed"));
@@ -664,7 +719,7 @@ mod tests {
 
             let mut mid = None;
             for _ in 0..200 {
-                let turns = svc.turns(WORKSPACE_CONVERSATION).await.unwrap();
+                let turns = svc.turns(GENERAL_CONVERSATION).await.unwrap();
                 if turns.first().is_some_and(|t| t.text == "Half an ") {
                     mid = turns.into_iter().next();
                     break;
@@ -673,7 +728,7 @@ mod tests {
             }
             let mid = mid.expect("the partial answer is overlaid");
             assert_eq!((mid.status.as_str(), mid.steps.len()), ("running", 1));
-            let stored = fx.core.pip_turns(WORKSPACE_CONVERSATION).await.unwrap();
+            let stored = fx.core.pip_turns(GENERAL_CONVERSATION).await.unwrap();
             assert_eq!((stored[0].text.as_str(), stored[0].steps.len()), ("", 1), "text is written once, on Done; steps as they come");
 
             gate.notify_one();
@@ -697,7 +752,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             let rows = crate::db::Db::open(&fx.dir.join("inbox-site-me.sqlite")).unwrap();
-            assert!(rows.pip_turns(WORKSPACE_CONVERSATION).unwrap().is_empty());
+            assert!(rows.pip_turns(GENERAL_CONVERSATION).unwrap().is_empty());
         }
 
     mod queueing {
@@ -715,6 +770,8 @@ mod tests {
             most: AtomicUsize,
             /// Each run started, with the session it was asked to continue.
             started: Mutex<Vec<(String, Option<String>)>>,
+            /// The prompt each run was given, by run id.
+            prompts: Mutex<HashMap<String, String>>,
             gates: Mutex<HashMap<String, Arc<Notify>>>,
             stopped: Mutex<HashSet<String>>,
         }
@@ -735,6 +792,7 @@ mod tests {
             async fn run(&self, req: AgentRequest) -> Result<EventStream> {
                 let c = self.0.clone();
                 c.started.lock().unwrap().push((req.run_id.clone(), req.session.clone()));
+                c.prompts.lock().unwrap().insert(req.run_id.clone(), req.prompt.clone());
                 let now = c.now.fetch_add(1, Ordering::SeqCst) + 1;
                 c.most.fetch_max(now, Ordering::SeqCst);
                 let gate = Arc::new(Notify::new());
@@ -991,6 +1049,68 @@ mod tests {
             assert_eq!(status(&fx, "A", "q2").await, "failed");
             fake.open("q3").await;
             until_status(&fx, "A", "q3", "done").await;
+        }
+
+        #[tokio::test]
+        async fn a_workstream_turn_works_in_it_and_keeps_its_session_on_it() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let conversation = format!("ws:{}", ws.id);
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            svc.ask(ask("q1", &conversation), sink.clone()).await.unwrap();
+            fake.until_started(1).await;
+            assert_eq!(svc.mcp.runs.lock().unwrap().get("q1").and_then(|p| p.workstream.clone()), Some(ws.id.clone()), "Pip's tools know the workstream");
+            assert!(svc.mcp.runs.lock().unwrap().get("q1").is_some_and(|p| p.handed.contains("CA-1")), "its ticket is handed to Pip");
+            let prompt = fake.0.prompts.lock().unwrap().get("q1").cloned().unwrap();
+            assert!(prompt.contains(&format!("Id: {} · ticket CA-1 · mode advise · stage Intake", ws.id)) && prompt.contains("[Open drafts in this workstream]"), "{prompt}");
+            fake.open("q1").await;
+            until_status(&fx, &conversation, "q1", "done").await;
+            for _ in 0..100 {
+                if fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream.pip_session.is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream.pip_session.as_deref(), Some("sess-q1"));
+            assert!(fx.core.pip_turns(GENERAL_CONVERSATION).await.unwrap().is_empty(), "the general conversation is apart");
+
+            // After a restart the queue knows no session; the workstream's own is continued.
+            let fresh = Fake::default();
+            let (again, _, sink) = service(&fx, fresh.clone()).await;
+            again.ask(ask("q2", &conversation), sink).await.unwrap();
+            fresh.until_started(1).await;
+            assert_eq!(fresh.session_of("q2").as_deref(), Some("sess-q1"));
+            fresh.open("q2").await;
+            until_status(&fx, &conversation, "q2", "done").await;
+        }
+
+        #[tokio::test]
+        async fn a_turn_in_a_closed_or_foreign_workstream_fails_without_running() {
+            let fx = fixture().await;
+            let closed = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            fx.core.close_workstream(&fx.scope, &closed.id).await.unwrap();
+            let mut theirs = fx.core.open_workstream(&fx.scope, None, Some("Theirs".into())).await.unwrap();
+            (theirs.id, theirs.connection_id) = ("theirs".into(), "jira:elsewhere:someone".into());
+            fx.insert_workstream(&theirs).await;
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+
+            let err = svc.ask(ask("q1", &format!("ws:{}", closed.id)), sink.clone()).await.unwrap_err().to_string();
+            assert!(err.contains("is closed"), "{err}");
+            let err = svc.ask(ask("q2", "ws:theirs"), sink.clone()).await.unwrap_err().to_string();
+            assert!(err.contains("no workstream theirs"), "{err}");
+            assert_eq!(status(&fx, &format!("ws:{}", closed.id), "q1").await, "failed");
+            assert_eq!(status(&fx, "ws:theirs", "q2").await, "failed");
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            assert!(fake.started().is_empty(), "nothing ran");
+            assert!(svc.mcp.runs.lock().unwrap().is_empty());
+
+            svc.ask(ask("q3", "workspace"), sink).await.unwrap();
+            fake.until_started(1).await;
+            fake.open("q3").await;
+            until_status(&fx, GENERAL_CONVERSATION, "q3", "done").await;
+            assert_eq!(fx.core.pip_turns("workspace").await.unwrap()[0].conversation, GENERAL_CONVERSATION, "a legacy name is kept as general");
         }
 
         #[tokio::test]

@@ -1,0 +1,135 @@
+[
+  {
+    "name": "no runs is intake",
+    "runs": [],
+    "stage": "intake"
+  },
+  {
+    "name": "a queued investigation is investigate",
+    "runs": [{ "kind": "investigate", "state": "queued", "queuedAt": "2026-09-29T10:00:00Z" }],
+    "stage": "investigate"
+  },
+  {
+    "name": "a finished investigation alone stays investigate",
+    "runs": [{ "kind": "investigate", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" }],
+    "stage": "investigate"
+  },
+  {
+    "name": "investigate done then triage working is triage",
+    "runs": [
+      { "kind": "investigate", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "triage", "state": "working", "queuedAt": "2026-09-29T11:00:00Z" }
+    ],
+    "stage": "triage"
+  },
+  {
+    "name": "plan working while an investigation failed is plan",
+    "runs": [
+      { "kind": "investigate", "state": "failed", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "plan", "state": "working", "queuedAt": "2026-09-29T11:00:00Z" }
+    ],
+    "stage": "plan"
+  },
+  {
+    "name": "a failed run after a finished one does not hold the stage back",
+    "runs": [
+      { "kind": "triage", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "investigate", "state": "failed", "queuedAt": "2026-09-29T11:00:00Z" }
+    ],
+    "stage": "triage"
+  },
+  {
+    "name": "an earlier kind in progress wins over a later kind that finished",
+    "runs": [
+      { "kind": "plan", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "investigate", "state": "launching", "queuedAt": "2026-09-29T11:00:00Z" }
+    ],
+    "stage": "investigate"
+  },
+  {
+    "name": "a build waiting on an answer is build",
+    "runs": [
+      { "kind": "plan", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "build", "state": "needsAnswer", "queuedAt": "2026-09-29T11:00:00Z" }
+    ],
+    "stage": "build"
+  },
+  {
+    "name": "a build waiting on permission is build",
+    "runs": [{ "kind": "build", "state": "needsPermission", "queuedAt": "2026-09-29T11:00:00Z" }],
+    "stage": "build"
+  },
+  {
+    "name": "a review in progress is review",
+    "runs": [
+      { "kind": "build", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "review", "state": "systemBlocked", "queuedAt": "2026-09-29T11:00:00Z" }
+    ],
+    "stage": "review"
+  },
+  {
+    "name": "a finished review is done",
+    "runs": [
+      { "kind": "build", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "review", "state": "done", "queuedAt": "2026-09-29T11:00:00Z" }
+    ],
+    "stage": "done"
+  },
+  {
+    "name": "a verification in progress is verify",
+    "runs": [{ "kind": "verify", "state": "working", "queuedAt": "2026-09-29T11:00:00Z" }],
+    "stage": "verify"
+  },
+  {
+    "name": "a finished verification is done",
+    "runs": [
+      { "kind": "investigate", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "verify", "state": "done", "queuedAt": "2026-09-29T11:00:00Z" }
+    ],
+    "stage": "done"
+  },
+  {
+    "name": "all stopped falls back to the kind of the last queued run",
+    "runs": [
+      { "kind": "plan", "state": "stopped", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "triage", "state": "failed", "queuedAt": "2026-09-29T12:00:00Z" },
+      { "kind": "investigate", "state": "stopped", "queuedAt": "2026-09-29T11:00:00Z" }
+    ],
+    "stage": "triage"
+  },
+  {
+    "name": "unknown counts as in progress",
+    "runs": [
+      { "kind": "review", "state": "done", "queuedAt": "2026-09-29T10:00:00Z" },
+      { "kind": "triage", "state": "unknown", "queuedAt": "2026-09-29T11:00:00Z" }
+    ],
+    "stage": "triage"
+  },
+  {
+    "name": "timestamps with and without fractions order by time, not text",
+    "runs": [
+      { "kind": "investigate", "state": "failed", "queuedAt": "2026-09-29T10:00:05.500Z" },
+      { "kind": "triage", "state": "failed", "queuedAt": "2026-09-29T10:00:05Z" }
+    ],
+    "stage": "investigate",
+    "labels": ["R2", "R1"]
+  },
+  {
+    "name": "timestamps that differ below a millisecond order by time",
+    "runs": [
+      { "kind": "plan", "state": "stopped", "queuedAt": "2026-09-29T10:00:05.120100000Z" },
+      { "kind": "build", "state": "failed", "queuedAt": "2026-09-29T10:00:05.120Z" }
+    ],
+    "stage": "plan",
+    "labels": ["R2", "R1"]
+  },
+  {
+    "name": "the same instant written two ways ties, and the id decides",
+    "runs": [
+      { "kind": "triage", "state": "failed", "queuedAt": "2026-09-29T10:00:05.120000Z" },
+      { "kind": "investigate", "state": "failed", "queuedAt": "2026-09-29T10:00:05.120Z" }
+    ],
+    "stage": "investigate",
+    "labels": ["R1", "R2"]
+  }
+]
