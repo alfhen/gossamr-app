@@ -65,6 +65,8 @@ const refusal = (allow: AllowKind, why: string | null): string | null =>
 export function permissionOffer(
   run: Pick<Run, "needs" | "readOnly"> & {
     spec: Pick<RunSpec, "kind" | "allowPush" | "name">;
+    /** Where the run's checkout is; without it, only relative paths count as inside it. */
+    expectedWorktree?: string;
   },
 ): PermissionOffer {
   const needs = run.needs ?? "";
@@ -75,8 +77,26 @@ export function permissionOffer(
   if (notWhole(needs, ask)) return say("notExact", ask);
   const why = forbidden(run.spec, ask);
   if (why) return say("forbidden", ask, why);
-  const unchecked = ask.tool.toLowerCase() === "bash" && !plain(ask.command) && !ownBranchPush(ask.command.split(/\s+/).filter(Boolean), run.spec.name);
-  return say(unchecked ? "unchecked" : "offered", ask);
+  return say(checkable(run, ask) ? "offered" : "unchecked", ask);
+}
+
+/** Claude Code's tools that write the file they name. */
+const FILE_TOOLS = ["edit", "write", "multiedit", "notebookedit"];
+
+/** Whether Gossamr can check a Build's request whole (`checkable`): a plain Bash command or its own push, or a file tool writing inside the checkout. */
+function checkable(run: { spec: Pick<RunSpec, "name">; expectedWorktree?: string }, ask: PermissionAsk): boolean {
+  const tool = ask.tool.toLowerCase();
+  if (tool === "bash") return plain(ask.command) || ownBranchPush(ask.command.split(/\s+/).filter(Boolean), run.spec.name);
+  return FILE_TOOLS.includes(tool) && insideCheckout(ask.command, run.expectedWorktree ?? "");
+}
+
+/** A path a file tool writes that stays in the checkout: relative, or under the run's worktree, with no `..` and no home directory. */
+function insideCheckout(path: string, worktree: string): boolean {
+  const p = path.trim();
+  if (!p || p.startsWith("~") || p.split(/[/\\]/).includes("..")) return false;
+  if (!p.startsWith("/")) return true;
+  const root = worktree.replace(/\/+$/, "");
+  return !!root && p.startsWith(`${root}/`);
 }
 
 /**
@@ -88,7 +108,7 @@ function forbidden(spec: Pick<RunSpec, "allowPush" | "name">, ask: PermissionAsk
   const tool = ask.tool.toLowerCase();
   if (tool.startsWith("mcp__gossamr")) return NO_GOSSAMR_TOOLS;
   if (tool.startsWith("mcp__")) return NO_OTHER_SERVERS;
-  if (["edit", "write", "multiedit", "notebookedit"].includes(tool)) return gitPath(ask.command) ? NO_GIT_SETTINGS : null;
+  if (FILE_TOOLS.includes(tool)) return gitPath(ask.command) ? NO_GIT_SETTINGS : null;
   if (tool !== "bash") return null;
   const command = ask.command;
   if (["$(", "`", "<(", ">("].some((s) => command.includes(s))) return HAS_COMMAND_INSIDE;
@@ -231,8 +251,6 @@ const PLAIN = [
   "rm",
   "diff",
   "cut",
-  "sort",
-  "uniq",
   "tr",
   "basename",
   "dirname",

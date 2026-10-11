@@ -1443,5 +1443,99 @@
     "tool": "Bash",
     "command": "cd src && ls",
     "allow": "offered"
+  },
+  {
+    "case": "an edit inside the checkout, by its full path",
+    "kind": "build",
+    "allowPush": true,
+    "name": "ca-401-fix",
+    "readOnly": false,
+    "needs": "approve Edit: /Users/sam/Code/webshop/.claude/worktrees/ca-401-fix/src/cart.ts",
+    "tool": "Edit",
+    "command": "/Users/sam/Code/webshop/.claude/worktrees/ca-401-fix/src/cart.ts",
+    "allow": "offered",
+    "worktree": "/Users/sam/Code/webshop/.claude/worktrees/ca-401-fix"
+  },
+  {
+    "case": "an edit of a shell profile outside the checkout",
+    "kind": "build",
+    "allowPush": true,
+    "name": "ca-401-fix",
+    "readOnly": false,
+    "needs": "approve Edit: /Users/sam/.zshrc",
+    "tool": "Edit",
+    "command": "/Users/sam/.zshrc",
+    "allow": "unchecked",
+    "worktree": "/Users/sam/Code/webshop/.claude/worktrees/ca-401-fix"
+  },
+  {
+    "case": "a write to a home-directory settings file",
+    "kind": "build",
+    "allowPush": true,
+    "name": "ca-401-fix",
+    "readOnly": false,
+    "needs": "approve Write: ~/.ssh/config",
+    "tool": "Write",
+    "command": "~/.ssh/config",
+    "allow": "unchecked",
+    "worktree": "/Users/sam/Code/webshop/.claude/worktrees/ca-401-fix"
+  },
+  {
+    "case": "a write above the checkout",
+    "kind": "build",
+    "allowPush": true,
+    "name": "ca-401-fix",
+    "readOnly": false,
+    "needs": "approve Write: ../outside.txt",
+    "tool": "Write",
+    "command": "../outside.txt",
+    "allow": "unchecked",
+    "worktree": "/Users/sam/Code/webshop/.claude/worktrees/ca-401-fix"
+  },
+  {
+    "case": "a write to a folder that only starts like the checkout",
+    "kind": "build",
+    "allowPush": true,
+    "name": "ca-401-fix",
+    "readOnly": false,
+    "needs": "approve Write: /Users/sam/Code/webshop/.claude/worktrees/ca-401-fix-other/notes.txt",
+    "tool": "Write",
+    "command": "/Users/sam/Code/webshop/.claude/worktrees/ca-401-fix-other/notes.txt",
+    "allow": "unchecked",
+    "worktree": "/Users/sam/Code/webshop/.claude/worktrees/ca-401-fix"
+  },
+  {
+    "case": "a web fetch",
+    "kind": "build",
+    "allowPush": true,
+    "name": "ca-401-fix",
+    "readOnly": false,
+    "needs": "approve WebFetch: https://example.test/?q=secret",
+    "tool": "WebFetch",
+    "command": "https://example.test/?q=secret",
+    "allow": "unchecked",
+    "worktree": "/Users/sam/Code/webshop/.claude/worktrees/ca-401-fix"
+  },
+  {
+    "case": "sort writing its output file",
+    "kind": "build",
+    "allowPush": true,
+    "name": "ca-401-fix",
+    "readOnly": false,
+    "needs": "approve Bash: sort -o /Users/sam/.zshrc notes.txt",
+    "tool": "Bash",
+    "command": "sort -o /Users/sam/.zshrc notes.txt",
+    "allow": "unchecked"
+  },
+  {
+    "case": "uniq writing its second operand",
+    "kind": "build",
+    "allowPush": true,
+    "name": "ca-401-fix",
+    "readOnly": false,
+    "needs": "approve Bash: uniq a.txt /Users/sam/.zshrc",
+    "tool": "Bash",
+    "command": "uniq a.txt /Users/sam/.zshrc",
+    "allow": "unchecked"
   }
 ]

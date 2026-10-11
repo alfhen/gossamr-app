@@ -15,6 +15,8 @@ interface Case {
   command?: string;
   allow: string;
   reason?: string;
+  /** The run's checkout, for a file tool's absolute path. */
+  worktree?: string;
 }
 
 const RESTRICTED: ReadOnly = { mode: "dontAsk", allow: ["Bash(git fetch origin main)"], deny: ["Edit"], guard: "read-only" };
@@ -23,7 +25,7 @@ const RESTRICTED: ReadOnly = { mode: "dontAsk", allow: ["Bash(git fetch origin m
 function runOf(c: Case) {
   let needs = c.needs;
   while ([...needs].length < (c.padTo ?? 0)) needs += "x";
-  return { needs, readOnly: c.readOnly ? RESTRICTED : null, spec: { kind: c.kind as RunKind, allowPush: c.allowPush, name: c.name } };
+  return { needs, readOnly: c.readOnly ? RESTRICTED : null, spec: { kind: c.kind as RunKind, allowPush: c.allowPush, name: c.name }, expectedWorktree: c.worktree };
 }
 
 describe("a permission prompt, on the fixtures the Rust side also runs", () => {

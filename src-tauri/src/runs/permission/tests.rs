@@ -30,6 +30,9 @@ fn every_case_of_the_shared_fixtures_is_offered_as_it_says() {
         }
         let mut run = Run::queued("r".into(), "p".into(), "c".into(), None, spec, "f".into(), Utc::now());
         (run.state, run.needs) = (RunState::NeedsPermission, Some(needs));
+        if let Some(worktree) = case["worktree"].as_str() {
+            run.expected_worktree = worktree.into();
+        }
         if case["readOnly"].as_bool().unwrap() {
             run.read_only = RunSpec { kind: RunKind::Investigate, ..run_spec() }.read_only();
         }

@@ -28,7 +28,8 @@
 //! for an interpreter, `eval`, a program named by a variable, an escape) isn't offered Allow at all. Beyond those
 //! rules a Build's Bash command is offered Allow only when it is plain (`plain`): every command in it one of a short list
 //! of programs that run nothing else, with nothing the shell would read differently from Gossamr and paths that stay
-//! inside the checkout. Anything else is `Unchecked`, answered in Terminal: a list of what to refuse can always be
+//! inside the checkout. A file tool gets it only for a path inside the checkout, and any other tool (a fetch, a
+//! search) is `Unchecked` too. Anything else is `Unchecked`, answered in Terminal: a list of what to refuse can always be
 //! talked around, a list of what to allow can't. Allow and Deny
 //! are the person's alone: Pip has no tool for them, and nothing that runs on its own answers a prompt.
 
@@ -152,7 +153,7 @@ pub fn offer(run: &Run) -> (Option<PermissionAsk>, Allow) {
     }
     let allow = match forbidden(run, &ask) {
         Some(why) => Allow::Forbidden(why),
-        None if ask.tool.eq_ignore_ascii_case("bash") && !plain(&ask.command) && !own_branch_push(&ask.command.split_whitespace().collect::<Vec<_>>(), &run.spec.name) => Allow::Unchecked,
+        None if !checkable(run, &ask) => Allow::Unchecked,
         None => Allow::Offered,
     };
     (Some(ask), allow)
@@ -168,7 +169,7 @@ fn forbidden(run: &Run, ask: &PermissionAsk) -> Option<String> {
     if tool.starts_with("mcp__") {
         return Some(NO_OTHER_SERVERS.into());
     }
-    if matches!(tool.as_str(), "edit" | "write" | "multiedit" | "notebookedit") {
+    if FILE_TOOLS.contains(&tool.as_str()) {
         return git_path(&ask.command).then(|| NO_GIT_SETTINGS.into());
     }
     if tool != "bash" {
@@ -313,11 +314,39 @@ fn own_branch_push(tokens: &[&str], name: &str) -> bool {
     matches!(rest, ["origin", target] if *target == branch || *target == to)
 }
 
+/// Claude Code's tools that write the file they name.
+const FILE_TOOLS: [&str; 4] = ["edit", "write", "multiedit", "notebookedit"];
+
+/// Whether Gossamr can check a Build's request whole once nothing forbids it: a plain Bash command or the Build's own
+/// push, or a file tool writing inside the checkout. Any other tool (a fetch, a search, another server's) can't be read
+/// for what it does, so it is answered in Terminal.
+fn checkable(run: &Run, ask: &PermissionAsk) -> bool {
+    let tool = ask.tool.to_ascii_lowercase();
+    if tool == "bash" {
+        return plain(&ask.command) || own_branch_push(&ask.command.split_whitespace().collect::<Vec<_>>(), &run.spec.name);
+    }
+    FILE_TOOLS.contains(&tool.as_str()) && inside_checkout(&ask.command, &run.expected_worktree.to_string_lossy())
+}
+
+/// A path a file tool writes that stays in the checkout: relative, or under the run's worktree, with no `..` and no home
+/// directory.
+fn inside_checkout(path: &str, worktree: &str) -> bool {
+    let path = path.trim();
+    if path.is_empty() || path.starts_with('~') || path.split(['/', '\\']).any(|part| part == "..") {
+        return false;
+    }
+    if !path.starts_with('/') {
+        return true;
+    }
+    let root = worktree.trim_end_matches('/');
+    !root.is_empty() && path.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// Programs a Build's Bash command may be offered Allow for: ones that do what their words say and run nothing else,
 /// given the checks in `plain_segment`. Anything else (a script, a package manager, an interpreter, `sed`, `awk`,
-/// `xargs`) is answered in Terminal.
-const PLAIN: [&str; 32] = [
-    "ls", "cat", "head", "tail", "wc", "grep", "rg", "pwd", "echo", "printf", "mkdir", "touch", "cp", "mv", "rm", "diff", "cut", "sort", "uniq", "tr", "basename", "dirname", "stat", "file", "true", "false", "which", "date", "cd", "find", "git", "gh",
+/// `xargs`, or `sort` and `uniq`, which write a file their words name) is answered in Terminal.
+const PLAIN: [&str; 30] = [
+    "ls", "cat", "head", "tail", "wc", "grep", "rg", "pwd", "echo", "printf", "mkdir", "touch", "cp", "mv", "rm", "diff", "cut", "tr", "basename", "dirname", "stat", "file", "true", "false", "which", "date", "cd", "find", "git", "gh",
 ];
 /// Programs that write or move where later commands write: their paths stay inside the checkout.
 const WRITERS: [&str; 6] = ["mkdir", "touch", "cp", "mv", "rm", "cd"];
