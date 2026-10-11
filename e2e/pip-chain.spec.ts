@@ -65,7 +65,7 @@ const runCount = (page: Page) =>
 
 /** The person adds `MARKER` to the Gossamr Plan description draft on CA-401, from its peek, and approves it. */
 async function settlePlan(page: Page) {
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
   await draft.getByRole("button", { name: "Edit" }).click();
@@ -84,7 +84,7 @@ const agentCards = (page: Page) => page.locator('main article[data-run-id]:not(a
 /** The stage chip of CA-401's workstream on its peek, at the head of its agents. */
 async function stageChip(page: Page) {
   if (!(await peekSheet(page).isVisible())) {
-    await page.getByRole("button", { name: "All projects" }).click();
+    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await peekTicket(page, "CA-401");
   }
   return peekSheet(page).locator("#peek-agents [data-stage]");

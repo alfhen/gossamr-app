@@ -178,7 +178,9 @@ export function onDraftCardKey(ev: KeyEventLike, p: Proposal, asking: Asking | n
 export function focusAfterLeaving(card: unknown, root: CardRoot, input: Focusable | null, defer?: (go: () => void) => void) {
   const cards: Focusable[] = reachableCards(root);
   const at = cards.indexOf(card as Focusable);
-  const next = at < 0 ? undefined : (cards[at + 1] ?? cards[at - 1]);
+  // A card still waiting for its decision comes first, forward then back; a decided one only when none is left.
+  const pending = (c: Focusable) => c.getAttribute("data-state") === "pending";
+  const next = at < 0 ? undefined : (cards.slice(at + 1).find(pending) ?? cards.slice(0, at).reverse().find(pending) ?? cards[at + 1] ?? cards[at - 1]);
   const go = () => (next ? show(next) : input?.focus());
   // Called as the card unmounts, inside React's commit, where React hears no focus event: the next card would take focus
   // but never arm, and its keys would do nothing. `defer` hands focus over once the commit is done.

@@ -1145,7 +1145,11 @@ export class MockRuns {
     }
     const note = resolved.note;
     if (note?.fromMarker && note.text && !this.commentDrafts(run.id).length) {
-      this.proposals.fromRun({ type: "comment", item: run.item, body: docFromText(commentText(note, this.changes.get(run.id) ?? null, run.spec.kind, false, resolved.status === "blocked")) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
+      const text = commentText(note, this.changes.get(run.id) ?? null, run.spec.kind, false, resolved.status === "blocked");
+      // Not a second draft of the very words already waiting on the ticket, as the real backend leaves it.
+      const item = run.item;
+      const waiting = this.proposals.list().some((p) => p.state.type === "pending" && p.intent.type === "comment" && p.intent.item.key === item.key && docText(p.intent.body) === text);
+      if (!waiting) this.proposals.fromRun({ type: "comment", item, body: docFromText(text) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
     }
     const summaries = resolved.subtasks;
     if (summaries.length && !this.subtaskDrafts(run.id).length) {

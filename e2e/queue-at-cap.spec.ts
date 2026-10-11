@@ -37,7 +37,8 @@ async function start(page: Page): Promise<string> {
   await expect(setup(page)).toHaveCount(0);
   await expect.poll(async () => (await mockRuns(page)).length).toBe(before + 1);
   const id = (await mockRuns(page))[0].id;
-  // Starting opens the run's sheet over the Agents view.
+  // Starting from the peek leaves the person on the board; the rail goes to the Agents view, where the run's sheet may be open.
+  await page.getByRole("button", { name: /^Agents/ }).click();
   const sheet = page.getByRole("dialog", { name: "Agent run" });
   if (await sheet.isVisible()) await page.keyboard.press("Escape");
   return id;

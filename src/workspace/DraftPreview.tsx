@@ -17,6 +17,7 @@ import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, es
 import { usePip } from "./pipStore";
 import { InlineStart, InlineStartContext, inlineStartId, inlineStartKey, inlineStartable, useInlineStarts } from "./InlineStart";
 import { focusPeekDraft } from "./peekDrafts";
+import { plainMarkdown } from "../lib/markdown";
 import { useTabs } from "./tabsStore";
 import { RetiredDraft } from "./RetiredDraft";
 import { NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
@@ -63,7 +64,7 @@ export function draftPreviewBody(p: Proposal, statusName: string | null, pass?: 
     case "runAnswer":
       return `${i.question ? `The agent asks: ${i.question}\n\n` : ""}${i.message}\n\nNothing is sent until you read this and send it.`;
     case "githubReview":
-      return [i.summary, ...i.comments.map((c) => `${c.path}:${c.line}: ${c.body}`), "Nothing is posted to GitHub until you approve it."].join("\n\n");
+      return [plainMarkdown(i.summary), ...i.comments.map((c) => `${c.path}:${c.line}: ${plainMarkdown(c.body)}`), "Nothing is posted to GitHub until you approve it."].join("\n\n");
     default:
       return unreachable(i);
   }

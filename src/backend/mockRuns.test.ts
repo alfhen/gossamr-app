@@ -326,6 +326,26 @@ describe("mock runs of every kind", () => {
     expect(after[1].supersededBy).toBe(after[0].id);
   });
 
+  it("leaves one pending comment draft when a second run finishes with the same note for the ticket", async () => {
+    const backend = new MockBackend();
+    const finish = async (n: string) => {
+      const made = await backend.runsDraft({ ...spec, ...storefront, kind: "investigate", instruction: "", name: `ca-401-${n}-0001` }, itemRef("CA-401"));
+      const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+      for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
+      expect(backend.runs.get(run.id)?.state).toBe("done");
+      return run;
+    };
+    const comments = () => backend.proposals.list().filter((p) => p.intent.type === "comment" && p.state.type === "pending");
+    const first = await finish("one");
+    expect(comments()).toHaveLength(1);
+    await finish("two");
+    expect(comments().map((p) => p.origin.type === "run" && p.origin.runId)).toEqual([first.id]);
+    // Once it is decided, the next run's comment is drafted again.
+    await backend.proposalsSkip(comments()[0].id);
+    await finish("three");
+    expect(comments()).toHaveLength(1);
+  });
+
   it("leaves the GitHub review draft of a finished review with drafting on finish off, and no Jira draft", async () => {
     const backend = new MockBackend({ githubRepos: 14 });
     await backend.watchSetMode("github:ada", "everything");

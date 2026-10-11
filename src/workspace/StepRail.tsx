@@ -374,7 +374,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                   <b className={`text-sm ${quiet ? "font-normal text-ws-ink2" : "font-semibold"}`}>{chip.label}</b>
                   {isNext && (
                     <span data-step-next-tag className="rounded-full bg-ws-pip-soft px-1.5 text-[10px] leading-4 font-semibold text-ws-pip">
-                      Next
+                      {chip.newest && chip.newest.state !== "done" ? "Now" : "Next"}
                     </span>
                   )}
                   {chip.needsYou > 0 && (

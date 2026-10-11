@@ -93,13 +93,13 @@ describe("needsYouItems", () => {
     );
     expect(items.map((i) => [i.kind, i.label])).toEqual([
       ["held", "CA-402 · Held by you"],
-      ["runStart", "CA-401 · Start Investigate"],
-      ["draft", "CA-401 · Draft comment"],
       ["question", "CA-401 · R1 asks a question"],
       ["permission", "CA-401 · R2 asks to run a command"],
       ["failure", "CA-401 · R3 failed"],
       ["permission", "CA-999 · Investigate agent needs its folder trusted"],
       ["permission", "Investigate agent needs permission"],
+      ["runStart", "CA-401 · Start Investigate"],
+      ["draft", "CA-401 · Draft comment"],
     ]);
     expect(items.find((i) => i.kind === "draft")?.target).toEqual({ type: "draft", id: "d-comment" });
     expect(items.find((i) => i.kind === "question")?.target).toEqual({ type: "run", id: "r-q" });
@@ -118,7 +118,7 @@ describe("needsYouItems", () => {
     expect(listed({ ...allowed, needs: "approve Bash: pnpm install" })).toEqual(["CA-401 · R2 asks to run a command"]);
   });
 
-  it("lists oldest first, by when each started waiting", () => {
+  it("lists a hold, then runs, then drafts, each oldest first by when it started waiting", () => {
     const items = needsYouItems(
       input({
         workstreams: [view("ws-1", "CA-401", { heldReason: HELD_PERSON })],
@@ -127,7 +127,13 @@ describe("needsYouItems", () => {
         heldAt: { "ws-1": iso(5) },
       }),
     );
-    expect(items.map((i) => i.key)).toEqual(["draft:old", "run:r1", "held:ws-1", "draft:new"]);
+    expect(items.map((i) => i.key)).toEqual(["held:ws-1", "run:r1", "draft:old", "draft:new"]);
+  });
+
+  it("puts a review that still blocks first, above older drafts and runs", () => {
+    const escalated: WorkstreamView = { ...view("ws-1", "CA-401", { runs: ["r-b", "r-rev"] }), escalation: { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R2", buildLabel: "R1", rounds: 2, reviewDraft: null, at: iso(1) } };
+    const items = needsYouItems(input({ workstreams: [escalated], proposals: [draft("old", comment("CA-401"), 60)], runs: [run("r1", "investigate", "failed", { lastProgressAt: iso(30) })] }));
+    expect(items.map((i) => i.kind)).toEqual(["escalation", "failure", "draft"]);
   });
 
   it("puts a draft and a run in their workstream, and the rest in General", () => {
@@ -186,6 +192,10 @@ describe("Needs you labels", () => {
     const fromRun = (id: string, runId: string, minutesAgo: number): Proposal => ({ ...draft(id, comment("CA-401"), minutesAgo), origin: { type: "run", runId, shortId: null, workstream: "ws-1" } }) as Proposal;
     const items = needsYouItems(input({ workstreams: [ws], proposals: [fromRun("c1", "r1", 5), fromRun("c2", "r2", 4), draft("c3", comment("CA-401"), 3, { workstream: "ws-1" })] }));
     expect(items.map((i) => i.label)).toEqual(["CA-401 · R1 comment", "CA-401 · R2 comment", "CA-401 · Draft comment"]);
+    // With the runs in hand, the step each came from is named too.
+    const runs = [run("r1", "review", "done", {}), run("r2", "plan", "done", {})];
+    const named = needsYouItems(input({ workstreams: [ws], runs, proposals: [fromRun("c1", "r1", 5), fromRun("c2", "r2", 4), fromRun("c4", "gone", 3)] }));
+    expect(named.map((i) => i.label)).toEqual(["CA-401 · R1 review · comment", "CA-401 · R2 plan · comment", "CA-401 · Draft comment"]);
   });
 
   it("give a ticket no cache holds the title its run or run draft kept in its snapshot, so every row reads KEY · Title (D27)", () => {

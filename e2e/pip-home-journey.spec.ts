@@ -216,7 +216,7 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   expect((await jiraWrites(page)).filter((w) => w.type === "comment")).toHaveLength(2);
 });
 
-test("the Needs you tray lists a draft and a hold oldest first, goes to each, and each leaves once dealt with", async ({ page }) => {
+test("the Needs you tray lists a hold before a draft, goes to each, and each leaves once dealt with", async ({ page }) => {
   await openApp(page, MANAGED);
   await agentsSettled(page);
   await homeWorkstream(page);
@@ -228,12 +228,12 @@ test("the Needs you tray lists a draft and a hold oldest first, goes to each, an
   await homeSettled(page);
   await stepRail(page).getByRole("button", { name: "Hold", exact: true }).click();
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("2 need you");
-  // Oldest first: the draft came before the hold, which sorts by when it was held.
-  await expect.poll(async () => (await items.allTextContents()).map((l) => l.replace(/ · (?:now|\d+[mhd])$/, ""))).toEqual(["CA-401 · Welcome flow refresh · Start Investigate", "CA-401 · Welcome flow refresh · Held by you"]);
+  // A hold sorts ahead of a draft however old each is (R2); within a kind, oldest first.
+  await expect.poll(async () => (await items.allTextContents()).map((l) => l.replace(/ · (?:now|\d+[mhd])$/, ""))).toEqual(["CA-401 · Welcome flow refresh · Held by you", "CA-401 · Welcome flow refresh · Start Investigate"]);
 
   // From General, the draft's item selects the workstream again and focuses its card; skipped there, it leaves.
   await workstreamRow(page, "General").click();
-  await items.first().click();
+  await items.last().click();
   await expect(row).toHaveAttribute("aria-selected", "true");
   await expect(homeRunCards(page, "CA-401").last()).toBeFocused();
   await page.keyboard.press("s");
@@ -251,7 +251,7 @@ test("the Needs you tray lists a draft and a hold oldest first, goes to each, an
   await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);
 });
 
-test("a failed run waits in the tray under General, opens its sheet over Pip home, and leaves once the failures were seen", async ({ page }) => {
+test("a failed run waits in the tray under General, opens its sheet over Pip home, and stays until it is dealt with, not just seen", async ({ page }) => {
   await openApp(page, "prSurface=manual");
   await agentsSettled(page);
   await openPipHome(page);
@@ -267,11 +267,11 @@ test("a failed run waits in the tray under General, opens its sheet over Pip hom
   await page.keyboard.press("Escape");
   await expect(sheet).toHaveCount(0);
 
-  // The Agents view is where failures are seen; back on Pip home it is gone from the tray.
+  // The Agents view is where failures are seen, but a folder to trust needs an action: back on Pip home it still waits (R5).
   await page.getByRole("button", { name: /^Agents/ }).click();
   await expect(pipHome(page)).toHaveCount(0);
   await openPipHome(page);
-  await expect(failed).toHaveCount(0);
+  await expect(failed).toHaveCount(1);
 });
 
 test("on a window about 900px wide the steps drop below the conversation, nothing scrolls sideways, and F6 still goes list, conversation, steps", async ({ page }) => {

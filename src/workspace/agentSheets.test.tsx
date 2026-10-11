@@ -9,6 +9,8 @@ import { AgentMenuView, TicketAgentRows, TicketAgentsView } from "./AgentMenu";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsSettingsView, type CleanupOffer } from "./AgentsSettings";
 import { RunSetupView, setupBlock, type SetupViewProps } from "./RunSetup";
+import { sheetFocusTarget } from "./AgentSheet";
+import { focusDecision, READ_ONLY_STEP_NOTE } from "./PermissionAsk";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
 import { MAY_TOUCH, SAFETY_SUMMARY, prChoices, sheetTopOn } from "./runSheetLogic";
 import { PipLauncher } from "./PipExtras";
@@ -35,6 +37,33 @@ beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 });
 
+describe("focus around the run sheet", () => {
+  const el = (isConnected = true) => ({ isConnected, focus: vi.fn() });
+  it("moves focus to the first enabled decision button when the sheet itself has it (R7), and leaves a click elsewhere alone", () => {
+    const sheetEl = {} as Element;
+    const button = el();
+    const root = { closest: (s: string) => (s === "#agent-sheet" ? sheetEl : null), querySelector: vi.fn(() => button) } as unknown as Pick<Element, "closest" | "querySelector">;
+    focusDecision(root, {} as Element);
+    expect(button.focus).not.toHaveBeenCalled();
+    focusDecision(root, sheetEl);
+    expect(root.querySelector).toHaveBeenCalledWith("[data-permission-decisions] button:not(:disabled)");
+    expect(button.focus).toHaveBeenCalled();
+    // A card on Agents has no sheet around it.
+    const card = { closest: () => null, querySelector: vi.fn() } as unknown as Pick<Element, "closest" | "querySelector">;
+    focusDecision(card, sheetEl);
+    expect(card.querySelector).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the opener, else the Needs you tray when the opener is gone, else leaves it (R8)", () => {
+    const opener = el();
+    const tray = el();
+    expect(sheetFocusTarget(opener, true, () => tray)).toBe(opener);
+    expect(sheetFocusTarget(el(false), true, () => tray)).toBe(tray);
+    expect(sheetFocusTarget(null, true, () => tray)).toBe(tray);
+    expect(sheetFocusTarget(opener, false, () => tray)).toBeNull();
+  });
+});
+
 describe("the run sheet, by state", () => {
   describe("a permission prompt", () => {
     const build = (needs: string, over: Partial<Run> = {}) => {
@@ -48,6 +77,12 @@ describe("the run sheet, by state", () => {
     /** The permission box's buttons, in tab order: the document's, as none of them is taken out of it. */
     const asked = (html: string) => /<div data-permission-ask[\s\S]*?(?=<section)/.exec(html)?.[0] ?? "";
     const primary = (html: string) => [...asked(html).matchAll(/<button[^>]*border-ws-pip bg-ws-pip[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
+
+    it("says why a read-only run's card offers only Deny (R10)", () => {
+      const html = sheet(investigate("approve Bash: ls"));
+      expect(html).toContain(READ_ONLY_STEP_NOTE.replace("'", "&#x27;"));
+      expect(sheet(build("approve Bash: ls"))).not.toContain("data-permission-read-only");
+    });
 
     it("on a Build, says plainly what it wants to run and offers Allow once as the one primary button, then Deny and Stop", () => {
       const html = sheet(build("approve Bash: mkdir -p dist && echo 'done'"), { label: "R3" });

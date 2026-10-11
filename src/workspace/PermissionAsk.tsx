@@ -9,6 +9,8 @@ import { permissionConfirmation, useRuns, type PermissionAnswered } from "./runs
 /** The one honest line beside Allow once: Gossamr can't say yes for the person, Claude Code's own prompt can. */
 export const ALLOW_ONCE_NOTE = "Claude Code takes a yes only in its own prompt. Allow once opens this run in Terminal and copies the command: choose Yes there for this command only.";
 export const DENY_NOTE = "Claude is told you said no and carries on without it.";
+/** Why a read-only run's card has Deny and nothing to allow. */
+export const READ_ONLY_STEP_NOTE = "This is a read-only step, so it can't be allowed. Deny lets it carry on without it.";
 export const STOP_LABEL = "Stop the run (abandons it)";
 export const DENIED_TEXT = "Denied. Claude is carrying on without it.";
 
@@ -69,6 +71,12 @@ export function StopRunConfirm({ name, onStop, onKeep }: { name: string; onStop(
   );
 }
 
+/** Moves focus to the first decision button when it is on the sheet itself, as it is on opening; a click elsewhere is not stolen. */
+export function focusDecision(root: Pick<Element, "closest" | "querySelector"> | null, active: Element | null) {
+  const sheet = root?.closest("#agent-sheet");
+  if (sheet && active === sheet) root?.querySelector<HTMLButtonElement>("[data-permission-decisions] button:not(:disabled)")?.focus({ preventScroll: true });
+}
+
 /**
  * A run asking permission, on its sheet and its cards: what it wants to run, exactly, and what the person can do about it
  * (`permissionOffer`). Allow once only where it is offered, which is never on a read-only run; Deny always; Stop clearly as
@@ -92,8 +100,14 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
   const what = !ask ? `${name} is asking permission:` : ask.tool === "Bash" ? `${name} wants to run this command:` : `${name} wants to use ${ask.tool} on:`;
   const allowed = answered?.kind === "allowed";
   const note = useId();
+  const root = useRef<HTMLDivElement>(null);
+  // Opened from Needs you, the sheet has focus on itself; the decision is what the person came for, so the keyboard starts there.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => focusDecision(root.current, document.activeElement));
+    return () => cancelAnimationFrame(frame);
+  }, [run.id]);
   return (
-    <div data-permission-ask data-allow={offer.allow} className="grid gap-2">
+    <div ref={root} data-permission-ask data-allow={offer.allow} className="grid gap-2">
       <p className="m-0 font-semibold text-ws-ink">{what}</p>
       {command ? <CodeBox text={ask ? ask.command : command} what="the command" wrap /> : <p className="m-0 text-ws-ink2">It didn&apos;t say what.</p>}
       {allowed ? (
@@ -106,7 +120,7 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
         </p>
       )}
       {/* The card behind takes a click or Enter as opening the run; these buttons are answers of their own. */}
-      <div className="flex flex-wrap items-center gap-2" onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
+      <div data-permission-decisions className="flex flex-wrap items-center gap-2" onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
         {offer.allow === "offered" && !allowed && (
           <Btn tone="primary" icon="term" disabled={busy || !run.shortId} onClick={allow}>
             Allow once in Terminal
@@ -128,6 +142,11 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
           </Btn>
         )}
       </div>
+      {offer.allow === "readOnly" && (
+        <p data-permission-read-only className="m-0 text-xs text-ws-ink3">
+          {READ_ONLY_STEP_NOTE}
+        </p>
+      )}
       <p id={note} className="m-0 text-xs text-ws-ink3">
         Deny: {DENY_NOTE}
       </p>

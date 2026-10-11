@@ -74,7 +74,7 @@ describe("the sample backend drafts a comment when a run finishes", () => {
     const [draft] = commentsOf(backend, run);
     expect(draft).toMatchObject({ createdBy: "agent", origin: { type: "run", runId: run.id, workstream: "ws-1" } });
     expect((await backend.proposalsList({ workstream: "ws-1" })).map((d) => d.id)).toContain(draft.id);
-    const [loose] = commentsOf(backend, await finished(backend));
+    const [loose] = commentsOf(backend, await finished(backend, "investigate", itemRef("CA-413")));
     expect(loose.origin).toMatchObject({ type: "run", workstream: null });
   });
 

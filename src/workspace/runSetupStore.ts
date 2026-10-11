@@ -41,8 +41,8 @@ export async function approveRunDraft(backend: Backend, proposalId: string, dige
 
 /**
  * What follows a start: the runs and drafts read again, the launch watched, the run selected and a toast. The setup
- * sheet goes on to the Agents view (`switchToAgents`), except over Pip home; a start inline on Pip home stays where the
- * person is too.
+ * setup sheet goes on to the Agents view (`switchToAgents`), except over a ticket peek or Pip home; a start inline on Pip
+ * home stays where the person is too, and the toast's Open action goes to the run.
  */
 export function afterRunStarted(run: Run, item: ItemRef | null, { switchToAgents }: { switchToAgents: boolean }) {
   const runs = useRuns.getState();
@@ -487,8 +487,9 @@ export const useRunSetup = create<SetupState>((set, get) => {
       if (result.type === "started") {
         if (!current(mine)) return result.run;
         get().close();
-        // Started from the sheet over Pip home, the person stays on Pip home, where the run shows on its step.
-        afterRunStarted(result.run, item, { switchToAgents: useTabs.getState().route !== "pip" });
+        // Started from the sheet over a ticket peek or Pip home, the person stays there; the toast's Open goes to the run.
+        const { route, selected } = useTabs.getState();
+        afterRunStarted(result.run, item, { switchToAgents: route !== "pip" && !(route === "workspace" && selected !== null) });
         return result.run;
       }
       if (!current(mine)) return null;

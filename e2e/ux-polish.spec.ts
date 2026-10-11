@@ -414,7 +414,7 @@ test.describe("draft action bar", () => {
   const box = async (l: Locator) => (await l.boundingBox())!;
   const scroller = (page: Page) => peekSheet(page).locator("[data-peek-scroll]");
   /** The action bar of `card`: the row that holds `button`. */
-  const barOf = (card: Locator, button: string) => card.locator("[data-draft-actions]").filter({ has: card.page().getByRole("button", { name: button, exact: true }) });
+  const barOf = (card: Locator, button: string | RegExp) => card.locator("[data-draft-actions]").filter({ has: card.page().getByRole("button", { name: button, exact: true }) });
 
   /** The bar is opaque and has a rule above it. */
   async function expectSolid(bar: Locator) {
@@ -459,7 +459,7 @@ test.describe("draft action bar", () => {
 
   test("the GitHub review's Post review bar and the comment draft's Post comment bar sit flush with their cards' bottoms", async ({ page }) => {
     const review = await reviewedDraft(page);
-    await expectFlushAtEnd(page, review, barOf(review, "Post review"));
+    await expectFlushAtEnd(page, review, barOf(review, /^Post review/));
 
     // The review run's own comment draft, and one Pip writes: each is a short card.
     const comments = peekSheet(page).getByRole("article", { name: "Comment on CA-402" });

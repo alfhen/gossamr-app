@@ -159,7 +159,7 @@ test("a draft edited elsewhere after it was read in place is refused: the banner
   await expect(review.getByRole("button", { name: "Start agent" })).toBeEnabled();
 
   // The same draft, changed in the setup sheet from the ticket's peek on the board.
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   await peekSheet(page).getByRole("article", { name: "Start an agent: CA-401" }).getByRole("button", { name: /^Review and start/ }).click();
   const field = setup(page).getByRole("textbox", { name: "What the agent should do" });

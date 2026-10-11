@@ -74,7 +74,7 @@ async function started(page: Page, kind: string, after: string | null = null) {
 
 /** The person approves the Gossamr Plan description draft on CA-401 from its peek, as written. */
 async function approvePlan(page: Page) {
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
   await draft.getByRole("button", { name: "Update description" }).click();
@@ -341,6 +341,7 @@ test("Esc closes only the popover or menu that is open: the pane, the peek and t
 
   // With no peek, where Esc would otherwise close the pane.
   await startInvestigation(page);
+  await page.getByRole("button", { name: /^Agents/ }).click();
   await expect(peekSheet(page)).toHaveCount(0);
   await stays();
   await trigger.click();
@@ -393,7 +394,7 @@ test("Manage is the person's switch; a rule turned off for the workstream, or in
   await global.click();
   await expect(global).toHaveAttribute("aria-checked", "false");
   await sheet.getByRole("button", { name: "Close" }).click();
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
 
   await startWorkstream(page, "CA-402");
   await setManage(page);

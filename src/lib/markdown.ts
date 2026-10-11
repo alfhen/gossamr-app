@@ -249,3 +249,32 @@ export function parseInline(text: string, inLink = false): Inline[] {
   if (last < text.length) out.push({ type: "text", text: text.slice(last) });
   return out;
 }
+
+const flatten = (nodes: Inline[]): string =>
+  nodes
+    .map((n) => {
+      if (n.type === "text" || n.type === "code") return n.text;
+      if (n.type === "ticket") return n.key;
+      const inner = flatten(n.children);
+      return n.type === "link" ? (inner === n.href ? inner : `${inner} (${n.href})`) : inner;
+    })
+    .join("");
+
+/**
+ * Markdown as plain text for a place that can't render it: emphasis and code markers dropped, links as "label (url)",
+ * and a leading "- ", "* " or "+ " list marker as "• ". Code fences are left as they are, and so is any `*` or `_` that
+ * isn't a marker, such as one inside a code span.
+ */
+export function plainMarkdown(text: string): string {
+  let fence: string | null = null;
+  return text
+    .split("\n")
+    .map((line) => {
+      const open = opener(line);
+      if (fence === null && open) fence = open.marker;
+      else if (fence !== null && closes(line, fence)) fence = null;
+      else if (fence === null) return flatten(parseInline(line.replace(/^(\s*)[-*+]\s+/, "$1• ")));
+      return line;
+    })
+    .join("\n");
+}

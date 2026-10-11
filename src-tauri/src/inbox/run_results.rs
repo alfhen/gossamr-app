@@ -201,6 +201,11 @@ fn ticket_fields(proposal: &TicketProposal) -> NewItem {
     NewItem { title: proposal.title.clone(), body: Doc::from_text(&body, &[]), kind: proposal.kind, assignee: None, parent: None, priority: None, labels: Vec::new() }
 }
 
+/// Whether an intent is a comment on the same item with the same words as `intent`, whatever its formatting.
+fn same_comment(intent: &Intent) -> impl Fn(&Intent) -> bool + '_ {
+    move |i| matches!((i, intent), (Intent::Comment { item: a, body: x }, Intent::Comment { item: b, body: y }) if a == b && x.plain_text() == y.plain_text())
+}
+
 fn is_plan_comment(p: &Proposal) -> bool {
     p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_LABEL))
 }
@@ -501,8 +506,7 @@ impl Core {
         let intro = "Implementation plan from an agent that was asked to only read code and change nothing. Read it and change what is wrong before relying on it.";
         let body = tracker::comment_doc(&format!("{intro}\n\n{}", fitted.text), &[]);
         let intent = Intent::Comment { item: item.clone(), body };
-        let same = |i: &Intent| matches!((i, &intent), (Intent::Comment { item: a, body: x }, Intent::Comment { item: b, body: y }) if a == b && x.plain_text() == y.plain_text());
-        if self.pending_same(same).await?.is_some() {
+        if self.pending_same(same_comment(&intent)).await?.is_some() {
             return Err(refuse(format!("that comment is already waiting as a draft on {}", item.key)));
         }
         let label = match &run.short_id {
@@ -548,15 +552,15 @@ impl Core {
         let resolved = self.resolved_of(&run).await?;
         let note = resolved.note.clone().filter(|n| !n.text.is_empty()).ok_or_else(|| refuse("the run finished without a written answer, so there is nothing to draft"))?;
         let intent = self.comment_intent(&run, &resolved, item.clone(), &note).await?;
-        let same = |i: &Intent| matches!((i, &intent), (Intent::Comment { item: a, body: x }, Intent::Comment { item: b, body: y }) if a == b && x.plain_text() == y.plain_text());
-        if self.pending_same(same).await?.is_some() {
+        if self.pending_same(same_comment(&intent)).await?.is_some() {
             return Err(refuse(format!("that comment is already waiting as a draft on {}", item.key)));
         }
         self.draft_from_run(&run, intent, label_of(&run)).await
     }
 
     /// The same draft, made when a run finishes. Only a full answer that marked a `For Jira:` section is used, and a
-    /// run that already has a comment draft in any state, even a skipped one, gets no second.
+    /// run that already has a comment draft in any state, even a skipped one, gets no second. Nor does one whose
+    /// comment is word for word what already waits as a draft on the ticket, as a second review of it often is.
     pub async fn auto_draft_run_comment(&self, id: &str) -> Result<Option<Proposal>> {
         let Ok((run, item)) = self.finished_run(id).await else { return Ok(None) };
         let resolved = self.resolved_of(&run).await?;
@@ -565,6 +569,9 @@ impl Core {
             return Ok(None);
         }
         let intent = self.comment_intent(&run, &resolved, item, &note).await?;
+        if self.pending_same(same_comment(&intent)).await?.is_some() {
+            return Ok(None);
+        }
         Ok(Some(self.draft_from_run(&run, intent, label_of(&run)).await?))
     }
 
@@ -955,6 +962,21 @@ pub(in crate::inbox) mod tests {
         assert_eq!(outcome.note.unwrap(), JiraNote { text: "waiting on CA-9 and CA-12.".into(), from_marker: true });
         let empty = run_with(&fx, |r| r.result = None).await;
         assert_eq!(fx.core.run_outcome(&empty.id).await.unwrap().note, None);
+    }
+
+    #[tokio::test]
+    async fn a_second_run_with_the_same_note_leaves_one_pending_comment_draft() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let first = run_with(&fx, |_| {}).await;
+        let second = run_with(&fx, |_| {}).await;
+        let made = fx.core.auto_draft_run_comment(&first.id).await.unwrap().unwrap();
+        assert_eq!(fx.core.auto_draft_run_comment(&second.id).await.unwrap(), None, "the same words already wait on the ticket");
+        // Once that one is decided, the next run's comment is drafted again.
+        fx.core.skip_proposal(&made.id).await.unwrap();
+        assert!(fx.core.auto_draft_run_comment(&second.id).await.unwrap().is_some());
+        // A different note is a different comment.
+        let other = run_with(&fx, |r| r.result = Some("Found it.\n\nFor Jira: a different finding.".into())).await;
+        assert!(fx.core.auto_draft_run_comment(&other.id).await.unwrap().is_some());
     }
 
     #[tokio::test]

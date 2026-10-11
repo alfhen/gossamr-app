@@ -170,8 +170,12 @@ function answersByRun(proposals: readonly Proposal[], runs: readonly Run[]): Map
   return out;
 }
 
+/** Where a kind of wait sorts in the tray, lowest first: a review that still blocks, then a hold, then a run stuck on the person, then drafts. */
+const URGENCY: Record<NeedsYouKind, number> = { escalation: 0, held: 1, permission: 2, question: 2, failure: 2, draft: 3, runStart: 3 };
+
 /**
- * Everything waiting on the person across the open workstreams and General, oldest first by when it started waiting:
+ * Everything waiting on the person across the open workstreams and General: an escalation first, then holds, then runs
+ * stuck on the person, then drafts, each group oldest first by when it started waiting. They are
  * pending drafts (a draft run start apart), runs asking a question, asking permission or blocked (a folder to trust
  * among them), failed runs not yet looked at, held workstreams, and reviews that still block after the automatic fix
  * rounds (the person chooses what happens next). A run asking a question that Pip suggested a reply
@@ -194,11 +198,14 @@ export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt
     if (p.intent.type === "startRun") {
       items.push({ key: `draft:${p.id}`, kind: "runStart", workstreamId, ...say(targetOf(p.intent)?.key, `Start ${STAGE_LABEL[p.intent.spec.kind]}`), at: p.createdAt, target });
     } else {
-      // A draft a run left says which run, so a review's comments in the tray can be told apart: "CA-401 · R5 comment".
+      // A draft a run left says which run, so a review's comments in the tray can be told apart: x.
       const from = p.origin.type === "run" ? p.origin.runId : null;
       const ws = workstreamId ? open.find((v) => v.workstream.id === workstreamId) : undefined;
       const label = from && ws?.labels.find(([id]) => id === from)?.[1];
-      const text = label ? `${label} ${DRAFT_TEXT[p.intent.type].replace(/^Draft /, "")}` : DRAFT_TEXT[p.intent.type];
+      // With the run's step beside it, so "R5" says what it was: "CA-401 · R5 review · comment".
+      const step = from ? runs.find((r) => r.id === from)?.spec.kind : undefined;
+      const what = DRAFT_TEXT[p.intent.type].replace(/^Draft /, "");
+      const text = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : DRAFT_TEXT[p.intent.type];
       items.push({ key: `draft:${p.id}`, kind: "draft", workstreamId, ...say(targetOf(p.intent)?.key, text), at: p.createdAt, target });
     }
   }
@@ -234,7 +241,7 @@ export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt
     if (!e) continue;
     items.push({ key: `escalation:${e.reviewRun}`, kind: "escalation", workstreamId: v.workstream.id, ...say(v.workstream.itemKey, escalationReason(e.rounds)), at: e.at, target: { type: "escalation" } });
   }
-  return items.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return items.sort((a, b) => URGENCY[a.kind] - URGENCY[b.kind] || Date.parse(a.at) - Date.parse(b.at) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
 
 /** How many of `items` wait in workstream `workstreamId`; null counts General's. */
