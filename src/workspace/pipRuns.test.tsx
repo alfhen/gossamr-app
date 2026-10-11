@@ -5,6 +5,7 @@ import { agentSummary, mockAsk, mockPipEvents, scriptPip } from "../backend/mock
 import type { AskRequest, ClaudeEvent } from "../backend/claude";
 import type { Run, RunState, ScreenContext, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { runPhrase } from "../lib/runNames";
 import { NUDGE_GAP_MS, nudgeCandidates, pickNudge, type NudgeScene } from "./nudges";
 import { NO_FILTERS } from "./agentsLogic";
 import { useAgentsFlag } from "./agentsFlag";
@@ -58,7 +59,8 @@ describe("run nudges", () => {
     expect(needs.action).toEqual({ type: "open-run", id: "r-needsAnswer" });
     const [done] = runNudges([run("done")], new Set(), () => "Aurora investigation");
     expect(done.text).toBe("Aurora investigation finished. Want me to sum up what it found?");
-    expect(done.action).toEqual({ type: "ask", prompt: "What did the agent find in run r-done?", shown: expect.stringMatching(/^What did the .+ find\?$/) });
+    // A ticket title isn't something that finds things, so the question names the run by ticket and step instead.
+    expect(done.action).toEqual({ type: "ask", prompt: "What did the agent find in run r-done?", shown: `What did ${runPhrase(run("done"))} find?` });
     const [failed] = runNudges([run("failed")], new Set());
     expect(failed.action).toEqual({ type: "open-run", id: "r-failed" });
   });

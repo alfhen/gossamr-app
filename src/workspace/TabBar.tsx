@@ -96,7 +96,10 @@ export function TabStrip({
     setView((v) => (v.start === next.start && v.end === next.end && v.offset === next.offset && v.width === next.width ? v : next));
   };
   const refit = useRef(fit);
-  refit.current = fit;
+  // Only a committed render's `fit` may answer the observer: a discarded render could hold a different active tab.
+  useLayoutEffect(() => {
+    refit.current = fit;
+  });
   // The canvas narrowing as the peek or the Pip pane opens, or a tab's count growing, refits the strip around the active tab.
   useLayoutEffect(() => {
     const box = room.current;
