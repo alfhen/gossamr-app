@@ -234,10 +234,22 @@ describe("runs and drafts in a mock workstream", () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const draft = await backend.runsDraft(spec(), CA401);
     const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    backend.runs.advance(run.id);
     await expect(backend.runsStop(run.id)).rejects.toThrow("It can be stopped once it is working.");
-    for (let n = 0; n < 3; n++) backend.runs.advance(run.id);
+    for (let n = 0; n < 2; n++) backend.runs.advance(run.id);
     await expect(backend.runsStop(run.id)).rejects.toThrow("This run is done, so there is nothing to stop.");
     await expect(backend.runsRetryLaunch(run.id)).rejects.toThrow("This run is done and has nothing to retry.");
+  });
+
+  it("cancels a queued run that hasn't launched, as the backend withdraws it: stopped before it started, and recorded (N8)", async () => {
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    const draft = await backend.runsDraft(spec(), CA401);
+    const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    expect(run.state).toBe("queued");
+    const cancelled = await backend.runsStop(run.id);
+    expect([cancelled.state, cancelled.error, cancelled.endedAt !== null]).toEqual(["stopped", "Stopped before it started", true]);
+    backend.runs.advance(run.id);
+    expect((await backend.runsList()).find((r) => r.id === run.id)?.state).toBe("stopped");
   });
 
   it("never gives a new run the id of one from before a reload that the audit or a draft still names", async () => {

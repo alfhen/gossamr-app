@@ -261,6 +261,8 @@ export interface AgentsScreenProps {
   stopping: boolean;
   /** Failed runs the person has taken the Terminal step for. */
   opened: ReadonlySet<string>;
+  /** Failed runs the person has looked at, which no longer wait on them: the summary counts as the Agents rail badge does. */
+  seenFailed?: ReadonlySet<string>;
   now: number;
   ticketTitle(run: Run): string | null;
   /** Whether a finished run has a comment draft waiting. */
@@ -276,7 +278,7 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, seenFailed, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on }: AgentsScreenProps) {
   const footer = useFooterHeight();
   const { lanes, workstreams: wsGroups, order } = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now), [group, runs, workstreams, filters, earlierOpen, now]);
   const filtered = isFiltered(filters);
@@ -331,7 +333,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ws-sep bg-ws-bar px-6 py-2.5">
         <h2 className="m-0 text-base font-semibold">Agents</h2>
         <span aria-live="polite" className="text-sm text-ws-ink3">
-          {summaryLine(runs, now)}
+          {summaryLine(runs, now, seenFailed)}
         </span>
         <span className="flex-1" />
         <button type="button" onClick={on.startAgent} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
@@ -437,6 +439,7 @@ export function AgentsView() {
   const introOpen = useRuns((s) => s.introOpen);
   const stopping = useRuns((s) => s.stopping);
   const opened = useRuns((s) => s.terminalOpened);
+  const seenFailed = useRuns((s) => s.seenFailed);
   const view = usePrefs((s) => s.agentsView);
   const group = usePrefs((s) => s.agentsGroup);
   const workstreams = useWorkstreams((s) => s.list);
@@ -501,6 +504,7 @@ export function AgentsView() {
       workstreams={workstreams}
       stopping={stopping}
       opened={opened}
+      seenFailed={seenFailed}
       now={now}
       ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
       draftReady={(run) => !!runDraftOf(proposals, run.id) || !!runTicketDraftOf(proposals, run.id)}

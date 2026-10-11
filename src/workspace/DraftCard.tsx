@@ -15,7 +15,7 @@ import { PIP_SHOWN, pipAsks } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
-import { peekFocusAfterLeaving } from "./peekDrafts";
+import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
 import { itemKey } from "../lib/filter";
 import { FOLLOW_UP_LIMIT, followUpProblem, followUpTitle, nextPass } from "./followUp";
 import { RetiredDraft } from "./RetiredDraft";
@@ -254,7 +254,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
       onBlur={(ev) => {
         if (ev.relatedTarget && !ev.currentTarget.contains(ev.relatedTarget as Node)) hadFocus.current = false;
       }}
-      className={`ws-legacy overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
+      className={`ws-legacy ${PEEK_DRAFT_MARGIN} overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
         <span aria-hidden>✦</span>

@@ -7,6 +7,13 @@ export const PEEK_CLOSE = '#peek-sheet button[aria-label="Close details"]';
 /** The peek's own scroll container, the only thing a card focused from code may scroll. */
 export const PEEK_SCROLL = "[data-peek-scroll]";
 
+/**
+ * The room a draft card in the peek keeps above itself when it is brought into view: the peek's sticky section nav and the
+ * "Drafts waiting" bar under it stay over the scroll box's top, so a card scrolled to the very top would have its title
+ * and its state under them. `take` honours it.
+ */
+export const PEEK_DRAFT_MARGIN = "scroll-mt-20";
+
 interface Box {
   top: number;
   bottom: number;
@@ -51,8 +58,16 @@ function take(el: Focusable, block: ScrollLogicalPosition) {
   el.focus({ preventScroll: true });
   const box = el.closest?.(PEEK_SCROLL) as Scroller | null | undefined;
   if (!box || !el.getBoundingClientRect) return;
-  const to = scrollTopFor(el.getBoundingClientRect(), box.getBoundingClientRect(), box.scrollTop, block);
-  if (to !== null) box.scrollTop = to;
+  const card = el.getBoundingClientRect();
+  const margin = scrollMargin(el);
+  const to = scrollTopFor({ top: card.top - margin, bottom: card.bottom }, box.getBoundingClientRect(), box.scrollTop, block);
+  if (to !== null) box.scrollTop = Math.max(0, to);
+}
+
+/** The scroll margin above `el`, as its style says (`PEEK_DRAFT_MARGIN`); 0 where there is no style to read. */
+function scrollMargin(el: Focusable): number {
+  if (typeof getComputedStyle !== "function" || typeof Element === "undefined" || !(el instanceof Element)) return 0;
+  return parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
 }
 
 /**

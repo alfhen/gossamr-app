@@ -134,7 +134,7 @@ describe("the lanes", () => {
     expect(out.match(/data-lane="(\w+)"/g)).toEqual(['data-lane="needs"', 'data-lane="running"', 'data-lane="done"', 'data-lane="bad"']);
     for (const heading of ["Needs you", "Running", "Done, ready to review", "Failed or stuck"]) expect(out).toContain(`>${heading}</h3>`);
     expect(articles(out)).toHaveLength(8);
-    expect(out).toContain("2 need you · 2 running · 2 ready to review · 1 quiet · 1 failed");
+    expect(out).toContain("3 waiting on you · 2 running · 2 ready to review · 2 failed or stuck (1 quiet)");
   });
 
   it("folds Earlier and says how many are in it", () => {

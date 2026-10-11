@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { focusPeekDraft, PEEK_CLOSE, PEEK_DRAFT, PEEK_SCROLL, peekFocusAfterLeaving, scrollTopFor } from "./peekDrafts";
+import { focusPeekDraft, PEEK_CLOSE, PEEK_DRAFT, PEEK_DRAFT_MARGIN, PEEK_SCROLL, peekFocusAfterLeaving, scrollTopFor } from "./peekDrafts";
 
 /** The peek's scroll container, 400px tall from y=100, scrolled by `scrollTop`. */
 const scroller = (scrollTop = 0) => ({ scrollTop, getBoundingClientRect: () => ({ top: 100, bottom: 500 }) });
@@ -94,5 +94,21 @@ describe("the keyboard and drafts in the peek", () => {
     expect(scrollTopFor({ top: 450, bottom: 560 }, box, 40, "nearest")).toBe(100);
     // Taller than the peek: its top shows.
     expect(scrollTopFor({ top: 450, bottom: 1000 }, box, 40, "nearest")).toBe(390);
+  });
+
+  it("leaves a card's scroll margin clear above it, so its title and state aren't under the peek's sticky bars (N7, D21)", () => {
+    class FakeElement {}
+    vi.stubGlobal("Element", FakeElement);
+    vi.stubGlobal("getComputedStyle", () => ({ scrollMarginTop: "80px" }));
+    try {
+      const box = scroller(20);
+      const card = Object.assign(Object.create(FakeElement.prototype), el("rv-1", { top: 380, bottom: 900 }, box));
+      focusPeekDraft("rv-1", rootOf([card]), (go) => (go(), 0), vi.fn());
+      // 80px short of the top, where it would have been without the margin (300).
+      expect(box.scrollTop).toBe(220);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(PEEK_DRAFT_MARGIN).toBe("scroll-mt-20");
   });
 });

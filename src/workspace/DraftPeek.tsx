@@ -13,7 +13,7 @@ import { pipAsks } from "./runSheetLogic";
 import { FromRun } from "./RunProvenance";
 import { useRuns } from "./runsStore";
 import { usePrefs } from "./prefs";
-import { PeekView, type DraftSlots, type PeekViewProps } from "./PeekSheet";
+import { PeekView, typingIn, type DraftSlots, type PeekViewProps } from "./PeekSheet";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 
@@ -391,7 +391,8 @@ function OpenDraft({ proposal: p, ...motion }: { proposal: Create } & Motion) {
         return;
       }
       if (ev.key !== "Escape") return;
-      if (typing) {
+      // Pip's input doesn't keep Esc: the draft over it closes first.
+      if (typingIn(focus)) {
         if (inside) (focus as HTMLElement).blur();
         return;
       }

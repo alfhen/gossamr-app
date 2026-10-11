@@ -175,12 +175,15 @@ export function onDraftCardKey(ev: KeyEventLike, p: Proposal, asking: Asking | n
  * Where focus goes when the focused card is about to leave the conversation, as a decided draft under "Drafts waiting"
  * does: the next card, else the one before, else the input. Never nowhere, where the next j or k would move the canvas.
  */
-export function focusAfterLeaving(card: unknown, root: CardRoot, input: Focusable | null) {
+export function focusAfterLeaving(card: unknown, root: CardRoot, input: Focusable | null, defer?: (go: () => void) => void) {
   const cards: Focusable[] = reachableCards(root);
   const at = cards.indexOf(card as Focusable);
   const next = at < 0 ? undefined : (cards[at + 1] ?? cards[at - 1]);
-  if (next) show(next);
-  else input?.focus();
+  const go = () => (next ? show(next) : input?.focus());
+  // Called as the card unmounts, inside React's commit, where React hears no focus event: the next card would take focus
+  // but never arm, and its keys would do nothing. `defer` hands focus over once the commit is done.
+  if (defer) defer(go);
+  else go();
 }
 
 /** ArrowDown and j move to the next draft card in the conversation, ArrowUp and k to the previous one. Only from a focused card. */

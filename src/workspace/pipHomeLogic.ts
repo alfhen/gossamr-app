@@ -133,6 +133,27 @@ function workstreamTitles(workstreams: readonly WorkstreamView[]): Map<string, s
   return out;
 }
 
+/**
+ * A ticket's title from the snapshot of it a run or a run draft carries ("KEY: title" on its first line, as the backend
+ * writes it), for a ticket outside the watched projects that no cache holds; null when the snapshot doesn't say.
+ */
+export function titleFromTicketBlock(block: string | null | undefined, key: string): string | null {
+  const first = block?.trimStart().split("\n", 1)[0] ?? "";
+  return first.startsWith(`${key}: `) ? first.slice(key.length + 2).trim() || null : null;
+}
+
+/** The titles runs and run drafts kept of their tickets, by key: the last resort for a tray line's title. */
+function snapshotTitles(runs: readonly Run[], proposals: readonly Proposal[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const add = (key: string | null | undefined, block: string | null | undefined) => {
+    const title = key && !out.has(key) ? titleFromTicketBlock(block, key) : null;
+    if (key && title) out.set(key, title);
+  };
+  for (const r of runs) add(r.item?.key, r.spec.ticketBlock);
+  for (const p of proposals) if (p.intent.type === "startRun") add(p.intent.item?.key, p.intent.spec.ticketBlock);
+  return out;
+}
+
 /** An item's label, head and reason, from the ticket key it is about and what it waits on. */
 const said = (key: string | null | undefined, reason: string, titleOf: NeedsYouInput["titleOf"]) => {
   const title = key ? titleOf?.(key)?.trim() : null;
@@ -158,9 +179,10 @@ function answersByRun(proposals: readonly Proposal[], runs: readonly Run[]): Map
  * goes as soon as the stores say its wait is over.
  */
 export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt, titleOf }: NeedsYouInput): NeedsYouItem[] {
-  // A ticket not in the cache still has the title its workstream took.
+  // A ticket not in the cache still has the title its workstream took, or the one its run's snapshot of it says.
   const kept = workstreamTitles(workstreams);
-  const say = (key: string | null | undefined, reason: string) => said(key, reason, (k) => titleOf?.(k)?.trim() || kept.get(k));
+  const snapped = snapshotTitles(runs, proposals);
+  const say = (key: string | null | undefined, reason: string) => said(key, reason, (k) => titleOf?.(k)?.trim() || kept.get(k) || snapped.get(k));
   const open = workstreams.filter((v) => v.workstream.closedAt === null);
   const items: NeedsYouItem[] = [];
   const answers = answersByRun(proposals, runs);

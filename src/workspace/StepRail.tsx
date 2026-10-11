@@ -5,6 +5,7 @@ import type { CodeChange, Proposal, ReviewView, Run, WorkstreamEvent, Workstream
 import { useWorkspace } from "../workspaceStore";
 import { RunLabel } from "./AgentCard";
 import { TONE } from "./AgentParts";
+import { APPROVE_PLAN, planOpenQuestions } from "./agentsLogic";
 import { Btn } from "./AgentSheet";
 import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
@@ -277,6 +278,33 @@ export interface StepRailViewProps {
  * The step rail of a workstream: Pip's notes, the workstream's controls, Pip's own drafts, then a chip for each step of
  * the chain. A chip opens to its runs and the drafts about it, where a draft is decided as in the conversation.
  */
+/** Whether the plan's description update waits among the Plan step's drafts: approving it is how the plan is approved. */
+export const planWaits = (drafts: readonly Proposal[] | undefined) => !!drafts?.some((p) => p.intent.type === "rewrite" && p.state.type === "pending");
+
+/**
+ * Under the Plan step while its description update waits: that approving it approves the plan and lets Build start, and
+ * the questions the plan left for a person, to answer first if they change it (N6).
+ */
+export function PlanApproval({ questions }: { questions: readonly string[] }) {
+  return (
+    <div data-plan-approve className="grid gap-1 rounded-md border border-ws-pip/40 bg-ws-pip-soft px-2.5 py-1.5 text-sm text-ws-ink2">
+      <p className="m-0 font-semibold text-ws-pip">{APPROVE_PLAN}</p>
+      {questions.length > 0 && (
+        <>
+          <p className="m-0">The plan leaves {questions.length === 1 ? "an open question" : `${questions.length} open questions`} for you. Answer first if they change the plan:</p>
+          <ul data-plan-questions className="m-0 grid list-disc gap-0.5 pl-4">
+            {questions.map((q) => (
+              <li key={q} className="[overflow-wrap:anywhere]">
+                {q}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onPullView = pullViewOrGithub, initialOpen = [], reveal = null }: StepRailViewProps) {
   const [open, setOpen] = useState<ReadonlySet<StepGroup>>(() => new Set(initialOpen));
   const chips = useMemo(() => stepChips([...runs], events, verdicts, proposals, { now, waitingForPr: view.waitingForPr, changes }), [runs, events, verdicts, proposals, now, view.waitingForPr, changes]);
@@ -348,6 +376,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                 </span>
                 {!quiet && <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} ws={view.workstream} />}
               </button>
+              {chip.kind === "plan" && planWaits(drafts.plan) && <PlanApproval questions={planOpenQuestions(chip.newest?.result)} />}
               {chip.pr && <StepPullRequest pr={chip.pr} onOpen={onOpenPr} />}
               {chip.kind === "review" && chip.newest?.spec.pr && <ReviewedPull repo={chip.newest.spec.repo} number={chip.newest.spec.pr} onOpen={() => onPullView(chip.newest!.spec.repo, chip.newest!.spec.pr!)} />}
               {shown && (

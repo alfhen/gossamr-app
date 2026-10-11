@@ -5,7 +5,7 @@ import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTAR
 import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { agentSummary } from "../backend/mockPip";
 import { NO_FILTERS, attentionCount, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
-import { planRewriteDraft, batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
+import { planRewriteDraft, titleFromTicketBlock, batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -186,6 +186,18 @@ describe("Needs you labels", () => {
     const fromRun = (id: string, runId: string, minutesAgo: number): Proposal => ({ ...draft(id, comment("CA-401"), minutesAgo), origin: { type: "run", runId, shortId: null, workstream: "ws-1" } }) as Proposal;
     const items = needsYouItems(input({ workstreams: [ws], proposals: [fromRun("c1", "r1", 5), fromRun("c2", "r2", 4), draft("c3", comment("CA-401"), 3, { workstream: "ws-1" })] }));
     expect(items.map((i) => i.label)).toEqual(["CA-401 · R1 comment", "CA-401 · R2 comment", "CA-401 · Draft comment"]);
+  });
+
+  it("give a ticket no cache holds the title its run or run draft kept in its snapshot, so every row reads KEY · Title (D27)", () => {
+    expect(titleFromTicketBlock("SUP-9: Export timeout\nKind: task | Status: Open", "SUP-9")).toBe("Export timeout");
+    expect(titleFromTicketBlock("SUP-90: Something else", "SUP-9")).toBeNull();
+    expect(titleFromTicketBlock(null, "SUP-9")).toBeNull();
+    const failed = run("f", "investigate", "failed", { item: ref("SUP-9"), spec: { ...base.spec, kind: "investigate", ticketBlock: "SUP-9: Export timeout\nDescription: none." } });
+    const start = draft("s", { type: "startRun", item: ref("WEB-120"), spec: { ...base.spec, kind: "investigate", ticketBlock: "WEB-120: Login redirect" } } as unknown as Intent, 2);
+    const items = needsYouItems(input({ runs: [failed], proposals: [start] }));
+    expect(items.map((i) => i.head)).toEqual(["SUP-9 · Export timeout", "WEB-120 · Login redirect"]);
+    // A cached title still comes first.
+    expect(needsYouItems(input({ runs: [failed], titleOf: (k) => (k === "SUP-9" ? "Export times out" : null) }))[0].head).toBe("SUP-9 · Export times out");
   });
 });
 

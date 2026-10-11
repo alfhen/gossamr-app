@@ -114,13 +114,13 @@ export function NeedsYouTray({ items, compact = false, onPick, now = new Date() 
                 title={needsYouText(item, now)}
                 className="grid w-full rounded px-2 py-1 text-left text-sm leading-snug text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip"
               >
-                <span data-needs-you-head className="truncate text-ws-ink">
+                <span data-needs-you-head className="line-clamp-2 text-ws-ink [overflow-wrap:anywhere]">
                   {item.head ?? needsYouReason(item, now)}
                 </span>
                 {/* Hidden, so the item's text reads as one line where it is read as text. */}
                 {item.head && <span hidden> · </span>}
                 {item.head && (
-                  <span data-needs-you-reason className="truncate text-xs text-ws-ink3">
+                  <span data-needs-you-reason className="line-clamp-2 text-xs text-ws-ink3 [overflow-wrap:anywhere]">
                     {needsYouReason(item, now)}
                   </span>
                 )}

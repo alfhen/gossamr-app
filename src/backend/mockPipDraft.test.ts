@@ -7,6 +7,7 @@ import { mockPipTurns } from "./mockPipTurns";
 import { itemRef } from "./mockConnector";
 import { BUILD_NEEDS_PLAN, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, REVIEW_REPORTS, WAITING_FOR_PR_HINT } from "./mockRunKinds";
 import type { AskRequest } from "./claude";
+import { planOpenQuestions } from "../workspace/agentsLogic";
 import type { Intent, Proposal, Run, RunKind, RunSpec, ScreenContext } from "../types";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -41,6 +42,21 @@ describe("mock Pip reading a draft in full", () => {
 describe("open questions in a run result", () => {
   it("stop before the For Jira section", () => {
     expect(openQuestions("## Open questions for a person\n\n- one?\n\nFor Jira:\nsummary")).toBe("- one?");
+  });
+});
+
+describe("mock Pip woken by a finished plan (N6)", () => {
+  it("says approving the description update lets Build start, and lists the questions the plan left open", () => {
+    const b = new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
+    const plan = b.runs.list().find((r) => r.spec.kind === "plan")!;
+    const reply = scriptPip(`[Event] run ${plan.id} (plan) Done; 1 draft`, { screen: "board", item: null } as unknown as ScreenContext, [], [plan], NOW).text;
+    expect(reply).toContain("Approve the description update to let Build start.");
+    const questions = planOpenQuestions(plan.result);
+    expect(questions.length).toBeGreaterThan(0);
+    for (const q of questions) expect(reply).toContain(`- ${q}`);
+    // Any other finished step says nothing of the sort.
+    const other = { ...plan, spec: { ...plan.spec, kind: "triage" as const } };
+    expect(scriptPip(`[Event] run ${plan.id} (triage) Done`, { screen: "board", item: null } as unknown as ScreenContext, [], [other], NOW).text).not.toContain("Approve the description update");
   });
 });
 

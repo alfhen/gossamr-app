@@ -154,10 +154,14 @@ describe("mock runs", () => {
     expect(rows.some((t) => / agents running$/.test(t))).toBe(false);
   });
 
-  it("refuses to stop a run that is only queued", async () => {
+  it("cancels a run that is only queued, before it launches, and refuses one that is launching (N8)", async () => {
     const backend = new MockBackend();
     const run = await backend.runsApprove((await draft(backend)).id, mockDigest(spec));
-    await expect(backend.runsStop(run.id)).rejects.toThrow(/once it is working/);
+    expect(await backend.runsStop(run.id)).toMatchObject({ state: "stopped", error: "Stopped before it started", shortId: null });
+    const other = { ...spec, name: `${spec.name}-2` };
+    const next = await backend.runsApprove((await draft(backend, other)).id, mockDigest(other));
+    backend.runs.advance(next.id);
+    await expect(backend.runsStop(next.id)).rejects.toThrow(/once it is working/);
   });
 
   it("emits runs-changed and open-run", async () => {
@@ -824,7 +828,7 @@ describe("mock runs over the cap wait for a slot, as runs_approve and launch_wai
     expect(b.runs.get(newer.id)).toMatchObject({ state: "queued", slotWaitSince: expect.any(String) });
   });
 
-  it("stops a run waiting for a slot without a session, and other queued runs still can't be stopped", async () => {
+  it("stops a run waiting for a slot without a session, and cancels any other queued run the same way", async () => {
     const { b, approve } = capped();
     const ws = b.workstreams.open(itemRef("CA-401")).id;
     for (const n of [1, 2, 3]) b.runs.advance((await approve(n)).id);
@@ -837,7 +841,7 @@ describe("mock runs over the cap wait for a slot, as runs_approve and launch_wai
     const roomy = capped();
     const loose = await roomy.approve(1);
     expect(loose.slotWaitSince).toBeUndefined();
-    expect(() => roomy.b.runs.stop(loose.id)).toThrow("once it is working");
+    expect(roomy.b.runs.stop(loose.id)).toMatchObject({ state: "stopped", error: "Stopped before it started" });
   });
 });
 

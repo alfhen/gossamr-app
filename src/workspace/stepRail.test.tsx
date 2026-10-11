@@ -97,6 +97,21 @@ const stepOf = (html: string, kind: RunKind) => {
 beforeEach(() => vi.stubGlobal("localStorage", memory()));
 afterEach(() => vi.unstubAllGlobals());
 
+describe("the Plan step while its description update waits (N6)", () => {
+  it("says approving it lets Build start, and lists the questions the plan left open", () => {
+    const planned = RUNS.map((r) => (r.id === "r3" ? { ...r, result: "## Steps\n\n1. Do it\n\n## Open questions for a person\n\n- Do the Klaviyo flows read the subjects?\n- Keep the two-day delay?" } : r));
+    const html = renderToStaticMarkup(<StepRailView {...props({ runs: planned, proposals: [fromRun("d-desc", rewrite, "r3")] })} />);
+    const plan = stepOf(html, "plan");
+    expect(plan).toContain("data-plan-approve");
+    expect(plan).toContain("Approve the description update to let Build start.");
+    expect(plan).toContain("The plan leaves 2 open questions for you.");
+    expect([...plan.matchAll(/<li class="\[overflow-wrap:anywhere\]">([^<]+)<\/li>/g)].map((m) => m[1])).toEqual(["Do the Klaviyo flows read the subjects?", "Keep the two-day delay?"]);
+    // Nowhere else, and not once the description update is decided.
+    expect(html.match(/data-plan-approve/g)).toHaveLength(1);
+    expect(renderToStaticMarkup(<StepRailView {...props({ runs: planned })} />)).not.toContain("data-plan-approve");
+  });
+});
+
 describe("the step rail", () => {
   it("shows Pip's notes, the workstream's controls, then the six steps in order", () => {
     const html = renderToStaticMarkup(<StepRailView {...props()} />);

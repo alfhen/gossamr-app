@@ -43,6 +43,12 @@ fn waits_for_slot(run: &Run) -> bool {
     run.state == RunState::Queued && run.slot_wait_since.is_some() && run.short_id.is_none()
 }
 
+/// An approved run that hasn't launched: queued with no session, whether it waits for a slot or not. Under the launch
+/// lock nothing can launch it, so it is withdrawn (stopped before it started) without asking Claude anything.
+fn withdrawable(run: &Run) -> bool {
+    run.state == RunState::Queued && run.short_id.is_none()
+}
+
 fn can_stop(state: RunState) -> bool {
     matches!(state, RunState::Working | RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked)
 }
@@ -212,12 +218,13 @@ impl RunService {
     }
 
     /// Stops a run that is working or waiting on the person. Its conversation and worktree are kept. A queued run that
-    /// is only waiting for a slot has no session yet, so it is marked stopped without asking Claude anything.
+    /// hasn't launched, waiting for a slot or not, has no session yet, so it is withdrawn: marked stopped before it
+    /// started, without asking Claude anything (the person's Cancel).
     pub async fn stop(&self, run_id: &str) -> Result<Run> {
         self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
-        if waits_for_slot(&run) {
+        if withdrawable(&run) {
             self.withdraw(&mut run).await?;
             return Ok(run);
         }

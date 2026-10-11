@@ -9,7 +9,7 @@ import { COPY, readOnlyNote, runAsYou, startBlock } from "./runSheetLogic";
 import { DRAFT_CARD, PIP_INPUT_ID } from "./draftKeys";
 import { scrollTopFor } from "./peekDrafts";
 import { afterRunStarted, approveRunDraft, readRunDraft } from "./runSetupStore";
-import { useRuns } from "./runsStore";
+import { startWhat, useRuns } from "./runsStore";
 import { messageOf, useToasts } from "./toasts";
 
 /**
@@ -157,7 +157,7 @@ export const useInlineStarts = create<InlineStartsState>((set, get) => {
 
     async open(id) {
       const b = backend();
-      if (!b || !useRuns.getState().ensureAgentsIntro(() => void get().open(id))) return;
+      if (!b || !useRuns.getState().ensureAgentsIntro(() => void get().open(id), startWhat(useWorkspace.getState().proposals[id]))) return;
       revealOnMount.add(id);
       const mine = bump(id);
       patch(id, { ...CLOSED_INLINE, phase: "loading" });

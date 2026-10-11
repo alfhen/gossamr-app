@@ -3,7 +3,7 @@ import { REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, le
 import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import type { BasisField, Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
-import { liveCounts, liveWords, needsPerson, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
+import { APPROVE_PLAN, liveCounts, liveWords, needsPerson, planOpenQuestions, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
 import type { AskRequest, ClaudeEvent, EventMeta } from "./claude";
@@ -338,7 +338,12 @@ function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstr
       if (rest.includes("; verdict: pass")) return `${who} passed. Nothing else starts on its own; the pull request is yours to mark ready.`;
       if (state.trim() === "Done") {
         const drafts = /; (\d+) drafts?/.exec(rest)?.[1];
-        return `${who} finished.${drafts ? ` It left ${drafts === "1" ? "a draft" : `${drafts} drafts`} for you.` : ""}`;
+        const done = `${who} finished.${drafts ? ` It left ${drafts === "1" ? "a draft" : `${drafts} drafts`} for you.` : ""}`;
+        if (kind !== "plan") return done;
+        // Approving the plan is approving its description update: say so, and what the plan left open for a person.
+        const questions = planOpenQuestions(runs.find((r) => r.id === id)?.result);
+        const open = questions.length ? `\n\nIt leaves ${questions.length === 1 ? "an open question" : `${questions.length} open questions`} for you, worth answering first if they change the plan:\n${questions.map((q) => `- ${q}`).join("\n")}` : "";
+        return `${done} ${APPROVE_PLAN}${open}`;
       }
       const asking = state.trim() === "Needs an answer" ? runs.find((r) => r.id === id && r.state === "needsAnswer") : undefined;
       if (asking) {

@@ -631,9 +631,17 @@ describe("the honest wording", () => {
     for (const p of phrases) expect(html).toContain(p);
   });
 
-  it("is in the safety sheet, with the list of what an agent may touch", () => {
+  it("is in the safety sheet once each, with what a Build may touch and nothing said twice (D25)", () => {
     const html = renderToStaticMarkup(<AgentsSettingsView runs={seeded()} stopping={false} keepRunning={3} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
-    for (const p of [...phrases, "exactly what the agent receives", "Nothing enforces that", "Gossamr adds no fence of its own", "What a Build may touch", "A Build runs as you"]) expect(html).toContain(p);
+    const text = html.replace(/<[^>]+>/g, " ");
+    const times = (re: RegExp) => text.match(re)?.length ?? 0;
+    // That Jira and pushing are only asked, that the read-only kinds only read, and that Review and Verify may run tests: once each.
+    expect(times(/not (?:a )?locks?\b/g)).toBe(1);
+    expect(times(/Investigate, Triage, Plan, Review and Verify/g)).toBe(1);
+    expect(times(/may run the repository/g)).toBe(1);
+    for (const p of ["your own Claude settings", "Gossamr adds no fence of its own", "What a Build may touch", "your Claude settings decide"]) expect(html).toContain(p);
+    // Nothing about the setup sheet, which this sheet doesn't show.
+    expect(html).not.toContain("exactly what the agent receives");
     expect(html).not.toMatch(/never write to jira|can&#x27;t write to jira/i);
   });
 });
@@ -641,7 +649,8 @@ describe("the honest wording", () => {
 describe("safety and settings", () => {
   it("counts what Stop all reaches and what keeps running after a quit", () => {
     const html = renderToStaticMarkup(<AgentsSettingsView runs={seeded()} stopping={false} keepRunning={3} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
-    expect(html).toContain("Stop all (5)");
+    // Stop all counts what it can stop, a set apart from Your agents, and says so.
+    expect(html).toContain("Stop all (5 stoppable)");
     expect(html).toContain("3 agents keep running if you quit Gossamr or sign out.");
     expect(html).toContain("Agents running at once");
     expect(html).not.toContain("This is fixed for now");
@@ -679,9 +688,9 @@ describe("safety and settings", () => {
   it("counts the runs waiting for a slot in what Stop all reaches", () => {
     const runs = [run("working", { id: "w" }), run("queued", { id: "q1", shortId: null, slotWaitSince: iso(3) }), run("queued", { id: "q2", shortId: null, slotWaitSince: iso(2) })];
     const html = renderToStaticMarkup(<AgentsSettingsView runs={runs} stopping={false} keepRunning={1} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
-    expect(html).toContain("Stop all (3)");
+    expect(html).toContain("Stop all (3 stoppable)");
     const waitingOnly = renderToStaticMarkup(<AgentsSettingsView runs={[runs[1]]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
-    expect(disabled(waitingOnly, "Stop all \\(1\\)")).toBe(false);
+    expect(disabled(waitingOnly, "Stop all \\(1 stoppable\\)")).toBe(false);
   });
 
   it("turns Stop all off when nothing is running", () => {
@@ -796,7 +805,16 @@ describe("the safety sheet as the one-time intro", () => {
     // Nothing enforces it, as the detail below says: the line can't promise a lock.
     expect(lines[1]).toContain("both are requests, not locks");
     expect(lines[2]).toBe("Gossamr posts nothing to Jira or GitHub until you approve it.");
-    expect(html.indexOf("data-safety-summary")).toBeLessThan(html.indexOf("What agents can touch"));
+    expect(html.indexOf("data-safety-summary")).toBeLessThan(html.indexOf("What a Build may touch"));
+  });
+
+  it("shows only the three lines on the first action, the rest folded behind Details, and none of it twice (D25)", () => {
+    const first = intro(true);
+    expect(first).toMatch(/<details data-safety-details="true"[^>]*><summary[^>]*>Details: stopping agents, what a Build may touch, limits and settings<\/summary>/);
+    expect(first.indexOf("data-safety-summary")).toBeLessThan(first.indexOf("<details"));
+    expect(first.indexOf("<details")).toBeLessThan(first.indexOf("Stop everything"));
+    // Opened from Agents later, the same sheet has no fold.
+    expect(intro(false)).not.toContain("<details data-safety-details");
   });
 
   it("has Got it, continue in its footer only when it opened in place of the person's first action", () => {

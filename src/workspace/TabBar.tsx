@@ -33,6 +33,9 @@ export const MORE_BUTTON = 34;
  * as little as it can; a run that reaches the last tab takes in as many earlier ones as still fit. A tab is never cut: the
  * strip ends where the last whole one does, and buttons either side say how many more there are.
  */
+/** Whether two windows show the same thing, so the strip keeps the one it has. */
+export const sameWindow = (a: TabWindow, b: TabWindow) => a.start === b.start && a.end === b.end && a.offset === b.offset && a.width === b.width && a.squeeze === b.squeeze;
+
 export function tabWindow(spans: TabSpan[], room: number, from: number, active: number): TabWindow {
   const last = spans.length - 1;
   const right = (i: number) => spans[i].left + spans[i].size;
@@ -100,7 +103,7 @@ export function TabStrip({
     const spans = tabs.map((r) => ({ left: r.left - (tabs[0]?.left ?? 0), size: r.width }));
     const next = tabWindow(spans, box.clientWidth - (newTab.current?.offsetWidth ?? 0) - 4, start, follow ? active : -1);
     from.current = next.start;
-    setView((v) => (v.start === next.start && v.end === next.end && v.offset === next.offset && v.width === next.width ? v : next));
+    setView((v) => (sameWindow(v, next) ? v : next));
   };
   const refit = useRef(fit);
   // Only a committed render's `fit` may answer the observer: a discarded render could hold a different active tab.

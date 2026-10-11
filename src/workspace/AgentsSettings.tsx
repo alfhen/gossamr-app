@@ -3,8 +3,11 @@ import { SwitchRow } from "../components/Switch";
 import { RULE_SWITCH, ruleText } from "../lib/workstreamHold";
 import { AUTOSTART_DEFAULTS, WORKSTREAM_RULES, type AgentSettings, type Run, type WorkstreamRule } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
-import { slotWaiters, stopAllText, stoppable, KIND_LABEL } from "./agentsLogic";
-import { COPY, MAY_TOUCH, SAFETY_SUMMARY } from "./runSheetLogic";
+import { slotWaiters, stopAllLabel, stopAllText, stoppable, KIND_LABEL } from "./agentsLogic";
+import { MAY_TOUCH, SAFETY_SUMMARY } from "./runSheetLogic";
+
+/** A Build's own details, less the Jira line, which the summary already says. */
+const BUILD_DETAILS = MAY_TOUCH.filter((t) => !t.title.startsWith("Writing to Jira"));
 import { Icon } from "./AgentIcons";
 import { usePrefs } from "./prefs";
 
@@ -41,34 +44,9 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
   const active = stoppable(runs);
   const waiting = slotWaiters(runs);
   const reach = active.length + waiting.length;
-  return (
-    <SheetFrame
-      label="Agents safety and settings"
-      title="Agents"
-      hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>}
-      wide={false}
-      onClose={onClose}
-      footer={
-        intro ? (
-          <>
-            <Btn tone="primary" autoFocus onClick={onContinue ?? onClose}>
-              Got it, continue
-            </Btn>
-            <span className="text-sm text-ws-ink3">This shows once. It stays under Agents, Safety and settings.</span>
-          </>
-        ) : undefined
-      }
-    >
-      <h2 className="m-0 text-[20px] leading-tight font-semibold">Safety and settings</h2>
-      <ul data-safety-summary className="m-0 grid list-none gap-1.5 p-0">
-        {SAFETY_SUMMARY.map((t) => (
-          <li key={t.text} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5 text-ws-ink">
-            <Icon name={t.icon} className="mt-0.5 size-3.5 text-ws-ink2" />
-            <span>{t.text}</span>
-          </li>
-        ))}
-      </ul>
-
+  // On the first agent action only the three lines above show, with Got it, continue under them; the rest waits behind Details.
+  const details = (
+    <>
       <Sec title="Stop everything">
         <Box>
           <p className="m-0">
@@ -97,21 +75,38 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
           ) : (
             <div>
               <Btn tone="danger" icon="stop" disabled={reach === 0 || stopping} onClick={() => setAsking(true)}>
-                Stop all{reach ? ` (${reach})` : ""}
+                {stopAllLabel(reach)}
               </Btn>
             </div>
           )}
           {keepRunning !== null && keepRunning > 0 && <p className="m-0 text-sm text-ws-ink2">{keepRunning} {keepRunning === 1 ? "agent keeps" : "agents keep"} running if you quit Gossamr or sign out.</p>}
+          {active.length > 0 && (
+            <table className="w-full border-collapse text-left">
+              <thead>
+                <tr className="text-xs tracking-[0.05em] text-ws-ink3 uppercase">
+                  <th className="py-1 pr-2 font-semibold">Agent</th>
+                  <th className="py-1 font-semibold">Starts in</th>
+                </tr>
+              </thead>
+              <tbody>
+                {active.map((r) => (
+                  <tr key={r.id} className="border-t border-ws-sep align-top">
+                    <td className="py-1.5 pr-2 whitespace-nowrap">
+                      <span className="font-mono font-semibold">{r.item?.key ?? "task"}</span> <span className="text-ws-ink3">{KIND_LABEL[r.spec.kind]}</span>
+                    </td>
+                    <td className="selectable py-1.5 font-mono text-sm break-all text-ws-ink2">{r.expectedWorktree}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </Box>
       </Sec>
 
-      <Sec title="What agents can touch">
-        <p className="m-0 text-ws-ink">{COPY.runAsYou}</p>
-        <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
-        <p className="m-0 text-ws-ink2">{COPY.readOnlySteps}</p>
-        <p className="m-0 font-semibold text-ws-ink">What a Build may touch</p>
+      {/* The summary above says what every kind may do and that Jira and pushing are requests; this adds only what a Build's own settings decide. */}
+      <Sec title="What a Build may touch">
         <ul className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
-          {MAY_TOUCH.map((t) => (
+          {BUILD_DETAILS.map((t) => (
             <li key={t.title} data-tone={t.tone} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5">
               <Icon name={t.tone === "yes" ? "check" : t.tone === "ask" ? "hand" : "x"} className={`mt-0.5 size-3.5 ${t.tone === "yes" ? "text-ws-done" : t.tone === "ask" ? "text-ws-warn" : "text-ws-ink3"}`} />
               <span>
@@ -120,27 +115,6 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
             </li>
           ))}
         </ul>
-        <p className="m-0 text-ws-ink2">{COPY.receives.replace("below ", "in the setup sheet ")}</p>
-        {active.length > 0 && (
-          <table className="w-full border-collapse text-left">
-            <thead>
-              <tr className="text-xs tracking-[0.05em] text-ws-ink3 uppercase">
-                <th className="py-1 pr-2 font-semibold">Agent</th>
-                <th className="py-1 font-semibold">Starts in</th>
-              </tr>
-            </thead>
-            <tbody>
-              {active.map((r) => (
-                <tr key={r.id} className="border-t border-ws-sep align-top">
-                  <td className="py-1.5 pr-2 whitespace-nowrap">
-                    <span className="font-mono font-semibold">{r.item?.key ?? "task"}</span> <span className="text-ws-ink3">{KIND_LABEL[r.spec.kind]}</span>
-                  </td>
-                  <td className="selectable py-1.5 font-mono text-sm break-all text-ws-ink2">{r.expectedWorktree}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </Sec>
 
       <Sec title="Limits">
@@ -204,6 +178,44 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
           <p className="m-0 text-ws-ink2">Agents start with the environment of your own shell, read once when Gossamr opens, so they find the same tools you do.</p>
         </Box>
       </Sec>
+    </>
+  );
+  return (
+    <SheetFrame
+      label="Agents safety and settings"
+      title="Agents"
+      hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>}
+      wide={false}
+      onClose={onClose}
+      footer={
+        intro ? (
+          <>
+            <Btn tone="primary" autoFocus onClick={onContinue ?? onClose}>
+              Got it, continue
+            </Btn>
+            <span className="text-sm text-ws-ink3">This shows once. It stays under Agents, Safety and settings.</span>
+          </>
+        ) : undefined
+      }
+    >
+      <h2 className="m-0 text-[20px] leading-tight font-semibold">Safety and settings</h2>
+      <ul data-safety-summary className="m-0 grid list-none gap-1.5 p-0">
+        {SAFETY_SUMMARY.map((t) => (
+          <li key={t.text} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5 text-ws-ink">
+            <Icon name={t.icon} className="mt-0.5 size-3.5 text-ws-ink2" />
+            <span>{t.text}</span>
+          </li>
+        ))}
+      </ul>
+
+      {intro ? (
+        <details data-safety-details className="grid gap-4">
+          <summary className="cursor-pointer text-sm font-semibold text-ws-ink2">Details: stopping agents, what a Build may touch, limits and settings</summary>
+          <div className="mt-3 grid gap-5">{details}</div>
+        </details>
+      ) : (
+        details
+      )}
     </SheetFrame>
   );
 }

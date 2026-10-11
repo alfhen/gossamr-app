@@ -1,11 +1,11 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { targetOf } from "../lib/proposals";
-import type { CleanupResult, ItemRef, PlanComment, Proposal, Run, RunsEnvironment } from "../types";
+import type { CleanupResult, ItemRef, PlanComment, Proposal, Run, RunKind, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { copyText } from "./AgentSheet";
-import { NO_FILTERS, agentGroups, attentionCount, stepRun, stopAllText, type AgentFilters } from "./agentsLogic";
+import { KIND_LABEL, NO_FILTERS, agentGroups, attentionCount, stepRun, stopAllText, type AgentFilters } from "./agentsLogic";
 import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
 import { planCommentMessage } from "./runSheetLogic";
@@ -68,6 +68,8 @@ interface RunsState {
    * while the safety sheet is that intro, which is how the sheet knows to offer it.
    */
   afterIntro: (() => void) | null;
+  /** What `afterIntro` would start, in words ("Investigate CA-401"), for the note when the intro is closed instead. */
+  afterIntroWhat: string | null;
   /** The order the run sheet browses in, taken when it opened; see `browseList`. */
   browseOrder: readonly string[] | null;
   /** Runs whose answer went through, with the progress time they had then: "Answer sent" shows until it moves on. */
@@ -102,7 +104,7 @@ interface RunsState {
    * False when it opened the safety sheet because the person has not seen it; callers stop there, and `then`, what
    * they were doing, runs when the person presses "Got it, continue". Closing the sheet any other way drops it.
    */
-  ensureAgentsIntro(then?: () => void): boolean;
+  ensureAgentsIntro(then?: () => void, what?: string): boolean;
   /** Closes the one-time safety sheet and carries on with what the person asked for before it opened. */
   continueIntro(): void;
   /** Moves the run sheet to the next (`1`) or previous (`-1`) run, in the order the Agents view lists them, grouped as it is. */
@@ -158,7 +160,7 @@ export function permissionConfirmation(run: Pick<Run, "lastProgressAt" | "permis
   return run.state === "needsPermission" && run.permissionAllowed?.command === answered.command ? answered : null;
 }
 
-const idle = { runs: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, afterIntro: null, browseOrder: null, picking: false };
+const idle = { runs: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, afterIntro: null, afterIntroWhat: null, browseOrder: null, picking: false };
 
 /** The order the Agents view lists runs in right now, grouped as it is. */
 const liveOrder = (s: Pick<RunsState, "runs" | "filters" | "earlierOpen">) => agentGroups(usePrefs.getState().agentsGroup, s.runs, useWorkstreams.getState().list, s.filters, s.earlierOpen, Date.now()).order;
@@ -239,6 +241,17 @@ const TICKET_READY = "Draft ticket ready. Nothing is created until you approve i
 
 let stop: (() => void) | null = null;
 let seq = 0;
+
+/** The note when the one-time safety sheet is closed with × rather than Got it, continue: what was dropped, and that nothing ran. */
+export const introCancelled = (what: string) => `Cancelled: ${what}. Nothing was started.`;
+
+/** A run start in words for that note: the draft's own kind and ticket when there is one ("Investigate CA-401"), else the kind and ticket asked for. */
+export function startWhat(p: Proposal | null | undefined, kind?: RunKind, item?: ItemRef | null): string {
+  const draft = p?.intent.type === "startRun" ? p.intent : null;
+  const k = draft?.spec.kind ?? kind;
+  const key = (draft ? draft.item : item)?.key;
+  return k ? `${KIND_LABEL[k]}${key ? ` ${key}` : ""}` : "Start an agent";
+}
 
 export const useRuns = create<RunsState>((set, get) => ({
   backend: null,
@@ -323,29 +336,34 @@ export const useRuns = create<RunsState>((set, get) => ({
     if (!opts?.stay || tabs.route === "settings" || tabs.route === "activity") tabs.setRoute("agents");
   },
 
-  openSafety: () => set({ sheet: { type: "safety" }, afterIntro: null, browseOrder: null }),
-  closeSheet: () => set({ sheet: null, afterIntro: null, browseOrder: null }),
+  openSafety: () => set({ sheet: { type: "safety" }, afterIntro: null, afterIntroWhat: null, browseOrder: null }),
+  closeSheet: () => {
+    // The one-time intro closed without Got it, continue: what it stood in for is dropped, and the person is told so.
+    const dropped = get().afterIntro ? (get().afterIntroWhat ?? "Start an agent") : null;
+    set({ sheet: null, afterIntro: null, afterIntroWhat: null, browseOrder: null });
+    if (dropped) useToasts.getState().push(introCancelled(dropped), "info");
+  },
 
   showDraft(item) {
     get().closeSheet();
     if (item) openDraftsOn(item);
   },
-  ensureAgentsIntro(then) {
+  ensureAgentsIntro(then, what) {
     const prefs = usePrefs.getState();
     if (prefs.agentsIntroSeen) return true;
     prefs.setAgentsIntroSeen(true);
-    set({ sheet: { type: "safety" }, picking: false, afterIntro: then ?? (() => {}), browseOrder: null });
+    set({ sheet: { type: "safety" }, picking: false, afterIntro: then ?? (() => {}), afterIntroWhat: what ?? null, browseOrder: null });
     return false;
   },
 
   continueIntro() {
     const then = get().afterIntro;
-    set({ sheet: null, afterIntro: null });
+    set({ sheet: null, afterIntro: null, afterIntroWhat: null });
     then?.();
   },
 
   setPicking(picking) {
-    if (picking && !get().ensureAgentsIntro(() => get().setPicking(true))) return;
+    if (picking && !get().ensureAgentsIntro(() => get().setPicking(true), "Start an agent")) return;
     set({ picking });
   },
 

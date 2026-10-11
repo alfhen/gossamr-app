@@ -1,7 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MockBackend } from "../backend/mock";
+import { docFromText } from "../lib/docs";
+import type { Intent, Proposal } from "../types";
+import { NO_FILTERS, agentsWaitingOnYou, attentionCount, groupRuns, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
 import { NeedsYouTray, needsYouText, openNeedsYou } from "./NeedsYouTray";
-import type { NeedsYouItem } from "./pipHomeLogic";
+import { composerFooter, needsYouItems, type NeedsYouItem } from "./pipHomeLogic";
+import { PipRunStripView } from "./PipRunCard";
+import { railBadgeText } from "./Rail";
 import { usePipHome } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { loadTabs, useTabs } from "./tabsStore";
@@ -95,4 +101,45 @@ describe("activating an item", () => {
     expect(usePipHome.getState().selected).toBeNull();
     expect(usePipHome.getState().focusTarget).toEqual({ type: "draft", id: "d9" });
   });
+});
+
+describe("every count of needs you and of agents, from one fixture (D4, D5, N3)", () => {
+  const backend = new MockBackend();
+  const runs = backend.runs.list();
+  const at = Date.now();
+  const proposal = (id: string, intent: Intent): Proposal =>
+    ({ id, createdAt: ago(3), updatedAt: ago(3), origin: { type: "chat", requestId: `q-${id}`, workstream: null }, createdBy: "pip", intent, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error: null, run: null }) as unknown as Proposal;
+  const ticket = { connectionId: "mock", externalId: "CA-401", key: "CA-401" };
+  const proposals = [proposal("p1", { type: "comment", item: ticket, body: docFromText("Checking in."), mentions: [] } as unknown as Intent), proposal("p2", { type: "startRun", connectionId: "mock", item: ticket, spec: { ...runs[0].spec, kind: "investigate" } } as unknown as Intent)];
+  const failed = runs.find((r) => r.state === "failed")!;
+
+  for (const seen of [new Set<string>(), new Set([failed.id])]) {
+    it(`agrees on Pip home, the tray, both rail badges, the Agents header, Your agents and Stop all${seen.size ? ", once the failed run was looked at" : ""}`, () => {
+      const items = needsYouItems({ workstreams: [], runs, proposals, seenFailed: seen });
+      const n = items.length;
+      // Needs you: the tray's pill, the Pip home badge and the composer footer.
+      expect(renderToStaticMarkup(<NeedsYouTray items={items} now={NOW} />)).toMatch(new RegExp(`data-needs-you-count[^>]*>${n}<`));
+      expect(railBadgeText.pipHome(n)).toBe(`${n} items wait in Needs you`);
+      expect(Number(/(\d+) needs? you/.exec(composerFooter(runs, items, at))?.[1])).toBe(n);
+      // Its agent part: the tray's run items, the Agents rail badge and the Agents header's "waiting on you".
+      const waiting = agentsWaitingOnYou(runs, seen);
+      const runItems = items.filter((i) => i.kind === "question" || i.kind === "permission" || i.kind === "failure");
+      expect(runItems).toHaveLength(waiting.length);
+      expect(attentionCount(runs, seen)).toBe(waiting.length);
+      expect(summaryLine(runs, at, seen)).toMatch(new RegExp(`^${waiting.length} waiting on you · `));
+      expect(railBadgeText.agents(waiting.length)).toMatch(/agent runs? waits? on you$/);
+      // Drafts are the rest: Needs you is the agents waiting plus the drafts waiting.
+      expect(n).toBe(waiting.length + proposals.length);
+      // Your agents: the strip's "3 of M" is every agent, the waiting ones among them.
+      const mine = yourAgents(runs, seen);
+      const strip = renderToStaticMarkup(<PipRunStripView runs={runs} enabled now={at} seenFailed={seen} titleOf={() => null} onOpen={() => {}} onSeeAll={() => {}} />);
+      expect(Number(/data-strip-count[^>]*>\d+ of (\d+)</.exec(strip)?.[1])).toBe(mine.length);
+      for (const r of waiting) expect(mine).toContain(r);
+      // Failed or stuck in the header is the lane of that name, card for card (N3).
+      const bad = groupRuns(runs, NO_FILTERS, at).find((g) => g.lane === "bad")?.runs.length ?? 0;
+      expect(Number(/(\d+) failed or stuck/.exec(summaryLine(runs, at, seen))?.[1])).toBe(bad);
+      // Stop all counts a set of its own, and says so.
+      expect(stopAllLabel(stoppable(runs).length + slotWaiters(runs).length)).toMatch(/^Stop all \(\d+ stoppable\)$/);
+    });
+  }
 });

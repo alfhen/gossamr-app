@@ -70,11 +70,11 @@ export interface WorkstreamListProps {
 /** What the list says before there is any workstream: what one is, in a line. */
 export const NO_WORKSTREAMS = "No workstreams yet. A workstream follows one ticket from investigation to a reviewed pull request, with Pip keeping track.";
 
-/** "1 needs you", "3 need you"; nothing when nothing does. */
-function NeedsBadge({ count }: { count: number }) {
+/** "1 needs you", "3 need you"; nothing when nothing does. Its row's share of Needs you (`total`), and its tooltip says so. */
+function NeedsBadge({ count, total }: { count: number; total: number }) {
   if (!count) return null;
   return (
-    <span data-needs-you-badge className="ml-auto shrink-0 rounded-full bg-ws-pip px-1.5 text-[10px] leading-4 font-semibold text-ws-on-pip">
+    <span data-needs-you-badge title={`${count} of the ${total} in Needs you ${count === 1 ? "is" : "are"} here`} className="ml-auto shrink-0 rounded-full bg-ws-pip px-1.5 text-[10px] leading-4 font-semibold text-ws-on-pip">
       {count} {count === 1 ? "needs" : "need"} you
     </span>
   );
@@ -97,7 +97,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
         <li data-workstream-row="general" {...option(null)}>
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="font-semibold text-ws-ink">General</span>
-            <NeedsBadge count={needsYouCount(needsYou, null)} />
+            <NeedsBadge count={needsYouCount(needsYou, null)} total={needsYou.length} />
           </span>
           <span className="text-xs text-ws-ink3">Everything not in a workstream</span>
         </li>
@@ -106,7 +106,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
             <span className="flex min-w-0 items-center gap-1.5">
               {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
               <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
-              <NeedsBadge count={needsYouCount(needsYou, v.workstream.id)} />
+              <NeedsBadge count={needsYouCount(needsYou, v.workstream.id)} total={needsYou.length} />
             </span>
             <RowStatus view={v} runs={runs} waiting={needsYouCount(needsYou, v.workstream.id)} />
           </li>

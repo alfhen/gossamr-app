@@ -250,7 +250,8 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
 /** Whether a draft is about `ticket`. */
 const onTicket = (p: Proposal, ticket: ItemRef) => {
   const target = targetOf(p.intent);
-  return target?.key === ticket.key && target.connectionId === ticket.connectionId;
+  // The key is for display only: a moved or renamed ticket keeps its id.
+  return target?.externalId === ticket.externalId && target.connectionId === ticket.connectionId;
 };
 
 /** Drafts split for a pane about one ticket: those on it, shown, and the rest, folded away. With no ticket, all are shown. */
@@ -431,7 +432,7 @@ export const MANAGE_NOTE = "Automatic steps: in Manage, routine next steps start
 const RUN_ID_REF = "<run id>";
 
 /** What a run's id is, and what R1 is, outside a workstream. */
-export const GENERAL_RUN_REF_NOTE = "A run's id is on its card. R1, R2… are the names a workstream gives its runs, and work in its conversation.";
+export const GENERAL_RUN_REF_NOTE = "A run's id is on its card in Agents, and at the top of its sheet (Open on a card under Your agents). R1, R2… are the names a workstream gives its runs, and work in its conversation.";
 
 /**
  * The commands as the Commands popover lists them: in a workstream all of them, naming runs R1 as its cards do; elsewhere

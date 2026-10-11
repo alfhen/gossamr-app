@@ -305,6 +305,15 @@ describe("focusAfterLeaving", () => {
     focusAfterLeaving(cards[0], rootOf([cards[0]]), input);
     expect(input.focus).toHaveBeenCalledTimes(1);
   });
+
+  it("picks the next card at once but hands focus over only when `defer` runs it, after React's commit (N1)", () => {
+    const cards = [card(), card()];
+    let later: (() => void) | null = null;
+    focusAfterLeaving(cards[0], rootOf(cards), card(), (go) => (later = go));
+    expect(cards[1].focus).not.toHaveBeenCalled();
+    later!();
+    expect(cards[1].focus).toHaveBeenCalled();
+  });
 });
 
 describe("moving between cards", () => {

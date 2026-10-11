@@ -11,7 +11,7 @@ import { usePullView, type PullDiffState } from "./pullViewStore";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
 import type { ScreenContext } from "../types";
-import { editThenPost, editThenPullView, followDraft, keptOlderNote, MARKDOWN_HINT, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+import { editThenPost, editThenPullView, settlesEdit, followDraft, keptOlderNote, SUMMARY, MARKDOWN_HINT, postedLine, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
 
 vi.mock("../components/autoHeight", async (original) => ({ ...(await original<typeof import("../components/autoHeight")>()), useAutoHeight: vi.fn() }));
 
@@ -119,7 +119,8 @@ describe("a GitHub review draft's card", () => {
     // Within its hunk only: the deleted line just above has no number on the new side, and the hunk ends after 45.
     expect(hunkLinesAround(file!.patch!, 42, "RIGHT")!.lines.map((l) => l.right)).toEqual([null, 40, 41, 42, 43, 44, 45]);
     const html = renderToStaticMarkup(<ReviewHunk file={file} line={42} side="RIGHT" />);
-    expect(html.match(/data-hunk-line=/g)).toHaveLength(7);
+    // The card shows two lines either side, so the first comment's box fits under the summary in the peek (D21).
+    expect(html.match(/data-hunk-line=/g)).toHaveLength(5);
     expect(html.match(/data-hunk-target/g)).toHaveLength(1);
     expect(renderToStaticMarkup(<ReviewHunk file={file} line={30} side="RIGHT" />)).toContain("doesn&#x27;t show this line now");
     expect(renderToStaticMarkup(<ReviewHunk file={undefined} line={42} side="RIGHT" />)).toContain("isn&#x27;t in the pull request&#x27;s diff now");
@@ -170,6 +171,16 @@ describe("a GitHub review draft's card", () => {
     expect(reworded).toEqual({ summary: "My summary.", comments: [{ ...at(42, "**Blocking:** the retry loop never backs off."), dropped: true }] });
     // Untouched, Pip's version is taken whole.
     expect(followDraft(intent, { ...intent, summary: "Pip's summary.", comments: [at(42, "Pip's words.")] }, intent.summary, intent.comments.map((c) => ({ ...c, dropped: false })))).toEqual({ summary: "Pip's summary.", comments: [{ ...at(42, "Pip's words."), dropped: false }] });
+  });
+
+  it("keeps what the person typed back during a save, even when it matches the draft before the save", () => {
+    // The card saved summary B and comment 42 as B; while the save was on its way the person typed both back to A.
+    const saved = { ...intent, summary: "B summary.", comments: [at(42, "B words."), intent.comments[1]] };
+    const back = intent.comments.map((c) => ({ ...c, dropped: false }));
+    const kept = followDraft(intent, saved, intent.summary, back, new Set([SUMMARY, `${intent.comments[0].path}:42:${intent.comments[0].side}`]));
+    expect(kept).toEqual({ summary: intent.summary, comments: back });
+    // Without the save's touched fields, the same values would read as untouched and take the saved draft.
+    expect(followDraft(intent, saved, intent.summary, back).summary).toBe("B summary.");
   });
 
   it("marks a draft the person edited, and says when a revision was Pip's", () => {
@@ -269,6 +280,9 @@ describe("a GitHub review draft's card in the peek (D9, D20, D21, D32)", () => {
     order.length = 0;
     await expect(editThenPullView(draft(), { type: "githubReview", summary: "" }, { saveEdit: () => Promise.reject(new Error("no")), took, open })).rejects.toThrow("no");
     expect(order).toEqual([]);
+    // Text typed while the save was on its way stays an unsent edit, so the saved draft arriving can't overwrite it.
+    expect(settlesEdit(3, 3)).toBe(true);
+    expect(settlesEdit(3, 4)).toBe(false);
   });
 
   it("says beside Post that it posts the inline comments and the summary as a comment review, never a verdict", () => {
@@ -288,6 +302,17 @@ describe("a GitHub review draft's card in the peek (D9, D20, D21, D32)", () => {
     expect(html.match(/<textarea[^>]*aria-describedby="review-markdown-r1"/g)).toHaveLength(3);
     // Once posted there is nothing to type, and no note.
     expect(render(draft({ state: { type: "applied" } }), canPost)).not.toContain("data-review-markdown");
+  });
+
+  it("once posted, says where and at which commit it went instead of the before-you-post advice (N5)", () => {
+    const pending = render(draft(), canPost);
+    expect(pending).toContain("read and edit it before you post");
+    expect(pending).toContain("Nothing goes to GitHub until you post it here.");
+    const posted = render(draft({ state: { type: "applied" } }), canPost);
+    expect(posted).not.toContain("read and edit it before you post");
+    expect(posted).not.toContain("Nothing goes to GitHub until you post it here.");
+    expect(posted).toContain("Posted to acme/webshop#218 at a1b2c3d4, as a comment review.");
+    expect(postedLine("skipped", intent)).toBe(". Discarded: nothing went to GitHub.");
   });
 
   it("grows each text box with its words, and wraps long diff lines rather than cut them off", () => {
