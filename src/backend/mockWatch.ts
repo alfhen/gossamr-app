@@ -11,6 +11,8 @@ export interface MockOptions {
   /** Which scripted agent runs exist, and the moment their ages count back from. */
   /** How long the scripted Pip waits between words, in ms (a step takes six times as long); unset keeps its usual pace. */
   pipPace?: number;
+  /** False starts the sample with Agents turned off, as the desktop app is until the person turns them on. */
+  agents?: boolean;
   /** New workstreams open in Manage mode, so the supervisor wakes Pip and starts the routine steps in them. */
   wsManage?: boolean;
   runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; planDescription?: boolean; untrusted?: boolean; prSurfaceMs?: number | null };
@@ -111,6 +113,8 @@ export interface MockHandle {
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
   /** Makes the scripted Pip wait, answering, after starting each turn (true) until let go (false). */
   holdPip(on: boolean): void;
+  /** Whether the scripted Pip has no turn running or waiting anywhere, a wake the supervisor queued included. */
+  pipIdle(): boolean;
 }
 
 /** The parts of the sample backend the handle reaches. */
@@ -118,7 +122,7 @@ export interface MockClockParts {
   runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string }; state: string }[]; surfacePullRequests(): boolean; scriptNext(kind: RunKind, script: ScriptedFinish): void };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown };
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[] };
-  pip?: { hold(on: boolean): void };
+  pip?: { hold(on: boolean): void; idle(): boolean };
 }
 
 declare global {
@@ -143,6 +147,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip }: MockClock
     jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent) })),
     setBudget: (id, budget) => void workstreams?.setBudget(id, budget),
     holdPip: (on) => pip?.hold(on),
+    pipIdle: () => pip?.idle() ?? true,
   };
 }
 
@@ -162,7 +167,7 @@ function writtenKey(intent: Intent): string | null {
 
 type MockHandleEvent = ReturnType<MockHandle["workstreamEvents"]>[number];
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsEnv=missing` or `signedOut` shows the Claude banners, `?runsCap=3` sets how many agents may run at once `?pipRun=1` starts with a run draft from Pip and `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?wsManage=1` opens new workstreams in Manage, where the supervisor wakes Pip and starts the routine steps. The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsEnv=missing` or `signedOut` shows the Claude banners, `?runsCap=3` sets how many agents may run at once `?pipRun=1` starts with a run draft from Pip and `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?wsManage=1` opens new workstreams in Manage, where the supervisor wakes Pip and starts the routine steps. `?agents=off` starts with Agents turned off, for the app as it is without them. The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -178,6 +183,7 @@ export function mockOptionsFromUrl(): MockOptions {
   const pace = count("pipPace");
   if (pace) options.pipPace = pace;
   if (params.get("wsManage") === "1") options.wsManage = true;
+  if (params.get("agents") === "off") options.agents = false;
   const outcome = params.get("mockDevice");
   if (outcome === "denied" || outcome === "expired" || outcome === "slow") options.device = { delayMs: 4000, outcome: outcome === "slow" ? "authorised" : outcome };
   const seed = params.get("runs");

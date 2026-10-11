@@ -11,6 +11,8 @@ import { usePopover } from "./Popover";
 import { useRunSetup } from "./runSetupStore";
 import { reviewablePr } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
+import { useAgentsEnabled } from "./agentsFlag";
+import { openOnPipHome } from "./workstreamsStore";
 
 export interface AgentMenuProps {
   ticketKey: string;
@@ -110,10 +112,13 @@ export function AgentMenu({ item }: { item: ItemRef }) {
 
 export const runsOfTicket = (runs: readonly Run[], ref: ItemRef) => runs.filter((r) => r.item && itemKey(r.item) === itemKey(ref));
 
-/** The workstream line at the head of "Agents on this ticket": its title and the stage its runs give it. */
-export function WorkstreamLine({ workstream }: { workstream: WorkstreamView }) {
+/**
+ * The workstream line at the head of "Agents on this ticket": its title and the stage its runs give it, and with
+ * `onOpen` (while Agents are on) a link to the workstream on Pip home.
+ */
+export function WorkstreamLine({ workstream, onOpen }: { workstream: WorkstreamView; onOpen?(id: string): void }) {
   return (
-    <p data-workstream={workstream.workstream.id} className="m-0 mb-1.5 flex min-w-0 items-center gap-1.5 text-sm text-ws-ink2">
+    <p data-workstream={workstream.workstream.id} className="m-0 mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5 text-sm text-ws-ink2">
       <span aria-hidden className="text-ws-pip">
         ◆
       </span>
@@ -121,6 +126,16 @@ export function WorkstreamLine({ workstream }: { workstream: WorkstreamView }) {
       <span className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip" data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>
         {stageText(workstream.stage, workstream.waitingForPr)}
       </span>
+      {onOpen && (
+        <button
+          type="button"
+          data-open-pip-home
+          onClick={() => onOpen(workstream.workstream.id)}
+          className="ml-auto shrink-0 rounded text-sm font-semibold text-ws-pip hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+        >
+          Open on Pip home
+        </button>
+      )}
     </p>
   );
 }
@@ -149,11 +164,11 @@ export function TicketAgentRows({ runs, now, title, labels = {}, onOpen }: { run
 }
 
 /** "Agents on this ticket": the ticket's open workstream, if it has one, with its stage, then its runs labelled R1, R2 within it. */
-export function TicketAgentsView({ runs, now, title, workstream, onOpen }: { runs: readonly Run[]; now: number; title: string | null; workstream: WorkstreamView | null; onOpen(id: string): void }) {
+export function TicketAgentsView({ runs, now, title, workstream, onOpen, onOpenWorkstream }: { runs: readonly Run[]; now: number; title: string | null; workstream: WorkstreamView | null; onOpen(id: string): void; onOpenWorkstream?(id: string): void }) {
   const labels = workstream ? Object.fromEntries(workstream.labels) : undefined;
   return (
     <>
-      {workstream && <WorkstreamLine workstream={workstream} />}
+      {workstream && <WorkstreamLine workstream={workstream} onOpen={onOpenWorkstream} />}
       <TicketAgentRows runs={runs} now={now} title={title} labels={labels} onOpen={onOpen} />
     </>
   );
@@ -162,5 +177,6 @@ export function TicketAgentsView({ runs, now, title, workstream, onOpen }: { run
 export function TicketAgents({ item, title, workstream = null }: { item: ItemRef; title: string; workstream?: WorkstreamView | null }) {
   const runs = useRuns((s) => s.runs);
   const mine = runsOfTicket(runs, item);
-  return <TicketAgentsView runs={mine} now={Date.now()} title={title} workstream={workstream} onOpen={(id) => useRuns.getState().openRun(id, { stay: true })} />;
+  const agentsOn = useAgentsEnabled();
+  return <TicketAgentsView runs={mine} now={Date.now()} title={title} workstream={workstream} onOpen={(id) => useRuns.getState().openRun(id, { stay: true })} onOpenWorkstream={agentsOn ? openOnPipHome : undefined} />;
 }

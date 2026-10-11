@@ -7,7 +7,9 @@ import type { Intent, Proposal, RunSpec, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { Composer, GENERAL_CONVERSATION, PipConversation, VerbNote, composerVerb, inputAfterCommand, outcomeBelongs, wakeHeader, workstreamConversation } from "./PipConversation";
+import { Composer, ComposerFooter, GENERAL_CONVERSATION, PipConversation, VerbNote, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, wakeHeader, wakeIsLong, wakeParts, workstreamConversation } from "./PipConversation";
+import { usePipHome } from "./pipHomeStore";
+import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
@@ -95,10 +97,64 @@ describe("PipConversation", () => {
     const html = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-1")} proposals={[]} />);
     useRuns.getInitialState().runs = [];
     expect(html.match(/data-turn-kind="wake"/g)).toHaveLength(1);
-    expect(html).toContain("Pip picked this up: run R2 finished");
+    expect(html.replace(/<[^>]+>/g, "")).toContain("Pip picked this up: run R2 finished");
+    // The run is named by a button that opens it.
+    expect(html).toMatch(/<button type="button" data-wake-run="run-2"[^>]*>run R2<\/button> finished/);
     expect(html).toContain("Plan R3 is queued to start automatically.");
     expect(html).not.toContain("[Event]");
     expect(html.match(/bg-ws-accent px-3/g)).toHaveLength(1);
+  });
+
+  it("keeps a wake turn compact: a long answer is clamped to about three lines behind Show more, then its cards", () => {
+    const runs = new MockBackend({ runs: { seed: "busy" } }).runs.list();
+    const r = { ...runs[0], id: "run-9", spec: { ...runs[0].spec, workstream: "ws-1" } };
+    useRuns.setState({ runs: [r] });
+    useRuns.getInitialState().runs = [r];
+    const long = ["R1 finished.", "It found the rounding.", "Triage R2 is queued.", "Plan follows.", "Nothing needs you yet."].join("\n\n");
+    const short: Turn = { requestId: "wake-s", kind: "wake", prompt: "[Event] run run-9 (investigate) Done", steps: [], text: "R1 finished.", status: "done", error: null };
+    const wake: Turn = { requestId: "wake-l", kind: "wake", prompt: "[Event] run run-9 (investigate) Done", steps: [], text: long, status: "done", error: null };
+    setTurns({ [workstreamConversation("ws-1")]: { sessionId: "s1", turns: [short, wake] } });
+    const proposals = [comment("p-w", "wake-l")];
+    const html = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-1")} proposals={proposals} />);
+    useRuns.getInitialState().runs = [];
+    expect(wakeIsLong(long)).toBe(true);
+    expect(wakeIsLong("R1 finished.")).toBe(false);
+    expect(html).toMatch(/id="wake-text-wake-l" data-wake-text="true" data-clamped="true" class="[^"]*line-clamp-3/);
+    expect(html).not.toMatch(/id="wake-text-wake-s"[^>]*data-clamped/);
+    expect(html.match(/>Show more</g)).toHaveLength(1);
+    expect(html).toContain('aria-controls="wake-text-wake-l"');
+    // Its cards follow the folded text.
+    expect(html.indexOf('data-draft="p-w"')).toBeGreaterThan(html.indexOf("wake-text-wake-l"));
+  });
+
+  it("opens a wake's run on Pip home by its step in the rail, and in the pane by its sheet", () => {
+    useTabs.setState({ route: "pip" });
+    openWakeRun("run-2");
+    expect(usePipHome.getState().focusTarget).toEqual({ type: "run", id: "run-2", where: "rail" });
+    expect(useRuns.getState().sheet).toBeNull();
+    usePipHome.getState().reset();
+    useTabs.setState({ route: "workspace" });
+    openWakeRun("run-2");
+    expect(useRuns.getState().sheet).toEqual({ type: "run", id: "run-2" });
+    expect(usePipHome.getState().focusTarget).toBeNull();
+    expect(useTabs.getState().route).toBe("workspace");
+    useRuns.setState({ sheet: null });
+  });
+
+  it("adds no turn and changes none when a run moves on to working: ticks are the rail's and the footer's", () => {
+    const [base] = new MockBackend({ runs: { seed: "busy" } }).runs.list();
+    const queued = { ...base, id: "run-q", state: "queued" as const, spec: { ...base.spec, workstream: "ws-1" } };
+    useRuns.setState({ runs: [queued] });
+    const conv = workstreamConversation("ws-1");
+    setTurns({ [conv]: { sessionId: "s1", turns: [turn("q1", "Investigate it", "Drafted.")] } });
+    const before = useClaude.getState().byTicket;
+    const turns = before[conv]!.turns;
+    useRuns.setState({ runs: [{ ...queued, state: "launching" }] });
+    useRuns.setState({ runs: [{ ...queued, state: "working", lastDetail: "Reading the code" }] });
+    expect(useClaude.getState().byTicket).toBe(before);
+    expect(useClaude.getState().byTicket[conv]!.turns).toBe(turns);
+    expect(useClaude.getState().byTicket[conv]!.turns).toHaveLength(1);
+    useRuns.setState({ runs: [] });
   });
 
   it("names a wake's run by its short id outside a workstream's labels, and says how many more woke it", () => {
@@ -106,6 +162,8 @@ describe("PipConversation", () => {
     expect(wakeHeader("[Event] a run (investigate) Done\n[Event] run r2 (review) Done; verdict: blocking", new Map([["r2", "R2"]]))).toBe("Pip picked this up: a run finished and 1 more");
     expect(wakeHeader("[Event] run r2 (review) Needs an answer", new Map([["r2", "R2"]]))).toBe("Pip picked this up: run R2 needs you");
     expect(wakeHeader("", new Map())).toBe("Pip picked this up");
+    expect(wakeParts("[Event] run r2 (review) Done", new Map([["r2", "R2"]]))).toEqual({ who: "run R2", runId: "r2", rest: " finished" });
+    expect(wakeParts("[Event] a run (investigate) Done", new Map())).toEqual({ who: "a run", runId: null, rest: " finished" });
   });
 
   it("renders its turns, the drafts they made and drafts from before, on its own", () => {
@@ -250,6 +308,16 @@ describe("PipConversation", () => {
     const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
     const composer = () =>
       renderToStaticMarkup(<Composer conversation={GENERAL_CONVERSATION} attached={attached} chips={["What is stale?"]} looking="the board" scene={{ itemKey: null, route: "workspace", runOpen: false }} />);
+
+    it("renders a footer under the input only when given one, as a muted status line", () => {
+      expect(composer()).not.toContain("data-composer-footer");
+      const html = renderToStaticMarkup(
+        <Composer conversation={GENERAL_CONVERSATION} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "pip", runOpen: false }} footer="4 agents working · 2 need you" />,
+      );
+      expect(html).toMatch(/<p role="status" data-composer-footer="true" class="[^"]*text-ws-ink3[^"]*">4 agents working · 2 need you<\/p>/);
+      expect(html.indexOf("data-composer-footer")).toBeGreaterThan(html.indexOf('id="pip-input"'));
+      expect(renderToStaticMarkup(<ComposerFooter text="No agents working · nothing needs you" />)).toContain("No agents working");
+    });
 
     it("shows a queued question with when it runs and a way to remove it", () => {
       setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running"), at("r2", "Second", "queued")] } });

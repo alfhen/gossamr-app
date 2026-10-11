@@ -2,7 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { FeedEntry } from "../types";
-import { ChipBar, DayHeading, EmptyNote, FeedRow, type FeedRowProps } from "./ActivityView";
+import { ChipBar, DayHeading, EmptyNote, FeedRow, PipFeedRow, type FeedRowProps } from "./ActivityView";
+import { chipsFor, toWorkstreamEntries } from "./activityLogic";
 import { useActivity } from "./activityStore";
 
 const entry = (over: Partial<FeedEntry> = {}): FeedEntry => ({
@@ -88,6 +89,28 @@ describe("the chips and notes", () => {
     expect(out).toMatch(/aria-pressed="true"[^>]*>Mentions/);
     expect(out).toContain('ml-1 font-normal">3<');
     expect(out).toContain('ml-1 font-normal">2<');
+  });
+
+  it("offers 'Pip & agents' only while Agents are on", () => {
+    expect(renderToStaticMarkup(<ChipBar chip="all" counts={{}} onChange={vi.fn()} chips={chipsFor({ agents: false })} />)).not.toContain("Pip &amp; agents");
+    expect(renderToStaticMarkup(<ChipBar chip="all" counts={{}} onChange={vi.fn()} />)).not.toContain("Pip &amp; agents");
+    const on = renderToStaticMarkup(<ChipBar chip="pip" counts={{}} onChange={vi.fn()} chips={chipsFor({ agents: true })} />);
+    expect(on).toMatch(/aria-pressed="true"[^>]*><span aria-hidden="true">◆ <\/span>Pip &amp; agents/);
+  });
+
+  it("shows a workstream's audit line with its ticket and a way to Pip home, newest first", () => {
+    const ws = { workstream: { id: "w1", connectionId: "mock", itemKey: "CA-401", title: "CA-401 Retry", closedAt: null }, stage: "triage", runs: ["r1", "r2"], labels: [["r1", "R1"], ["r2", "R2"]] } as unknown as Parameters<typeof toWorkstreamEntries>[1][number];
+    const line = (seq: number, at: string, actor: "person" | "supervisor", action: string, runId: string | null, detail: string | null = null) => ({ workstreamId: "w1", seq, at, actor, action, runId, proposalId: null, digest: null, detail });
+    const [newest, older] = toWorkstreamEntries({ w1: [line(1, "2026-09-30T10:00:00Z", "person", "opened", null), line(2, "2026-09-30T11:00:00Z", "supervisor", "autostart", "r2", "investigate_triage after r1")] }, [ws]);
+    expect(newest.text).toBe("Triage R2 started automatically after R1");
+    expect(older.text).toBe("You opened the workstream");
+    const html = renderToStaticMarkup(<PipFeedRow entry={newest} ticketTitle="Retry failed webhooks" now={new Date("2026-09-30T12:00:00Z")} position={1} total={2} onOpen={vi.fn()} />);
+    expect(html).toContain('data-source="pip"');
+    expect(html).toContain('data-action="autostart"');
+    expect(html).toContain("Triage R2 started automatically after R1");
+    expect(html).toContain("CA-401");
+    expect(html).toContain("Retry failed webhooks");
+    expect(html).toContain("Open on Pip home");
   });
 
   it("renders a day heading and a status note", () => {

@@ -6,6 +6,8 @@ import { messageOf } from "./toasts";
 interface FlagState {
   /** What the backend says. Until it has answered, the desktop app is off and the browser build (whose mock owns the flag) is on. */
   enabled: boolean;
+  /** Whether the backend has answered for `enabled` yet, for what must wait to know whether Agents are on. */
+  known: boolean;
   /** The value being asked for while the backend works on it. */
   pending: boolean | null;
   error: string | null;
@@ -20,6 +22,7 @@ let seq = 0;
 
 export const useAgentsFlag = create<FlagState>((set, get) => ({
   enabled: !isTauri(),
+  known: false,
   pending: null,
   error: null,
   note: null,
@@ -29,7 +32,7 @@ export const useAgentsFlag = create<FlagState>((set, get) => ({
     const mine = ++seq;
     set({ backend, pending: null, error: null, note: null });
     backend.runsEnabled().then(
-      (enabled) => mine === seq && set({ enabled }),
+      (enabled) => mine === seq && set({ enabled, known: true }),
       () => {},
     );
   },
@@ -41,7 +44,7 @@ export const useAgentsFlag = create<FlagState>((set, get) => ({
     set({ pending: on, error: null, note: null });
     try {
       const change = await backend.runsSetEnabled(on);
-      if (mine === seq) set({ enabled: change.enabled, note: change.note, pending: null });
+      if (mine === seq) set({ enabled: change.enabled, known: true, note: change.note, pending: null });
     } catch (e) {
       if (mine === seq) set({ error: messageOf(e), pending: null });
     }

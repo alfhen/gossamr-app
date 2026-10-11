@@ -124,7 +124,8 @@ export const useActivity = create<ActivityState>((set, get) => ({
 
   async reload() {
     const { backend, chip, container, source } = get();
-    if (!backend || chip === "drafts") return;
+    // Drafts are the workspace's, and "Pip & agents" reads the workstreams' audits, not the feed.
+    if (!backend || chip === "drafts" || chip === "pip") return;
     const mine = ++seq;
     set((s) => ({ status: s.entries.length || s.codeEvents.length ? s.status : "loading", error: null, loadingMore: false }));
     try {
@@ -141,7 +142,7 @@ export const useActivity = create<ActivityState>((set, get) => ({
 
   async loadMore() {
     const { backend, chip, container, next, loadingMore, source } = get();
-    if (!backend || !next || loadingMore || chip === "drafts" || source === "github" || source === "agents") return;
+    if (!backend || !next || loadingMore || chip === "drafts" || chip === "pip" || source === "github" || source === "agents") return;
     const mine = seq;
     set({ loadingMore: true });
     try {

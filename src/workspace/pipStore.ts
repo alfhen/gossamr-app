@@ -61,6 +61,11 @@ const loadDismissed = (): string[] => {
   return Array.isArray(raw?.dismissed) ? raw.dismissed.filter((d): d is string => typeof d === "string") : [];
 };
 
+/** Opens the Pip pane, except on Pip home, which has its own composer and no pane. */
+const showPip = () => {
+  if (useTabs.getState().route !== "pip") usePrefs.getState().setPipOpen(true);
+};
+
 const setTabFilter = (tabId: string, filter: WorkFilter, title: string | null) =>
   useTabs.setState((s) => ({ tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, filter, title } : t)) }));
 
@@ -81,7 +86,8 @@ export const usePip = create<PipState>((set, get) => ({
     const filtered: PipFiltered = { tabId: tab.id, before: tab.filter, beforeTitle: tab.title, filter, note, requestId: requestId ?? null };
     set((s) => ({ filtered, applied: requestId ? { ...s.applied, [requestId]: { ...filtered, undone: false } } : s.applied }));
     tabs.setFilter(filter);
-    tabs.setRoute("workspace");
+    // Pip home stays where it is: the filter waits on the workspace tab for when the person goes there.
+    if (tabs.route !== "pip") tabs.setRoute("workspace");
   },
 
   undoFilter() {
@@ -113,12 +119,12 @@ export const usePip = create<PipState>((set, get) => ({
   setPinned: (pinned) => set({ pinned }),
   askAbout(text) {
     set({ quote: text });
-    usePrefs.getState().setPipOpen(true);
+    showPip();
   },
   clearQuote: () => set({ quote: null }),
   openWith(text) {
     set({ prefill: { text } });
-    usePrefs.getState().setPipOpen(true);
+    showPip();
   },
   typeOn: (text) => set((s) => ({ prefill: s.prefill ? { ...s.prefill, text: s.prefill.text + text } : { text, append: true } })),
   clearPrefill: () => set({ prefill: null }),

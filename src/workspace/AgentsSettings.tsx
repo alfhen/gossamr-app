@@ -6,6 +6,7 @@ import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
 import { stoppable, KIND_LABEL } from "./agentsLogic";
 import { COPY, MAY_TOUCH } from "./runSheetLogic";
 import { Icon } from "./AgentIcons";
+import { usePrefs } from "./prefs";
 
 export interface CleanupOffer {
   count: number;
@@ -139,6 +140,12 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         </Box>
       </Sec>
 
+      <Sec title="Pip home">
+        <Box>
+          <StartOnPipHome />
+        </Box>
+      </Sec>
+
       <Sec title="Clean up">
         <Box>
           <p className="m-0 text-ws-ink2">Finished runs leave their worktree and session files behind. Clean up removes a worktree with claude rm, which refuses work that was never pushed and says why. Gossamr never forces it.</p>
@@ -167,6 +174,19 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         </Box>
       </Sec>
     </SheetFrame>
+  );
+}
+
+/** Whether Gossamr opens on Pip home, as it does until the person turns it off. This sheet only shows while Agents are on, and so does Pip home. */
+function StartOnPipHome() {
+  const on = usePrefs((s) => s.startOnPipHome);
+  return (
+    <SwitchRow
+      label="Start on Pip home"
+      description="Open Gossamr on Pip home, with your workstreams and Pip side by side. Turn it off to open on the workspace; ⌘0 opens Pip home from anywhere."
+      checked={on}
+      onChange={(next) => usePrefs.getState().setStartOnPipHome(next)}
+    />
   );
 }
 

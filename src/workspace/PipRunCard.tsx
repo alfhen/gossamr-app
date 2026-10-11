@@ -17,15 +17,23 @@ interface CardProps {
   /** The run's short name in its workstream (`R1`), when it is in one. */
   label?: string;
   onOpen(): void;
+  /** Stepped to from the keyboard, as on Pip home's step rail: it takes focus from code and shows a ring. */
+  focusable?: boolean;
 }
 
 /** A run in Pip's pane: its state, what it is doing, and a way into the run's sheet. */
-export function PipRunCard({ run, now, ticketTitle, label, onOpen }: CardProps) {
+export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = false }: CardProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
   return (
-    <article data-run-id={run.id} data-state={run.state} aria-label={`${title}, ${view.label}`} className="flex items-center gap-2 rounded-[10px] border border-ws-sep bg-ws-win py-1.5 pr-2 pl-2.5">
+    <article
+      data-run-id={run.id}
+      data-state={run.state}
+      aria-label={`${title}, ${view.label}`}
+      tabIndex={focusable ? -1 : undefined}
+      className="flex items-center gap-2 rounded-[10px] border border-ws-sep bg-ws-win py-1.5 pr-2 pl-2.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+    >
       <Dot tone={view.tone} live={view.live} />
       <div className="grid min-w-0 flex-1 leading-snug">
         <span className="flex min-w-0 items-baseline gap-1.5">
@@ -38,7 +46,7 @@ export function PipRunCard({ run, now, ticketTitle, label, onOpen }: CardProps) 
         </span>
         <AutoStarted run={run} />
       </div>
-      <button type="button" onClick={onOpen} aria-label={`Open ${title}`} className="shrink-0 rounded-md border border-ws-sep2 px-2 py-px text-sm font-semibold hover:border-ws-pip hover:text-ws-pip">
+      <button type="button" onClick={onOpen} aria-label={`Open ${title}`} data-run-open className="shrink-0 rounded-md border border-ws-sep2 px-2 py-px text-sm font-semibold hover:border-ws-pip hover:text-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
         Open
       </button>
     </article>

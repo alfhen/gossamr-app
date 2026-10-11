@@ -242,6 +242,11 @@ export function mockQueueWake(workstream: string, facts: WakeFact[], drafter: Pa
   return req.requestId;
 }
 
+/** Whether the scripted Pip has nothing to do: no turn running or waiting in any conversation, a wake's included. */
+export function mockPipIdle(): boolean {
+  return queue.conversations().length === 0;
+}
+
 /** Whether a wake waits in `conversation`, which a new one merges into without spending the budget. */
 export function mockHasWaitingWake(conversation: string): boolean {
   return queue.waitingIn(conversationId(conversation)).some(([, w]) => !!w.wake);

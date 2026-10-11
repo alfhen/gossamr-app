@@ -36,6 +36,9 @@ export function draftKeyShortcuts(p: Proposal): string {
 /** The id of Pip's message input, where a card sends typing that isn't one of its keys. */
 export const PIP_INPUT_ID = "pip-input";
 
+/** What holds one conversation with Pip, its cards and its composer: the Pip pane, or Pip home's conversation column. */
+export const PIP_ROOT = "[data-pip-root]";
+
 interface KeyEventLike {
   key: string;
   target: unknown;

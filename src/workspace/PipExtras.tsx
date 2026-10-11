@@ -15,7 +15,7 @@ import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
-import { paneConversation, useWorkstreams } from "./workstreamsStore";
+import { focusedConversation, useWorkstreams } from "./workstreamsStore";
 import { isPaneConversation } from "../lib/conversations";
 
 /** The line under the filter bar after Pip narrowed the view; hidden once the person edits the filter themselves. */
@@ -46,9 +46,13 @@ export function FilterNote() {
   return <PipFilterNote filtered={filtered} onUndo={() => usePip.getState().undoFilter()} onDismiss={() => usePip.getState().clearFiltered()} />;
 }
 
-/** Applies a filter Pip asked for, but only for a question asked in the conversation the pane shows (General or the focused workstream's); other conversations don't get to change the view. */
+/**
+ * Applies a filter Pip asked for, but only for a question asked in the focused conversation: on Pip home the one it shows,
+ * elsewhere the one the pane shows (General or the focused workstream's). Other conversations don't get to change the
+ * view, and a filter only ever changes the workspace tab's filter.
+ */
 export function handlePipView({ requestId, filter, note }: PipView) {
-  const asked = useClaude.getState().byTicket[paneConversation()]?.turns.some((t) => t.requestId === requestId);
+  const asked = useClaude.getState().byTicket[focusedConversation()]?.turns.some((t) => t.requestId === requestId);
   if (asked) usePip.getState().applyFilter(filter, note, requestId);
 }
 

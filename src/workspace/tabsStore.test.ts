@@ -205,6 +205,18 @@ describe("the peek and the route", () => {
     expect(s()).toMatchObject({ route: "workspace", selected: null });
   });
 
+  it("closes the peek and drops the ticks on the way to Pip home, as on the way to any other route, and never stores the route", () => {
+    s().select("mock:CA-402");
+    s().mark("mock:CA-403", "toggle", ["mock:CA-402", "mock:CA-403"]);
+    expect(s().marked).toHaveLength(2);
+    s().setRoute("pip");
+    expect(s()).toMatchObject({ route: "pip", selected: null, marked: [] });
+    s().select("mock:CA-402");
+    s().setRoute("pip");
+    expect(s().selected).toBe("mock:CA-402");
+    expect(globalThis.localStorage.getItem("gossamr-tabs")).not.toContain('"route"');
+  });
+
   it("lets a jump select after switching route", () => {
     s().setRoute("activity");
     s().setRoute("workspace");

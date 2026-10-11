@@ -382,14 +382,16 @@ async fn retry_does_not_launch_when_the_sessions_cannot_be_listed() {
 
 #[tokio::test]
 async fn a_launch_that_never_started_can_be_retried_once_the_cause_is_fixed() {
-    let rig = ready().await;
+    // A grace far longer than a retry takes even on a loaded machine, so not waiting for it is unmistakable.
+    let grace = Duration::from_secs(10);
+    let rig = build(None, |s| s.with_timing(Timing { worktree_grace: grace, ..FAST })).await;
     rig.cli.with(|s| s.logged_in = false);
     let run = rig.queued(1).await;
     rig.svc.launch(&run.id).await.unwrap();
     rig.cli.with(|s| s.logged_in = true);
     let started = std::time::Instant::now();
     assert_eq!(rig.svc.retry_launch(&run.id).await.unwrap().state, RunState::Launching);
-    assert!(started.elapsed() < FAST.worktree_grace, "nothing was launched before, so there is no session to wait for");
+    assert!(started.elapsed() < grace, "nothing was launched before, so there is no session to wait for");
 }
 
 #[tokio::test]

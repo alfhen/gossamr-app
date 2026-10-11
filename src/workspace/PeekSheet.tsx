@@ -163,7 +163,7 @@ export function PeekView(p: PeekViewProps) {
           ×
         </button>
       </div>
-      <div className={`min-h-0 flex-1 gap-5 overflow-auto px-[22px] ${draft ? "flex flex-col pt-4 pb-5" : "grid content-start scroll-pt-11 pb-24"}`}>
+      <div data-peek-scroll className={`min-h-0 flex-1 gap-5 overflow-auto px-[22px] ${draft ? "flex flex-col pt-4 pb-5" : "grid content-start scroll-pt-11 pb-24"}`}>
         {!draft && <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length, development: p.developmentCount })} onJump={p.onJump} />}
         <div className="grid gap-2.5">
           {draft?.banner}
@@ -610,7 +610,8 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       if (menuOpen) return setMenuOpen(false);
       const inside = !!document.activeElement?.closest("#peek-sheet");
       useTabs.getState().select(null);
-      if (inside) requestAnimationFrame(() => (canvasElement(ref) ?? document.getElementById("workspace-main"))?.focus());
+      // Over Pip home, Pip home hands the keyboard back to what opened the peek.
+      if (inside && useTabs.getState().route !== "pip") requestAnimationFrame(() => (canvasElement(ref) ?? document.getElementById("workspace-main"))?.focus());
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -697,7 +698,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
               item={ref}
               workstream={workstream}
               onStart={() => void useWorkstreams.getState().start(ref)}
-              onOpen={focusPip}
+              onOpen={() => focusPip(workstream?.workstream.id)}
               confirmingClose={!!workstream && confirmingClose === workstream.workstream.id}
               onAskClose={(ask) => useWorkstreams.getState().askClose(ask && workstream ? workstream.workstream.id : null)}
               onClose={() => workstream && void useWorkstreams.getState().close(workstream.workstream.id)}

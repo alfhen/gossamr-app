@@ -14,6 +14,46 @@ const LAST_REPO_KEY = "gossamr-agent-repo";
 const LAST_PROJECT_KEY = "gossamr-agent-project";
 const CHANGED = /changed after you read it/i;
 
+/**
+ * Reads a run draft as the person is about to approve it: the review the backend would send (prompt, guard and digest),
+ * then the checks for its spec. `onReview` sees the review as soon as it is read; returning false stops before the
+ * checks. A failed check reads as no checks, which keeps Start off.
+ */
+export async function readRunDraft(backend: Backend, proposalId: string, onReview?: (review: RunReview) => boolean): Promise<{ review: RunReview; preflight: Preflight | null }> {
+  const review = await backend.runsReview(proposalId);
+  if (onReview && !onReview(review)) return { review, preflight: null };
+  const preflight = await backend.runsPreflight(review.spec).catch(() => null);
+  return { review, preflight };
+}
+
+/** What approving a run draft with the digest on screen came to: the run, a draft that changed after it was read, or another refusal. */
+export type RunDraftStart = { type: "started"; run: Run } | { type: "changed" } | { type: "error"; message: string };
+
+/** Approves run draft `proposalId` with the `digest` of the review the person read. The only way a drafted run starts. */
+export async function approveRunDraft(backend: Backend, proposalId: string, digest: string): Promise<RunDraftStart> {
+  try {
+    return { type: "started", run: await backend.runsApprove(proposalId, digest) };
+  } catch (e) {
+    const message = messageOf(e);
+    return CHANGED.test(message) ? { type: "changed" } : { type: "error", message };
+  }
+}
+
+/**
+ * What follows a start: the runs and drafts read again, the launch watched, the run selected and a toast. The setup
+ * sheet goes on to the Agents view (`switchToAgents`), except over Pip home; a start inline on Pip home stays where the
+ * person is too.
+ */
+export function afterRunStarted(run: Run, item: ItemRef | null, { switchToAgents }: { switchToAgents: boolean }) {
+  const runs = useRuns.getState();
+  void runs.reload();
+  void useWorkspace.getState().refreshProposals();
+  runs.watchLaunch(run.id);
+  runs.select(run.id);
+  if (switchToAgents) useTabs.getState().setRoute("agents");
+  useToasts.getState().push(`Agent started${item ? ` on ${item.key}` : ""}. It runs in the background.`, "info", { label: "Open", run: () => runs.openRun(run.id) });
+}
+
 export type SetupPhase = "preparing" | "ready" | "starting";
 
 export interface PrSearch {
@@ -175,10 +215,10 @@ export const useRunSetup = create<SetupState>((set, get) => {
   const refresh = async (mine: number) => {
     const { backend, proposalId } = get();
     if (!backend || !proposalId) return;
-    const review = await backend.runsReview(proposalId);
-    if (!current(mine)) return;
-    set({ review });
-    const preflight = await backend.runsPreflight(review.spec).catch(() => null);
+    const { preflight } = await readRunDraft(backend, proposalId, (review) => {
+      if (current(mine)) set({ review });
+      return current(mine);
+    });
     if (current(mine)) set({ preflight });
   };
 
@@ -430,26 +470,20 @@ export const useRunSetup = create<SetupState>((set, get) => {
       if (!backend || !proposalId || !review || phase === "starting" || busy) return null;
       const mine = run;
       set({ phase: "starting", error: null });
-      try {
-        const started = await backend.runsApprove(proposalId, review.digest);
-        if (!current(mine)) return started;
+      const result = await approveRunDraft(backend, proposalId, review.digest);
+      if (result.type === "started") {
+        if (!current(mine)) return result.run;
         get().close();
-        const runs = useRuns.getState();
-        void runs.reload();
-        void useWorkspace.getState().refreshProposals();
-        runs.watchLaunch(started.id);
-        runs.select(started.id);
-        useTabs.getState().setRoute("agents");
-        useToasts.getState().push(`Agent started${item ? ` on ${item.key}` : ""}. It runs in the background.`, "info", { label: "Open", run: () => runs.openRun(started.id) });
-        return started;
-      } catch (e) {
-        if (!current(mine)) return null;
-        if (CHANGED.test(messageOf(e))) {
-          set({ phase: "ready", changed: true });
-          await refresh(mine).catch((err) => set({ error: messageOf(err) }));
-        } else set({ phase: "ready", error: messageOf(e) });
-        return null;
+        // Started from the sheet over Pip home, the person stays on Pip home, where the run shows on its step.
+        afterRunStarted(result.run, item, { switchToAgents: useTabs.getState().route !== "pip" });
+        return result.run;
       }
+      if (!current(mine)) return null;
+      if (result.type === "changed") {
+        set({ phase: "ready", changed: true });
+        await refresh(mine).catch((err) => set({ error: messageOf(err) }));
+      } else set({ phase: "ready", error: result.message });
+      return null;
     },
 
     async discard() {

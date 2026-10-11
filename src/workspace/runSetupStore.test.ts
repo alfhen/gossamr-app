@@ -9,6 +9,7 @@ import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { useWorkstreams } from "./workstreamsStore";
+import { afterRunStarted, approveRunDraft, readRunDraft } from "./runSetupStore";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -196,6 +197,15 @@ describe("what starts", () => {
     expect(useToasts.getState().toasts[0].text).toMatch(/Agent started on CA-401/);
     await settle();
     expect(useRuns.getState().runs.some((r) => r.id === run!.id)).toBe(true);
+  });
+
+  it("started from the sheet over Pip home, stays on Pip home", async () => {
+    useTabs.getState().setRoute("pip");
+    const run = await s().start();
+    expect(run).toMatchObject({ state: "queued" });
+    expect(useTabs.getState().route).toBe("pip");
+    expect(useRuns.getState().selectedId).toBe(run!.id);
+    useTabs.getState().setRoute("workspace");
   });
 
   it("does not start twice on a double press", async () => {
@@ -425,5 +435,64 @@ describe("the first agent start", () => {
     useRuns.getState().closeSheet();
     await s().begin({ item: itemRef("ENG-1") });
     expect(s().open).toBe(true);
+  });
+});
+
+describe("the shared review-and-approve core", () => {
+  /** A run draft on CA-401 in acme/storefront, as the setup sheet makes it, with the sheet closed again. */
+  async function draft() {
+    await s().begin({ item: CA });
+    await s().chooseRepo("acme/storefront");
+    const id = s().proposalId!;
+    s().close();
+    return id;
+  }
+
+  it("reads a draft's review and its checks as the sheet does", async () => {
+    const id = await draft();
+    const { review, preflight } = await readRunDraft(backend, id);
+    expect(review).toEqual(await backend.runsReview(id));
+    expect(preflight).toEqual(await backend.runsPreflight(review.spec));
+    // Told to stop after the review, it makes no checks.
+    const checks = vi.spyOn(backend, "runsPreflight");
+    expect((await readRunDraft(backend, id, () => false)).preflight).toBeNull();
+    expect(checks).not.toHaveBeenCalled();
+  });
+
+  it("starts the run with the digest read", async () => {
+    const id = await draft();
+    const { review } = await readRunDraft(backend, id);
+    const started = await approveRunDraft(backend, id, review.digest);
+    expect(started).toMatchObject({ type: "started", run: { state: "queued" } });
+  });
+
+  it("maps a draft that changed after it was read to 'changed', and starts nothing", async () => {
+    const id = await draft();
+    const { review } = await readRunDraft(backend, id);
+    await backend.proposalsEdit(id, { type: "run", instruction: "Changed behind the reader." });
+    expect(await approveRunDraft(backend, id, review.digest)).toEqual({ type: "changed" });
+    vi.spyOn(backend, "runsApprove").mockRejectedValueOnce(new Error("This draft changed after you read it. Read it again."));
+    expect(await approveRunDraft(backend, id, "any")).toEqual({ type: "changed" });
+    expect(await backend.runsList({ item: CA })).toHaveLength(0);
+  });
+
+  it("passes any other refusal on as an error", async () => {
+    const id = await draft();
+    vi.spyOn(backend, "runsApprove").mockRejectedValueOnce(new Error("Gossamr is already running 3 agents"));
+    expect(await approveRunDraft(backend, id, "any")).toEqual({ type: "error", message: "Gossamr is already running 3 agents" });
+  });
+
+  it("after a start, selects the run and stays on the screen unless asked to go to the Agents view", async () => {
+    const id = await draft();
+    const { review } = await readRunDraft(backend, id);
+    const started = await approveRunDraft(backend, id, review.digest);
+    if (started.type !== "started") throw new Error("expected a start");
+    useTabs.getState().setRoute("pip");
+    afterRunStarted(started.run, CA, { switchToAgents: false });
+    expect(useTabs.getState().route).toBe("pip");
+    expect(useRuns.getState().selectedId).toBe(started.run.id);
+    expect(useToasts.getState().toasts.slice(-1)[0]?.text).toBe("Agent started on CA-401. It runs in the background.");
+    afterRunStarted(started.run, CA, { switchToAgents: true });
+    expect(useTabs.getState().route).toBe("agents");
   });
 });

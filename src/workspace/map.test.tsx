@@ -5,7 +5,7 @@ import { ALL, itemKey } from "../lib/filter";
 import type { WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
 import { CapNotice, MapSvg, type MapSvgProps } from "./MapView";
-import { FIT, labelRects, layoutMap, MAP_CAP, neighbour, placeKeyLabels, rectsOverlap, shownKey, textWidth, zoomAt, type MapLayout } from "./mapLayout";
+import { FIT, labelRects, layoutMap, MAP_CAP, mapZoomKey, neighbour, placeKeyLabels, rectsOverlap, shownKey, textWidth, zoomAt, type MapLayout } from "./mapLayout";
 
 const s = () => useWorkspace.getState();
 
@@ -356,5 +356,14 @@ describe("shownKey", () => {
     expect(shownKey(nodes, "b")).toBe("b");
     expect(shownKey(nodes, "gone")).toBeNull();
     expect(shownKey(nodes, null)).toBeNull();
+  });
+});
+
+describe("the map's zoom keys", () => {
+  const key = (k: string, over: { metaKey?: boolean; ctrlKey?: boolean } = {}) => mapZoomKey({ key: k, metaKey: false, ctrlKey: false, ...over });
+  it("zoom with + = and -, fit with 0, and leave Cmd/Ctrl+0 to the app (Pip home)", () => {
+    expect([key("+"), key("="), key("-"), key("0"), key("j")]).toEqual(["in", "in", "out", "fit", null]);
+    expect(key("0", { metaKey: true })).toBeNull();
+    expect(key("0", { ctrlKey: true })).toBeNull();
   });
 });

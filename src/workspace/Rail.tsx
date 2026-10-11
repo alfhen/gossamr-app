@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { containerKey, describeFilter, filterChips } from "../lib/filter";
 import type { WorkContainer } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -16,11 +16,12 @@ import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
 import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watchLogic";
 import { useClaude } from "../claudeStore";
-import { HOLD_ALL_HINT } from "./commands";
-import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
+import { HOLD_ALL_HINT, PIP_HOME_HINT } from "./commands";
+import { holdAllVisible, togglePip, useWorkstreams } from "./workstreamsStore";
+import { NeedsYouTray, useNeedsYou } from "./NeedsYouTray";
 
 /** Fixed so the scrolling project list can't clip it. */
-export function RailTip({ label, hint, at }: { label: string; hint?: string; at: { x: number; y: number } | null }) {
+export function RailTip({ label, hint, note, at }: { label: string; hint?: string; note?: string; at: { x: number; y: number } | null }) {
   if (!at) return null;
   return (
     <span
@@ -30,6 +31,7 @@ export function RailTip({ label, hint, at }: { label: string; hint?: string; at:
     >
       {label}
       {hint && <kbd className="ml-1.5">{hint}</kbd>}
+      {note && <span className="block text-xs font-normal text-ws-ink3">{note}</span>}
     </span>
   );
 }
@@ -44,10 +46,13 @@ export function RailButton({
   className = "",
   style,
   tip = true,
+  note,
   ...rest
 }: {
   label: string;
   hint?: string;
+  /** A second line in the tooltip, for what else the button does. */
+  note?: string;
   current?: boolean;
   pressed?: boolean;
   onClick(): void;
@@ -57,6 +62,9 @@ export function RailButton({
   tip?: boolean;
   "data-popover-trigger"?: boolean;
   "aria-expanded"?: boolean;
+  "aria-haspopup"?: "dialog";
+  "aria-description"?: string;
+  onContextMenu?(ev: MouseEvent<HTMLButtonElement>): void;
 }) {
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
   const show = (el: HTMLElement) => {
@@ -81,7 +89,7 @@ export function RailButton({
       >
         {children}
       </button>
-      {tip && <RailTip label={label} hint={hint} at={at} />}
+      {tip && <RailTip label={label} hint={hint} note={note} at={at} />}
     </span>
   );
 }
@@ -224,6 +232,56 @@ function HoldAllButton() {
   );
 }
 
+/** "1 needs you" or "3 need you" over a rail button. */
+function NeedsBadge({ count }: { count: number }) {
+  return (
+    <span aria-label={`${count} ${count === 1 ? "needs" : "need"} you`} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+/**
+ * Pip home, with how many things wait on the person across the workstreams. Its context menu (a right click, or the
+ * keyboard's menu key) opens the Needs you tray as a popover from any route; an item there goes to it on Pip home.
+ */
+/** How the rail's Pip home button opens what needs the person without leaving the screen. */
+export const PIP_HOME_TRAY_NOTE = "Right-click or Shift+F10: what needs you";
+
+function PipHomeButton({ current }: { current: boolean }) {
+  const items = useNeedsYou();
+  const { open, setOpen, root } = usePopover();
+  const count = items.length;
+  return (
+    <div ref={root} className="relative">
+      <RailButton
+        label={count > 0 ? `Pip home, ${count} ${count === 1 ? "needs" : "need"} you` : "Pip home"}
+        hint={PIP_HOME_HINT}
+        tip={!open}
+        current={current}
+        // A click goes to Pip home; what needs the person opens beside it from the context menu (right-click or Shift+F10).
+        note={PIP_HOME_TRAY_NOTE}
+        aria-description={PIP_HOME_TRAY_NOTE}
+        data-popover-trigger
+        onClick={() => (setOpen(false), useTabs.getState().setRoute("pip"))}
+        onContextMenu={(ev) => {
+          ev.preventDefault();
+          setOpen(!open);
+        }}
+        className={`text-lg ${plain(current)}`}
+      >
+        <span aria-hidden>⌂</span>
+        {count > 0 && <NeedsBadge count={count} />}
+      </RailButton>
+      {open && (
+        <div role="dialog" aria-label="Needs you" className="absolute bottom-0 left-full z-40 ml-2 w-[300px] overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win text-ws-ink shadow-ws-pop">
+          <NeedsYouTray items={items} compact onPick={() => setOpen(false)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Rail() {
   const tab = useActiveTab();
   const route = useTabs((s) => s.route);
@@ -234,8 +292,8 @@ export function Rail() {
   const unread = useActivity((s) => s.unread + s.codeUnread);
   const agentsEnabled = useAgentsEnabled();
   const attention = useAttention();
-  const pipOpen = usePrefs((s) => s.pipOpen);
-  const setPipOpen = usePrefs((s) => s.setPipOpen);
+  // Pip home has its own composer in place of the pane, so there the Pip button goes to it.
+  const pipOpen = usePrefs((s) => s.pipOpen) && route !== "pip";
   const setPaletteOpen = usePrefs((s) => s.setPaletteOpen);
   const project = projectOf(tab.filter);
   const inWorkspace = route === "workspace";
@@ -296,11 +354,12 @@ export function Rail() {
             )}
           </RailButton>
         )}
+        {agentsEnabled && <PipHomeButton current={route === "pip"} />}
         {agentsEnabled && <HoldAllButton />}
         <RailButton label="Settings" current={route === "settings"} onClick={() => setRoute("settings")} className={`text-lg ${plain(route === "settings")}`}>
           <span aria-hidden>⚙</span>
         </RailButton>
-        <RailButton label="Pip" hint="⌘J" pressed={pipOpen} onClick={() => setPipOpen(!pipOpen)} className={`text-lg ${pipOpen ? "bg-ws-win text-ws-pip shadow-[0_1px_4px_rgb(0_0_0/0.2)]" : "text-ws-ink2 hover:bg-ws-hover"}`}>
+        <RailButton label="Pip" hint="⌘J" pressed={pipOpen} onClick={togglePip} className={`text-lg ${pipOpen ? "bg-ws-win text-ws-pip shadow-[0_1px_4px_rgb(0_0_0/0.2)]" : "text-ws-ink2 hover:bg-ws-hover"}`}>
           <span aria-hidden>✦</span>
         </RailButton>
       </div>

@@ -343,6 +343,12 @@ export interface Viewport {
 }
 
 export const FIT: Viewport = { x: 0, y: 0, k: 1 };
+
+/** What a key on the focused map does to its zoom: + or = in, - out, 0 back to fit. With Cmd or Ctrl it is the app's own (⌘0 is Pip home), never the map's. */
+export function mapZoomKey(ev: { key: string; metaKey: boolean; ctrlKey: boolean }): "in" | "out" | "fit" | null {
+  if (ev.metaKey || ev.ctrlKey) return null;
+  return ev.key === "+" || ev.key === "=" ? "in" : ev.key === "-" ? "out" : ev.key === "0" ? "fit" : null;
+}
 export const MIN_ZOOM = 0.4;
 export const MAX_ZOOM = 4;
 

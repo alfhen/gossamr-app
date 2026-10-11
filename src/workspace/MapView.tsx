@@ -5,7 +5,7 @@ import { daysQuiet } from "./boardLogic";
 import { ageLevel, statusTone, type StatusTone } from "./canvasShared";
 import { CanvasFooter } from "./CanvasFooter";
 import type { CanvasProps } from "./canvases";
-import { FIT, layoutMap, neighbour, placeKeyLabels, shownKey, textWidth, zoomAt, type Direction, type MapCluster, type MapEdge, type MapLayout, type Viewport } from "./mapLayout";
+import { FIT, layoutMap, mapZoomKey, neighbour, placeKeyLabels, shownKey, textWidth, zoomAt, type Direction, type MapCluster, type MapEdge, type MapLayout, type Viewport } from "./mapLayout";
 import { useTabs } from "./tabsStore";
 import { useCards } from "./useCards";
 
@@ -378,9 +378,9 @@ export function MapView({ items }: CanvasProps) {
     } else if ((ev.key === "Enter" || ev.key === " ") && focused) {
       ev.preventDefault();
       pick(focused, ev.shiftKey ? "range" : ev.metaKey || ev.ctrlKey ? "toggle" : "one");
-    } else if (ev.key === "+" || ev.key === "=") zoomBy(1.25);
-    else if (ev.key === "-") zoomBy(0.8);
-    else if (ev.key === "0") setViewport(FIT);
+    } else if (mapZoomKey(ev) === "in") zoomBy(1.25);
+    else if (mapZoomKey(ev) === "out") zoomBy(0.8);
+    else if (mapZoomKey(ev) === "fit") setViewport(FIT);
     else if (ev.key === "Escape" && cards.bulk.marked.length) useTabs.getState().clearMarks();
   };
 
