@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WorkstreamEvent, WorkstreamView } from "../types";
 import { freezeBatch } from "./pipHomeLogic";
-import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, EarlierStepDrafts, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
+import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, EarlierStepDrafts, planResultFor, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -110,6 +110,15 @@ describe("the Plan step while its description update waits (N6)", () => {
     // Nowhere else, and not once the description update is decided.
     expect(html.match(/data-plan-approve/g)).toHaveLength(1);
     expect(renderToStaticMarkup(<StepRailView {...props({ runs: planned })} />)).not.toContain("data-plan-approve");
+  });
+
+  it("takes the open questions from the plan the waiting update came from, not a later plan", () => {
+    const earlier = run("p1", "plan", "done", 30, { result: "## Open questions for a person\n\n- The earlier plan's question?" });
+    const later = run("p2", "plan", "done", 5, { result: "## Open questions for a person\n\n- The later plan's question?" });
+    const waiting = fromRun("d-desc", describe_, "p1");
+    expect(planResultFor(waiting, [earlier, later], later)).toBe(earlier.result);
+    // A draft not made from a run falls back to the step's newest plan.
+    expect(planResultFor({ ...waiting, origin: { type: "board" } }, [earlier, later], later)).toBe(later.result);
   });
 
   it("says nothing of approving for a rewrite of the title alone: there is no description update", () => {
