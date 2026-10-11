@@ -69,6 +69,7 @@ const event = (action: string, runId: string | null): WorkstreamEvent => ({ work
 const comment: Intent = { type: "comment", item: ref("CA-401"), body: { blocks: [] } as never };
 const transition: Intent = { type: "transition", item: ref("CA-401"), to: "31" };
 const rewrite: Intent = { type: "rewrite", item: ref("CA-401"), title: { from: "Old", to: "New" } as never, body: null, flattened: [] };
+const describe_: Intent = { type: "rewrite", item: ref("CA-401"), title: null, body: { blocks: [] } as never, flattened: [] };
 
 const draft = (id: string, intent: Intent, minutesAgo: number, origin: Proposal["origin"] = { type: "chat", requestId: `q-${id}`, workstream: "ws-1" }): Proposal =>
   ({ id, createdAt: iso(minutesAgo), updatedAt: iso(minutesAgo), origin, createdBy: origin.type === "run" ? "agent" : "pip", intent, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error: null, run: null }) as Proposal;
@@ -100,7 +101,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("the Plan step while its description update waits (N6)", () => {
   it("says approving it lets Build start, and lists the questions the plan left open", () => {
     const planned = RUNS.map((r) => (r.id === "r3" ? { ...r, result: "## Steps\n\n1. Do it\n\n## Open questions for a person\n\n- Do the Klaviyo flows read the subjects?\n- Keep the two-day delay?" } : r));
-    const html = renderToStaticMarkup(<StepRailView {...props({ runs: planned, proposals: [fromRun("d-desc", rewrite, "r3")] })} />);
+    const html = renderToStaticMarkup(<StepRailView {...props({ runs: planned, proposals: [fromRun("d-desc", describe_, "r3")] })} />);
     const plan = stepOf(html, "plan");
     expect(plan).toContain("data-plan-approve");
     expect(plan).toContain("Approve the description update to let Build start.");
@@ -109,6 +110,11 @@ describe("the Plan step while its description update waits (N6)", () => {
     // Nowhere else, and not once the description update is decided.
     expect(html.match(/data-plan-approve/g)).toHaveLength(1);
     expect(renderToStaticMarkup(<StepRailView {...props({ runs: planned })} />)).not.toContain("data-plan-approve");
+  });
+
+  it("says nothing of approving for a rewrite of the title alone: there is no description update", () => {
+    const html = renderToStaticMarkup(<StepRailView {...props({ proposals: [fromRun("d-title", rewrite, "r3")] })} />);
+    expect(html).not.toContain("data-plan-approve");
   });
 });
 

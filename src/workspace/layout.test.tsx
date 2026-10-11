@@ -10,7 +10,7 @@ import { HOLD_ALL_NOTE, Rail, RailButton, RailTip } from "./Rail";
 import { COMPOSER_CLEAR, ToastHost, toastPlacement } from "./ToastHost";
 import { useToasts, LIFETIME_MS, MAX_QUEUED, STALE_MS } from "./toasts";
 import { MORE_BUTTON, sameWindow, tabWindow } from "./TabBar";
-import { canvasRoom } from "./Workspace";
+import { canvasRoom, regionTarget } from "./Workspace";
 import { RowBadges } from "./ListView";
 import { useAgentsFlag } from "./agentsFlag";
 import { useWorkstreams } from "./workstreamsStore";
@@ -454,5 +454,17 @@ describe("tabs kept from before Your turn", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("where F6 puts the keyboard", () => {
+  const el = (id: string) => ({ id }) as unknown as HTMLElement;
+  const doc = (title: boolean) => ({ querySelector: () => (title ? el("title") : null), getElementById: (id: string) => el(id) }) as unknown as Pick<Document, "querySelector" | "getElementById">;
+
+  it("is the peek's title, or the peek itself when a draft's peek has no title heading", () => {
+    expect(regionTarget("peek", doc(true))?.id).toBe("title");
+    expect(regionTarget("peek", doc(false))?.id).toBe("peek-sheet");
+    expect(regionTarget("pip", doc(false))?.id).toBe("pip-input");
+    expect(regionTarget("main", doc(false))?.id).toBe("workspace-main");
   });
 });

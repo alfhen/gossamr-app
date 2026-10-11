@@ -278,8 +278,8 @@ export interface StepRailViewProps {
  * The step rail of a workstream: Pip's notes, the workstream's controls, Pip's own drafts, then a chip for each step of
  * the chain. A chip opens to its runs and the drafts about it, where a draft is decided as in the conversation.
  */
-/** Whether the plan's description update waits among the Plan step's drafts: approving it is how the plan is approved. */
-export const planWaits = (drafts: readonly Proposal[] | undefined) => !!drafts?.some((p) => p.intent.type === "rewrite" && p.state.type === "pending");
+/** Whether the plan's description update waits among the Plan step's drafts: approving it is how the plan is approved. A rewrite of the title alone isn't one. */
+export const planWaits = (drafts: readonly Proposal[] | undefined) => !!drafts?.some((p) => p.intent.type === "rewrite" && !!p.intent.body && p.state.type === "pending");
 
 /**
  * Under the Plan step while its description update waits: that approving it approves the plan and lets Build start, and

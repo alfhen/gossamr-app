@@ -57,6 +57,8 @@ describe("mock Pip woken by a finished plan (N6)", () => {
     // Any other finished step says nothing of the sort.
     const other = { ...plan, spec: { ...plan.spec, kind: "triage" as const } };
     expect(scriptPip(`[Event] run ${plan.id} (triage) Done`, { screen: "board", item: null } as unknown as ScreenContext, [], [other], NOW).text).not.toContain("Approve the description update");
+    // Nor a plan that left no draft: there is no description update to approve.
+    expect(scriptPip(`[Event] run ${plan.id} (plan) Done`, { screen: "board", item: null } as unknown as ScreenContext, [], [plan], NOW).text).not.toContain("Approve the description update");
   });
 });
 

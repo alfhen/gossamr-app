@@ -107,10 +107,15 @@ function regionOf(el: Element | null): WorkspaceRegion {
   return "main";
 }
 
-/** Puts the keyboard in `region`: the peek's title, Pip's input, or the main area, from where Tab goes on into it. */
+/** Where the keyboard goes in `region`: the peek's title, or the peek itself when it has none (a draft's peek, whose title is a field), Pip's input, or the main area. */
+export function regionTarget(region: WorkspaceRegion, doc: Pick<Document, "querySelector" | "getElementById">): HTMLElement | null {
+  if (region === "peek") return doc.querySelector<HTMLElement>("#peek-sheet h2") ?? doc.getElementById("peek-sheet");
+  return doc.getElementById(region === "pip" ? PIP_INPUT_ID : MAIN_ID);
+}
+
+/** Puts the keyboard in `region`, from where Tab goes on into it. */
 function enterRegion(region: WorkspaceRegion) {
-  const el =
-    region === "peek" ? document.querySelector<HTMLElement>("#peek-sheet h2") : region === "pip" ? document.getElementById(PIP_INPUT_ID) : document.getElementById(MAIN_ID);
+  const el = regionTarget(region, document);
   if (!el) return;
   if (!el.hasAttribute("tabindex") && region === "peek") el.setAttribute("tabindex", "-1");
   el.focus({ preventScroll: region !== "peek" });
