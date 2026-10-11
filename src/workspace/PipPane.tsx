@@ -22,6 +22,7 @@ import { draftsForItem, pendingDrafts, useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
 import { inWorkstreamPane } from "../lib/proposals";
 import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
+import { stageText } from "../lib/workstreamStage";
 
 export { AppliedCard, GENERAL_CONVERSATION, PIP_INPUT_ID, workstreamConversation } from "./PipConversation";
 
@@ -178,8 +179,21 @@ export function PipPane({ onClose }: { onClose(): void }) {
             ×
           </button>
         </div>
-        <p data-pip-conversation={conversation} title={workstream ? "This workstream's own conversation with Pip" : "Pip's conversation for everything that isn't in a workstream"} className="m-0 truncate text-sm font-semibold text-ws-ink2">
-          {conversationTitle(workstream)}
+        <p
+          data-pip-conversation={conversation}
+          data-waiting-for-pr={workstream?.waitingForPr || undefined}
+          title={workstream ? `This workstream's own conversation with Pip. ${conversationTitle(workstream)}` : "Pip's conversation for everything that isn't in a workstream"}
+          className="m-0 flex min-w-0 text-sm font-semibold text-ws-ink2"
+        >
+          {workstream ? (
+            <>
+              {/* Only the title is cut: where the workstream stands is what the person most needs to see. */}
+              <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
+              <span className="shrink-0 whitespace-pre">{` · ${stageText(workstream.stage, workstream.waitingForPr)}`}</span>
+            </>
+          ) : (
+            <span className="truncate">{conversationTitle(null)}</span>
+          )}
         </p>
         <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
         {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}

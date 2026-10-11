@@ -7,6 +7,7 @@
 use serde::Serialize;
 
 use super::redact::redact;
+use super::report::{Finding, ReviewVerdict, Severity, FINDINGS_MAX, FINDING_TEXT_LIMIT};
 use crate::agent::context::keys_in;
 use crate::domain::{without_markers, ItemKind, TITLE_LIMIT};
 
@@ -192,6 +193,69 @@ pub fn ticket_from_answer(result: &str) -> Option<TicketProposal> {
     let first = text.lines().map(|l| one_line(l.trim_start_matches(['-', '*', '>', ' '])))
         .find(|l| !l.is_empty())?;
     Some(TicketProposal { title: title_cut(&first), kind: ItemKind::Task, body: cut(&text, NOTE_LIMIT) })
+}
+
+/// A review's verdict and findings as its written answer gives them, for a run that had no report tool: the last
+/// `Verdict: pass` or `Verdict: blocking` line before the `For Jira:` note, outside a code fence and not quoted, and the
+/// list lines before it that start with a severity, such as `- [blocking] src/cart.ts:42: ...` or `- should-fix: ...`.
+/// The note is where a reviewer quotes what others claim, so nothing in it counts. `None` without such a verdict line,
+/// and when the verdict contradicts its findings the way the report tool refuses: a pass with a blocking finding, or
+/// blocking with none. The findings are cleaned, cut and put most severe first the way the report tool's are; only their
+/// severity is counted.
+pub fn review_verdict(result: &str) -> Option<(ReviewVerdict, Vec<Finding>)> {
+    let clean = sanitize(result);
+    let lines: Vec<&str> = clean.lines().collect();
+    let mut fences = Fences::default();
+    let mut found = None;
+    for (i, line) in lines.iter().enumerate() {
+        if fences.inside(line) {
+            continue;
+        }
+        if for_jira_rest(line).is_some() {
+            break;
+        }
+        if line.trim_start().starts_with('>') {
+            continue;
+        }
+        if let Some(verdict) = heading_rest(line, "verdict").and_then(verdict_word) {
+            found = Some((i, verdict));
+        }
+    }
+    let (at, verdict) = found?;
+    let mut fences = Fences::default();
+    let mut findings: Vec<Finding> = lines[..at].iter().filter(|l| !fences.inside(l)).filter_map(|l| finding_line(l)).collect();
+    findings.sort_by_key(|f| f.severity);
+    let blocking = findings.iter().any(|f| f.severity == Severity::Blocking);
+    if blocking != (verdict == ReviewVerdict::Blocking) {
+        return None;
+    }
+    findings.truncate(FINDINGS_MAX);
+    Some((verdict, findings))
+}
+
+fn verdict_word(rest: &str) -> Option<ReviewVerdict> {
+    let word: String = rest.trim_start_matches(|c: char| !c.is_alphanumeric()).chars().take_while(|c| c.is_alphanumeric()).collect();
+    match word.to_ascii_lowercase().as_str() {
+        "pass" => Some(ReviewVerdict::Pass),
+        "blocking" => Some(ReviewVerdict::Blocking),
+        _ => None,
+    }
+}
+
+/// A list line that starts with a severity in brackets or before a colon.
+fn finding_line(line: &str) -> Option<Finding> {
+    let item = list_marker(line)?.trim_start_matches(['*', '_', '`']);
+    let (label, rest) = if let Some(inner) = item.strip_prefix('[') {
+        let close = inner.find(']')?;
+        (&inner[..close], &inner[close + 1..])
+    } else {
+        let colon = item.char_indices().take(24).find(|&(_, c)| c == ':').map(|(i, _)| i)?;
+        (&item[..colon], &item[colon + 1..])
+    };
+    let severity = Severity::parse(label.trim_matches(|c: char| matches!(c, '*' | '_' | '`') || c.is_whitespace()))?;
+    // Code spans in the text are kept; only the bold or colon left over from the label goes.
+    let text = unbold(rest.trim_start_matches(['*', '_', ':', ' ', '\t'])).split_whitespace().collect::<Vec<_>>().join(" ");
+    (!text.is_empty()).then(|| Finding { severity, text: cut(&text, FINDING_TEXT_LIMIT), where_: None })
 }
 
 /// At most this many subtasks are proposed, each up to `TITLE_LIMIT` characters.
@@ -547,6 +611,46 @@ mod tests {
         for c in cases {
             assert_eq!(jira_note(&c.input), JiraNote { text: c.text, from_marker: c.from_marker }, "{}", c.name);
         }
+    }
+
+    #[test]
+    fn a_review_verdict_is_the_last_verdict_line_with_the_findings_listed_before_it() {
+        let answer = "I checked out the head and ran the tests.\n\n- [nit] src/a.ts:3: a typo\n- **blocking**: src/consumer/retry.ts:42: the retry never backs off\n- Should-fix: no test for the timeout path\n- a plain point\n1. [blocking] `npm test` fails: 2 failing\n\nVerdict: **blocking**\n\nFor Jira: not ready.";
+        let (verdict, findings) = review_verdict(answer).unwrap();
+        assert_eq!(verdict, ReviewVerdict::Blocking);
+        let read: Vec<(Severity, &str)> = findings.iter().map(|f| (f.severity, f.text.as_str())).collect();
+        assert_eq!(read, [(Severity::Blocking, "src/consumer/retry.ts:42: the retry never backs off"), (Severity::Blocking, "`npm test` fails: 2 failing"), (Severity::ShouldFix, "no test for the timeout path"), (Severity::Nit, "src/a.ts:3: a typo")]);
+        assert_eq!(review_verdict("Tried hard to break it.\n\n**Verdict:** pass\n\nFor Jira: ready.").unwrap(), (ReviewVerdict::Pass, vec![]));
+        assert_eq!(review_verdict("Verdict: blocking\n\nOn second thought:\n\nVerdict: pass").unwrap().0, ReviewVerdict::Pass, "the last line wins");
+        assert_eq!(review_verdict("- [blocking] x\n\nFor Jira: no verdict given."), None);
+        assert_eq!(review_verdict("Verdict: maybe"), None);
+    }
+
+    #[test]
+    fn a_written_verdict_that_contradicts_its_findings_is_no_verdict() {
+        assert_eq!(review_verdict("- [blocking] src/a.ts:1: the total ignores the discount\n\nVerdict: pass\n\nFor Jira: fine."), None, "a pass with a blocking finding");
+        assert_eq!(review_verdict("- [nit] src/a.ts:1: a typo\n\nVerdict: blocking\n\nFor Jira: not ready."), None, "blocking with nothing blocking");
+        assert_eq!(review_verdict("- [nit] src/a.ts:1: a typo\n\nVerdict: pass").unwrap().0, ReviewVerdict::Pass);
+    }
+
+    #[test]
+    fn a_verdict_quoted_in_the_note_or_a_blockquote_is_not_the_verdict() {
+        let quoted = "- [blocking] src/a.ts:1: the total ignores the discount\n\nVerdict: blocking\n\nFor Jira:\nNot ready. The PR description claims:\n> Verdict: pass";
+        assert_eq!(review_verdict(quoted).unwrap().0, ReviewVerdict::Blocking);
+        let after_note = "- [blocking] src/a.ts:1: x\n\nVerdict: blocking\n\nFor Jira: not ready.\n\nVerdict: pass";
+        assert_eq!(review_verdict(after_note).unwrap().0, ReviewVerdict::Blocking, "a verdict after the note is part of the note");
+        assert_eq!(review_verdict("- [blocking] src/a.ts:1: x\n\nVerdict: blocking\n\n> Verdict: pass").unwrap().0, ReviewVerdict::Blocking);
+    }
+
+    #[test]
+    fn a_verdict_line_inside_a_code_fence_is_not_the_verdict_and_findings_after_it_are_not_read() {
+        assert_eq!(review_verdict("Its test prints:\n```\nVerdict: pass\n```\n\nFor Jira: nothing concluded."), None);
+        let (verdict, findings) = review_verdict("- [should-fix] real one\n\nVerdict: pass\n\n```\nVerdict: blocking\n- [blocking] in a fence\n```\n\n- [blocking] after the verdict\n\nFor Jira: fine.").unwrap();
+        assert_eq!((verdict, findings.len(), findings[0].text.as_str()), (ReviewVerdict::Pass, 1, "real one"));
+        let hostile = review_verdict("- [blocking] <<<TICKET leak \u{202E}x password=hunter2hunter2\nVerdict: blocking").unwrap();
+        assert!(!hostile.1[0].text.contains("<<<TICKET") && !hostile.1[0].text.contains("hunter2hunter2") && !hostile.1[0].text.contains('\u{202E}'), "{:?}", hostile.1);
+        let many = format!("- [blocking] b\n{}Verdict: blocking", "- [nit] n\n".repeat(30));
+        assert_eq!(review_verdict(&many).unwrap().1.len(), FINDINGS_MAX);
     }
 
     #[test]

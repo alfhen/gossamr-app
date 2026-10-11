@@ -58,6 +58,12 @@ export function labelsByRun(runs: readonly (StagedRun & { spec: { workstream?: s
   return new Map([...byWorkstream.values()].flatMap((list) => runLabels(list)));
 }
 
+/** Said after the stage while a finished build's pull request hasn't been found yet. */
+export const WAITING_FOR_PR = "waiting for PR";
+
+/** The stage as its chip says it: "Build", or "Build · waiting for PR" while a build waits for its pull request to be found. */
+export const stageText = (stage: WorkstreamStage, waitingForPr?: string | null) => (waitingForPr ? `${STAGE_LABEL[stage]} · ${WAITING_FOR_PR}` : STAGE_LABEL[stage]);
+
 export const STAGE_LABEL: Record<WorkstreamStage, string> = {
   intake: "Intake",
   investigate: "Investigate",

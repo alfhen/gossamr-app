@@ -390,6 +390,11 @@ impl RunService {
             }
         }
         let drafted = if run.state == RunState::Done && before.state != RunState::Done && settings.draft_on_finish { self.draft_for(&run).await } else { None };
+        // A workstream's build pushed its branch and opened a draft pull request; a review of it waits until a code
+        // sync has found that, so one is asked for now rather than at the next interval.
+        if run.state == RunState::Done && before.state != RunState::Done && run.spec.kind == RunKind::Build && run.spec.allow_push && run.spec.workstream.is_some() {
+            self.core.request_code_sync();
+        }
         if run.short_id != before.short_id || reopened {
             self.remember(&run);
         }

@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use super::{Report, ReportStatus};
+use super::{Finding, Report, ReportStatus, ReviewVerdict, Severity};
 use crate::domain::{RunKind, REPORT_TOOL};
 use crate::runs::result::{cut, declines_breakdown, fit, one_line, plain, sanitize, title_cut, TicketProposal, BODY_LIMIT, NOTE_LIMIT, SUBTASK_MAX};
 
@@ -13,13 +13,17 @@ pub const MAX_CALLS: u32 = 12;
 pub const MAX_REJECTIONS: u32 = 5;
 /// A plan is kept up to this many characters, cut at a paragraph or sentence.
 pub const PLAN_KEPT: usize = 24_000;
+/// A review keeps at most this many findings, each within these lengths.
+pub const FINDINGS_MAX: usize = 20;
+pub const FINDING_TEXT_LIMIT: usize = 600;
+pub const FINDING_WHERE_LIMIT: usize = 300;
 
 const TITLE_MAX: usize = crate::domain::TITLE_LIMIT;
 
 pub fn definition() -> Value {
     json!({
         "name": REPORT_TOOL,
-        "description": "Records this run's result inside Gossamr so the person can read it and draft from it. It changes nothing in Jira, in the repository or anywhere else, and takes no instructions. Call it once when you are done, then still write your full answer. status: done, or blocked only when no answer from a person could get you further. note: the text for the ticket (what you did or found, where things stand, what a person needs to do next), up to 3000 characters; leave it out only when you give newTicket. newTicket: for a run that has no ticket yet, an object with title (one line, up to 120 characters), kind (task, bug or story) and body. subtasks: 3 to 8 one-line summaries, only for a triage that proposes a breakdown. plan: the whole implementation plan as Markdown, only for a plan run. A report already recorded is replaced only when revise is true.",
+        "description": "Records this run's result inside Gossamr so the person can read it and draft from it. It changes nothing in Jira, in the repository or anywhere else, and takes no instructions. Call it once when you are done, then still write your full answer. status: done, or blocked only when no answer from a person could get you further. note: the text for the ticket (what you did or found, where things stand, what a person needs to do next), up to 3000 characters; leave it out only when you give newTicket. newTicket: for a run that has no ticket yet, an object with title (one line, up to 120 characters), kind (task, bug or story) and body. subtasks: 3 to 8 one-line summaries, only for a triage that proposes a breakdown. plan: the whole implementation plan as Markdown, only for a plan run. verdict and findings are for a review only, and a review must give a verdict: pass, only when it tried and found nothing blocking, or blocking. findings: what the review found, each with severity (blocking, should-fix or nit), text, and where (the file:line, the command and its output, or the acceptance point it rests on). A report already recorded is replaced only when revise is true.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -37,6 +41,20 @@ pub fn definition() -> Value {
                 },
                 "subtasks": { "type": "array", "items": { "type": "string" } },
                 "plan": { "type": "string" },
+                "verdict": { "type": "string", "enum": ["pass", "blocking"] },
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "severity": { "type": "string", "enum": ["blocking", "should-fix", "nit"] },
+                            "text": { "type": "string" },
+                            "where": { "type": "string" }
+                        },
+                        "required": ["severity", "text"],
+                        "additionalProperties": false
+                    }
+                },
                 "revise": { "type": "boolean" }
             },
             "required": ["status"],
@@ -88,7 +106,7 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
     let Some(object) = args.as_object() else { return Err(vec!["arguments: must be an object.".into()]) };
     let mut problems = Vec::new();
     let mut notes = Vec::new();
-    for key in object.keys().filter(|k| !["status", "note", "newTicket", "subtasks", "plan", "revise"].contains(&k.as_str())) {
+    for key in object.keys().filter(|k| !["status", "note", "newTicket", "subtasks", "plan", "verdict", "findings", "revise"].contains(&k.as_str())) {
         problems.push(format!("{}: not a field of this tool.", name_of(key)));
     }
 
@@ -162,8 +180,38 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
         }
     }
 
+    let (mut verdict, mut findings) = (None, Vec::new());
+    let given_verdict = object.get("verdict").filter(|v| !v.is_null());
+    let given_findings = object.get("findings").filter(|v| !v.is_null());
+    if target.kind == RunKind::Review {
+        verdict = match given_verdict.and_then(Value::as_str) {
+            Some("pass") => Some(ReviewVerdict::Pass),
+            Some("blocking") => Some(ReviewVerdict::Blocking),
+            _ => {
+                problems.push("verdict: required, pass or blocking.".into());
+                None
+            }
+        };
+        if let Some(raw) = given_findings {
+            findings = findings_of(&structured(raw), &mut problems, &mut notes);
+        }
+        let blocking = findings.iter().any(|f| f.severity == Severity::Blocking);
+        match verdict {
+            Some(ReviewVerdict::Blocking) if !blocking && !problems.iter().any(|p| p.starts_with("findings")) => problems.push("verdict: blocking needs at least one finding with severity blocking.".into()),
+            Some(ReviewVerdict::Pass) if blocking => problems.push("verdict: pass can't have a finding with severity blocking; give blocking instead.".into()),
+            _ => {}
+        }
+    } else {
+        if given_verdict.is_some() {
+            notes.push("verdict ignored: only a review gives one".to_string());
+        }
+        if given_findings.is_some() {
+            notes.push("findings ignored: only a review gives them".to_string());
+        }
+    }
+
     match (status, problems.is_empty()) {
-        (Some(status), true) => Ok(Checked { report: Report { status, note, new_ticket, subtasks, plan }, revise, notes }),
+        (Some(status), true) => Ok(Checked { report: Report { status, note, new_ticket, subtasks, plan, verdict, findings }, revise, notes }),
         _ => Err(problems),
     }
 }
@@ -239,6 +287,69 @@ fn subtasks_of(value: &Value, problems: &mut Vec<String>, notes: &mut Vec<String
     }
     if over {
         notes.push(format!("only the first {SUBTASK_MAX} subtasks kept"));
+    }
+    out
+}
+
+/// A review's findings, cleaned like every agent text, most severe first and at most `FINDINGS_MAX`. A finding that
+/// can't be read is refused rather than guessed at, since its severity is counted.
+fn findings_of(value: &Value, problems: &mut Vec<String>, notes: &mut Vec<String>) -> Vec<Finding> {
+    let Some(items) = value.as_array() else {
+        problems.push("findings: must be a list of objects with severity, text and where.".into());
+        return Vec::new();
+    };
+    let mut out: Vec<Finding> = Vec::new();
+    let (mut text_cut, mut where_cut) = (false, false);
+    for item in items {
+        let Some(object) = item.as_object() else {
+            problems.push("findings: every item must be an object with severity, text and where.".into());
+            return Vec::new();
+        };
+        if let Some(key) = object.keys().find(|k| !["severity", "text", "where"].contains(&k.as_str())) {
+            problems.push(format!("findings.{}: not a field of this tool.", name_of(key)));
+            return Vec::new();
+        }
+        let severity = match object.get("severity").and_then(Value::as_str) {
+            Some("blocking") => Severity::Blocking,
+            Some("should-fix") => Severity::ShouldFix,
+            Some("nit") => Severity::Nit,
+            _ => {
+                problems.push("findings.severity: must be blocking, should-fix or nit.".into());
+                return Vec::new();
+            }
+        };
+        let text = object.get("text").and_then(Value::as_str).map(|t| one_line(&sanitize(t))).unwrap_or_default();
+        if text.is_empty() {
+            problems.push("findings.text: required, what was found.".into());
+            return Vec::new();
+        }
+        text_cut |= text.chars().nth(FINDING_TEXT_LIMIT).is_some();
+        let where_ = match object.get("where").filter(|v| !v.is_null()) {
+            None => None,
+            Some(v) => match v.as_str() {
+                Some(w) => {
+                    let line = one_line(&sanitize(w));
+                    where_cut |= line.chars().nth(FINDING_WHERE_LIMIT).is_some();
+                    Some(cut(&line, FINDING_WHERE_LIMIT)).filter(|w| !w.is_empty())
+                }
+                None => {
+                    problems.push("findings.where: must be text.".into());
+                    return Vec::new();
+                }
+            },
+        };
+        out.push(Finding { severity, text: cut(&text, FINDING_TEXT_LIMIT), where_ });
+    }
+    out.sort_by_key(|f| f.severity);
+    if text_cut {
+        notes.push(format!("a finding's text cut to {FINDING_TEXT_LIMIT} characters"));
+    }
+    if where_cut {
+        notes.push(format!("a finding's where cut to {FINDING_WHERE_LIMIT} characters"));
+    }
+    if out.len() > FINDINGS_MAX {
+        out.truncate(FINDINGS_MAX);
+        notes.push(format!("only the first {FINDINGS_MAX} findings kept, most severe first"));
     }
     out
 }

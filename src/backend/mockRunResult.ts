@@ -1,4 +1,4 @@
-import { SUMMARY_ONLY, type CodeChange, type ItemRef, type JiraNote, type ReportView, type ResultSource, type RunKind, type TicketProposal, type WorkItemKind } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type ItemRef, type JiraNote, type ReportView, type ResultSource, type ReviewFinding, type ReviewSeverity, type ReviewVerdict, type ReviewView, type RunKind, type TicketProposal, type WorkItemKind } from "../types";
 
 const KEY = /\b[A-Za-z][A-Za-z0-9_]*-\d+\b/g;
 
@@ -138,6 +138,84 @@ export function ticketFromAnswer(result: string): TicketProposal | null {
   return first ? { title: titleCut(first), kind: "task", body: text.length > 3_000 ? `${text.slice(0, 3_000).trimEnd()}…` : text } : null;
 }
 
+/** A review keeps at most this many findings, each cut to this length; as `runs/report/tool.rs`. */
+export const FINDINGS_MAX = 20;
+export const FINDING_TEXT_LIMIT = 600;
+const SEVERITY_ORDER: Record<ReviewSeverity, number> = { blocking: 0, "should-fix": 1, nit: 2 };
+
+const cutTo = (text: string, limit: number) => {
+  const chars = [...text];
+  return chars.length <= limit ? text : `${chars.slice(0, limit).join("").trimEnd()}…`;
+};
+
+/** A severity as an answer writes it, as `Severity::parse` in `runs/report/mod.rs`. */
+function severityOf(label: string): ReviewSeverity | null {
+  const word = label.trim().toLowerCase().replace(/[ _]/g, "-");
+  if (word === "blocking" || word === "blocker") return "blocking";
+  if (word === "should-fix" || word === "shouldfix") return "should-fix";
+  if (word === "nit") return "nit";
+  return null;
+}
+
+/** A list line that starts with a severity in brackets or before a colon, as `finding_line` in `runs/result.rs`. */
+function findingLine(line: string): ReviewFinding | null {
+  const listed = listText(line);
+  if (listed === null) return null;
+  const item = listed.replace(/^[*_`]+/, "");
+  let label: string;
+  let rest: string;
+  if (item.startsWith("[")) {
+    const close = item.indexOf("]");
+    if (close < 0) return null;
+    [label, rest] = [item.slice(1, close), item.slice(close + 1)];
+  } else {
+    const colon = [...item].slice(0, 24).indexOf(":");
+    if (colon < 0) return null;
+    const chars = [...item];
+    [label, rest] = [chars.slice(0, colon).join(""), chars.slice(colon + 1).join("")];
+  }
+  const severity = severityOf(label.replace(/^[*_`\s]+|[*_`\s]+$/g, ""));
+  if (!severity) return null;
+  const text = rest.replace(/^[*_:\s]+/, "").replace(/\*\*(\S(?:[^*]*\S)?)\*\*/g, "$1").split(/\s+/).filter(Boolean).join(" ");
+  return text ? { severity, text: cutTo(text, FINDING_TEXT_LIMIT), where: null } : null;
+}
+
+const bySeverity = (findings: ReviewFinding[]) => findings.map((f, i) => [f, i] as const).sort(([a, i], [b, j]) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || i - j).map(([f]) => f);
+
+/**
+ * A review's verdict and findings from its written answer, as `review_verdict` in `runs/result.rs`: the last
+ * `Verdict: pass|blocking` line before the `For Jira:` note, outside a code fence and not quoted, and the severity list
+ * lines before it. Null without one, and when the verdict contradicts its findings.
+ */
+export function reviewVerdict(result: string): { verdict: ReviewVerdict; findings: ReviewFinding[] } | null {
+  const lines = result.replace(/\r\n/g, "\n").split("\n");
+  const inside = fenceTracker();
+  let found: { at: number; verdict: ReviewVerdict } | null = null;
+  for (const [i, l] of lines.entries()) {
+    if (inside(l)) continue;
+    // The note is where a reviewer quotes what others claim, so nothing from it on counts, nor a quoted line.
+    if (headingRest(l, "for jira") !== null) break;
+    if (l.trimStart().startsWith(">")) continue;
+    const rest = headingRest(l, "verdict");
+    const word = rest === null ? null : (/^[^\p{L}\p{N}]*([\p{L}\p{N}]*)/u.exec(rest)?.[1] ?? "").toLowerCase();
+    if (word === "pass" || word === "blocking") found = { at: i, verdict: word };
+  }
+  if (!found) return null;
+  const { at, verdict } = found as { at: number; verdict: ReviewVerdict };
+  const before = fenceTracker();
+  const findings = lines.slice(0, at).filter((l) => !before(l)).map(findingLine).filter((f): f is ReviewFinding => f !== null);
+  // A verdict that contradicts its findings, as the report tool refuses, is no verdict.
+  if (findings.some((f) => f.severity === "blocking") !== (verdict === "blocking")) return null;
+  return { verdict, findings: bySeverity(findings).slice(0, FINDINGS_MAX) };
+}
+
+/** A review's verdict for the sheet and card, as `review_view` in `inbox/run_results.rs`. */
+export function reviewView(resolved: Pick<Resolved, "verdict" | "findings" | "verdictStructured">): ReviewView | null {
+  if (!resolved.verdict) return null;
+  const count = (s: ReviewSeverity) => resolved.findings.filter((f) => f.severity === s).length;
+  return { verdict: resolved.verdict, blocking: count("blocking"), shouldFix: count("should-fix"), nits: count("nit"), findings: resolved.findings, source: resolved.verdictStructured ? "structured" : "written" };
+}
+
 export const SUBTASK_MAX = 8;
 const BARE_REFUSALS = ["none", "n/a", "na", "nothing"];
 const REFUSAL_OPENERS = ["no subtasks", "no subtask", "no breakdown", "no need", "nothing to split", "not needed", "not required", "not necessary", "not applicable", "not worth"];
@@ -259,6 +337,9 @@ export interface MockReport {
   newTicket?: TicketProposal;
   subtasks?: string[];
   plan?: string;
+  /** For a review: its verdict and findings. */
+  verdict?: ReviewVerdict;
+  findings?: ReviewFinding[];
 }
 
 /** A run's report row: whether it was offered the tool, and what came of it. */
@@ -285,6 +366,10 @@ export interface Resolved {
   status: "done" | "blocked" | null;
   /** The agent's own account rather than Claude's one-line summary of it. */
   complete: boolean;
+  /** For a review: from the report when it gave one, else from the `Verdict:` line of the whole written answer. */
+  verdict: ReviewVerdict | null;
+  findings: ReviewFinding[];
+  verdictStructured: boolean;
 }
 
 interface Resolvable {
@@ -296,6 +381,16 @@ interface Resolvable {
 
 /** Which result a run's drafts and sheet use, as `runs::report::resolve`: a current report wins wholesale, else the written answer. */
 export function resolveResult(run: Resolvable, row: MockReportRow | null): Resolved {
+  const resolved = readResult(run, row);
+  if (run.spec.kind !== "review") return resolved;
+  const current = row?.report && !row.stale ? row.report : null;
+  const reported = current?.verdict ? { verdict: current.verdict, findings: current.findings ?? [] } : null;
+  const written = !reported && run.result && run.resultComplete !== false ? reviewVerdict(run.result) : null;
+  const found = reported ?? written;
+  return { ...resolved, verdict: found?.verdict ?? null, findings: found?.findings ?? [], verdictStructured: !!reported };
+}
+
+function readResult(run: Resolvable, row: MockReportRow | null): Resolved {
   const result = run.result?.trim() || undefined;
   const own = run.item?.key.toUpperCase();
   const onTicket = !!run.item;
@@ -311,6 +406,9 @@ export function resolveResult(run: Resolvable, row: MockReportRow | null): Resol
       plan: current.plan ?? null,
       status: current.status,
       complete: true,
+      verdict: null,
+      findings: [],
+      verdictStructured: false,
     };
   }
   const note = result ? jiraNote(result) : null;
@@ -324,6 +422,9 @@ export function resolveResult(run: Resolvable, row: MockReportRow | null): Resol
     plan: null,
     status: null,
     complete: source !== null && source !== "summaryOnly",
+    verdict: null,
+    findings: [],
+    verdictStructured: false,
   };
 }
 

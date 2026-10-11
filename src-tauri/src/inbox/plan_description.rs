@@ -221,12 +221,38 @@ impl Core {
 
     /// The plan as the person settled it on the ticket: the newest description draft from `run` that was applied, with
     /// the edits the person made before approving it and without Gossamr's intro paragraph. `None` when no such draft
-    /// was applied, so a build falls back to the run's own answer. Waiting, skipped, retired and failed drafts don't count.
+    /// was applied, so a build falls back to the run's own answer. Waiting, skipped, retired and failed drafts don't count,
+    /// and nor does one Pip revised that the person didn't edit after: a build is told a person wrote what it follows.
     pub(super) async fn approved_plan_of(&self, run: &Run) -> Result<Option<String>> {
-        let Some(item) = run.item.clone() else { return Ok(None) };
+        let newest = self.plan_drafts_of(run).await?.into_iter().filter(|p| p.state == ProposalState::Applied).max_by_key(|p| (p.updated_at, p.created_at));
+        Ok(newest.filter(|p| !proposals::revised_by_pip_unedited(p)).and_then(|p| plan_text_of(&p)).filter(|text| !text.is_empty()))
+    }
+
+    /// Every Gossamr Plan description draft `run` left, whatever its state.
+    async fn plan_drafts_of(&self, run: &Run) -> Result<Vec<Proposal>> {
+        let Some(item) = run.item.clone() else { return Ok(Vec::new()) };
         let found = self.proposals(&ProposalQuery { item: Some(item), ..Default::default() }).await?;
-        let newest = found.into_iter().filter(|p| from_run(p, &run.id) && p.state == ProposalState::Applied).max_by_key(|p| (p.updated_at, p.created_at));
-        Ok(newest.and_then(|p| plan_text_of(&p)).filter(|text| !text.is_empty()))
+        Ok(found.into_iter().filter(|p| from_run(p, &run.id)).collect())
+    }
+
+    /// Why Pip may not yet draft a build from the plan of `run`, worded for Pip; `None` once the person settled it: they
+    /// approved its Gossamr Plan description draft, or skipped it and so chose the run's own answer.
+    pub(super) async fn plan_unsettled(&self, run: &Run) -> Result<Option<String>> {
+        if self.approved_plan_of(run).await?.is_some() {
+            return Ok(None);
+        }
+        let newest = self.plan_drafts_of(run).await?.into_iter().max_by_key(|p| (p.updated_at, p.created_at));
+        let ask = "Ask the person to settle the plan, or to draft the build themselves from the plan run's sheet.";
+        Ok(match newest.map(|p| p.state) {
+            Some(ProposalState::Skipped) => None,
+            Some(ProposalState::Pending | ProposalState::Applying) => Some("the person hasn't settled the plan yet: they approve or skip the Gossamr Plan draft first".into()),
+            Some(ProposalState::Applied) => Some(format!("the plan approved on the ticket carries text Pip wrote or is empty, so the person didn't settle it. {ask}")),
+            Some(ProposalState::Retired(why)) => Some(format!("the Gossamr Plan draft of that run was retired ({why}) before the person decided on it. {ask}")),
+            None => {
+                let why = self.plan_description_of(run).await?.and_then(|d| d.unavailable).map(|why| format!(" {why}")).unwrap_or_default();
+                Some(format!("the plan of that run hasn't been put to the person on the ticket.{why} {ask}"))
+            }
+        })
     }
 
     /// Why a description draft can't be made now, without making one.
@@ -466,17 +492,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_person_edits_it_but_pip_may_revise_only_before_that_and_never_what_it_was_drafted_against() {
+    async fn pip_may_not_revise_it_before_or_after_the_person_edits_it() {
         use crate::proposals::require_pip_may_revise;
         let fx = fixture_watching(&["acme/webshop"]).await;
         let run = plan_with(&fx, PLAN).await;
         let made = fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().unwrap();
-        require_pip_may_revise(&made, None).unwrap();
-        let revised = fx.core.revise_as_pip(&fx.scope, None, &made.id, {
+        let err = fx.core.revise_as_pip(&fx.scope, None, &made.id, {
             let (from, _) = rewrite_of(&made);
             Intent::Rewrite { item: fx.item("CA-1"), title: None, body: Some(BodyChange { from: from.clone(), to: Doc::from_markdown("Hi\n\n## Gossamr Plan\n\nPip's tighter plan.", &[]) }), flattened: vec![] }
-        }).await.unwrap();
-        assert_eq!(revised.revisions.last().unwrap().note, "Revised by Pip");
+        }).await.unwrap_err().to_string();
+        assert!(err.contains("carries the Gossamr Plan a build follows"), "{err}");
         let edited = fx.core.edit_proposal(&made.id, &Edit::Rewrite { title: None, body: Some("Hi\n\n## Gossamr Plan\n\nThe person's words.".into()) }).await.unwrap();
         assert!(require_pip_may_revise(&edited, None).unwrap_err().to_string().contains("edited this description draft"));
     }
@@ -552,7 +577,8 @@ mod tests {
         fx.core.save_run(&linked).await.unwrap();
         let made = fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().unwrap();
         assert_eq!((made.created_by, made.workstream()), (CreatedBy::Agent, Some(ws.id.as_str())));
-        assert!(crate::proposals::require_pip_may_revise(&made, Some(&ws.id)).is_ok());
-        assert!(crate::proposals::require_pip_may_revise(&made, Some("other")).is_err());
+        // The plan a build follows is the person's to change, even from the workstream's own conversation.
+        let err = crate::proposals::require_pip_may_revise(&made, Some(&ws.id)).unwrap_err().to_string();
+        assert!(err.contains("carries the Gossamr Plan a build follows"), "{err}");
     }
 }

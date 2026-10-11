@@ -1356,3 +1356,52 @@ async fn a_run_stopped_for_a_limit_is_picked_up_when_the_person_carries_on_and_i
     assert_eq!(rig.get(&run).await.state, RunState::Working, "the limit doesn't stop it a second time");
     assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 1);
 }
+
+/// Whether a code sync was asked for since the last look: the sync loop's `Notify` holds one permit until taken.
+async fn sync_requested(rig: &Rig) -> bool {
+    tokio::time::timeout(std::time::Duration::from_millis(200), rig.fx.core.wake.notified()).await.is_ok()
+}
+
+/// Approved and launched in a workstream opened on the ticket, as a run of `kind`.
+async fn launched_in_workstream_as(rig: &Rig, n: u32, kind: RunKind) -> Run {
+    let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
+    let spec = crate::domain::RunSpec { kind, workstream: Some(ws.id.clone()), ..rig.spec(n) };
+    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
+    let queued = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    rig.svc.start_now(&queued.id).await.unwrap()
+}
+
+/// Polls `run` from working to done, and says whether finishing asked for a code sync.
+async fn finishing_requests_a_sync(rig: &Rig, run: &Run) -> bool {
+    rig.poll().await;
+    // Anything that asked for a sync before the run finished is taken first.
+    while sync_requested(rig).await {}
+    finish_with(rig, run, "Pushed the branch and opened a draft pull request.\n\nFor Jira:\nA fix is up for review.");
+    rig.poll().await;
+    assert_eq!(rig.get(run).await.state, RunState::Done);
+    let asked = sync_requested(rig).await;
+    rig.poll().await;
+    assert!(!sync_requested(rig).await, "staying done asks for nothing more");
+    asked
+}
+
+#[tokio::test]
+async fn a_workstream_build_that_finishes_asks_for_a_code_sync_so_its_pull_request_is_found() {
+    let rig = ready().await;
+    let run = launched_in_workstream_as(&rig, 1, RunKind::Build).await;
+    assert!(run.spec.allow_push, "a workstream's build always pushes");
+    assert!(finishing_requests_a_sync(&rig, &run).await);
+}
+
+#[tokio::test]
+async fn other_kinds_and_builds_outside_a_workstream_ask_for_no_code_sync() {
+    let rig = ready().await;
+    let plan = launched_in_workstream_as(&rig, 1, RunKind::Plan).await;
+    assert!(!finishing_requests_a_sync(&rig, &plan).await, "a plan in a workstream");
+
+    let rig = ready().await;
+    let build = rig.launched_as(2, RunKind::Build).await;
+    assert!(!build.spec.allow_push && build.spec.workstream.is_none());
+    assert!(!finishing_requests_a_sync(&rig, &build).await, "a build outside a workstream");
+}

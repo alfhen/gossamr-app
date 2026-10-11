@@ -194,7 +194,7 @@ describe("the sample Pip and agents", () => {
   it("proposes an investigation as a draft with a focus note and says it has not started", async () => {
     const item = { connectionId: "mock", externalId: "CA-402", key: "CA-402" };
     const s = scriptPip("Start an agent on CA-402 and look at the retry loop", { ...blank, item });
-    expect(s.runDraft).toEqual({ item, focus: "the retry loop" });
+    expect(s.runDraft).toEqual({ item, kind: "investigate", fromRun: null, focus: "the retry loop" });
     expect(s.text).toContain("It has not started");
 
     const backend = new MockBackend();

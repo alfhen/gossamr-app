@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
-import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PUSH_ALLOWED, withoutMarkers } from "../backend/mockRunKinds";
+import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PUSH_ALLOWED, REVIEW_REPORTS, withoutMarkers } from "../backend/mockRunKinds";
 import type { Run, RunSpec } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { usePrefs } from "./prefs";
@@ -46,6 +46,21 @@ describe("a finished build in the mock", () => {
     expect(change).toMatchObject({ kind: "pullRequest", number: 218, state: "draft", repo: "acme/webshop", headRepo: "acme/webshop", headRef: `worktree-${build.spec.name}` });
     expect(backend.github.code.change("acme/webshop", 218)).toMatchObject({ state: "draft", sha: "a1b2c3d4e5f6" });
     expect(build.result).toContain("draft pull request");
+  });
+});
+
+describe("a review the person drafts", () => {
+  it.each([false, true])("always asks for the report, with the setting %s, and the person can't untick it", async (reportResult) => {
+    await backend.runsSetSettings({ ...(await backend.runsSettings()), reportResult });
+    await begin();
+    expect(s().error).toBeNull();
+    expect(s().review!.spec.report).toBe(true);
+    expect(s().review!.prompt).toContain("verdict ('pass' or 'blocking', required)");
+    await s().saveEdit({ report: false });
+    expect(s().error).toBe(REVIEW_REPORTS);
+    expect(s().review!.spec.report).toBe(true);
+    const direct = await backend.runsDraft(reviewSpec({ report: false }), CA);
+    expect(direct.intent.type === "startRun" && direct.intent.spec.report).toBe(true);
   });
 });
 
@@ -110,11 +125,16 @@ describe("Review this", () => {
     expect(s().preflight!.rows.some((r) => r.level === "green" && r.text.includes(`builder's account from run ${build.id}`))).toBe(true);
   });
 
-  it("says in the instruction to check against the ticket, verify claims and report by importance", () => {
-    expect(INSTRUCTIONS.review).toContain("acceptance points");
+  it("says in the instruction to try to show the change is not ready, verify claims, cite evidence and end with a verdict", () => {
+    // Reworded on purpose when the review became adversarial.
+    expect(INSTRUCTIONS.review).toContain("show that the change is not ready");
+    expect(INSTRUCTIONS.review).toContain("an acceptance point of the ticket it does not meet");
     expect(INSTRUCTIONS.review).toContain("claim to verify in the code, not as evidence");
-    expect(INSTRUCTIONS.review).toContain("unfinished, untested, out of scope or risky, most important first");
-    expect(INSTRUCTIONS.review).toContain("do not comment on it");
+    expect(INSTRUCTIONS.review).toContain("a file and line, a command you ran with its output, or the acceptance point it fails");
+    expect(INSTRUCTIONS.review).toContain("blocking, should-fix or nit");
+    expect(INSTRUCTIONS.review).toContain("'Verdict: pass' (only when you tried and found nothing blocking) or 'Verdict: blocking'");
+    expect(INSTRUCTIONS.review).toContain("never comments on, approves, requests changes on or otherwise changes the pull request");
+    expect(INSTRUCTIONS.review.toLowerCase()).not.toContain("push");
   });
 
   it("takes the pull request from the build and the answer from the run, never the caller's", async () => {
@@ -233,8 +253,10 @@ describe("Review this", () => {
     expect(off({ item: null }).reason).toContain("needs a ticket");
     expect(off({ result: " " }).reason).toContain("without a written answer");
     expect(off({ resultComplete: false }).reason).toContain("read in full");
-    expect(off({}, null).reason).toContain("no pull request");
-    expect(off({}, { ...change, kind: "branch", number: null }).reason).toContain("no pull request");
+    const unpushed = { spec: { ...build.spec, allowPush: false } };
+    expect(off(unpushed, null).reason).toContain("no pull request");
+    expect(off(unpushed, { ...change, kind: "branch", number: null }).reason).toContain("no pull request");
+    expect(off({}, null).reason).toContain("hasn't been found on GitHub yet");
     expect(off({}, { ...change, headRepo: "mallory/webshop" }).reason).toContain("same repository");
     expect(off({}, { ...change, repo: "acme/other" }).reason).toContain("same repository");
     expect(off({}, { ...change, state: "merged" }).reason).toContain("merged");

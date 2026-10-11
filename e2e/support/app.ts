@@ -71,3 +71,15 @@ export async function advanceRuns(page: Page, times = 1, id?: string) {
     }, id ?? null);
   }
 }
+
+/**
+ * Makes the sample code host show the draft pull requests finished builds opened, as a code sync finding them, rather than
+ * after a moment (or never, with `prSurface=manual`). Through `__gossamrMock.surfacePullRequests` (src/backend/mockWatch.ts).
+ */
+export async function surfacePullRequests(page: Page) {
+  return page.evaluate(() => {
+    const mock = (globalThis as { __gossamrMock?: { surfacePullRequests(): boolean } }).__gossamrMock;
+    if (!mock) throw new Error("the sample backend isn't there; is this a dev build in mock mode?");
+    return mock.surfacePullRequests();
+  });
+}

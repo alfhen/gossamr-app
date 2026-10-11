@@ -10,7 +10,7 @@ export interface MockOptions {
   /** Which scripted agent runs exist, and the moment their ages count back from. */
   /** How long the scripted Pip waits between words, in ms (a step takes six times as long); unset keeps its usual pace. */
   pipPace?: number;
-  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; planDescription?: boolean; untrusted?: boolean };
+  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; planDescription?: boolean; untrusted?: boolean; prSurfaceMs?: number | null };
 }
 
 interface Stored {
@@ -96,6 +96,10 @@ export interface MockHandle {
   advanceRuns(id?: string): void;
   /** The audit of every workstream, oldest first within each, as `workstreams_events` reads one. */
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null }[];
+  /** Every run the sample backend holds, newest first: its id, kind and state. */
+  runs(): { id: string; kind: string; state: string }[];
+  /** Makes the draft pull requests finished builds opened show on the code host now, as a code sync finding them; true when there was one. */
+  surfacePullRequests(): boolean;
 }
 
 declare global {
@@ -106,19 +110,22 @@ declare global {
 /**
  * The scripted runs never move by themselves, so in a dev browser (never a build, never a test outside a browser) the sample
  * backend puts its clock on `globalThis.__gossamrMock`: `__gossamrMock.advanceRuns()` steps every unfinished run along and
- * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit. The last sample backend made wins.
+ * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs and `surfacePullRequests()` shows the
+ * draft pull requests finished builds opened without waiting. The last sample backend made wins.
  */
-export function exposeMockClock(runs: { advance(id?: string): void }, workstreams?: { list(includeClosed?: boolean): { workstream: { id: string } }[]; events(id: string): MockHandleEvent[] }) {
+export function exposeMockClock(runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string }; state: string }[]; surfacePullRequests(): boolean }, workstreams?: { list(includeClosed?: boolean): { workstream: { id: string } }[]; events(id: string): MockHandleEvent[] }) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
     workstreamEvents: () => (workstreams ? workstreams.list(true).flatMap((v) => workstreams.events(v.workstream.id)) : []),
+    runs: () => runs.list().map((r) => ({ id: r.id, kind: r.spec.kind, state: r.state })),
+    surfacePullRequests: () => runs.surfacePullRequests(),
   };
 }
 
 type MockHandleEvent = ReturnType<MockHandle["workstreamEvents"]>[number];
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsEnv=missing` or `signedOut` shows the Claude banners, `?runsCap=3` sets how many agents may run at once `?pipRun=1` starts with a run draft from Pip and `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsEnv=missing` or `signedOut` shows the Claude banners, `?runsCap=3` sets how many agents may run at once `?pipRun=1` starts with a run draft from Pip and `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -146,6 +153,7 @@ export function mockOptionsFromUrl(): MockOptions {
     pipRun: params.get("pipRun") === "1",
     planDescription: true,
     untrusted: params.get("runsUntrusted") === "1",
+    prSurfaceMs: params.get("prSurface") === "manual" ? null : undefined,
   };
   return options;
 }

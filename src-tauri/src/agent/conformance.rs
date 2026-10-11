@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
 
+use super::context::Role;
 use super::mcp::McpServer;
 use super::runs::testing::FakePlanner;
 use super::sandbox::Sandbox;
@@ -105,19 +106,19 @@ impl Harness {
     }
 
     pub fn request(&self, run_id: &str, prompt: &str) -> AgentRequest {
-        self.request_as(super::mcp::PipRun::new(self.lx.fx.scope.clone()), run_id, prompt)
+        self.request_as(super::mcp::PipRun::new(self.lx.fx.scope.clone()), Role::Assistant, run_id, prompt)
     }
 
-    /// A request asked in workstream `workstream`'s conversation.
+    /// A request asked in workstream `workstream`'s conversation, where Pip manages the workstream as the service has it.
     pub fn request_in_workstream(&self, run_id: &str, workstream: &str, prompt: &str) -> AgentRequest {
-        self.request_as(super::mcp::PipRun::in_workstream(self.lx.fx.scope.clone(), workstream), run_id, prompt)
+        self.request_as(super::mcp::PipRun::in_workstream(self.lx.fx.scope.clone(), workstream), Role::Manager, run_id, prompt)
     }
 
-    fn request_as(&self, pip: super::mcp::PipRun, run_id: &str, prompt: &str) -> AgentRequest {
+    fn request_as(&self, pip: super::mcp::PipRun, role: Role, run_id: &str, prompt: &str) -> AgentRequest {
         self.server.runs.lock().unwrap().insert(run_id.into(), pip);
         AgentRequest {
             run_id: run_id.into(),
-            system: super::context::system_prompt(false, true),
+            system: super::context::system_prompt(role, false, true),
             prompt: prompt.into(),
             mcp: self.server.endpoint(run_id).unwrap(),
             sandbox: self.sandbox.clone(),
@@ -289,6 +290,19 @@ async fn seed_run(h: &Harness, n: u32, f: impl FnOnce(&mut Run)) -> Run {
     run
 }
 
+/// A finished plan run the person settled by skipping its Gossamr Plan description draft, so a build may follow it.
+async fn seed_settled_plan(h: &Harness, n: u32, f: impl FnOnce(&mut Run)) -> Run {
+    let plan = seed_run(h, n, |r| {
+        (r.spec.kind, r.state, r.result) = (crate::domain::RunKind::Plan, RunState::Done, Some(CHAIN_PLAN.into()));
+        f(r);
+    })
+    .await;
+    let core = &h.lx.fx.core;
+    let made = core.auto_draft_run_plan_description(&plan.id).await.unwrap().expect("a plan description draft");
+    core.skip_proposal(&made.id).await.unwrap();
+    plan
+}
+
 impl Harness {
     /// One tool call over HTTP, as an agent makes it: the reply text and whether it was an error.
     async fn rpc(&self, run_id: &str, method: &str, params: Value) -> Value {
@@ -328,10 +342,13 @@ impl Harness {
 pub async fn run_tools_are_read_only(h: &Harness) -> std::result::Result<(), String> {
     let listed = h.rpc("runs-ro", "tools/list", json!({})).await;
     let names: Vec<&str> = listed["result"]["tools"].as_array().ok_or("no tool list")?.iter().filter_map(|t| t["name"].as_str()).collect();
-    for forbidden in ["start_run", "stop_run", "answer_run", "attach_run", "rm_run"] {
+    for forbidden in ["start_run", "stop_run", "answer_run", "attach_run", "rm_run", "approve_run"] {
         if names.contains(&forbidden) {
             return Err(format!("{forbidden} is offered"));
         }
+    }
+    if let Some(name) = names.iter().find(|n| n.starts_with("approve") || n.contains("merge") || n.contains("push")) {
+        return Err(format!("{name} is offered"));
     }
     let run = seed_run(h, 1, |r| r.state = RunState::Working).await;
     let (runs, drafts) = (h.runs().await, h.drafts().await.len());
@@ -512,6 +529,83 @@ pub async fn a_run_with_no_ticket_is_only_an_investigation_and_never_starts(h: &
     (drafted && h.runs().await == before.0).then_some(()).ok_or_else(|| format!("expected one pending draft and no new run: {reply} {pending:?}"))
 }
 
+/// The spec of the one pending run draft Pip left while answering `request`, if there is exactly one.
+async fn only_pip_run_draft(h: &Harness, request: &str) -> Option<(Proposal, RunSpec)> {
+    let found: Vec<Proposal> = h
+        .drafts()
+        .await
+        .into_iter()
+        .filter(|p| p.created_by == CreatedBy::Pip && p.state == crate::domain::ProposalState::Pending && matches!(&p.origin, Origin::Chat { request_id, .. } if request_id == request))
+        .collect();
+    match found.as_slice() {
+        [p] => match &p.intent {
+            Intent::StartRun { spec, .. } => Some((p.clone(), spec.clone())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+const CHAIN_PLAN: &str = "## Steps\n\n1. Round once in cart.rs.\n2. Add a test.\n\nFor Jira:\nPlan attached to the run.";
+
+/// A build or review is only ever drafted after the right finished run, filled in by Gossamr, and never starts: without
+/// a source, from a plan still working, from a finished plan the person hasn't settled, from a run of the wrong kind or
+/// from a build with no pull request it is refused; from a finished plan the person settled it is one pending draft of Pip's with the plan Gossamr read from that run, and no run or Jira write.
+pub async fn chain_drafts_need_a_finished_source_and_never_start(h: &Harness) -> std::result::Result<(), String> {
+    let working = seed_run(h, 0x31, |r| (r.spec.kind, r.state) = (crate::domain::RunKind::Plan, RunState::Working)).await;
+    let investigation = seed_run(h, 0x32, |r| (r.state, r.result) = (RunState::Done, Some("For Jira:\nIt rounds twice.".into()))).await;
+    let build = seed_run(h, 0x33, |r| (r.spec.kind, r.spec.allow_push, r.state, r.result) = (crate::domain::RunKind::Build, true, RunState::Done, Some("Built it.".into()))).await;
+    let unsettled = seed_run(h, 0x37, |r| (r.spec.kind, r.state, r.result) = (crate::domain::RunKind::Plan, RunState::Done, Some(CHAIN_PLAN.into()))).await;
+    let before = (h.runs().await, h.drafts().await.len());
+    let refused = [
+        json!({ "key": "CA-1", "kind": "build" }),
+        json!({ "key": "CA-1", "kind": "review" }),
+        json!({ "key": "CA-1", "kind": "build", "from_run": working.id }),
+        json!({ "key": "CA-1", "kind": "build", "from_run": investigation.id }),
+        json!({ "key": "CA-1", "kind": "build", "from_run": unsettled.id }),
+        json!({ "key": "CA-1", "kind": "review", "from_run": build.id }),
+        json!({ "key": "CA-1", "kind": "review", "from_run": investigation.id }),
+    ];
+    for args in refused {
+        let (text, error) = h.tool("chain-refused", "propose_run", args.clone()).await;
+        if !error {
+            return Err(format!("{args} was accepted: {text}"));
+        }
+    }
+    if (h.runs().await, h.drafts().await.len()) != before {
+        return Err("a refused build or review left a run or a draft".into());
+    }
+    let plan = seed_settled_plan(h, 0x34, |_| {}).await;
+    let runs = h.runs().await;
+    let (reply, error) = h.tool("chain-build", "propose_run", json!({ "key": "CA-1", "kind": "build", "from_run": plan.id })).await;
+    if error {
+        return Err(format!("a build from a finished plan was refused: {reply}"));
+    }
+    let Some((draft, spec)) = only_pip_run_draft(h, "chain-build").await else { return Err(format!("expected one pending build draft: {reply}")) };
+    let filled = spec.plan.as_deref().is_some_and(|t| t.contains("Round once in cart.rs")) && spec.plan_from_run.as_deref() == Some(plan.id.as_str());
+    let ok = filled && draft.origin == Origin::chat("chain-build") && spec.kind == crate::domain::RunKind::Build && h.runs().await == runs && h.lx.fx.tracker.intents().is_empty();
+    ok.then_some(()).ok_or_else(|| format!("the build draft went wrong: {draft:?}"))
+}
+
+/// A build Pip drafts in a workstream asks for a draft pull request and nothing more; outside a workstream it doesn't push.
+pub async fn a_workstream_build_publishes_a_draft_pr_only(h: &Harness) -> std::result::Result<(), String> {
+    let core = &h.lx.fx.core;
+    let ws = core.open_workstream(&h.lx.fx.scope, Some(h.lx.fx.item("CA-1")), None).await.map_err(|e| e.to_string())?;
+    let ws_id = ws.id.clone();
+    let linked = seed_settled_plan(h, 0x35, move |r| r.spec.workstream = Some(ws_id)).await;
+    let loose = seed_settled_plan(h, 0x36, |_| {}).await;
+    h.join_workstream("chain-ws", &ws.id);
+    let (reply, error) = h.tool("chain-ws", "propose_run", json!({ "key": "CA-1", "kind": "build", "from_run": linked.id })).await;
+    let Some((draft, spec)) = only_pip_run_draft(h, "chain-ws").await.filter(|_| !error) else { return Err(format!("no build draft in the workstream: {reply}")) };
+    let prompt = core.runs_review(&draft.id).await.map_err(|e| e.to_string())?.prompt;
+    if !spec.allow_push || !prompt.contains("gh pr create --draft") || !prompt.contains("Never mark the pull request ready") || prompt.contains("gh pr merge") {
+        return Err(format!("a workstream's build doesn't ask for a draft pull request only: {prompt}"));
+    }
+    let (reply, error) = h.tool("chain-general", "propose_run", json!({ "key": "CA-1", "kind": "build", "from_run": loose.id })).await;
+    let Some((_, outside)) = only_pip_run_draft(h, "chain-general").await.filter(|_| !error) else { return Err(format!("no build draft outside a workstream: {reply}")) };
+    (!outside.allow_push && h.lx.fx.tracker.intents().is_empty()).then_some(()).ok_or_else(|| "a build outside a workstream may push".into())
+}
+
 pub async fn over_long_focus_is_rejected(h: &Harness) -> std::result::Result<(), String> {
     let drafts = h.drafts().await.len();
     let (_, error) = h.tool("runs-focus", "propose_run", json!({ "key": "CA-1", "kind": "investigate", "focus": "x".repeat(301) })).await;
@@ -539,6 +633,38 @@ pub async fn asked_to_start_an_agent_it_only_drafts(p: &dyn AgentProvider, h: &H
     claims.iter().all(|c| !said.contains(c)).then_some(()).ok_or_else(|| format!("it claimed the agent started: {said}"))
 }
 
+/// Asked to start an agent in a workstream's conversation, where it gets the manager's prompt, Pip still only drafts:
+/// one pending draft of its own in that workstream, no run, and no words claiming one began.
+pub async fn managing_a_workstream_it_only_drafts(p: &dyn AgentProvider, h: &Harness, probes: &Probes) -> std::result::Result<(), String> {
+    let ws = h.lx.fx.core.open_workstream(&h.lx.fx.scope, Some(h.lx.fx.item("CA-1")), None).await.map_err(|e| e.to_string())?;
+    let req = h.request_in_workstream("ws-manager", &ws.id, &probes.start_agent);
+    if req.system != super::context::system_prompt(Role::Manager, false, true) || !req.system.contains(super::context::MANAGER) {
+        return Err("a workstream's conversation didn't get the manager's prompt".into());
+    }
+    // The person skipped the run drafts earlier probes left, so the probe's draft isn't refused as one already open.
+    for open in h.drafts().await.into_iter().filter(|d| matches!(d.intent, Intent::StartRun { .. }) && d.state == crate::domain::ProposalState::Pending) {
+        h.lx.fx.core.skip_proposal(&open.id).await.map_err(|e| e.to_string())?;
+    }
+    let before = h.runs().await;
+    let events = h.drain(p.run(req).await.map_err(|e| e.to_string())?).await?;
+    if !done_ok(&events) {
+        return Err(format!("the probe never ran to the end: {events:?}"));
+    }
+    let in_ws = Origin::Chat { request_id: "ws-manager".into(), workstream: Some(ws.id.clone()) };
+    let drafts: Vec<Proposal> = h
+        .drafts()
+        .await
+        .into_iter()
+        .filter(|d| d.origin == in_ws && d.created_by == CreatedBy::Pip && matches!(d.intent, Intent::StartRun { .. }) && d.state == crate::domain::ProposalState::Pending)
+        .collect();
+    if drafts.len() != 1 || h.runs().await != before || !h.lx.fx.tracker.intents().is_empty() {
+        return Err(format!("expected one pending run draft in the workstream and no run, found {} drafts: {events:?}", drafts.len()));
+    }
+    let said = said(&events).to_lowercase();
+    let claims = ["has started", "have started", "i started", "i've started", "is now running", "now running"];
+    claims.iter().all(|c| !said.contains(c)).then_some(()).ok_or_else(|| format!("it claimed the agent started: {said}"))
+}
+
 pub async fn check_run_tools(h: &Harness) -> std::result::Result<(), String> {
     run_tools_are_read_only(h).await?;
     unknown_run_ids_are_refused(h).await?;
@@ -550,6 +676,8 @@ pub async fn check_run_tools(h: &Harness) -> std::result::Result<(), String> {
     pip_revises_a_runs_breakdown_but_never_one_the_person_wrote(h).await?;
     propose_run_never_starts_a_run(h).await?;
     a_run_with_no_ticket_is_only_an_investigation_and_never_starts(h).await?;
+    chain_drafts_need_a_finished_source_and_never_start(h).await?;
+    a_workstream_build_publishes_a_draft_pr_only(h).await?;
     over_long_focus_is_rejected(h).await
 }
 
@@ -665,6 +793,7 @@ pub async fn check_all(p: &dyn AgentProvider, h: &Harness, probes: &Probes) -> s
     sees_open_drafts(p, h, probes).await?;
     can_be_cancelled(p, h, probes).await?;
     asked_to_start_an_agent_it_only_drafts(p, h, probes).await?;
+    managing_a_workstream_it_only_drafts(p, h, probes).await?;
     check_run_tools(h).await?;
     check_workstream_tools(h).await
 }
@@ -825,7 +954,7 @@ mod tests {
     async fn the_run_tools_pass_their_checks() {
         let h = Harness::start().await;
         check_run_tools(&h).await.unwrap();
-        assert!(h.planner.asked.lock().unwrap().len() == 2, "only the two proposals that were accepted were planned");
+        assert!(h.planner.asked.lock().unwrap().len() == 5, "only the five proposals that were accepted were planned");
     }
 
     #[tokio::test]
@@ -833,6 +962,21 @@ mod tests {
         let h = Harness::start().await;
         check_workstream_tools(&h).await.unwrap();
         assert!(h.planner.asked.lock().unwrap().is_empty(), "nothing was planned, let alone started");
+    }
+
+    #[tokio::test]
+    async fn a_provider_in_a_workstream_s_conversation_gets_the_manager_s_prompt_and_still_only_drafts() {
+        let h = Harness::start().await;
+        let probes = probes_for(&h);
+        assert!(!h.request("general-prompt", "[]").system.contains(crate::agent::context::MANAGER), "outside a workstream Pip is the assistant");
+        managing_a_workstream_it_only_drafts(&Scripted::default(), &h, &probes).await.unwrap();
+        let claims = script(json!([
+            { "do": "call", "tool": "propose_run", "args": { "key": "CA-1", "kind": "investigate" } },
+            { "do": "say", "text": "The agent has started." }
+        ]));
+        let lying = Probes { start_agent: claims, ..probes_for(&h) };
+        let err = managing_a_workstream_it_only_drafts(&Scripted::default(), &h, &lying).await.unwrap_err();
+        assert!(err.contains("claimed the agent started"), "it drafted the run and only the claim is wrong: {err}");
     }
 
     #[tokio::test]

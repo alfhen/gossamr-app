@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { SUMMARY_ONLY, type CodeChange, type Run, type RunOutcome } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type ReviewView, type Run, type RunOutcome } from "../types";
 import { Box, Btn, CopyButton, Details, Sec } from "./AgentSheet";
-import { planDescriptionStatus, blockerChoices, blockerControl, breakdownStatus, buildFromPlanControl, changeSummary, commentControl, createdFrom, planCommentControl, reportNotes, reviewThisControl, SOURCE_CHIP, ticketControl, ticketStatus } from "./runSheetLogic";
+import { planDescriptionStatus, blockerChoices, blockerControl, breakdownStatus, buildFromPlanControl, changeSummary, commentControl, createdFrom, planCommentControl, reportNotes, reviewThisControl, SEVERITY_LABEL, SOURCE_CHIP, ticketControl, ticketStatus, verdictText } from "./runSheetLogic";
 
 export interface ResultActions {
   draftComment(): void;
@@ -214,9 +214,67 @@ function TicketFound({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "
   );
 }
 
+const SEVERITY_TONE: Record<ReviewView["findings"][number]["severity"], string> = {
+  blocking: "bg-ws-blocked-soft text-ws-blocked",
+  "should-fix": "bg-ws-warn/15 text-ws-warn",
+  nit: "bg-ws-hover text-ws-ink2",
+};
+
+/** A review's verdict and its findings, most severe first. Only the verdict and the counts are Gossamr's to read; the findings are the reviewer's words. */
+export function ReviewVerdictBlock({ outcome }: { outcome: RunOutcome | null }) {
+  if (!outcome) return null;
+  const review = outcome.review ?? null;
+  return (
+    <Sec title="Verdict">
+      <Box tone={review?.verdict === "blocking" ? "failed" : "plain"}>
+        {review ? (
+          <>
+            <p data-verdict={review.verdict} data-blocking-count={review.blocking} className={`m-0 flex flex-wrap items-center gap-2 text-[14px] font-semibold ${review.verdict === "blocking" ? "text-ws-blocked" : "text-ws-done"}`}>
+              {verdictText(review)}
+              <span className="rounded-full bg-ws-hover px-2 text-xs font-semibold text-ws-ink2">{review.source === "structured" ? "Reported to Gossamr" : "Read from its Verdict line"}</span>
+            </p>
+            {(review.shouldFix > 0 || review.nits > 0) && (
+              <p className="m-0 text-sm text-ws-ink2">
+                Also {review.shouldFix} should fix and {review.nits} nit{review.nits === 1 ? "" : "s"}.
+              </p>
+            )}
+            {review.findings.length > 0 ? (
+              <ul aria-label="Findings" className="selectable m-0 grid list-none gap-1 p-0 text-[13.5px] [overflow-wrap:anywhere]">
+                {review.findings.map((f, i) => (
+                  <li key={i} data-severity={f.severity} className="flex items-baseline gap-2">
+                    <span className={`shrink-0 rounded-full px-2 text-xs font-semibold ${SEVERITY_TONE[f.severity]}`}>{SEVERITY_LABEL[f.severity]}</span>
+                    <span className="min-w-0">
+                      {f.text}
+                      {f.where && <span className="block font-mono text-xs text-ws-ink3">{f.where}</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="m-0 text-sm text-ws-ink3">It listed no findings.</p>
+            )}
+          </>
+        ) : (
+          <p data-verdict="none" className="m-0 text-sm text-ws-ink2">
+            The reviewer gave no verdict. Read its answer below to see what it found.
+          </p>
+        )}
+        <p className="m-0 text-xs text-ws-ink3">The reviewer was asked to show the change is not ready. The findings are its words, written after reading the pull request; nothing was said on the pull request.</p>
+      </Box>
+    </Sec>
+  );
+}
+
 /** What the agent found. Drafting from it is one click and posts nothing. */
 export function Found(props: ResultProps) {
-  return props.run.item ? <TicketRunFound {...props} /> : <TicketFound run={props.run} outcome={props.outcome} drafting={props.drafting} on={props.on} />;
+  const found = props.run.item ? <TicketRunFound {...props} /> : <TicketFound run={props.run} outcome={props.outcome} drafting={props.drafting} on={props.on} />;
+  if (props.run.spec.kind !== "review") return found;
+  return (
+    <>
+      <ReviewVerdictBlock outcome={props.outcome} />
+      {found}
+    </>
+  );
 }
 
 /** The subtasks a Triage proposed. They are drafted on the ticket, and nothing is created until the person approves them. */
@@ -276,7 +334,7 @@ function ReviewBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "ou
     <div data-review-box className="grid gap-2 rounded-md border border-ws-sep bg-ws-bar p-2.5">
       <p className="m-0 text-xs font-semibold text-ws-ink3">Review the pull request</p>
       <p className="m-0 text-sm text-ws-ink2">
-        {change ? `Pull request #${change.number}${change.state === "draft" ? " (a draft)" : ""} is what a review would read, at the commit GitHub has now.` : "A review reads the build's pull request at the commit GitHub has now."} It checks the diff against the ticket, treats what the builder says it did as a claim to verify, and reports what is unfinished, untested, out of scope or risky. It only reads, and comments nothing on the pull request.
+        {change ? `Pull request #${change.number}${change.state === "draft" ? " (a draft)" : ""} is what a review would read, at the commit GitHub has now.` : "A review reads the build's pull request at the commit GitHub has now."} The reviewer tries to show the change is not ready: a failing case, an acceptance point of the ticket it misses, a missing test, a regression or a security issue. It may check the pull request out in its own worktree and run the existing tests, treats what the builder says it did as a claim to verify, cites a file and line, a command or an acceptance point for every finding, and ends with a verdict: pass or blocking. It only reads, and never comments on, approves or changes the pull request.
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Btn tone="primary" icon="eye" disabled={!control.enabled || drafting} title={control.reason ?? "Opens a Review draft that carries the builder's answer as a claim to check, for you to read and edit before it starts"} onClick={on.reviewThis}>

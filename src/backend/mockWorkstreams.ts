@@ -11,7 +11,7 @@ const TITLE_LIMIT = 200;
 /** What a workstream id may be, as `RunSpec::validate` checks it. */
 const ID_LIMIT = 64;
 /** The markers prompts and Pip's context fence data with; notes holding any of them are refused rather than cleaned. */
-const MARKERS = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>", "<<<PLAN", "PLAN>>>", "<<<BUILD", "BUILD>>>", "<<<AGENT_OUTPUT", "AGENT_OUTPUT>>>", "<<<PIP_NOTES", "PIP_NOTES>>>"];
+const MARKERS = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>", "<<<PLAN", "PLAN>>>", "<<<BUILD", "BUILD>>>", "<<<FINDINGS", "FINDINGS>>>", "<<<AGENT_OUTPUT", "AGENT_OUTPUT>>>", "<<<PIP_NOTES", "PIP_NOTES>>>"];
 
 /** Parts of an audit line besides who did what. */
 export interface EventDetail {
@@ -46,6 +46,17 @@ function textDigest(text: string): string {
   return `mock-${h.toString(16).padStart(8, "0")}`;
 }
 
+/**
+ * The newest finished build among `runs` that pushes a branch, when no review was queued after it and `prOf` finds no
+ * pull request for it yet: what a review waits for, as `pushed_build` and `view_of` in src-tauri/src/inbox/workstreams.rs.
+ */
+export function waitingForPr(runs: readonly Run[], prOf: (runId: string) => number | null): string | null {
+  const build = runs.filter((r) => r.spec.kind === "build" && r.state === "done" && r.spec.allowPush).sort(byQueue).pop();
+  if (!build) return null;
+  if (runs.some((r) => r.spec.kind === "review" && (byQueue(r, build) > 0 || r.spec.buildFromRun === build.id))) return null;
+  return prOf(build.id) == null ? build.id : null;
+}
+
 /** Why `id` can't be a workstream id at all, as `RunSpec::validate` refuses it; null when it can. */
 export function workstreamIdProblem(id: string): string | null {
   if (!id || [...id].length > ID_LIMIT || /[\u0000-\u001f\u007f]/.test(id)) return "the workstream id must be 1 to 64 characters with no control characters";
@@ -72,6 +83,8 @@ export class MockWorkstreams {
   private audit: WorkstreamEvent[] = [];
   private listeners = new Set<(c: WorkstreamsChanged) => void>();
   private seq = 0;
+  /** The number of the pull request run `runId` opened, as far as the code host shows it; set by the backend that owns the code. */
+  prOf: (runId: string) => number | null = () => null;
 
   /**
    * `runs` lists the runs there are, `titleOf` the title of a cached ticket (null when it isn't cached). `now` is the
@@ -115,7 +128,9 @@ export class MockWorkstreams {
 
   private view(ws: Workstream, runs: readonly Run[]): WorkstreamView {
     const linked = runs.filter((r) => r.spec.workstream === ws.id).sort((a, b) => byQueue(b, a));
-    return { workstream: ws, stage: stage(linked), runs: linked.map((r) => r.id), labels: runLabels(linked) };
+    const view: WorkstreamView = { workstream: ws, stage: stage(linked), runs: linked.map((r) => r.id), labels: runLabels(linked) };
+    const waiting = waitingForPr(linked, this.prOf);
+    return waiting ? { ...view, waitingForPr: waiting } : view;
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */

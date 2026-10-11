@@ -218,6 +218,14 @@ export class MockCode {
     return () => void this.listeners.delete(listener);
   }
 
+  /** A draft pull request an agent's build opened, as a sync finds it: linked to the tickets it names by its branch. */
+  addPullRequest(change: CodeChange) {
+    if (this.changes.some((c) => c.externalId === change.externalId)) return;
+    this.changes.push({ ...change, connectionId: this.connectionId });
+    for (const key of change.linkedKeys) this.links.push([key, change.externalId, "branch"]);
+    this.listeners.forEach((l) => l({ connectionId: this.connectionId }));
+  }
+
   /** The pull request as GitHub has it now; null when there is none or the repository isn't watched. */
   change(repo: string, number: number): CodeChange | null {
     return this.watched(repo) ? (this.changes.find((c) => c.kind === "pullRequest" && c.repo === repo && c.number === number) ?? null) : null;

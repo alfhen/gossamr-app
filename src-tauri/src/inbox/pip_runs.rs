@@ -1,6 +1,7 @@
 //! What Pip may do with agent runs: read the signed-in account's runs, and draft one for the person to approve. The
 //! spec of a drafted run is built here from what Rust knows; Pip supplies only the ticket, the kind and a focus note, or,
-//! for an investigation with no ticket, a watched repository and the question.
+//! for an investigation with no ticket, a watched repository and the question. A build or review Pip drafts only as the
+//! successor of a finished run, and everything it carries from that run is filled in here.
 
 use chrono::Utc;
 
@@ -8,7 +9,7 @@ use super::ticket_context::snapshot;
 use super::Core;
 use crate::auth::Scope;
 use crate::domain::{
-    default_instruction, pip_kinds, Basis, ClonePlan, CodeChangeKind, ContainerRef, Intent, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery,
+    default_instruction, pip_chain_kinds, pip_kinds, Basis, ClonePlan, CodeChangeKind, ContainerRef, Intent, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery,
     RunSpec, StateKind,
 };
 use crate::error::{Error, Result};
@@ -21,7 +22,20 @@ fn refuse(message: impl Into<String>) -> Error {
 
 /// The part of a run request that makes two drafts the same ask; the name differs every time.
 fn same_ask(a: &RunSpec, b: &RunSpec) -> bool {
-    (a.kind, &a.repo, &a.focus, &a.focus_from_run) == (b.kind, &b.repo, &b.focus, &b.focus_from_run)
+    (a.kind, &a.repo, &a.focus, &a.focus_from_run, &a.findings_from_run) == (b.kind, &b.repo, &b.focus, &b.focus_from_run, &b.findings_from_run)
+}
+
+/// Two chained drafts are the same ask when they follow the same run as the same kind, whatever their focus.
+fn same_chain(a: &RunSpec, b: &RunSpec) -> bool {
+    a.kind == b.kind && (a.plan_from_run.is_some() || a.build_from_run.is_some()) && (&a.plan_from_run, &a.build_from_run) == (&b.plan_from_run, &b.build_from_run)
+}
+
+/// The words a refusal uses for what a chained kind must follow.
+fn source_words(kind: RunKind) -> &'static str {
+    match kind {
+        RunKind::Build => "a finished plan run",
+        _ => "a finished build whose pull request has been found",
+    }
 }
 
 /// What Pip asks of a run: the ticket, the kind, and its own words.
@@ -127,6 +141,8 @@ impl Core {
             plan_approved: false,
             build_account: None,
             build_from_run: None,
+            findings: None,
+            findings_from_run: None,
             allow_push: false,
             project: Some(project),
             report: false,
@@ -150,7 +166,9 @@ impl Core {
     /// A run Pip proposes while answering `request_id`. Its prompt is the kind's own template, its ticket text the cached
     /// ticket, its clone and branch what `plan` found; only `focus` and `from_run` are Pip's words. Nothing starts: the
     /// person reads the exact prompt and approves it in the setup sheet. Asked in a workstream's conversation, the run
-    /// belongs to that workstream, which must be an open one on the same ticket.
+    /// belongs to that workstream, which must be an open one on the same ticket. A triage or plan carries what an
+    /// investigation found, as Gossamr reads it from that run: the one `from_run` names when it is a finished
+    /// investigation on this ticket, else the workstream's newest.
     pub async fn draft_run_as_pip(&self, scope: &Scope, request_id: &str, workstream: Option<&str>, ask: PipRunAsk, repo: String, plan: ClonePlan) -> Result<Proposal> {
         let PipRunAsk { key, kind, focus, from_run } = ask;
         let key = key.as_str();
@@ -163,36 +181,193 @@ impl Core {
         let item = Self::item(scope, key);
         let links = self.ticket_dev_links(&item);
         let connection_id = Connection::jira_id(scope);
+        let mut spec = RunSpec {
+            kind,
+            repo,
+            clone_path,
+            base: plan.base,
+            name: plan.name,
+            instruction: instruction.into(),
+            focus,
+            focus_from_run: from_run.clone(),
+            ticket_block: None,
+            pr: None,
+            pr_sha: None,
+            plan: None,
+            plan_from_run: None,
+            plan_approved: false,
+            build_account: None,
+            build_from_run: None,
+            findings: None,
+            findings_from_run: None,
+            allow_push: false,
+            project: None,
+            report: false,
+            workstream: workstream.map(Into::into),
+        };
+        if matches!(kind, RunKind::Triage | RunKind::Plan) {
+            self.attach_pip_findings(scope, workstream, &item, from_run.as_deref(), &mut spec).await?;
+        }
         let at = Utc::now();
         self.with_db_for(scope, |db| {
             let work = db.item(&item)?.ok_or_else(|| refuse(format!("{key} isn't in the cache, so there is nothing to base a run on")))?;
             if let Some(ws) = workstream {
                 super::workstreams::require_linkable(db, &connection_id, ws, Some(&item))?;
             }
-            let spec = RunSpec {
-                kind,
-                repo,
-                clone_path,
-                base: plan.base,
-                name: plan.name,
-                instruction: instruction.into(),
-                focus,
-                focus_from_run: from_run,
-                ticket_block: Some(snapshot(db, &work, &links, false)),
-                pr: None,
-                pr_sha: None,
-                plan: None,
-                plan_from_run: None,
-                plan_approved: false,
-                build_account: None,
-                build_from_run: None,
-                allow_push: false,
-                project: None,
-                report: false,
-                workstream: workstream.map(Into::into),
-            };
+            spec.ticket_block = Some(snapshot(db, &work, &links, false));
             let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), item: Some(item.clone()), ..Default::default() };
             let same = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::StartRun { spec: s, .. } if same_ask(s, &spec)));
+            if let Some(same) = same {
+                return Err(refuse(format!("An identical draft is already open (proposal {}). Don't propose it again; see list_proposals.", same.id)));
+            }
+            let mut draft = Draft::from_pip(request_id, workstream, Intent::StartRun { connection_id, item: Some(item.clone()), spec }, None);
+            draft.basis = Some(Basis::of(&work));
+            proposals::create(db, draft, at)
+        })
+        .await
+    }
+
+    /// Fills a triage or plan Pip drafts with what an investigation found. `from_run` counts when it names a finished
+    /// investigation on this ticket in the same workstream, and then a failure to read it is Pip's to hear; otherwise the
+    /// newest finished investigation on this ticket in the conversation's workstream, if any, is used when it can be read.
+    async fn attach_pip_findings(&self, scope: &Scope, workstream: Option<&str>, item: &crate::domain::ItemRef, from_run: Option<&str>, spec: &mut RunSpec) -> Result<()> {
+        let of_ticket = |r: &Run| r.spec.kind == RunKind::Investigate && r.state == crate::domain::RunState::Done && r.item.as_ref().is_some_and(|i| (&i.connection_id, &i.external_id) == (&item.connection_id, &item.external_id));
+        if let Some(id) = from_run {
+            if let Some(named) = self.run_in(scope, id).await?.filter(|r| of_ticket(r) && r.spec.workstream.as_deref() == workstream) {
+                spec.findings_from_run = Some(self.attach_findings(spec, &named.id, Some(item)).await?);
+                return Ok(());
+            }
+        }
+        let Some(ws) = workstream else { return Ok(()) };
+        let newest = self
+            .runs_in(scope, &RunQuery::default())
+            .await?
+            .into_iter()
+            .filter(|r| of_ticket(r) && r.spec.workstream.as_deref() == Some(ws))
+            .max_by_key(|r| (r.ended_at.unwrap_or(r.queued_at), r.queued_at));
+        if let Some(found) = newest {
+            let mut with = spec.clone();
+            if let Ok(id) = self.attach_findings(&mut with, &found.id, Some(item)).await {
+                with.findings_from_run = Some(id);
+                *spec = with;
+            }
+        }
+        Ok(())
+    }
+
+    /// The finished run a build or review Pip asks for would follow, after every check that doesn't need a clone: it
+    /// belongs to this account, is of the kind `kind` follows (`pip_chain_kinds`), has finished, is on ticket `key` and in
+    /// the conversation's workstream (none for none), and for a build its plan is one the person settled. Returns it with
+    /// the ticket's title, to plan a clone from.
+    pub async fn pip_chain_source(&self, scope: &Scope, workstream: Option<&str>, key: &str, kind: RunKind, from_run: Option<&str>) -> Result<(Run, String)> {
+        let Some(&(_, needed)) = pip_chain_kinds().iter().find(|(k, _)| *k == kind) else {
+            return Err(refuse(format!("a {} isn't drafted as the successor of a run", kind.as_str())));
+        };
+        let Some(id) = from_run else {
+            return Err(refuse(format!("A {} can only follow {}: pass from_run with that run's id from list_runs.", kind.as_str(), source_words(kind))));
+        };
+        let source = self.run_in(scope, id).await?.ok_or_else(|| refuse(format!("There is no run {id} for this account. Call list_runs to see the ids.")))?;
+        if source.spec.kind != needed {
+            return Err(refuse(format!("A {} can only follow {}; run {} is a {} run.", kind.as_str(), source_words(kind), source.id, source.spec.kind.as_str())));
+        }
+        if source.state != crate::domain::RunState::Done {
+            return Err(refuse(format!("that {} run hasn't finished", needed.as_str())));
+        }
+        let item = Self::item(scope, key);
+        if source.item.as_ref().is_none_or(|i| (&i.connection_id, &i.external_id) != (&item.connection_id, &item.external_id)) {
+            return Err(refuse(format!("that {} run is about another ticket", needed.as_str())));
+        }
+        match (source.spec.workstream.as_deref(), workstream) {
+            (a, b) if a == b => {}
+            (Some(_), _) => return Err(refuse(format!("run {} belongs to another workstream; ask in that workstream's conversation", source.id))),
+            (None, _) => return Err(refuse(format!("run {} isn't part of this workstream; Pip can only follow a run of the workstream it is asked in", source.id))),
+        }
+        // Found before a clone is planned for it; `attach_build_account` checks it again as it fills the draft.
+        // Only a plan the person settled on the ticket, never one Gossamr retired or one they haven't seen.
+        if kind == RunKind::Build {
+            if let Some(why) = self.plan_unsettled(&source).await? {
+                return Err(refuse(why));
+            }
+        }
+        // No sync is asked for here: the tracker asked once when the build finished, and Pip asking again and again must
+        // not drive GitHub past its back-off.
+        if kind == RunKind::Review && self.pull_request_of(&source)?.is_none() {
+            return Err(refuse(format!("that build has no pull request in this repository yet. {}", super::workstreams::WAITING_FOR_PR_HINT)));
+        }
+        let work = self.with_db_for(scope, |db| db.item(&item)).await?.ok_or_else(|| refuse(format!("{key} isn't in the cache, so there is nothing to base a run on")))?;
+        Ok((source, work.title))
+    }
+
+    /// A build or review Pip proposes while answering `request_id`, as the successor of the finished run `ask.from_run`.
+    /// It runs the same handoff steps as the person's `draft_run`, so what it carries comes from that run and its drafts,
+    /// never from Pip: a build the plan the person settled on the ticket (approved, or skipped for the run's own answer;
+    /// refused before that) and a review the builder's account and the pull request pinned to its commit. Its repository
+    /// is the source run's and its clone what `plan` found. Pip's own words are only a focus note, and a review takes none. A build in a workstream may push
+    /// its branch and open a draft pull request; outside one it may not. The draft is Pip's, never the person's, and
+    /// nothing starts until the person approves it in the setup sheet.
+    pub async fn draft_chain_run_as_pip(&self, scope: &Scope, request_id: &str, workstream: Option<&str>, ask: PipRunAsk, plan: ClonePlan) -> Result<Proposal> {
+        let PipRunAsk { key, kind, focus, from_run } = ask;
+        let key = key.as_str();
+        let (source, _) = self.pip_chain_source(scope, workstream, key, kind, from_run.as_deref()).await?;
+        let repo = source.spec.repo.clone();
+        self.require_watched_repo(&repo)?;
+        let clone_path = self.resolve_clone(&plan.path)?;
+        let item = Self::item(scope, key);
+        let mut spec = RunSpec {
+            kind,
+            repo,
+            clone_path,
+            base: plan.base,
+            name: plan.name,
+            instruction: default_instruction(kind).into(),
+            focus: None,
+            focus_from_run: None,
+            ticket_block: None,
+            pr: None,
+            pr_sha: None,
+            plan: None,
+            plan_from_run: None,
+            plan_approved: false,
+            build_account: None,
+            build_from_run: None,
+            findings: None,
+            findings_from_run: None,
+            allow_push: false,
+            project: None,
+            report: false,
+            workstream: workstream.map(Into::into),
+        };
+        match kind {
+            RunKind::Build => {
+                spec.plan_from_run = Some(self.attach_plan(&mut spec, &source.id, Some(&item)).await?);
+                // A workstream's build always ends with a draft pull request, which its review then reads.
+                spec.allow_push = workstream.is_some();
+                spec.focus_from_run = focus.as_ref().map(|_| source.id.clone());
+                spec.focus = focus;
+            }
+            _ => {
+                if focus.is_some() {
+                    return Err(refuse("A review judges the change on its own; it takes no focus note."));
+                }
+                spec.build_from_run = Some(self.attach_build_account(&mut spec, &source.id, Some(&item)).await?);
+                let change = self.review_target(&spec).await?;
+                spec.base = change.base_ref.unwrap_or(spec.base);
+                spec.pr_sha = change.sha;
+                // Its verdict is read by the app; the tool is offered when the setting allows, else the written verdict counts.
+                spec.report = true;
+            }
+        }
+        let links = self.ticket_dev_links(&item);
+        let connection_id = Connection::jira_id(scope);
+        let at = Utc::now();
+        self.with_db_for(scope, |db| {
+            let work = db.item(&item)?.ok_or_else(|| refuse(format!("{key} isn't in the cache, so there is nothing to base a run on")))?;
+            if let Some(ws) = workstream {
+                super::workstreams::require_linkable(db, &connection_id, ws, Some(&item))?;
+            }
+            spec.ticket_block = Some(snapshot(db, &work, &links, spec.plan.is_some()));
+            let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), item: Some(item.clone()), ..Default::default() };
+            let same = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::StartRun { spec: s, .. } if same_chain(s, &spec)));
             if let Some(same) = same {
                 return Err(refuse(format!("An identical draft is already open (proposal {}). Don't propose it again; see list_proposals.", same.id)));
             }

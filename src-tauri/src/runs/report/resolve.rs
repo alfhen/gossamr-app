@@ -1,9 +1,9 @@
 //! Which of a run's two results its drafts and sheet use: the report the agent made through the tool, else the written
 //! answer as the parsers read it. One source per run, never a mixture, and the source is said wherever the result is.
 
-use super::{Report, ReportStatus, ResultSource, StoredReport};
+use super::{Finding, Report, ReportStatus, ResultSource, ReviewVerdict, StoredReport};
 use crate::domain::{Run, RunKind};
-use crate::runs::result::{jira_note, subtask_proposals, ticket_keys, ticket_proposal, JiraNote, TicketProposal};
+use crate::runs::result::{jira_note, review_verdict, subtask_proposals, ticket_keys, ticket_proposal, JiraNote, TicketProposal};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolved {
@@ -18,6 +18,12 @@ pub struct Resolved {
     /// For a Plan run that reported its plan.
     pub plan: Option<String>,
     pub status: Option<ReportStatus>,
+    /// For a Review: its verdict, from the report when that gave one, else from the `Verdict:` line of its whole written
+    /// answer. Never from a one-line summary.
+    pub verdict: Option<ReviewVerdict>,
+    pub findings: Vec<Finding>,
+    /// Whether `verdict` came from the report rather than the written answer.
+    pub verdict_structured: bool,
 }
 
 impl Resolved {
@@ -38,6 +44,19 @@ fn keys_of(texts: &[&str], own: Option<&str>) -> Vec<String> {
 }
 
 pub fn resolve(run: &Run, stored: Option<&StoredReport>) -> Resolved {
+    let mut resolved = read(run, stored);
+    if run.spec.kind == RunKind::Review {
+        let reported = stored.and_then(StoredReport::current).and_then(|r| r.verdict.map(|v| (v, r.findings.clone())));
+        let written = || run.result.as_deref().filter(|_| run.result_complete).and_then(review_verdict);
+        resolved.verdict_structured = reported.is_some();
+        if let Some((verdict, findings)) = reported.or_else(written) {
+            (resolved.verdict, resolved.findings) = (Some(verdict), findings);
+        }
+    }
+    resolved
+}
+
+fn read(run: &Run, stored: Option<&StoredReport>) -> Resolved {
     let own = run.item.as_ref().map(|i| i.key.to_uppercase());
     let result = run.result.as_deref().map(str::trim).filter(|r| !r.is_empty());
     let on_ticket = run.item.is_some();
@@ -56,6 +75,9 @@ pub fn resolve(run: &Run, stored: Option<&StoredReport>) -> Resolved {
         keys: result.map(|r| keys_of(&[r], own.as_deref())).unwrap_or_default(),
         plan: None,
         status: None,
+        verdict: None,
+        findings: Vec::new(),
+        verdict_structured: false,
     }
 }
 
@@ -71,5 +93,8 @@ fn structured(run: &Run, report: &Report, result: Option<&str>, own: Option<&str
         keys: keys_of(&texts, own),
         plan: report.plan.clone(),
         status: Some(report.status),
+        verdict: None,
+        findings: Vec::new(),
+        verdict_structured: false,
     }
 }

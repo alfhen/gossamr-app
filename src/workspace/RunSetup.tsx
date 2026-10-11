@@ -252,6 +252,11 @@ function Heading({ p }: { p: SetupViewProps }) {
       </h2>
       <p className="m-0 text-ws-ink2">Nothing runs until you press Start. You can stop it once it&apos;s working.</p>
       {p.fromPip && p.ticketless && <p className="m-0 text-ws-ink2">Pip wrote the question below because no ticket covers it. It is the prompt in full, and you can change it before you start.</p>}
+      {p.fromPip && (p.review?.spec.planFromRun || p.review?.spec.buildFromRun) && (
+        <p data-pip-chain className="m-0 text-ws-ink2">
+          Drafted by Pip from run {p.review.spec.planFromRun ?? p.review.spec.buildFromRun}; the {p.review.spec.planFromRun ? "plan" : "account"} below was filled in by Gossamr from that run.
+        </p>
+      )}
       {p.review?.spec.buildFromRun && p.review.buildAccount && (
         <p className="m-0 text-ws-ink2">
           This review follows build run {p.review.spec.buildFromRun}, pinned to the pull request&apos;s commit as GitHub has it now. What the builder says it did is its own part of the prompt below, in full, and you can edit it before you start. The reviewer is told to check it against the diff and the ticket, not to believe it.
@@ -313,13 +318,20 @@ function KindPicker({ p }: { p: SetupViewProps }) {
 /** The result tool: asking for it is part of what the person approves, and the prompt below shows the exact words. */
 function ReportOption({ p }: { p: SetupViewProps }) {
   const on = !!p.review?.spec.report;
+  // A review's verdict is read by the app, so it always asks for the report; the backend refuses unticking it.
+  const locked = p.review?.spec.kind === "review";
   return (
     <Sec title="Result">
-      <label className="flex items-start gap-2">
-        <input type="checkbox" aria-label="Let the agent report its result to Gossamr" checked={on} disabled={!p.review || p.busy || p.phase !== "ready"} onChange={(ev) => p.on.setReport?.(ev.target.checked)} className="mt-1" />
+      <label className="flex items-start gap-2" data-report-locked={locked || undefined}>
+        <input type="checkbox" aria-label="Let the agent report its result to Gossamr" checked={on} disabled={locked || !p.review || p.busy || p.phase !== "ready"} onChange={(ev) => p.on.setReport?.(ev.target.checked)} className="mt-1" />
         <span className="grid gap-0.5">
           <b className="font-semibold text-ws-ink">Let the agent report its result to Gossamr</b>
           <span className="text-ws-ink2">The prompt asks it to call one extra tool, report_result, with its result. The tool only records what it says on this run; it can&apos;t write to Jira or reach anything else, and what you get is still a draft. The agent writes its full answer too, and Gossamr reads that when the tool isn&apos;t used.</span>
+          {locked && (
+            <span className="text-ws-ink2">
+              A review always reports its verdict.{p.reportOffered ? "" : " Reporting is off in Settings, so the tool won't be offered and Gossamr reads the 'Verdict:' line of its written answer instead."}
+            </span>
+          )}
         </span>
       </label>
     </Sec>
@@ -328,14 +340,20 @@ function ReportOption({ p }: { p: SetupViewProps }) {
 
 function PushOption({ p }: { p: SetupViewProps }) {
   const on = !!p.review?.spec.allowPush;
+  // A workstream's build always ends with a draft pull request, which its review then reads; the backend refuses turning it off.
+  const locked = !!p.review?.spec.workstream;
   const mode = permissionMode(p.preflight);
   return (
     <Sec title="Pushing">
-      <label className="flex items-start gap-2">
-        <input type="checkbox" checked={on} disabled={!p.review || p.busy || p.phase !== "ready"} onChange={(ev) => p.on.setAllowPush(ev.target.checked)} className="mt-1" />
+      <label className="flex items-start gap-2" data-push-locked={locked || undefined}>
+        <input type="checkbox" checked={on} disabled={locked || !p.review || p.busy || p.phase !== "ready"} onChange={(ev) => p.on.setAllowPush(ev.target.checked)} className="mt-1" />
         <span className="grid gap-0.5">
           <b className="font-semibold text-ws-ink">Push its branch and open a draft pull request</b>
-          <span className="text-ws-ink2">On by default. The prompt tells it to push the branch, open a draft pull request, never mark it ready and never merge it, and to put the link in its note for Jira. Off, the prompt tells it to commit on its own branch and not push.</span>
+          {locked ? (
+            <span className="text-ws-ink2">Builds in a workstream always push their branch and open a draft pull request. The prompt says never mark it ready and never merge it.</span>
+          ) : (
+            <span className="text-ws-ink2">On by default. The prompt tells it to push the branch, open a draft pull request, never mark it ready and never merge it, and to put the link in its note for Jira. Off, the prompt tells it to commit on its own branch and not push.</span>
+          )}
         </span>
       </label>
       <p className="m-0 text-xs text-ws-ink3">

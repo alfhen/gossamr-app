@@ -1,15 +1,22 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
-import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT } from "./mockRunKinds";
+import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
 import { leftByRun, targetOf, workstreamOf } from "../lib/proposals";
 import { followUpProblem } from "../workspace/followUp";
 import { bodyChange, markdownOf } from "./mockMarkdown";
+import { planSectionOf } from "./mockPlanSection";
 import { readStored, writeStored } from "../workspace/storage";
 import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, WorkItemKind, WorkstreamActor } from "../types";
+
+/** A description update carrying a `Gossamr Plan` section that an agent run left: the plan a build follows once the person approves it. As `is_run_plan_rewrite` in `proposals.rs`. */
+export const isRunPlanRewrite = (p: Proposal) => p.origin.type === "run" && p.intent.type === "rewrite" && !!p.intent.body && !!planSectionOf(p.intent.body.to);
+
+/** Pip changed the draft's text and the person never edited it after. As `revised_by_pip_unedited` in `proposals.rs`. */
+export const revisedByPipUnedited = (p: Proposal) => p.revisions.some((r) => r.note === "Revised by Pip") && !p.revisions.some((r) => r.note === "Edited");
 
 const CONNECTION = "mock";
 const SUMMARY_LIMIT = 255;
 const DESCRIPTION_LIMIT = 30_000;
-const RESERVED = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>", "<<<PLAN", "PLAN>>>", "<<<BUILD", "BUILD>>>"];
+const RESERVED = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>", "<<<PLAN", "PLAN>>>", "<<<BUILD", "BUILD>>>", "<<<FINDINGS", "FINDINGS>>>"];
 
 /** The backend's checks on a rewrite, in the same words. */
 function rewriteProblem(i: Extract<Intent, { type: "rewrite" }>): string | null {
@@ -215,7 +222,8 @@ export class MockProposals {
         ...(base !== undefined ? { base: base.trim() } : {}),
         ...(clonePath !== undefined ? { clonePath } : {}),
         ...(kind ? { kind } : {}),
-        ...(switched ? { pr: null, prSha: null, allowPush: kind === "build", ...(kind !== "build" ? { plan: null, planFromRun: null, planApproved: false } : {}), ...(kind !== "review" ? { buildAccount: null, buildFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
+        // A review always reports its verdict; what another kind asks for is the person's choice again.
+        ...(switched ? { pr: null, prSha: null, allowPush: kind === "build", report: kind === "review" ? true : was.kind === "review" ? false : was.report, ...(kind !== "build" ? { plan: null, planFromRun: null, planApproved: false } : {}), ...(kind !== "review" ? { buildAccount: null, buildFromRun: null } : {}), ...(kind !== "triage" && kind !== "plan" ? { findings: null, findingsFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
         ...(project ? { project } : {}),
         ...(pr !== undefined ? { pr, prSha: null, ...(pr !== was.pr ? { buildAccount: null, buildFromRun: null } : {}) } : {}),
         ...(allowPush !== undefined ? { allowPush } : {}),
@@ -225,7 +233,9 @@ export class MockProposals {
         ...(buildAccount !== undefined ? (buildAccount.trim() ? { buildAccount } : { buildAccount: null, buildFromRun: null }) : {}),
         ...(name !== undefined ? { name: name.trim() } : {}),
       };
+      if (report === false && spec.kind === "review") throw new Error(REVIEW_REPORTS);
       if (spec.allowPush && spec.kind !== "build") throw new Error("Only a build can push.");
+      if (allowPush === false && spec.kind === "build" && spec.workstream) throw new Error("a workstream's build always publishes a draft pull request");
       if (plan?.trim() && !was.planFromRun) throw new Error("this draft doesn't carry a plan");
       if (buildAccount?.trim() && !was.buildFromRun) throw new Error("this draft doesn't carry a builder's account");
       if (buildAccount && [...buildAccount].length > BUILD_ACCOUNT_LIMIT) throw new Error(`The builder's account must be text of at most ${BUILD_ACCOUNT_LIMIT} characters.`);
@@ -245,6 +255,8 @@ export class MockProposals {
     };
     if (p.intent.type === "rewrite") {
       if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this description draft, so Pip can't change it any more");
+      // A build follows the plan the person approves here and is told a person settled it, so none of it may be Pip's.
+      if (leftByRun(p) && isRunPlanRewrite(p)) throw new Error("this description update carries the Gossamr Plan a build follows, so only the user changes it; tell them what you would change instead");
       if (p.createdBy !== "pip" && !leftByRun(p)) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
       ownWorkstream();
       const was = p.intent;
