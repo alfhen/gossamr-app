@@ -4,7 +4,7 @@ import { draftsForTurn, targetOf } from "../lib/proposals";
 import { REMOVED_TURN } from "../backend/claude";
 import { useClaude, type Turn } from "../claudeStore";
 import { filesIn } from "../lib/attachments";
-import { GENERAL_RUN_REF_NOTE, RUN_REF_NOTE, commandHelp, runComposerVerb, runRef, type VerbOutcome } from "../lib/composerVerbs";
+import { COMMAND_HELP, RUN_REF_NOTE, WORKSTREAM_VERBS, runComposerVerb, runRef, type CommandHelp, type VerbOutcome } from "../lib/composerVerbs";
 import { labelsByRun } from "../lib/workstreamStage";
 import { workstreamOfConversation } from "../lib/conversations";
 import { MAX_IMAGES, defaultQuestion } from "../lib/pipImages";
@@ -426,6 +426,21 @@ export function ComposerFooter({ text }: { text: string }) {
 
 /** What the Commands popover says about Manage: the rules start routine steps, Pip starts nothing, Jira waits. */
 export const MANAGE_NOTE = "Automatic steps: in Manage, routine next steps start on their own by fixed rules. I start nothing myself, and every change to Jira still waits for you.";
+
+/** How a command names its run outside a workstream, where cards show no R labels. */
+const RUN_ID_REF = "<run id>";
+
+/** What a run's id is, and what R1 is, outside a workstream. */
+export const GENERAL_RUN_REF_NOTE = "A run's id is on its card. R1, R2… are the names a workstream gives its runs, and work in its conversation.";
+
+/**
+ * The commands as the Commands popover lists them: in a workstream all of them, naming runs R1 as its cards do; elsewhere
+ * the run commands only, naming the run by its id.
+ */
+export function commandHelp(workstream: boolean): readonly CommandHelp[] {
+  if (workstream) return COMMAND_HELP;
+  return COMMAND_HELP.filter((c) => !(WORKSTREAM_VERBS as readonly string[]).includes(c.verb)).map((c) => ({ ...c, usage: c.usage.replace(/\bR1\b/, RUN_ID_REF) }));
+}
 
 /**
  * The commands the composer takes, with a line on each; a workstream's own only in a workstream, and Manage's note when it

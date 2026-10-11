@@ -64,7 +64,7 @@ export interface NeedsYouItem {
   workstreamId: string | null;
   /** The whole line: the ticket's key, then `reason`. */
   label: string;
-  /** The ticket it is about, "KEY · its title" when the title is cached; null when it has none. */
+  /** The ticket it is about, "KEY · its title" when the title is cached or its workstream kept it; null when it has none. */
   head: string | null;
   /** What it waits on: "R1 asks a question", "Draft comment", "Held by you". */
   reason: string;
@@ -113,6 +113,19 @@ function runName(run: Run, ws: WorkstreamView | null): string {
 
 const prefix = (key: string | null | undefined, text: string) => (key ? `${key} · ${text}` : text);
 
+/**
+ * The title a workstream gives its ticket, which it took when it opened: "KEY title" less the key. For a ticket that is
+ * no longer cached, so its tray line still has a title.
+ */
+function workstreamTitles(workstreams: readonly WorkstreamView[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const { workstream: w } of workstreams) {
+    const rest = w.itemKey && w.title.startsWith(`${w.itemKey} `) ? w.title.slice(w.itemKey.length).trim() : "";
+    if (w.itemKey && rest && !out.has(w.itemKey)) out.set(w.itemKey, rest);
+  }
+  return out;
+}
+
 /** An item's label, head and reason, from the ticket key it is about and what it waits on. */
 const said = (key: string | null | undefined, reason: string, titleOf: NeedsYouInput["titleOf"]) => {
   const title = key ? titleOf?.(key)?.trim() : null;
@@ -137,7 +150,9 @@ function answersByRun(proposals: readonly Proposal[], runs: readonly Run[]): Map
  * goes as soon as the stores say its wait is over.
  */
 export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt, titleOf }: NeedsYouInput): NeedsYouItem[] {
-  const say = (key: string | null | undefined, reason: string) => said(key, reason, titleOf);
+  // A ticket not in the cache still has the title its workstream took.
+  const kept = workstreamTitles(workstreams);
+  const say = (key: string | null | undefined, reason: string) => said(key, reason, (k) => titleOf?.(k)?.trim() || kept.get(k));
   const open = workstreams.filter((v) => v.workstream.closedAt === null);
   const items: NeedsYouItem[] = [];
   const answers = answersByRun(proposals, runs);

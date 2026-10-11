@@ -10,7 +10,7 @@ import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsSettingsView, type CleanupOffer } from "./AgentsSettings";
 import { RunSetupView, setupBlock, type SetupViewProps } from "./RunSetup";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
-import { prChoices, sheetTopOn } from "./runSheetLogic";
+import { MAY_TOUCH, SAFETY_SUMMARY, prChoices, sheetTopOn } from "./runSheetLogic";
 import { PipLauncher } from "./PipExtras";
 import { useRuns } from "./runsStore";
 import { useRunSetup } from "./runSetupStore";
@@ -718,5 +718,31 @@ describe("what an agent sheet keeps clear", () => {
     expect(new Set(states.map((s) => sheetTopOn(run(s), false)))).toEqual(new Set([null]));
     expect(states.map((s) => sheetTopOn(run(s), true))).toEqual(states);
     expect(sheetTopOn(run("stopped"), true)).not.toBe(sheetTopOn(run("working"), true));
+  });
+});
+
+describe("the safety sheet as the one-time intro", () => {
+  const intro = (on: boolean) =>
+    renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} intro={on} onContinue={vi.fn()} />);
+
+  it("starts with three lines that are true for each kind, before the longer explanation", () => {
+    const html = intro(false);
+    const lines = [...html.matchAll(/data-safety-summary[\s\S]*?<\/ul>/g)][0][0].match(/<span>([^<]+)<\/span>/g)!.map((m) => m.slice(6, -7).replace(/&#x27;/g, "'"));
+    expect(lines).toEqual(SAFETY_SUMMARY.map((l) => l.text));
+    expect(lines[0]).toMatch(/^Investigate, Triage, Plan, Review and Verify only read/);
+    expect(lines[1]).toMatch(/^Build changes code in its own worktree/);
+    // As the detail below says: the person's Claude settings decide pushing, and Pushing ticked or not is only asked.
+    expect(lines[1]).toContain("your own Claude settings, which decide whether it can push a branch or open a pull request");
+    expect(MAY_TOUCH.find((t) => t.title.startsWith("Pushing a branch"))?.text).toMatch(/^your Claude settings decide/);
+    expect(lines[1]).not.toMatch(/only when you allow it|until you approve/);
+    // Nothing enforces it, as the detail below says: the line can't promise a lock.
+    expect(lines[1]).toContain("both are requests, not locks");
+    expect(lines[2]).toBe("Gossamr posts nothing to Jira or GitHub until you approve it.");
+    expect(html.indexOf("data-safety-summary")).toBeLessThan(html.indexOf("What agents can touch"));
+  });
+
+  it("has Got it, continue in its footer only when it opened in place of the person's first action", () => {
+    expect(intro(true)).toMatch(/<button[^>]*>Got it, continue<\/button>/);
+    expect(intro(false)).not.toContain("Got it, continue");
   });
 });

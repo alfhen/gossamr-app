@@ -15,7 +15,6 @@ import { TicketAgentsView, WorkstreamLine } from "./AgentMenu";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
 import { openOnPipHome } from "./workstreamsStore";
-import { focusPeekOf } from "./peekDrafts";
 
 const ws = () => useWorkspace.getState();
 
@@ -332,47 +331,5 @@ describe("the workstream line in 'Agents on this ticket'", () => {
     expect(usePipHome.getState().selected).toBeNull();
     useTabs.setState({ route: "workspace" });
     usePipHome.getState().reset();
-  });
-});
-
-describe("a ticket opened from the palette", () => {
-  /** A stand-in for an element that takes focus from code. */
-  const focusable = () => {
-    const attrs = new Map<string, string>();
-    return { focus: vi.fn(), hasAttribute: (n: string) => attrs.has(n), setAttribute: (n: string, v: string) => void attrs.set(n, v), attrs };
-  };
-
-  it("hands the keyboard to the peek's title once the peek of that ticket shows, not to the board behind it", () => {
-    const title = focusable();
-    const peek = { ...focusable(), querySelector: (s: string) => (s === "h2" ? title : null) };
-    let shown = false;
-    const asked: string[] = [];
-    const root = { querySelector: (s: string) => (asked.push(s), shown && s.includes('"Details for CA-401"') ? peek : null), querySelectorAll: () => [] };
-    const frames: (() => void)[] = [];
-    focusPeekOf("CA-401", root, (go) => frames.push(go), () => {});
-    // The peek isn't there on the first frame; it is on the next.
-    frames.shift()!();
-    expect(title.focus).not.toHaveBeenCalled();
-    shown = true;
-    frames.shift()!();
-    expect(title.focus).toHaveBeenCalledWith({ preventScroll: true });
-    expect(title.attrs.get("tabindex")).toBe("-1");
-    expect(peek.focus).not.toHaveBeenCalled();
-    expect(frames).toHaveLength(0);
-    expect(asked.every((s) => s.startsWith("#peek-sheet"))).toBe(true);
-  });
-
-  it("takes the peek itself when it has no title, and gives up after a while when no peek of that ticket shows", () => {
-    const bare = { ...focusable(), querySelector: () => null };
-    const frames: (() => void)[] = [];
-    focusPeekOf("CA-402", { querySelector: () => bare, querySelectorAll: () => [] }, (go) => frames.push(go), () => {});
-    frames.shift()!();
-    expect(bare.focus).toHaveBeenCalledWith({ preventScroll: true });
-
-    let tries = 0;
-    const never: (() => void)[] = [];
-    focusPeekOf("CA-403", { querySelector: () => (tries++, null), querySelectorAll: () => [] }, (go) => never.push(go), () => {});
-    while (never.length) never.shift()!();
-    expect(tries).toBe(120);
   });
 });

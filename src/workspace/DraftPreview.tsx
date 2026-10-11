@@ -285,7 +285,8 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
       }}
       className={`relative ${KEY_HINT_ROOM} scroll-mt-2 scroll-mb-9 rounded-xl border border-ws-sep2 bg-ws-win shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "applied" ? "opacity-70" : state === "skipped" || state === "retired" ? "opacity-45" : ""}`}
     >
-      <div data-draft-body className="overflow-hidden rounded-[inherit]">
+      {/* The card's own box, which clips its corners; the key hint hangs outside it. */}
+      <section data-draft-body className="overflow-hidden rounded-[inherit]">
         <div className={`flex items-center gap-2 px-2.5 py-1.5 text-sm font-semibold ${HEADER[state]}`}>
           <span aria-hidden>{ICON[p.intent.type]}</span>
           <span className="min-w-0 truncate">{title}</span>
@@ -336,7 +337,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
             {warning}
           </p>
         )}
-      </div>
+      </section>
       {armed && (
         <p ref={hint} role="status" className={`${KEY_HINT} ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-win text-ws-ink3"}`}>
           {draftKeyHint(p, asking, canApprove)}

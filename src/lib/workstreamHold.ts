@@ -62,13 +62,16 @@ export function heldText(reason: string | null | undefined, drifted?: readonly B
 }
 
 /**
- * What Resume does for a tripwire hold, said after why it is held: a tripwire takes Manage away, so with `resumeMode`
- * set, or Manage switched back on during the hold (`mode`), the automatic steps are paused and Resume turns them back
- * on; otherwise Resume only lifts the hold. Null for any other hold.
+ * What Resume does about Manage, said after why it is held, so the banner agrees with the Manage switch: a tripwire takes
+ * Manage away, so with `resumeMode` set (a trip can land on any hold), or Manage switched back on during a tripwire's
+ * hold (`mode`), the automatic steps are paused and Resume turns them back on; after a trip from Advise, Resume only
+ * lifts the hold. Null for any other hold, which leaves the mode alone.
  */
 export function tripwireResumeText(reason: string | null | undefined, resumeMode: WorkstreamMode | null | undefined, mode?: WorkstreamMode): string | null {
-  if (!reason?.startsWith(TRIPWIRE)) return null;
-  return resumeMode === "manage" || mode === "manage" ? "Automatic steps are paused. Resume turns them back on." : "Resume only lifts the hold; Manage stays off.";
+  if (!reason) return null;
+  if (resumeMode === "manage") return "Automatic steps are paused. Resume turns them back on.";
+  if (!reason.startsWith(TRIPWIRE)) return null;
+  return mode === "manage" ? "Automatic steps are paused. Resume turns them back on." : "Resume only lifts the hold; Manage stays off.";
 }
 
 /** The whole held banner of `ws`: why it is held, then for a tripwire what Resume does. `budget` is its budget view. */

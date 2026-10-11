@@ -121,7 +121,9 @@ export function validHoldReason(reason: string): boolean {
  */
 function held(ws: Workstream, reason: string): Workstream | null {
   if (ws.closedAt !== null) return null;
-  if (ws.heldReason !== null && !(reason === HELD_PERSON && [HELD_RESTART, HELD_BUDGET, HELD_QUOTA].includes(ws.heldReason))) return null;
+  // The person's own hold, or a tripwire's, replaces one that would lift by itself or that the person didn't choose.
+  const replaces = reason === HELD_PERSON || reason.startsWith(TRIPWIRE);
+  if (ws.heldReason !== null && !(replaces && [HELD_RESTART, HELD_BUDGET, HELD_QUOTA].includes(ws.heldReason))) return null;
   return { ...ws, heldReason: reason };
 }
 
@@ -373,17 +375,18 @@ export class MockWorkstreams {
   /**
    * Lifts a workstream's hold, as `resume_workstream` does; lifting a budget hold also resets what was spent
    * (`budget_reset`), and lifting a basis-drift hold takes the basis again from the ticket as it is now (`basis_captured`).
-   * Lifting a tripwire puts back the mode it took away (`mode_set` by the person), unless the person chose one meanwhile.
+   * Resuming puts back the mode a tripwire took away (`mode_set` by the person), whatever the hold, unless the person
+   * chose one meanwhile.
    */
   resume(id: string): Workstream {
     const ws = this.openOne(id);
     if (ws.heldReason === null) return ws;
     const reset = ws.heldReason === HELD_BUDGET;
     const rebase = ws.heldReason === `${TRIPWIRE}basis_drift`;
-    const restore = ws.heldReason.startsWith(TRIPWIRE) ? (ws.resumeMode ?? null) : null;
+    // Whatever the hold, as a trip can land while another is on.
+    const restore = ws.resumeMode ?? null;
     const { resumeMode: _, ...kept } = ws;
     let next: Workstream = { ...kept, heldReason: null, mode: restore ?? ws.mode, spent: reset ? { ...ws.spent, autoTurns: 0, wakes: 0 } : ws.spent };
-    if (!restore && ws.resumeMode) next = { ...next, resumeMode: ws.resumeMode };
     if (rebase) {
       const ticket = ws.itemKey ? this.ticketOf(ws.itemKey) : null;
       const { drifted: _, ...rest } = next;
@@ -535,7 +538,8 @@ export class MockWorkstreams {
     this.append(id, "supervisor", "tripwire", { runId, detail: kind });
     if (kind === "basis_drift" && drifted.length) this.append(id, "supervisor", "basis_drifted", { detail: drifted.join(",") });
     if (ws.mode !== "advise") {
-      ws = { ...ws, mode: "advise", ...(ws.heldReason === null ? { resumeMode: ws.mode } : {}) };
+      // Held already (by the person, say), the trip still takes Manage away, and resuming that hold puts it back.
+      ws = { ...ws, mode: "advise", resumeMode: ws.resumeMode ?? ws.mode };
       this.append(id, "supervisor", "mode_set", { detail: "advise" });
     }
     const next = held(ws, reason);

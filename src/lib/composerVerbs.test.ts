@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunKind, RunState } from "../types";
-import { COMMAND_HELP, COMPOSER_VERBS, GENERAL_RUN_REF_NOTE, RUN_REF_NOTE, commandHelp, VERB_HINT, WORKSTREAM_VERBS, parseVerb, resolveRun, runComposerVerb, runRef } from "./composerVerbs";
+import { COMMAND_HELP, COMPOSER_VERBS, RUN_REF_NOTE, VERB_HINT, WORKSTREAM_VERBS, parseVerb, resolveRun, runComposerVerb, runRef } from "./composerVerbs";
 
 const base = new MockBackend().runs.list()[0];
 const run = (id: string, state: RunState, workstream: string | null, queuedAt: string, kind: RunKind = "investigate", shortId: string | null = null): Run => ({ ...base, id, state, shortId, queuedAt, spec: { ...base.spec, kind, workstream } });
@@ -62,16 +62,6 @@ describe("parsing", () => {
     expect(VERB_HINT).toBe("Commands are /stop R1, /retry R1 and /answer R1 your answer, and in a workstream /hold and /resume. R1 is a run in this workstream; a run's id works anywhere.");
     expect(VERB_HINT.endsWith(RUN_REF_NOTE)).toBe(true);
     for (const verb of WORKSTREAM_VERBS) expect(COMMAND_HELP.find((c) => c.verb === verb)?.usage).toBe(`/${verb}`);
-  });
-
-  it("names runs R1 in a workstream's help and by their id elsewhere, saying what R1 is", () => {
-    expect(commandHelp(true)).toBe(COMMAND_HELP);
-    const general = commandHelp(false);
-    expect(general.map((c) => c.verb)).toEqual(["stop", "retry", "answer"]);
-    expect(general.map((c) => c.usage)).toEqual(["/stop <run id>", "/retry <run id>", "/answer <run id> your answer"]);
-    for (const c of general) expect(c.usage).not.toMatch(/\bR1\b/);
-    expect(GENERAL_RUN_REF_NOTE).toContain("A run's id is on its card");
-    expect(GENERAL_RUN_REF_NOTE).toContain("R1, R2… are the names a workstream gives its runs");
   });
 
   it("lets everything else through to Pip", () => {

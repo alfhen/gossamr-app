@@ -33,7 +33,8 @@ describe("starting an agent for the first time", () => {
   it("shows the safety sheet once instead of the ticket picker, then lets the person start", () => {
     usePrefs.setState({ agentsIntroSeen: false });
     s().setPicking(true);
-    expect(s().sheet).toEqual({ type: "safety", intro: true });
+    expect(s().sheet).toEqual({ type: "safety" });
+    expect(s().afterIntro).not.toBeNull();
     expect(s().picking).toBe(false);
     expect(usePrefs.getState().agentsIntroSeen).toBe(true);
     s().closeSheet();

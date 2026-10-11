@@ -6,8 +6,8 @@ import { bodyChange, docFromMarkdown } from "../backend/mockMarkdown";
 import type { Proposal } from "../types";
 import { DraftCard, draftSummary, draftTitle } from "./DraftCard";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
-import { ONLY_SPACING, oneLine, rewriteBlocked, rewriteEdit, rewriteFields, RewriteView, takesBackendText, type Rewrite } from "./RewriteDiff";
-import { changedPairs, diffLines, diffWords } from "../lib/textDiff";
+import { ONLY_SPACING, changedPairs, diffWords, oneLine, rewriteBlocked, rewriteEdit, rewriteFields, RewriteView, takesBackendText, type Rewrite } from "./RewriteDiff";
+import { diffLines } from "../lib/textDiff";
 import { targetOf } from "../lib/proposals";
 
 const OLD = "Retries back off.\n\nBackoff starts at two seconds.\n\nOpen question: who owns the alert?";

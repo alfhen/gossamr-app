@@ -337,6 +337,13 @@ export function liveCounts(runs: readonly Run[], now: number): { running: number
 /** The live counts in words, in the order both lines give them: "2 running · 1 queued · 1 waiting for a slot". Quiet runs are said apart, where each line puts them. */
 export const liveWords = (c: ReturnType<typeof liveCounts>) => [c.running && `${c.running} running`, c.queued && `${c.queued} queued`, c.waiting && `${c.waiting} waiting for a slot`].filter((w): w is string => !!w);
 
+/**
+ * The count beside a lane's title. The Running lane holds queued runs too, so it says them apart with `liveCounts`
+ * ("2 running · 1 queued"), and its running number is the one the summary and Pip home's footer give; any other lane
+ * gives how many runs it holds.
+ */
+export const laneCount = (lane: LaneId, runs: readonly Run[], now: number): string => (lane === "running" ? liveWords(liveCounts(runs, now)).join(" · ") || "0" : String(runs.length));
+
 export function summaryLine(runs: readonly Run[], now: number): string {
   if (!runs.length) return "Nothing running";
   const count = (lane: LaneId) => runs.filter((r) => laneOf(r, now) === lane).length;

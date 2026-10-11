@@ -1,7 +1,84 @@
 import { useMemo } from "react";
-import { changedLines, changedPairs, diffLines, diffWords, withGaps, type DiffRow, type WordPart } from "../lib/textDiff";
+import { changedLines, diffLines, withGaps, type DiffRow } from "../lib/textDiff";
 import { withRunNamed } from "../lib/runNames";
 import type { Intent, ProposalEdit } from "../types";
+
+/** A run of one side of a changed line: `changed` when the other side doesn't have it. */
+export type WordPart = { text: string; changed: boolean };
+
+/** The most cells of the matching table a word diff may fill; a longer pair of lines is shown as wholly changed. */
+const MAX_WORD_CELLS = 250_000;
+
+/** Words, runs of spaces and single marks, so "plan (1000addd)" changes at "1000addd", not as a whole. */
+const tokens = (line: string) => line.match(/\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu) ?? [];
+
+/** Adjacent tokens with the same mark, joined. */
+function joined(parts: WordPart[]): WordPart[] {
+  const out: WordPart[] = [];
+  for (const p of parts) {
+    const last = out[out.length - 1];
+    if (last && last.changed === p.changed) last.text += p.text;
+    else out.push({ ...p });
+  }
+  return out;
+}
+
+/**
+ * The words that differ between a removed line and the line added in its place, marked on each side, and whether the
+ * two differ only in spacing, which no highlight would show.
+ */
+export function diffWords(from: string, to: string): { from: WordPart[]; to: WordPart[]; spacingOnly: boolean } {
+  const spacingOnly = from !== to && from.replace(/\s+/g, "") === to.replace(/\s+/g, "");
+  const a = tokens(from);
+  const b = tokens(to);
+  if ((a.length + 1) * (b.length + 1) > MAX_WORD_CELLS) return { from: [{ text: from, changed: true }], to: [{ text: to, changed: true }], spacingOnly };
+  const width = b.length + 1;
+  const table = new Uint32Array((a.length + 1) * width);
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      table[i * width + j] = a[i] === b[j] ? table[(i + 1) * width + j + 1] + 1 : Math.max(table[(i + 1) * width + j], table[i * width + j + 1]);
+    }
+  }
+  const left: WordPart[] = [];
+  const right: WordPart[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      left.push({ text: a[i++], changed: false });
+      right.push({ text: b[j++], changed: false });
+    } else if (i < a.length && (j === b.length || table[(i + 1) * width + j] >= table[i * width + j + 1])) {
+      left.push({ text: a[i++], changed: true });
+    } else {
+      right.push({ text: b[j++], changed: true });
+    }
+  }
+  return { from: joined(left), to: joined(right), spacingOnly };
+}
+
+/**
+ * Which removed and added lines of a diff are one line changed: in each run of removed lines followed by added ones, the
+ * first removed with the first added, and so on. Each is mapped to the index of the other.
+ */
+export function changedPairs(rows: readonly DiffRow[]): Map<number, number> {
+  const pairs = new Map<number, number>();
+  let i = 0;
+  while (i < rows.length) {
+    if (rows[i].kind !== "del") {
+      i++;
+      continue;
+    }
+    const dels = i;
+    while (i < rows.length && rows[i].kind === "del") i++;
+    const adds = i;
+    while (i < rows.length && rows[i].kind === "add") i++;
+    for (let k = 0; k < Math.min(adds - dels, i - adds); k++) {
+      pairs.set(dels + k, adds + k);
+      pairs.set(adds + k, dels + k);
+    }
+  }
+  return pairs;
+}
 
 export type Rewrite = Extract<Intent, { type: "rewrite" }>;
 

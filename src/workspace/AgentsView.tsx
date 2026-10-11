@@ -16,6 +16,7 @@ import {
   agentGroups,
   filterOptions,
   isFiltered,
+  laneCount,
   laneIsFolded,
   stepRun,
   slotWaiters,
@@ -44,8 +45,8 @@ const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep
 const VIEW_LABEL: Record<AgentsViewMode, string> = { cards: "Cards", list: "List" };
 const GROUP_LABEL: Record<AgentsGroup, string> = { state: "State", workstream: "Workstream" };
 
-/** Re-renders now and then so ages and the quiet chip move without a refresh. */
-function useNow(everyMs = 30_000) {
+/** Re-renders now and then so ages and the quiet chip move without a refresh, and counts of quiet runs with them. */
+export function useNow(everyMs = 30_000) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), everyMs);
@@ -199,13 +200,15 @@ function Toolbar({ runs, filters, view, group, introShown, on }: { runs: readonl
   );
 }
 
-function Lane({ group, folded, onToggle, children }: { group: LaneGroup; folded: boolean; onToggle?: () => void; children: ReactNode }) {
+function Lane({ group, now, folded, onToggle, children }: { group: LaneGroup; now: number; folded: boolean; onToggle?: () => void; children: ReactNode }) {
   const needs = group.lane === "needs";
   return (
     <section aria-label={group.title} data-lane={group.lane} className="grid gap-2.5">
       <div className="flex items-center gap-2">
         <h3 className={`m-0 text-xs font-semibold tracking-[0.05em] uppercase ${needs ? "text-ws-pip" : "text-ws-ink2"}`}>{group.title}</h3>
-        <span className="text-xs text-ws-ink3">{group.runs.length}</span>
+        <span data-lane-count className="text-xs text-ws-ink3">
+          {laneCount(group.lane, group.runs, now)}
+        </span>
         <span className="ml-1 text-sm text-ws-ink3">{group.why}</span>
         {onToggle && (
           <button type="button" aria-expanded={!folded} onClick={onToggle} className="ml-auto rounded-md px-2 py-px text-sm text-ws-ink2 hover:bg-ws-hover">
@@ -362,7 +365,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
             ))
           ) : (
             (lanes ?? []).map((g, gi) => (
-              <Lane key={g.lane} group={g} folded={laneIsFolded(g.lane, earlierOpen, filters)} onToggle={g.lane === "earlier" && !filtered ? on.toggleEarlier : undefined}>
+              <Lane key={g.lane} group={g} now={now} folded={laneIsFolded(g.lane, earlierOpen, filters)} onToggle={g.lane === "earlier" && !filtered ? on.toggleEarlier : undefined}>
                 {items(g.title, g.runs, gi === 0, labels)}
               </Lane>
             ))

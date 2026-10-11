@@ -6,7 +6,7 @@ const NUDGE = "Checking in on this one. Is it still on track, or does anything n
 
 const peek = (page: Page) => page.locator("#peek-sheet");
 const card = (page: Page, name: string) => pipPane(page).getByRole("article", { name });
-const stateOf = (article: ReturnType<typeof card>) => article.locator("[data-draft-body] > div").first().locator("span").last();
+const stateOf = (article: ReturnType<typeof card>) => article.locator("div").first().locator("span").last();
 
 /** Opens CA-401's peek, so Pip's drafts land on it, and then Pip. */
 async function onCa401(page: Page) {

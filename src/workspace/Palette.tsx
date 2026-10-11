@@ -15,7 +15,7 @@ import { useRunSetup } from "./runSetupStore";
 import { useAttention, useRuns } from "./runsStore";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
 import { openTicketByKey } from "./jump";
-import { focusPeekOf } from "./peekDrafts";
+import { focusPeekOf } from "./PeekSheet";
 import { useGithubUi } from "./githubUi";
 import { openPull } from "./openPull";
 import { openOnPipHome, togglePip, useWorkstreams } from "./workstreamsStore";

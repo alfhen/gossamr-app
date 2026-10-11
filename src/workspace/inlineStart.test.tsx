@@ -6,6 +6,7 @@ import type { ItemRef, Proposal, RunKind, RunSpec } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftPreview, KEY_HINT, KEY_HINT_ROOM, LiveDraftPreview, collapseReview, openLiveDraft } from "./DraftPreview";
 import { escapeCollapses } from "./draftKeys";
+import { focusPeekOf } from "./PeekSheet";
 import { CLOSED_INLINE, InlineStartContext, InlineStartView, inlineStartBlock, inlineStartKey, inlineStartable, revealReview, tabToStart, useInlineStarts, type InlineActions } from "./InlineStart";
 import { usePrefs } from "./prefs";
 import { COPY } from "./runSheetLogic";
@@ -203,7 +204,7 @@ describe("reviewing and starting a run draft in place", () => {
     const id = await draft();
     usePrefs.setState({ agentsIntroSeen: false });
     await inline().open(id);
-    expect(useRuns.getState().sheet).toEqual({ type: "safety", intro: true });
+    expect(useRuns.getState().sheet).toEqual({ type: "safety" });
     expect(inline().entries[id]).toBeUndefined();
     useRuns.getState().closeSheet();
   });
@@ -217,6 +218,17 @@ describe("reviewing and starting a run draft in place", () => {
     expect(useRuns.getState().sheet).toBeNull();
     await vi.waitFor(() => expect(inline().entries[id]?.phase).toBe("shown"));
     expect(inline().entries[id]?.review).not.toBeNull();
+  });
+
+  it("opens the setup sheet the person asked for once they continue past the safety sheet, as asked", async () => {
+    usePrefs.setState({ agentsIntroSeen: false });
+    await useRunSetup.getState().begin({ item: CA, kind: "triage" });
+    expect(useRunSetup.getState().open).toBe(false);
+    useRuns.getState().continueIntro();
+    await vi.waitFor(() => expect(useRunSetup.getState().open).toBe(true));
+    expect(useRunSetup.getState()).toMatchObject({ kind: "triage", item: CA });
+    expect(useRuns.getState().sheet).toBeNull();
+    useRunSetup.getState().close();
   });
 });
 
@@ -381,5 +393,47 @@ describe("which run drafts start in place", () => {
     expect(html).not.toContain("inline-start-");
     openLiveDraft(p);
     expect(begin).toHaveBeenCalledWith({ proposalId: p.id });
+  });
+});
+
+describe("a ticket opened from the palette", () => {
+  /** A stand-in for an element that takes focus from code. */
+  const focusable = () => {
+    const attrs = new Map<string, string>();
+    return { focus: vi.fn(), hasAttribute: (n: string) => attrs.has(n), setAttribute: (n: string, v: string) => void attrs.set(n, v), attrs };
+  };
+
+  it("hands the keyboard to the peek's title once the peek of that ticket shows, not to the board behind it", () => {
+    const title = focusable();
+    const peek = { ...focusable(), querySelector: (s: string) => (s === "h2" ? title : null) };
+    let shown = false;
+    const asked: string[] = [];
+    const root = { querySelector: (s: string) => (asked.push(s), shown && s.includes('"Details for CA-401"') ? peek : null), querySelectorAll: () => [] };
+    const frames: (() => void)[] = [];
+    focusPeekOf("CA-401", root, (go) => frames.push(go), () => {});
+    // The peek isn't there on the first frame; it is on the next.
+    frames.shift()!();
+    expect(title.focus).not.toHaveBeenCalled();
+    shown = true;
+    frames.shift()!();
+    expect(title.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(title.attrs.get("tabindex")).toBe("-1");
+    expect(peek.focus).not.toHaveBeenCalled();
+    expect(frames).toHaveLength(0);
+    expect(asked.every((s) => s.startsWith("#peek-sheet"))).toBe(true);
+  });
+
+  it("takes the peek itself when it has no title, and gives up after a while when no peek of that ticket shows", () => {
+    const bare = { ...focusable(), querySelector: () => null };
+    const frames: (() => void)[] = [];
+    focusPeekOf("CA-402", { querySelector: () => bare }, (go) => frames.push(go), () => {});
+    frames.shift()!();
+    expect(bare.focus).toHaveBeenCalledWith({ preventScroll: true });
+
+    let tries = 0;
+    const never: (() => void)[] = [];
+    focusPeekOf("CA-403", { querySelector: () => (tries++, null) }, (go) => never.push(go), () => {});
+    while (never.length) never.shift()!();
+    expect(tries).toBe(120);
   });
 });

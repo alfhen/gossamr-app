@@ -118,6 +118,7 @@ export function AgentSheets() {
   const setupOpen = useRunSetup((s) => s.open);
   const setupItem = useRunSetup((s) => s.item);
   const sheet = useRuns((s) => s.sheet);
+  const afterIntro = useRuns((s) => s.afterIntro);
   const picking = useRuns((s) => s.picking);
   const ticketTitle = useWorkspace((s) => (setupItem ? (s.items[itemKey(setupItem)]?.title ?? null) : null));
   const runSheetOpen = !setupOpen && sheet !== null;
@@ -149,7 +150,7 @@ export function AgentSheets() {
 
   return (
     <>
-      {setupOpen ? <RunSetup ticketTitle={ticketTitle} /> : sheet?.type === "run" ? <RunSheet key={sheet.id} id={sheet.id} /> : sheet?.type === "safety" ? <Settings intro={!!sheet.intro} /> : null}
+      {setupOpen ? <RunSetup ticketTitle={ticketTitle} /> : sheet?.type === "run" ? <RunSheet key={sheet.id} id={sheet.id} /> : sheet?.type === "safety" ? <Settings intro={afterIntro !== null} /> : null}
       {picking && <AgentTicketPicker />}
     </>
   );

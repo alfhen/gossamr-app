@@ -427,51 +427,6 @@ describe("holding and managing a mock workstream", () => {
     expect(store.get(spent.id)?.budget.level).toBe("ok");
   });
 
-  it("puts back on resume the Manage a tripwire took away, unless the person chose a mode meanwhile, as the backend does", () => {
-    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
-    const ws = store.open(null, "managed");
-    store.setMode(ws.id, "manage");
-    const tripped = store.trip(ws.id, "basis_drift", null, ["description"]);
-    expect([tripped.mode, tripped.resumeMode]).toEqual(["advise", "manage"]);
-    const resumed = store.resume(ws.id);
-    expect([resumed.mode, resumed.resumeMode, resumed.heldReason]).toEqual(["manage", undefined, null]);
-    expect(store.events(ws.id).slice(-2).map((e) => [e.actor, e.action, e.detail])).toEqual([
-      ["person", "resumed", "tripwire:basis_drift"],
-      ["person", "mode_set", "manage"],
-    ]);
-
-    // From Advise there is nothing to put back.
-    store.setMode(ws.id, "advise");
-    expect(store.trip(ws.id, "marker", "r1").resumeMode).toBeUndefined();
-    expect(store.resume(ws.id).mode).toBe("advise");
-
-    // The person's choice while held wins.
-    store.setMode(ws.id, "manage");
-    store.trip(ws.id, "repeated_failure", "r1");
-    expect(store.setMode(ws.id, "advise").resumeMode).toBeUndefined();
-    expect(store.resume(ws.id).mode).toBe("advise");
-    expect(store.events(ws.id).slice(-1)[0]).toMatchObject({ action: "resumed", detail: "tripwire:repeated_failure" });
-  });
-
-  it("gives the stage from each finished review's verdict: blocking is review with changes needed, a pass is done", () => {
-    const at = (n: number) => new Date(Date.UTC(2026, 8, 30, 10, n)).toISOString();
-    const runs: Run[] = [];
-    const store = new MockWorkstreams(() => runs, () => "title", undefined, undefined, false);
-    const ws = store.open(null, "reviewed");
-    const reviewRun = (id: string, n: number) => ({ id, state: "done", queuedAt: at(n), spec: { kind: "review", workstream: ws.id } }) as Run;
-    const verdicts: Record<string, "pass" | "blocking"> = { r1: "blocking" };
-    store.verdictOf = (r) => verdicts[r.id] ?? null;
-    runs.push(reviewRun("r1", 1));
-    expect(store.get(ws.id)).toMatchObject({ stage: "review", reviewBlocking: true });
-    runs.push(reviewRun("r2", 2));
-    verdicts.r2 = "pass";
-    expect(store.get(ws.id)?.stage).toBe("done");
-    expect(store.get(ws.id)?.reviewBlocking).toBeUndefined();
-    delete verdicts.r2;
-    expect(store.get(ws.id)).toMatchObject({ stage: "review" });
-    expect(store.get(ws.id)?.reviewBlocking).toBeUndefined();
-  });
-
   it("keeps a budget hold when the person writes while the wakes still use the budget up, and lifts it otherwise", () => {
     const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
     const ws = store.open(null, "spent");

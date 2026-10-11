@@ -6,8 +6,9 @@ import { useClaude } from "../claudeStore";
 import type { WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { isPipHomeKey } from "./commands";
-import { footerHints } from "./footerHints";
-import { wrapTab } from "./pipHomeKeys";
+import { footerHints, pipHomeHints } from "./footerHints";
+import { pipHomeKey, wrapTab, type PipHomeKeyEvent, type PipHomeKeyState } from "./pipHomeKeys";
+import { ShortcutHint } from "./ShortcutHint";
 import { HomeConversation, NO_WORKSTREAMS, PipHome, StepsColumn, WorkstreamList, rowTitle, type WorkstreamListProps } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -201,5 +202,43 @@ describe("Start on Pip home", () => {
   it("is on for a person whose saved settings predate it", () => {
     localStorage.setItem("gossamr-prefs", JSON.stringify({ ui: "workspace", theme: "dark" }));
     expect(loadPrefs()).toMatchObject({ startOnPipHome: true, theme: "dark" });
+  });
+});
+
+describe("Pip home's keys with no workstream, and its footer", () => {
+  const key = (k: string, over: Partial<PipHomeKeyEvent> = {}): PipHomeKeyEvent => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: null, ...over });
+  const at = (over: Partial<PipHomeKeyState> = {}): PipHomeKeyState => ({ column: "list", overlay: false, count: 4, at: 1, kind: "row", ...over });
+
+  it("passes the Steps column by while no workstream gives it steps, both ways and with ⌘] and ⌘[", () => {
+    const none = (column: PipHomeKeyState["column"]) => at({ column, steps: false });
+    expect(pipHomeKey(key("F6"), none("conversation"))).toEqual({ type: "column", to: "list" });
+    expect(pipHomeKey(key("F6"), none("list"))).toEqual({ type: "column", to: "conversation" });
+    expect(pipHomeKey(key("F6", { shiftKey: true }), none("list"))).toEqual({ type: "column", to: "conversation" });
+    expect(pipHomeKey(key("]", { metaKey: true }), none("conversation"))).toEqual({ type: "column", to: "list" });
+    expect(pipHomeKey(key("[", { ctrlKey: true }), none("list"))).toEqual({ type: "column", to: "conversation" });
+    // Left in the Steps column somehow, the keys still leave it.
+    expect(pipHomeKey(key("F6"), none("rail"))).toEqual({ type: "column", to: "list" });
+    expect(pipHomeKey(key("F6", { shiftKey: true }), none("rail"))).toEqual({ type: "column", to: "conversation" });
+    // With steps, the rail is a stop again.
+    expect(pipHomeKey(key("F6"), at({ column: "conversation", steps: true }))).toEqual({ type: "column", to: "rail" });
+  });
+
+  it("takes Tab from the last stop on Pip home round to the first stop on the page, and leaves every other Tab to the browser", () => {
+    const stops = ["rail-search", "general", "composer", "commands"];
+    expect(wrapTab(key("Tab"), stops, "commands", true)).toBe("rail-search");
+    expect(wrapTab(key("Tab"), stops, "composer", true)).toBeNull();
+    expect(wrapTab(key("Tab", { shiftKey: true }), stops, "commands", true)).toBeNull();
+    expect(wrapTab(key("Tab", { ctrlKey: true }), stops, "commands", true)).toBeNull();
+    // Off Pip home, as in a sheet after it in the page, or with nothing focused.
+    expect(wrapTab(key("Tab"), stops, "commands", false)).toBeNull();
+    expect(wrapTab(key("Tab"), stops, null, true)).toBeNull();
+    expect(wrapTab(key("F6"), stops, "commands", true)).toBeNull();
+  });
+
+  it("says a opens a run draft rather than approving it, as its card does", () => {
+    const decide = pipHomeHints().find((h) => h.id === "decide")!;
+    expect(decide.keys).toEqual(["a", "s"]);
+    expect(decide.text).toBe("approve or skip a draft · a opens a run draft");
+    expect(renderToStaticMarkup(<ShortcutHint view="list" hints={pipHomeHints()} />)).toContain("a opens a run draft");
   });
 });

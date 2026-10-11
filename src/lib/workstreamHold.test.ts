@@ -57,9 +57,12 @@ describe("heldText", () => {
     expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: "manage" })).toBe("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
     expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: null })).toBe("Held: the ticket's description changed in Jira. Resume only lifts the hold; Manage stays off.");
     expect(tripwireResumeText(`${TRIPWIRE}marker`, "manage")).toBe("Automatic steps are paused. Resume turns them back on.");
+    // A trip that landed on another hold took Manage away too: that hold's banner says so, as the switch does.
+    expect(tripwireResumeText(HELD_PERSON, "manage")).toBe("Automatic steps are paused. Resume turns them back on.");
+    expect(heldBanner({ heldReason: HELD_PERSON, resumeMode: "manage" })).toBe("Held by you. Automatic steps are paused. Resume turns them back on.");
     // Any other hold says only why; the budget's says how many turns resuming gives.
-    expect(tripwireResumeText(HELD_PERSON, "manage")).toBeNull();
-    expect(heldBanner({ heldReason: HELD_PERSON, resumeMode: "manage" })).toBe("Held by you");
+    expect(tripwireResumeText(HELD_PERSON, null, "manage")).toBeNull();
+    expect(heldBanner({ heldReason: HELD_PERSON })).toBe("Held by you");
     expect(heldBanner({ heldReason: HELD_BUDGET })).toBe("Held: automatic turns used up. Resume to give it 6 more");
     // Manage switched back on while a tripwire holds it: Resume turns the automatic steps on, whatever resumeMode says.
     expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: null, mode: "manage" })).toBe("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");

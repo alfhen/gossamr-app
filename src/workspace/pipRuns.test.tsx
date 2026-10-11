@@ -128,18 +128,20 @@ describe("the strip of live runs", () => {
     expect(view([])).toBe("");
   });
 
-  it("lists a failed run the person hasn't seen, and says how many of all the runs it shows, with a way to the rest", () => {
+  it("lists a failed run the person hasn't seen, and says how many of the runs it lists it shows, with a way to the rest", () => {
     const runs = [run("failed", { id: "f" }), run("needsAnswer", { id: "n1" }), run("working", { id: "w1" }), run("working", { id: "w2" }), run("done", { id: "d1" }), run("done", { id: "d2" }), run("stopped", { id: "s1" }), run("queued", { id: "q1" })];
     const seeAll = vi.fn();
     const html = renderToStaticMarkup(<PipRunStripView runs={runs} enabled now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
     expect(html.match(/data-run-id=/g)).toHaveLength(STRIP_SHOWN);
     expect(html).toContain('data-run-id="f"');
-    expect(html).toMatch(/data-strip-count[^>]*>3 of 8</);
+    // Five it would list (the done and stopped ones it never lists don't count): it shows three of them.
+    expect(html).toMatch(/data-strip-count[^>]*>3 of 5</);
     expect(html).toContain("See all in Agents</button>");
-    // When it shows them all, it says only how many.
-    const few = renderToStaticMarkup(<PipRunStripView runs={runs.slice(1, 3)} enabled now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
+    // When it shows them all, it says only how many, however many finished runs there are besides.
+    const few = renderToStaticMarkup(<PipRunStripView runs={[...runs.slice(1, 3), ...runs.slice(4, 7)]} enabled now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
     expect(few).toMatch(/data-strip-count[^>]*>2</);
     expect(few).not.toContain("See all in Agents");
+    expect(few).not.toMatch(/data-strip-count[^>]*>[^<]* of /);
   });
 
   it("in a workstream's conversation lists only its runs, each with its short name there", () => {

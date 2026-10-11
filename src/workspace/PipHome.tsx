@@ -19,6 +19,7 @@ import { focusComposer, focusedConversation, useHomeWorkstream, useWorkstreams }
 import { TABBABLE, pipHomeKey, wrapTab, type PipHomeItemKind } from "./pipHomeKeys";
 import { InlineStartContext } from "./InlineStart";
 import { StepRail } from "./StepRail";
+import { useNow } from "./AgentsView";
 import { pipHomeHints } from "./footerHints";
 import { ShortcutHint } from "./ShortcutHint";
 
@@ -412,7 +413,9 @@ export function PipHome() {
   const workstream = useHomeWorkstream();
   const runs = useRuns((s) => s.runs);
   const needsYou = useNeedsYou();
-  const footer = useMemo(() => composerFooter(runs, needsYou), [runs, needsYou]);
+  // The same clock as the Agents view's, so a run gone quiet leaves "running" here when it does there.
+  const now = useNow();
+  const footer = useMemo(() => composerFooter(runs, needsYou, now), [runs, needsYou, now]);
   useTurnEscape();
   useFocusTarget();
   usePipHomeKeys();

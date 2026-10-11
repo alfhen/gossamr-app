@@ -41,11 +41,13 @@ export function useNeedsYou(): NeedsYouItem[] {
   const seenFailed = useRuns((s) => s.seenFailed);
   const proposals = useWorkspace((s) => s.proposals);
   const items = useWorkspace((s) => s.items);
+  const peeked = useWorkspace((s) => s.peeked);
   const heldAt = useHeldTimes();
   return useMemo(() => {
-    const titles = new Map(Object.values(items).map((i) => [i.item.key, i.title]));
+    // A ticket peeked from outside the watched projects has its title there.
+    const titles = new Map([...Object.values(peeked).map((p) => [p.item.item.key, p.item.title] as const), ...Object.values(items).map((i) => [i.item.key, i.title] as const)]);
     return needsYouItems({ workstreams, runs, proposals: Object.values(proposals), seenFailed, heldAt, titleOf: (key) => titles.get(key) });
-  }, [workstreams, runs, proposals, seenFailed, heldAt, items]);
+  }, [workstreams, runs, proposals, seenFailed, heldAt, items, peeked]);
 }
 
 /**

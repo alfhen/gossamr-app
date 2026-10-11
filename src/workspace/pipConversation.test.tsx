@@ -7,7 +7,7 @@ import type { Intent, Proposal, RunSpec, WorkstreamView, Run, WorkContainer, Wor
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { CommandsList, Composer, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, showPlanUpdate, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
+import { CommandsList, Composer, GENERAL_RUN_REF_NOTE, commandHelp, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, showPlanUpdate, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
@@ -18,6 +18,7 @@ import { MockBackend } from "../backend/mock";
 import { GENERAL_CONVERSATION as FROM_PANE, PIP_INPUT_ID } from "./PipPane";
 import { Markdown } from "../components/Markdown";
 import { TicketLinksContext } from "../components/ticketLinks";
+import { COMMAND_HELP } from "../lib/composerVerbs";
 import { knownTicketTitle, workspaceTicketLinks } from "./jump";
 
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
@@ -646,5 +647,60 @@ describe("'Show me the plan update'", () => {
     showPlanUpdate(workstreamConversation("ws-9"), root);
     expect(card.focus).toHaveBeenCalledTimes(1);
     expect(ask).not.toHaveBeenCalled();
+  });
+});
+
+describe("a decision waiting on a draft card's Enter", () => {
+  /** A focused draft card, as the key handler sees it. */
+  const card = () => ({ focus: vi.fn(), scrollIntoView: vi.fn(), matches: (sel: string) => sel === DRAFT_CARD, getAttribute: (name: string) => (name === "data-state" ? "pending" : null) });
+  /** The card's handlers, with the decision it waits on kept the way the card keeps it. */
+  const acts = () => {
+    const a = { approve: vi.fn(), skip: vi.fn(), open: vi.fn(), asking: null as "approve" | "skip" | null, typed: [] as string[], ask: vi.fn(), type: vi.fn() };
+    a.ask.mockImplementation((next: "approve" | "skip" | null) => (a.asking = next));
+    a.type.mockImplementation((text: string) => (a.typed.push(text), true));
+    return a;
+  };
+  /** Presses `keys` on one card in turn and returns the last result. */
+  const press = (a: ReturnType<typeof acts>, p: Proposal, keys: string[], el: unknown = card()) => keys.reduce((_, k) => onDraftCardKey(key(k, el), p, a.asking, a), false);
+  const note = comment("p-note", null);
+  const runDraft = draft("p-run", { type: "startRun", connectionId: "mock", item: itemRef("CA-412"), spec }, { origin: { type: "chat", requestId: "r1" } });
+
+  it("only cancels on a card key pressed while a decision waits: s then a neither asks to approve nor opens", () => {
+    for (const [first, then] of [["s", "a"], ["a", "s"], ["s", "o"], ["a", "Escape"], ["s", "s"]]) {
+      const a = acts();
+      press(a, note, [first]);
+      const ev = key(then, card());
+      expect(onDraftCardKey(ev, note, a.asking, a)).toBe(true);
+      expect(ev.preventDefault).toHaveBeenCalled();
+      expect(a.asking).toBeNull();
+      expect(a.ask).not.toHaveBeenCalledWith(first === "s" ? "approve" : "skip");
+      expect(a.ask).toHaveBeenCalledTimes(2);
+      expect(a.open).not.toHaveBeenCalled();
+      expect(a.approve).not.toHaveBeenCalled();
+      expect(a.skip).not.toHaveBeenCalled();
+      expect(a.typed).toEqual([]);
+    }
+    // On a run draft, a after s cancels the skip and doesn't open the draft either.
+    const run = acts();
+    press(run, runDraft, ["s", "a"]);
+    expect(run.open).not.toHaveBeenCalled();
+    expect(run.asking).toBeNull();
+    // A letter that is not a card key still goes back to the input with the s before it.
+    const b = acts();
+    press(b, note, ["s", "x"]);
+    expect(b.typed).toEqual(["sx"]);
+    expect(b.skip).not.toHaveBeenCalled();
+  });
+});
+
+describe("the commands help outside a workstream", () => {
+  it("names runs R1 in a workstream's help and by their id elsewhere, saying what R1 is", () => {
+    expect(commandHelp(true)).toBe(COMMAND_HELP);
+    const general = commandHelp(false);
+    expect(general.map((c) => c.verb)).toEqual(["stop", "retry", "answer"]);
+    expect(general.map((c) => c.usage)).toEqual(["/stop <run id>", "/retry <run id>", "/answer <run id> your answer"]);
+    for (const c of general) expect(c.usage).not.toMatch(/\bR1\b/);
+    expect(GENERAL_RUN_REF_NOTE).toContain("A run's id is on its card");
+    expect(GENERAL_RUN_REF_NOTE).toContain("R1, R2… are the names a workstream gives its runs");
   });
 });

@@ -22,7 +22,7 @@ export const COPY = {
 /** The three lines at the top of the safety sheet, true for each kind: what read-only steps may do, what a Build may do, and what always waits for the person. */
 export const SAFETY_SUMMARY: readonly { icon: "check" | "hand" | "lock"; text: string }[] = [
   { icon: "check", text: "Investigate, Triage, Plan, Review and Verify only read: Claude Code refuses their edits and writes. Review and Verify may run the repository's tests." },
-  { icon: "hand", text: "Build changes code in its own worktree, with your own Claude settings. It is told to push and open a draft pull request only when you allow it, and to stay out of Jira; both are requests, not locks." },
+  { icon: "hand", text: "Build changes code in its own worktree and runs with your own Claude settings, which decide whether it can push a branch or open a pull request. Its prompt asks it to push only when Pushing is ticked, and to stay out of Jira; both are requests, not locks." },
   { icon: "lock", text: "Gossamr posts nothing to Jira or GitHub until you approve it." },
 ];
 

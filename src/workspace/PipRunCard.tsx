@@ -78,19 +78,21 @@ interface StripProps {
 
 /**
  * Up to three live runs above the drafts: the ones that need the person (unseen failures among them), then the ones
- * working. In a workstream's conversation (`workstream`), only that workstream's runs. When there are more runs than it
- * shows, the header says how many of them it shows and links to the Agents view. Absent while agents are off or nothing is going.
+ * working. In a workstream's conversation (`workstream`), only that workstream's runs. When it lists more such runs than
+ * it shows, the header says how many of them it shows and links to the Agents view; never when nothing was cut. Absent while agents are off or nothing is going.
  */
 export function PipRunStripView({ runs, enabled, now, workstream = null, seenFailed, titleOf, onOpen, onSeeAll }: StripProps) {
   const labels = labelsByRun(runs);
   const scope = workstream ? runs.filter((r) => r.spec.workstream === workstream) : runs;
-  const shown = stripRuns(scope, seenFailed).slice(0, STRIP_SHOWN);
+  // Out of the runs it would list, not every run there is: one finished or seen is not left out, only not listed.
+  const listed = stripRuns(scope, seenFailed);
+  const shown = listed.slice(0, STRIP_SHOWN);
   if (!enabled || !shown.length) return null;
-  const more = shown.length < scope.length;
+  const more = shown.length < listed.length;
   return (
     <section aria-label="Your agents" className="grid gap-1.5">
       <h3 className="m-0 flex items-baseline gap-1.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
-        Your agents <span data-strip-count className="font-normal">{more ? `${shown.length} of ${scope.length}` : shown.length}</span>
+        Your agents <span data-strip-count className="font-normal">{more ? `${shown.length} of ${listed.length}` : shown.length}</span>
         {more && onSeeAll && (
           <button type="button" onClick={onSeeAll} className="ml-auto font-semibold tracking-normal text-ws-accent normal-case hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
             See all in Agents

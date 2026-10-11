@@ -25,7 +25,7 @@ const loadSeen = (): ReadonlySet<string> => {
 };
 
 /** What the sheet over the screen shows; starting an agent has its own store. */
-export type RunSheetTarget = { type: "run"; id: string } | { type: "safety"; intro?: boolean };
+export type RunSheetTarget = { type: "run"; id: string } | { type: "safety" };
 
 /**
  * The order j and k walk through: the one the sheet opened with (`snapshot`), runs gone from it dropped and new ones
@@ -62,7 +62,10 @@ interface RunsState {
   /** Runs the person just started and has not been told the outcome of: a launch that fails is announced and opened. */
   launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
-  /** What the person asked for when the one-time safety sheet opened instead; "Got it, continue" carries it on. */
+  /**
+   * What the person asked for when the one-time safety sheet opened instead; "Got it, continue" carries it on. Set only
+   * while the safety sheet is that intro, which is how the sheet knows to offer it.
+   */
   afterIntro: (() => void) | null;
   /** The order the run sheet browses in, taken when it opened; see `browseList`. */
   browseOrder: readonly string[] | null;
@@ -285,7 +288,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     const prefs = usePrefs.getState();
     if (prefs.agentsIntroSeen) return true;
     prefs.setAgentsIntroSeen(true);
-    set({ sheet: { type: "safety", intro: true }, picking: false, afterIntro: then ?? null, browseOrder: null });
+    set({ sheet: { type: "safety" }, picking: false, afterIntro: then ?? (() => {}), browseOrder: null });
     return false;
   },
 

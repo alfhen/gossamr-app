@@ -4,7 +4,7 @@ import { heldText } from "../lib/workstreamHold";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { agentSummary } from "../backend/mockPip";
-import { summaryLine } from "./agentsLogic";
+import { NO_FILTERS, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
 import { planRewriteDraft, batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -408,6 +408,20 @@ describe("composerFooter", () => {
     expect(counts(footer)).toEqual(counts(summaryLine(runs, NOW)));
     // And the sample's Pip, asked what the agents are doing, says the same.
     expect(counts(agentSummary(runs, NOW).split("\n")[0])).toEqual(counts(footer));
+    // The Agents view's Running lane, which holds the queued runs too, says the same numbers apart.
+    const running = groupRuns(runs, NO_FILTERS, NOW).find((g) => g.lane === "running")!;
+    expect(laneCount("running", running.runs, NOW)).toBe("3 running · 1 queued · 1 waiting for a slot");
+    expect(counts(laneCount("running", running.runs, NOW))).toEqual({ ...counts(footer), quiet: 0 });
+    expect(laneCount("needs", [runs[6]], NOW)).toBe("1");
+  });
+
+  it("counts by the same clock on every screen: a run that goes quiet leaves running in the footer, the summary and the lane at once", () => {
+    const later = NOW + 40 * 60_000;
+    const runs = [run("a", "investigate", "working", { lastProgressAt: iso(1) })];
+    for (const [at, running] of [[NOW, 1], [later, 0]] as const) {
+      const n = (line: string) => Number(/(\d+) running/.exec(line)?.[1] ?? 0);
+      expect([n(composerFooter(runs, [], at)), n(summaryLine(runs, at)), n(laneCount("running", runs.filter((r) => laneOf(r, at) === "running"), at))]).toEqual([running, running, running]);
+    }
   });
 });
 
@@ -441,7 +455,7 @@ describe("an answer Pip suggests to a run's question", () => {
 
   it("is one item with the run's question in the tray, going to the reply", () => {
     const items = needsYouItems(input({ workstreams: [ws1], runs: [asking], proposals: [draft("d-a", answer("r-q"), 5, { workstream: "ws-1" })] }));
-    expect(items).toEqual([{ key: "draft:d-a", kind: "question", workstreamId: "ws-1", label: "CA-401 · R1 asks a question · Pip suggests a reply", head: "CA-401", reason: "R1 asks a question · Pip suggests a reply", at: iso(10), target: { type: "draft", id: "d-a" } }]);
+    expect(items).toEqual([{ key: "draft:d-a", kind: "question", workstreamId: "ws-1", label: "CA-401 · R1 asks a question · Pip suggests a reply", head: "CA-401 · Something", reason: "R1 asks a question · Pip suggests a reply", at: iso(10), target: { type: "draft", id: "d-a" } }]);
     expect(needsYouCount(items, "ws-1")).toBe(1);
   });
 
@@ -455,6 +469,15 @@ describe("an answer Pip suggests to a run's question", () => {
       ]),
     );
     expect(items.every((i) => i.label === `CA-401 · ${i.reason}`)).toBe(true);
+  });
+
+  it("heads an item on a ticket that isn't cached with the title its workstream kept, and the key alone without one", () => {
+    const failed = run("r-f", "build", "failed", { item: ref("CA-401") });
+    const loose = run("r-l", "plan", "failed", { item: ref("CA-777") });
+    const items = needsYouItems(input({ workstreams: [ws1], runs: [failed, loose], titleOf: () => null }));
+    expect(items.map((i) => i.head)).toEqual(expect.arrayContaining(["CA-401 · Something", "CA-777"]));
+    // The cache wins where it has the ticket.
+    expect(needsYouItems(input({ workstreams: [ws1], runs: [failed], titleOf: () => "Welcome flow refresh" }))[0].head).toBe("CA-401 · Welcome flow refresh");
   });
 
   it("is a draft of its own once the run isn't asking, and the question alone once the reply is decided", () => {

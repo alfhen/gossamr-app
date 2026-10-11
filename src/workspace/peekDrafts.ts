@@ -86,19 +86,3 @@ export function focusPeekDraft(id: string, root: Root = document, frame: (go: ()
   handle = frame(find);
   return () => cancel(handle);
 }
-
-/**
- * Hands the keyboard to the peek of ticket `key` once it shows, as when the palette opens a ticket: its title, so the next
- * Tab is one of the peek's own controls rather than the board's behind it. Gives up after about two seconds. Returns a cancel.
- */
-export function focusPeekOf(key: string, root: Root = document, frame: (go: () => void) => number = requestAnimationFrame, cancel: (n: number) => void = cancelAnimationFrame): () => void {
-  let handle = 0;
-  let tries = 0;
-  const find = () => {
-    const peek = root.querySelector(`#peek-sheet[aria-label="Details for ${key.replace(/["\\]/g, "\\$&")}"]`) as (Focusable & { querySelector?(s: string): unknown }) | null;
-    if (peek) return take((peek.querySelector?.("h2") as Focusable | null) ?? peek, "nearest");
-    if (++tries < FOCUS_FRAMES) handle = frame(find);
-  };
-  handle = frame(find);
-  return () => cancel(handle);
-}

@@ -249,7 +249,9 @@ test.describe("agent intro continues (D1, D25)", () => {
     const summary = sheet.locator("[data-safety-summary] li");
     await expect(summary).toHaveCount(3);
     await expect(summary.nth(0)).toHaveText(/^Investigate, Triage, Plan, Review and Verify only read: Claude Code refuses their edits and writes/);
-    await expect(summary.nth(1)).toHaveText(/^Build changes code in its own worktree.*told to push and open a draft pull request only when you allow it.*requests, not locks/);
+    await expect(summary.nth(1)).toHaveText(/^Build changes code in its own worktree and runs with your own Claude settings, which decide whether it can push.*requests, not locks/);
+    // The detail further down says the same about pushing.
+    await expect(sheet.locator('li[data-tone="ask"]', { hasText: "Pushing a branch" })).toContainText("your Claude settings decide");
     await expect(summary.nth(2)).toHaveText("Gossamr posts nothing to Jira or GitHub until you approve it.");
     await sheet.getByRole("button", { name: "Got it, continue" }).click();
     await expect(sheet).toHaveCount(0);
@@ -412,8 +414,11 @@ test.describe("agent counts and tray (D4, D27)", () => {
     await openApp(page);
     await openPip(page);
     const strip = pipPane(page).getByRole("region", { name: "Your agents" });
-    const total = (await mockRuns(page)).length;
+    // Out of the runs it lists, the live ones and those waiting on the person, not the finished ones too.
+    const listed = new Set(["needsAnswer", "needsPermission", "systemBlocked", "failed", "queued", "launching", "working"]);
+    const total = (await mockRuns(page)).filter((r) => listed.has(r.state)).length;
     expect(total).toBeGreaterThan(3);
+    expect(total).toBeLessThan((await mockRuns(page)).length);
     await expect(strip.locator("[data-strip-count]")).toHaveText(`3 of ${total}`);
     await expect(strip.locator("article[data-run-id]")).toHaveCount(3);
     await expect(strip.locator('article[data-state="failed"]')).toContainText("SUP-9");
@@ -513,13 +518,13 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
 });
 
 /** Whether `review` starts within 16px of the top of what scrolls it, or what scrolls it is as far down as it goes. */
-async function reviewAtTop(review: ReturnType<Page["locator"]>) {
-  return review.evaluate((el) => {
+async function reviewAtTop(review: ReturnType<Page["locator"]>, strict = false) {
+  return review.evaluate((el, strict) => {
     const box = el.closest<HTMLElement>('[data-pip-conversation-body], aside[aria-label="Steps"]');
     if (!box) return false;
     const gap = el.getBoundingClientRect().top - box.getBoundingClientRect().top;
-    return (gap >= 0 && gap <= 16) || box.scrollTop >= box.scrollHeight - box.clientHeight - 1;
-  });
+    return (gap >= 0 && gap <= 16) || (!strict && box.scrollTop >= box.scrollHeight - box.clientHeight - 1);
+  }, strict);
 }
 
 test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
@@ -548,9 +553,6 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await expect(armed).toBeFocused();
     const hint = armed.getByRole("status");
     await expect(hint).toHaveText("a approve · s skip · ↵ open");
-    // It hangs in the room kept under every card, clear of the next card's title.
-    const under = (await hint.boundingBox())!;
-    expect(under.y + under.height).toBeLessThanOrEqual((await cards.last().boundingBox())!.y);
     // The hint hangs under the card: the card is as tall with it as without it.
     const tall = (await armed.boundingBox())!.height;
     await page.locator(PIP_INPUT).focus();
@@ -562,6 +564,32 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await expect(armed.getByRole("status")).toBeVisible();
     await cards.last().getByRole("button", { name: "Review on CA-401 →" }).click();
     await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
+  });
+
+  test("an armed card's key hint hangs clear of the next card's title, in the Drafts waiting list where cards sit closest", async ({ page }) => {
+    await openApp(page, MANAGED);
+    await startWorkstream(page, "CA-401");
+    await openPipHome(page);
+    await workstreamRow(page, "CA-401").click();
+    await askPip(page, "investigate this");
+    await homeSettled(page);
+    const review = await inlineStart(page, homeRunCards(page, "CA-401").last());
+    await review.getByRole("button", { name: "Start agent" }).click();
+    await expect(review).toHaveCount(0);
+    await finishOnHome(page, (await newest(page, "investigate"))!.id);
+    await finishOnHome(page, (await started(page, "triage")).id);
+    // The wakes' drafts wait one under the other, 6px apart.
+    const waiting = homeConversationRegion(page).getByRole("region", { name: "Drafts" }).locator("article[data-draft]");
+    await expect(waiting.nth(1)).toBeVisible();
+    const first = waiting.first();
+    await page.locator(PIP_INPUT).focus();
+    for (let i = 0; i < 6 && !(await first.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
+    await expect(first).toBeFocused();
+    const hint = first.getByRole("status");
+    await expect(hint).toBeVisible();
+    const under = (await hint.boundingBox())!;
+    const title = (await waiting.nth(1).locator("[data-draft-body] > div").first().boundingBox())!;
+    expect(under.y + under.height).toBeLessThanOrEqual(title.y);
   });
 
   test("a on a run draft opens its review scrolled into view with the keyboard in it; Tab reaches Start, Esc hides it and keeps the card", async ({ page }) => {
@@ -618,7 +646,8 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await expect(review.or(sheet)).toBeVisible();
     if (await sheet.isVisible()) await page.keyboard.press("Enter");
     await expect(review).toHaveAttribute("data-inline-start", "shown");
-    await expect.poll(() => reviewAtTop(review)).toBe(true);
+    // At the top of the conversation, under the chips no more: there is room below it to scroll it all the way up.
+    await expect.poll(() => reviewAtTop(review, true)).toBe(true);
     // The keyboard stays in it.
     await expect.poll(() => focusIn(page, '[aria-label="Review and start"][role="group"]')).toBe(true);
   });
@@ -667,6 +696,14 @@ test.describe("focus and keyboard (D8, D29, D30)", () => {
     expect(await focusIn(page, "#peek-sheet")).toBe(true);
     // A control of the peek's own, never the board's Filter input behind it.
     expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe("INPUT");
+    // j and k from inside it step to the next ticket's peek, and the keyboard goes along rather than to the page.
+    await peekSheet(page).locator("h2").first().focus();
+    for (const step of ["j", "j", "k"]) {
+      const before = await peekSheet(page).getAttribute("aria-label");
+      await page.keyboard.press(step);
+      await expect(peekSheet(page)).not.toHaveAttribute("aria-label", before!);
+      await expect.poll(() => focusIn(page, "#peek-sheet")).toBe(true);
+    }
     // Esc closes it and the keyboard goes back to the board.
     await page.keyboard.press("Escape");
     await expect(peekSheet(page)).toHaveCount(0);

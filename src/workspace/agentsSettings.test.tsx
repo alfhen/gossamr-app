@@ -4,7 +4,6 @@ import { MockBackend } from "../backend/mock";
 import { ruleText } from "../lib/workstreamHold";
 import { AUTOSTART_DEFAULTS, WORKSTREAM_RULES, type AgentSettings } from "../types";
 import { AgentsSettingsView, withAutostart, withTurnsPerDay } from "./AgentsSettings";
-import { SAFETY_SUMMARY } from "./runSheetLogic";
 
 const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 };
 const view = (settings: AgentSettings | null, settingsSaving = false) =>
@@ -64,28 +63,5 @@ describe("the automatic steps in Settings", () => {
     const turns = await b.runsSetSettings(withTurnsPerDay(saved, "9999")!);
     expect(turns.managerTurnsPerDay).toBe(500);
     expect((await b.runsSetSettings(withTurnsPerDay(turns, "0")!)).managerTurnsPerDay).toBe(0);
-  });
-});
-
-describe("the safety sheet as the one-time intro", () => {
-  const intro = (on: boolean) =>
-    renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} intro={on} onContinue={vi.fn()} />);
-
-  it("starts with three lines that are true for each kind, before the longer explanation", () => {
-    const html = intro(false);
-    const lines = [...html.matchAll(/data-safety-summary[\s\S]*?<\/ul>/g)][0][0].match(/<span>([^<]+)<\/span>/g)!.map((m) => m.slice(6, -7).replace(/&#x27;/g, "'"));
-    expect(lines).toEqual(SAFETY_SUMMARY.map((l) => l.text));
-    expect(lines[0]).toMatch(/^Investigate, Triage, Plan, Review and Verify only read/);
-    expect(lines[1]).toMatch(/^Build changes code in its own worktree/);
-    expect(lines[1]).toContain("told to push and open a draft pull request only when you allow it");
-    // Nothing enforces it, as the detail below says: the line can't promise a lock.
-    expect(lines[1]).toContain("both are requests, not locks");
-    expect(lines[2]).toBe("Gossamr posts nothing to Jira or GitHub until you approve it.");
-    expect(html.indexOf("data-safety-summary")).toBeLessThan(html.indexOf("What agents can touch"));
-  });
-
-  it("has Got it, continue in its footer only when it opened in place of the person's first action", () => {
-    expect(intro(true)).toMatch(/<button[^>]*>Got it, continue<\/button>/);
-    expect(intro(false)).not.toContain("Got it, continue");
   });
 });

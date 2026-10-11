@@ -17,7 +17,7 @@ import { useWorkstreams } from "./workstreamsStore";
 import type { WorkstreamView, Run } from "../types";
 import { SavedViewsPanel, type SavedViewsPanelProps } from "./SavedViews";
 import { buildTabItems } from "./tabItems";
-import { useTabs, type Tab } from "./tabsStore";
+import { loadTabs, useTabs, type Tab } from "./tabsStore";
 import { afterRunStarted } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 
@@ -428,5 +428,21 @@ describe("the toast queue", () => {
         expect(texts().length, `${started.state} then ${now}`).toBe(news ? 1 : 0);
       }
     });
+  });
+});
+
+describe("tabs kept from before Your turn", () => {
+  it("renames a tab opened from the old Needs me view to Your turn, and nothing else of that name", () => {
+    const tabs = [
+      { id: "a", title: "Needs me", filter: { type: "needsMe" }, view: "list" },
+      { id: "b", title: "Needs me", filter: { type: "blocked" }, view: "list" },
+    ];
+    const saved = JSON.stringify({ tabs, activeId: "a" });
+    vi.stubGlobal("localStorage", { getItem: (k: string) => (k === "gossamr-tabs" ? saved : null), setItem: () => {}, removeItem: () => {} });
+    try {
+      expect(loadTabs().tabs.map((t) => t.title)).toEqual(["Your turn", "Needs me"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

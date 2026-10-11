@@ -108,15 +108,16 @@ impl WorkstreamView {
 }
 
 /// Holds `ws` with `reason` unless it is closed or already held. An existing reason is kept, except that the person's own
-/// hold replaces one that resuming would otherwise lift by itself or that the person didn't choose (restart, budget,
-/// quota). Returns whether it changed.
+/// hold, or a tripwire, replaces one that resuming would otherwise lift by itself or that the person didn't choose
+/// (restart, budget, quota): a tripwire's hold is lifted only by the person, never by a message or a new day. Returns
+/// whether it changed.
 fn hold(ws: &mut Workstream, reason: &str) -> bool {
     if ws.closed_at.is_some() {
         return false;
     }
     match ws.held_reason.as_deref() {
         None => {}
-        Some(HELD_RESTART | HELD_BUDGET | HELD_QUOTA) if reason == HELD_PERSON => {}
+        Some(HELD_RESTART | HELD_BUDGET | HELD_QUOTA) if reason == HELD_PERSON || reason.starts_with(TRIPWIRE) => {}
         Some(_) => return false,
     }
     ws.held_reason = Some(reason.to_string());
@@ -472,9 +473,9 @@ impl Core {
 
     /// The person lifts a workstream's hold. Lifting a budget hold also starts its automatic turns and wakes again from
     /// zero (`budget_reset`); lifting a basis-drift hold takes the basis again from the ticket as the cache has it now
-    /// (`basis_captured`; forgotten when it isn't cached, so a sweep takes it later). Lifting a tripwire puts back the
-    /// mode it took away (`mode_set` by the person), unless the person chose one meanwhile. A workstream that isn't held
-    /// records nothing.
+    /// (`basis_captured`; forgotten when it isn't cached, so a sweep takes it later). Resuming puts back the mode a
+    /// tripwire took away (`mode_set` by the person), whatever the hold, as a trip can land while another hold is on;
+    /// unless the person chose a mode meanwhile. A workstream that isn't held records nothing.
     pub async fn resume_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
@@ -486,7 +487,7 @@ impl Core {
                 ws.spent.auto_turns = 0;
                 ws.spent.wakes = 0;
             }
-            let restore = if reason.starts_with(TRIPWIRE) { ws.resume_mode.take() } else { None };
+            let restore = ws.resume_mode.take();
             if let Some(mode) = restore {
                 ws.mode = mode;
             }
@@ -641,7 +642,8 @@ impl Core {
     }
 
     /// A tripwire fired in workstream `id`: it is recorded with its kind (and run), the workstream drops to Advise and
-    /// is held with `tripwire:<kind>`; the mode it dropped from is kept in `resume_mode` for resuming to put back. A drifted basis records the fields that drifted (`basis_drifted`, kept in
+    /// is held with `tripwire:<kind>` (unless the person or another tripwire holds it already); the mode it dropped from
+    /// is kept in `resume_mode`, whatever holds it, for resuming to put back. A drifted basis records the fields that drifted (`basis_drifted`, kept in
     /// `drifted` while held) and is kept until the person resumes, which takes it again from the ticket as it is then.
     pub async fn trip_workstream(&self, scope: &Scope, id: &str, kind: &str, run: Option<&str>, fields: &[&str]) -> Result<Workstream> {
         let reason = tripwire(kind);
@@ -661,9 +663,8 @@ impl Core {
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_drifted", at).detail(fields.join(",")))?;
             }
             if ws.mode != Mode::Advise {
-                if ws.held_reason.is_none() {
-                    ws.resume_mode = Some(ws.mode);
-                }
+                // Held already (by the person, say), the trip still takes Manage away, and resuming that hold puts it back.
+                ws.resume_mode.get_or_insert(ws.mode);
                 ws.mode = Mode::Advise;
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "mode_set", at).detail(Mode::Advise.as_str()))?;
             }
@@ -1322,6 +1323,29 @@ mod tests {
         assert_eq!(resumed.mode, Mode::Advise);
         assert_eq!(last(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), (Actor::Person, "resumed", Some("tripwire:marker")));
         assert!(fx.tracker.intents().is_empty(), "nothing is written to Jira");
+    }
+
+    #[tokio::test]
+    async fn a_trip_that_lands_on_another_hold_still_remembers_manage_and_its_resume_puts_it_back() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
+        // Held by the person first: the hold stays theirs, and Manage is still remembered.
+        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
+        let held = fx.core.trip_workstream(&fx.scope, &ws.id, "marker", Some("r1"), &[]).await.unwrap();
+        assert_eq!((held.held_reason.as_deref(), held.mode, held.resume_mode), (Some(HELD_PERSON), Mode::Advise, Some(Mode::Manage)));
+        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!((resumed.held_reason.as_deref(), resumed.mode, resumed.resume_mode), (None, Mode::Manage, None));
+        assert_eq!(last(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), (Actor::Person, "mode_set", Some("manage")));
+
+        // Held for the budget, which a message would lift: the tripwire takes its place, so only Resume lifts it.
+        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
+        let held = fx.core.trip_workstream(&fx.scope, &ws.id, "marker", Some("r1"), &[]).await.unwrap();
+        assert_eq!((held.held_reason.as_deref(), held.mode, held.resume_mode), (Some("tripwire:marker"), Mode::Advise, Some(Mode::Manage)));
+        fx.core.person_wrote_in_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(held_reason(&fx, &ws.id).await.as_deref(), Some("tripwire:marker"));
+        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!((resumed.held_reason.as_deref(), resumed.mode), (None, Mode::Manage));
     }
 
     #[tokio::test]

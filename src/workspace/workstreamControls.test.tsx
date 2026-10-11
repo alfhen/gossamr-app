@@ -11,6 +11,10 @@ import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandA
 import { useToasts } from "./toasts";
 import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
+import type { WatchState } from "../types";
+import type { StepChip } from "./pipHomeLogic";
+import { NO_PULL_VIEW, autoNote, pullViewOrGithub } from "./StepRail";
+import { usePullView } from "./pullViewStore";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -249,5 +253,48 @@ describe("Hold all", () => {
     // No other command shows the same shortcut.
     expect(on.filter((c) => c.hint === HOLD_ALL_HINT)).toHaveLength(1);
     expect(buildCommands([], [], actions).some((c) => c.id === "workstream:hold-all")).toBe(false);
+  });
+});
+
+describe("a step a rule started, while the workstream is held or in Advise", () => {
+  it("says a queued run waits for Resume while held and for Manage while in Advise, and how a started one started", () => {
+    const chip = (state: "queued" | "working") => ({ auto: true, newest: { state } }) as StepChip;
+    expect(autoNote(chip("queued"), { heldReason: "tripwire:basis_drift", mode: "advise" })).toBe("waits for Resume");
+    expect(autoNote(chip("queued"), { heldReason: null, mode: "advise" })).toBe("waits for Manage");
+    expect(autoNote(chip("queued"), { heldReason: null, mode: "manage" })).toBe("started automatically");
+    // A run that already started says how it started, held or not.
+    expect(autoNote(chip("working"), { heldReason: "person", mode: "advise" })).toBe("started automatically");
+    expect(autoNote({ ...chip("queued"), auto: false }, { heldReason: "person", mode: "advise" })).toBeNull();
+  });
+});
+
+describe("the Review step's PR view with no GitHub connection (D17)", () => {
+  const openUrl = vi.fn(() => Promise.resolve());
+  const watching = (connectionId: string): WatchState => ({ connectionId, mode: "selected", needsChoice: false, catalogSize: null, watches: [] });
+  beforeEach(() => {
+    openUrl.mockClear();
+    useToasts.getState().clear();
+    useWorkspace.setState({ backend: { openUrl } as never, proposals: {}, watch: [] });
+  });
+  afterEach(() => {
+    useToasts.getState().clear();
+    usePullView.setState({ target: null, opener: null });
+    useWorkspace.setState({ backend: null, watch: [] });
+  });
+
+  it("says so in a note and opens the pull request on GitHub, rather than doing nothing", () => {
+    pullViewOrGithub("acme/storefront", 519);
+    expect(usePullView.getState().target).toBeNull();
+    expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toEqual([[NO_PULL_VIEW, "info"]]);
+    expect(NO_PULL_VIEW).toBe("Connect GitHub to see this pull request in Gossamr. Opened it on GitHub instead.");
+    expect(openUrl).toHaveBeenCalledWith("https://github.com/acme/storefront/pull/519");
+  });
+
+  it("with a code host watched, opens the in-app view and nothing else", () => {
+    useWorkspace.setState({ watch: [watching("github:ada")] });
+    pullViewOrGithub("acme/storefront", 519);
+    expect(usePullView.getState().target).toEqual({ connectionId: "github:ada", repo: "acme/storefront", number: 519, proposalId: null });
+    expect(useToasts.getState().toasts).toEqual([]);
+    expect(openUrl).not.toHaveBeenCalled();
   });
 });
