@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 fn connection_of(p: &Proposal) -> String {
     match &p.intent {
         Intent::Create { container, .. } => container.connection_id.clone(),
-        Intent::StartRun { connection_id, .. } | Intent::FollowUp { connection_id, .. } => connection_id.clone(),
+        Intent::StartRun { connection_id, .. } | Intent::FollowUp { connection_id, .. } | Intent::RunAnswer { connection_id, .. } => connection_id.clone(),
         other => other.target().map(|t| t.connection_id.clone()).unwrap_or_default(),
     }
 }
@@ -103,6 +103,9 @@ impl Db {
         if matches!(p.intent, Intent::FollowUp { .. }) {
             return Err(Error::Proposal("a follow-up is sent back with its own button".into()));
         }
+        if matches!(p.intent, Intent::RunAnswer { .. }) {
+            return Err(Error::Proposal("an answer is sent with its own button".into()));
+        }
         p.state = ProposalState::Applying;
         p.updated_at = at;
         p.error = None;
@@ -115,11 +118,11 @@ impl Db {
     }
 
     /// Puts proposals left `Applying` by a run that never finished back to pending, with a note that the write may
-    /// have gone through. A `StartRun` is left alone: it is approved by one transaction and never passes through
-    /// `Applying`, so there is no write to doubt.
+    /// have gone through. A `StartRun`, follow-up or answer is left alone: none passes through `Applying`, so there is no
+    /// write to doubt.
     pub fn release_interrupted(&self, at: DateTime<Utc>) -> Result<usize> {
         let stuck = self.proposals(&ProposalQuery { states: Some(vec![StateKind::Applying]), ..Default::default() })?;
-        let stuck: Vec<Proposal> = stuck.into_iter().filter(|p| !matches!(p.intent, Intent::StartRun { .. } | Intent::FollowUp { .. })).collect();
+        let stuck: Vec<Proposal> = stuck.into_iter().filter(|p| !matches!(p.intent, Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. })).collect();
         for mut p in stuck.iter().cloned() {
             p.state = ProposalState::Pending;
             p.updated_at = at;

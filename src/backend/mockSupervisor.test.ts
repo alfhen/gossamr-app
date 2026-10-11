@@ -2,7 +2,8 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoStartSwitches, Run, RunKind, RunSpec, Workstream, WorkstreamRule } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
-import { MockWorkstreams } from "./mockWorkstreams";
+import { MockWorkstreams, basisOfItem, driftOf, type BasisTicket } from "./mockWorkstreams";
+import { docFromText } from "../lib/docs";
 import fixtures from "./supervisor.fixtures.json";
 import { FIX_FINDING_LIMIT, FIX_INSTRUCTION, FIX_PREFACE, MockSupervisor, budgetLevel, decideAutostart, decideWake, eventLine, fixRoundMessage, keysIn, planRecommended, tripwireOf } from "./mockSupervisor";
 import type { AutostartInput, ReviewFinding, WakeFact } from "./mockSupervisor";
@@ -51,6 +52,17 @@ describe("the supervisor fixtures the Rust side runs too", () => {
 
   it.each(fixtures.budget.map((c) => [JSON.stringify(c), c] as const))("budget %s", (_, c) => {
     expect(budgetLevel(workstream({ spent: c.spent, budget: c.budget }))).toBe(c.expect);
+  });
+
+  it.each(fixtures.basisDrift.map((c) => [c.name, c] as const))("basis drift: %s", (_, c) => {
+    const { basis: b, now: n } = c as typeof c & { basis: { summary?: string; changing?: string[] } };
+    const then: BasisTicket = { title: b.summary ?? "", body: docFromText(b.description), status: { id: b.statusId, name: b.statusId, category: "active" }, assignee: null };
+    const basis = { ...basisOfItem(then), summaryDigest: b.summary === undefined ? undefined : basisOfItem(then).summaryDigest, changing: b.changing ?? [] };
+    const ticket: BasisTicket = { title: n.summary, body: docFromText(n.description), status: { id: n.statusId, name: n.statusId, category: n.statusCategory as "todo" | "active" | "done" }, assignee: { connectionId: "c", accountId: n.assignee } };
+    const drifted = driftOf(basis, ticket);
+    expect(drifted).toEqual(c.expect);
+    // The tripwire fires on any field, and on none it doesn't.
+    expect(tripwireOf({ ws: { createdAt: "2026-10-01T09:00:00Z" }, marked: null, drifted, runs: [], events: [] })).toEqual(c.expect.length ? { kind: "basis_drift", run: null } : null);
   });
 });
 
@@ -466,6 +478,44 @@ describe("the sample supervisor", () => {
     expect(b.workstreams.get(ws)?.workstream).toMatchObject({ mode: "advise", heldReason: "tripwire:marker" });
     expect(supervisorLines(b, ws)).toEqual(["tripwire marker", "mode_set advise", "held tripwire:marker"]);
     expect([wakes.length, newest(b, ws, "triage")]).toEqual([0, undefined]);
+  });
+
+  it("holds a managed workstream whose ticket's description is edited in Jira, says why, and takes the ticket again on resume", () => {
+    const { b, supervisor, wakes } = world();
+    const ws = b.workstreams.open(CA401).id;
+    supervisor.check();
+    expect(b.workstreams.get(ws)?.workstream.heldReason).toBeNull();
+    const before = b.workstreams.get(ws)!.workstream.basis!;
+    expect(before.summaryDigest).toMatch(/^mock-/);
+
+    b.editTicket("CA-401", { description: "Someone rewrote the welcome flow." });
+    expect(b.workstreams.get(ws)?.workstream).toMatchObject({ mode: "advise", heldReason: "tripwire:basis_drift", drifted: ["description"], basis: before });
+    expect(supervisorLines(b, ws)).toEqual(["tripwire basis_drift", "basis_drifted description", "mode_set advise", "held tripwire:basis_drift"]);
+    expect([wakes.length, b.proposals.writes]).toEqual([0, []]);
+
+    b.workstreams.setMode(ws, "manage");
+    const resumed = b.workstreams.resume(ws);
+    expect(resumed.drifted).toBeUndefined();
+    expect(resumed.basis!.descriptionDigest).not.toBe(before.descriptionDigest);
+    expect(last(supervisorLines(b, ws))).toBe("basis_captured");
+    supervisor.check();
+    expect(b.workstreams.get(ws)?.workstream.heldReason).toBeNull();
+
+    // The new basis counts the next edit once, the summary this time.
+    b.editTicket("CA-401", { summary: "Welcome flow, take two" });
+    expect(b.workstreams.get(ws)?.workstream).toMatchObject({ heldReason: "tripwire:basis_drift", drifted: ["summary"] });
+    expect(b.proposals.writes).toEqual([]);
+  });
+
+  it("leaves a workstream be when its ticket moves to another status, and holds it when it moves to Done", () => {
+    const { b, supervisor } = world();
+    const ws = b.workstreams.open(itemRef("CA-402")).id;
+    supervisor.check();
+    b.editTicket("CA-402", { statusId: "QA" });
+    expect(b.workstreams.get(ws)?.workstream.heldReason).toBeNull();
+    b.editTicket("CA-402", { statusId: "Sent" });
+    expect(b.workstreams.get(ws)?.workstream).toMatchObject({ heldReason: "tripwire:basis_drift", drifted: ["status"] });
+    expect(b.proposals.writes).toEqual([]);
   });
 
   it("holds a workstream whose step failed twice", () => {

@@ -58,6 +58,10 @@ pub enum Edit {
     FollowUp {
         message: String,
     },
+    /// The answer a run that asked a question is sent.
+    RunAnswer {
+        message: String,
+    },
     /// A run's settings; the ones left out stay as they are. Only the person edits these.
     #[serde(rename_all = "camelCase")]
     Run {
@@ -137,6 +141,14 @@ impl Edit {
                 item: item.clone(),
                 message: message.trim().to_string(),
                 reason: reason.clone(),
+            }),
+            (Edit::RunAnswer { message }, Intent::RunAnswer { connection_id, run_id, short_id, item, question, .. }) => Ok(Intent::RunAnswer {
+                connection_id: connection_id.clone(),
+                run_id: run_id.clone(),
+                short_id: short_id.clone(),
+                item: item.clone(),
+                message: message.trim().to_string(),
+                question: question.clone(),
             }),
             (Edit::Rewrite { title, body }, Intent::Rewrite { item, title: was_title, body: was_body, flattened }) => {
                 let mut changed_title = was_title.clone();
@@ -731,6 +743,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn approving_a_transition_retires_its_pending_siblings_even_uncached() {
+        let fx = crate::inbox::testing::fixture().await;
+        let scope = fx.core.scope().await.unwrap();
+        let mine = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }, Some("Done".into())).await.unwrap();
+        let pips = fx.core.propose(&scope, Draft::from_pip("q", None, Intent::Transition { item: fx.item("CA-1"), to: "3".into() }, None)).await.unwrap();
+        let elsewhere = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-2"), to: "10001".into() }, None).await.unwrap();
+
+        assert_eq!(fx.core.approve_proposal(&pips.id).await.unwrap().state, ProposalState::Applied);
+        let all = fx.core.proposals(&ProposalQuery::default()).await.unwrap();
+        let state = |id: &str| all.iter().find(|p| p.id == id).unwrap().state.clone();
+        assert_eq!(state(&mine.id), ProposalState::Retired("Another move of CA-1 was approved".into()));
+        assert_eq!(state(&elsewhere.id), ProposalState::Pending);
+        assert_eq!(fx.tracker.intents().len(), 1, "only the approved move reached the tracker");
+    }
+
+    #[tokio::test]
     async fn a_failed_approval_returns_the_draft_to_pending_with_the_reason() {
         let fx = crate::inbox::testing::fixture().await;
         let drafted = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }, None).await.unwrap();
@@ -804,6 +832,15 @@ mod tests {
         let edit: Edit = serde_json::from_str(r#"{"type":"comment","body":"hi","mentions":[{"accountId":"a","name":"A"}]}"#).unwrap();
         assert!(matches!(edit, Edit::Comment { mentions, .. } if mentions.len() == 1));
         assert!(matches!(serde_json::from_str::<Edit>(r#"{"type":"subtasks","summaries":["x"]}"#).unwrap(), Edit::Subtasks { .. }));
+    }
+
+    #[test]
+    fn an_answer_edit_changes_only_the_message() {
+        let current = Intent::RunAnswer { connection_id: "c".into(), run_id: "r1".into(), short_id: Some("abcd1234".into()), item: Some(item_ref("1")), message: "Pip's words".into(), question: Some("Which one?".into()) };
+        let edit: Edit = serde_json::from_str(r#"{"type":"runAnswer","message":"  My words \n"}"#).unwrap();
+        let Intent::RunAnswer { run_id, short_id, message, question, .. } = edit.apply_to(&current).unwrap() else { panic!() };
+        assert_eq!((run_id.as_str(), short_id.as_deref(), message.as_str(), question.as_deref()), ("r1", Some("abcd1234"), "My words", Some("Which one?")));
+        assert!(edit.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
     }
 
     fn clone_in(fx: &crate::inbox::testing::Fixture, name: &str) -> PathBuf {

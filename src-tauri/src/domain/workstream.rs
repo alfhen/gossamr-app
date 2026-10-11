@@ -111,6 +111,10 @@ pub struct Workstream {
     /// The ticket as it was when the workstream opened, to notice it drifting; none for a ticketless one.
     #[serde(default)]
     pub basis: Option<WorkstreamBasis>,
+    /// The basis fields (`BASIS_SUMMARY`, `BASIS_DESCRIPTION`, `BASIS_STATUS`) whose drift held it, kept while it is
+    /// held for `tripwire:basis_drift`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drifted: Vec<String>,
 }
 
 /// An auto-start rule: which finished run may start which successor on its own (`agent/autostart.rs`).
@@ -164,14 +168,18 @@ impl RuleSwitches {
     }
 }
 
-/// What a ticket looked like when its workstream opened: its status, assignee and a digest of its description.
+/// What a ticket looked like when its workstream opened: its status, assignee and digests of its summary and
+/// description.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkstreamBasis {
     pub status_id: String,
     pub assignee: Option<PersonRef>,
+    /// A basis recorded before summaries were kept has none, and isn't compared on its summary until taken again.
+    #[serde(default)]
+    pub summary_digest: Option<String>,
     pub description_digest: String,
-    /// The fields (`BASIS_STATUS`, `BASIS_ASSIGNEE`, `BASIS_DESCRIPTION`) a draft the person approved has just written:
+    /// The fields (`BASIS_STATUS`, `BASIS_ASSIGNEE`, `BASIS_SUMMARY`, `BASIS_DESCRIPTION`) a draft the person approved has just written:
     /// not compared until they are taken again from the ticket as the write left it. Every other field still is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changing: Vec<String>,
@@ -179,6 +187,7 @@ pub struct WorkstreamBasis {
 
 pub const BASIS_STATUS: &str = "status";
 pub const BASIS_ASSIGNEE: &str = "assignee";
+pub const BASIS_SUMMARY: &str = "summary";
 pub const BASIS_DESCRIPTION: &str = "description";
 
 /// How much of its budget a workstream has used: `Amber` from 80% of either limit, `Spent` at 100%.
@@ -478,6 +487,7 @@ mod tests {
         assert_eq!(budget_level(&ws), BudgetLevel::Ok);
         let back: Workstream = serde_json::from_value(serde_json::to_value(&ws).unwrap()).unwrap();
         assert_eq!(back, ws);
+        assert!(ws.drifted.is_empty() && serde_json::to_value(&ws).unwrap().get("drifted").is_none());
         assert_eq!((ws.mode, ws.notes, ws.closed_at, ws.repo, ws.pip_session), (Mode::Advise, None, None, None, None));
         assert_eq!((ws.budget, ws.spent), (Budget::default(), Spend::default()));
         assert_eq!(serde_json::to_value(Stage::Investigate).unwrap(), "investigate");

@@ -4,6 +4,7 @@ import { HELD_PERSON } from "../types";
 import type {
   AdfNode,
   AssignedElsewhere,
+  BasisField,
   CacheChanged,
   CatalogPage,
   CodeCommitQuery,
@@ -45,24 +46,24 @@ import type {
   WorkstreamsChanged,
 } from "../types";
 import { fold, type Mention } from "../lib/mentions";
-import { docText } from "../lib/docs";
+import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
-import { targetOf, workstreamOf } from "../lib/proposals";
+import { basisFieldsOf, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { MockSupervisor } from "./mockSupervisor";
 import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
 import { mockPipTurns } from "./mockPipTurns";
-import { MockWorkstreams, textDigest } from "./mockWorkstreams";
+import { MockWorkstreams, lastTripOf, type LastTrip } from "./mockWorkstreams";
 
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
 import { MockRuns, STOPPABLE } from "./mockRuns";
 import { seedDrafts } from "./mockDrafts";
-import { exposeMockClock, type MockOptions } from "./mockWatch";
+import { exposeMockClock, type MockOptions, type TicketEdit } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
 import type { Backend, ReadScope } from "./types";
 
@@ -407,7 +408,7 @@ export class MockBackend implements Backend {
     );
     this.runs.workstreams = this.workstreams;
     // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
-    this.proposals.audit = (p, actor, action) => void this.workstreams.record(workstreamOf(p), actor, action, { proposalId: p.id });
+    this.proposals.audit = (p, actor, action, detail) => void this.workstreams.record(workstreamOf(p), actor, action, { proposalId: p.id, ...(detail ? { detail } : {}) });
     // A run that moved on may have moved its workstream's stage on.
     this.runs.onChanged(() => this.workstreams.changed());
     this.runs.ticketText = (ref) => {
@@ -420,9 +421,11 @@ export class MockBackend implements Backend {
     // A draft pull request a build opened turns up on the code host, which ends its workstream's wait for it.
     this.runs.onPullRequest = (change) => this.github.code.addPullRequest(change);
     this.workstreams.prOf = (runId) => this.runs.pullRequestOf(runId);
-    this.workstreams.basisOf = (ref) => {
-      const w = this.connector.item(ref);
-      return w ? { statusId: w.status.id, assignee: w.assignee, descriptionDigest: textDigest(docText(w.body)) } : null;
+    this.workstreams.ticketOf = (key) => this.connector.item(itemRef(key));
+    // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for drift.
+    this.proposals.onWritten = (p) => {
+      const ws = workstreamOf(p);
+      if (ws) this.workstreams.rebase(ws, basisFieldsOf(p.intent));
     };
     this.runs.seedPlanDescriptions();
     this.supervisor = new MockSupervisor({
@@ -433,7 +436,7 @@ export class MockBackend implements Backend {
       hasWaitingWake: mockHasWaitingWake,
       cancelWakes: mockCancelWakes,
     });
-    exposeMockClock({ runs: this.runs, workstreams: this.workstreams, proposals: this.proposals, pip: { hold: holdMockPip, idle: mockPipIdle } });
+    exposeMockClock({ runs: this.runs, workstreams: this.workstreams, proposals: this.proposals, pip: { hold: holdMockPip, idle: mockPipIdle }, tickets: { edit: (key, change) => this.editTicket(key, change) } });
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
     this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));
@@ -464,6 +467,8 @@ export class MockBackend implements Backend {
         throw new Error("A run is approved with its own button");
       case "followUp":
         throw new Error("A follow-up is sent back with its own button");
+      case "runAnswer":
+        throw new Error("An answer is sent with its own button");
       default:
         throw new Error("the sample data can't apply that");
     }
@@ -612,6 +617,11 @@ export class MockBackend implements Backend {
 
   async runsAnswer(id: string, text: string) {
     return this.runs.answer(id, text);
+  }
+
+  async runsAnswerDraft(proposalId: string, message: string) {
+    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
+    return this.runs.answerDraft(proposalId, message);
   }
 
   async runsAdoptSession(id: string, session: string) {
@@ -802,12 +812,32 @@ export class MockBackend implements Backend {
     return this.workstreams.get(id)?.workstream.heldReason ?? null;
   }
 
+  pipWorkstreamDrifted(id: string): readonly BasisField[] | null {
+    return this.workstreams.get(id)?.workstream.drifted ?? null;
+  }
+
+  /** The last tripwire that held workstream `id`, until a wake after the one that follows the person's resume: Pip is told once. */
+  pipWorkstreamTrip(id: string): LastTrip | null {
+    if (!this.workstreams.get(id)) return null;
+    const events = this.workstreams.events(id);
+    const trip = lastTripOf(events);
+    if (!trip?.resumedAt) return trip;
+    const since = trip.resumedAt;
+    // One wake turn's lines share their time; the turn asking now has written its own already.
+    const turns = new Set(events.filter((e) => e.actor === "supervisor" && e.action === "wake" && e.at >= since).map((e) => e.at));
+    return turns.size <= 1 ? trip : null;
+  }
+
   pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string) {
     return this.runs.pipDraft(item, kind, fromRun, focus, requestId, this.workstreamOfRequest(requestId));
   }
 
   pipFollowUp(runId: string, message: string, reason: string, requestId: string) {
     return this.runs.pipFollowUp(runId, message, reason, requestId);
+  }
+
+  pipAnswer(runId: string, message: string, requestId: string) {
+    return this.runs.proposeAnswer(runId, message, requestId);
   }
 
   pipPersonWrote(id: string) {
@@ -828,6 +858,16 @@ export class MockBackend implements Backend {
 
   proposalsSkip(id: string) {
     return this.proposals.skip(id);
+  }
+
+  /**
+   * Someone edits sample ticket `key` in Jira: its summary, description or status (an id or a name). The cache changes
+   * at once (items-changed), and the workstreams tell their listeners, so the supervisor looks again, as a sync bringing
+   * the edit would make it.
+   */
+  editTicket(key: string, change: TicketEdit) {
+    this.connector.edit(itemRef(key), { title: change.summary, body: change.description === undefined ? undefined : docFromText(change.description), status: change.statusId });
+    this.workstreams.changed();
   }
 
   proposalsApprove(id: string) {
@@ -891,6 +931,8 @@ export class MockBackend implements Backend {
         throw new Error("A run is approved with its own button");
       case "followUp":
         throw new Error("A follow-up is sent back with its own button");
+      case "runAnswer":
+        throw new Error("An answer is sent with its own button");
       default:
         throw new Error("the sample data can't apply that");
     }

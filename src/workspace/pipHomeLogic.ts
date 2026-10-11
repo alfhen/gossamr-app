@@ -2,7 +2,7 @@ import { inWorkstreamPane, targetOf, workstreamOf } from "../lib/proposals";
 import { heldText } from "../lib/workstreamHold";
 import { byQueue, STAGE_LABEL } from "../lib/workstreamStage";
 import { HELD_BUDGET, HELD_DAILY, TRIPWIRE } from "../types";
-import type { CodeChange, Intent, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
+import type { BasisField, CodeChange, Intent, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
 import { needsPerson, stateView, type Tone } from "./agentsLogic";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
 import type { WorkstreamSuggestionScene } from "./suggestions";
@@ -11,8 +11,8 @@ import { runWorkstream } from "./workstreamsStore";
 /** Pure helpers behind Pip home's workstream rows and its Needs you tray. They read the live stores' values and decide nothing. */
 
 /** What a workstream's held banner says, shortened for a row or the tray: "Held: budget", "Held by you", "Held: tripwire, …". */
-export function shortHeld(reason: string | null | undefined): string | null {
-  const text = heldText(reason);
+export function shortHeld(reason: string | null | undefined, drifted?: readonly BasisField[] | null): string | null {
+  const text = heldText(reason, drifted);
   if (!text || !reason) return null;
   if (reason === HELD_BUDGET) return "Held: budget";
   if (reason === HELD_DAILY) return "Held: daily turns";
@@ -32,7 +32,7 @@ const RUNNING = new Set<Run["state"]>(["launching", "working"]);
  * else "Done" or "Idle".
  */
 export function workstreamStatus(view: WorkstreamView, runs: readonly Run[], waiting = 0): string {
-  const held = shortHeld(view.workstream.heldReason);
+  const held = shortHeld(view.workstream.heldReason, view.workstream.drifted);
   if (held) return held;
   if (view.waitingForPr) return "waiting for PR";
   const own = runs.filter((r) => view.runs.includes(r.id));
@@ -85,6 +85,7 @@ const DRAFT_TEXT: Record<Exclude<Intent["type"], "startRun">, string> = {
   update: "Draft change",
   rewrite: "Draft rewrite",
   followUp: "Draft follow-up",
+  runAnswer: "Draft answer",
 };
 
 /** The open workstream a draft belongs to: the one it was made in, else the first whose conversation shows it; null is General. */
@@ -101,17 +102,30 @@ function runName(run: Run, ws: WorkstreamView | null): string {
 
 const prefix = (key: string | null | undefined, text: string) => (key ? `${key} · ${text}` : text);
 
+/** The pending answer drafts for runs still asking, by run id, the oldest when there are several: each run's question carries its one. */
+function answersByRun(proposals: readonly Proposal[], runs: readonly Run[]): Map<string, Proposal> {
+  const asking = new Set(runs.filter((r) => r.state === "needsAnswer").map((r) => r.id));
+  const out = new Map<string, Proposal>();
+  for (const p of [...proposals].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+    if (p.state.type === "pending" && p.intent.type === "runAnswer" && asking.has(p.intent.runId) && !out.has(p.intent.runId)) out.set(p.intent.runId, p);
+  }
+  return out;
+}
+
 /**
  * Everything waiting on the person across the open workstreams and General, oldest first by when it started waiting:
  * pending drafts (a draft run start apart), runs asking a question, asking permission or blocked (a folder to trust
- * among them), failed runs not yet looked at, and held workstreams. Decided drafts, runs that moved on and lifted holds
- * aren't there, so an item goes as soon as the stores say its wait is over.
+ * among them), failed runs not yet looked at, and held workstreams. A run asking a question that Pip suggested a reply
+ * to is one item, which goes to the reply. Decided drafts, runs that moved on and lifted holds aren't there, so an item
+ * goes as soon as the stores say its wait is over.
  */
 export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt }: NeedsYouInput): NeedsYouItem[] {
   const open = workstreams.filter((v) => v.workstream.closedAt === null);
   const items: NeedsYouItem[] = [];
+  const answers = answersByRun(proposals, runs);
+  const carried = new Set([...answers.values()].map((p) => p.id));
   for (const p of proposals) {
-    if (p.state.type !== "pending") continue;
+    if (p.state.type !== "pending" || carried.has(p.id)) continue;
     const workstreamId = draftWorkstream(p, open);
     const target = { type: "draft", id: p.id } as const;
     if (p.intent.type === "startRun") {
@@ -131,7 +145,9 @@ export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt
     const at = run.lastProgressAt ?? run.endedAt ?? run.queuedAt;
     const base = { key: `run:${run.id}`, workstreamId: ws?.workstream.id ?? null, at, target: { type: "run", id: run.id } as const };
     const key = run.item?.key;
-    if (run.state === "needsAnswer") items.push({ ...base, kind: "question", label: prefix(key, `${name} asks a question`) });
+    const answer = answers.get(run.id);
+    if (answer) items.push({ ...base, key: `draft:${answer.id}`, kind: "question", label: prefix(key, `${name} asks a question · ${answer.createdBy === "pip" ? "Pip suggests a reply" : "a reply is drafted"}`), target: { type: "draft", id: answer.id } });
+    else if (run.state === "needsAnswer") items.push({ ...base, kind: "question", label: prefix(key, `${name} asks a question`) });
     else if (run.state === "needsPermission" || run.state === "systemBlocked") items.push({ ...base, kind: "permission", label: prefix(key, `${name} needs permission`) });
     else if (run.state === "failed" && !seenFailed.has(run.id)) {
       const trust = run.failure?.type === "untrustedFolder";
@@ -139,7 +155,7 @@ export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt
     }
   }
   for (const v of open) {
-    const held = shortHeld(v.workstream.heldReason);
+    const held = shortHeld(v.workstream.heldReason, v.workstream.drifted);
     if (!held) continue;
     const id = v.workstream.id;
     items.push({ key: `held:${id}`, kind: "held", workstreamId: id, label: prefix(v.workstream.itemKey, held), at: heldAt?.[id] ?? v.workstream.createdAt, target: { type: "workstream" } });
@@ -170,12 +186,12 @@ export type StepGroup = RunKind | "pip";
 const isOpen = (p: Proposal) => p.state.type === "pending" || p.state.type === "applying";
 
 /**
- * The step a workstream's draft is about: a run draft's own kind; a draft a run left, or a follow-up to a run, that
- * run's kind; anything else (a comment Pip drafted in the conversation, say) is one of Pip's drafts.
+ * The step a workstream's draft is about: a run draft's own kind; a draft a run left, or a follow-up or answer to a run,
+ * that run's kind; anything else (a comment Pip drafted in the conversation, say) is one of Pip's drafts.
  */
 export function draftStep(p: Proposal, runs: readonly Pick<Run, "id" | "spec">[]): StepGroup {
   if (p.intent.type === "startRun") return p.intent.spec.kind;
-  const runId = p.origin.type === "run" ? p.origin.runId : p.intent.type === "followUp" ? p.intent.runId : null;
+  const runId = p.origin.type === "run" ? p.origin.runId : p.intent.type === "followUp" || p.intent.type === "runAnswer" ? p.intent.runId : null;
   return runs.find((r) => r.id === runId)?.spec.kind ?? "pip";
 }
 
@@ -185,6 +201,15 @@ export function stepDrafts(proposals: readonly Proposal[], runs: readonly Pick<R
   for (const p of [...proposals].filter(isOpen).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : 1))) {
     const step = draftStep(p, runs);
     (groups[step] ??= []).push(p);
+  }
+  return groups;
+}
+
+/** The workstream's retired drafts (replaced by a newer one, or out of date) by the step they were about, oldest first; a step with none is absent. */
+export function retiredStepDrafts(proposals: readonly Proposal[], runs: readonly Pick<Run, "id" | "spec">[]): Partial<Record<StepGroup, Proposal[]>> {
+  const groups: Partial<Record<StepGroup, Proposal[]>> = {};
+  for (const p of [...proposals].filter((p) => p.state.type === "retired").sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : 1))) {
+    (groups[draftStep(p, runs)] ??= []).push(p);
   }
   return groups;
 }
@@ -274,7 +299,10 @@ export function stepChips(runs: readonly Run[], events: readonly Pick<Workstream
     const review = kind === "review" && newest ? shownVerdict(newest, verdicts) : null;
     const ids = new Set(own.map((r) => r.id));
     const rounds = kind === "build" ? events.filter((e) => e.action === "fix_round_sent" && e.runId !== null && ids.has(e.runId)).length : 0;
-    const pending = (drafts[kind] ?? []).filter((p) => p.state.type === "pending").length;
+    const pendingDrafts = (drafts[kind] ?? []).filter((p) => p.state.type === "pending");
+    // A run asking a question that has a reply drafted waits on the person once, as the tray counts it.
+    const answered = new Set(pendingDrafts.flatMap((p) => (p.intent.type === "runAnswer" ? [p.intent.runId] : [])));
+    const pending = pendingDrafts.length;
     return {
       kind,
       label: STAGE_LABEL[kind],
@@ -285,7 +313,7 @@ export function stepChips(runs: readonly Run[], events: readonly Pick<Workstream
       auto: !!newest?.autoStart,
       verdict: review ? verdictChip(review) : null,
       fixRound: rounds ? `fix round ${Math.min(rounds, FIX_ROUNDS)}/${FIX_ROUNDS}` : null,
-      needsYou: pending + own.filter(needsPerson).length,
+      needsYou: pending + own.filter((r) => needsPerson(r) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
       pr: kind === "build" ? buildPullRequest(own, changes) : null,
     };
   });

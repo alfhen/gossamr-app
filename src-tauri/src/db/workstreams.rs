@@ -196,6 +196,7 @@ mod tests {
             spent: Default::default(),
             rules: Default::default(),
             basis: None,
+            drifted: Vec::new(),
         }
     }
 

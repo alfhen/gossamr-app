@@ -154,7 +154,7 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
             let polled = service.poll().await;
             // The poll has let go of the launch lock by now, which each start takes again.
             if let Err(e) = service.launch_waiting().await {
-                eprintln!("couldn't start the runs waiting in workstreams: {e}");
+                eprintln!("couldn't start the runs waiting for a slot: {e}");
             }
             let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
             let wait = if polled.busy && focused { runs::tracker::POLL_BUSY } else { runs::tracker::POLL_IDLE };
@@ -162,6 +162,17 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
                 _ = tokio::time::sleep(wait) => {}
                 _ = service.focus.notified() => {}
             }
+        }
+    });
+}
+
+/// After a stop has freed a slot, starts what waits for one on its own task: the stop has let go of the launch lock by
+/// now, and each start takes it again.
+fn use_freed_slot(service: &RunsState) {
+    let service = service.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = service.launch_waiting().await {
+            eprintln!("couldn't start the runs waiting for a slot: {e}");
         }
     });
 }
@@ -537,6 +548,14 @@ async fn runs_approve(
 ) -> Result<Run> {
     runs.ensure_enabled()?;
     let run = core.runs_approve(&proposal_id, &digest).await?;
+    // Over the cap it is marked as waiting for a slot now, so the page can say it waits rather than that it started.
+    let run = match runs.note_slot_wait(&run.id).await {
+        Ok(noted) => noted,
+        Err(e) => {
+            eprintln!("couldn't check the slots for run {}: {e}", run.id);
+            run
+        }
+    };
     proposals_changed(&app, &run.connection_id);
     runs_changed(&app, &run.connection_id);
     let (launcher, run_id) = (launcher.inner().clone(), run.id.clone());
@@ -654,6 +673,9 @@ async fn workstreams_hold_all(app: AppHandle, core: State<'_, CoreState>, agent:
 async fn workstreams_stop(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, agent: State<'_, AgentState>, id: String) -> Result<runs::control::StopAll> {
     let scope = core.scope().await?;
     let result = runs.stop_workstream(&scope, &id).await;
+    if result.is_ok() {
+        use_freed_slot(&runs);
+    }
     agent.cancel_workstream_turns(&id).await;
     let connection_id = Connection::jira_id(&scope);
     workstreams_changed(&app, &connection_id);
@@ -702,7 +724,9 @@ async fn runs_suggest_name(runs: State<'_, RunsState>, clone_path: std::path::Pa
 /// Stops a run that is working or waiting on the person. Its conversation and worktree are kept.
 #[tauri::command]
 async fn runs_stop(runs: State<'_, RunsState>, id: String) -> Result<Run> {
-    runs.stop(&id).await
+    let stopped = runs.stop(&id).await?;
+    use_freed_slot(&runs);
+    Ok(stopped)
 }
 
 /// Sends the person's answer to an agent that asked a question: stops its session and wakes it with the answer.
@@ -722,13 +746,26 @@ async fn runs_send_follow_up(app: AppHandle, runs: State<'_, RunsState>, proposa
     result
 }
 
+/// Sends an answer Pip suggested that the person has read (`message` is what they saw; a draft that changed since is
+/// refused) to the run that asked, exactly as their own answer goes, and marks the draft applied.
+#[tauri::command]
+async fn runs_answer_draft(app: AppHandle, runs: State<'_, RunsState>, proposal_id: String, message: String) -> Result<Run> {
+    let result = runs.answer_draft(&proposal_id, &message).await;
+    if let Ok(run) = &result {
+        proposals_changed(&app, &run.connection_id);
+        runs_changed(&app, &run.connection_id);
+    }
+    result
+}
+
 /// Takes a listed session over as the continuation of a stopped or finished run, when it still passes every check.
 #[tauri::command]
 async fn runs_adopt_session(runs: State<'_, RunsState>, id: String, session: String) -> Result<Run> {
     runs.adopt_session(&id, &session).await
 }
 
-/// Stops every run Gossamr started, in any account, and nothing else.
+/// Stops every run Gossamr started, in any account, and the runs waiting for a slot, and nothing else. Nothing is
+/// started in the slots it frees.
 #[tauri::command]
 async fn runs_stop_all(runs: State<'_, RunsState>) -> Result<runs::control::StopAll> {
     runs.stop_all().await
@@ -1291,6 +1328,7 @@ pub fn run() {
             runs_stop,
             runs_answer,
             runs_send_follow_up,
+            runs_answer_draft,
             runs_adopt_session,
             runs_stop_all,
             runs_attach,

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WorkstreamEvent, WorkstreamView } from "../types";
 import { freezeBatch } from "./pipHomeLogic";
-import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
+import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, EarlierStepDrafts, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -236,5 +236,36 @@ describe("the step rail", () => {
     expect(calls).toEqual(["c1", "c2", "t1", "c3"]);
     expect(outcome).toEqual({ text: "Approved 2. Failed: Comment on CA-401: Jira said no; Move CA-401: offline", failed: true });
     expect(await approveBatch(drafts.slice(0, 1), async () => ({ error: null }))).toEqual({ text: "Approved 1.", failed: false });
+  });
+});
+
+describe("earlier drafts on the rail", () => {
+  const retired = (p: Proposal, reason: string): Proposal => ({ ...p, state: { type: "retired", reason } });
+
+  it("collapses a step's retired drafts to 'N earlier drafts', each with its reason once opened; open drafts are unchanged", () => {
+    const older = retired(draft("t1", transition, 9), "Replaced by a newer draft");
+    const proposals = [older, draft("t2", transition, 5), retired(fromRun("c1", comment, "r5", 8), "Another move of CA-401 was approved")];
+    const html = renderToStaticMarkup(<StepRailView {...props({ proposals, initialOpen: ["review"] })} />);
+    const pip = html.slice(html.indexOf('aria-label="Pip&#x27;s drafts"'), html.indexOf('data-step="investigate"'));
+    expect(pip).toContain('data-draft="t2"');
+    expect(pip).not.toContain('data-draft="t1"');
+    expect(pip).toMatch(/data-earlier-drafts="pip"[\s\S]*aria-expanded="false"[\s\S]*1 earlier draft</);
+    expect(stepOf(html, "review")).toContain("1 earlier draft");
+    expect(stepOf(html, "investigate")).not.toContain("earlier draft");
+
+    const two = renderToStaticMarkup(<EarlierStepDrafts step="pip" drafts={[older, retired(draft("t3", transition, 7), "Another move of CA-401 was approved")]} />);
+    expect(two).toContain("2 earlier drafts");
+    expect(two).toMatch(/<ul[^>]*hidden/);
+    const opened = renderToStaticMarkup(<EarlierStepDrafts step="pip" drafts={[older]} initialOpen />);
+    expect(opened).toContain('aria-expanded="true"');
+    expect(opened).not.toMatch(/<ul[^>]*hidden/);
+    expect(opened).toMatch(/Move CA-401<\/span> · Replaced by a newer draft/);
+  });
+
+  it("shows Pip's section for retired drafts alone, and nothing for a step without any", () => {
+    const html = renderToStaticMarkup(<StepRailView {...props({ proposals: [retired(draft("t1", transition, 9), "Replaced by a newer draft")] })} />);
+    expect(html).toContain("Pip&#x27;s drafts");
+    expect(html).toContain("1 earlier draft");
+    expect(renderToStaticMarkup(<EarlierStepDrafts step="plan" drafts={[]} />)).toBe("");
   });
 });

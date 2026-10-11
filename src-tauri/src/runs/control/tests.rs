@@ -34,6 +34,29 @@ async fn stop_is_refused_until_the_run_is_working() {
 }
 
 #[tokio::test]
+async fn stopping_a_run_waiting_for_a_slot_marks_it_stopped_without_asking_claude() {
+    let rig = crate::runs::rig::ready_with(|s| s.with_cap(1)).await;
+    let (running, ws) = rig.launched_in_workstream(1).await;
+    let draft = rig.fx.core.draft_run(RunSpec { workstream: Some(ws.clone()), ..rig.spec(2) }, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let digest = rig.fx.core.runs_review(&draft.id).await.unwrap().digest;
+    let waiting = rig.fx.core.runs_approve(&draft.id, &digest).await.unwrap();
+    rig.svc.start_now(&waiting.id).await.unwrap();
+    assert!(rig.get(&waiting).await.slot_wait_since.is_some());
+
+    let stopped = rig.svc.stop(&waiting.id).await.unwrap();
+    assert_eq!((stopped.state, stopped.error.as_deref(), stopped.slot_wait_since), (RunState::Stopped, Some(NOT_STARTED), None));
+    assert!(stopped.ended_at.is_some());
+    assert!(rig.cli.0.lock().unwrap().stops.is_empty(), "no CLI stop for a run with no session");
+    assert_eq!(rig.get(&waiting).await.state, RunState::Stopped);
+    assert_eq!(rig.run_actions(&ws).await, [("run_stopped".to_string(), Some(waiting.id.clone()), None)]);
+    assert_eq!(rig.get(&running).await.state, RunState::Launching, "the running one goes on");
+    assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "a stopped run never starts");
+
+    let plain = rig.queued(3).await;
+    assert!(rig.svc.stop(&plain.id).await.unwrap_err().to_string().contains("once it is working"), "a queued run not waiting for a slot is refused as before");
+}
+
+#[tokio::test]
 async fn stopping_a_working_run_stops_its_session_and_keeps_the_worktree() {
     let (rig, run) = working().await;
     let stopped = rig.svc.stop(&run.id).await.unwrap();
@@ -72,7 +95,7 @@ async fn stopping_a_workstream_holds_it_and_stops_only_its_stoppable_runs() {
     assert_eq!(rig.get(&queued).await.state, RunState::Queued);
 
     let tally = rig.svc.stop_workstream(&rig.fx.scope, &ws).await.unwrap();
-    assert_eq!(tally, StopAll { stopped: 2, failed: 0 });
+    assert_eq!(tally, StopAll { stopped: 2, failed: 0, waiting: 0 });
     let mut stops = rig.cli.0.lock().unwrap().stops.clone();
     stops.sort();
     let mut expected = [first.short_id.clone().unwrap().to_string(), second.short_id.clone().unwrap().to_string()];
@@ -118,7 +141,7 @@ async fn stop_all_stops_only_runs_in_the_index_of_any_account_and_never_a_foreig
     rig.svc.index.record(other_account("other-1", "0ddba11e")).unwrap();
 
     let tally = rig.svc.stop_all().await.unwrap();
-    assert_eq!(tally, StopAll { stopped: 2, failed: 0 });
+    assert_eq!(tally, StopAll { stopped: 2, failed: 0, waiting: 0 });
     let stops = rig.cli.0.lock().unwrap().stops.clone();
     let mut expected = vec![mine.short_id.as_ref().unwrap().to_string(), "0ddba11e".to_string()];
     expected.sort();
@@ -145,10 +168,37 @@ async fn stop_all_counts_what_it_could_not_stop_and_skips_finished_runs() {
     rig.svc.index.record(Entry { short_id: None, ..other_account("other-unlaunched", "00000000") }).unwrap();
 
     let tally = rig.svc.stop_all().await.unwrap();
-    assert_eq!(tally, StopAll { stopped: 2, failed: 2 }, "the launching run and the unlaunched one count as failed");
+    assert_eq!(tally, StopAll { stopped: 2, failed: 2, waiting: 0 }, "the launching run and the unlaunched one count as failed");
     assert_eq!(rig.get(&launching).await.state, RunState::Launching);
     assert_eq!(rig.get(&done_run).await.state, RunState::Done);
     assert!(!rig.svc.index.live().iter().any(|e| e.run_id == done_run.id));
+}
+
+#[tokio::test]
+async fn stop_all_stops_the_runs_waiting_for_a_slot_so_none_takes_a_freed_one() {
+    let rig = crate::runs::rig::ready_with(|s| s.with_cap(1)).await;
+    let running = rig.launched(1).await;
+    rig.poll().await;
+    let (loose, plain) = (rig.queued(2).await, rig.queued(4).await);
+    rig.svc.start_now(&loose.id).await.unwrap();
+    let (in_ws, ws) = rig.launched_in_workstream(3).await;
+    for waiting in [&loose, &in_ws] {
+        assert!(rig.get(waiting).await.slot_wait_since.is_some(), "{} waits for a slot", waiting.id);
+    }
+    let launches = rig.cli.launches();
+
+    let tally = rig.svc.stop_all().await.unwrap();
+    assert_eq!((tally.stopped, tally.waiting), (1, 2), "{tally:?}");
+    assert_eq!(rig.get(&running).await.state, RunState::Stopped);
+    for waiting in [&loose, &in_ws] {
+        let run = rig.get(waiting).await;
+        assert_eq!((run.state, run.error.as_deref(), run.slot_wait_since), (RunState::Stopped, Some(NOT_STARTED), None), "{}", run.id);
+    }
+    assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "nothing is left to take the freed slot");
+    rig.poll().await;
+    assert_eq!(rig.cli.launches(), launches, "Stop all launched nothing");
+    assert_eq!(rig.get(&plain).await.state, RunState::Queued, "a queued run not waiting for a slot doesn't start on its own, so it is left");
+    assert!(rig.run_actions(&ws).await.iter().any(|(a, run, _)| a == "run_stopped" && run.as_deref() == Some(in_ws.id.as_str())));
 }
 
 #[tokio::test]

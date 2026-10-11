@@ -132,7 +132,8 @@ describe("the mock settings", () => {
     const rows = async () => (await backend.runsPreflight(null)).rows.map((r) => r.text).join("|");
     expect(await rows()).toContain(`${live} of 6 agents running`);
     await backend.runsSetSettings({ maxRuns: 1, wallClockMinutes: 60, tokenCap: 0, terminal: "terminal", draftOnFinish: true, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 });
-    expect(await rows()).toContain(`${live} agents are running, the most Gossamr starts at once (1)`);
+    expect(await rows()).toContain(`${live} of 1 agents are running. This one will wait for a slot and start when one finishes.`);
+    expect((await backend.runsPreflight(null)).blocking).toBe(false);
   });
 
   it("clamps like the backend and returns what it kept", async () => {

@@ -4,7 +4,7 @@ import { targetOf } from "../lib/proposals";
 import type { CleanupResult, ItemRef, PlanComment, Proposal, Run, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
-import { NO_FILTERS, agentGroups, attentionCount, stepRun, type AgentFilters } from "./agentsLogic";
+import { NO_FILTERS, agentGroups, attentionCount, stepRun, stopAllText, type AgentFilters } from "./agentsLogic";
 import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
 import { planCommentMessage } from "./runSheetLogic";
@@ -289,7 +289,9 @@ export const useRuns = create<RunsState>((set, get) => ({
     const { backend } = get();
     if (!backend) return;
     try {
-      await backend.runsStartNow(id);
+      const run = await backend.runsStartNow(id);
+      // Every slot is taken: it is left waiting for one rather than started.
+      if (run.state === "queued" && run.slotWaitSince) useToasts.getState().push("Every slot is taken, so it waits and starts when one of the running agents finishes.", "info");
     } catch (e) {
       useToasts.getState().push(`Couldn't start it: ${messageOf(e)}`);
     }
@@ -429,8 +431,8 @@ export const useRuns = create<RunsState>((set, get) => ({
     if (!backend || stopping) return;
     set({ stopping: true });
     try {
-      const { stopped, failed } = await backend.runsStopAll();
-      const text = `Stopped ${stopped} ${stopped === 1 ? "agent" : "agents"}`;
+      const { stopped, failed, waiting = 0 } = await backend.runsStopAll();
+      const text = `Stopped ${stopAllText(stopped, waiting)}`;
       useToasts.getState().push(failed ? `${text}. ${failed} couldn't be stopped.` : text, failed ? "error" : "info");
     } catch (e) {
       useToasts.getState().push(`Couldn't stop the agents: ${messageOf(e)}`);

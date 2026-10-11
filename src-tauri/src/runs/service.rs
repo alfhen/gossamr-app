@@ -1,7 +1,8 @@
 //! Starts approved runs and finds the ones a restart interrupted.
 //!
 //! Approval already committed a `Queued` run (`Core::runs_approve`); everything here belongs to that run. A launch that
-//! fails leaves the run `Failed` with the reason, and nothing is retried on its own. A run is joined to its session by
+//! fails leaves the run `Failed` with the reason, and nothing is retried on its own. An approved run over the cap is not
+//! a failure: it stays `Queued`, waiting for a slot, and `launch_waiting` starts it once one frees. A run is joined to its session by
 //! the worktree path chosen before launch, or by the short id once known, never by name or start time.
 
 use std::collections::HashSet;
@@ -11,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use super::cli::{AgentEntry, LaunchRequest, ShortId};
@@ -102,6 +103,8 @@ pub struct RunService {
     pub(super) projects_dir: Mutex<Option<PathBuf>>,
     /// Wakes the tracker when the window gains focus.
     pub focus: tokio::sync::Notify,
+    /// When this service was made, so recovery can tell a slot wait from before a restart from one of this session's.
+    pub(super) started_at: DateTime<Utc>,
 }
 
 /// The nearest existing ancestor made real, with the rest appended: a worktree that doesn't exist yet still compares
@@ -191,6 +194,7 @@ impl RunService {
             config_dir: Mutex::new(None),
             projects_dir: Mutex::new(None),
             focus: tokio::sync::Notify::new(),
+            started_at: Utc::now(),
         }
     }
 
@@ -379,8 +383,10 @@ impl RunService {
         }
     }
 
-    /// Runs the launch for a run that has been checked eligible. Returns with the run `Launching` or `Failed`.
+    /// Runs the launch for a run that has been checked eligible. Returns with the run `Launching` or `Failed`, and no
+    /// longer waiting for a slot either way.
     async fn spawn(&self, run: &mut Run) -> Result<()> {
+        run.slot_wait_since = None;
         let tc = match self.tools.get().await {
             Ok(tc) => tc,
             Err(e) => return self.fail(run, &e.into()).await,
@@ -424,7 +430,8 @@ impl RunService {
         }
     }
 
-    /// Starts a queued run, or with `retry` a failed one that never got a session. Returns whether it did anything.
+    /// Starts a queued run, or with `retry` a failed one that never got a session. Returns whether it launched: a queued
+    /// run over the cap is left queued, waiting for a slot, and a retry over the cap fails for it as before.
     async fn start(&self, run_id: &str, retry: bool) -> Result<(Run, bool)> {
         self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
@@ -433,6 +440,11 @@ impl RunService {
         let mut run = self.load(run_id).await?;
         let eligible = if retry { run.state == RunState::Failed && run.short_id.is_none() } else { run.state == RunState::Queued };
         if !eligible {
+            return Ok((run, false));
+        }
+        // A free slot goes to the runs already waiting for one first, in approval order; `launch_waiting` starts them.
+        if !retry && (self.live_elsewhere(&run) >= self.cap() || self.waits_behind(&run).await) {
+            self.wait_for_slot(&mut run).await?;
             return Ok((run, false));
         }
         if retry {
@@ -452,31 +464,79 @@ impl RunService {
         Ok((run, true))
     }
 
-    /// For a run that is queued, as after a restart. Does nothing for any other state.
+    /// Whether a run approved before `run` is waiting for a slot and may start, so it has the next one. Called under
+    /// the launch lock.
+    async fn waits_behind(&self, run: &Run) -> bool {
+        let Ok(queued) = self.core.runs_list(&RunQuery { states: Some(vec![RunState::Queued]), ..RunQuery::default() }).await else { return false };
+        for other in queued.iter().filter(|r| r.id != run.id && r.slot_wait_since.is_some() && (r.queued_at, &r.id) < (run.queued_at, &run.id)) {
+            if other.spec.workstream.is_none() || self.workstream_runs(other).await {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// `start` for a freshly approved or queued run; one left waiting behind earlier runs gets its turn through
+    /// `launch_waiting`, which starts them in approval order once the start has let go of the launch lock.
+    async fn start_in_line(&self, run_id: &str) -> Result<(Run, bool)> {
+        let (run, launched) = self.start(run_id, false).await?;
+        if launched || run.state != RunState::Queued || run.slot_wait_since.is_none() {
+            return Ok((run, launched));
+        }
+        let started = self.launch_waiting().await?;
+        let launched = started.contains(&run.id);
+        Ok((self.load(run_id).await?, launched))
+    }
+
+    /// Marks a freshly approved run as waiting for a slot when it will have to wait for one, before the launcher gets to
+    /// it, so the approval can say so. The launch checks again under the lock.
+    pub async fn note_slot_wait(&self, run_id: &str) -> Result<Run> {
+        let _turn = self.launching.lock().await;
+        let mut run = self.load(run_id).await?;
+        if run.state == RunState::Queued && (self.live_elsewhere(&run) >= self.cap() || self.waits_behind(&run).await) {
+            self.wait_for_slot(&mut run).await?;
+        }
+        Ok(run)
+    }
+
+    /// Keeps a queued run queued because the cap is full, marked as waiting for a slot from the first time it was.
+    async fn wait_for_slot(&self, run: &mut Run) -> Result<()> {
+        if run.slot_wait_since.is_none() {
+            run.slot_wait_since = Some(Utc::now());
+            self.store(run).await?;
+        }
+        Ok(())
+    }
+
+    /// For a run that is queued, as after a restart. Over the cap it is left waiting for a slot and returned as it is;
+    /// any state but queued is refused.
     pub async fn start_now(&self, run_id: &str) -> Result<Run> {
-        match self.start(run_id, false).await? {
+        match self.start_in_line(run_id).await? {
             (run, true) => Ok(run),
+            (run, false) if run.state == RunState::Queued => Ok(run),
             (run, false) => Err(Error::Proposal(format!("This run is {}, so it can't be started.", run.state.as_str()))),
         }
     }
 
-    /// Starts the runs waiting in a workstream that is open and not held, oldest first, while fewer than the cap are live:
-    /// ones the supervisor auto-started, and ones a person approved that are still queued. The rest stay queued, never
-    /// failed for the cap, and a held workstream's are skipped. Each start takes the launch lock itself, so this is only
-    /// ever called with no lock held: from the supervisor's own task and after the tracker's poll returns. Returns the
-    /// ids it started.
+    /// Starts the runs that wait, in approval order (`queued_at`, then id), while fewer than the cap are live: queued
+    /// runs in a workstream that is open and not held (ones the supervisor auto-started and ones a person approved,
+    /// in one queue), and runs in no workstream a person approved over the cap. The rest stay queued, never failed for
+    /// the cap: one the cap keeps out is marked as waiting for a slot, and a held workstream's is skipped.
+    ///
+    /// Each start takes the launch lock itself, and tokio's mutex isn't re-entrant, so this is only ever called with no
+    /// lock held: from the supervisor's own task, after the tracker's poll returns, and after a stop has freed a slot.
+    /// The cap is checked again under that lock, which also orders it against an answer: `answer` holds the lock from
+    /// the stop through its settle to the wake, with the answered run marked terminal in the index in between, so a
+    /// waiting run can't take that run's slot while it settles. Returns the ids it started.
     pub async fn launch_waiting(&self) -> Result<Vec<String>> {
         if !self.is_enabled() {
             return Ok(Vec::new());
         }
         let mut queued = self.core.runs_list(&RunQuery { states: Some(vec![RunState::Queued]), ..RunQuery::default() }).await?;
-        queued.retain(|r| r.spec.workstream.is_some());
+        queued.retain(|r| r.spec.workstream.is_some() || r.slot_wait_since.is_some());
         queued.sort_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)));
         let mut started = Vec::new();
         for run in queued {
-            if self.index.live().len() >= self.cap() {
-                break;
-            }
             match self.start_waiting(&run.id).await {
                 Ok(true) => started.push(run.id),
                 Ok(false) => {}
@@ -501,14 +561,24 @@ impl RunService {
     }
 
     /// `start` for a waiting run: under the launch lock it is checked again that it is still queued, that its workstream
-    /// isn't held and that there is room under the cap; otherwise it is left as it is. Returns whether it launched.
+    /// isn't held (or, in no workstream, that it is still waiting for a slot) and that there is room under the cap;
+    /// otherwise it is left as it is, marked as waiting for a slot when the cap is all that keeps it. Returns whether it
+    /// launched.
     async fn start_waiting(&self, run_id: &str) -> Result<bool> {
         let _turn = self.launching.lock().await;
         if !self.is_enabled() {
             return Ok(false);
         }
         let mut run = self.load(run_id).await?;
-        if run.state != RunState::Queued || self.live_elsewhere(&run) >= self.cap() || !self.workstream_runs(&run).await {
+        let may_start = match run.spec.workstream {
+            Some(_) => self.workstream_runs(&run).await,
+            None => run.slot_wait_since.is_some(),
+        };
+        if run.state != RunState::Queued || !may_start {
+            return Ok(false);
+        }
+        if self.live_elsewhere(&run) >= self.cap() {
+            self.wait_for_slot(&mut run).await?;
             return Ok(false);
         }
         self.spawn(&mut run).await?;
@@ -536,12 +606,16 @@ impl RunService {
     }
 
     /// After a restart: runs that were launching are matched to their sessions for up to the recovery window, adopted
-    /// if found and failed if not. Queued runs stay queued. Live runs missing from the index are put back.
+    /// if found and failed if not. Queued runs stay queued; one in no workstream that was waiting for a slot before the
+    /// restart stops waiting, so it is the person's to start again (a workstream's waits behind the restart hold). The
+    /// same pass runs again on sign-in and when Agents are turned back on; a wait from this session is kept then, so an
+    /// approved run still starts when a slot frees. Live runs missing from the index are put back.
     pub async fn recover(&self) {
         if !self.is_enabled() {
             return;
         }
         let _only_pass = self.recovery.lock().await;
+        self.forget_slot_waits().await;
         let live = vec![RunState::Launching, RunState::Working, RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked, RunState::Unknown];
         let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(live), ..RunQuery::default() }).await else { return };
         runs.iter().filter(|r| !self.index.contains(&r.id)).for_each(|r| self.remember(r));
@@ -579,6 +653,24 @@ impl RunService {
             let _ = self.fail(&mut run, &why).await;
         }
         self.sweep_report_files().await;
+    }
+
+    /// Queued runs in no workstream that were waiting for a slot when the app stopped wait no longer. A wait that began
+    /// after this service started is this session's, and is kept.
+    async fn forget_slot_waits(&self) {
+        let before_restart = |r: &Run| r.spec.workstream.is_none() && r.slot_wait_since.is_some_and(|t| t < self.started_at);
+        let Ok(queued) = self.core.runs_list(&RunQuery { states: Some(vec![RunState::Queued]), ..RunQuery::default() }).await else { return };
+        for listed in queued.iter().filter(|r| before_restart(r)) {
+            let _turn = self.launching.lock().await;
+            let Ok(mut run) = self.load(&listed.id).await else { continue };
+            if run.state != RunState::Queued || !before_restart(&run) {
+                continue;
+            }
+            run.slot_wait_since = None;
+            if let Err(e) = self.store(&run).await {
+                eprintln!("couldn't clear the slot wait of run {}: {e}", run.id);
+            }
+        }
     }
 
     pub async fn preflight(&self, spec: Option<RunSpec>) -> Result<Preflight> {
@@ -659,7 +751,7 @@ impl RunService {
 impl RunLauncher for RunService {
     /// Starts a freshly approved run. A run that isn't queued is left alone, so calling this twice never starts two.
     async fn launch(&self, run_id: &str) -> Result<()> {
-        self.start(run_id, false).await.map(drop)
+        self.start_in_line(run_id).await.map(drop)
     }
 }
 

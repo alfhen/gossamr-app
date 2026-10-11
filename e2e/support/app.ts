@@ -106,11 +106,15 @@ interface Handle {
   runs(): { id: string; kind: string; state: string }[];
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   scriptNext(kind: string, script: Script): void;
+  askRun(id: string, question: string): void;
   jiraWrites(): { proposalId: string; type: string; key: string | null }[];
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
   holdPip(on: boolean): void;
   pipIdle(): boolean;
+  editTicket(key: string, change: TicketEdit): void;
 }
+/** What `editTicket` changes on a sample ticket; the status is a status id or its name. */
+type TicketEdit = { summary?: string; description?: string; statusId?: string };
 type Mocked = { __gossamrMock?: Handle };
 const NO_MOCK = "the sample backend isn't there; is this a dev build in mock mode?";
 
@@ -141,6 +145,17 @@ export const scriptNextRun = (page: Page, kind: string, script: Script) =>
     { kind, script, missing: NO_MOCK },
   );
 
+/** Has working run `id` ask the person `question`, as a run stopping to ask does (`MockRuns.ask`). */
+export const askRun = (page: Page, id: string, question: string) =>
+  page.evaluate(
+    ({ id, question, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.askRun(id, question);
+    },
+    { id, question, missing: NO_MOCK },
+  );
+
 /** Every write the sample tracker made, with the draft the person approved for it. */
 export const jiraWrites = (page: Page) =>
   page.evaluate((missing) => {
@@ -158,6 +173,17 @@ export const setBudget = (page: Page, id: string, budget: { autoTurns?: number |
       mock.setBudget(id, budget);
     },
     { id, budget, missing: NO_MOCK },
+  );
+
+/** Changes sample ticket `key` as someone editing it in Jira would: its summary, description or status (an id or a name). */
+export const editTicket = (page: Page, key: string, change: TicketEdit) =>
+  page.evaluate(
+    ({ key, change, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.editTicket(key, change);
+    },
+    { key, change, missing: NO_MOCK },
   );
 
 /** Makes the scripted Pip wait, still answering, after it starts each turn (`on`), or lets it go on: a turn to act on while it runs. */

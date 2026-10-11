@@ -139,8 +139,9 @@ async fn launches_are_serialised_and_the_cap_is_held_under_the_lock() {
     rb.unwrap();
     let states: Vec<RunState> = vec![rig.get(&a).await.state, rig.get(&b).await.state];
     assert_eq!(states.iter().filter(|s| **s == RunState::Launching).count(), 1, "{states:?}");
-    let failed = if states[0] == RunState::Failed { &a } else { &b };
-    assert!(rig.get(failed).await.error.unwrap().contains("1 agents are already running"));
+    let waiting = rig.get(if states[0] == RunState::Queued { &a } else { &b }).await;
+    assert_eq!(waiting.state, RunState::Queued, "{states:?}");
+    assert!(waiting.slot_wait_since.is_some() && waiting.error.is_none() && waiting.failure.is_none(), "it waits for a slot, never failed");
     assert_eq!(rig.cli.launches(), 1);
     assert_eq!(rig.live().len(), 1);
 }
@@ -167,10 +168,149 @@ async fn the_cap_counts_runs_of_other_accounts_through_the_index() {
     let run = rig.queued(1).await;
     rig.svc.launch(&run.id).await.unwrap();
     let capped = rig.get(&run).await;
-    assert!(capped.error.unwrap().contains("2 agents are already running"));
-    assert_eq!(capped.failure, Some(RunFailure::CapReached));
+    assert_eq!((capped.state, capped.error.as_deref(), capped.failure.as_ref()), (RunState::Queued, None, None));
+    let since = capped.slot_wait_since.expect("waiting for a slot");
+    assert_eq!(rig.cli.launches(), 0, "nothing reached the CLI");
+    assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "both slots are still another account's");
+    assert_eq!(rig.get(&run).await.slot_wait_since, Some(since), "it keeps its place from the first time it waited");
+
     rig.svc.index.mark_terminal("other-0").unwrap();
-    assert_eq!(rig.svc.retry_launch(&run.id).await.unwrap().state, RunState::Launching);
+    assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&run.id));
+    let launched = rig.get(&run).await;
+    assert_eq!((launched.state, launched.slot_wait_since), (RunState::Launching, None));
+    assert_eq!(rig.cli.launches(), 1);
+}
+
+#[tokio::test]
+async fn a_retry_over_the_cap_still_fails_for_it() {
+    let rig = build(None, |s| s.with_cap(1)).await;
+    let first = rig.queued(1).await;
+    rig.svc.launch(&first.id).await.unwrap();
+    let failed = rig.set(&rig.queued(2).await, |r| {
+        r.state = RunState::Failed;
+        r.error = Some("earlier".into());
+    })
+    .await;
+    rig.svc.retry_launch(&failed.id).await.unwrap();
+    let after = rig.get(&failed).await;
+    assert_eq!((after.state, after.failure), (RunState::Failed, Some(RunFailure::CapReached)));
+    assert!(after.error.unwrap().contains("1 agents are already running"));
+}
+
+#[tokio::test]
+async fn approved_runs_over_the_cap_launch_in_approval_order_with_a_workstream_s_auto_started_successor() {
+    use crate::domain::workstream::{Mode, Rule};
+    use crate::domain::Actor;
+    let rig = build(None, |s| s.with_cap(1)).await;
+    let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+    rig.fx.core.set_workstream_mode(&rig.fx.scope, &ws, Mode::Manage, Actor::Person).await.unwrap();
+    let running = rig.queued(1).await;
+    rig.svc.launch(&running.id).await.unwrap();
+    let older = rig.queued(2).await;
+    rig.svc.launch(&older.id).await.unwrap();
+    let spec = RunSpec { workstream: Some(ws.clone()), ..rig.spec(3) };
+    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
+    let successor = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    let successor = rig.set(&successor, |r| r.auto_start = Some(crate::domain::AutoStarted { rule: Rule::InvestigateTriage, after_run: running.id.clone() })).await;
+    let newer = rig.queued(4).await;
+    rig.svc.launch(&newer.id).await.unwrap();
+    assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "the one slot is taken");
+    for waiting in [&older, &successor, &newer] {
+        let run = rig.get(waiting).await;
+        assert_eq!((run.state, run.slot_wait_since.is_some()), (RunState::Queued, true), "{}", run.id);
+    }
+
+    let mut order = Vec::new();
+    let mut live = running.clone();
+    for _ in 0..3 {
+        rig.set(&live, |r| r.state = RunState::Done).await;
+        rig.svc.index.mark_terminal(&live.id).unwrap();
+        let started = rig.svc.launch_waiting().await.unwrap();
+        assert_eq!(started.len(), 1, "one slot, one start: {started:?}");
+        live = rig.fx.core.run(&started[0]).await.unwrap().unwrap();
+        assert_eq!(live.slot_wait_since, None);
+        order.push(started[0].clone());
+    }
+    assert_eq!(order, [older.id.clone(), successor.id.clone(), newer.id.clone()], "oldest approval first");
+    assert_eq!(rig.cli.launches(), 4);
+}
+
+#[tokio::test]
+async fn a_fresh_approval_waits_behind_a_run_already_waiting_for_the_freed_slot() {
+    let rig = build(None, |s| s.with_cap(1)).await;
+    let first = rig.queued(1).await;
+    rig.svc.launch(&first.id).await.unwrap();
+    let older = rig.queued(2).await;
+    rig.svc.launch(&older.id).await.unwrap();
+    assert!(rig.get(&older).await.slot_wait_since.is_some());
+    // The slot frees with nothing yet started in it, as between a stop and the task that fills it.
+    rig.set(&first, |r| r.state = RunState::Done).await;
+    rig.svc.index.mark_terminal(&first.id).unwrap();
+
+    let newer = rig.queued(3).await;
+    rig.svc.launch(&newer.id).await.unwrap();
+    assert_eq!(rig.get(&older).await.state, RunState::Launching, "the earlier approval takes the slot");
+    let newer = rig.get(&newer).await;
+    assert_eq!((newer.state, newer.slot_wait_since.is_some()), (RunState::Queued, true), "the fresh one waits behind it");
+    assert_eq!(rig.cli.launches(), 2);
+}
+
+#[tokio::test]
+async fn an_approval_over_the_cap_is_noted_as_waiting_before_the_launcher_runs() {
+    let rig = build(None, |s| s.with_cap(1)).await;
+    let free = rig.svc.note_slot_wait(&rig.queued(1).await.id).await.unwrap();
+    assert_eq!((free.state, free.slot_wait_since), (RunState::Queued, None), "a free slot leaves it to the launcher");
+    rig.svc.launch(&free.id).await.unwrap();
+    let over = rig.svc.note_slot_wait(&rig.queued(2).await.id).await.unwrap();
+    assert_eq!((over.state, over.slot_wait_since.is_some()), (RunState::Queued, true));
+    assert_eq!(rig.cli.launches(), 1, "noting it launched nothing");
+}
+
+#[tokio::test]
+async fn start_now_over_the_cap_leaves_the_run_waiting_instead_of_failing() {
+    let rig = build(None, |s| s.with_cap(1)).await;
+    let first = rig.queued(1).await;
+    rig.svc.launch(&first.id).await.unwrap();
+    let second = rig.queued(2).await;
+    let waiting = rig.svc.start_now(&second.id).await.unwrap();
+    assert_eq!((waiting.state, waiting.slot_wait_since.is_some(), waiting.error), (RunState::Queued, true, None));
+    assert_eq!(rig.cli.launches(), 1);
+}
+
+#[tokio::test]
+async fn recovery_clears_the_slot_wait_of_a_run_in_no_workstream_and_keeps_a_workstream_s() {
+    let rig = ready().await;
+    let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+    let before_restart = rig.svc.started_at - chrono::Duration::minutes(5);
+    let loose = rig.set(&rig.queued(1).await, |r| r.slot_wait_since = Some(before_restart)).await;
+    let spec = RunSpec { workstream: Some(ws), ..rig.spec(2) };
+    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
+    let in_ws = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    let in_ws = rig.set(&in_ws, |r| r.slot_wait_since = Some(before_restart)).await;
+    rig.svc.recover().await;
+    let loose = rig.get(&loose).await;
+    assert_eq!((loose.state, loose.slot_wait_since), (RunState::Queued, None), "plain queued, the person's to start");
+    assert_eq!(rig.get(&in_ws).await.slot_wait_since, in_ws.slot_wait_since);
+    assert!(rig.svc.launch_waiting().await.unwrap().iter().all(|id| *id != loose.id), "it no longer starts by itself");
+    assert_eq!(rig.get(&loose).await.state, RunState::Queued);
+}
+
+#[tokio::test]
+async fn signing_in_again_or_turning_agents_back_on_keeps_this_session_s_slot_waits() {
+    let rig = build(None, |s| s.with_cap(1)).await;
+    let first = rig.queued(1).await;
+    rig.svc.launch(&first.id).await.unwrap();
+    let waiting = rig.svc.start_now(&rig.queued(2).await.id).await.unwrap();
+    let since = waiting.slot_wait_since.expect("waiting for a slot");
+
+    // The pass sign-in and the Agents switch run again mid-session.
+    rig.svc.recover().await;
+    assert_eq!(rig.get(&waiting).await.slot_wait_since, Some(since), "still waiting, in its place");
+    rig.set(&first, |r| r.state = RunState::Done).await;
+    rig.svc.index.mark_terminal(&first.id).unwrap();
+    assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&waiting.id), "it starts when the slot frees");
 }
 
 async fn assert_fails_without_launching(rig: &Rig, run: &Run, text: &str, kind: RunFailure) -> Run {
@@ -733,11 +873,17 @@ mod preflight_rows {
         let rig = build(Some(ToolchainError::NoEnvironment("Couldn't read your shell environment: it printed no variables.".into())), |s| s).await;
         assert!(has(&rows(&rig, None).await, Level::Red, "Couldn't read your shell environment"));
 
+    }
+
+    #[tokio::test]
+    async fn at_the_cap_the_row_is_amber_and_does_not_block() {
         let rig = build(None, |s| s.with_cap(1)).await;
         let run = rig.queued(1).await;
         rig.svc.launch(&run.id).await.unwrap();
-        let p = rows(&rig, None).await;
-        assert!(p.blocking && has(&p, Level::Red, "1 agents are already running"));
+        let p = rows(&rig, Some(rig.spec(2))).await;
+        assert!(!p.blocking, "{p:?}");
+        assert!(has(&p, Level::Amber, "1 of 1 agents are running. This one will wait for a slot and start when one finishes."));
+        assert!(!p.rows.iter().any(|r| r.level == Level::Red));
     }
 
     #[tokio::test]

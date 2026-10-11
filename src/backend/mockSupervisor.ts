@@ -1,5 +1,5 @@
 import { AUTOSTART_DEFAULTS, HELD_BUDGET, HELD_DAILY } from "../types";
-import type { AutoStartSwitches, BudgetLevel, Run, RunKind, Tripwire, Workstream, WorkstreamEvent, WorkstreamRule, WorkstreamRules } from "../types";
+import type { AutoStartSwitches, BasisField, BudgetLevel, Run, RunKind, Tripwire, Workstream, WorkstreamEvent, WorkstreamRule, WorkstreamRules } from "../types";
 import { budgetLevel } from "../lib/workstreamHold";
 import { byQueue, runLabels } from "../lib/workstreamStage";
 import { runRef } from "../lib/composerVerbs";
@@ -314,17 +314,20 @@ export interface TripInput {
   ws: Pick<Workstream, "createdAt">;
   /** A run woken now whose output holds a data marker. */
   marked: string | null;
+  /** The basis fields the ticket drifted from (`driftOf`); none when it didn't. */
+  drifted?: readonly BasisField[];
   runs: readonly Pick<Run, "id" | "state" | "queuedAt" | "endedAt" | "lastProgressAt" | "spec">[];
   events: readonly Pick<WorkstreamEvent, "seq" | "at" | "actor" | "action">[];
 }
 
 /**
- * The tripwire that fires and the run it is about, as `tripwire_of`: a marker in a child's output, the same kind of step
- * failing twice, or Pip asking three times for a chain step Gossamr refused, counted from the person's last change of
- * mode or resume. (The sample tickets never drift from their basis.)
+ * The tripwire that fires and the run it is about, as `tripwire_of`: a marker in a child's output, the ticket drifting
+ * from its basis, the same kind of step failing twice, or Pip asking three times for a chain step Gossamr refused,
+ * counted from the person's last change of mode or resume.
  */
 export function tripwireOf(input: TripInput): { kind: Tripwire; run: string | null } | null {
   if (input.marked) return { kind: "marker", run: input.marked };
+  if (input.drifted?.length) return { kind: "basis_drift", run: null };
   const last = input.events.filter((e) => e.actor === "person" && (e.action === "mode_set" || e.action === "resumed")).sort((a, b) => b.seq - a.seq)[0];
   const sinceSeq = last?.seq ?? -1;
   const since = last && last.at > input.ws.createdAt ? last.at : input.ws.createdAt;
@@ -489,9 +492,10 @@ export class MockSupervisor {
     // again, and no rule chains on it either.
     const tripped = trippedRuns(events);
     const hit = facts.find((f) => !tripped.has(f.run) && this.outputMarked(linked.find((r) => r.id === f.run)!));
-    const trip = tripwireOf({ ws, marked: hit?.run ?? null, runs: linked, events });
+    const drifted = workstreams.basisDrift(id) ?? [];
+    const trip = tripwireOf({ ws, marked: hit?.run ?? null, drifted, runs: linked, events });
     if (trip) {
-      workstreams.trip(id, trip.kind, trip.run);
+      workstreams.trip(id, trip.kind, trip.run, trip.kind === "basis_drift" ? drifted : []);
       this.parts.cancelWakes?.(id);
       return;
     }

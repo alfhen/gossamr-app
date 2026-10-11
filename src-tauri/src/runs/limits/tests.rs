@@ -150,7 +150,7 @@ async fn the_concurrency_limit_comes_from_the_settings() {
     let second = rig.fx.core.draft_run(rig.spec(2), Some(rig.fx.item("CA-1"))).await.unwrap();
     let digest = rig.fx.core.runs_review(&second.id).await.unwrap().digest;
     let queued = rig.fx.core.runs_approve(&second.id, &digest).await.unwrap();
-    let refused = rig.svc.start_now(&queued.id).await.unwrap();
-    assert_eq!(refused.state, RunState::Failed);
-    assert!(refused.error.unwrap().contains("1 agents are already running"));
+    let waiting = rig.svc.start_now(&queued.id).await.unwrap();
+    assert_eq!((waiting.state, waiting.slot_wait_since.is_some()), (RunState::Queued, true), "over the cap it waits for a slot");
+    assert_eq!(rig.cli.launches(), 1);
 }

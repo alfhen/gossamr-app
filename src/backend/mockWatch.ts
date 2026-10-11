@@ -107,6 +107,8 @@ export interface MockHandle {
   surfacePullRequests(): boolean;
   /** The next run of `kind` to finish writes this: a triage's plan recommendation, a review's verdict, or a data marker. */
   scriptNext(kind: RunKind, script: ScriptedFinish): void;
+  /** Has working run `id` ask the person `question`, as `MockRuns.ask` does. */
+  askRun(id: string, question: string): void;
   /** Every write the sample tracker made, oldest first, with the draft the person approved for it. */
   jiraWrites(): { proposalId: string; type: string; key: string | null }[];
   /** Sets workstream `id`'s own limits for automatic turns and wakes. */
@@ -115,14 +117,24 @@ export interface MockHandle {
   holdPip(on: boolean): void;
   /** Whether the scripted Pip has no turn running or waiting anywhere, a wake the supervisor queued included. */
   pipIdle(): boolean;
+  /** Changes sample ticket `key` as someone editing it in Jira would (`MockBackend.editTicket`): its summary, description or status (an id or a name). */
+  editTicket(key: string, change: TicketEdit): void;
+}
+
+/** What `editTicket` changes on a sample ticket; the status is a status id or its name. */
+export interface TicketEdit {
+  summary?: string;
+  description?: string;
+  statusId?: string;
 }
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string }; state: string }[]; surfacePullRequests(): boolean; scriptNext(kind: RunKind, script: ScriptedFinish): void };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string }; state: string }[]; surfacePullRequests(): boolean; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown };
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
+  tickets?: { edit(key: string, change: TicketEdit): void };
 }
 
 declare global {
@@ -136,7 +148,7 @@ declare global {
  * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs and `surfacePullRequests()` shows the
  * draft pull requests finished builds opened without waiting. The last sample backend made wins.
  */
-export function exposeMockClock({ runs, workstreams, proposals, pip }: MockClockParts) {
+export function exposeMockClock({ runs, workstreams, proposals, pip, tickets }: MockClockParts) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
@@ -144,10 +156,12 @@ export function exposeMockClock({ runs, workstreams, proposals, pip }: MockClock
     runs: () => runs.list().map((r) => ({ id: r.id, kind: r.spec.kind, state: r.state })),
     surfacePullRequests: () => runs.surfacePullRequests(),
     scriptNext: (kind, script) => runs.scriptNext(kind, script),
+    askRun: (id, question) => void runs.ask(id, question),
     jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent) })),
     setBudget: (id, budget) => void workstreams?.setBudget(id, budget),
     holdPip: (on) => pip?.hold(on),
     pipIdle: () => pip?.idle() ?? true,
+    editTicket: (key, change) => tickets?.edit(key, change),
   };
 }
 

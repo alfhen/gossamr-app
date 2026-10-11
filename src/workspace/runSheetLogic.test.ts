@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { renderPrompt } from "../backend/mockRuns";
 import type { CodeChange, Preflight, Proposal, Run, RunReview, RunSpec, RunState } from "../types";
-import { MAY_TOUCH, defaultRepo, kindBlock, permissionMode, prChoices, reviewablePr, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, linkedRepo, FINDINGS_INTRO, PLAN_INTRO, PLAN_INTRO_UNEDITED, repoChoices, repoShortage, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
+import { MAY_TOUCH, canStartNow, defaultRepo, kindBlock, permissionMode, prChoices, reviewablePr, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, linkedRepo, FINDINGS_INTRO, PLAN_INTRO, PLAN_INTRO_UNEDITED, repoChoices, repoShortage, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
 
 const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
   kind: "investigate",
@@ -139,6 +139,13 @@ describe("Stop", () => {
   it("works while the run waits on the person, and is gone once it has ended or cannot be stopped", () => {
     for (const s of ["needsAnswer", "needsPermission", "systemBlocked"] as const) expect(control(s).enabled).toBe(true);
     for (const s of ["queued", "done", "failed", "stopped", "unknown"] as const) expect(control(s).shown).toBe(false);
+  });
+
+  it("stops a run waiting for a slot before it starts, and leaves it no Start now since it starts on its own", () => {
+    const waiting = { state: "queued" as const, slotWaitSince: "2026-09-30T11:00:00Z" };
+    expect(stopControl(waiting)).toMatchObject({ shown: true, enabled: true, label: "Stop" });
+    expect(canStartNow(waiting)).toBe(false);
+    expect(canStartNow({ state: "queued", slotWaitSince: null })).toBe(true);
   });
 });
 

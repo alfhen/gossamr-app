@@ -10,8 +10,8 @@ use super::Core;
 use crate::auth::Scope;
 use crate::db::Db;
 use crate::agent::supervisor::{decide_wake, level_word, WakeFact, TRIP_BASIS};
-use crate::domain::workstream::{BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, budget_level, budget_limits, run_labels, stage, tripwire, valid_hold_reason, BudgetLevel, Mode, Rule, Stage, WorkstreamBasis, HELD_ALL, HELD_BUDGET, HELD_PERSON, HELD_QUOTA, HELD_RESTART};
-use crate::domain::{has_markers, Actor, ItemRef, Run, RunKind, RunQuery, RunState, WorkItem, Workstream, WorkstreamEvent};
+use crate::domain::workstream::{BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, budget_level, budget_limits, run_labels, stage, tripwire, valid_hold_reason, BudgetLevel, Mode, Rule, Stage, WorkstreamBasis, HELD_ALL, HELD_BUDGET, HELD_PERSON, HELD_QUOTA, HELD_RESTART};
+use crate::domain::{has_markers, Actor, Category, ItemRef, Run, RunKind, RunQuery, RunState, WorkItem, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::tracker::Connection;
@@ -140,17 +140,33 @@ fn pushed_build(runs: &[Run]) -> Option<&Run> {
 
 /// What the ticket `work` looks like now, to notice it drifting later.
 pub(crate) fn basis_of(work: &WorkItem) -> WorkstreamBasis {
-    WorkstreamBasis { status_id: work.status.id.clone(), assignee: work.assignee.clone(), description_digest: sha256_hex(&work.body.plain_text()), changing: Vec::new() }
+    WorkstreamBasis {
+        status_id: work.status.id.clone(),
+        assignee: work.assignee.clone(),
+        summary_digest: Some(sha256_hex(&work.title)),
+        description_digest: sha256_hex(&work.body.plain_text()),
+        changing: Vec::new(),
+    }
 }
 
-/// Whether the ticket `work` changed its status, assignee or description since `basis`, leaving out the fields a write
-/// the person approved is changing.
-pub(crate) fn drifted(basis: &WorkstreamBasis, work: &WorkItem) -> bool {
+/// The fields of `basis` the ticket `work` drifted from in a way that invalidates the plan: its summary or description
+/// changed, or it moved into a Done status other than the basis's. Fields a write is changing are left out, and a basis
+/// with no summary digest isn't compared on its summary. Deliberately narrower than proposal §6: a move to another
+/// status that isn't Done, or a new assignee, leaves the plan as it was, so it no longer trips the workstream.
+pub(crate) fn drifted(basis: &WorkstreamBasis, work: &WorkItem) -> Vec<&'static str> {
     let now = basis_of(work);
     let compared = |field: &str| !basis.changing.iter().any(|f| f == field);
-    (compared(BASIS_STATUS) && now.status_id != basis.status_id)
-        || (compared(BASIS_ASSIGNEE) && now.assignee.as_ref().map(|a| &a.account_id) != basis.assignee.as_ref().map(|a| &a.account_id))
-        || (compared(BASIS_DESCRIPTION) && now.description_digest != basis.description_digest)
+    let mut fields = Vec::new();
+    if compared(BASIS_SUMMARY) && basis.summary_digest.as_ref().is_some_and(|d| Some(d) != now.summary_digest.as_ref()) {
+        fields.push(BASIS_SUMMARY);
+    }
+    if compared(BASIS_DESCRIPTION) && now.description_digest != basis.description_digest {
+        fields.push(BASIS_DESCRIPTION);
+    }
+    if compared(BASIS_STATUS) && work.status.category == Category::Done && now.status_id != basis.status_id {
+        fields.push(BASIS_STATUS);
+    }
+    fields
 }
 
 /// `basis` with the fields a write was changing taken from the ticket `work` as it is now; the others are kept.
@@ -160,6 +176,7 @@ fn rebased(basis: &WorkstreamBasis, work: &WorkItem) -> WorkstreamBasis {
     WorkstreamBasis {
         status_id: if taken(BASIS_STATUS) { now.status_id } else { basis.status_id.clone() },
         assignee: if taken(BASIS_ASSIGNEE) { now.assignee } else { basis.assignee.clone() },
+        summary_digest: if taken(BASIS_SUMMARY) { now.summary_digest } else { basis.summary_digest.clone() },
         description_digest: if taken(BASIS_DESCRIPTION) { now.description_digest } else { basis.description_digest.clone() },
         changing: Vec::new(),
     }
@@ -273,6 +290,7 @@ impl Core {
                 spent: Default::default(),
                 rules: Default::default(),
                 basis,
+                drifted: Vec::new(),
             };
             db.insert_workstream(&ws)?;
             db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "opened", at))?;
@@ -424,7 +442,9 @@ impl Core {
     }
 
     /// The person lifts a workstream's hold. Lifting a budget hold also starts its automatic turns and wakes again from
-    /// zero (`budget_reset`). A workstream that isn't held records nothing.
+    /// zero (`budget_reset`); lifting a basis-drift hold takes the basis again from the ticket as the cache has it now
+    /// (`basis_captured`; forgotten when it isn't cached, so a sweep takes it later). A workstream that isn't held
+    /// records nothing.
     pub async fn resume_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
@@ -436,10 +456,22 @@ impl Core {
                 ws.spent.auto_turns = 0;
                 ws.spent.wakes = 0;
             }
+            let rebase = reason == tripwire(TRIP_BASIS);
+            if rebase {
+                let work = match &ws.item_key {
+                    Some(key) => db.item(&Core::item(scope, key))?,
+                    None => None,
+                };
+                ws.basis = work.as_ref().map(basis_of);
+                ws.drifted.clear();
+            }
             db.save_workstream(&ws)?;
             db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "resumed", at).detail(reason))?;
             if reset {
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "budget_reset", at))?;
+            }
+            if rebase && ws.basis.is_some() {
+                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_captured", at))?;
             }
             Ok(ws)
         })
@@ -572,8 +604,9 @@ impl Core {
     }
 
     /// A tripwire fired in workstream `id`: it is recorded with its kind (and run), the workstream drops to Advise and
-    /// is held with `tripwire:<kind>`. A drifted basis is forgotten, so what the person sets going again is the new one.
-    pub async fn trip_workstream(&self, scope: &Scope, id: &str, kind: &str, run: Option<&str>) -> Result<Workstream> {
+    /// is held with `tripwire:<kind>`. A drifted basis records the fields that drifted (`basis_drifted`, kept in
+    /// `drifted` while held) and is kept until the person resumes, which takes it again from the ticket as it is then.
+    pub async fn trip_workstream(&self, scope: &Scope, id: &str, kind: &str, run: Option<&str>, fields: &[&str]) -> Result<Workstream> {
         let reason = tripwire(kind);
         if !valid_hold_reason(&reason) {
             return Err(refuse(format!("there is no tripwire {kind:?}")));
@@ -587,6 +620,9 @@ impl Core {
                 event = event.run(run);
             }
             db.append_workstream_event(&event)?;
+            if kind == TRIP_BASIS && !fields.is_empty() {
+                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_drifted", at).detail(fields.join(",")))?;
+            }
             if ws.mode != Mode::Advise {
                 ws.mode = Mode::Advise;
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "mode_set", at).detail(Mode::Advise.as_str()))?;
@@ -594,8 +630,8 @@ impl Core {
             if hold(&mut ws, &reason) {
                 db.append_workstream_event(&held_event(&ws.id, Actor::Supervisor, &reason, at))?;
             }
-            if kind == TRIP_BASIS {
-                ws.basis = None;
+            if kind == TRIP_BASIS && ws.held_reason.as_deref() == Some(reason.as_str()) {
+                ws.drifted = fields.iter().map(|f| f.to_string()).collect();
             }
             db.save_workstream(&ws)?;
             Ok(ws)
@@ -648,9 +684,10 @@ impl Core {
         .await
     }
 
-    /// Whether workstream `id`'s ticket drifted from its basis in the cache. A workstream with no basis yet has it
-    /// captured now and hasn't drifted. `None` when there is nothing to compare: no ticket, or not cached.
-    pub async fn workstream_basis_drift(&self, scope: &Scope, id: &str) -> Result<Option<bool>> {
+    /// The fields of workstream `id`'s basis its ticket drifted from in the cache (`drifted`), empty when none did. A
+    /// workstream with no basis yet has it captured now and hasn't drifted. `None` when there is nothing to compare: no
+    /// ticket, or not cached.
+    pub async fn workstream_basis_drift(&self, scope: &Scope, id: &str) -> Result<Option<Vec<&'static str>>> {
         let connection_id = Connection::jira_id(scope);
         let found = self
             .with_db_for(scope, |db| {
@@ -662,7 +699,7 @@ impl Core {
         match found {
             None | Some((_, None)) => Ok(None),
             Some((Some(basis), Some(work))) => Ok(Some(drifted(&basis, &work))),
-            Some((None, Some(_))) => self.capture_workstream_basis(scope, id, false).await.map(|_| Some(false)),
+            Some((None, Some(_))) => self.capture_workstream_basis(scope, id, false).await.map(|_| Some(Vec::new())),
         }
     }
 
@@ -1123,22 +1160,118 @@ mod tests {
 
     #[tokio::test]
     async fn a_write_s_fields_are_left_out_of_the_drift_check_until_taken_again_and_only_they_are() {
-        use crate::domain::{Doc, Intent};
+        use crate::domain::{Doc, Intent, TitleChange};
         let fx = fixture().await;
-        let fx_item = |status: &str, body: &str| {
+        let fx_item = |title: &str, body: &str| {
             let mut w = fx.tracker_item("CA-1");
-            w.status.id = status.into();
+            w.title = title.into();
             w.body = Doc::paragraph(body);
             w
         };
-        let mut basis = basis_of(&fx_item("1", "old"));
+        let mut basis = basis_of(&fx_item("Cart", "old"));
         basis.changing = vec![BASIS_DESCRIPTION.into()];
-        assert!(!drifted(&basis, &fx_item("1", "rewritten by the person")), "the description is being written");
-        assert!(drifted(&basis, &fx_item("2", "rewritten by the person")), "the status is someone else's change");
+        assert!(drifted(&basis, &fx_item("Cart", "rewritten by the person")).is_empty(), "the description is being written");
+        assert_eq!(drifted(&basis, &fx_item("Checkout", "rewritten by the person")), [BASIS_SUMMARY], "the summary is someone else's change");
         let fields = |i: Intent| crate::proposals::basis_fields(&i);
         let item = || crate::domain::ItemRef { connection_id: "c".into(), external_id: "1".into(), key: "CA-1".into() };
         assert_eq!(fields(Intent::Transition { item: item(), to: "3".into() }), [BASIS_STATUS]);
         assert!(fields(Intent::Comment { item: item(), body: Doc::paragraph("x") }).is_empty());
         assert!(fields(Intent::Subtasks { parent: item(), summaries: vec!["a".into()] }).is_empty());
+        let title = Some(TitleChange { from: "Cart".into(), to: "Checkout".into() });
+        assert_eq!(fields(Intent::Rewrite { item: item(), title, body: None, flattened: vec![] }), [BASIS_SUMMARY]);
+    }
+
+    /// The ticket CA-1 with `title`, `body` and status `status` of `category`.
+    fn ticket(fx: &Fixture, title: &str, body: &str, status: &str, category: Category) -> WorkItem {
+        let mut w = fx.tracker_item("CA-1");
+        w.title = title.into();
+        w.body = crate::domain::Doc::paragraph(body);
+        w.status.id = status.into();
+        w.status.category = category;
+        w
+    }
+
+    #[tokio::test]
+    async fn only_a_new_summary_or_description_or_a_move_to_done_drifts() {
+        let fx = fixture().await;
+        let basis = basis_of(&ticket(&fx, "Cart", "Rounding", "10", Category::Active));
+        let drift = |w: WorkItem| drifted(&basis, &w);
+        assert!(drift(ticket(&fx, "Cart", "Rounding", "10", Category::Active)).is_empty());
+        assert_eq!(drift(ticket(&fx, "Checkout", "Rounding", "10", Category::Active)), [BASIS_SUMMARY]);
+        assert_eq!(drift(ticket(&fx, "Cart", "Someone rewrote it", "10", Category::Active)), [BASIS_DESCRIPTION]);
+        assert_eq!(drift(ticket(&fx, "Checkout", "Someone rewrote it", "30", Category::Done)), [BASIS_SUMMARY, BASIS_DESCRIPTION, BASIS_STATUS]);
+        assert_eq!(drift(ticket(&fx, "Cart", "Rounding", "30", Category::Done)), [BASIS_STATUS]);
+        assert!(drift(ticket(&fx, "Cart", "Rounding", "20", Category::Active)).is_empty(), "a move to In Progress leaves the plan be");
+        assert!(drift(ticket(&fx, "Cart", "Rounding", "5", Category::Todo)).is_empty());
+        let mut theirs = ticket(&fx, "Cart", "Rounding", "10", Category::Active);
+        theirs.assignee = Some(crate::domain::PersonRef { connection_id: "c".into(), account_id: "someone-else".into() });
+        assert!(drift(theirs).is_empty(), "a new assignee leaves the plan be");
+        let done = basis_of(&ticket(&fx, "Cart", "Rounding", "30", Category::Done));
+        assert!(drifted(&done, &ticket(&fx, "Cart", "Rounding", "30", Category::Done)).is_empty(), "already Done when it was taken");
+        let mut moving = basis.clone();
+        moving.changing = vec![BASIS_STATUS.into(), BASIS_SUMMARY.into()];
+        assert_eq!(drifted(&moving, &ticket(&fx, "Checkout", "Someone rewrote it", "30", Category::Done)), [BASIS_DESCRIPTION], "what a write changes is left out");
+    }
+
+    #[tokio::test]
+    async fn a_basis_stored_before_summaries_were_kept_reads_and_does_not_drift_on_its_summary() {
+        let fx = fixture().await;
+        let mut stored = serde_json::to_value(basis_of(&ticket(&fx, "Cart", "Rounding", "10", Category::Active))).unwrap();
+        stored.as_object_mut().unwrap().remove("summaryDigest");
+        let old: WorkstreamBasis = serde_json::from_value(stored).unwrap();
+        assert_eq!(old.summary_digest, None);
+        assert!(drifted(&old, &ticket(&fx, "Checkout", "Rounding", "10", Category::Active)).is_empty());
+        assert_eq!(drifted(&old, &ticket(&fx, "Checkout", "New", "10", Category::Active)), [BASIS_DESCRIPTION]);
+    }
+
+    #[tokio::test]
+    async fn a_basis_drift_trip_keeps_the_fields_and_resuming_takes_the_basis_again() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let before = ws.basis.clone().unwrap();
+        fx.edit_item("CA-1", |i| i.body = crate::domain::Doc::paragraph("Someone rewrote the ticket")).await;
+        assert_eq!(fx.core.workstream_basis_drift(&fx.scope, &ws.id).await.unwrap(), Some(vec![BASIS_DESCRIPTION]));
+
+        let held = fx.core.trip_workstream(&fx.scope, &ws.id, TRIP_BASIS, None, &[BASIS_SUMMARY, BASIS_DESCRIPTION]).await.unwrap();
+        assert_eq!((held.held_reason.as_deref(), held.drifted.clone()), (Some("tripwire:basis_drift"), vec!["summary".to_string(), "description".into()]));
+        assert_eq!(held.basis, Some(before.clone()), "kept while held");
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        assert!(events.iter().any(|e| (e.actor, e.action.as_str(), e.detail.as_deref()) == (Actor::Supervisor, "basis_drifted", Some("summary,description"))));
+        assert!(events.iter().any(|e| (e.action.as_str(), e.detail.as_deref()) == ("tripwire", Some(TRIP_BASIS))), "the tripwire line keeps the kind");
+
+        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(resumed.held_reason, None);
+        assert!(resumed.drifted.is_empty());
+        let after = resumed.basis.clone().unwrap();
+        assert_ne!(after.description_digest, before.description_digest, "the ticket as it reads now is the basis");
+        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream, resumed);
+        assert_eq!(fx.core.workstream_basis_drift(&fx.scope, &ws.id).await.unwrap(), Some(vec![]), "the first edit isn't counted again");
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        let tail: Vec<_> = events.iter().rev().take(2).map(|e| (e.actor, e.action.as_str())).collect();
+        assert_eq!(tail, [(Actor::Supervisor, "basis_captured"), (Actor::Person, "resumed")]);
+
+        // Another tripwire keeps the basis and its resume takes nothing again.
+        fx.edit_item("CA-1", |i| i.body = crate::domain::Doc::paragraph("And again")).await;
+        fx.core.trip_workstream(&fx.scope, &ws.id, "marker", Some("r1"), &[]).await.unwrap();
+        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(resumed.basis, Some(after));
+        assert!(resumed.drifted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_approved_title_rewrite_is_not_drift() {
+        use crate::domain::{Intent, TitleChange};
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let mut basis = ws.basis.clone().unwrap();
+        let title = Some(TitleChange { from: "Cart".into(), to: "Checkout".into() });
+        let intent = Intent::Rewrite { item: fx.item("CA-1"), title, body: None, flattened: vec![] };
+        basis.changing = crate::proposals::basis_fields(&intent).into_iter().map(String::from).collect();
+        let mut now = fx.core.with_db_for(&fx.scope, |db| db.item(&fx.item("CA-1"))).await.unwrap().unwrap();
+        now.title = "Checkout".into();
+        assert!(drifted(&basis, &now).is_empty(), "the person's own retitle");
+        let taken = rebased(&basis, &now);
+        assert_eq!(taken.summary_digest, Some(sha256_hex("Checkout")));
+        assert!(drifted(&taken, &now).is_empty());
     }
 }

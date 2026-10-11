@@ -204,9 +204,11 @@ export interface StopControl {
   title?: string;
 }
 
-/** Stop only works once the session is there to stop; a launching run says so instead of failing. */
-export function stopControl(run: Pick<Run, "state">): StopControl {
+/** Stop only works once the session is there to stop; a launching run says so instead of failing. A run waiting for a slot has no session yet and is stopped before it starts. */
+export function stopControl(run: Pick<Run, "state"> & Partial<Pick<Run, "slotWaitSince">>): StopControl {
   switch (run.state) {
+    case "queued":
+      return run.slotWaitSince ? { shown: true, enabled: true, label: "Stop" } : { shown: false, enabled: false, label: "Stop" };
     case "working":
     case "needsAnswer":
     case "needsPermission":
@@ -236,7 +238,8 @@ export const answerDraft = (run: Pick<Run, "state" | "unsentAnswer" | "suggested
 /** Stopped or finished runs that may have carried on in a session Gossamr could not be sure of. A stopped run holding an answer to send stays with its own session until that is sent. */
 export const offeredSessions = (run: Pick<Run, "state" | "possibleContinuations" | "unsentAnswer">) => (run.state === "done" || (run.state === "stopped" && !run.unsentAnswer) ? (run.possibleContinuations ?? []) : []);
 
-export const canStartNow = (run: Pick<Run, "state">) => run.state === "queued";
+/** A queued run the person starts; one waiting for a slot starts on its own when one frees, so it has no Start now. */
+export const canStartNow = (run: Pick<Run, "state"> & Partial<Pick<Run, "slotWaitSince">>) => run.state === "queued" && !run.slotWaitSince;
 
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "";

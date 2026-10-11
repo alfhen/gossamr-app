@@ -1,7 +1,8 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
-import { leftByRun, targetOf, workstreamOf } from "../lib/proposals";
+import { capRefusal, leftByRun, PLAN_IS_THE_USERS, REPLACED_REASON, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
 import { followUpProblem } from "../workspace/followUp";
+import { answerProblem } from "../lib/answer";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { planSectionOf } from "./mockPlanSection";
 import { readStored, writeStored } from "../workspace/storage";
@@ -38,6 +39,13 @@ function rewriteProblem(i: Extract<Intent, { type: "rewrite" }>): string | null 
   return null;
 }
 
+/** The backend's checks on an answer's text, in the backend's words (`check_answer` in `proposals.rs`). */
+export function runAnswerProblem(message: string): string | null {
+  const problem = answerProblem(message);
+  if (problem) return problem;
+  return RESERVED.some((m) => message.includes(m)) ? "the answer contains text Gossamr reserves; remove it" : null;
+}
+
 /** Who an audit line names for a draft's maker (`actor_of` in src-tauri/src/proposals.rs). */
 export function actorOf(by: Proposal["createdBy"]): WorkstreamActor {
   switch (by) {
@@ -64,9 +72,11 @@ export class MockProposals {
 
   /** Called with each draft that was applied, for a backend that has to tell its own listeners. */
   onApplied: (p: Proposal) => void = () => {};
+  /** Told of a draft the moment its write went through, before it reads as applied, as the backend takes a workstream's basis again then. */
+  onWritten: (p: Proposal) => void = () => {};
 
   /** Called when a draft was made, approved, skipped or retired, for the audit of its workstream; set by the backend that keeps them. */
-  audit: (p: Proposal, actor: WorkstreamActor, action: string) => void = () => {};
+  audit: (p: Proposal, actor: WorkstreamActor, action: string, detail?: string) => void = () => {};
 
   constructor(private readonly apply: (intent: Intent, already: ItemRef[]) => Promise<ItemRef[]>) {}
 
@@ -83,6 +93,7 @@ export class MockProposals {
       if (!intent.fields.title.trim()) return Promise.reject(new Error("a new item needs a title"));
       if (intent.container.connectionId !== CONNECTION) return Promise.reject(new Error("that item belongs to another connection"));
     } else if (intent.type === "followUp") return Promise.reject(new Error("only Pip proposes a follow-up"));
+    else if (intent.type === "runAnswer") return Promise.reject(new Error("only Pip proposes an answer; answer the run yourself from its card"));
     else if (intent.type !== "startRun" && !targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
     if (intent.type === "transition" && !intent.to.trim()) return Promise.reject(new Error("a transition needs a target status"));
     const problem = intent.type === "rewrite" ? rewriteProblem(intent) : null;
@@ -112,10 +123,40 @@ export class MockProposals {
       error: null,
       run: null,
     };
-    this.drafts = [p, ...this.drafts];
+    // Everything that can refuse the draft is decided before anything is stored, as `create` in `proposals.rs`.
+    const replaced = this.tidy(p);
+    this.drafts = [p, ...this.drafts.map((d) => (replaced.includes(d) ? { ...d, state: { type: "retired" as const, reason: REPLACED_REASON }, supersededBy: p.id, updatedAt: now } : d))];
     this.changed();
     this.audit(p, actorOf(createdBy), "draft_created");
+    for (const old of replaced) this.audit(this.get(old.id)!, actorOf(createdBy), "draft_superseded", p.id);
     return p;
+  }
+
+  /** The older drafts `p` replaces in its workstream; throws when it would replace one the person owns, or when Pip already has the workstream's share waiting. As `tidy` in `proposals.rs`. */
+  private tidy(p: Proposal): Proposal[] {
+    const ws = workstreamOf(p);
+    if (!ws || p.createdBy === "autopilot" || (p.createdBy === "user" && p.origin.type !== "run")) return [];
+    const open = this.drafts.filter((d) => (d.state.type === "pending" || d.state.type === "applying") && workstreamOf(d) === ws);
+    const replaced: Proposal[] = [];
+    for (const older of open) {
+      const verdict = supersession(older, p, isRunPlanRewrite);
+      if (verdict.type === "refuse") throw new Error(verdict.reason);
+      if (verdict.type === "supersede") replaced.push(older);
+    }
+    // What a run reported is never refused; Pip is told to settle what is waiting first.
+    if (p.createdBy === "pip" && open.length - replaced.length >= WORKSTREAM_PENDING_CAP) throw new Error(capRefusal(ws));
+    return replaced;
+  }
+
+  /** Once one move of a ticket is approved, the other pending moves of it drafted before then are retired, whoever made them. As `retire_moved_siblings` in `proposals.rs`. */
+  private retireMovedSiblings(approved: Proposal) {
+    if (approved.intent.type !== "transition") return;
+    const on = approved.intent.item;
+    const siblings = this.drafts.filter((d) => d.state.type === "pending" && d.intent.type === "transition" && d.intent.item.externalId === on.externalId && d.createdAt <= approved.updatedAt);
+    for (const d of siblings) {
+      const retired = this.set(d.id, { state: { type: "retired", reason: `Another move of ${on.key} was approved` } });
+      this.audit(retired, "supervisor", "draft_retired");
+    }
   }
 
   list(query: ProposalQuery = {}): Proposal[] {
@@ -212,6 +253,11 @@ export class MockProposals {
       const next: Intent = { ...intent, message: edit.message.trim() };
       return this.set(id, { intent: next, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Edited", intent: next }], error: null });
     }
+    if (edit.type === "runAnswer" && intent.type === "runAnswer") {
+      const problem = runAnswerProblem(edit.message);
+      if (problem) throw new Error(problem);
+      return this.edited(p, { ...intent, message: edit.message.trim() });
+    }
     if (edit.type === "run" && intent.type === "startRun") {
       if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
       const { instruction, base, clonePath, kind, name, pr, allowPush, report, plan, buildAccount, project } = edit;
@@ -259,7 +305,7 @@ export class MockProposals {
     if (p.intent.type === "rewrite") {
       if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this description draft, so Pip can't change it any more");
       // A build follows the plan the person approves here and is told a person settled it, so none of it may be Pip's.
-      if (leftByRun(p) && isRunPlanRewrite(p)) throw new Error("this description update carries the Gossamr Plan a build follows, so only the user changes it; tell them what you would change instead");
+      if (leftByRun(p) && isRunPlanRewrite(p)) throw new Error(PLAN_IS_THE_USERS);
       if (p.createdBy !== "pip" && !leftByRun(p)) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
       ownWorkstream();
       const was = p.intent;
@@ -271,6 +317,15 @@ export class MockProposals {
       };
       const problem = rewriteProblem(intent as Extract<Intent, { type: "rewrite" }>);
       if (problem) throw new Error(problem);
+      return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
+    }
+    if (p.intent.type === "runAnswer") {
+      if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this answer, so Pip can't change it any more");
+      if (p.createdBy !== "pip") throw new Error("that draft wasn't made by Pip, so Pip can't change it");
+      ownWorkstream();
+      const problem = runAnswerProblem(body ?? "");
+      if (problem) throw new Error(problem);
+      const intent: Intent = { ...p.intent, message: (body ?? "").trim() };
       return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
     }
     if (p.intent.type === "followUp") {
@@ -328,17 +383,35 @@ export class MockProposals {
     return this.set(id, { state: { type: "applied" }, run: runId, error: null });
   }
 
+  /** Marks an answer draft sent with the text that went, kept as the person's revision when it differs, as `answer_draft_sent`. */
+  answerSent(id: string, runId: string, sent: string): Proposal {
+    const p = this.pending(id);
+    if (p.intent.type !== "runAnswer") throw new Error("that draft isn't an answer");
+    const changed = p.intent.message.trim() !== sent.trim();
+    const intent: Intent = changed ? { ...p.intent, message: sent.trim() } : p.intent;
+    const revisions = changed ? [...p.revisions, { at: new Date().toISOString(), note: "Edited", intent }] : p.revisions;
+    return this.set(id, { intent, revisions, state: { type: "applied" }, run: runId, error: null });
+  }
+
+  /** Keeps a pending draft with the reason sending it failed. */
+  failed(id: string, why: string) {
+    if (this.get(id)?.state.type === "pending") this.set(id, { error: why });
+  }
+
   async approve(id: string) {
     const p = this.pending(id);
     if (p.intent.type === "startRun") throw new Error("A run is approved with its own button");
     if (p.intent.type === "followUp") throw new Error("A follow-up is sent back with its own button");
+    if (p.intent.type === "runAnswer") throw new Error("An answer is sent with its own button");
     this.set(id, { state: { type: "applying" } });
     try {
       const created = await this.apply(p.intent, p.created);
       this.writes.push({ proposalId: id, intent: p.intent });
+      this.onWritten(p);
       const applied = this.set(id, { state: { type: "applied" }, created: [...p.created, ...created], error: null });
       this.onApplied(applied);
       this.audit(applied, "person", "draft_approved");
+      this.retireMovedSiblings(applied);
       return applied;
     } catch (e) {
       return this.set(id, { state: { type: "pending" }, error: String(e) });

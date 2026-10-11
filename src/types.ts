@@ -351,7 +351,9 @@ export type Intent =
   /** Never applied with `proposalsApprove`; `runsApprove` starts it, bound to the digest the person read. */
   | { type: "startRun"; connectionId: string; item: ItemRef | null; spec: RunSpec }
   /** Never applied with `proposalsApprove`; `runsSendFollowUp` sends the finished run back with this message, which the person may edit first. */
-  | { type: "followUp"; connectionId: string; runId: string; shortId?: string | null; item: ItemRef | null; message: string; reason: string };
+  | { type: "followUp"; connectionId: string; runId: string; shortId?: string | null; item: ItemRef | null; message: string; reason: string }
+  /** Never applied with `proposalsApprove`; `runsAnswerDraft` sends this answer to the run that asked `question`, as the person's own answer goes. The person may edit it first. */
+  | { type: "runAnswer"; connectionId: string; runId: string; shortId: string | null; item: ItemRef | null; message: string; question: string | null };
 
 export interface TitleChange {
   from: string;
@@ -436,6 +438,8 @@ export interface Proposal {
   error: string | null;
   /** The run an approved `startRun` became. */
   run: string | null;
+  /** The newer draft of the same kind that replaced this one in its workstream. */
+  supersededBy?: string | null;
 }
 
 /** Which proposals to list. Every field that is set must match. */
@@ -457,6 +461,8 @@ export type ProposalEdit =
   | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef }
   /** A run draft's settings, as the person edits them; the ones left out stay as they are. */
   | { type: "followUp"; message: string }
+  /** The answer an answer draft sends. */
+  | { type: "runAnswer"; message: string }
   | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; report?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
@@ -572,6 +578,8 @@ export interface Run {
   createdItem?: ItemRef | null;
   /** Set when the supervisor started the run by an auto-start rule, after the run named, rather than a person approving it. */
   autoStart?: { rule: WorkstreamRule; afterRun: string } | null;
+  /** Set while an approved run stays queued only because the most agents allowed are running; it starts by itself once a slot frees. */
+  slotWaitSince?: string | null;
 }
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */
@@ -759,6 +767,8 @@ export type WorkstreamRules = Partial<Record<WorkstreamRule, boolean>>;
 export interface WorkstreamBasis {
   statusId: string;
   assignee: PersonRef | null;
+  /** A basis kept before summaries were has none, and isn't compared on its summary until taken again. */
+  summaryDigest?: string | null;
   descriptionDigest: string;
   /** The fields a draft the person approved has just written, not compared until taken again from the ticket. */
   changing?: string[];
@@ -817,7 +827,13 @@ export interface Workstream {
   rules: WorkstreamRules;
   /** The ticket as it was when the workstream opened; null for a ticketless one. */
   basis: WorkstreamBasis | null;
+  /** The basis fields (`BASIS_FIELDS`) whose drift held it, kept while it is held for `tripwire:basis_drift`. */
+  drifted?: BasisField[];
 }
+
+/** The fields of a workstream's basis, as `BASIS_SUMMARY`, `BASIS_DESCRIPTION` and `BASIS_STATUS` name them. */
+export const BASIS_FIELDS = ["summary", "description", "status"] as const;
+export type BasisField = (typeof BASIS_FIELDS)[number];
 
 /** How much of its budget a workstream has used: `amber` from 80% of either limit, `spent` at 100%. */
 export type BudgetLevel = "ok" | "amber" | "spent";

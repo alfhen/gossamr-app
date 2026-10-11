@@ -193,10 +193,16 @@ export interface Backend {
   runsAnswer(id: string, text: string): Promise<Run>;
   /** Sends a finished run back for another pass with a `followUp` draft's message. `message` is what the person read; a draft that changed since rejects with "The message changed after you read it. Read it again." Rejects with the reason when the run can't be resumed; the draft stays pending. */
   runsSendFollowUp(proposalId: string, message: string): Promise<Run>;
+  /**
+   * Sends a `runAnswer` draft's message to the run that asked, exactly as `runsAnswer` sends the person's own, and marks
+   * the draft applied. `message` is what the person read; a draft that changed since rejects with "The answer changed
+   * after you read it. Read it again." Rejects with the reason when the run can't be answered; the draft stays pending.
+   */
+  runsAnswerDraft(proposalId: string, message: string): Promise<Run>;
   /** Takes a listed session over as the continuation of a stopped or finished run. */
   runsAdoptSession(id: string, session: string): Promise<Run>;
-  /** Stops every active run, across accounts. */
-  runsStopAll(): Promise<{ stopped: number; failed: number }>;
+  /** Stops every active run, across accounts, and the runs waiting for a slot (`waiting`); nothing starts in the slots it frees. */
+  runsStopAll(): Promise<{ stopped: number; failed: number; waiting: number }>;
   /** Opens Terminal attached to the run's session. */
   runsAttach(id: string): Promise<void>;
   /** Opens Terminal in the run's clone running `claude`, so the person can accept Claude's trust question. Rejects unless the run failed because its folder isn't trusted. */

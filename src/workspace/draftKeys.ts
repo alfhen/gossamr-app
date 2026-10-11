@@ -6,8 +6,11 @@ export type DraftKeyAction = "approve" | "skip" | "open";
 /** A draft card in the conversation, as the keyboard finds it. */
 export const DRAFT_CARD = "article[data-draft]";
 
-/** Drafts the card may approve in place. A rewrite is approved after its diff is read, a run after its prompt is read and a follow-up after its message is read, so those only open. */
-const INLINE: ReadonlySet<Proposal["intent"]["type"]> = new Set(["comment", "transition", "subtasks", "create", "link", "update"]);
+/**
+ * Drafts the card may approve in place. A rewrite is approved after its diff is read, a run after its prompt is read and a
+ * follow-up after its message is read, so those only open. An answer's card shows its whole reply, so it is sent from there.
+ */
+const INLINE: ReadonlySet<Proposal["intent"]["type"]> = new Set(["comment", "transition", "subtasks", "create", "link", "update", "runAnswer"]);
 
 /** Enter and o open; a approves where the card can, or opens where approving needs a review first; s skips. A decided draft only opens. */
 export function draftKeyAction(p: Proposal, key: string): DraftKeyAction | null {
@@ -21,10 +24,14 @@ export function draftKeyAction(p: Proposal, key: string): DraftKeyAction | null 
 /** A decision a card waits for Enter to confirm. */
 export type Asking = "approve" | "skip";
 
-/** The one line a focused card shows about its keys, or what it asks while a decision waits to be confirmed. */
-export function draftKeyHint(p: Proposal, asking: Asking | null = null): string {
-  if (asking) return `↵ ${asking} · any other key cancels`;
-  if (draftKeyAction(p, "a") === "approve") return "a approve · s skip · ↵ open";
+/**
+ * The one line a focused card shows about its keys, or what it asks while a decision waits to be confirmed. `canApprove`
+ * false leaves a out, for an answer whose run isn't asking any more. An answer is sent rather than approved.
+ */
+export function draftKeyHint(p: Proposal, asking: Asking | null = null, canApprove = true): string {
+  const answer = p.intent.type === "runAnswer";
+  if (asking) return `↵ ${asking === "approve" && answer ? "send this reply" : asking} · any other key cancels`;
+  if (canApprove && draftKeyAction(p, "a") === "approve") return answer ? "a send · s skip · ↵ open" : "a approve · s skip · ↵ open";
   return draftKeyAction(p, "s") ? "s skip · ↵ open" : "↵ open";
 }
 
@@ -62,6 +69,9 @@ interface Focusable {
 interface CardRoot {
   querySelectorAll(selector: string): ArrayLike<unknown>;
 }
+
+/** The draft cards under `root` the keyboard can reach: not the whole card of a retired draft folded away under its one line. */
+const reachableCards = (root: CardRoot) => (Array.from(root.querySelectorAll(DRAFT_CARD)) as (Focusable & { closest?(s: string): unknown })[]).filter((c) => !c.closest?.("[hidden]"));
 
 const plain = (ev: Pick<KeyEventLike, "metaKey" | "ctrlKey" | "altKey" | "shiftKey">) => !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey;
 
@@ -146,7 +156,7 @@ export function onDraftCardKey(ev: KeyEventLike, p: Proposal, asking: Asking | n
  * does: the next card, else the one before, else the input. Never nowhere, where the next j or k would move the canvas.
  */
 export function focusAfterLeaving(card: unknown, root: CardRoot, input: Focusable | null) {
-  const cards = Array.from(root.querySelectorAll(DRAFT_CARD)) as Focusable[];
+  const cards: Focusable[] = reachableCards(root);
   const at = cards.indexOf(card as Focusable);
   const next = at < 0 ? undefined : (cards[at + 1] ?? cards[at - 1]);
   if (next) show(next);
@@ -159,7 +169,7 @@ export function stepDraftCards(ev: KeyEventLike, root: CardRoot): boolean {
   if (!step || !plain(ev) || !isCard(ev.target) || ev.isDefaultPrevented?.()) return false;
   // Taken even at either end, so j and k never fall through to stepping the canvas behind the pane.
   ev.preventDefault();
-  const cards = Array.from(root.querySelectorAll(DRAFT_CARD)) as Focusable[];
+  const cards: Focusable[] = reachableCards(root);
   const next = cards[cards.indexOf(ev.target) + step];
   if (next) show(next);
   return true;
@@ -168,7 +178,7 @@ export function stepDraftCards(ev: KeyEventLike, root: CardRoot): boolean {
 /** ArrowUp from an empty input goes to the newest draft still waiting, the last one in the conversation. */
 export function upToNewestDraft(ev: Pick<KeyEventLike, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "preventDefault">, value: string, root: CardRoot): boolean {
   if (ev.key !== "ArrowUp" || value !== "" || !plain(ev)) return false;
-  const cards = Array.from(root.querySelectorAll(DRAFT_CARD)) as Focusable[];
+  const cards: Focusable[] = reachableCards(root);
   const newest = cards.filter((c) => c.getAttribute("data-state") === "pending").pop();
   if (!newest) return false;
   ev.preventDefault();

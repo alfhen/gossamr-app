@@ -606,6 +606,22 @@ export class MockConnector {
     this.onChange({ connectionId: MOCK_CONNECTION });
   }
 
+  /**
+   * Someone else edits the item in Jira: its title, description and/or status (an id or a name in its workflow, any move
+   * allowed, as an admin's would be). Recorded as theirs, not the person's.
+   */
+  edit(ref: ItemRef, change: { title?: string; body?: WorkDoc; status?: string }) {
+    const item = this.item(ref);
+    if (!item) throw new Error(`${ref.key} isn't in the sample data`);
+    const wf = this.workflow(item.container)!;
+    const to = change.status === undefined ? item.status : (statusOf(wf, change.status) ?? wf.statuses.find((s) => s.name === change.status));
+    if (!to) throw new Error(`${item.container.externalId} has no status ${change.status}`);
+    const at = new Date().toISOString();
+    this.items.set(ref.externalId, { ...item, ...(change.title !== undefined ? { title: change.title } : {}), ...(change.body ? { body: change.body } : {}), status: to, updated: at });
+    if (to.id !== item.status.id) this.record(ref.externalId, "statusChanged", "mette", at, { from: item.status.name, to: to.name });
+    this.onChange({ connectionId: MOCK_CONNECTION });
+  }
+
   /** Replaces the item's title and/or description. */
   rewrite(ref: ItemRef, change: { title?: string; body?: WorkDoc }) {
     const item = this.item(ref);
