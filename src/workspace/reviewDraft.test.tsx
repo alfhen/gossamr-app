@@ -11,7 +11,7 @@ import { usePullView, type PullDiffState } from "./pullViewStore";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
 import type { ScreenContext } from "../types";
-import { editThenPost, editThenPullView, settlesEdit, followDraft, MARKDOWN_HINT, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+import { editThenPost, editThenPullView, settlesEdit, followDraft, SUMMARY, MARKDOWN_HINT, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
 
 vi.mock("../components/autoHeight", async (original) => ({ ...(await original<typeof import("../components/autoHeight")>()), useAutoHeight: vi.fn() }));
 
@@ -170,6 +170,16 @@ describe("a GitHub review draft's card", () => {
     expect(reworded).toEqual({ summary: "My summary.", comments: [{ ...at(42, "**Blocking:** the retry loop never backs off."), dropped: true }] });
     // Untouched, Pip's version is taken whole.
     expect(followDraft(intent, { ...intent, summary: "Pip's summary.", comments: [at(42, "Pip's words.")] }, intent.summary, intent.comments.map((c) => ({ ...c, dropped: false })))).toEqual({ summary: "Pip's summary.", comments: [{ ...at(42, "Pip's words."), dropped: false }] });
+  });
+
+  it("keeps what the person typed back during a save, even when it matches the draft before the save", () => {
+    // The card saved summary B and comment 42 as B; while the save was on its way the person typed both back to A.
+    const saved = { ...intent, summary: "B summary.", comments: [at(42, "B words."), intent.comments[1]] };
+    const back = intent.comments.map((c) => ({ ...c, dropped: false }));
+    const kept = followDraft(intent, saved, intent.summary, back, new Set([SUMMARY, `${intent.comments[0].path}:42:${intent.comments[0].side}`]));
+    expect(kept).toEqual({ summary: intent.summary, comments: back });
+    // Without the save's touched fields, the same values would read as untouched and take the saved draft.
+    expect(followDraft(intent, saved, intent.summary, back).summary).toBe("B summary.");
   });
 
   it("marks a draft the person edited, and says when a revision was Pip's", () => {

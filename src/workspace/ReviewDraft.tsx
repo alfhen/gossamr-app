@@ -25,6 +25,8 @@ export interface Held extends ReviewComment {
 
 const placeOf = (c: Pick<ReviewComment, "path" | "line">) => `${c.path}:${c.line}`;
 const keyOf = (c: ReviewComment) => `${c.path}:${c.line}:${c.side}`;
+/** The summary's name among the fields a person touched (`followDraft`); a comment's is its place. */
+export const SUMMARY = "summary";
 const held = (r: Review): Held[] => r.comments.map((c) => ({ ...c, dropped: false }));
 
 /** Comment `i` dropped, or restored when it was dropped; a dropped comment keeps its words until the edit is sent. */
@@ -43,17 +45,19 @@ export async function editThenPost<T>(id: string, edit: ProposalEdit | null, see
 /**
  * What the card holds once the draft changed under the person's unsaved edit, from `was` to `now` (Pip revised it, say):
  * the comments `now` has, with the person's words and drops kept on those they had changed, and their summary when they
- * had changed it. A comment the draft no longer has is gone; one it gained comes as it is.
+ * had changed it. A comment the draft no longer has is gone; one it gained comes as it is. `touched` names the fields the
+ * person changed while a save was on its way ("summary", or a comment's place): theirs are kept even when they typed
+ * them back to what `was` had, since `now` is the save of their earlier words.
  */
-export function followDraft(was: Review, now: Review, summary: string, comments: readonly Held[]): { summary: string; comments: Held[] } {
+export function followDraft(was: Review, now: Review, summary: string, comments: readonly Held[], touched: ReadonlySet<string> = new Set()): { summary: string; comments: Held[] } {
   const mine = new Map(comments.map((c) => [keyOf(c), c]));
   const before = new Map(was.comments.map((c) => [keyOf(c), c]));
   return {
-    summary: summary !== was.summary ? summary : now.summary,
+    summary: touched.has(SUMMARY) || summary !== was.summary ? summary : now.summary,
     comments: now.comments.map((c) => {
       const held = mine.get(keyOf(c));
       const old = before.get(keyOf(c));
-      return held && old && (held.dropped || held.body !== old.body) ? { ...c, body: held.body, dropped: held.dropped } : { ...c, dropped: false };
+      return held && (touched.has(keyOf(c)) || (old && (held.dropped || held.body !== old.body))) ? { ...c, body: held.body, dropped: held.dropped } : { ...c, dropped: false };
     }),
   };
 }
@@ -151,6 +155,8 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
   const edited = useRef(false);
   const attempting = useRef(working);
   attempting.current = working;
+  /** Fields the person changed while Open PR view's save was on its way, kept over the saved draft when it arrives. */
+  const keep = useRef<ReadonlySet<string>>(new Set());
   /** The draft as the card last took it from the backend. */
   const base = useRef(review);
   /** The draft changed under the person's unsaved edit, which the card then merged in (`followDraft`). */
@@ -170,7 +176,8 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
       return;
     }
     if (was.summary === review.summary && JSON.stringify(was.comments) === JSON.stringify(review.comments)) return;
-    const next = followDraft(was, review, summary, comments);
+    const next = followDraft(was, review, summary, comments, keep.current);
+    keep.current = new Set();
     setFollowed(true);
     setSummary(next.summary);
     setComments(next.comments);
@@ -207,9 +214,12 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
   const savingNow = useRef(false);
   /** How many edits the person has made; a save only settles the edits made before it started. */
   const edits = useRef(0);
-  function markEdited() {
+  /** The fields changed since the save began, while one is on its way. */
+  const touching = useRef<Set<string> | null>(null);
+  function markEdited(field: string) {
     edited.current = true;
     edits.current++;
+    touching.current?.add(field);
   }
   const pullView = () => {
     // Not disabled while it saves: a disabled button would drop the focus the view gives back on closing.
@@ -218,22 +228,27 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
     const backend = useWorkspace.getState().backend;
     setSaveError(null);
     const editsAtStart = edits.current;
+    touching.current = new Set();
     editThenPullView(p, backend ? edit : null, {
       saveEdit: (id, e) => backend!.proposalsEdit(id, e),
       // What the backend now holds is what the card showed when the save began. Text typed since stays an unsent edit, so the
       // saved draft arriving is merged with it rather than replacing it.
       took: (saved) => {
         if (settlesEdit(editsAtStart, edits.current)) edited.current = false;
+        else keep.current = new Set(touching.current);
         useWorkspace.setState((s) => ({ proposals: { ...s.proposals, [saved.id]: saved } }));
       },
       open: pullViewOf(p),
     })
       .catch((e) => setSaveError(e instanceof Error ? e.message : String(e)))
-      .finally(() => (savingNow.current = false));
+      .finally(() => {
+        savingNow.current = false;
+        touching.current = null;
+      });
   };
   const hint = `review-markdown-${p.id}`;
   const change = (i: number, next: Partial<Held>) => {
-    markEdited();
+    markEdited(keyOf(comments[i]));
     setComments((was) => was.map((c, j) => (j === i ? { ...c, ...next } : c)));
   };
 
@@ -295,7 +310,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
               disabled={working || state === "applying"}
               rows={Math.min(12, Math.max(3, summary.split("\n").length + 1))}
               onChange={(e) => {
-                markEdited();
+                markEdited(SUMMARY);
                 setSummary(e.target.value);
               }}
               className="w-full scroll-mb-16 resize-none rounded-md border border-ws-sep2 bg-ws-win px-2 py-1.5 text-base font-normal [overflow-wrap:anywhere]"
@@ -318,7 +333,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
                       {c.side === "LEFT" && <span className="font-sans font-normal text-ws-ink3"> (old side)</span>}
                     </span>
                     {open && (
-                      <button type="button" disabled={working} aria-label={`${c.dropped ? "Restore" : "Drop"} comment on ${place}`} onClick={() => (markEdited(), setComments((was) => toggleDropped(was, i)))} className={`${button} ml-auto shrink-0 py-0.5 text-xs`}>
+                      <button type="button" disabled={working} aria-label={`${c.dropped ? "Restore" : "Drop"} comment on ${place}`} onClick={() => (markEdited(keyOf(c)), setComments((was) => toggleDropped(was, i)))} className={`${button} ml-auto shrink-0 py-0.5 text-xs`}>
                         {c.dropped ? "Restore" : "Drop comment"}
                       </button>
                     )}
