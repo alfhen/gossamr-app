@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hunkLinesAround } from "../lib/diffHunks";
 import { REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
 import type { Proposal, ReviewAccess } from "../types";
-import { DraftCard } from "./DraftCard";
+import { DraftCard, type DraftCardProps } from "./DraftCard";
+import { docFromText } from "../lib/docs";
+import { draftPreviewBody } from "./DraftPreview";
 import { usePullView, type PullDiffState } from "./pullViewStore";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
@@ -43,13 +45,46 @@ afterEach(() => {
   usePullView.setState({ target: null, opener: null });
 });
 
+/** The static markup of a draft card's action bar, and whatever the card renders after it. */
+function actionBarOf(html: string): { bar: string; after: string } {
+  const start = html.lastIndexOf("<div data-draft-actions");
+  if (start < 0) return { bar: "", after: html };
+  let depth = 0;
+  const tag = /<(\/?)div\b[^>]*>/g;
+  tag.lastIndex = start;
+  for (let m = tag.exec(html); m; m = tag.exec(html)) {
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) return { bar: html.slice(start, tag.lastIndex), after: html.slice(tag.lastIndex) };
+  }
+  return { bar: html.slice(start), after: "" };
+}
+
+/** The bar is pinned to the bottom of its card, opaque, with a rule above it, and nothing of the card comes after it. */
+function expectPinnedBar(html: string) {
+  const { bar, after } = actionBarOf(html);
+  const open = bar.slice(0, bar.indexOf(">") + 1);
+  for (const cls of ["sticky", "bottom-0", "bg-ws-win", "border-t"]) expect(open).toMatch(new RegExp(`class="[^"]*(?<![\\w-])${cls}(?![\\w-])`));
+  // Only the closing tags of the card's body and the card itself follow the bar.
+  expect(after).toBe("</div></article>");
+}
+
+describe("a GitHub review draft's preview", () => {
+  it("shows the summary exactly as it will be posted, its last line included", () => {
+    const summary = "Not ready yet.\n\nDrafted by a Gossamr agent reviewing CA-402; posted only after a person approved it in Gossamr.";
+    const body = draftPreviewBody(draft({ intent: { ...intent, summary } }), null);
+    expect(body.startsWith(`${summary}\n\n`)).toBe(true);
+  });
+});
+
 describe("a GitHub review draft's card", () => {
   it("shows the hunk around each comment with its line marked, under a path:line heading, with an editable body", () => {
     const html = render(draft(), canPost);
     expect(html).toContain('aria-label="GitHub review of acme/webshop#218"');
     expect(html).toContain("acme/webshop#218");
     expect(html).toMatch(/data-review-commit[^>]*>a1b2c3d4</);
-    expect(html).toContain("From agent run");
+    // No ticket and no run known here: the run is named plainly, never by its id.
+    expect(html).toContain("From <b>an agent run</b>");
+    expect(html).not.toContain("abcd1234");
     for (const line of [42, 17]) {
       expect(html).toContain(`data-review-comment="${RETRY}:${line}"`);
       expect(html).toContain(`aria-label="Comment on ${RETRY}:${line}"`);
@@ -189,6 +224,19 @@ describe("a GitHub review draft's card", () => {
     // The sample Pip reads it as a talk about this draft and changes nothing yet.
     const reply = scriptPip(prompt, { view: null, item: null, filter: null, selection: [] } as unknown as ScreenContext, [], [], Date.now(), [draft()]);
     expect([reply.discussed, reply.revise ?? null]).toEqual(["r1", null]);
+  });
+
+  it("ends a comment's and a move's card with the action bar too, pinned and solid, an error above it", () => {
+    const comment = { type: "comment", item: { connectionId: "mock", externalId: "DEVOPS-471", key: "DEVOPS-471" }, body: docFromText("Looks good.") } as const;
+    const plain = (over: Partial<Proposal>, props: Partial<DraftCardProps> = {}) =>
+      renderToStaticMarkup(<DraftCard proposal={draft({ origin: { type: "chat", requestId: "r" }, createdBy: "pip", ...over })} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} {...props} />);
+    expectPinnedBar(plain({ intent: comment }, { onShow: vi.fn() }));
+    expectPinnedBar(plain({ intent: { type: "transition", item: comment.item, to: "done" }, label: "Done" }, { statusName: "Done", error: "It failed." }));
+  });
+
+  it("ends the card with its action bar, pinned to the bottom, opaque and ruled off, notes and errors above it", () => {
+    expectPinnedBar(render(draft(), canPost));
+    expectPinnedBar(renderToStaticMarkup(<ReviewDraft proposal={draft()} statusName={null} people={[]} working={false} error="GitHub said no." onApprove={vi.fn()} onSkip={vi.fn()} access={cantPost} diff={sample()} />));
   });
 
   it("is the card DraftCard shows for a GitHub review", () => {

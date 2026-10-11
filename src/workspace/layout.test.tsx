@@ -1,15 +1,25 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
 import { ALL, and } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, PRESETS, showsEntry, visibleChips, withProject } from "./filters";
 import { Header, ProjectMenu, ViewSegment } from "./Header";
-import { Rail, RailTip } from "./Rail";
+import { HOLD_ALL_NOTE, Rail, RailButton, RailTip } from "./Rail";
+import { COMPOSER_CLEAR, ToastHost, toastPlacement } from "./ToastHost";
+import { useToasts, LIFETIME_MS, MAX_QUEUED, STALE_MS } from "./toasts";
+import { MORE_BUTTON, tabWindow } from "./TabBar";
+import { canvasRoom } from "./Workspace";
+import { RowBadges } from "./ListView";
+import { useAgentsFlag } from "./agentsFlag";
+import { useWorkstreams } from "./workstreamsStore";
+import type { WorkstreamView, Run } from "../types";
 import { SavedViewsPanel, type SavedViewsPanelProps } from "./SavedViews";
 import { buildTabItems } from "./tabItems";
 import { useTabs, type Tab } from "./tabsStore";
+import { afterRunStarted } from "./runSetupStore";
+import { useRuns } from "./runsStore";
 
 const tab = (id: string, filter = ALL, title: string | null = null): Tab => ({ id, title, filter, view: "list" });
 const names = (items: ReturnType<typeof buildTabItems>) => items.map((i) => i.label);
@@ -167,5 +177,256 @@ describe("header and rail", () => {
     const out = renderToStaticMarkup(<RailTip label="Search" hint="⌘K" at={{ x: 66, y: 20 }} />);
     expect(out).toContain('role="tooltip"');
     expect(out).toContain("⌘K");
+  });
+});
+
+describe("nothing covers anything", () => {
+  it("shows one toast at a time, with how many wait behind it", () => {
+    vi.useFakeTimers();
+    try {
+      useToasts.getState().push("Agent started", "info");
+      useToasts.getState().push("Watching 4 repositories", "info");
+      Object.assign(useToasts.getInitialState(), { toasts: useToasts.getState().toasts });
+      const out = renderToStaticMarkup(<ToastHost />);
+      expect(out.match(/data-toast="true"/g)).toHaveLength(1);
+      expect(out).toContain("Agent started");
+      expect(out).not.toContain("Watching 4 repositories");
+      expect(out).toContain("+1 more");
+    } finally {
+      useToasts.getState().clear();
+      Object.assign(useToasts.getInitialState(), { toasts: [] });
+      vi.useRealTimers();
+    }
+  });
+
+  it("puts toasts bottom right of the canvas, above the launcher and left of the peek, and in Pip home's Steps column", () => {
+    const canvas = toastPlacement("workspace", 520);
+    expect(canvas.right).toBe("calc(520px + 1.25rem)");
+    expect(canvas.bottom).toContain("var(--ws-launcher-clear, 0px)");
+    expect(canvas.bottom).toContain("var(--ws-footer-h, 2rem)");
+    expect(canvas).not.toHaveProperty("top");
+    expect(toastPlacement("agents", 0).right).toBe("calc(0px + 1.25rem)");
+    // Pip home: inside the Steps column, which is at least 240px wide, or above the composer when a peek covers it.
+    const home = toastPlacement("pip", 0);
+    expect(home.right).toBe(16);
+    expect(Number(home.maxWidth)).toBeLessThanOrEqual(240 + 2 * 16 + 16);
+    expect(toastPlacement("pip", 520).bottom).toContain(`${COMPOSER_CLEAR}px`);
+    expect(toastPlacement("pip", 520).right).toBe("calc(520px + 1.25rem)");
+  });
+
+  it("shows a run of whole tabs that always holds the active one, and ends where the last whole tab does", () => {
+    // Five 100px tabs, 2px apart: 0..100, 102..202, 204..304, 306..406, 408..508.
+    const spans = [0, 1, 2, 3, 4].map((i) => ({ left: i * 102, size: 100 }));
+    expect(tabWindow(spans, 600, 0, 4)).toEqual({ start: 0, end: 4, offset: 0 });
+    // Room for two whole tabs once the 'more' buttons are in: never a third cut short.
+    const room = 2 * MORE_BUTTON + 250;
+    expect(tabWindow(spans, room, 0, 0)).toEqual({ start: 0, end: 1, offset: 0, width: 202 });
+    // The strip narrowing (the peek and the Pip pane opening) with the last tab active brings it in, not the first two.
+    expect(tabWindow(spans, room, 0, 4)).toEqual({ start: 3, end: 4, offset: 306, width: 202 });
+    expect(tabWindow(spans, room, 3, 1)).toEqual({ start: 1, end: 2, offset: 102, width: 202 });
+    // Paging on with no tab to follow keeps the start the person chose, filling back from the last tab.
+    expect(tabWindow(spans, room, 2, -1)).toEqual({ start: 2, end: 3, offset: 204, width: 202 });
+    expect(tabWindow(spans, room, 9, -1)).toEqual({ start: 3, end: 4, offset: 306, width: 202 });
+    expect(tabWindow([], 100, 0, -1)).toEqual({ start: 0, end: 0, offset: 0 });
+  });
+
+  it("gives a narrow row's badges as named icons with tooltips, none of them dropped", () => {
+    const all = { needsMe: true, blocked: true, draft: { id: "d1", to: "Done" }, moreDrafts: 2 } as const;
+    const full = renderToStaticMarkup(<RowBadges {...all} compact={false} />);
+    for (const words of [">Needs you<", "⛓ blocked", "✦ draft → ", "Done"]) expect(full).toContain(words);
+    const compact = renderToStaticMarkup(<RowBadges {...all} compact />);
+    const icons = [...compact.matchAll(/<span role="img" aria-label="([^"]+)" title="([^"]+)"/g)].map((m) => [m[1], m[2]]);
+    expect(icons).toEqual([
+      ["Needs you", "Needs you"],
+      ["Blocked", "Blocked"],
+      ["A draft waits for approval: Done", "A draft waits for approval: Done"],
+      ["2 more drafts waiting", "2 more drafts waiting"],
+    ]);
+    expect(renderToStaticMarkup(<RowBadges needsMe={false} blocked={false} draft={null} moreDrafts={0} compact />)).toBe("");
+  });
+
+  it("makes room for the peek beside the workspace canvas only", () => {
+    expect(canvasRoom("workspace", true, 520)).toBe(520);
+    expect(canvasRoom("workspace", false, 520)).toBe(0);
+    expect(canvasRoom("agents", true, 520)).toBe(0);
+  });
+
+  it("names every rail button", () => {
+    expect(renderToStaticMarkup(<RailButton label="Pip" onClick={vi.fn()}>x</RailButton>)).toContain('aria-label="Pip"');
+    const out = renderToStaticMarkup(<Rail />);
+    const buttons = out.match(/<button[^>]*>/g) ?? [];
+    expect(buttons.length).toBeGreaterThan(5);
+    for (const b of buttons) expect(b).toMatch(/aria-label="[^"]+"/);
+    expect(out).not.toContain("⌕");
+  });
+
+  it("draws Hold all as a pause icon with a note on what it does", () => {
+    const flag = useAgentsFlag.getInitialState();
+    const ws = useWorkstreams.getInitialState();
+    const before = { enabled: flag.enabled, list: ws.list };
+    const view = { workstream: { id: "ws-1", closedAt: null, mode: "manage", heldReason: null } } as unknown as WorkstreamView;
+    Object.assign(flag, { enabled: true });
+    Object.assign(ws, { list: [view] });
+    try {
+      const out = renderToStaticMarkup(<Rail />);
+      const hold = /<button[^>]*aria-label="Hold all workstreams"[^>]*>(.*?)<\/button>/s.exec(out)![1];
+      expect(hold).toContain("<svg");
+      expect(hold).not.toContain("⏸");
+      expect(HOLD_ALL_NOTE).toMatch(/agents carry on/);
+      for (const b of out.match(/<button[^>]*>/g) ?? []) expect(b).toMatch(/aria-label="[^"]+"/);
+    } finally {
+      Object.assign(flag, { enabled: before.enabled });
+      Object.assign(ws, { list: before.list });
+    }
+  });
+});
+
+describe("the toast queue", () => {
+  const SAMPLE: Run = new MockBackend().runs.list()[0];
+
+  const texts = () => useToasts.getState().toasts.map((t) => t.text);
+  const shown = () => useToasts.getState().toasts[0]?.text;
+
+  describe("toasts", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      useToasts.getState().clear();
+    });
+    afterEach(() => {
+      useToasts.getState().clear();
+      vi.useRealTimers();
+    });
+
+    it("queues in order and shows only the head", () => {
+      useToasts.getState().push("Agent started", "info");
+      useToasts.getState().push("Watching 4 repositories", "info");
+      expect(texts()).toEqual(["Agent started", "Watching 4 repositories"]);
+      expect(shown()).toBe("Agent started");
+      expect(useToasts.getState().toasts.slice(-1)[0].text).toBe("Watching 4 repositories");
+    });
+
+    it("starts a toast's clock only once it is the one on screen", () => {
+      useToasts.getState().push("first", "info");
+      vi.advanceTimersByTime(LIFETIME_MS.info - STALE_MS + 100);
+      useToasts.getState().push("second", "info");
+      vi.advanceTimersByTime(STALE_MS - 101);
+      expect(texts()).toEqual(["first", "second"]);
+      vi.advanceTimersByTime(1);
+      expect(texts()).toEqual(["second"]);
+      // The second waited less than STALE_MS, so it shows, for its own whole lifetime from when it came up.
+      vi.advanceTimersByTime(LIFETIME_MS.info - 100);
+      expect(shown()).toBe("second");
+      vi.advanceTimersByTime(100);
+      expect(texts()).toEqual([]);
+    });
+
+    it("drops a note that waited too long behind another rather than show it late, but never an error", () => {
+      useToasts.getState().push("Watching 4 repositories", "info");
+      useToasts.getState().push("Agent started on CA-402", "info");
+      useToasts.getState().push("Couldn't reach Jira");
+      vi.advanceTimersByTime(LIFETIME_MS.info);
+      // The error went ahead of the note and comes up next; the note, older than STALE_MS by then, is gone.
+      expect(texts()).toEqual(["Couldn't reach Jira"]);
+      expect(STALE_MS).toBeLessThan(LIFETIME_MS.info);
+    });
+
+    it("puts an error ahead of the notes waiting, behind the one on screen and earlier errors", () => {
+      useToasts.getState().push("on screen", "info");
+      useToasts.getState().push("note 1", "info");
+      useToasts.getState().push("error 1");
+      useToasts.getState().push("note 2", "info");
+      useToasts.getState().push("error 2");
+      expect(texts()).toEqual(["on screen", "error 1", "error 2", "note 1", "note 2"]);
+    });
+
+    it("keeps an error on screen longer than a note", () => {
+      useToasts.getState().push("Couldn't post it");
+      expect(useToasts.getState().toasts[0].tone).toBe("error");
+      vi.advanceTimersByTime(LIFETIME_MS.info + 1);
+      expect(shown()).toBe("Couldn't post it");
+      vi.advanceTimersByTime(LIFETIME_MS.error - LIFETIME_MS.info);
+      expect(texts()).toEqual([]);
+      expect(LIFETIME_MS.error).toBeGreaterThan(LIFETIME_MS.info);
+    });
+
+    it("shows the next one when the head is dismissed, with a fresh clock", () => {
+      useToasts.getState().push("first", "info");
+      vi.advanceTimersByTime(LIFETIME_MS.info - 10);
+      useToasts.getState().push("second", "info");
+      useToasts.getState().dismiss(useToasts.getState().toasts[0].id);
+      expect(shown()).toBe("second");
+      vi.advanceTimersByTime(LIFETIME_MS.info - 1);
+      expect(shown()).toBe("second");
+      vi.advanceTimersByTime(1);
+      expect(texts()).toEqual([]);
+    });
+
+    it("drops a repeat of a toast that is on screen or waiting", () => {
+      useToasts.getState().push("same", "info");
+      useToasts.getState().push("other", "info");
+      useToasts.getState().push("other", "info");
+      useToasts.getState().push("same", "info");
+      expect(texts()).toEqual(["same", "other"]);
+    });
+
+    it("keeps the action a toast carries", () => {
+      const run = vi.fn();
+      useToasts.getState().push("Stopped", "info", { label: "Undo", run });
+      useToasts.getState().toasts[0].action!.run();
+      expect(run).toHaveBeenCalled();
+    });
+
+    it("lets the oldest waiting toast give way past the cap, never the one on screen", () => {
+      for (let i = 0; i < MAX_QUEUED + 3; i++) useToasts.getState().push(`t${i}`, "info");
+      expect(texts()).toHaveLength(MAX_QUEUED);
+      expect(shown()).toBe("t0");
+      expect(texts().slice(-1)[0]).toBe(`t${MAX_QUEUED + 2}`);
+      // An error waiting outlasts the notes when the queue is full.
+      useToasts.getState().clear();
+      useToasts.getState().push("on screen", "info");
+      useToasts.getState().push("an error");
+      for (let i = 0; i < MAX_QUEUED + 3; i++) useToasts.getState().push(`n${i}`, "info");
+      expect(texts()).toHaveLength(MAX_QUEUED);
+      expect(texts().slice(0, 2)).toEqual(["on screen", "an error"]);
+    });
+
+    it("drops a waiting note whose subject has moved on, however short its wait, but shows one still news", () => {
+      let running = true;
+      useToasts.getState().push("Watching 4 repositories", "info");
+      useToasts.getState().push("Agent started on CA-402", "info", undefined, { current: () => running });
+      useToasts.getState().push("Created CA-500.", "info", undefined, { current: () => true });
+      // The run finishes before the first note has gone; its note never comes up, the next one does.
+      running = false;
+      useToasts.getState().dismiss(useToasts.getState().toasts[0].id);
+      expect(texts()).toEqual(["Created CA-500."]);
+      // A check that throws counts as moved on; an error is never dropped for it.
+      useToasts.getState().push("Agent started on CA-401", "info", undefined, { current: () => { throw new Error("gone"); } });
+      useToasts.getState().push("Couldn't reach Jira", "error", undefined, { current: () => false });
+      useToasts.getState().dismiss(useToasts.getState().toasts[0].id);
+      expect(texts()).toEqual(["Couldn't reach Jira"]);
+    });
+  });
+
+  describe("the note that an agent started", () => {
+    beforeEach(() => useToasts.getState().clear());
+
+    it("is old news once its run has finished or got the slot it waited for, and is not shown late", () => {
+      const run = (state: Run["state"], over: Partial<Run> = {}) => ({ ...SAMPLE, state, ...over }) as Run;
+      for (const [started, now, news] of [
+        [run("launching"), "working", true],
+        [run("launching"), "done", false],
+        [run("launching"), "needsAnswer", false],
+        [run("queued", { slotWaitSince: "2026-10-01T10:00:00Z" }), "queued", true],
+        [run("queued", { slotWaitSince: "2026-10-01T10:00:00Z" }), "working", false],
+      ] as const) {
+        useToasts.getState().clear();
+        useRuns.setState({ runs: [] });
+        useToasts.getState().push("on screen", "info");
+        afterRunStarted(started, null, { switchToAgents: false });
+        useRuns.setState({ runs: [{ ...started, state: now }] });
+        useToasts.getState().dismiss(useToasts.getState().toasts[0].id);
+        expect(texts().length, `${started.state} then ${now}`).toBe(news ? 1 : 0);
+      }
+    });
   });
 });

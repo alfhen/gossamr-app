@@ -15,7 +15,7 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { answerable, mayTouch, readOnlyNote, breakdownWithPipPrompt, planDescriptionWithPipPrompt, buildFromPlanOptions, canStartNow, descriptionWithPipPrompt, reviewThisControl, reviewThisOptions, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
+import { answerable, mayTouch, readOnlyNote, buildFromPlanOptions, canStartNow, reviewThisControl, reviewThisOptions, pendingBreakdownOn, pipAsks, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { RunContinuation } from "./RunContinuation";
@@ -342,7 +342,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
           ))}
       </div>
 
-      <RunContinuation key={run.id} run={run} adopt={on.adoptSession} />
+      <RunContinuation key={`continue-${run.id}`} run={run} adopt={on.adoptSession} />
       {attention && <Attention run={run} opened={opened} answering={answering} slotPlace={slotPlace} on={on} />}
       {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingBreakdown} drafting={drafting} on={on} />}
       {outcome?.change && <Changes change={outcome.change} on={on} />}
@@ -352,7 +352,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       </Sec>
 
       <RunWhere run={run} disk={disk} onReveal={on.reveal} />
-      <RunCleanup key={run.id} run={run} reason={cleanup} />
+      <RunCleanup key={`cleanup-${run.id}`} run={run} reason={cleanup} />
 
       <Sec title="What this agent may touch">
         {run.readOnly && (
@@ -470,7 +470,11 @@ export function RunSheet({ id }: { id: string }) {
     },
     reveal: (path) => void backend?.revealPath(path).catch(() => {}),
     draftComment: () => void store.draftComment(id),
-    askPip: () => (askPip(commentWithPipPrompt(run, outcome?.draft?.state.type === "pending" ? outcome.draft.id : null)), store.closeSheet()),
+    askPip: () => {
+      const draftId = outcome?.draft?.state.type === "pending" ? outcome.draft.id : null;
+      askPip(pipAsks.comment(run, draftId));
+      store.closeSheet();
+    },
     openDraft: () => store.showDraft(run.item),
     pickBlocker: () => setPickBlocker(true),
     cancelBlocker: () => setPickBlocker(false),
@@ -493,7 +497,7 @@ export function RunSheet({ id }: { id: string }) {
     discussPlanDescription: () => {
       const draft = outcome?.planDescription?.draft;
       if (draft?.state.type !== "pending") return;
-      askPip(planDescriptionWithPipPrompt(run, draft.id));
+      askPip(pipAsks.planDescription(run, draft.id));
       store.closeSheet();
     },
     openTicketDraft: () => {
@@ -504,12 +508,16 @@ export function RunSheet({ id }: { id: string }) {
     finishWithPip: () => {
       const draft = outcome?.ticketDraft;
       if (draft?.state.type !== "pending") return;
-      askPip(finishWithPipPrompt(run, draft.id));
+      askPip(pipAsks.finish(run, draft.id));
       store.closeSheet();
       showDraft(draft.id);
     },
-    askPipDescription: () => (askPip(descriptionWithPipPrompt(run)), store.closeSheet()),
-    askPipBreakdown: () => (askPip(breakdownWithPipPrompt(run, outcome?.subtasksDraft?.state.type === "pending" ? outcome.subtasksDraft.id : waitingOn)), store.closeSheet()),
+    askPipDescription: () => (askPip(pipAsks.description(run)), store.closeSheet()),
+    askPipBreakdown: () => {
+      const draftId = outcome?.subtasksDraft?.state.type === "pending" ? outcome.subtasksDraft.id : waitingOn;
+      askPip(pipAsks.breakdown(run, draftId));
+      store.closeSheet();
+    },
     openCreated: () => {
       if (!run.createdItem) return;
       store.closeSheet();

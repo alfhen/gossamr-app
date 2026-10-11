@@ -7,6 +7,7 @@ import type { ScreenContext, WorkEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
 import { askPip } from "./askPip";
+import { commentWithPipPrompt, PIP_SHOWN, pipAsks } from "./runSheetLogic";
 import { handlePipView } from "./PipExtras";
 import { escapeCancelsTurn } from "./PipPane";
 import { usePipHome } from "./pipHomeStore";
@@ -354,6 +355,45 @@ describe("askPip", () => {
     expect(useToasts.getState().toasts).toHaveLength(toasts);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ prompt: "and then?", sessionId: "s1", conversation: "general" });
+  });
+
+  it("sends an instruction the page wrote whole, with the short line its bubble shows", async () => {
+    useClaude.setState({ byTicket: {} });
+    const sent: AskRequest[] = [];
+    const ask = vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), { queued: false, ahead: 0 }));
+    const run = { id: "run-7", item: { key: "CA-402" } };
+    try {
+      askPip(pipAsks.comment(run, "d1"));
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+    } finally {
+      ask.mockRestore();
+    }
+    expect(sent[0].prompt).toBe(commentWithPipPrompt(run, "d1"));
+    expect(sent[0].meta).toMatchObject({ shown: PIP_SHOWN.draft });
+    expect(useClaude.getState().byTicket.general.turns[0]).toMatchObject({ shown: "Discuss this draft" });
+  });
+
+  it("pairs every instruction a run's sheet, a draft's card or peek sends with a short line that names no id or tool", () => {
+    const run = { id: "run-7", item: { key: "CA-402" } };
+    const asks = [
+      pipAsks.comment(run),
+      pipAsks.comment(run, "d1"),
+      pipAsks.planDescription(run, "d2"),
+      pipAsks.finish(run, "d3"),
+      pipAsks.description(run),
+      pipAsks.breakdown(run),
+      pipAsks.breakdown(run, "d4"),
+    ];
+    const lines: string[] = Object.values(PIP_SHOWN);
+    for (const a of asks) {
+      expect(lines).toContain(a.shown);
+      expect(a.prompt).toContain("run-7");
+      expect(a.shown).not.toMatch(/run-7|d\d|_[a-z]+/);
+    }
+    expect(pipAsks.comment(run).shown).toBe(PIP_SHOWN.comment);
+    expect(pipAsks.comment(run, "d1").shown).toBe(PIP_SHOWN.draft);
+    expect(pipAsks.breakdown(run).shown).toBe(PIP_SHOWN.subtasks);
+    expect(pipAsks.breakdown(run, "d4").shown).toBe(PIP_SHOWN.breakdown);
   });
 });
 

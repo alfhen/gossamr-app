@@ -26,6 +26,17 @@ describe("limits", () => {
   });
 });
 
+describe("canvas beside both panes", () => {
+  it("caps the peek so the canvas keeps its minimum with the Pip pane open", () => {
+    for (const w of [1100, 1280, 1440, 1920]) {
+      const fit = fitPanes(w, 5000, PIP_DEFAULT, true, true);
+      expect(w - RAIL_WIDTH - fit.pip - fit.peek).toBeGreaterThanOrEqual(CANVAS_MIN);
+    }
+    const at1440 = fitPanes(1440, PEEK_DEFAULT, PIP_DEFAULT, true, true);
+    expect(1440 - RAIL_WIDTH - at1440.pip - at1440.peek).toBeGreaterThanOrEqual(CANVAS_MIN);
+  });
+});
+
 describe("fitPanes", () => {
   it("keeps the defaults in a roomy window", () => {
     const f = fitPanes(1600, PEEK_DEFAULT, PIP_DEFAULT, true);

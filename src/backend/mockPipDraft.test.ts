@@ -303,7 +303,10 @@ describe("mock Pip discussing and revising a GitHub review draft, as revise_prop
   it("talks the draft over, softens, drops and adds a comment, each a revision marked 'Revised by Pip', and posts nothing", async () => {
     const { b, draft, run } = await reviewed();
     const talk = await ask(b, `Let's talk about the GitHub review draft ${draft.id} of acme/webshop#218, drafted from agent run ${run.id}. Read it in full.`);
-    expect(talk).toContain(`I read review draft ${draft.id} of acme/webshop#218 in full`);
+    expect(talk).toContain("I read the review of acme/webshop#218 in full");
+    // The person reads draft and run names, never their ids or Pip's tools.
+    for (const id of [draft.id, run.id, run.shortId ?? run.id]) expect(talk).not.toContain(id);
+    expect(talk).not.toMatch(/\b(get|list|propose|revise|retire|set)_[a-z_]+/);
     expect(talk).toContain("`src/consumer/retry.ts:42`");
 
     const softened = await ask(b, "soften the comment on src/consumer/retry.ts:42");

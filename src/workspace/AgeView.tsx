@@ -96,7 +96,7 @@ export function AgeView({ items }: CanvasProps) {
         <AgeLayoutToggle layout={layout} onChange={change} />
         <span className="ml-3 text-xs text-ws-ink3">{layout === "ranked" ? "Longest quiet first, bars scaled to the longest." : "Open tickets by how long they have been quiet."}</span>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto px-6 pb-4">
+      <div className="min-h-0 flex-1 overflow-auto px-6 pb-[calc(var(--ws-launcher-clear,0px)+16px)]">
         {layout === "ranked" ? (
           <div role="list" aria-label="Open tickets by days quiet">
             {bars.map((bar) => (

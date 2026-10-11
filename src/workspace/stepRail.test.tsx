@@ -124,6 +124,45 @@ describe("the step rail", () => {
     expect(stepOf(running, "investigate")).toMatch(/data-run-label="R1"[\s\S]*Working/);
   });
 
+  it("marks the next step and keeps the later steps nothing has reached to one quiet line each", () => {
+    const fresh = renderToStaticMarkup(<StepRailView {...props({ runs: [], view: { ...view, runs: [], labels: [], stage: "intake" } })} />);
+    expect(stepOf(fresh, "investigate")).toContain('data-step-next="investigate"');
+    expect(stepOf(fresh, "investigate")).toContain("Not started");
+    expect(stepOf(fresh, "investigate")).toContain(">Next<");
+    expect(stepOf(fresh, "investigate")).not.toContain("data-step-quiet");
+    for (const kind of ["triage", "plan", "build", "review", "verify"] as const) {
+      expect(stepOf(fresh, kind)).toContain('data-step-quiet="true"');
+      expect(stepOf(fresh, kind)).not.toContain("Not started");
+      expect(stepOf(fresh, kind)).not.toContain("data-step-next");
+    }
+    expect(fresh.match(/data-step-next=/g)).toHaveLength(1);
+    // The next step is marked by a bar down its edge, not an outline in the focus ring's colour; quiet labels stay readable.
+    const nextChip = /<button[^>]*data-step-next="investigate"[^>]*>/.exec(fresh)![0];
+    expect(nextChip).toContain("shadow-[inset_3px_0_0_var(--color-ws-pip)]");
+    expect(nextChip).not.toMatch(/\bborder-ws-pip\b/);
+    expect(stepOf(fresh, "plan")).toMatch(/<b class="text-sm font-normal text-ws-ink2">Plan<\/b>/);
+    // Once the investigation is done, Triage is next; the investigation reads as it did.
+    const investigated = renderToStaticMarkup(<StepRailView {...props({ runs: [RUNS[0]], view: { ...view, runs: ["r1"], labels: [["r1", "R1"]] } })} />);
+    expect(stepOf(investigated, "triage")).toContain('data-step-next="triage"');
+    expect(stepOf(investigated, "investigate")).toContain('data-run-label="R1"');
+    expect(stepOf(investigated, "investigate")).toContain("Ready to review");
+    expect(stepOf(investigated, "investigate")).not.toContain("data-step-quiet");
+    expect(stepOf(investigated, "plan")).toContain("data-step-quiet");
+  });
+
+  it("leaves the steps with runs as they were, and a step with a draft waiting is never quiet", () => {
+    const html = renderToStaticMarkup(<StepRailView {...props()} />);
+    for (const kind of ["investigate", "triage", "plan", "build", "review"] as const) {
+      expect(stepOf(html, kind)).not.toContain("data-step-quiet");
+      expect(stepOf(html, kind)).not.toContain("data-step-next");
+    }
+    expect(stepOf(html, "verify")).toContain('data-step-next="verify"');
+    const start: Intent = { type: "startRun", connectionId: "mock", item: ref("CA-401"), spec: { ...base.spec, kind: "plan", workstream: "ws-1" } };
+    const waiting = renderToStaticMarkup(<StepRailView {...props({ runs: [], view: { ...view, runs: [], labels: [] }, proposals: [draft("d-plan", start, 3)] })} />);
+    expect(stepOf(waiting, "plan")).not.toContain("data-step-quiet");
+    expect(stepOf(waiting, "plan")).toContain("data-step-needs-you");
+  });
+
   it("shows the build's pull request under the Build chip once a sync has found it, and not while it waits for it", () => {
     const waiting = renderToStaticMarkup(<StepRailView {...props({ view: { ...view, waitingForPr: "r4" } })} />);
     expect(stepOf(waiting, "build")).toMatch(/data-step-state[^>]*>waiting for PR</);

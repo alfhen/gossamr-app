@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { HELD_BUDGET, HELD_PERSON, TRIPWIRE } from "../types";
+import { heldText } from "../lib/workstreamHold";
+import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
-import { batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
+import { batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -148,7 +149,7 @@ describe("needsYouItems", () => {
 
   it("labels budget and tripwire holds the short way", () => {
     const items = needsYouItems(input({ workstreams: [view("ws-1", "CA-401", { heldReason: HELD_BUDGET }), view("ws-2", null, { heldReason: `${TRIPWIRE}repeated_failure` })] }));
-    expect(items.map((i) => i.label).sort()).toEqual(["CA-401 · Held: budget", "Held: tripwire, the same step failed twice"]);
+    expect(items.map((i) => i.label).sort()).toEqual(["CA-401 · Held: budget", "Held: the same step failed twice"]);
   });
 });
 
@@ -166,9 +167,29 @@ describe("shortHeld and lastHeldAt", () => {
     expect(shortHeld(null)).toBeNull();
     expect(shortHeld(HELD_PERSON)).toBe("Held by you");
     expect(shortHeld(HELD_BUDGET)).toBe("Held: budget");
-    expect(shortHeld(`${TRIPWIRE}marker`)).toBe("Held: tripwire, a run's output held one of Gossamr's data markers");
-    expect(shortHeld(`${TRIPWIRE}basis_drift`, ["description"])).toBe("Held: tripwire, the ticket's description changed in Jira");
-    expect(shortHeld(`${TRIPWIRE}basis_drift`, ["status"])).toBe("Held: tripwire, the ticket was moved to Done");
+    expect(shortHeld(`${TRIPWIRE}marker`)).toBe("Held: a run's output held one of Gossamr's data markers");
+    expect(shortHeld(`${TRIPWIRE}basis_drift`, ["description"])).toBe("Held: the ticket's description changed in Jira");
+    expect(shortHeld(`${TRIPWIRE}basis_drift`, ["status"])).toBe("Held: the ticket was moved to Done");
+  });
+
+  it("reads a safety hold exactly as the rail banner does, never naming the tripwire", () => {
+    for (const kind of TRIPWIRES) {
+      const reason = `${TRIPWIRE}${kind}`;
+      for (const drifted of [undefined, ["description"] as const, ["status"] as const]) {
+        const short = shortHeld(reason, drifted);
+        expect(short).toBe(heldText(reason, drifted));
+        expect(short).not.toMatch(/tripwire/i);
+      }
+    }
+  });
+
+  it("never says tripwire in a row's status for any hold", () => {
+    const reasons = [HELD_RESTART, HELD_PERSON, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_QUOTA, ...TRIPWIRES.map((k) => `${TRIPWIRE}${k}`), `${TRIPWIRE}other`];
+    for (const reason of reasons) {
+      expect(heldText(reason, ["description"])).not.toMatch(/tripwire/i);
+      expect(shortHeld(reason, ["description"])).not.toMatch(/tripwire/i);
+      expect(workstreamStatus(view("ws-1", "CA-401", { heldReason: reason }), [])).not.toMatch(/tripwire/i);
+    }
   });
 
   it("takes the last hold in the audit", () => {
@@ -209,6 +230,25 @@ describe("workstreamStatus", () => {
 
   it("only reads the workstream's own runs", () => {
     expect(workstreamStatus(view("ws-1", "CA-401", { runs: ["r1"] }), [run("r9", "build", "working")])).toBe("Idle");
+  });
+});
+
+describe("nextStep", () => {
+  const next = (runs: Run[]) => nextStep(stepChips(runs, [], {}, [], { now: NOW }));
+
+  it("points at Investigate when nothing has run, and stays on a step until its newest run finished well", () => {
+    expect(next([])).toBe("investigate");
+    expect(next([run("r1", "investigate", "working")])).toBe("investigate");
+    expect(next([run("r1", "investigate", "needsAnswer")])).toBe("investigate");
+    expect(next([run("r1", "investigate", "done")])).toBe("triage");
+    expect(next([run("r1", "investigate", "done"), run("r2", "plan", "done"), run("r3", "build", "failed")])).toBe("build");
+    expect(next([run("r1", "investigate", "done"), run("r2", "build", "stopped")])).toBe("build");
+  });
+
+  it("goes by the furthest step with a run, skipped steps and all, and is null once Verify is done", () => {
+    expect(next([run("r1", "investigate", "done"), run("r2", "plan", "done")])).toBe("build");
+    expect(next([run("r1", "verify", "working")])).toBe("verify");
+    expect(next([run("r1", "investigate", "done"), run("r2", "verify", "done")])).toBeNull();
   });
 });
 

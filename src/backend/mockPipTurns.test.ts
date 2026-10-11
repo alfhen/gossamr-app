@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { INTERRUPTED, MOCK_TURN_DAYS, NEVER_RAN, freshStart, mockUsage, openMockPipTurns } from "./mockPipTurns";
+import { INTERRUPTED, MOCK_TURN_DAYS, NEVER_RAN, SHOWN_MAX_CHARS, freshStart, mockUsage, openMockPipTurns, shownLine } from "./mockPipTurns";
 import { mockAsk } from "./mockPip";
 import type { ScreenContext } from "../types";
 
@@ -142,6 +142,16 @@ describe("the mock pip-turn store", () => {
     expect(openMockPipTurns().turns("general")).toEqual([]);
     localStorage.setItem(KEY, JSON.stringify([{ requestId: 1 }, "x"]));
     expect(openMockPipTurns().turns("general")).toEqual([]);
+  });
+});
+
+describe("shownLine", () => {
+  it("keeps a shown line trimmed and cut to its limit, and none that is blank, as the app does", () => {
+    expect(shownLine("  Discuss this draft \n")).toBe("Discuss this draft");
+    expect(shownLine("   ")).toBeNull();
+    expect(shownLine(undefined)).toBeNull();
+    expect([...shownLine(`${"é".repeat(SHOWN_MAX_CHARS - 1)} and on`)!]).toHaveLength(SHOWN_MAX_CHARS - 1);
+    expect([...shownLine("x".repeat(SHOWN_MAX_CHARS + 50))!]).toHaveLength(SHOWN_MAX_CHARS);
   });
 });
 

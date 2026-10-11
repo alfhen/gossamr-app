@@ -8,7 +8,7 @@ use super::run_results::label_of;
 use super::Core;
 use crate::codehost::diff::{commentable, parse_where, relative_path};
 use crate::domain::{
-    clip, without_markers, Actor, Basis, ChangedFile, CreatedBy, DiffSide, Intent, MaybePosted, Origin, Proposal, ProposalQuery, ProposalState, ReviewComment, Run, RunKind,
+    clip, without_markers, Actor, Basis, ChangedFile, CreatedBy, DiffSide, Intent, MaybePosted, Origin, Proposal, ProposalQuery, ProposalState, ReviewComment, RunKind,
     RunState, WorkstreamEvent,
 };
 use crate::auth::Scope;
@@ -84,26 +84,44 @@ fn leading_place(text: &str) -> (Option<String>, String) {
     (None, text.into())
 }
 
-/// The review of pull request `number` at `commit_sha` that `findings` come to. `files` is the pull request's files, or
-/// `None` when its diff at `commit_sha` couldn't be read (it failed, or the head has moved on): then every finding goes in the summary. A finding goes inline only when its
-/// `where` names a file and a line the diff shows on the new side; the others are listed in the summary. `run` names
-/// the run in its last line. `src/backend/mockReviewDraft.ts` mirrors this, and both pass
-/// `src/lib/reviewDraft.fixtures.json`.
-pub fn review_text(number: u64, commit_sha: &str, verdict: ReviewVerdict, findings: &[Finding], files: Option<&[ChangedFile]>, run: &str) -> ReviewText {
+/// The summary's first line, as a reviewer would put it: "Not ready to merge yet: 1 blocking issue, 1 should-fix and 1
+/// nit.", "Looks good to merge, with 2 should-fixes and 4 nits to look at.", "Looks good to merge. Nothing to change.".
+/// The counts name only the severities found, blocking first. A blocking finding makes it not ready whatever the verdict
+/// says, so the line never reads "looks good" over one. As `verdictLine` in src/backend/mockReviewDraft.ts.
+pub fn verdict_line(verdict: ReviewVerdict, findings: &[Finding]) -> String {
     let count = |s: Severity| findings.iter().filter(|f| f.severity == s).count();
-    let nits = count(Severity::Nit);
-    let verdict = match verdict {
-        ReviewVerdict::Pass => "pass",
-        ReviewVerdict::Blocking => "blocking",
+    let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let counts: Vec<String> = [
+        (count(Severity::Blocking), "blocking issue", "blocking issues"),
+        (count(Severity::ShouldFix), "should-fix", "should-fixes"),
+        (count(Severity::Nit), "nit", "nits"),
+    ]
+    .into_iter()
+    .filter(|(n, ..)| *n > 0)
+    .map(|(n, one, many)| plural(n, one, many))
+    .collect();
+    let listed = match counts.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
     };
-    let header = format!(
-        "Gossamr review of #{number} at {}: {verdict} ({} blocking, {} should-fix, {nits} {}).",
-        clip(commit_sha, 8),
-        count(Severity::Blocking),
-        count(Severity::ShouldFix),
-        if nits == 1 { "nit" } else { "nits" }
-    );
-    let footer = format!("Drafted from agent run {run}; posted only after a person approved it in Gossamr.");
+    let verdict = if count(Severity::Blocking) > 0 { ReviewVerdict::Blocking } else { verdict };
+    match (verdict, listed.is_empty()) {
+        (ReviewVerdict::Blocking, true) => "Not ready to merge yet.".into(),
+        (ReviewVerdict::Blocking, false) => format!("Not ready to merge yet: {listed}."),
+        (ReviewVerdict::Pass, true) => "Looks good to merge. Nothing to change.".into(),
+        (ReviewVerdict::Pass, false) => format!("Looks good to merge, with {listed} to look at."),
+    }
+}
+
+/// The review that `verdict` and `findings` come to, opening with `verdict_line`. `files` is the pull request's files at
+/// the commit the review read, or `None` when that diff couldn't be read (it failed, or the head has moved on): then every finding goes in the summary. A finding goes inline only when its
+/// `where` names a file and a line the diff shows on the new side; the others are listed in the summary. `ticket` is the
+/// key of the ticket the review was for, which its last line names; never the run's id, which means nothing on GitHub. `src/backend/mockReviewDraft.ts` mirrors this, and both pass
+/// `src/lib/reviewDraft.fixtures.json`.
+pub fn review_text(verdict: ReviewVerdict, findings: &[Finding], files: Option<&[ChangedFile]>, ticket: Option<&str>) -> ReviewText {
+    let header = verdict_line(verdict, findings);
+    let footer = format!("{}; posted only after a person approved it in Gossamr.", drafted_by(ticket));
 
     let mut comments: Vec<ReviewComment> = Vec::new();
     let mut listed: Vec<String> = Vec::new();
@@ -145,7 +163,7 @@ pub fn review_text(number: u64, commit_sha: &str, verdict: ReviewVerdict, findin
         for (i, line) in listed.iter().enumerate() {
             let len = line.chars().count() + 1;
             if used + len > REVIEW_SUMMARY_LIMIT - MORE_ROOM {
-                lines.push(format!("- …and {} more; the whole review is in agent run {run}.", listed.len() - i));
+                lines.push(format!("- …and {} more; the whole review is in Gossamr.", listed.len() - i));
                 break;
             }
             used += len;
@@ -186,7 +204,7 @@ impl Core {
                 None
             }
         };
-        let text = review_text(number, &sha, verdict, &resolved.findings, files.as_deref(), &short_of(&run));
+        let text = review_text(verdict, &resolved.findings, files.as_deref(), run.item.as_ref().map(|i| i.key.as_str()));
         let intent = Intent::GithubReview {
             connection_id,
             item: run.item.clone(),
@@ -379,11 +397,11 @@ impl Core {
     }
 }
 
-/// How a review names the run it came from: its session's short id, else the start of its own.
-fn short_of(run: &Run) -> String {
-    match &run.short_id {
-        Some(short) => short.to_string(),
-        None => clip(&run.id, 8),
+/// Who wrote a review, in its last line: a Gossamr agent, reviewing `ticket` when there is one. As `draftedBy` in the mock.
+fn drafted_by(ticket: Option<&str>) -> String {
+    match ticket.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(key) => format!("Drafted by a Gossamr agent reviewing {}", clip(key, 40)),
+        None => "Drafted by a Gossamr agent".into(),
     }
 }
 
@@ -391,7 +409,7 @@ fn short_of(run: &Run) -> String {
 mod tests {
     use super::*;
     use crate::codehost::github::testserver::{pull_reply, pull_reply_at, Reply};
-    use crate::domain::ProposalState;
+    use crate::domain::{ProposalState, Run};
     use crate::inbox::run_results::tests::run_with;
     use crate::inbox::testing::{fixture_watching, fixture_watching_with, Fixture};
 
@@ -419,7 +437,7 @@ mod tests {
                     .collect()
             });
             let verdict: ReviewVerdict = serde_json::from_value(case["verdict"].clone()).unwrap();
-            let got = review_text(case["number"].as_u64().unwrap(), case["commitSha"].as_str().unwrap(), verdict, &findings, files.as_deref(), case["run"].as_str().unwrap());
+            let got = review_text(verdict, &findings, files.as_deref(), case["ticket"].as_str());
             assert_eq!(got.summary, case["expect"]["summary"].as_str().unwrap(), "{name}");
             let comments: Vec<ReviewComment> = serde_json::from_value(case["expect"]["comments"].clone()).unwrap();
             assert_eq!(got.comments, comments, "{name}");
@@ -427,11 +445,34 @@ mod tests {
     }
 
     #[test]
+    fn the_verdict_line_reads_as_a_reviewer_would_write_it() {
+        let of = |counts: [usize; 3]| -> Vec<Finding> {
+            [Severity::Blocking, Severity::ShouldFix, Severity::Nit]
+                .into_iter()
+                .zip(counts)
+                .flat_map(|(severity, n)| (0..n).map(move |i| Finding { severity, text: format!("f{i}"), where_: None }))
+                .collect()
+        };
+        let line = |verdict, counts| verdict_line(verdict, &of(counts));
+        assert_eq!(line(ReviewVerdict::Blocking, [1, 1, 1]), "Not ready to merge yet: 1 blocking issue, 1 should-fix and 1 nit.");
+        assert_eq!(line(ReviewVerdict::Blocking, [2, 3, 2]), "Not ready to merge yet: 2 blocking issues, 3 should-fixes and 2 nits.");
+        assert_eq!(line(ReviewVerdict::Blocking, [1, 0, 1]), "Not ready to merge yet: 1 blocking issue and 1 nit.");
+        assert_eq!(line(ReviewVerdict::Blocking, [0, 0, 3]), "Not ready to merge yet: 3 nits.");
+        assert_eq!(line(ReviewVerdict::Blocking, [0, 0, 0]), "Not ready to merge yet.");
+        assert_eq!(line(ReviewVerdict::Pass, [0, 0, 0]), "Looks good to merge. Nothing to change.");
+        assert_eq!(line(ReviewVerdict::Pass, [0, 2, 4]), "Looks good to merge, with 2 should-fixes and 4 nits to look at.");
+        assert_eq!(line(ReviewVerdict::Pass, [0, 1, 0]), "Looks good to merge, with 1 should-fix to look at.");
+        assert_eq!(line(ReviewVerdict::Pass, [0, 0, 1]), "Looks good to merge, with 1 nit to look at.");
+        // A pass over a finding the agent itself called blocking is not ready all the same.
+        assert_eq!(line(ReviewVerdict::Pass, [1, 0, 1]), "Not ready to merge yet: 1 blocking issue and 1 nit.");
+    }
+
+    #[test]
     fn a_long_list_of_findings_is_cut_with_a_note_and_the_summary_stays_within_its_limit() {
         let findings: Vec<Finding> = (0..40).map(|n| Finding { severity: Severity::Nit, text: format!("{n} {}", "x".repeat(590)), where_: Some(format!("src/f{n}.ts")) }).collect();
-        let text = review_text(12, "a1b2c3d4e5f6", ReviewVerdict::Pass, &findings, Some(&[][..]), "ab12cd34");
+        let text = review_text(ReviewVerdict::Pass, &findings, Some(&[][..]), Some("CA-402"));
         assert!(text.summary.chars().count() <= REVIEW_SUMMARY_LIMIT, "{}", text.summary.chars().count());
-        assert!(text.summary.contains("more; the whole review is in agent run ab12cd34."));
+        assert!(text.summary.contains("more; the whole review is in Gossamr."));
         assert!(text.summary.ends_with("posted only after a person approved it in Gossamr."));
     }
 
@@ -440,7 +481,7 @@ mod tests {
         let patch = format!("@@ -0,0 +1,60 @@\n{}", (1..=60).map(|n| format!("+line {n}")).collect::<Vec<_>>().join("\n"));
         let files = [ChangedFile { path: "src/a.ts".into(), status: "added".into(), additions: 60, deletions: 0, patch: Some(patch), truncated: false }];
         let findings: Vec<Finding> = (1..=55).map(|n| Finding { severity: Severity::Nit, text: format!("n{n}"), where_: Some(format!("src/a.ts:{n}")) }).collect();
-        let text = review_text(12, "a1b2c3d4e5f6", ReviewVerdict::Pass, &findings, Some(&files), "ab12cd34");
+        let text = review_text(ReviewVerdict::Pass, &findings, Some(&files), Some("CA-402"));
         assert_eq!(text.comments.len(), REVIEW_COMMENTS_MAX);
         assert!(text.summary.contains("- **Nit:** n51 (src/a.ts:51)") && text.summary.contains("n55"));
     }
@@ -450,7 +491,7 @@ mod tests {
         let patch = "@@ -0,0 +1,1 @@\n+line".to_string();
         let files = [ChangedFile { path: "src/a.ts".into(), status: "added".into(), additions: 1, deletions: 0, patch: Some(patch), truncated: false }];
         let findings: Vec<Finding> = (0..12).map(|n| Finding { severity: Severity::Nit, text: format!("{n} {}", "x".repeat(590)), where_: Some("src/a.ts:1".into()) }).collect();
-        let text = review_text(12, "a1b2c3d4e5f6", ReviewVerdict::Pass, &findings, Some(&files), "ab12cd34");
+        let text = review_text(ReviewVerdict::Pass, &findings, Some(&files), Some("CA-402"));
         assert_eq!(text.comments.len(), 1);
         assert!(text.comments[0].body.chars().count() <= REVIEW_COMMENT_LIMIT);
         assert!(text.summary.contains("- **Nit:** 11 "), "what didn't fit is listed");
@@ -489,10 +530,11 @@ mod tests {
         assert_eq!((connection, repo, number, sha), ("github:ann", "acme/webshop", 12, "a1b2c3d4e5f6"));
         assert_eq!(comments.iter().map(|c| (c.path.as_str(), c.line, c.side)).collect::<Vec<_>>(), [("src/consumer/retry.ts", 42, DiffSide::Right), ("src/consumer/retry.ts", 17, DiffSide::Right)]);
         assert!(comments[0].body.starts_with("**Blocking:** the retry loop never backs off"));
-        assert!(summary.starts_with("Gossamr review of #12 at a1b2c3d4: blocking (1 blocking, 1 should-fix, 2 nits)."), "{summary}");
+        assert!(summary.starts_with("Not ready to merge yet: 1 blocking issue, 1 should-fix and 2 nits.\n\n"), "{summary}");
         assert!(summary.contains("Findings without a line in the diff:\n- **Should fix:** no test covers the timeout path. (src/consumer/retry.test.ts)\n- **Nit:** not in this change. (src/elsewhere.ts:3)"), "{summary}");
-        assert!(!summary.contains("Not ready") && !summary.contains("I ran the tests"), "never the agent's prose");
-        assert!(summary.ends_with(&format!("Drafted from agent run {}; posted only after a person approved it in Gossamr.", run.short_id.as_ref().unwrap())));
+        assert!(!summary.contains("Not ready.") && !summary.contains("I ran the tests"), "never the agent's prose");
+        assert!(summary.ends_with("\n\nDrafted by a Gossamr agent reviewing CA-1; posted only after a person approved it in Gossamr."), "{summary}");
+        assert!(!summary.contains(&run.id) && !run.short_id.as_ref().is_some_and(|s| summary.contains(s.as_str())), "never the run's id: {summary}");
         assert_eq!((p.state.clone(), p.created_by, p.origin.clone(), p.label.clone()), (ProposalState::Pending, CreatedBy::Agent, Origin::of_run(&run), Some(label_of(&run))));
         assert_eq!(p.target(), Some(&fx.item("CA-1")));
         assert!(fx.tracker.intents().is_empty(), "a draft writes nothing to Jira");
@@ -559,7 +601,7 @@ mod tests {
         let p = fx.core.auto_draft_run_review(&run.id).await.unwrap().unwrap();
         let (.., summary, comments) = intent_of(&p);
         assert!(comments.is_empty());
-        assert!(summary.starts_with("Gossamr review of #12 at a1b2c3d4: pass (0 blocking, 0 should-fix, 0 nits)."), "{summary}");
+        assert!(summary.starts_with("Looks good to merge. Nothing to change.\n\n"), "{summary}");
     }
 
     const POST_ROUTE: &str = "POST /repos/acme/webshop/pulls/12/reviews";

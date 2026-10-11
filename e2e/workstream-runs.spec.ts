@@ -7,12 +7,6 @@ const peekAgents = (page: Page) => peekSheet(page).locator("#peek-agents");
 /** The Agents view's runs; Pip's strip of agents shows runs too, and only the view counts. */
 const agentRuns = (page: Page) => page.locator('main [data-run-id]:not(aside[aria-label="Pip"] *)');
 
-/** Dismisses the toasts on screen, which sit over the rail's lower buttons until they time out. */
-async function dismissToasts(page: Page) {
-  const dismiss = page.getByRole("button", { name: "Dismiss" });
-  while ((await dismiss.count()) > 0) await dismiss.first().click();
-}
-
 /** Waits until Pip has finished answering in the pane. */
 async function settled(page: Page) {
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
@@ -233,7 +227,6 @@ test("/stop R1 in the workstream's conversation stops the run without asking Pip
   await expect(pipPane(page).getByText("/stop R1", { exact: true })).toHaveCount(0);
 
   // The Agents view shows it stopped too.
-  await dismissToasts(page);
   await page.getByRole("button", { name: /^Agents/ }).click();
   // A run the person stopped is under Earlier, folded until shown.
   await page.locator('[data-lane="earlier"]').getByRole("button", { name: "Show" }).click();

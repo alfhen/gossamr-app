@@ -167,6 +167,14 @@ describe("PeekView", () => {
     expect(view({ motion: "none" })).not.toContain("ws-peek");
   });
 
+  it("keeps the room under the last section as an element, not as the scroller's padding a sticky bar would stop above", () => {
+    const out = view();
+    const scroller = out.match(/<div data-peek-scroll[^>]*>/)![0];
+    expect(scroller).toContain("scroll-pt-11");
+    expect(scroller).not.toMatch(/\bpb-/);
+    expect(out).toMatch(/<div aria-hidden="true" data-peek-end="true" class="[^"]*h-24[^"]*"><\/div><\/div><\/aside>/);
+  });
+
   it("tells the person how to browse", () => {
     const out = view();
     expect(out).toContain("browse");

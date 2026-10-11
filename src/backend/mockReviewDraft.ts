@@ -37,16 +37,42 @@ function leadingPlace(text: string): [string | null, string] {
   return [null, text];
 }
 
+/** Each severity as the verdict line counts it, singular and plural, in the order it names them. */
+const COUNTED: [ReviewSeverity, string, string][] = [
+  ["blocking", "blocking issue", "blocking issues"],
+  ["should-fix", "should-fix", "should-fixes"],
+  ["nit", "nit", "nits"],
+];
+
 /**
- * The review of pull request `number` at `commitSha` that `findings` come to, as `review_text` in
- * `inbox/review_drafts.rs`: inline comments for findings at lines the diff shows on the new side, the rest listed in the
- * summary. `files` null means the diff at `commitSha` couldn't be read (it couldn't be, or the head has moved on). Both pass `src/lib/reviewDraft.fixtures.json`.
+ * The summary's first line, as a reviewer would put it: "Not ready to merge yet: 1 blocking issue, 1 should-fix and 1
+ * nit.", "Looks good to merge, with 2 should-fixes and 4 nits to look at.", "Looks good to merge. Nothing to change.".
+ * The counts name only the severities found, blocking first. A blocking finding makes it not ready whatever the verdict
+ * says, so the line never reads "looks good" over one. As `verdict_line` in `inbox/review_drafts.rs`.
  */
-export function reviewText(number: number, commitSha: string, verdict: ReviewVerdict, findings: ReviewFinding[], files: Pick<ChangedFile, "path" | "patch">[] | null, run: string): { summary: string; comments: ReviewComment[] } {
-  const count = (s: ReviewSeverity) => findings.filter((f) => f.severity === s).length;
-  const nits = count("nit");
-  const header = `Gossamr review of #${number} at ${clip(commitSha, 8)}: ${verdict} (${count("blocking")} blocking, ${count("should-fix")} should-fix, ${nits} ${nits === 1 ? "nit" : "nits"}).`;
-  const footer = `Drafted from agent run ${run}; posted only after a person approved it in Gossamr.`;
+export function verdictLine(verdict: ReviewVerdict, findings: Pick<ReviewFinding, "severity">[]): string {
+  const counts = COUNTED.map(([s, one, many]) => [findings.filter((f) => f.severity === s).length, one, many] as const)
+    .filter(([n]) => n > 0)
+    .map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
+  const listed = counts.length > 1 ? `${counts.slice(0, -1).join(", ")} and ${counts[counts.length - 1]}` : (counts[0] ?? "");
+  if (verdict === "blocking" || findings.some((f) => f.severity === "blocking")) return listed ? `Not ready to merge yet: ${listed}.` : "Not ready to merge yet.";
+  return listed ? `Looks good to merge, with ${listed} to look at.` : "Looks good to merge. Nothing to change.";
+}
+
+/** Who wrote a review, in its last line: a Gossamr agent, reviewing `ticket` when there is one. As `drafted_by` in Rust. */
+function draftedBy(ticket: string | null): string {
+  const key = ticket?.trim();
+  return key ? `Drafted by a Gossamr agent reviewing ${clip(key, 40)}` : "Drafted by a Gossamr agent";
+}
+
+/**
+ * The review that `verdict` and `findings` come to, opening with `verdictLine`, as `review_text` in
+ * `inbox/review_drafts.rs`: inline comments for findings at lines the diff shows on the new side, the rest listed in the
+ * summary. `ticket` is the key of the ticket the review was for, which its last line names, never the run's id. `files` is the pull request's files at the commit the review read; null means that diff couldn't be read (it couldn't be, or the head has moved on). Both pass `src/lib/reviewDraft.fixtures.json`.
+ */
+export function reviewText(verdict: ReviewVerdict, findings: ReviewFinding[], files: Pick<ChangedFile, "path" | "patch">[] | null, ticket: string | null): { summary: string; comments: ReviewComment[] } {
+  const header = verdictLine(verdict, findings);
+  const footer = `${draftedBy(ticket)}; posted only after a person approved it in Gossamr.`;
   const comments: ReviewComment[] = [];
   const listed: string[] = [];
   for (const f of findings) {
@@ -80,7 +106,7 @@ export function reviewText(number: number, commitSha: string, verdict: ReviewVer
     for (const [i, line] of listed.entries()) {
       const len = chars(line) + 1;
       if (used + len > REVIEW_SUMMARY_LIMIT - MORE_ROOM) {
-        lines.push(`- …and ${listed.length - i} more; the whole review is in agent run ${run}.`);
+        lines.push(`- …and ${listed.length - i} more; the whole review is in Gossamr.`);
         break;
       }
       used += len;

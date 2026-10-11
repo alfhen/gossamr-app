@@ -502,8 +502,8 @@ impl Core {
         let body = tracker::comment_doc(&format!("{intro}\n\n{}", fitted.text), &[]);
         let intent = Intent::Comment { item: item.clone(), body };
         let same = |i: &Intent| matches!((i, &intent), (Intent::Comment { item: a, body: x }, Intent::Comment { item: b, body: y }) if a == b && x.plain_text() == y.plain_text());
-        if let Some(existing) = self.pending_same(same).await? {
-            return Err(refuse(format!("that comment is already waiting as a draft on {} (draft {})", item.key, existing.id)));
+        if self.pending_same(same).await?.is_some() {
+            return Err(refuse(format!("that comment is already waiting as a draft on {}", item.key)));
         }
         let label = match &run.short_id {
             Some(short) => format!("{PLAN_LABEL} {short}"),
@@ -549,8 +549,8 @@ impl Core {
         let note = resolved.note.clone().filter(|n| !n.text.is_empty()).ok_or_else(|| refuse("the run finished without a written answer, so there is nothing to draft"))?;
         let intent = self.comment_intent(&run, &resolved, item.clone(), &note).await?;
         let same = |i: &Intent| matches!((i, &intent), (Intent::Comment { item: a, body: x }, Intent::Comment { item: b, body: y }) if a == b && x.plain_text() == y.plain_text());
-        if let Some(existing) = self.pending_same(same).await? {
-            return Err(refuse(format!("that comment is already waiting as a draft on {} (draft {})", item.key, existing.id)));
+        if self.pending_same(same).await?.is_some() {
+            return Err(refuse(format!("that comment is already waiting as a draft on {}", item.key)));
         }
         self.draft_from_run(&run, intent, label_of(&run)).await
     }
@@ -651,7 +651,7 @@ impl Core {
         let resolved = self.resolved_of(&run).await?;
         let result = run.result.as_deref().unwrap_or("");
         let proposal = resolved.ticket.clone().or_else(|| ticket_from_answer(result)).ok_or_else(|| refuse("the run finished without a written answer, so there is nothing to draft"))?;
-        self.draft_ticket_once(&run, &proposal).await?.map_err(|existing| refuse(format!("that run already has a ticket draft ({}), {}", existing.id, state_words(&existing.state))))
+        self.draft_ticket_once(&run, &proposal).await?.map_err(|existing| refuse(format!("that run already has a ticket draft, {}", state_words(&existing.state))))
     }
 
     /// The same draft, made when an investigation that was started to end as a ticket finishes. Only a result with a
@@ -705,8 +705,8 @@ impl Core {
         let wanted = ItemRef { connection_id: item.connection_id.clone(), external_id: key.clone(), key: key.clone() };
         let blocker = self.cache_item(&wanted).await?.ok_or_else(|| refuse(format!("{key} wasn't found in Jira, so it can't be linked")))?.item;
         let same = |i: &Intent| matches!(i, Intent::Link { from, to, kind: LinkKind::Blocks } if *from == blocker && *to == item);
-        if let Some(existing) = self.pending_same(same).await? {
-            return Err(refuse(format!("that link is already waiting as a draft (draft {})", existing.id)));
+        if self.pending_same(same).await?.is_some() {
+            return Err(refuse(format!("that link from {key} is already waiting as a draft on {}", item.key)));
         }
         let label = format!("Blocked by {key}");
         self.draft_from_run(&run, Intent::Link { from: blocker, to: item, kind: LinkKind::Blocks }, label).await
@@ -915,8 +915,9 @@ pub(in crate::inbox) mod tests {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let run = run_with(&fx, |_| {}).await;
         let first = fx.core.draft_run_comment(&run.id).await.unwrap();
-        let err = fx.core.draft_run_comment(&run.id).await.unwrap_err();
-        assert!(err.to_string().contains(&first.id), "{err}");
+        let err = fx.core.draft_run_comment(&run.id).await.unwrap_err().to_string();
+        // The person reads this: it says where the draft waits, never the draft's id.
+        assert!(err.ends_with("that comment is already waiting as a draft on CA-1") && !err.contains(&first.id), "{err}");
         fx.core.skip_proposal(&first.id).await.unwrap();
         assert!(fx.core.draft_run_comment(&run.id).await.is_ok(), "once it is decided a new one may be drafted");
     }
@@ -931,8 +932,8 @@ pub(in crate::inbox) mod tests {
         assert_eq!((p.label.as_deref(), p.created_by), (Some("Blocked by CA-2"), CreatedBy::Agent));
         assert_eq!(p.origin, Origin::of_run(&run));
         assert!(fx.tracker.intents().is_empty());
-        let err = fx.core.draft_run_blocker(&run.id, "CA-2").await.unwrap_err();
-        assert!(err.to_string().contains(&p.id), "{err}");
+        let err = fx.core.draft_run_blocker(&run.id, "CA-2").await.unwrap_err().to_string();
+        assert!(err.ends_with("that link from CA-2 is already waiting as a draft on CA-1") && !err.contains(&p.id), "{err}");
     }
 
     #[tokio::test]
@@ -968,7 +969,8 @@ pub(in crate::inbox) mod tests {
         assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().draft, Some(RunDraft { id: auto.id.clone(), state: crate::domain::ProposalState::Pending }));
 
         assert_eq!(fx.core.auto_draft_run_comment(&run.id).await.unwrap(), None, "waiting");
-        assert!(fx.core.draft_run_comment(&run.id).await.unwrap_err().to_string().contains(&auto.id));
+        let err = fx.core.draft_run_comment(&run.id).await.unwrap_err().to_string();
+        assert!(err.contains("already waiting as a draft") && !err.contains(&auto.id), "{err}");
         fx.core.skip_proposal(&auto.id).await.unwrap();
         assert_eq!(fx.core.auto_draft_run_comment(&run.id).await.unwrap(), None, "skipped");
         assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().draft.unwrap().state, crate::domain::ProposalState::Skipped);
@@ -1018,7 +1020,7 @@ pub(in crate::inbox) mod tests {
         let first = fx.core.auto_draft_run_ticket(&run.id).await.unwrap().unwrap();
         assert_eq!(fx.core.auto_draft_run_ticket(&run.id).await.unwrap(), None, "waiting");
         let err = fx.core.draft_run_ticket(&run.id).await.unwrap_err().to_string();
-        assert!(err.contains(&first.id) && err.contains("waiting for you"), "{err}");
+        assert!(err.ends_with("that run already has a ticket draft, waiting for you") && !err.contains(&first.id), "says what became of it, never its id: {err}");
 
         fx.core.skip_proposal(&first.id).await.unwrap();
         assert_eq!(fx.core.auto_draft_run_ticket(&run.id).await.unwrap(), None, "skipped");

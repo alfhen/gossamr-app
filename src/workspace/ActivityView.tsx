@@ -520,7 +520,7 @@ export function ActivityView() {
           </button>
         )}
       </header>
-      <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-4 pb-8">
+      <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(32px,var(--ws-launcher-clear,0px))]">
         <div className="mx-auto max-w-[780px]">
           <StrayNotices />
           {showDrafts ? (

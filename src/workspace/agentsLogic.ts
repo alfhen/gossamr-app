@@ -1,3 +1,4 @@
+import { humanDuration } from "../lib/runNames";
 import { relativeTime } from "../lib/views";
 import { runLabels, stage } from "../lib/workstreamStage";
 import type { Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
@@ -94,9 +95,9 @@ export function stoppedText(run: Pick<Run, "stoppedByLimit" | "error" | "lastDet
 
 export const KIND_LABEL: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
 
+/** "Quiet for 40 min", "Quiet for 3 h", "Quiet for 10 days". */
 export function quietText(minutes: number): string {
-  if (minutes < 120) return `Quiet for ${minutes} min`;
-  return `Quiet for ${Math.floor(minutes / 60)} h`;
+  return `Quiet for ${humanDuration(minutes)}`;
 }
 
 /** "578k tokens", "1.2M tokens"; null when the count isn't known. Never a price. */

@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   advanceRuns,
   askPip,
+  expectToast,
   heldBanner,
   holdAll,
   holdPip,
@@ -428,7 +429,7 @@ test("Hold all, from the rail or with its shortcut, stops a running wake and eve
   const triage = await started(page, "triage");
 
   await holdAll(page, "button");
-  await expect(page.getByText(/^Held 2 workstreams\./)).toBeVisible();
+  await expectToast(page, /^Held 2 workstreams\./);
   await expect(wakes(page)).toContainText("Set aside");
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
   await holdPip(page, false);

@@ -56,6 +56,8 @@ export interface TurnUsage {
 export interface TurnMeta {
   quote?: string;
   looking?: string;
+  /** The short line the bubble shows in place of an instruction the page wrote. Display only; never sent to Claude. */
+  shown?: string;
   imageCount: number;
 }
 
@@ -66,6 +68,7 @@ export interface StoredTurn {
   prompt: string;
   quote?: string;
   looking?: string;
+  shown?: string;
   imageCount: number;
   text: string;
   steps: string[];

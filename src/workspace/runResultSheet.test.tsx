@@ -215,17 +215,21 @@ describe("a draft made from a run", () => {
   const props = { statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() };
 
   it("says where it came from, who wrote the words, and still waits for the person", () => {
+    // A static render reads the runs store's first state, so the run is named from the draft's ticket; runNames.test
+    // covers naming it by its step once the run is known.
     const html = renderToStaticMarkup(<DraftCard proposal={draft({})} {...props} onOpenRun={vi.fn()} />);
     expect(html).toContain('data-provenance="run"');
-    expect(html).toContain("From agent run");
-    expect(html).toContain("1000a000");
+    // Named by ticket and step, as a link to the run, and never by its id.
+    expect(html).toMatch(/From <button[^>]*title="Open the run this draft came from"[^>]*>the CA-412 run<\/button>/);
+    expect(html).not.toContain("1000a000");
+    expect(html).not.toContain("font-mono");
     expect(html).toContain("The words are the agent&#x27;s. Read and edit them before you approve.");
     expect(html).toContain("Post comment");
     expect(html).toContain("Edit");
   });
 
   it("is not marked when the person wrote it", () => {
-    expect(renderToStaticMarkup(<DraftCard proposal={draft({ origin: { type: "board" } })} {...props} />)).not.toContain("From agent run");
+    expect(renderToStaticMarkup(<DraftCard proposal={draft({ origin: { type: "board" } })} {...props} />)).not.toContain('data-provenance="run"');
   });
 
   it("shows a blocker as a sentence the person can read before creating the link", () => {
@@ -234,7 +238,7 @@ describe("a draft made from a run", () => {
     expect(html).toContain("CA-402</b> blocks <b");
     expect(html).toContain("CA-412");
     expect(html).toContain("Create link");
-    expect(html).toContain("From agent run");
+    expect(html).toContain("From <b>the CA-402 run</b>");
     const preview = renderToStaticMarkup(<DraftPreview proposal={link} statusName={null} targetTitle={null} onOpen={vi.fn()} />);
     expect(preview).toContain("CA-402 blocks CA-412");
   });

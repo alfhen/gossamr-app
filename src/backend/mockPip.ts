@@ -11,6 +11,7 @@ import { mockPipTurns, mockUsage } from "./mockPipTurns";
 import { GENERAL_CONVERSATION, workstreamOfConversation } from "../lib/conversations";
 import { labelsByRun } from "../lib/workstreamStage";
 import { heldText } from "../lib/workstreamHold";
+import { draftPhrase, runPhrase } from "../lib/runNames";
 import { statusId } from "./mockConnector";
 import type { LastTrip } from "./mockWorkstreams";
 
@@ -100,6 +101,9 @@ export function reviewRefusal(why: string): string {
     : `I couldn't change the draft: ${why}. It is as it was, and nothing was posted.`;
 }
 
+/** `the CA-402 review` at the start of a sentence. */
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 const STILL_A_DRAFT = "It's still a draft: nothing was posted to GitHub, and it goes there only when you post it.";
 
 /** A turn about a GitHub review draft: talking it over, or softening, dropping or adding a comment. Null when the request isn't one. */
@@ -122,7 +126,7 @@ function reviewScript(prompt: string, drafts: readonly Proposal[], discussed: st
   if (talk) {
     return {
       steps: ["Read the draft in full", "Read the pull request's review comments"],
-      text: `I read review draft ${draft.id} of ${review.repo}#${review.number} in full, with the diff around each comment:\n\n${listed || "It has no inline comments."}\n\nTell me what to change, for example "soften the comment on ${review.comments[0] ? `${review.comments[0].path}:${review.comments[0].line}` : "a line"}" or "drop the nit", and I'll revise it. ${STILL_A_DRAFT}`,
+      text: `I read ${draftPhrase(draft)} in full, with the diff around each comment:\n\n${listed || "It has no inline comments."}\n\nTell me what to change, for example "soften the comment on ${review.comments[0] ? `${review.comments[0].path}:${review.comments[0].line}` : "a line"}" or "drop the nit", and I'll revise it. ${STILL_A_DRAFT}`,
       filter: null,
       draft: null,
       discussed: draft.id,
@@ -223,7 +227,7 @@ function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[],
       .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
   const source = newest(true) ?? (ask.kind === "build" || ask.kind === "review" ? newest(false) : undefined);
   const fromRun = source?.id ?? null;
-  const following = fromRun ? ` following ${ask.from} run ${source?.shortId ?? fromRun}` : "";
+  const following = source ? ` following ${runPhrase(source)}` : "";
   const carried = ask.kind === "build" ? " Gossamr filled in the plan from that run; I didn't write it." : ask.kind === "review" ? " Gossamr filled in the builder's account and pinned the pull request; I didn't write them." : "";
   return {
     steps: [`Looked up ${item.key}`, "Read the workstream's runs", "Drafted an agent run"],
@@ -311,7 +315,8 @@ export function suggestedAnswer(run: Run): string {
 function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstream | null = null): PipScript {
   const answers: { runId: string; message: string }[] = [];
   const labels = labelsByRun(runs);
-  const name = (id: string | undefined) => (id ? (labels.get(id) ?? (id.length <= 12 ? id : id.slice(0, 8))) : "A run");
+  // A run by its workstream label (R1), else by ticket and step; never by its id.
+  const name = (id: string | undefined) => (id ? (labels.get(id) ?? capital(runPhrase(runs.find((r) => r.id === id)))) : "A run");
   const startedState = (kind: string, label: string) => {
     const ws = runs.find((r) => labels.get(r.id) === label && r.spec.kind === kind);
     return ws?.state === "working" ? "is working on it" : "is queued to start automatically";
@@ -322,7 +327,7 @@ function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstr
     .filter((m): m is RegExpExecArray => m !== null)
     .slice(0, 3)
     .map(([, id, kind, state, rest]) => {
-      const who = `${KIND_WORD[kind as RunKind] ?? "The run"} ${name(id)}`;
+      const who = id && !labels.has(id) ? name(id) : `${KIND_WORD[kind as RunKind] ?? "The run"} ${name(id)}`;
       const started = /; started (\w+) (\S+) automatically/.exec(rest);
       if (started) return `${name(id)} finished. ${KIND_WORD[started[1] as RunKind] ?? started[1]} ${started[2]} ${startedState(started[1], started[2])}.`;
       const fix = /; sent fix round (\d+) to build (\S+)/.exec(rest);
@@ -355,14 +360,14 @@ function sendBack(context: ScreenContext, runs: readonly Run[], drafts: readonly
   const run = (context.run ? runs.find((r) => r.id === context.run) : undefined) ?? (from?.type === "run" ? runs.find((r) => r.id === from.runId) : undefined) ?? runs.find((r) => r.state === "done" && !!r.item && r.item.externalId === context.item?.externalId);
   if (!run) return none("Which run do you mean? Open the ticket it ran on, or use Discuss with Pip on one of its drafts, and ask again.");
   const blocker = followUpBlocker(run);
-  if (blocker) return none(`I can't send run ${run.shortId ?? run.id} back: ${blocker}.`);
+  if (blocker) return none(`I can't send ${runPhrase(run)} back: ${blocker}.`);
   const waiting = drafts.find((d) => d.state.type === "pending" && d.intent.type === "followUp" && d.intent.runId === run.id);
-  if (waiting) return none(`A follow-up for run ${run.shortId ?? run.id} is already waiting for you (draft ${waiting.id}). Read it, edit it if you like, and send it back.`);
+  if (waiting) return none(`A follow-up for ${runPhrase(run)} is already waiting for you. Read it, edit it if you like, and send it back.`);
   const questions = openQuestions(run.result ?? "");
-  if (!questions) return { steps: ["Read the run", "Read the rest of its result"], text: `I read the whole result of run ${run.shortId ?? run.id}: it did its job and left nothing open, so I won't send it back.`, filter: null, draft: null };
+  if (!questions) return { steps: ["Read the run", "Read the rest of its result"], text: `I read the whole result of ${runPhrase(run)}: it did its job and left nothing open, so I won't send it back.`, filter: null, draft: null };
   return {
     steps: ["Read the run", "Read the rest of its result", "Drafted a follow-up"],
-    text: `Run ${run.shortId ?? run.id} left open questions, so I drafted a follow-up with the exact message. Nothing is sent: read it, change it if you like, and press Send back.`,
+    text: `${capital(runPhrase(run))} left open questions, so I drafted a follow-up with the exact message. Nothing is sent: read it, change it if you like, and press Send back.`,
     filter: null,
     draft: null,
     followUp: { runId: run.id, message: `Please settle the open questions you left in your plan, then update the plan to match.\n\nOpen questions:\n${questions}\n\nKeep everything else in the plan as it is.`, reason: "the plan left open questions" },
@@ -436,6 +441,21 @@ export function agentSummary(runs: readonly Run[], now: number): string {
 const FINDINGS_SHOWN = 5;
 
 /** What the finished runs found, one line each: the part of the result meant for Jira, or its first line. */
+/** What the run-done nudge asks (runNudges in src/workspace/pipRuns.ts): what one finished run found. */
+const asksWhatRunFound = /^What did the agent find in run (\S+)\?$/;
+
+/** What one run found, named as the person knows it: its note for the ticket, or that it left none. */
+function runFound(run: Run | undefined): PipScript {
+  if (!run) return { steps: [], text: "I can't find that run any more, so I can't say what it found.", filter: null, draft: null };
+  const note = jiraNote(run.result ?? "").text.trim();
+  return {
+    steps: ["Read the run", "Read the rest of its result"],
+    text: note ? `I read the whole result of ${runPhrase(run)}. It found:\n\n${note}` : `${capital(runPhrase(run))} finished without a written answer, so there is nothing to sum up.`,
+    filter: null,
+    draft: null,
+  };
+}
+
 function findings(runs: readonly Run[]): string {
   const done = runs.filter((r) => r.state === "done");
   if (!done.length) return "No agent has finished yet.";
@@ -461,6 +481,8 @@ function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
   if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs, workstream);
   const q = prompt.toLowerCase();
+  const foundIn = asksWhatRunFound.exec(prompt.trim());
+  if (foundIn) return runFound(runs.find((r) => r.id === foundIn[1]));
   if (asksToSendBack.test(prompt)) return sendBack(context, runs, drafts, discussed);
   const move = moveScript(prompt, context, workstream);
   if (move) return move;
@@ -491,7 +513,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     if (!left) return { steps: [], text: "I can't find that breakdown draft any more, or it has been decided already, so there is nothing to discuss.", filter: null, draft: null };
     return {
       steps: ["Read the run", "Read the rest of its result", "Looked at the breakdown"],
-      text: `I read the whole run and checked it against draft ${left.id}. Tell me what to change, for example "fewer" or "shorter", and I'll revise the summaries. Nothing is created in Jira until you approve it.`,
+      text: `I read the whole run and checked it against ${draftPhrase(left, runs)}. Tell me what to change, for example "fewer" or "shorter", and I'll revise the summaries. Nothing is created in Jira until you approve it.`,
       filter: null,
       draft: null,
       discussed: left.id,
@@ -529,7 +551,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     const open = questions ? ` It has open questions:\n\n${questions}` : " It has no open questions.";
     return {
       steps: ["Read the draft in full"],
-      text: `Yes, I read draft ${seen.id} in full, all ${text.split("\n").length} lines of it.${open}\n\nTell me what you want done and I'll revise it or send the agent back.`,
+      text: `Yes, I read ${draftPhrase(seen, runs)} in full, all ${text.split("\n").length} lines of it.${open}\n\nTell me what you want done and I'll revise it or send the agent back.`,
       filter: null,
       draft: null,
       discussed: seen.id,
@@ -542,7 +564,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     if (!left) return { steps: [], text: "I can't find that description draft any more, or it has been decided already, so there is nothing to discuss.", filter: null, draft: null };
     return {
       steps: ["Read the run", "Read the rest of its result", "Read the ticket", "Checked the draft"],
-      text: `I read the whole run and the ticket and checked draft ${left.id}: the ticket's description with the run's plan added under a "Gossamr Plan" heading. A build follows that plan, so only you change it. Tell me what you'd change, for example "shorter", and I'll suggest the words for you to put in. Nothing is written to Jira until you approve it.`,
+      text: `I read the whole run and the ticket and checked ${draftPhrase(left, runs)}: the ticket's description with the run's plan added under a "Gossamr Plan" heading. A build follows that plan, so only you change it. Tell me what you'd change, for example "shorter", and I'll suggest the words for you to put in. Nothing is written to Jira until you approve it.`,
       filter: null,
       draft: null,
       discussed: left.id,
@@ -562,9 +584,10 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   }
   const talked = discusses.exec(prompt);
   if (talked) {
+    const talkedOf = drafts.find((d) => d.id === talked[1]);
     return {
       steps: ["Read the run", "Read the rest of its result", "Looked at the draft"],
-      text: `I read the whole run, not only the start of its result, and checked it against draft ${talked[1]}. The draft says what the run found. Tell me what to change, for example "shorter", and I'll revise it. It stays a draft until you approve it.`,
+      text: `I read the whole run, not only the start of its result, and checked it against ${talkedOf ? draftPhrase(talkedOf, runs) : "the draft"}. The draft says what the run found. Tell me what to change, for example "shorter", and I'll revise it. It stays a draft until you approve it.`,
       filter: null,
       draft: null,
       discussed: talked[1],

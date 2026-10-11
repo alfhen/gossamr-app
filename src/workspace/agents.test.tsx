@@ -243,6 +243,8 @@ describe("cards", () => {
     expect(html).toContain("Quiet for 40 min");
     expect(html).not.toMatch(/stuck/i);
     expect(card(run("working", { lastProgressAt: iso(29) }))).not.toContain("Quiet for");
+    expect(card(run("working", { lastProgressAt: iso(247 * 60), shortId: "1000a000" }))).toContain("Quiet for 10 days");
+    expect(card(run("working", { lastProgressAt: iso(247 * 60), shortId: "1000a000" }))).not.toMatch(/\d{3,} h\b/);
   });
 
   it("disables Open in Terminal until there is a session", () => {

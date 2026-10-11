@@ -12,6 +12,7 @@ import { useAgentsEnabled } from "./agentsFlag";
 import { usePrefs } from "./prefs";
 import { useAttention } from "./runsStore";
 import { Icon } from "./AgentIcons";
+import { Icon as Glyph } from "../components/icons";
 import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
 import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watchLogic";
@@ -217,6 +218,9 @@ function BellIcon() {
   );
 }
 
+/** What Hold all does, under its name in the tooltip. */
+export const HOLD_ALL_NOTE = "Stops automatic steps in every workstream; agents carry on";
+
 /**
  * Hold all, while anything could start on its own: a workstream in Manage that isn't held, or Pip answering in a
  * workstream's conversation. It holds every open workstream and stops Pip's turns in them; agents carry on.
@@ -226,8 +230,8 @@ function HoldAllButton() {
   const answering = useClaude((s) => holdAllVisible([], s.byTicket));
   if (!managing && !answering) return null;
   return (
-    <RailButton label="Hold all workstreams" hint={HOLD_ALL_HINT} onClick={() => void useWorkstreams.getState().holdAll()} className="text-lg text-ws-warn hover:bg-ws-hover">
-      <span aria-hidden>⏸</span>
+    <RailButton label="Hold all workstreams" hint={HOLD_ALL_HINT} note={HOLD_ALL_NOTE} onClick={() => void useWorkstreams.getState().holdAll()} className="text-ws-ink2 hover:bg-ws-hover">
+      <Glyph name="pause" className="size-[19px]" />
     </RailButton>
   );
 }
@@ -307,7 +311,7 @@ export function Rail() {
       <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-10" />
       <nav aria-label="Workspace" className="flex min-h-0 w-full flex-1 flex-col items-center gap-2">
         <RailButton label="Search and jump" hint="⌘K" onClick={() => setPaletteOpen(true)} className={`text-lg ${plain(false)}`}>
-          <span aria-hidden>⌕</span>
+          <Glyph name="search" className="size-[17px]" />
         </RailButton>
         <Divider />
         <RailButton label="All projects" current={inWorkspace && !project} onClick={() => setProject(null)} className={`text-lg ${plain(inWorkspace && !project)}`}>

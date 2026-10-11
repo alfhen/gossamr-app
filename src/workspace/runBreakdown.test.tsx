@@ -112,6 +112,9 @@ describe("Pip and a breakdown in the sample", () => {
     const { run, draft } = await draftOf();
     const first = scriptPip(breakdownWithPipPrompt(run, draft.id), blank, [], [run], Date.now(), [draft]);
     expect(first.discussed).toBe(draft.id);
+    expect(first.text).toContain("the breakdown of CA-412");
+    for (const id of [draft.id, run.id, run.shortId ?? run.id]) expect(first.text).not.toContain(id);
+    expect(first.text).not.toMatch(/\b(get|list|propose|revise|retire|set)_[a-z_]+/);
     expect(first.revise).toBeUndefined();
     const second = scriptPip("fewer please", blank, [], [run], Date.now(), [draft], draft.id);
     expect(second.revise).toEqual({ id: draft.id, summaries: (draft.intent as Extract<Intent, { type: "subtasks" }>).summaries.slice(0, 3) });

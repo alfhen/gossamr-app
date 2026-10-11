@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "./backend/mock";
-import { applyEvent, catchUp, forgetConversations, listenToClaude, mergeStored, onClaudeEvent, useClaude, watchProposals, withQuote, type Conversation } from "./claudeStore";
+import { applyEvent, catchUp, forgetConversations, listenToClaude, mergeStored, onClaudeEvent, turnFromStored, useClaude, watchProposals, withQuote, type Conversation } from "./claudeStore";
 import { claude, type AskRequest, type ClaudeEvent, type StoredTurn } from "./backend/claude";
 import type { Intent } from "./types";
 
@@ -207,6 +207,25 @@ describe("load", () => {
     await useClaude.getState().ask("CA-7", "and here?", null);
     expect(sent[0]).toMatchObject({ conversation: "general", meta: { looking: "CA-401", quote: "this", imageCount: 0 } });
     expect(sent[1]).toMatchObject({ conversation: "CA-7", meta: { imageCount: 0 } });
+  });
+  it("shows a short line in place of an instruction the page wrote, and sends Pip the whole instruction", async () => {
+    const sent: AskRequest[] = [];
+    vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), started));
+    const instruction = "Let's talk about the GitHub review draft p-1 of acme/webshop#218. Read it with get_proposal.";
+    await useClaude.getState().ask("general", instruction, null, undefined, { shown: "Discuss this review", quote: "the bit" });
+    expect(sent[0].prompt).toBe(withQuote(instruction, "the bit"));
+    expect(sent[0].meta).toMatchObject({ shown: "Discuss this review", quote: "the bit" });
+    const turn = useClaude.getState().byTicket.general.turns[0];
+    expect(turn).toMatchObject({ prompt: instruction, shown: "Discuss this review" });
+    await useClaude.getState().ask("general", "what next?", null);
+    expect(sent[1].meta).not.toHaveProperty("shown");
+    expect(useClaude.getState().byTicket.general.turns[1]).not.toHaveProperty("shown");
+  });
+
+  it("keeps the short line of a stored turn, with the quote still taken off the prompt", () => {
+    const back = turnFromStored(stored("r1", { prompt: withQuote("Discuss: read get_proposal", "the bit"), quote: "the bit", shown: "Discuss this review" }));
+    expect(back).toMatchObject({ prompt: "Discuss: read get_proposal", quote: "the bit", shown: "Discuss this review" });
+    expect(turnFromStored(stored("r2"))).not.toHaveProperty("shown");
   });
 });
 

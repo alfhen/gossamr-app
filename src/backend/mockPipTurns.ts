@@ -6,6 +6,18 @@ import type { StoredTurn, TurnMeta, TurnUsage } from "./claude";
 const KEY = "gossamr-mock-pip-turns";
 /** Set in the tab's session storage once the sample app has opened in it, so a reload can be told from a fresh start. */
 const OPEN = "gossamr-mock-pip-open";
+
+/** The most of a `shown` line that is kept, in characters. As `SHOWN_MAX_CHARS` in `agent/mod.rs`. */
+export const SHOWN_MAX_CHARS = 200;
+
+/** A `shown` line as it is kept: trimmed, cut to `SHOWN_MAX_CHARS`, and none when nothing is left. As `shown_line` in Rust. */
+export function shownLine(shown: string | null | undefined): string | null {
+  const line = shown?.trim();
+  if (!line) return null;
+  const chars = [...line];
+  return chars.length > SHOWN_MAX_CHARS ? chars.slice(0, SHOWN_MAX_CHARS).join("").trimEnd() : line;
+}
+
 /** Turns older than this are forgotten, as a full sync prunes them in the app. */
 export const MOCK_TURN_DAYS = 90;
 /** Why a turn that was still going when the app last closed is shown as failed, as the app says it after a restart (INTERRUPTED in src-tauri/src/db/pip_turns.rs). */
@@ -116,7 +128,7 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
 
     /** The turns a reload cut off, oldest first, once: the caller asks each again. */
     resume(): Resumed[] {
-      const out = resumable.map((t) => ({ requestId: t.requestId, conversation: t.conversation, prompt: t.prompt, meta: { quote: t.quote, looking: t.looking, imageCount: t.imageCount }, ask: t.ask! }));
+      const out = resumable.map((t) => ({ requestId: t.requestId, conversation: t.conversation, prompt: t.prompt, meta: { quote: t.quote, looking: t.looking, shown: t.shown, imageCount: t.imageCount }, ask: t.ask! }));
       resumable = [];
       for (const t of out) live.set(t.requestId, { text: "", steps: [] });
       return out;
@@ -125,6 +137,7 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
     /** Keeps a new turn; `kind` is `wake` for one the supervisor started, whose prompt is its event lines. */
     begin(conversation: string, requestId: string, prompt: string, meta: TurnMeta, status: "queued" | "running" = "running", at = new Date(), ask?: Resumable, kind: "user" | "wake" = "user") {
       if (all.some((t) => t.requestId === requestId)) return;
+      const shown = shownLine(meta.shown);
       all = [
         ...all,
         {
@@ -133,6 +146,7 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
           prompt,
           ...(meta.quote ? { quote: meta.quote } : {}),
           ...(meta.looking ? { looking: meta.looking } : {}),
+          ...(shown ? { shown } : {}),
           imageCount: meta.imageCount,
           text: "",
           steps: [],

@@ -169,7 +169,7 @@ export function DrawerTurn({ turn, proposals }: { turn: Turn; proposals: Proposa
   return (
     <>
       <div className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
-        {turn.prompt}
+        {turn.shown ?? turn.prompt}
       </div>
       {turn.status === "queued" && <p className="m-0 justify-self-end text-sm text-ink-3">Queued, starts when Pip is free</p>}
       {(turn.steps.length > 0 || (turn.status === "running" && !turn.text)) && (

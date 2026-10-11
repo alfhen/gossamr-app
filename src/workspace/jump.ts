@@ -2,6 +2,7 @@ import { itemKey } from "../lib/filter";
 import type { TicketLinks } from "../components/ticketLinks";
 import type { ItemRef } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { useRuns } from "./runsStore";
 import { workConnections, workWatch } from "./domains";
 import { cardId } from "./ItemCard";
 import { useTabs } from "./tabsStore";
@@ -79,9 +80,28 @@ export async function openTicketByKey(key: string): Promise<boolean> {
   }
 }
 
-/** Ticket keys in Pip's replies and other rendered text open the cached item here. */
+/**
+ * The title of a ticket key Gossamr knows: the cached title, or '' for a key it knows without one (the ticket of an
+ * agent run, or a key in a project it has). Null for any other, which stays text.
+ */
+export function knownTicketTitle(key: string): string | null {
+  const cached = cachedByKey(key);
+  if (cached) return cached.title;
+  const lower = key.toLowerCase();
+  if (useRuns.getState().runs.some((r) => r.item?.key.toLowerCase() === lower)) return "";
+  const project = lower.slice(0, lower.lastIndexOf("-"));
+  return Object.values(useWorkspace.getState().containers).some((c) => c.key.toLowerCase() === project) ? "" : null;
+}
+
+/** Ticket keys in Pip's replies and other rendered text open the item here: the cached one, else a live peek. */
 export const workspaceTicketLinks: TicketLinks = {
-  titleOf: (key) => cachedByKey(key)?.title ?? null,
+  titleOf: knownTicketTitle,
+  // What knownTicketTitle reads: an answer rendered before the tickets, runs or projects load links its keys once they do.
+  useKnown() {
+    useWorkspace((s) => s.items);
+    useWorkspace((s) => s.containers);
+    useRuns((s) => s.runs);
+  },
   open(key) {
     const item = cachedByKey(key);
     if (item) showMe(item.item);

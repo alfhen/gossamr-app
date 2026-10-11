@@ -126,7 +126,7 @@ describe("a review draft that follows a build", () => {
   it("says so on its card, with the account's size, and not for other drafts", async () => {
     const made = await backend.runsDraft({ ...build.spec, kind: "review", instruction: "", allowPush: false, pr: null, buildAccount: null, buildFromRun: build.id }, build.item);
     const html = card(made);
-    expect(html).toContain("Checks the builder&#x27;s account from run");
+    expect(html).toContain("Checks the builder&#x27;s account from <b");
     expect(html).toContain("shown whole in the prompt");
     const plain = await backend.runsDraft({ ...build.spec, kind: "review", instruction: "", allowPush: false, pr: 212, buildAccount: null, buildFromRun: null, name: "ca-402-other-0a1b" }, build.item);
     expect(card(plain)).not.toContain("Checks the builder");

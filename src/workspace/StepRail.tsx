@@ -9,7 +9,7 @@ import { Btn } from "./AgentSheet";
 import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
-import { batchable, batchToApprove, freezeBatch, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
+import { batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
 import { openPullView } from "./pullViewStore";
@@ -252,6 +252,7 @@ export interface StepRailViewProps {
 export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onPullView = (repo, number) => openPullView({ repo, number }), initialOpen = [], reveal = null }: StepRailViewProps) {
   const [open, setOpen] = useState<ReadonlySet<StepGroup>>(() => new Set(initialOpen));
   const chips = useMemo(() => stepChips([...runs], events, verdicts, proposals, { now, waitingForPr: view.waitingForPr, changes }), [runs, events, verdicts, proposals, now, view.waitingForPr, changes]);
+  const next = nextStep(chips);
   const revealIn = reveal ? (runs.find((r) => r.id === reveal)?.spec.kind ?? null) : null;
   useEffect(() => {
     if (revealIn) setOpen((was) => (was.has(revealIn) ? was : new Set([...was, revealIn])));
@@ -284,28 +285,40 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
         {chips.map((chip) => {
           const shown = open.has(chip.kind);
           const panel = `step-${id}-${chip.kind}`;
+          const isNext = chip.kind === next;
+          // A step nothing has reached yet, and that isn't next, is one quiet line: the route shows without six boxes alike.
+          const quiet = !isNext && !chip.newest && chip.needsYou === 0;
+          // The next step has an accent bar down its left edge, not a full outline, so it never reads as the keyboard's focus ring.
+          const box = isNext ? `border-ws-sep shadow-[inset_3px_0_0_var(--color-ws-pip)] ${shown ? "bg-ws-win" : ""}` : quiet ? `border-transparent py-0.5 ${shown ? "bg-ws-win" : ""}` : shown ? "border-ws-sep2 bg-ws-win" : "border-ws-sep";
           return (
             <li key={chip.kind} data-step={chip.kind} data-state={chip.newest?.state ?? "none"} className="grid gap-1.5">
               <button
                 type="button"
                 data-step-chip={chip.kind}
+                data-step-next={isNext ? chip.kind : undefined}
+                data-step-quiet={quiet || undefined}
                 aria-expanded={shown}
                 aria-controls={panel}
                 onClick={() => toggle(chip.kind)}
-                className={`grid w-full gap-0.5 rounded-lg border px-2.5 py-1.5 text-left outline-none hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip ${shown ? "border-ws-sep2 bg-ws-win" : "border-ws-sep"}`}
+                className={`grid w-full gap-0.5 rounded-lg border px-2.5 text-left outline-none hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip ${quiet ? "" : "py-1.5"} ${box}`}
               >
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span aria-hidden className="text-xs text-ws-ink3">
                     {shown ? "▾" : "▸"}
                   </span>
-                  <b className="text-sm font-semibold">{chip.label}</b>
+                  <b className={`text-sm ${quiet ? "font-normal text-ws-ink2" : "font-semibold"}`}>{chip.label}</b>
+                  {isNext && (
+                    <span data-step-next-tag className="rounded-full bg-ws-pip-soft px-1.5 text-[10px] leading-4 font-semibold text-ws-pip">
+                      Next
+                    </span>
+                  )}
                   {chip.needsYou > 0 && (
                     <span data-step-needs-you className="ml-auto shrink-0 rounded-full bg-ws-pip px-1.5 text-[10px] leading-4 font-semibold text-ws-on-pip">
                       {chip.needsYou} {chip.needsYou === 1 ? "needs" : "need"} you
                     </span>
                   )}
                 </span>
-                <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} />
+                {!quiet && <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} />}
               </button>
               {chip.pr && <StepPullRequest pr={chip.pr} onOpen={onOpenPr} />}
               {chip.kind === "review" && chip.newest?.spec.pr && <ReviewedPull repo={chip.newest.spec.repo} number={chip.newest.spec.pr} onOpen={() => onPullView(chip.newest!.spec.repo, chip.newest!.spec.pr!)} />}

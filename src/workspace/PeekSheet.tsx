@@ -163,7 +163,7 @@ export function PeekView(p: PeekViewProps) {
           ×
         </button>
       </div>
-      <div data-peek-scroll className={`min-h-0 flex-1 gap-5 overflow-auto px-[22px] ${draft ? "flex flex-col pt-4 pb-5" : "grid content-start scroll-pt-11 pb-24"}`}>
+      <div data-peek-scroll className={`min-h-0 flex-1 gap-5 overflow-auto px-[22px] ${draft ? "flex flex-col pt-4" : "grid content-start scroll-pt-11"}`}>
         {!draft && <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length, development: p.developmentCount })} onJump={p.onJump} />}
         <div className="grid gap-2.5">
           {draft?.banner}
@@ -330,6 +330,9 @@ export function PeekView(p: PeekViewProps) {
             </ul>
           </SectionCard>
         )}
+        {/* The space under the last section, which keeps it clear of Pip's launcher. It is an element, not the scroller's
+            padding: a draft card's sticky action bar sticks inside the padding, so padding would hold it up off the bottom. */}
+        <div aria-hidden data-peek-end className={`-mt-5 shrink-0 ${draft ? "h-5" : "h-24"}`} />
       </div>
       {draft && <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-2.5 border-t-2 border-ws-pip bg-ws-pip-soft px-[22px] py-3 shadow-[0_-6px_16px_rgb(0_0_0/0.06)]">{draft.actions}</div>}
     </aside>

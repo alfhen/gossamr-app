@@ -5,6 +5,7 @@ import { agentSummary, mockAsk, mockPipEvents, scriptPip } from "../backend/mock
 import type { AskRequest, ClaudeEvent } from "../backend/claude";
 import type { Run, RunState, ScreenContext, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { runPhrase } from "../lib/runNames";
 import { NUDGE_GAP_MS, nudgeCandidates, pickNudge, type NudgeScene } from "./nudges";
 import { NO_FILTERS } from "./agentsLogic";
 import { useAgentsFlag } from "./agentsFlag";
@@ -58,9 +59,23 @@ describe("run nudges", () => {
     expect(needs.action).toEqual({ type: "open-run", id: "r-needsAnswer" });
     const [done] = runNudges([run("done")], new Set(), () => "Aurora investigation");
     expect(done.text).toBe("Aurora investigation finished. Want me to sum up what it found?");
-    expect(done.action).toEqual({ type: "ask", prompt: "What did the agent find in run r-done?" });
+    // A ticket title isn't something that finds things, so the question names the run by ticket and step instead.
+    expect(done.action).toEqual({ type: "ask", prompt: "What did the agent find in run r-done?", shown: `What did ${runPhrase(run("done"))} find?` });
     const [failed] = runNudges([run("failed")], new Set());
     expect(failed.action).toEqual({ type: "open-run", id: "r-failed" });
+  });
+
+  it("get an answer about the one run the run-done nudge asks about, named as the person knows it", () => {
+    const done = run("done", { result: "Found the cause: the cache key ignores the locale.\n\nFor Jira: The cache key ignores the locale; a fix is a one-line change." });
+    const [nudge] = runNudges([done, run("needsAnswer")], new Set());
+    if (nudge.action.type !== "ask") throw new Error("the run-done nudge asks Pip");
+    const blank: ScreenContext = { view: null, item: null, filter: null, selection: [] };
+    const answer = scriptPip(nudge.action.prompt, blank, [], [done, run("needsAnswer")], NOW);
+    expect(answer.text).toContain(`I read the whole result of ${done.item ? `the ${done.item.key}` : "the"}`);
+    expect(answer.text).toContain("The cache key ignores the locale");
+    expect(answer.text).not.toContain("agent runs");
+    expect(answer.text).not.toContain(done.id);
+    expect(scriptPip("What did the agent find in run gone?", blank, [], [done], NOW).text).toContain("can't find that run");
   });
 
   it("come once per state change: the id carries the state, and what was announced stays quiet", () => {

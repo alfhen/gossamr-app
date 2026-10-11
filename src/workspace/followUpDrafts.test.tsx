@@ -33,11 +33,11 @@ describe("a follow-up draft", () => {
 
   it("is named for the run, belongs to its ticket and is kept off screens that only approve through the tracker", () => {
     const p = followUp();
-    expect(draftTitle(p)).toBe("Follow-up for run ab12cd34");
+    expect(draftTitle(p)).toBe("Follow-up for the CA-412 run");
     expect(draftSummary(p, null)).toBe("the plan left open questions");
     expect(targetOf(p.intent)?.key).toBe("CA-412");
     expect(withoutRunDrafts([p])).toEqual([]);
-    expect(draftTitle(followUp({ intent: { ...(p.intent as object), shortId: null } as Proposal["intent"] }))).toBe("Follow-up for run run-1234");
+    expect(draftTitle(followUp({ intent: { ...(p.intent as object), item: null, shortId: null } as Proposal["intent"] }))).toBe("Follow-up for run run-1234");
   });
 
   it("shows the pass, the reason, the whole editable message and a prominent Send back, and nothing that applies it elsewhere", () => {

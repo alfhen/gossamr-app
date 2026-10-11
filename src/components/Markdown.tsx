@@ -130,14 +130,15 @@ function TicketKey({ ticketKey }: { ticketKey: string }) {
   return links ? <WorkspaceTicketKey ticketKey={ticketKey} links={links} /> : <ClassicTicketKey ticketKey={ticketKey} />;
 }
 
-/** A key the workspace has cached selects that item; any other stays text. */
+/** A key the workspace knows opens that ticket; any other stays text. */
 function WorkspaceTicketKey({ ticketKey, links }: { ticketKey: string; links: TicketLinks }) {
+  links.useKnown?.();
   const title = links.titleOf(ticketKey);
   if (title === null) return <>{ticketKey}</>;
   return (
     <button
       type="button"
-      title={`${ticketKey}: ${title}`}
+      title={title ? `${ticketKey}: ${title}` : `Open ${ticketKey}`}
       onClick={() => links.open(ticketKey)}
       className="font-semibold text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
     >

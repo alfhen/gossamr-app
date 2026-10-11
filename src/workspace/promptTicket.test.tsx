@@ -266,9 +266,10 @@ describe("the sample path from a prompt to a ticket", () => {
     const run = await ticketless();
     backend.runs.advance(run.id);
     expect(ticketDrafts(run)).toHaveLength(1);
-    await expect(backend.runsDraftTicket(run.id)).rejects.toThrow(/already has a ticket draft/);
+    // The refusal says what became of the first, never its id, which the person can't use.
+    await expect(backend.runsDraftTicket(run.id)).rejects.toThrow(/^that run already has a ticket draft, waiting for you$/);
     await backend.proposalsSkip(ticketDrafts(run)[0].id);
-    await expect(backend.runsDraftTicket(run.id)).rejects.toThrow(/already has a ticket draft/);
+    await expect(backend.runsDraftTicket(run.id)).rejects.toThrow(/^that run already has a ticket draft, skipped$/);
     expect(ticketDrafts(run)).toHaveLength(1);
     expect(ticketStatus(await backend.runsOutcome(run.id))).toBe("skipped");
   });
@@ -392,9 +393,8 @@ describe("the draft ticket made from a run", () => {
 
   it("says where it came from with a link to the run, lets the project change while pending, and offers Finish with Pip", () => {
     const html = view(draft(), { onOpenRun: vi.fn(), onFinishWithPip: vi.fn() });
-    expect(html).toContain("From agent run");
-    expect(html).toContain("ab12cd34");
-    expect(html).toMatch(/<button[^>]*>ab12cd34<\/button>/);
+    expect(html).toMatch(/From <button[^>]*title="Open the run this draft came from"[^>]*>an agent run<\/button>/);
+    expect(html).not.toContain("ab12cd34");
     expect(html).toContain("Finish with Pip");
     expect(html).toMatch(/<select[^>]*aria-label="Project"/);
     expect(html).not.toMatch(/<select[^>]*aria-label="Project"[^>]*disabled=""/);
@@ -403,7 +403,7 @@ describe("the draft ticket made from a run", () => {
   it("offers neither once it is decided, and a draft that is not from a run has no run header", () => {
     expect(view(draft({ state: { type: "applied" }, created: [itemRef("CA-9")] }), { onOpenRun: vi.fn(), onFinishWithPip: vi.fn() })).not.toContain("Finish with Pip");
     const plain = view(draft({ origin: { type: "board" }, createdBy: "user" }));
-    expect(plain).not.toContain("From agent run");
+    expect(plain).not.toContain("From <");
     expect(plain).not.toContain("Finish with Pip");
   });
 });

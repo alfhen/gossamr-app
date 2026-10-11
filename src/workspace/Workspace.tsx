@@ -19,7 +19,7 @@ import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
 import { PullView } from "./PullView";
-import { FilterNote, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
+import { FilterNote, LAUNCHER_CLEAR, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
 import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
@@ -35,7 +35,7 @@ import { ConnectGithubDialog } from "./ConnectGithub";
 import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
-import { ToastHost } from "./ToastHost";
+import { ToastHost, toastPlacement } from "./ToastHost";
 import { useTabs, type Route } from "./tabsStore";
 
 /** Matches no item, for a filter that has nothing to read. */
@@ -72,6 +72,12 @@ export function mainScreen(route: Route, agentsEnabled: boolean): Route | null {
 
 /** Whether the docked Pip pane is in the window: as the person left it, except on Pip home, whose own conversation takes its place. */
 export const showsPipPane = (route: Route, agentsEnabled: boolean, pipOpen: boolean) => pipOpen && mainScreen(route, agentsEnabled) !== "pip";
+
+/**
+ * How much of the main area's right side the workspace leaves to the open peek, so the canvas reflows beside it
+ * instead of running under it. Other screens keep the peek as an overlay; an expanded peek covers everything anyway.
+ */
+export const canvasRoom = (route: Route, peekOpen: boolean, peekWidth: number) => (route === "workspace" && peekOpen ? peekWidth : 0);
 
 /** Pip home is where the app opens only once per load, so coming back to the workspace later doesn't send the person away again. */
 let landed = false;
@@ -131,7 +137,8 @@ export function Workspace({ backend }: { backend: Backend }) {
   const route = useTabs((s) => s.route);
   const theme = usePrefs((s) => s.theme);
   const pipOpen = usePrefs((s) => s.pipOpen);
-  const pipWidth = usePaneWidths().pip;
+  const { pip: pipWidth, peek: peekWidth } = usePaneWidths();
+  const peekOpen = useTabs((s) => !!s.selected && s.marked.length <= 1);
   const paletteOpen = usePrefs((s) => s.paletteOpen);
   const setPipOpen = usePrefs((s) => s.setPipOpen);
   const choice = useWorkspace((s) => s.watch.find((w) => w.needsChoice));
@@ -142,6 +149,8 @@ export function Workspace({ backend }: { backend: Backend }) {
   usePipView();
   const screen = mainScreen(route, agentsEnabled);
   const paneShown = showsPipPane(route, agentsEnabled, pipOpen);
+  const launcherShown = !pipOpen && screen !== "pip";
+  const room = canvasRoom(route, peekOpen, peekWidth);
 
   useEffect(() => listenToClaude(), []);
 
@@ -235,28 +244,35 @@ export function Workspace({ backend }: { backend: Backend }) {
           (a card in the peek, say) would scroll the whole app up under the person. A clipped one never scrolls. */}
       <div className="ws-root grid h-full overflow-clip bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `58px minmax(0,1fr)${paneShown ? ` ${pipWidth}px` : ""}` }}>
         <Rail />
-        <main id={MAIN_ID} tabIndex={-1} className="relative flex min-h-0 min-w-0 flex-col outline-none">
-          {route === "workspace" ? <Header /> : <div data-tauri-drag-region className="h-[34px] shrink-0" />}
-          {route === "workspace" && <FilterBar />}
-          {route === "workspace" && <FilterNote />}
-          <div className="min-h-0 flex-1">
-            {screen === "workspace" && <Canvas />}
-            {screen === "activity" && <ActivityView />}
-            {screen === "agents" && <AgentsView />}
-            {screen === "pip" && <PipHome />}
-            {screen === "settings" && <Settings />}
+        <main
+          id={MAIN_ID}
+          tabIndex={-1}
+          style={{ ["--ws-launcher-clear" as string]: `${launcherShown ? LAUNCHER_CLEAR : 0}px` }}
+          className="relative flex min-h-0 min-w-0 flex-col outline-none"
+        >
+          <div data-canvas-column style={{ paddingRight: room }} className="flex min-h-0 min-w-0 flex-1 flex-col motion-safe:transition-[padding] motion-safe:duration-200">
+            {route === "workspace" ? <Header /> : <div data-tauri-drag-region className="h-[34px] shrink-0" />}
+            {route === "workspace" && <FilterBar />}
+            {route === "workspace" && <FilterNote />}
+            <div className="min-h-0 flex-1">
+              {screen === "workspace" && <Canvas />}
+              {screen === "activity" && <ActivityView />}
+              {screen === "agents" && <AgentsView />}
+              {screen === "pip" && <PipHome />}
+              {screen === "settings" && <Settings />}
+            </div>
           </div>
           <PeekSheet />
           {agentsEnabled && <AgentSheets />}
-          {!pipOpen && screen !== "pip" && <PipLauncher />}
+          {launcherShown && <PipLauncher />}
           <SelectionAsk />
+          <ToastHost placement={toastPlacement(screen, screen === "pip" ? (peekOpen ? peekWidth : 0) : room)} />
         </main>
         {paneShown && <PipPane onClose={() => setPipOpen(false)} />}
         {paletteOpen && <Palette />}
       </div>
       <ConnectGithubDialog />
       <PullView />
-      <ToastHost />
     </TicketLinksContext.Provider>
   );
 }

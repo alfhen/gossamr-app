@@ -25,6 +25,9 @@ pub struct PipTurn {
     pub quote: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub looking: Option<String>,
+    /// The short line the bubble shows in place of an instruction the page wrote; none for a question as typed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shown: Option<String>,
     /// How many images were sent. The images themselves are not kept.
     pub image_count: u32,
     pub text: String,
@@ -145,6 +148,7 @@ impl Db {
                 prompt,
                 quote: meta.quote,
                 looking: meta.looking,
+                shown: meta.shown,
                 image_count: meta.image_count,
                 text,
                 steps: serde_json::from_str(&steps).unwrap_or_default(),
@@ -189,7 +193,7 @@ mod tests {
     use super::*;
 
     fn meta(quote: Option<&str>, images: u32) -> TurnMeta {
-        TurnMeta { quote: quote.map(String::from), looking: Some("CA-1".into()), image_count: images }
+        TurnMeta { quote: quote.map(String::from), looking: Some("CA-1".into()), image_count: images, ..Default::default() }
     }
 
     fn usage() -> TurnUsage {
@@ -216,6 +220,7 @@ mod tests {
                 prompt: "What changed?".into(),
                 quote: Some("the text".into()),
                 looking: Some("CA-1".into()),
+                shown: None,
                 image_count: 2,
                 text: "Two things changed.".into(),
                 steps: vec!["Looked up CA-1".into(), "Listed the drafts".into()],
@@ -229,6 +234,21 @@ mod tests {
         );
         let v = serde_json::to_value(&turns[0]).unwrap();
         assert_eq!((v["requestId"].as_str(), v["imageCount"].as_u64(), v["usage"]["inputTokens"].as_u64()), (Some("q1"), Some(2), Some(10)));
+        assert!(v.get("shown").is_none(), "a question as typed has no short line");
+    }
+
+    #[test]
+    fn the_short_line_a_bubble_shows_comes_back_from_the_stored_meta() {
+        let db = Db::in_memory().unwrap();
+        let shown = TurnMeta { shown: Some("Discuss this review".into()), ..Default::default() };
+        db.begin_pip_turn("general", "q1", "Let's talk about the GitHub review draft p-1 ...", &shown, "running", "t1").unwrap();
+        db.begin_pip_turn("general", "q2", "What changed?", &TurnMeta::default(), "running", "t2").unwrap();
+        let turns = db.pip_turns("general").unwrap();
+        assert_eq!((turns[0].shown.as_deref(), turns[0].prompt.as_str()), (Some("Discuss this review"), "Let's talk about the GitHub review draft p-1 ..."));
+        assert_eq!(turns[1].shown, None);
+        assert_eq!(serde_json::to_value(&turns[0]).unwrap()["shown"], "Discuss this review");
+        let stored: String = db.conn.query_row("SELECT meta FROM pip_turns WHERE request_id = 'q2' AND role = 'user'", [], |r| r.get(0)).unwrap();
+        assert!(!stored.contains("shown"), "nothing is stored for a question as typed: {stored}");
     }
 
     #[test]

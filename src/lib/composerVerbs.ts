@@ -21,8 +21,31 @@ export const MIN_ID_PREFIX = 4;
 /** The part of a run's id the screen shows on its card, row and sheet, and that the commands take anywhere: its first 8 characters, or all of a short one. */
 export const runRef = (run: Pick<Run, "id">) => (run.id.length <= 12 ? run.id : run.id.slice(0, 8));
 
-export const VERB_HINT =
-  "Commands are /stop R1, /retry R1 and /answer R1 your answer, and in a workstream /hold and /resume. R1 is a run in this workstream; a run's id works anywhere.";
+/** One command as the composer's Commands popover lists it: how it is typed, and what it does in a line. */
+export interface CommandHelp {
+  verb: ComposerVerb;
+  /** How it is typed, such as "/stop R1". */
+  usage: string;
+  meaning: string;
+}
+
+/** The commands, in the order the help names them; the run commands first, then the workstream's own. */
+export const COMMAND_HELP: readonly CommandHelp[] = [
+  { verb: "stop", usage: "/stop R1", meaning: "Stops the run." },
+  { verb: "retry", usage: "/retry R1", meaning: "Starts the run again with the same instructions." },
+  { verb: "answer", usage: "/answer R1 your answer", meaning: "Sends your answer to the run's question." },
+  { verb: "hold", usage: "/hold", meaning: "Holds this workstream: its agents carry on, nothing new starts on its own." },
+  { verb: "resume", usage: "/resume", meaning: "Resumes this workstream." },
+];
+
+/** What R1 means in a command. */
+export const RUN_REF_NOTE = "R1 is a run in this workstream; a run's id works anywhere.";
+
+const usages = (verbs: readonly string[]) => COMMAND_HELP.filter((c) => verbs.includes(c.verb)).map((c) => c.usage);
+const listed = (words: string[]) => (words.length > 1 ? `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}` : words.join(""));
+
+/** The commands in one line, as a refused command's note gives them; built from `COMMAND_HELP` so the two can't drift. */
+export const VERB_HINT = `Commands are ${listed(usages(COMPOSER_VERBS.filter((v) => !(WORKSTREAM_VERBS as readonly string[]).includes(v))))}, and in a workstream ${listed(usages(WORKSTREAM_VERBS))}. ${RUN_REF_NOTE}`;
 
 export type ParsedVerb = { type: "verb"; verb: RunVerb; ref: string; text: string } | { type: "workstream"; verb: WorkstreamVerb } | { type: "problem"; message: string };
 

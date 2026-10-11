@@ -497,6 +497,10 @@ const byApproval = (a: Run, b: Run) => a.queuedAt.localeCompare(b.queuedAt) || a
 const slugOf = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").slice(0, 3).join("-");
 
 /** Runs held in memory for the sample-data backend. Nothing moves on its own: `advance` is the clock. */
+
+/** A run's ticket draft's state, in the words the refusal to draft another uses (state_words in inbox/run_results.rs). */
+const TICKET_DRAFT_STATE: Record<Proposal["state"]["type"], string> = { pending: "waiting for you", applying: "waiting for you", applied: "already created", skipped: "skipped", retired: "out of date" };
+
 export class MockRuns {
   private runs: Run[];
   private listeners = new Set<(c: RunsChanged) => void>();
@@ -1097,7 +1101,7 @@ export class MockRuns {
     if (!connectionId) return;
     // Lines are only placed against the diff at the commit reviewed: once the head moved on, every finding is listed.
     const files = this.pullRequest(run.spec.repo, pr)?.sha === prSha ? this.pullFiles(run.spec.repo, pr) : null;
-    const { summary, comments } = reviewText(pr, prSha, resolved.verdict, resolved.findings, files, run.shortId ?? run.id.slice(0, 8));
+    const { summary, comments } = reviewText(resolved.verdict, resolved.findings, files, run.item?.key ?? null);
     const intent: Intent = { type: "githubReview", connectionId, item: run.item, runId: run.id, repo: run.spec.repo, number: pr, commitSha: prSha, summary, comments };
     this.proposals.fromRun(intent, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
   }
@@ -1134,7 +1138,7 @@ export class MockRuns {
     if (mine.some((p) => (p.state.type !== "pending" && (!manual || p.state.type === "applied")) || (p.state.type === "pending" && p.intent.type === "rewrite" && p.intent.body?.fromText === fromText))) return "have";
     const waiting = this.proposals.list({ states: ["pending"], item }).filter((p) => p.origin.type === "run" && p.intent.type === "rewrite" && p.intent.body && planSectionOf(p.intent.body.to));
     const edited = waiting.find((p) => p.revisions.some((r) => r.note === "Edited"));
-    if (edited) return { unavailable: `A description update you edited is already waiting on ${item.key} (draft ${edited.id}). Approve or skip it, then draft the plan again.` };
+    if (edited) return { unavailable: `A description update you edited is already waiting on ${item.key}. Approve or skip it, then draft the plan again.` };
     for (const older of waiting) this.proposals.retire(older.id, "replaced by a newer plan");
     const intent: Intent = { type: "rewrite", item, title: null, body: { from, to, fromText, toText: markdownOf(to) }, flattened: [] };
     return this.proposals.fromRun(intent, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
@@ -1182,7 +1186,7 @@ export class MockRuns {
     const proposal = this.resolved(run).ticket ?? ticketFromAnswer(run.result ?? "");
     if (!proposal) throw new Error("the run finished without a written answer, so there is nothing to draft");
     const existing = this.ticketDrafts(id)[0];
-    if (existing) throw new Error(`that run already has a ticket draft (${existing.id})`);
+    if (existing) throw new Error(`that run already has a ticket draft, ${TICKET_DRAFT_STATE[existing.state.type]}`);
     return this.makeTicketDraft(run, proposal);
   }
 
@@ -1955,7 +1959,7 @@ export class MockRuns {
     if (!note?.text) throw new Error("the run finished without a written answer, so there is nothing to draft");
     const body = commentText(note, this.changes.get(id) ?? null, run.spec.kind, resolved.source === "summaryOnly", resolved.status === "blocked");
     const same = this.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "comment" && p.intent.item.externalId === item.externalId && docText(p.intent.body) === body);
-    if (same) throw new Error(`that comment is already waiting as a draft on ${item.key} (draft ${same.id})`);
+    if (same) throw new Error(`that comment is already waiting as a draft on ${item.key}`);
     return this.proposals.fromRun({ type: "comment", item, body: docFromText(body) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
   }
 
@@ -1970,7 +1974,7 @@ export class MockRuns {
     const fitted = fit(plan, PLAN_COMMENT_LIMIT, (total) => `[Cut here. The plan is ${total} characters and a Jira comment holds about ${PLAN_COMMENT_LIMIT}. The whole plan is in the agent run.]`);
     const body = `Implementation plan from an agent that was asked to only read code and change nothing. Read it and change what is wrong before relying on it.\n\n${fitted.text}`;
     const same = this.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "comment" && p.intent.item.externalId === item.externalId && docText(p.intent.body) === body);
-    if (same) throw new Error(`that comment is already waiting as a draft on ${item.key} (draft ${same.id})`);
+    if (same) throw new Error(`that comment is already waiting as a draft on ${item.key}`);
     const label = run.shortId ? `${PLAN_LABEL} ${run.shortId}` : PLAN_LABEL;
     const proposal = this.proposals.fromRun({ type: "comment", item, body: docFromText(body) }, label, this.fromRun(run));
     return { proposal, cut: fitted.cut, total: fitted.total };

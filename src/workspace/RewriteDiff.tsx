@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { changedLines, diffLines, withGaps, type DiffRow } from "../lib/textDiff";
+import { withRunNamed } from "../lib/runNames";
 import type { Intent, ProposalEdit } from "../types";
 
 export type Rewrite = Extract<Intent, { type: "rewrite" }>;
@@ -75,14 +76,22 @@ interface Props {
   disabled?: boolean;
   onTitle(value: string): void;
   onBody(value: string): void;
+  /**
+   * The run the draft came from, "the CA-401 plan": the diff shows it where Gossamr's text names the run by id. The
+   * field being edited keeps the text exactly as it would be written.
+   */
+  runName?: string | null;
 }
 
 const field = "w-full rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-ws-ink";
 
 /** What a rewrite would change, as a diff against what the ticket said when it was drafted. While editing, the new text is a field and the diff follows it. */
-export function RewriteView({ intent, title, body, editing, disabled, onTitle, onBody }: Props) {
+export function RewriteView({ intent, title, body, editing, disabled, onTitle, onBody, runName = null }: Props) {
   const titleRows = useMemo(() => (intent.title ? withGaps(diffLines(intent.title.from, title)) : []), [intent.title, title]);
-  const bodyRows = useMemo(() => (intent.body ? withGaps(diffLines(intent.body.fromText, body)) : []), [intent.body, body]);
+  const bodyRows = useMemo(() => {
+    const rows = intent.body ? withGaps(diffLines(intent.body.fromText, body)) : [];
+    return runName ? rows.map((r) => (r.kind === "gap" ? r : { ...r, text: withRunNamed(r.text, runName) })) : rows;
+  }, [intent.body, body, runName]);
   return (
     <div className="grid gap-2.5">
       {intent.title && (

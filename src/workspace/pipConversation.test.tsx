@@ -3,18 +3,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { useClaude, type Turn } from "../claudeStore";
 import { docFromText } from "../lib/docs";
-import type { Intent, Proposal, RunSpec, WorkstreamView } from "../types";
+import type { Intent, Proposal, RunSpec, WorkstreamView, Run, WorkContainer, WorkItem } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { Composer, ComposerFooter, GENERAL_CONVERSATION, PipConversation, VerbNote, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, wakeHeader, wakeIsLong, wakeParts, workstreamConversation } from "./PipConversation";
+import { CommandsList, Composer, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, VerbNote, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
+import { useAgentsFlag } from "./agentsFlag";
 import { MockBackend } from "../backend/mock";
 import { GENERAL_CONVERSATION as FROM_PANE, PIP_INPUT_ID } from "./PipPane";
+import { Markdown } from "../components/Markdown";
+import { TicketLinksContext } from "../components/ticketLinks";
+import { knownTicketTitle, workspaceTicketLinks } from "./jump";
 
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
 
@@ -198,22 +202,31 @@ describe("PipConversation", () => {
     expect(html).not.toMatch(/<article[^>]*class="[^"]*(?<![\w:-])outline-none/);
   });
 
-  it("opens a workstream's empty conversation with what it is for and the commands, and General with its own words", () => {
+  it("opens a workstream's empty conversation with one sentence on what it is for and one button, and General with its own words", () => {
     setTurns({});
-    const ws = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-404")} proposals={[]} />);
+    const ws = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-404")} proposals={[]} primary="Investigate CA-404" />);
     expect(ws).toContain("data-empty-workstream");
-    expect(ws).toContain("/stop R1, /retry R1 or /answer R1");
+    const intro = /<p data-empty-workstream="true"[^>]*>([^<]*)<\/p>/.exec(ws)?.[1] ?? "";
+    expect(intro).toBe("Everything for this ticket stays here: its agents, drafts and our conversation.");
+    expect(ws).not.toContain("/stop");
+    expect(ws).toMatch(/<button type="button" data-intro-action="true"[^>]*class="[^"]*from-ws-pip[^"]*">Investigate CA-404<\/button>/);
     expect(ws).not.toContain("I follow along as you move around");
-    const general = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
+    // With no suggestion to make there is no button.
+    expect(renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-404")} proposals={[]} />)).not.toContain("data-intro-action");
+    const general = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} primary="Catch me up" />);
     expect(general).toContain("I follow along as you move around");
     expect(general).not.toContain("data-empty-workstream");
+    expect(general).not.toContain("data-intro-action");
   });
 
-  it("says in a managed workstream's empty conversation that routine steps start on their own and Jira still waits", () => {
+  it("names the workstream's ticket in its intro, and leaves Manage's rules and the commands to the Commands popover", () => {
     setTurns({});
+    expect(workstreamIntro({ itemKey: "CA-401", title: "CA-401 Welcome flow refresh" })).toBe("Everything for CA-401 Welcome flow refresh stays here: its agents, drafts and our conversation.");
+    expect(workstreamIntro({ itemKey: "CA-401", title: "Welcome flow refresh" })).toBe("Everything for CA-401 Welcome flow refresh stays here: its agents, drafts and our conversation.");
+    expect(workstreamIntro({ itemKey: null, title: "Tidy the docs" })).toBe("Everything for Tidy the docs stays here: its agents, drafts and our conversation.");
     const before = useWorkstreams.getInitialState().list;
     const ws = (mode: "advise" | "manage"): WorkstreamView => ({
-      workstream: { id: "ws-405", connectionId: "mock", itemKey: "CA-405", repo: null, title: "CA-405", pipSession: null, mode, heldReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null },
+      workstream: { id: "ws-405", connectionId: "mock", itemKey: "CA-405", repo: null, title: "CA-405 Export fix", pipSession: null, mode, heldReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null },
       stage: "intake",
       runs: [],
       labels: [],
@@ -225,12 +238,52 @@ describe("PipConversation", () => {
       return renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-405")} proposals={[]} />);
     };
     try {
-      expect(intro("advise")).toContain("Nothing changes until you approve.");
-      const managed = intro("manage");
-      expect(managed).toContain("the routine next steps start on their own by fixed rules (see Automatic steps), I start nothing myself, and every change to Jira still waits for you.");
-      expect(managed).not.toContain("Nothing changes until you approve.");
+      for (const mode of ["advise", "manage"] as const) {
+        const html = intro(mode);
+        expect(html).toContain("Everything for CA-405 Export fix stays here");
+        expect(html).not.toContain("fixed rules");
+        expect(html).not.toContain("/stop");
+        // One sentence.
+        expect(/<p data-empty-workstream="true"[^>]*>([^<]*)<\/p>/.exec(html)?.[1].match(/[.!?](\s|$)/g)).toHaveLength(1);
+      }
     } finally {
       useWorkstreams.getInitialState().list = before;
+    }
+    const managed = renderToStaticMarkup(<CommandsList workstream manage />);
+    expect(managed).toContain(MANAGE_NOTE);
+    expect(MANAGE_NOTE).toContain("routine next steps start on their own by fixed rules");
+    expect(MANAGE_NOTE).toContain("I start nothing myself");
+    expect(MANAGE_NOTE).toContain("every change to Jira still waits for you");
+    expect(renderToStaticMarkup(<CommandsList workstream manage={false} />)).not.toContain("data-manage-note");
+  });
+
+  it("lists the commands in the popover: the run commands everywhere, /hold and /resume in a workstream", () => {
+    const ws = renderToStaticMarkup(<CommandsList workstream manage={false} />);
+    for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/hold", "/resume"]) expect(ws).toContain(`>${usage}</dt>`);
+    expect(ws).toContain("R1 is a run in this workstream; a run&#x27;s id works anywhere.");
+    const general = renderToStaticMarkup(<CommandsList workstream={false} manage={false} />);
+    expect(general).toContain(">/stop R1</dt>");
+    expect(general).not.toContain('data-command="hold"');
+    expect(general).not.toContain('data-command="resume"');
+  });
+
+  it("offers the Commands button beside the input only while Agents are on", () => {
+    const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
+    const flag = useAgentsFlag.getInitialState();
+    const was = flag.enabled;
+    const render = (on: boolean) => {
+      flag.enabled = on;
+      return renderToStaticMarkup(<Composer conversation={workstreamConversation("ws-1")} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "pip", runOpen: false, workstream: true }} />);
+    };
+    try {
+      const on = render(true);
+      expect(on).toMatch(/<button type="button" data-popover-trigger="true" aria-label="Commands" aria-haspopup="dialog" aria-expanded="false"[^>]*>\?<\/button>/);
+      expect(on.indexOf('aria-label="Commands"')).toBeGreaterThan(on.indexOf('id="pip-input"'));
+      // Closed, the commands themselves aren't on screen.
+      expect(on).not.toContain("/stop R1");
+      expect(render(false)).not.toContain('aria-label="Commands"');
+    } finally {
+      flag.enabled = was;
     }
   });
 
@@ -483,6 +536,57 @@ describe("PipConversation", () => {
       stepDraftCards(key("j", cards[1]), rootOf(cards));
       stepDraftCards(key("ArrowDown", cards[2]), rootOf(cards));
       expect(cards[3].focus).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe("ticket links", () => {
+  const ref = (key: string) => ({ connectionId: "mock", externalId: key, key });
+  const container = (key: string) => ({ ref: { connectionId: "mock", externalId: key }, key, name: key, workflow: { statuses: [], transitions: { kind: "any" } } }) as unknown as WorkContainer;
+
+  describe("ticket keys in Pip's answers", () => {
+    beforeEach(() => {
+      vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+      useWorkspace.setState({ items: { "mock:CA-401": { item: ref("CA-401"), title: "Welcome flow" } as WorkItem }, containers: { "mock:CA": container("CA") } });
+      useRuns.setState({ runs: [{ id: "r1", item: ref("DEVOPS-455") } as Run] });
+    });
+    afterEach(() => {
+      useWorkspace.setState({ items: {}, containers: {} });
+      useRuns.setState({ runs: [] });
+      vi.unstubAllGlobals();
+    });
+
+    it("know a cached key by its title, a run's key and a key in a known project without one, and no other", () => {
+      expect(knownTicketTitle("CA-401")).toBe("Welcome flow");
+      expect(knownTicketTitle("DEVOPS-455")).toBe("");
+      expect(knownTicketTitle("CA-411")).toBe("");
+      expect(knownTicketTitle("ZZ-9")).toBeNull();
+    });
+
+    it("link every key Gossamr knows, cached or not, and leave an unknown project's key as text", () => {
+      const html = renderToStaticMarkup(
+        <TicketLinksContext.Provider value={workspaceTicketLinks}>
+          <Markdown text="CA-401 is planned; DEVOPS-455 and CA-411 are done; ZZ-9 is elsewhere." />
+        </TicketLinksContext.Provider>,
+      );
+      expect(html).toMatch(/<button[^>]*title="CA-401: Welcome flow"[^>]*>CA-401<\/button>/);
+      expect(html).toMatch(/<button[^>]*title="Open DEVOPS-455"[^>]*>DEVOPS-455<\/button>/);
+      expect(html).toMatch(/<button[^>]*title="Open CA-411"[^>]*>CA-411<\/button>/);
+      expect(html).not.toContain(">ZZ-9</button>");
+      expect(html).toContain("ZZ-9");
+    });
+  });
+
+  describe("the sample backend's live peek", () => {
+    it("opens the tickets only its sample runs name, as finished tickets in their project, and still not an unknown key", async () => {
+      const b = new MockBackend();
+      for (const key of ["CA-377", "DEVOPS-455", "SUP-9", "WEB-97"]) {
+        const item = await b.peekItem(ref(key));
+        expect(item?.item.key).toBe(key);
+        expect(item?.status.category).toBe("done");
+        expect(item?.title).not.toBe("");
+      }
+      expect(await b.peekItem(ref("CA-9999"))).toBeNull();
     });
   });
 });

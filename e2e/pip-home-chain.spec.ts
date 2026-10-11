@@ -139,7 +139,7 @@ test("a build Pip drafts is never started in place: its 'Review and start →' o
 
   const before = (await mockRuns(page)).length;
   await ask(page, "build it");
-  await expect(homeConversationRegion(page)).toContainText("I drafted a build of CA-401 following plan run");
+  await expect(homeConversationRegion(page)).toContainText("I drafted a build of CA-401 following the CA-401 plan.");
   const build = runCards(page).last();
   await expect(build.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
   await build.getByRole("button", { name: "Review and start →" }).click();
