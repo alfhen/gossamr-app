@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { pipHomeHints } from "./footerHints";
-import { isTypingTarget, pipHomeKey, type PipHomeKeyEvent, type PipHomeKeyState } from "./pipHomeKeys";
+import { isTypingTarget, nextRegion, pipHomeKey, regionStep, type PipHomeKeyEvent, type PipHomeKeyState } from "./pipHomeKeys";
 import { ShortcutHint } from "./ShortcutHint";
 
 const key = (k: string, over: Partial<PipHomeKeyEvent> = {}): PipHomeKeyEvent => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: null, ...over });
@@ -122,5 +122,25 @@ describe("Pip home's footer hint", () => {
     expect(html).toContain("<kbd");
     expect(html).toContain("next column");
     expect(html).not.toContain("Drag a card");
+  });
+});
+
+describe("the workspace layout's regions (D29)", () => {
+  it("steps main, peek and Pip in order with F6, back with Shift+F6, wrapping and passing what isn't open", () => {
+    const all = ["main", "peek", "pip"] as const;
+    expect(nextRegion(all, "pip", 1)).toBe("main");
+    expect(nextRegion(all, "main", 1)).toBe("peek");
+    expect(nextRegion(all, "main", -1)).toBe("pip");
+    expect(nextRegion(["main", "pip"], "main", 1)).toBe("pip");
+    expect(nextRegion(["main", "pip"], "pip", 1)).toBe("main");
+    expect(nextRegion(["main"], "main", 1)).toBe("main");
+  });
+
+  it("takes F6 from Pip's composer too, never from another field, and nothing with a modifier", () => {
+    expect(regionStep(key("F6", { target: { tagName: "TEXTAREA", id: "pip-input" } }))).toBe(1);
+    expect(regionStep(key("F6", { shiftKey: true }))).toBe(-1);
+    expect(regionStep(key("F6", { target: { tagName: "TEXTAREA", id: "answer" } }))).toBe(0);
+    expect(regionStep(key("F6", { ctrlKey: true }))).toBe(0);
+    expect(regionStep(key("Tab"))).toBe(0);
   });
 });

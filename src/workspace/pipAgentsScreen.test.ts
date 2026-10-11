@@ -41,7 +41,7 @@ describe("the Agents screen", () => {
   it("sends no board data, but the open run, the waiting count and the runs by state", () => {
     const board = { ...screen().tab, filter: { type: "mine" } as const };
     const ctx = buildScreenContext(screen({ tab: board, shown: [], items: {} }, NO_FILTERS, "c"));
-    expect(ctx).toEqual({ view: "Agents · All · 3 runs", item: null, filter: null, selection: [], run: "c", runsWaiting: 1, runsSummary: "1 needs you · 1 running · 1 ready to review" });
+    expect(ctx).toEqual({ view: "Agents · All · 3 runs", item: null, filter: null, selection: [], run: "c", runsWaiting: 1, runsSummary: "1 waiting on you · 1 running · 1 ready to review" });
     expect(buildScreenContext(screen()).run).toBeNull();
   });
 
@@ -61,7 +61,7 @@ describe("the Agents screen", () => {
     expect(contextLines(ctx, null, words)).toEqual([
       "Screen: Agents · All · 3 runs",
       "Open agent run: Investigate CA-1 · Ready to review",
-      "Runs shown: 1 needs you · 1 running · 1 ready to review",
+      "Runs shown: 1 waiting on you · 1 running · 1 ready to review",
       "Agents waiting on you: 1",
     ]);
   });

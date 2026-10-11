@@ -90,6 +90,12 @@ export function findingsFitted(text: string, runId: string): string {
 
 export const worktreeOf = (spec: RunSpec) => `${spec.clonePath}/.claude/worktrees/${spec.name}`;
 
+/** A sample run's ticket title from its worktree name, the way the person would have named it: "sup-9-export-timeout-f8a9" is "Export timeout". */
+function sampleTitle(key: string, name: string): string {
+  const words = name.replace(new RegExp(`^${key.toLowerCase()}-`), "").replace(/-[0-9a-f]{4}$/, "").replace(/-/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : "sample ticket";
+}
+
 function specFor(key: string, name: string, repo = "acme/storefront", kind: RunKind = "investigate", over: Partial<RunSpec> = {}): RunSpec {
   return {
     kind,
@@ -100,7 +106,7 @@ function specFor(key: string, name: string, repo = "acme/storefront", kind: RunK
     instruction: INSTRUCTIONS[kind],
     focus: null,
     focusFromRun: null,
-    ticketBlock: `${key}: sample ticket`,
+    ticketBlock: `${key}: ${sampleTitle(key, name)}`,
     ...over,
   };
 }
@@ -1217,8 +1223,9 @@ export class MockRuns {
   stop(id: string): Run {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
-    if (run.state === "queued" && run.slotWaitSince && !run.shortId) {
-      // It has no session yet, so nothing is asked of Claude.
+    if (run.state === "queued" && !run.shortId) {
+      // It has no session yet, so nothing is asked of Claude: one waiting for a slot is stopped, any other queued one
+      // cancelled, before either starts.
       const next = this.update(id, { state: "stopped", endedAt: this.now(), slotWaitSince: null, error: NOT_STARTED });
       this.changed();
       this.workstreams?.record(next.spec.workstream, "person", "run_stopped", { runId: id });

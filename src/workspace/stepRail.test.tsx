@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WorkstreamEvent, WorkstreamView } from "../types";
 import { freezeBatch } from "./pipHomeLogic";
-import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, EarlierStepDrafts, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
+import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, EarlierStepDrafts, planResultFor, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -69,6 +69,7 @@ const event = (action: string, runId: string | null): WorkstreamEvent => ({ work
 const comment: Intent = { type: "comment", item: ref("CA-401"), body: { blocks: [] } as never };
 const transition: Intent = { type: "transition", item: ref("CA-401"), to: "31" };
 const rewrite: Intent = { type: "rewrite", item: ref("CA-401"), title: { from: "Old", to: "New" } as never, body: null, flattened: [] };
+const describe_: Intent = { type: "rewrite", item: ref("CA-401"), title: null, body: { blocks: [] } as never, flattened: [] };
 
 const draft = (id: string, intent: Intent, minutesAgo: number, origin: Proposal["origin"] = { type: "chat", requestId: `q-${id}`, workstream: "ws-1" }): Proposal =>
   ({ id, createdAt: iso(minutesAgo), updatedAt: iso(minutesAgo), origin, createdBy: origin.type === "run" ? "agent" : "pip", intent, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error: null, run: null }) as Proposal;
@@ -96,6 +97,35 @@ const stepOf = (html: string, kind: RunKind) => {
 
 beforeEach(() => vi.stubGlobal("localStorage", memory()));
 afterEach(() => vi.unstubAllGlobals());
+
+describe("the Plan step while its description update waits (N6)", () => {
+  it("says approving it lets Build start, and lists the questions the plan left open", () => {
+    const planned = RUNS.map((r) => (r.id === "r3" ? { ...r, result: "## Steps\n\n1. Do it\n\n## Open questions for a person\n\n- Do the Klaviyo flows read the subjects?\n- Keep the two-day delay?" } : r));
+    const html = renderToStaticMarkup(<StepRailView {...props({ runs: planned, proposals: [fromRun("d-desc", describe_, "r3")] })} />);
+    const plan = stepOf(html, "plan");
+    expect(plan).toContain("data-plan-approve");
+    expect(plan).toContain("Approve the description update to let Build start.");
+    expect(plan).toContain("The plan leaves 2 open questions for you.");
+    expect([...plan.matchAll(/<li class="\[overflow-wrap:anywhere\]">([^<]+)<\/li>/g)].map((m) => m[1])).toEqual(["Do the Klaviyo flows read the subjects?", "Keep the two-day delay?"]);
+    // Nowhere else, and not once the description update is decided.
+    expect(html.match(/data-plan-approve/g)).toHaveLength(1);
+    expect(renderToStaticMarkup(<StepRailView {...props({ runs: planned })} />)).not.toContain("data-plan-approve");
+  });
+
+  it("takes the open questions from the plan the waiting update came from, not a later plan", () => {
+    const earlier = run("p1", "plan", "done", 30, { result: "## Open questions for a person\n\n- The earlier plan's question?" });
+    const later = run("p2", "plan", "done", 5, { result: "## Open questions for a person\n\n- The later plan's question?" });
+    const waiting = fromRun("d-desc", describe_, "p1");
+    expect(planResultFor(waiting, [earlier, later], later)).toBe(earlier.result);
+    // A draft not made from a run falls back to the step's newest plan.
+    expect(planResultFor({ ...waiting, origin: { type: "board" } }, [earlier, later], later)).toBe(later.result);
+  });
+
+  it("says nothing of approving for a rewrite of the title alone: there is no description update", () => {
+    const html = renderToStaticMarkup(<StepRailView {...props({ proposals: [fromRun("d-title", rewrite, "r3")] })} />);
+    expect(html).not.toContain("data-plan-approve");
+  });
+});
 
 describe("the step rail", () => {
   it("shows Pip's notes, the workstream's controls, then the six steps in order", () => {

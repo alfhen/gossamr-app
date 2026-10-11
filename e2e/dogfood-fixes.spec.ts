@@ -365,7 +365,7 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     await expect(runSheet(page).locator("[data-answer-sent]")).toBeFocused();
     await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "working");
     await expect(runSheet(page).getByText("You answered")).toBeVisible();
-    await expect(sheetHint(page)).toHaveText(new RegExp(` · ${place![0]} of ${place![1]}$`));
+    await expect(sheetHint(page)).toHaveText(new RegExp(` · run ${place![0]} of ${place![1]}$`));
     // What the run said while it asked is over.
     await expect(runSheet(page)).not.toContainText("Waiting for an answer");
     expect(await jiraWrites(page)).toEqual([]);
@@ -815,6 +815,13 @@ test.describe("plan chip (D19)", () => {
     await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
     expect(await pipPane(page).locator("[data-turn-status]").count()).toBe(turns);
     await expect(plan).toHaveAttribute("data-state", "pending");
+    // Approving the plan is signposted, in Pip's word on the finished plan and on the Plan step, with its open questions (N6).
+    await expect(pipPane(page)).toContainText("Approve the description update to let Build start.");
+    await openPipHome(page);
+    await workstreamRow(page, "CA-401").click();
+    const note = stepChip(page, "plan").locator("[data-plan-approve]");
+    await expect(note).toContainText("Approve the description update to let Build start.");
+    await expect(note.locator("[data-plan-questions] li").first()).toBeVisible();
   });
 });
 

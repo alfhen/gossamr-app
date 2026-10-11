@@ -1,6 +1,6 @@
 import { runPhrase } from "../lib/runNames";
 import type { Run, WorkstreamView } from "../types";
-import { needsAttention, needsPerson, runTitle, stateView } from "./agentsLogic";
+import { needsAttention, needsPerson, runTitle, stateView, yourAgents } from "./agentsLogic";
 import type { Nudge } from "./nudges";
 import type { AgentsSuggestionScene } from "./suggestions";
 
@@ -44,8 +44,10 @@ const GOING = new Set<Run["state"]>(["queued", "launching", "working"]);
  */
 export function stripRuns(runs: readonly Run[], seenFailed: ReadonlySet<string> = new Set()): Run[] {
   const newest = (a: Run, b: Run) => b.lastProgressAt.localeCompare(a.lastProgressAt) || a.id.localeCompare(b.id);
-  const needs = runs.filter((r) => needsAttention(r, seenFailed)).sort(newest);
-  const going = runs.filter((r) => GOING.has(r.state)).sort(newest);
+  // Your agents, every one of them (`yourAgents`), so "3 of 6" counts what every other count of agents counts.
+  const mine = yourAgents(runs, seenFailed);
+  const needs = mine.filter((r) => needsAttention(r, seenFailed)).sort(newest);
+  const going = mine.filter((r) => !needsAttention(r, seenFailed)).sort(newest);
   return [...needs, ...going];
 }
 

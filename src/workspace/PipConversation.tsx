@@ -432,7 +432,7 @@ export const MANAGE_NOTE = "Automatic steps: in Manage, routine next steps start
 const RUN_ID_REF = "<run id>";
 
 /** What a run's id is, and what R1 is, outside a workstream. */
-export const GENERAL_RUN_REF_NOTE = "A run's id is on its card. R1, R2… are the names a workstream gives its runs, and work in its conversation.";
+export const GENERAL_RUN_REF_NOTE = "A run's id is on its card in Agents, and at the top of its sheet (Open on a card under Your agents). R1, R2… are the names a workstream gives its runs, and work in its conversation.";
 
 /**
  * The commands as the Commands popover lists them: in a workstream all of them, naming runs R1 as its cards do; elsewhere

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunState, WorkstreamView } from "../types";
 import {
+  APPROVE_PLAN,
+  planOpenQuestions,
   ALL,
   NO_FILTERS,
   QUIET_MINUTES,
@@ -254,16 +256,21 @@ describe("words on a card", () => {
     expect(progressText(run("working", { lastDetail: "Reading the code" }))).toBe("Reading the code");
     expect(progressText(run("queued"))).toBe("Waiting to start");
     expect(progressText(run("launching"))).toBe("Starting up");
-    expect(progressText(run("working"))).toBe("Working");
+    // Never the state's own word again, as "Working · Working" read on a card after an answer (N9).
+    expect(progressText(run("working"))).toBe("No update from it yet");
   });
 });
 
 describe("the header", () => {
   it("sums up the runs", () => {
-    expect(summaryLine(sample(), NOW)).toBe("2 need you · 2 running · 2 ready to review · 1 quiet · 1 failed");
+    // Waiting on you counts the failed run not yet looked at too, as the Agents rail badge does; failed or stuck is the
+    // lane of that name card for card, the quiet run among them (N3).
+    expect(summaryLine(sample(), NOW)).toBe("3 waiting on you · 2 running · 2 ready to review · 2 failed or stuck (1 quiet)");
+    const failed = sample().find((r) => r.state === "failed")!;
+    expect(summaryLine(sample(), NOW, new Set([failed.id]))).toBe("2 waiting on you · 2 running · 2 ready to review · 2 failed or stuck (1 quiet)");
     expect(summaryLine([], NOW)).toBe("Nothing running");
     expect(summaryLine([run("stopped")], NOW)).toBe("Nothing running");
-    expect(summaryLine([run("needsAnswer"), run("unknown")], NOW)).toBe("1 needs you · 1 unclear");
+    expect(summaryLine([run("needsAnswer"), run("unknown")], NOW)).toBe("1 waiting on you · 1 failed or stuck");
   });
 
   it("offers Stop all only for runs it could stop", () => {
@@ -414,5 +421,16 @@ describe("a run waiting for a slot", () => {
   it("says a run stopped before it started so when it never launched", () => {
     expect(stoppedText({ ...run("stopped"), launchedAt: null, error: "Stopped before it started" })).toBe("Stopped before it started");
     expect(stoppedText({ ...run("stopped"), launchedAt: at(0), error: null, lastDetail: null })).toBe("Stopped before it finished");
+  });
+});
+
+describe("a plan's open questions (N6)", () => {
+  it("reads the bullets or numbered lines under an Open questions heading, up to the next heading, at most five", () => {
+    const plan = "## Steps\n\n1. Do it\n\n## Open questions for a person\n\n- Do the Klaviyo flows read the subjects?\n2) Keep the delay?\nFor Jira: a note\n\n## Risks\n\n- none";
+    expect(planOpenQuestions(plan)).toEqual(["Do the Klaviyo flows read the subjects?", "Keep the delay?"]);
+    expect(planOpenQuestions("## Steps\n\n- one")).toEqual([]);
+    expect(planOpenQuestions(null)).toEqual([]);
+    expect(planOpenQuestions(`## Open questions\n${Array.from({ length: 8 }, (_, i) => `- q${i}`).join("\n")}`)).toHaveLength(5);
+    expect(APPROVE_PLAN).toBe("Approve the description update to let Build start.");
   });
 });

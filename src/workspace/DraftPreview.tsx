@@ -236,7 +236,13 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
     const card = ref.current;
     return () => {
       if (!card || !decided.current || !card.contains(document.activeElement)) return;
-      focusAfterLeaving(card, card.closest(PIP_ROOT) ?? document, document.getElementById(PIP_INPUT_ID));
+      // After the commit, and only while nothing else has taken the keyboard since.
+      focusAfterLeaving(card, card.closest(PIP_ROOT) ?? document, document.getElementById(PIP_INPUT_ID), (go) =>
+        queueMicrotask(() => {
+          const at = document.activeElement;
+          if (!at || at === document.body || at === card) go();
+        }),
+      );
     };
   }, []);
 

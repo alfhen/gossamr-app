@@ -4,7 +4,7 @@ import { itemsByFilter, useItemsByFilter, useWorkspace } from "../workspaceStore
 import type { WorkItem } from "../types";
 import { useActivity } from "./activityStore";
 import { useAgentsFlag } from "./agentsFlag";
-import { needsPerson } from "./agentsLogic";
+import { attentionCount } from "./agentsLogic";
 import { useRuns } from "./runsStore";
 import { useActiveTab } from "./hooks";
 import { itemScene, type ItemScene } from "./pipScene";
@@ -17,8 +17,9 @@ const peekedItems = (p: ReturnType<typeof useWorkspace.getState>["peeked"]) => O
 
 type RunsState = ReturnType<typeof useRuns.getState>;
 
-const agentsIn = (on: boolean, { sheet, runs, filters, earlierOpen }: Pick<RunsState, "sheet" | "runs" | "filters" | "earlierOpen">): Screen["agents"] =>
-  on ? { openRun: sheet?.type === "run" ? sheet.id : null, waiting: runs.filter(needsPerson).length, runs, filters, earlierOpen, now: Date.now() } : undefined;
+// Waiting on you is the one count every screen gives (`attentionCount`), as the Agents rail badge and header count it.
+const agentsIn = (on: boolean, { sheet, runs, filters, earlierOpen, seenFailed }: Pick<RunsState, "sheet" | "runs" | "filters" | "earlierOpen" | "seenFailed">): Screen["agents"] =>
+  on ? { openRun: sheet?.type === "run" ? sheet.id : null, waiting: attentionCount(runs, seenFailed), runs, filters, earlierOpen, seenFailed, now: Date.now() } : undefined;
 
 /** The screen as it is right now, read when a question is asked so it is about what is on screen then. */
 export function readScreen(): Screen {
@@ -61,7 +62,8 @@ export function useScreen(): Screen {
   const runs = useRuns((s) => s.runs);
   const filters = useRuns((s) => s.filters);
   const earlierOpen = useRuns((s) => s.earlierOpen);
-  const agents = useMemo(() => agentsIn(enabled, { sheet, runs, filters, earlierOpen }), [enabled, sheet, runs, filters, earlierOpen]);
+  const seenFailed = useRuns((s) => s.seenFailed);
+  const agents = useMemo(() => agentsIn(enabled, { sheet, runs, filters, earlierOpen, seenFailed }), [enabled, sheet, runs, filters, earlierOpen, seenFailed]);
   const homeSelected = usePipHome((s) => s.selected);
   const home = useWorkstreams((s) => homeConversationLine(homeSelected, s.list));
   return useMemo(

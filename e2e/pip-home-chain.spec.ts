@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, expectPeekInPlace, homeConversation, homeConversationRegion, homeSettled, mockRuns, needsYouTray, openApp, openPipHome, peekSheet, peekTicket, pipHome, startWorkstream, stepChip, stepRail, workstreamRow } from "./support/app";
+import { advanceRuns, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needsYouTray, openApp, openPipHome, peekSheet, peekTicket, pipHome, startWorkstream, stepChip, stepRail, workstreamRow } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
@@ -51,7 +51,8 @@ async function startInline(page: Page) {
   await expect(start).toBeEnabled();
   await start.click();
   await expect(review).toHaveCount(0);
-  await expect(page.getByText("Agent started on CA-401.", { exact: false }).last()).toBeVisible();
+  // Toasts come one at a time: one saying a closed safety sheet cancelled its action may be ahead of it.
+  await expectToast(page, "Agent started on CA-401.");
 }
 
 /** Moves run `id` on to done: queued, launching, working, done. */

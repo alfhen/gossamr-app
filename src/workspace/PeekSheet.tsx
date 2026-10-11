@@ -12,6 +12,7 @@ import { PeekResizer, usePaneWidths } from "./PaneResizers";
 import { LiveDraftCard } from "./DraftCard";
 import { draftIdOf, draftItem, showsAsDraftTicket } from "./draftTicket";
 import { LiveDraftPeek } from "./DraftPeek";
+import { PIP_INPUT_ID } from "./draftKeys";
 import { canvasElement, showMe } from "./jump";
 import { PEEK_DEFAULT } from "./paneSizes";
 import { useAgentsEnabled } from "./agentsFlag";
@@ -593,6 +594,12 @@ export function focusPeekOf(key: string, root: { querySelector(selector: string)
   return () => cancel(handle);
 }
 
+/** Whether Esc belongs to the field `el`, which keeps it while the person types there; Pip's input never does, so Esc from it closes the peek over it. */
+export function typingIn(el: Element | null): boolean {
+  if (!(typeof HTMLElement !== "undefined" && el instanceof HTMLElement) || el.id === PIP_INPUT_ID) return false;
+  return el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+}
+
 /** Set as a peek gives way to the next one (j or k) with the keyboard in it, so that one takes the keyboard on. */
 let keyboardInPeek = false;
 
@@ -652,7 +659,9 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape" || ev.defaultPrevented || usePrefs.getState().paletteOpen) return;
       const field = document.activeElement;
-      if (field instanceof HTMLElement && (field.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(field.tagName))) return;
+      // A field keeps Esc for itself, except Pip's input: the peek over it closes first, as Esc does from anywhere else,
+      // and the next Esc closes Pip.
+      if (typingIn(field)) return;
       if (menuOpen) return setMenuOpen(false);
       const inside = !!document.activeElement?.closest("#peek-sheet");
       useTabs.getState().select(null);

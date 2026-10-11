@@ -138,7 +138,12 @@ describe("Stop", () => {
 
   it("works while the run waits on the person, and is gone once it has ended or cannot be stopped", () => {
     for (const s of ["needsAnswer", "needsPermission", "systemBlocked"] as const) expect(control(s).enabled).toBe(true);
-    for (const s of ["queued", "done", "failed", "stopped", "unknown"] as const) expect(control(s).shown).toBe(false);
+    for (const s of ["done", "failed", "stopped", "unknown"] as const) expect(control(s).shown).toBe(false);
+  });
+
+  it("offers Cancel on a queued run that hasn't launched, with its own confirmation, and nothing on one that has a session (N8)", () => {
+    expect(control("queued")).toMatchObject({ shown: true, enabled: true, label: "Cancel", ask: "Cancel this run? It hasn't started, so nothing is lost.", yes: "Yes, cancel" });
+    expect(stopControl({ state: "queued", shortId: "ab12cd34" }).shown).toBe(false);
   });
 
   it("stops a run waiting for a slot before it starts, and leaves it no Start now since it starts on its own", () => {

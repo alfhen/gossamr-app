@@ -302,7 +302,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       title={run.item?.key ?? "Agent"}
       hint={
         <>
-          agent run · <kbd className="font-sans">j</kbd> <kbd className="font-sans">k</kbd> browse · <kbd className="font-sans">esc</kbd> close{place ? ` · ${place.index} of ${place.total}` : ""}
+          agent run · <kbd className="font-sans">j</kbd> <kbd className="font-sans">k</kbd> browse · <kbd className="font-sans">esc</kbd> close{place ? ` · run ${place.index} of ${place.total}` : ""}
         </>
       }
       wide={wide}
@@ -347,19 +347,19 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
           (confirmStop ? (
             <span
               role="group"
-              aria-label="Stop this agent"
+              aria-label={stop.label === "Cancel" ? "Cancel this run" : "Stop this agent"}
               data-esc-local
               className="inline-flex flex-nowrap items-center gap-1.5 whitespace-nowrap"
               onKeyDown={(ev) => {
                 if (ev.key === "Escape") (ev.stopPropagation(), on.cancelStop());
               }}
             >
-              <span className="text-ws-ink2">Stop this agent? Its work is kept.</span>
+              <span className="text-ws-ink2">{stop.ask ?? "Stop this agent? Its work is kept."}</span>
               <Btn tone="dangerFill" autoFocus onClick={on.stop}>
-                Yes, stop
+                {stop.yes ?? "Yes, stop"}
               </Btn>
               <Btn tone="ghost" onClick={on.cancelStop}>
-                Keep going
+                {stop.label === "Cancel" ? "Keep it" : "Keep going"}
               </Btn>
             </span>
           ) : (
