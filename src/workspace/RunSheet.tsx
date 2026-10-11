@@ -10,12 +10,12 @@ import { KIND_LABEL, agentGroups, ageText, formatTokens, ordinal, permissionRequ
 import { openTicketByKey } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { failureAction } from "./failureActions";
-import { PromptParts, ReportExtras } from "./RunPrompt";
+import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPrompt";
 import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { MAY_TOUCH, answerable, breakdownWithPipPrompt, planDescriptionWithPipPrompt, buildFromPlanOptions, canStartNow, descriptionWithPipPrompt, reviewThisControl, reviewThisOptions, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
+import { answerable, mayTouch, readOnlyNote, breakdownWithPipPrompt, planDescriptionWithPipPrompt, buildFromPlanOptions, canStartNow, descriptionWithPipPrompt, reviewThisControl, reviewThisOptions, commentWithPipPrompt, finishWithPipPrompt, pendingBreakdownOn, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { RunContinuation } from "./RunContinuation";
@@ -248,7 +248,8 @@ function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTit
   );
 }
 
-function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode {
+/** The brief and what Gossamr added; the read-only rules are the ones the run was launched with, so a run from before they existed shows none. */
+function BriefBody({ brief, readOnly }: { brief: RunSheetViewProps["brief"]; readOnly?: Run["readOnly"] }): ReactNode {
   if (brief === null || brief === "loading") return <p className="m-0 text-ws-ink3">Loading…</p>;
   if (brief === "unavailable") return <p className="m-0 text-ws-ink3">The brief couldn&apos;t be read.</p>;
   return (
@@ -256,6 +257,7 @@ function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode 
       <PromptParts review={brief} />
       <Details summary="What Gossamr added for the model">
         <pre className={MONO_BLOCK}>{brief.guard}</pre>
+        <ReadOnlyExtras readOnly={readOnly} />
         <ReportExtras report={brief.report} />
       </Details>
     </>
@@ -353,8 +355,14 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       <RunCleanup key={run.id} run={run} reason={cleanup} />
 
       <Sec title="What this agent may touch">
+        {run.readOnly && (
+          <>
+            <ReadOnlyLine readOnly={run.readOnly} />
+            <p className="m-0 text-ws-ink2">{readOnlyNote(run.readOnly)}</p>
+          </>
+        )}
         <ul className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
-          {MAY_TOUCH.map((t) => (
+          {mayTouch(run.readOnly).map((t) => (
             <li key={t.title} data-tone={t.tone} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5">
               <Icon name={t.tone === "yes" ? "check" : t.tone === "ask" ? "hand" : "x"} className={`mt-0.5 size-3.5 ${t.tone === "yes" ? "text-ws-done" : t.tone === "ask" ? "text-ws-warn" : "text-ws-ink3"}`} />
               <span>
@@ -366,7 +374,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       </Sec>
 
       <Details summary="The brief as it was sent" onToggle={(open) => open && on.loadBrief()}>
-        <BriefBody brief={brief} />
+        <BriefBody brief={brief} readOnly={run.readOnly} />
         <p className="m-0 text-xs text-ws-ink3 [overflow-wrap:anywhere]">What you approved: {run.digest.slice(0, 16)}</p>
       </Details>
     </SheetFrame>

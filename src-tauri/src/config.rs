@@ -23,7 +23,10 @@ const MAX_MINUTES: u32 = 7 * 24 * 60;
 const MAX_TOKENS: u64 = 1_000_000_000;
 const MAX_MANAGER_TURNS: u32 = 500;
 
-/// The global switches for the auto-start rules (`agent/autostart.rs`). A workstream can override each one.
+/// The global switches for the auto-start rules (`agent/autostart.rs`). A workstream can override each one. They are on
+/// by default (open question 3): the read-only steps they start (Triage, Plan, Review, Verify) are launched with a
+/// restriction Claude Code itself enforces since Phase 6 (`domain::READ_ONLY_MODE`), and they apply only in a workstream
+/// the person has put in Manage mode; a new workstream opens in Advise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoStartSwitches {

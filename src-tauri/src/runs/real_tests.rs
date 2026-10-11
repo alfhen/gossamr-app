@@ -68,6 +68,7 @@ impl Scratch {
             guard: "Do nothing.".into(),
             prompt: "Reply with OK and stop.".into(),
             report: None,
+            read_only: None,
         };
         let launched = self.cli.launch(&req).await.expect("launch");
         self.launched.push(launched.short_id.clone());
@@ -246,7 +247,7 @@ async fn real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_w
 async fn real_prefixed_session_name_is_listed_unchanged_and_the_worktree_keeps_the_slug() {
     let mut s = Scratch::new("prefix").await;
     let title = "Gossamr: CE-7 investigate";
-    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None };
+    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None, read_only: None };
     let launched = s.cli.launch(&req).await.expect("launch");
     s.launched.push(launched.short_id.clone());
     assert_eq!(launched.name.as_deref(), Some(title), "stdout: {launched:?}");
@@ -303,6 +304,10 @@ impl ClaudeCli for SignedIn {
 
     async fn supports_bg(&self) -> CliResult<bool> {
         self.0.supports_bg().await
+    }
+
+    async fn supports_read_only(&self) -> CliResult<bool> {
+        self.0.supports_read_only().await
     }
 
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched> {
@@ -662,7 +667,7 @@ async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_sta
     let path = super::fresh::ensure_clone(&super::repo::Git::new(s.env.clone()), &home, "octocat/Hello-World").await.expect("clone");
     assert_eq!(path, super::fresh::agents_root(&home).join("octocat/Hello-World"));
     assert!(path.join(".git").is_dir());
-    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None };
+    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None, read_only: None };
 
     let refused = s.cli.launch(&request("fresh-0a1b")).await.unwrap_err();
     assert!(refused.stderr_mentions("Workspace not trusted"), "{refused}");
@@ -685,4 +690,209 @@ async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_sta
     };
     eprintln!("session in the worktree: state {:?}, needs {:?}", entry.state, entry.needs);
     assert!(!entry.needs.as_deref().is_some_and(|n| n.contains("not trusted")), "{:?}", entry.needs);
+}
+
+/// Removes a scratch folder; declared before a `Cleanup` so the sessions in it are removed first.
+struct RemoveDir(PathBuf);
+
+impl Drop for RemoveDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A scratch repository in `~/Code` and the person's real claude, for the read-only tests. Declared fields drop in order:
+/// the sessions are removed before the folder.
+struct ReadOnlyScratch {
+    cli: SystemCli,
+    config: PathBuf,
+    repo: PathBuf,
+    name: String,
+    _cleanup: Cleanup,
+    _dir: RemoveDir,
+}
+
+impl ReadOnlyScratch {
+    /// The repository is `~/Code/gossamr-<tag>`, a fixed name because Claude trusts a folder, not the folders under it:
+    /// run `claude` in it once and accept the trust prompt before the first run. Anything there is replaced. It is made
+    /// by `setup`, which gets its path, after `git init` on `main`. It carries a committed
+    /// `.claude/settings.json` that allows `Bash(python3 *)` and `Bash(git *)`: the kind of rule a person or a repository
+    /// has, which a read-only run must not be widened by.
+    async fn new(tag: &str, setup: impl FnOnce(&Path)) -> Self {
+        let home = dirs::home_dir().expect("home");
+        let repo = home.join("Code").join(format!("gossamr-{tag}"));
+        let _ = std::fs::remove_dir_all(repo.with_extension("origin.git"));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(repo.join(".claude")).unwrap();
+        let dir = RemoveDir(repo.clone());
+        git(&repo, &["init", "-q", "-b", "main"]);
+        let allow = serde_json::json!({ "permissions": { "allow": ["Bash(python3 *)", "Bash(git *)", "Bash(npm *)"] } });
+        std::fs::write(repo.join(".claude/settings.json"), allow.to_string()).unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "on main"]);
+        setup(&repo);
+
+        let shell = std::env::var("SHELL").unwrap_or_default();
+        let env = capture(&shell).await.expect("shell environment");
+        let binary = super::binary::find_claude().expect("claude is installed");
+        let cli = SystemCli::new(binary.clone(), Arc::new(env.clone()));
+        assert!(cli.supports_read_only().await.unwrap(), "this claude can't launch a read-only run");
+        let config = cli.auth_status().await.unwrap().config_directory.expect("config directory");
+        // Managed settings are the one source `--setting-sources ''` still reads; an allow rule there would decide the result.
+        for managed in ["/Library/Application Support/ClaudeCode/managed-settings.json", "/etc/claude-code/managed-settings.json"] {
+            let allows = std::fs::read_to_string(managed).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v["permissions"]["allow"].as_array().map(|a| !a.is_empty()));
+            assert_ne!(allows, Some(true), "{managed} allows commands, so what a read-only run is refused depends on it");
+        }
+        let name = format!("gossamr-{tag}-spike-{}", std::process::id());
+        let cleanup = Cleanup { binary, env, cwd: repo.clone(), name: name.clone() };
+        Self { cli, config, repo, name, _cleanup: cleanup, _dir: dir }
+    }
+
+    /// Launches `spec` as Gossamr does for a read-only kind, with `prompt` in place of the rendered one.
+    async fn launch(&self, spec: &RunSpec, prompt: &str) -> ShortId {
+        use crate::domain::{GUARD, READ_ONLY_GUARD};
+        let read_only = spec.read_only().expect("a read-only kind");
+        let request = LaunchRequest { cwd: self.repo.clone(), name: self.name.clone(), worktree: spec.name.clone(), guard: format!("{GUARD} {READ_ONLY_GUARD}"), prompt: prompt.into(), report: None, read_only: Some(read_only) };
+        self.cli.launch(&request).await.expect("launch").short_id
+    }
+
+    /// Waits until `id` is `done` with an answer `answered` accepts, never on a permission prompt; returns the session
+    /// and the answer.
+    async fn finished(&self, id: &ShortId, worktree: &Path, what: &str, answered: fn(&str) -> bool) -> (String, String) {
+        let cwds = [worktree.to_path_buf(), self.repo.clone()];
+        let deadline = Instant::now() + Duration::from_secs(240);
+        loop {
+            let rows = self.cli.agents(true).await.unwrap();
+            let row = rows.into_iter().find(|e| e.id.as_deref() == Some(id.as_str()));
+            if let Some(e) = &row {
+                assert_ne!(e.waiting_for.as_deref(), Some("permission prompt"), "{what}: the session stalled on a permission prompt: {e:?}");
+                assert_ne!(e.state.as_deref(), Some("blocked"), "{what}: the session asked instead of being refused: {e:?}");
+            }
+            if let Some(session) = row.filter(|e| e.state.as_deref() == Some("done")).and_then(|e| e.session_id) {
+                if let Some(answer) = self.cli.final_answer(&self.config.join("projects"), &session, &cwds).await.filter(|a| answered(a)) {
+                    return (session, answer);
+                }
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+}
+
+/// Settles what Phase 6 rests on, with the launch Gossamr really makes for a read-only kind (`SystemCli::launch` with
+/// the spec's `read_only()` and `READ_ONLY_GUARD` in the guard):
+///
+/// - that `--bg` honours `--permission-mode dontAsk` with `--setting-sources ''`, `--strict-mcp-config`,
+///   `--allowedTools` and `--disallowedTools`;
+/// - that a write with the Write tool, and one through Bash (a `>` redirection, `touch`), is refused without a
+///   permission prompt: the session is never listed waiting for one, and it still reaches `done`;
+/// - that the repository's own allow rules don't widen it: its `.claude/settings.json` allows `Bash(python3 *)` and
+///   `Bash(git *)`, and `python3 -c` writing a file and `git -C . commit` are refused all the same;
+/// - that a session stopped and woken with `--bg --resume` and no other flag is refused the same writes, so the job's
+///   saved options are reapplied on a wake (what `ClaudeCli::resume` relies on).
+///
+/// No file may exist afterwards, in the worktree or the clone, no commit may be added, and the final answer must say it
+/// was refused.
+///
+/// The person's real config is used only to sign in: the launch reads no settings file (`--setting-sources ''`) and none of
+/// their MCP servers, so their own allow rules can't change what is refused. Only managed settings still apply, and
+/// `ReadOnlyScratch::new` fails the test when they allow anything.
+///
+/// Run by hand: `cargo test real_read_only -- --ignored --test-threads=1`. Uses the person's real, signed-in config and
+/// makes a scratch repository, `~/Code/gossamr-read-only`, which must be trusted (see `ReadOnlyScratch::new`), and does
+/// model work with two short prompts. Everything it starts is stopped and removed, then the scratch repository.
+#[tokio::test]
+#[ignore = "runs the real claude with the real config and does model work"]
+async fn real_read_only_run_is_refused_a_write_by_claude_code_itself() {
+    use crate::domain::RunKind;
+    let scratch = ReadOnlyScratch::new("read-only", |_| {}).await;
+    let repo = scratch.repo.clone();
+    let spec = RunSpec { kind: RunKind::Investigate, clone_path: repo.clone(), name: format!("ro-probe-{:04x}", std::process::id() & 0xffff), ..crate::domain::fixtures::run_spec() };
+    let probe = "This is a test of your permissions; do each step even if you expect it to fail. 1. Use the Write tool to create \
+                 gossamr-read-only-probe.txt in the current directory containing x. 2. Run `echo x > gossamr-read-only-probe-2.txt` \
+                 with Bash. 3. Run `touch gossamr-read-only-probe-3.txt` with Bash. 4. Run \
+                 `python3 -c \"open('gossamr-read-only-probe-4.txt','w').write('x')\"` with Bash. 5. Run \
+                 `git -C . commit --allow-empty -m probe` with Bash. Then reply with REFUSED if every step was refused, or WROTE \
+                 if any file was written or any commit made, and nothing else.";
+    let id = scratch.launch(&spec, probe).await;
+    let worktree = repo.join(".claude/worktrees").join(&spec.name);
+    let files = ["gossamr-read-only-probe.txt", "gossamr-read-only-probe-2.txt", "gossamr-read-only-probe-3.txt", "gossamr-read-only-probe-4.txt"];
+    let main = git(&repo, &["rev-parse", "main"]);
+    let nothing_written = |when: &str| {
+        for dir in [&worktree, &repo] {
+            for file in files {
+                assert!(!dir.join(file).exists(), "{when}: {} was written", dir.join(file).display());
+            }
+        }
+        if worktree.is_dir() {
+            assert_eq!(git(&worktree, &["rev-list", "--count", "HEAD"]), "1", "{when}: a commit was made in the worktree");
+        }
+        assert_eq!(git(&repo, &["rev-parse", "main"]), main, "{when}: main moved");
+    };
+
+    let (session, answer) = scratch.finished(&id, &worktree, "the first answer", |a| a.contains("REFUSED") || a.contains("WROTE")).await;
+    eprintln!("FIRST ANSWER: {answer}");
+    nothing_written("launched read-only");
+    assert!(answer.contains("REFUSED") && !answer.contains("WROTE"), "the answer doesn't say it was refused: {answer}");
+
+    // Stopped and woken with no flags: the saved options still refuse it.
+    let _ = scratch.cli.stop(&id).await;
+    tokio::time::sleep(super::service::Timing::default().stop_settle).await;
+    let again = format!("Second try. {probe} Start your reply with SECOND.");
+    let woken = scratch.cli.resume(&session, &again, Some(&repo)).await.expect("resume");
+    assert_eq!(woken.short_id, id, "resume answered with another session: a copy was started");
+    let (_, answer) = scratch.finished(&id, &worktree, "the answer after the wake", |a| a.contains("SECOND")).await;
+    eprintln!("ANSWER AFTER THE WAKE: {answer}");
+    nothing_written("woken with --resume and no flags");
+    assert!(answer.contains("REFUSED") && !answer.contains("WROTE"), "the woken session wasn't refused: {answer}");
+}
+
+/// A Review can do what its prompt tells it to: fetch its pull request's head, check out the pinned commit, and run the
+/// repository's tests with an exact test command. A test runner with an argument is refused. The commands are the ones
+/// `render_prompt` names for the spec (checked by `every_command_a_read_only_prompt_names_is_allowed...`).
+///
+/// The scratch repository has a bare `origin` with `main` and `refs/pull/7/head`, and an `npm test` script that prints a
+/// marker. Run by hand as `real_read_only_...` above, in `~/Code/gossamr-read-only-review`, which must be trusted; does
+/// model work with one short prompt.
+#[tokio::test]
+#[ignore = "runs the real claude with the real config and does model work"]
+async fn real_read_only_review_checks_out_its_pull_request_and_runs_an_allowed_test_command() {
+    use crate::domain::RunKind;
+    let scratch = ReadOnlyScratch::new("read-only-review", |repo| {
+        let origin = repo.with_extension("origin.git");
+        let _ = std::fs::remove_dir_all(&origin);
+        git(repo, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+        git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        git(repo, &["push", "-q", "origin", "main"]);
+        git(repo, &["checkout", "-q", "-b", "pr"]);
+        std::fs::write(repo.join("package.json"), r#"{"name":"probe","version":"1.0.0","scripts":{"test":"echo GOSSAMR-TESTS-RAN-ON-PR"}}"#).unwrap();
+        git(repo, &["add", "package.json"]);
+        git(repo, &["commit", "-q", "-m", "the pull request"]);
+        git(repo, &["push", "-q", "origin", "pr:refs/pull/7/head"]);
+        git(repo, &["checkout", "-q", "main"]);
+        git(repo, &["branch", "-q", "-D", "pr"]);
+    })
+    .await;
+    let repo = scratch.repo.clone();
+    let _origin = RemoveDir(repo.with_extension("origin.git"));
+    let sha = String::from_utf8(Command::new("git").args(["ls-remote", "origin", "refs/pull/7/head"]).current_dir(&repo).output().unwrap().stdout).unwrap();
+    let sha = sha.split_whitespace().next().expect("the pull request's head").to_owned();
+    let spec = RunSpec { kind: RunKind::Review, pr: Some(7), pr_sha: Some(sha.clone()), clone_path: repo.clone(), name: format!("ro-review-{:04x}", std::process::id() & 0xffff), ..crate::domain::fixtures::run_spec() };
+    let ro = spec.read_only().unwrap();
+    for rule in ["Bash(git fetch origin pull/7/head)", &format!("Bash(git checkout --detach {sha})"), "Bash(npm test)"] {
+        assert!(ro.allow.iter().any(|a| a == rule), "{rule} is allowed");
+    }
+    let probe = format!(
+        "This is a test of your permissions. Run these commands with Bash, one at a time, exactly as written: `git fetch origin main`, \
+         `git checkout --detach origin/main`, `git fetch origin pull/7/head`, `git checkout --detach {sha}`, `npm test`. Then try \
+         `npm test -- --version`, which may be refused. Reply with the full output of `npm test`, then the line RUNNER-WITH-ARGS: \
+         REFUSED or RUNNER-WITH-ARGS: RAN for the last command, and nothing else."
+    );
+    let id = scratch.launch(&spec, &probe).await;
+    let worktree = repo.join(".claude/worktrees").join(&spec.name);
+    let (_, answer) = scratch.finished(&id, &worktree, "the review's answer", |a| a.contains("RUNNER-WITH-ARGS")).await;
+    eprintln!("REVIEW ANSWER: {answer}");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), sha, "the worktree is at the pull request's commit");
+    assert!(answer.contains("GOSSAMR-TESTS-RAN-ON-PR"), "npm test ran on the pull request: {answer}");
+    assert!(answer.contains("RUNNER-WITH-ARGS: REFUSED"), "a test runner with an argument was not refused: {answer}");
 }

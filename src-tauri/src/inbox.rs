@@ -31,6 +31,8 @@ mod ticket_context;
 mod workstreams;
 pub use pip_runs::{PipRunAsk, NOT_ON_ITS_OWN, PR_MOVED};
 #[cfg(test)]
+pub use pip_runs::VERIFY_UNPINNED;
+#[cfg(test)]
 pub(crate) use workstreams::{basis_of, drifted};
 pub use workstreams::{Admitted, WakeAdmission, WorkstreamView, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 pub use rewrites::TextSeen;

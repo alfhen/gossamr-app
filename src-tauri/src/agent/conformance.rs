@@ -1391,6 +1391,165 @@ pub async fn orchestration_never_posts_to_github() -> std::result::Result<(), St
     Ok(())
 }
 
+/// Checks `run`'s one launch against its kind: a read-only kind launched with its spec's restriction and the read-only
+/// sentence in its guard, recorded on the run too; a Build with neither.
+fn launched_as_its_kind_allows(run: &Run, launches: &[crate::runs::cli::LaunchRequest]) -> std::result::Result<(), String> {
+    use crate::domain::READ_ONLY_GUARD;
+    let mine: Vec<_> = launches.iter().filter(|l| l.worktree == run.spec.name).collect();
+    let [request] = mine.as_slice() else { return Err(format!("expected one launch of {} ({:?}), found {}", run.id, run.spec.kind, mine.len())) };
+    let restriction = run.spec.read_only();
+    if run.spec.kind.read_only() {
+        if restriction.is_none() || request.read_only != restriction || run.read_only != restriction {
+            return Err(format!("{:?} run {} launched without its restriction: {:?} (run says {:?})", run.spec.kind, run.id, request.read_only, run.read_only));
+        }
+        if !request.guard.contains(READ_ONLY_GUARD) {
+            return Err(format!("{:?} run {}'s guard doesn't say it is read-only: {}", run.spec.kind, run.id, request.guard));
+        }
+    } else if request.read_only.is_some() || run.read_only.is_some() || restriction.is_some() || request.guard.contains(READ_ONLY_GUARD) {
+        return Err(format!("{:?} run {} was launched restricted: {:?}", run.spec.kind, run.id, request.read_only));
+    }
+    Ok(())
+}
+
+/// Every run of the managed workstream, person-started or started by a rule, launched as its kind allows: each read-only
+/// kind (Investigate, Triage, Plan, Review) with the restriction Claude Code enforces, the Build with none. The fix round
+/// reached the Build as a wake of its own session, never a new launch: a wake takes no flags, so the Build keeps what
+/// it had and gains nothing. A Triage auto-started while the cap is full waits for a slot and, launched from the
+/// queue, is restricted all the same: no path launches a read-only kind without it.
+pub async fn read_only_runs_always_launch_restricted() -> std::result::Result<(), String> {
+    use crate::domain::workstream::Rule;
+    use crate::domain::RunKind;
+    let w = World::start().await;
+    manage_to_a_passing_review(&w).await?;
+    let runs = w.runs().await;
+    let (launches, resumes) = {
+        let s = w.rig.cli.0.lock().unwrap();
+        (s.launches.clone(), s.resumes.clone())
+    };
+    for run in &runs {
+        launched_as_its_kind_allows(run, &launches)?;
+        if run.auto_start.is_some() && run.spec.kind.read_only() && run.read_only.is_none() {
+            return Err(format!("auto-started {:?} run {} is unrestricted", run.spec.kind, run.id));
+        }
+    }
+    let kinds: Vec<RunKind> = runs.iter().map(|r| r.spec.kind).collect();
+    if kinds != [RunKind::Investigate, RunKind::Triage, RunKind::Plan, RunKind::Build, RunKind::Review, RunKind::Review] {
+        return Err(format!("the workstream didn't run the whole chain: {kinds:?}"));
+    }
+    if launches.len() != runs.len() {
+        return Err(format!("{} launches for {} runs: something launched twice or outside the workstream", launches.len(), runs.len()));
+    }
+    // The fix round is the only wake there was, and it went to the Build's own session.
+    let build = runs.iter().find(|r| r.spec.kind == RunKind::Build).ok_or("no build")?;
+    let [fix] = resumes.as_slice() else { return Err(format!("expected one wake, the fix round, got {}", resumes.len())) };
+    if build.session_id.as_deref() != Some(fix.session_id.as_str()) || build.passes != 2 {
+        return Err(format!("the fix round didn't wake the build's own session: {} vs {:?}", fix.session_id, build.session_id));
+    }
+
+    // At the cap: the triage waits for a slot, then launches from the queue, restricted.
+    let w = World::start().await;
+    w.pip.quiet.store(true, Ordering::SeqCst);
+    let investigation = w.person_starts(1).await;
+    let other = w.person_starts(2).await;
+    w.rig.svc.set_settings(crate::config::AgentSettings { max_runs: 1, ..w.rig.svc.settings() }).map_err(|e| e.to_string())?;
+    let investigation = w.finish(&investigation, FOUND).await;
+    w.sweep().await;
+    let after = |r: &Run| r.auto_start.as_ref().is_some_and(|a| a.rule == Rule::InvestigateTriage && a.after_run == investigation.id);
+    let waiting = w.of_kind(RunKind::Triage).await.into_iter().find(after).ok_or("no triage after the investigation")?;
+    if waiting.state != RunState::Queued || waiting.slot_wait_since.is_none() || w.rig.cli.launches() != 2 {
+        return Err(format!("the triage didn't wait for a slot: {:?}, {} launches", waiting.state, w.rig.cli.launches()));
+    }
+    w.finish(&other, FOUND).await;
+    w.rig.svc.launch_waiting().await.map_err(|e| e.to_string())?;
+    let triage = w.rig.get(&waiting).await;
+    if triage.state != RunState::Launching {
+        return Err(format!("the waiting triage didn't launch once a slot was free: {:?}", triage.state));
+    }
+    let launches = w.rig.cli.0.lock().unwrap().launches.clone();
+    for run in w.runs().await.iter().filter(|r| r.state != RunState::Queued) {
+        launched_as_its_kind_allows(run, &launches)?;
+    }
+    Ok(())
+}
+
+/// The source files under `src` that build a `LaunchRequest`, test code left out, as paths relative to `src`. Test code
+/// is a file a `#[cfg(test)] mod name;` declares (and everything under its directory) and, in any other file,
+/// everything from a `#[cfg(test)]` inline `mod name {` on, since a file's test module comes last.
+fn files_that_build_launch_requests() -> std::io::Result<Vec<String>> {
+    use std::path::Path;
+    // Spelled in two parts so this file never matches itself, though it is test code anyway.
+    let name = format!("{}Request", "Launch");
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = vec![];
+    let mut stack = vec![src.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push((path.clone(), std::fs::read_to_string(&path)?));
+            }
+        }
+    }
+    // The files and directories of out-of-line test modules, from where each is declared.
+    let mut test_paths = vec![];
+    for (path, text) in &files {
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        for pair in lines.windows(2) {
+            let Some(name) = (pair[0] == "#[cfg(test)]").then(|| pair[1].rsplit_once("mod ")).flatten().and_then(|(_, n)| n.strip_suffix(';')) else { continue };
+            let stem = path.file_stem().unwrap_or_default();
+            let parent = path.parent().unwrap_or(&src);
+            let base = if stem == "mod" || stem == "lib" || stem == "main" { parent.to_path_buf() } else { parent.join(stem) };
+            test_paths.push(base.join(format!("{name}.rs")));
+            test_paths.push(base.join(name));
+        }
+    }
+    let mut found = vec![];
+    for (path, text) in &files {
+        if test_paths.iter().any(|t| path.starts_with(t)) {
+            continue;
+        }
+        let mut code = String::new();
+        let mut lines = text.lines().peekable();
+        while let Some(line) = lines.next() {
+            let inline_tests = line.trim() == "#[cfg(test)]" && lines.peek().is_some_and(|next| next.contains("mod ") && next.trim_end().ends_with('{'));
+            if inline_tests {
+                break;
+            }
+            code.push_str(line);
+            code.push('\n');
+        }
+        if builds(&code, &name) > 0 {
+            found.push(path.strip_prefix(&src).unwrap_or(path).to_string_lossy().replace('\\', "/"));
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// How many times `code` builds (or has an `impl` block for) the struct `name`: the name followed by `{` with any
+/// whitespace between, and not its own declaration.
+fn builds(code: &str, name: &str) -> usize {
+    code.match_indices(name)
+        .filter(|(at, _)| {
+            let before = code[..*at].trim_end();
+            let whole = !code[..*at].ends_with(|c: char| c.is_alphanumeric() || c == '_');
+            whole && !before.ends_with("struct") && code[at + name.len()..].trim_start().starts_with('{')
+        })
+        .count()
+}
+
+/// Only the run service builds a `LaunchRequest` (its `spawn`, which sets the restriction from the spec), so no other
+/// code path can launch a run, read-only or not, around it. Tests build their own; they are left out.
+pub fn launch_requests_are_built_only_by_the_run_service() -> std::result::Result<(), String> {
+    let found = files_that_build_launch_requests().map_err(|e| e.to_string())?;
+    if found != ["runs/service.rs"] {
+        return Err(format!("a LaunchRequest is built outside the run service's spawn: {found:?}"));
+    }
+    Ok(())
+}
+
 /// What no wake turn may change: the runs, the workstream's hold and mode, and Jira.
 #[derive(Debug, PartialEq)]
 struct Steady {
@@ -1570,6 +1729,32 @@ mod tests {
     #[tokio::test]
     async fn orchestration_never_posts_to_github() {
         super::orchestration_never_posts_to_github().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_only_runs_always_launch_restricted() {
+        super::read_only_runs_always_launch_restricted().await.unwrap();
+    }
+
+    #[test]
+    fn a_struct_literal_is_found_however_it_is_spaced_and_an_impl_block_counts_too() {
+        let name = "LaunchRequest";
+        assert_eq!(super::builds("pub struct LaunchRequest {\n}", name), 0);
+        assert_eq!(super::builds("let r = LaunchRequest{ cwd };", name), 1);
+        assert_eq!(super::builds("let r = LaunchRequest\n    {\n cwd };", name), 1);
+        assert_eq!(super::builds("impl LaunchRequest { fn new() -> Self { Self { cwd } } }", name), 1);
+        assert_eq!(super::builds("fn f(r: &LaunchRequest) {}", name), 0, "a type in a signature builds nothing");
+        assert_eq!(super::builds("MyLaunchRequest { }", name), 0);
+    }
+
+    #[test]
+    fn launch_requests_are_built_only_by_the_run_service() {
+        super::launch_requests_are_built_only_by_the_run_service().unwrap();
+        // The scan sees what it should: test code builds requests too, and is left out only because it is test code.
+        let found = files_that_build_launch_requests().unwrap();
+        assert_eq!(found, ["runs/service.rs"]);
+        let cli = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/runs/cli.rs")).unwrap();
+        assert!(cli.matches(&format!("{}Request {{", "Launch")).count() >= 2, "cli.rs's own tests build one, after its struct");
     }
 
     #[tokio::test]

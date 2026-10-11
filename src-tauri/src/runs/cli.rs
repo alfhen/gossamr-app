@@ -166,6 +166,8 @@ pub struct LaunchRequest {
     pub prompt: String,
     /// Offers the session the run-report tool.
     pub report: Option<super::report::ReportLaunch>,
+    /// For a read-only kind: the permission mode and rules Claude Code enforces.
+    pub read_only: Option<crate::domain::ReadOnly>,
 }
 
 fn text(v: &Value, key: &str) -> Option<String> {
@@ -287,9 +289,19 @@ pub trait ClaudeCli: Send + Sync {
     async fn version(&self) -> CliResult<String>;
     async fn auth_status(&self) -> CliResult<AuthStatus>;
     async fn supports_bg(&self) -> CliResult<bool>;
+    /// Whether this `claude` takes the flags a read-only run is launched with (`--permission-mode dontAsk`,
+    /// `--disallowedTools`, `--setting-sources` and `--strict-mcp-config`). A read-only run is never launched without them.
+    async fn supports_read_only(&self) -> CliResult<bool>;
+    /// Starts a background session. A read-only request adds `--permission-mode dontAsk`, `--setting-sources` with no
+    /// source, `--strict-mcp-config`, its allow rules (with the report tool's, when offered) and its deny rules, so Claude
+    /// Code itself refuses the run's writes whatever the person's or the repository's settings allow.
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched>;
     async fn agents(&self, all: bool) -> CliResult<Vec<AgentEntry>>;
-    /// Wakes a stopped session with `message`. Carries no other flag: any flag makes `claude` start a copy.
+    /// Wakes a stopped session with `message`. Carries no other flag: any flag makes `claude` start a copy. When the
+    /// session continues in place (the `Launched` id is the session's own), the job keeps the flags it was launched with
+    /// and the wake reapplies them, so a read-only run stays restricted and a Build stays as it was. When `claude` starts
+    /// a copy instead (the session is running, open elsewhere, or its state can't be checked or read), the copy is a new
+    /// job from this command line and has none of them; `runs/answer.rs` stops and removes it.
     async fn resume(&self, session_id: &str, message: &str, cwd: Option<&Path>) -> CliResult<Launched>;
     async fn stop(&self, id: &ShortId) -> CliResult<()>;
     async fn rm(&self, id: &ShortId) -> CliResult<()>;
@@ -380,14 +392,40 @@ impl ClaudeCli for SystemCli {
         Ok(self.succeed(&["--help"]).await?.stdout.contains("--bg"))
     }
 
+    async fn supports_read_only(&self) -> CliResult<bool> {
+        let help = self.succeed(&["--help"]).await?.stdout;
+        Ok(["dontAsk", "--disallowedTools", "--setting-sources", "--strict-mcp-config"].iter().all(|flag| help.contains(flag)))
+    }
+
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched> {
         // `--` keeps a prompt that starts with a dash from being read as a flag.
         let mut args: Vec<&str> = vec!["--bg", "--name", &req.name, "--worktree", &req.worktree];
-        // Both flags take a list, so each is followed by another flag; the token is in the file, never on the command line.
+        // The list flags take a list, so each is followed by another flag; the token is in the file, never on the command
+        // line. Each rule is one argument.
         let config = req.report.as_ref().map(|r| r.config.to_string_lossy().into_owned());
-        let allowed = format!("mcp__{}__{}", crate::domain::REPORT_SERVER, crate::domain::REPORT_TOOL);
+        let report_rule = format!("mcp__{}__{}", crate::domain::REPORT_SERVER, crate::domain::REPORT_TOOL);
+        let mut allowed: Vec<&str> = Vec::new();
         if let Some(config) = &config {
-            args.extend(["--mcp-config", config, "--allowedTools", &allowed]);
+            args.extend(["--mcp-config", config]);
+            allowed.push(&report_rule);
+        }
+        if let Some(ro) = &req.read_only {
+            args.extend(["--permission-mode", &ro.mode]);
+            if let Some(sources) = &ro.setting_sources {
+                args.extend(["--setting-sources", sources]);
+            }
+            if ro.strict_mcp_config {
+                args.push("--strict-mcp-config");
+            }
+            allowed.extend(ro.allow.iter().map(String::as_str));
+        }
+        if !allowed.is_empty() {
+            args.push("--allowedTools");
+            args.extend(allowed);
+        }
+        if let Some(ro) = req.read_only.as_ref().filter(|ro| !ro.deny.is_empty()) {
+            args.push("--disallowedTools");
+            args.extend(ro.deny.iter().map(String::as_str));
         }
         args.extend(["--append-system-prompt", &req.guard, "--", &req.prompt]);
         let out = self.run(&args, Some(&req.cwd), LAUNCH).await?;
@@ -674,6 +712,7 @@ mod tests {
                     guard: "guard text".into(),
                     prompt: "-- look at it; \"quoted\" $(not run) `nor this`".into(),
                     report: None,
+                    read_only: None,
                 }
             }
 
@@ -828,6 +867,112 @@ mod tests {
                 "each list flag is followed by another flag, and the person's own MCP servers are not replaced"
             );
             assert!(!calls.contains("--strict-mcp-config") && !calls.contains("gsr_") && !calls.contains("Bearer"));
+        }
+
+        fn read_only() -> crate::domain::ReadOnly {
+            crate::domain::ReadOnly {
+                mode: "dontAsk".into(),
+                allow: vec!["Bash(git fetch origin main)".into(), "Bash(git checkout --detach origin/main)".into()],
+                deny: vec!["Edit".into(), "Write".into(), "mcp__gossamr".into(), "Bash(git push *)".into(), "Bash(git -c *)".into()],
+                guard: "read-only sentence".into(),
+                setting_sources: Some(String::new()),
+                strict_mcp_config: true,
+            }
+        }
+
+        #[tokio::test]
+        async fn read_only_support_is_read_from_the_help() {
+            let rig = Rig::new("ro-help", "");
+            assert!(rig.cli.supports_read_only().await.unwrap());
+            let old = Rig::new("ro-help-old", "help_ro=0\n");
+            assert!(!old.cli.supports_read_only().await.unwrap());
+            assert!(old.cli.supports_bg().await.unwrap(), "bg alone is not enough");
+        }
+
+        #[tokio::test]
+        async fn a_read_only_launch_adds_the_mode_then_one_allow_list_then_one_deny_list_each_rule_one_argument() {
+            let rig = Rig::new("readonly", "");
+            let mut req = rig.request("ce-6-x-ab12");
+            req.read_only = Some(read_only());
+            rig.cli.launch(&req).await.unwrap();
+            let calls = rig.calls();
+            let args: Vec<&str> = calls.lines().skip(2).collect();
+            assert_eq!(
+                args,
+                [
+                    "--bg",
+                    "--name",
+                    "ce-6-x-ab12 investigate",
+                    "--worktree",
+                    "ce-6-x-ab12",
+                    "--permission-mode",
+                    "dontAsk",
+                    "--setting-sources",
+                    "",
+                    "--strict-mcp-config",
+                    "--allowedTools",
+                    "Bash(git fetch origin main)",
+                    "Bash(git checkout --detach origin/main)",
+                    "--disallowedTools",
+                    "Edit",
+                    "Write",
+                    "mcp__gossamr",
+                    "Bash(git push *)",
+                    "Bash(git -c *)",
+                    "--append-system-prompt",
+                    "guard text",
+                    "--",
+                    "-- look at it; \"quoted\" $(not run) `nor this`",
+                ],
+                "each list is followed by another flag"
+            );
+            let listed = rig.cli.agents(false).await.unwrap();
+            assert_eq!(listed.len(), 1, "the fake read the lists through to the prompt and started one session");
+            assert_eq!(listed[0].name.as_deref(), Some("ce-6-x-ab12 investigate"));
+        }
+
+        #[tokio::test]
+        async fn a_read_only_launch_with_the_report_tool_puts_its_rule_first_in_the_same_allow_list() {
+            let rig = Rig::new("readonly-report", "");
+            let mut req = rig.request("ce-6-y-ab12");
+            req.read_only = Some(read_only());
+            req.report = Some(crate::runs::report::ReportLaunch { config: PathBuf::from("/data/report/run-2.json") });
+            rig.cli.launch(&req).await.unwrap();
+            let calls = rig.calls();
+            let args: Vec<&str> = calls.lines().skip(2).collect();
+            assert_eq!(
+                &args[5..17],
+                [
+                    "--mcp-config",
+                    "/data/report/run-2.json",
+                    "--permission-mode",
+                    "dontAsk",
+                    "--setting-sources",
+                    "",
+                    "--strict-mcp-config",
+                    "--allowedTools",
+                    "mcp__run-report__report_result",
+                    "Bash(git fetch origin main)",
+                    "Bash(git checkout --detach origin/main)",
+                    "--disallowedTools",
+                ]
+            );
+            assert_eq!(args.iter().filter(|a| **a == "--allowedTools").count(), 1);
+            assert_eq!(args.iter().filter(|a| **a == "--disallowedTools").count(), 1);
+        }
+
+        #[tokio::test]
+        async fn resuming_a_read_only_session_sends_no_flag_because_the_job_keeps_its_own() {
+            let rig = Rig::new("readonly-resume", "");
+            let mut req = rig.request("ce-6-z-ab12");
+            req.read_only = Some(read_only());
+            let first = rig.cli.launch(&req).await.unwrap();
+            let session = rig.cli.agents(false).await.unwrap().remove(0).session_id.unwrap();
+            rig.cli.stop(&first.short_id).await.unwrap();
+            rig.cli.resume(&session, "and now?", Some(&rig.repo)).await.unwrap();
+            let calls = rig.calls();
+            let last: Vec<&str> = calls.rsplit("---\n").next().unwrap().lines().skip(1).collect();
+            assert_eq!(last, ["--bg", "--resume", session.as_str(), "--", "and now?"]);
         }
 
         #[tokio::test]

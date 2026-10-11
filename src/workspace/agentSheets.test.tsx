@@ -566,7 +566,7 @@ describe("the honest wording", () => {
 
   it("is in the safety sheet, with the list of what an agent may touch", () => {
     const html = renderToStaticMarkup(<AgentsSettingsView runs={seeded()} stopping={false} keepRunning={3} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
-    for (const p of [...phrases, "exactly what the agent receives", "Nothing enforces that", "Gossamr adds no fence of its own"]) expect(html).toContain(p);
+    for (const p of [...phrases, "exactly what the agent receives", "Nothing enforces that", "Gossamr adds no fence of its own", "What a Build may touch", "A Build runs as you"]) expect(html).toContain(p);
     expect(html).not.toMatch(/never write to jira|can&#x27;t write to jira/i);
   });
 });

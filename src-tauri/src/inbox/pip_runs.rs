@@ -373,7 +373,19 @@ impl Core {
                 // Its verdict is read by the app; the tool is offered when the setting allows, else the written verdict counts.
                 spec.report = true;
             }
-            RunKind::Investigate | RunKind::Verify => {}
+            // After a passing review: its pull request at the commit it read, so the verify checks the change itself and
+            // not the base branch. A review always had GitHub confirm the pull request is this repository's own. A review
+            // without a pinned commit is refused rather than followed by a verify of the base branch.
+            RunKind::Verify if source.spec.kind == RunKind::Review => {
+                let (Some(pr), Some(sha)) = (source.spec.pr, source.spec.pr_sha.clone()) else {
+                    return Err(refuse(VERIFY_UNPINNED));
+                };
+                spec.pr = Some(pr);
+                spec.pr_sha = Some(sha);
+                spec.base = source.spec.base.clone();
+            }
+            RunKind::Verify => {}
+            RunKind::Investigate => {}
         }
         Ok(())
     }
@@ -433,6 +445,10 @@ impl Core {
         .await
     }
 }
+
+/// Why no verify follows a review: the review has no pull request pinned to the commit it read, so a verify after it
+/// would check the base branch instead of the change.
+pub const VERIFY_UNPINNED: &str = "that review has no pull request pinned to the commit it read, so a verify after it would check the base branch instead of the change";
 
 /// Why an auto-started review waits: GitHub's head of the pull request isn't the commit the last sync cached.
 pub const PR_MOVED: &str = "the pull request has a commit the last sync hasn't seen; the review waits for the next one";

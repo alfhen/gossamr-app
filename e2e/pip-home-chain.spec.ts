@@ -80,7 +80,7 @@ test("an investigation is reviewed and started in place on Pip home: the exact p
   const rows = review.getByRole("group", { name: "Checks before you approve" }).locator("li[data-level]");
   expect(await rows.count()).toBeGreaterThan(0);
   await expect(rows.first()).toBeVisible();
-  await expect(review).toContainText("Agents run as you, with your own Claude settings.");
+  await expect(review).toContainText("A read-only step runs signed in as you, but without your own or the repository's Claude settings");
   const start = review.getByRole("button", { name: "Start agent" });
   await expect(start).toBeEnabled();
   expect(await mockRuns(page)).toEqual([]);

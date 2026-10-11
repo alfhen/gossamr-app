@@ -167,21 +167,60 @@ async fn an_answer_that_was_stopped_on_its_way_can_be_sent_again() {
     assert!(cli.resumes[1].message.ends_with("Use staging, please"));
 }
 
+/// A run asking a question, of `kind`.
+async fn asking_as(kind: crate::domain::RunKind) -> (Rig, Run) {
+    let mut rig = ready().await;
+    rig.svc = std::sync::Arc::new(std::sync::Arc::into_inner(rig.svc).expect("sole owner").with_timing(FAST));
+    let run = rig.launched_as(1, kind).await;
+    rig.session(&run, |e| {
+        e.state = Some("blocked".into());
+        e.pid = None;
+    });
+    rig.poll().await;
+    let run = rig.get(&run).await;
+    assert_eq!(run.state, RunState::NeedsAnswer);
+    (rig, run)
+}
+
+fn copy_state(rig: &Rig) -> Option<Option<String>> {
+    let cli = rig.cli.0.lock().unwrap();
+    cli.sessions.iter().find(|e| e.id.as_deref().is_some_and(|i| i.starts_with('c'))).map(|e| e.state.clone())
+}
+
 #[tokio::test]
-async fn a_resume_that_starts_a_copy_stops_the_copy_and_keeps_the_run_stopped() {
-    let (rig, run) = asking().await;
+async fn a_resume_that_starts_a_copy_of_a_build_stops_the_copy_and_keeps_the_run_stopped() {
+    let (rig, run) = asking_as(crate::domain::RunKind::Build).await;
     rig.cli.with(|s| s.resume = Resume::Copies);
     let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();
-    assert!(why.contains("started a copy") && why.contains("was stopped"), "{why}");
-    let copy_state = {
-        let cli = rig.cli.0.lock().unwrap();
-        cli.sessions.iter().find(|e| e.id.as_deref().is_some_and(|i| i.starts_with('c'))).and_then(|e| e.state.clone())
-    };
-    assert_eq!(copy_state.as_deref(), Some("stopped"));
+    assert!(why.contains("started a copy") && why.contains("was stopped") && !why.contains("read-only"), "{why}");
+    assert_eq!(copy_state(&rig), Some(Some("stopped".into())));
     let after = rig.get(&run).await;
     assert_eq!((after.state, after.unsent_answer.as_deref()), (RunState::Stopped, Some("Yes")));
-    let copies: Vec<_> = after.earlier_sessions.iter().map(|e| e.short_id.as_str()).collect();
-    assert!(matches!(copies.as_slice(), [copy] if copy.starts_with('c')), "the copy is remembered so it is never taken for another run's session: {copies:?}");
+    let copies: Vec<_> = after.earlier_sessions.iter().map(|e| (e.short_id.as_str(), e.removed)).collect();
+    assert!(matches!(copies.as_slice(), [(copy, false)] if copy.starts_with('c')), "the copy is remembered so it is never taken for another run's session: {copies:?}");
+}
+
+/// A copy is a new job from the resume command line, without the flags the run was launched with, so a read-only run's
+/// copy would run unrestricted: it is removed, not only stopped.
+#[tokio::test]
+async fn a_resume_that_starts_a_copy_of_a_read_only_run_stops_and_removes_the_copy() {
+    let (rig, run) = asking_as(crate::domain::RunKind::Triage).await;
+    rig.cli.with(|s| s.resume = Resume::Copies);
+    let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();
+    assert!(why.contains("started a copy") && why.contains("stopped and removed") && why.contains("read-only restriction"), "{why}");
+    assert_eq!(copy_state(&rig), None, "the copy is gone");
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.unsent_answer.as_deref()), (RunState::Stopped, Some("Yes")));
+    let copies: Vec<_> = after.earlier_sessions.iter().map(|e| (e.short_id.as_str(), e.removed)).collect();
+    assert!(matches!(copies.as_slice(), [(copy, true)] if copy.starts_with('c')), "{copies:?}");
+
+    // A copy Claude refuses to remove is called out, and kept for cleanup to retry.
+    let (rig, run) = asking_as(crate::domain::RunKind::Investigate).await;
+    rig.cli.with(|s| s.resume = Resume::Copies);
+    rig.cli.with(|s| s.rm_refusals = vec!["boom".into()]);
+    let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();
+    assert!(why.contains("it was stopped; remove it with `claude rm c") && why.contains("read-only restriction"), "{why}");
+    assert!(rig.get(&run).await.earlier_sessions.iter().any(|e| !e.removed && e.short_id.as_str().starts_with('c')));
 }
 
 #[tokio::test]

@@ -7,10 +7,15 @@ use super::cli::CliError;
 use super::toolchain::ToolchainError;
 use crate::domain::RunFailure;
 
+/// Why a read-only kind won't launch on this `claude`; also the preflight row's text.
+pub const CANT_RESTRICT: &str = "This Claude Code can't run a step read-only: it needs --permission-mode dontAsk, --disallowedTools, --setting-sources and --strict-mcp-config.";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Failure {
     ClaudeMissing,
     TooOld,
+    /// It runs background agents but can't be told to keep a read-only kind from writing.
+    CantRestrict,
     NotSignedIn,
     NoEnvironment(String),
     /// The clone is gone, isn't a clone of the repository, or can't be read.
@@ -29,6 +34,7 @@ impl fmt::Display for Failure {
         match self {
             Failure::ClaudeMissing => write!(f, "Claude Code isn't installed, or Gossamr can't find it."),
             Failure::TooOld => write!(f, "Your Claude Code is too old to run background agents. Update it, then retry."),
+            Failure::CantRestrict => write!(f, "{CANT_RESTRICT} Update it, then retry."),
             Failure::NotSignedIn => write!(f, "Claude isn't signed in. Run `claude` in Terminal and sign in, then retry."),
             Failure::NoEnvironment(why) => write!(f, "{why}"),
             Failure::NoClone(why) | Failure::Invalid(why) => write!(f, "{why}"),
@@ -65,7 +71,7 @@ impl From<&Failure> for RunFailure {
             Failure::NoClone(_) => RunFailure::NoClone,
             Failure::CapReached(_) => RunFailure::CapReached,
             Failure::NeedsTrust { folder } => RunFailure::UntrustedFolder { path: folder.clone() },
-            Failure::TooOld | Failure::NoEnvironment(_) | Failure::Invalid(_) | Failure::CommandFailed(_) | Failure::Unparseable(_) | Failure::Interrupted => RunFailure::Other,
+            Failure::TooOld | Failure::CantRestrict | Failure::NoEnvironment(_) | Failure::Invalid(_) | Failure::CommandFailed(_) | Failure::Unparseable(_) | Failure::Interrupted => RunFailure::Other,
         }
     }
 }
@@ -109,6 +115,7 @@ mod tests {
         vec![
             (Failure::ClaudeMissing, RunFailure::ClaudeMissing),
             (Failure::TooOld, RunFailure::Other),
+            (Failure::CantRestrict, RunFailure::Other),
             (Failure::NotSignedIn, RunFailure::NotSignedIn),
             (Failure::NoEnvironment("Couldn't read your shell environment.".into()), RunFailure::Other),
             (Failure::NoClone("/x isn't a git clone any more".into()), RunFailure::NoClone),
