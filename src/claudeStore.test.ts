@@ -130,7 +130,7 @@ const usage = { inputTokens: 120, outputTokens: 30, cacheCreationTokens: 0, cach
 
 const stored = (requestId: string, over: Partial<StoredTurn> = {}): StoredTurn => ({
   requestId,
-  conversation: "workspace",
+  conversation: "general",
   prompt: `asked ${requestId}`,
   imageCount: 0,
   text: `answer ${requestId}`,
@@ -158,15 +158,15 @@ describe("load", () => {
 
   it("brings back stored turns in order and the newest session, without replacing a turn still running", async () => {
     useClaude.setState({
-      byTicket: { workspace: { sessionId: null, turns: [{ requestId: "r3", prompt: "live", steps: ["Reading"], text: "half", status: "running", error: null }] } },
+      byTicket: { general: { sessionId: null, turns: [{ requestId: "r3", prompt: "live", steps: ["Reading"], text: "half", status: "running", error: null }] } },
     });
     vi.spyOn(claude, "turns").mockResolvedValue([
       stored("r1", { sessionId: "s-old", usage }),
       stored("r2", { sessionId: "s-new", quote: "the bit", prompt: withQuote("what is this?", "the bit"), looking: "CA-401", imageCount: 2 }),
       stored("r3", { status: "failed", error: "Gossamr closed before Pip finished", text: "" }),
     ]);
-    await useClaude.getState().load("workspace");
-    const c = useClaude.getState().byTicket.workspace;
+    await useClaude.getState().load("general");
+    const c = useClaude.getState().byTicket.general;
     expect(c.turns.map((t) => t.requestId)).toEqual(["r1", "r2", "r3"]);
     expect(c.turns[2]).toMatchObject({ status: "running", text: "half", steps: ["Reading"] });
     expect(c.turns[0]).toMatchObject({ status: "done", text: "answer r1", usage });
@@ -174,8 +174,8 @@ describe("load", () => {
     expect(c.turns[1]).not.toHaveProperty("images");
     expect(c.sessionId).toBe("s-new");
 
-    await useClaude.getState().load("workspace");
-    expect(useClaude.getState().byTicket.workspace.turns).toHaveLength(3);
+    await useClaude.getState().load("general");
+    expect(useClaude.getState().byTicket.general.turns).toHaveLength(3);
   });
 
   it("keeps the session the conversation already has", () => {
@@ -193,7 +193,7 @@ describe("load", () => {
   it("drops turns that arrive after the conversations were forgotten, as on an account switch", async () => {
     let answer: (t: StoredTurn[]) => void = () => {};
     vi.spyOn(claude, "turns").mockReturnValue(new Promise((r) => (answer = r)));
-    const loading = useClaude.getState().load("workspace");
+    const loading = useClaude.getState().load("general");
     forgetConversations();
     answer([stored("r1")]);
     await loading;
@@ -203,9 +203,9 @@ describe("load", () => {
   it("sends the conversation and what the turn showed with each question", async () => {
     const sent: AskRequest[] = [];
     vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), started));
-    await useClaude.getState().ask("workspace", "what next?", null, undefined, { looking: "CA-401", quote: "this" });
+    await useClaude.getState().ask("general", "what next?", null, undefined, { looking: "CA-401", quote: "this" });
     await useClaude.getState().ask("CA-7", "and here?", null);
-    expect(sent[0]).toMatchObject({ conversation: "workspace", meta: { looking: "CA-401", quote: "this", imageCount: 0 } });
+    expect(sent[0]).toMatchObject({ conversation: "general", meta: { looking: "CA-401", quote: "this", imageCount: 0 } });
     expect(sent[1]).toMatchObject({ conversation: "CA-7", meta: { imageCount: 0 } });
   });
 });
@@ -214,15 +214,15 @@ describe("queued turns", () => {
   beforeEach(() => useClaude.setState({ byTicket: {} }));
   afterEach(() => vi.restoreAllMocks());
 
-  const statuses = () => useClaude.getState().byTicket.workspace.turns.map((t) => t.status);
+  const statuses = () => useClaude.getState().byTicket.general.turns.map((t) => t.status);
 
   it("appends a turn as queued when the backend queued it, and the running event starts it", async () => {
     vi.spyOn(claude, "ask").mockResolvedValueOnce(started).mockResolvedValueOnce({ queued: true, ahead: 1 });
-    await useClaude.getState().ask("workspace", "first", null);
-    await useClaude.getState().ask("workspace", "second", "s1");
+    await useClaude.getState().ask("general", "first", null);
+    await useClaude.getState().ask("general", "second", "s1");
     expect(statuses()).toEqual(["running", "queued"]);
-    const second = useClaude.getState().byTicket.workspace.turns[1].requestId;
-    const c = applyEvent(useClaude.getState().byTicket.workspace, second, { type: "running" });
+    const second = useClaude.getState().byTicket.general.turns[1].requestId;
+    const c = applyEvent(useClaude.getState().byTicket.general, second, { type: "running" });
     expect(c.turns.map((t) => t.status)).toEqual(["running", "running"]);
   });
 
@@ -245,14 +245,14 @@ describe("queued turns", () => {
       events(req.requestId, { type: "running" });
       return { queued: true, ahead: 1 };
     });
-    await useClaude.getState().ask("workspace", "quick", null);
+    await useClaude.getState().ask("general", "quick", null);
     expect(statuses()).toEqual(["running"]);
   });
 
   it("removes only the queued turn, and cancel stops only the running one", async () => {
     useClaude.setState({
       byTicket: {
-        workspace: {
+        general: {
           sessionId: "s1",
           turns: [
             { requestId: "r1", prompt: "a", steps: [], text: "", status: "running", error: null },
@@ -266,15 +266,15 @@ describe("queued turns", () => {
     vi.spyOn(claude, "cancel").mockImplementation(async (id) => void cancelled.push(id));
     useClaude.getState().remove("r2");
     useClaude.getState().remove("r1");
-    useClaude.getState().cancel("workspace");
+    useClaude.getState().cancel("general");
     expect(cancelled).toEqual(["r2", "r1"]);
   });
 
   it("sends a queued question with the session known when it was sent", async () => {
     const sent: AskRequest[] = [];
     vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), { queued: true, ahead: 1 }));
-    await useClaude.getState().ask("workspace", "later", null);
-    await useClaude.getState().ask("workspace", "and later", "s-known");
+    await useClaude.getState().ask("general", "later", null);
+    await useClaude.getState().ask("general", "and later", "s-known");
     expect(sent.map((r) => r.sessionId)).toEqual([null, "s-known"]);
   });
 });
@@ -302,7 +302,7 @@ describe("a reload while Pip answers", () => {
   it("holds the events of a turn the store doesn't have yet while it loads, and the stored answer settles it", async () => {
     let answer: (t: StoredTurn[]) => void = () => {};
     const turns = vi.spyOn(claude, "turns").mockReturnValueOnce(new Promise((r) => (answer = r)));
-    const loading = useClaude.getState().load("workspace");
+    const loading = useClaude.getState().load("general");
     // The page listens before it loads: these come while the snapshot is being read, and the first is in it.
     onClaudeEvent("r1", text("Two "));
     onClaudeEvent("r1", text("things."));
@@ -310,7 +310,7 @@ describe("a reload while Pip answers", () => {
     turns.mockResolvedValueOnce([stored("r1", { text: "Two things.", status: "done", sessionId: "s1", usage })]);
     answer([stored("r1", { text: "Two ", status: "running", sessionId: null, usage: null })]);
     await loading;
-    const turn = () => useClaude.getState().byTicket.workspace.turns[0];
+    const turn = () => useClaude.getState().byTicket.general.turns[0];
     expect(turn()).toMatchObject({ status: "done", text: "Two things." });
     await vi.waitFor(() => expect(turns).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(turn()).toMatchObject({ status: "done", text: "Two things.", usage }));
@@ -318,18 +318,18 @@ describe("a reload while Pip answers", () => {
 
   it("replaces a restored turn's answer with the stored one when it ends after the load", async () => {
     const turns = vi.spyOn(claude, "turns").mockResolvedValueOnce([stored("r1", { text: "Half", status: "running" })]);
-    await useClaude.getState().load("workspace");
+    await useClaude.getState().load("general");
     // A chunk lost in a gap the snapshot couldn't cover: the stream alone would end garbled.
     onClaudeEvent("r1", text(" answer."));
     turns.mockResolvedValueOnce([stored("r1", { text: "Half of the answer.", status: "done" })]);
     onClaudeEvent("r1", { type: "done", sessionId: null, ok: true, message: null });
-    await vi.waitFor(() => expect(useClaude.getState().byTicket.workspace.turns[0]).toMatchObject({ status: "done", text: "Half of the answer." }));
+    await vi.waitFor(() => expect(useClaude.getState().byTicket.general.turns[0]).toMatchObject({ status: "done", text: "Half of the answer." }));
   });
 
   it("drops held events once no load is waiting, and never a turn's own events", async () => {
     onClaudeEvent("nowhere", text("lost"));
     vi.spyOn(claude, "turns").mockResolvedValueOnce([stored("nowhere", { text: "", status: "running" })]);
-    await useClaude.getState().load("workspace");
-    expect(useClaude.getState().byTicket.workspace.turns[0].text).toBe("");
+    await useClaude.getState().load("general");
+    expect(useClaude.getState().byTicket.general.turns[0].text).toBe("");
   });
 });

@@ -51,7 +51,7 @@ describe("the sample backend drafts a comment when a run finishes", () => {
       expect(run.result).toContain("For Jira:");
       const [draft] = commentsOf(backend, run);
       expect(draft, kind).toBeDefined();
-      expect(draft).toMatchObject({ state: { type: "pending" }, createdBy: "user", origin: { type: "run", runId: run.id } });
+      expect(draft).toMatchObject({ state: { type: "pending" }, createdBy: "agent", origin: { type: "run", runId: run.id } });
       expect((await backend.runsOutcome(run.id)).draft).toEqual({ id: draft.id, state: { type: "pending" } });
     }
   });
@@ -60,6 +60,20 @@ describe("the sample backend drafts a comment when a run finishes", () => {
     for (const kind of ["investigate", "triage", "verify", "build", "review"] as const) {
       expect(jiraNote(SCRIPTED_RESULT[kind]), kind).toMatchObject({ fromMarker: true });
     }
+  });
+
+  it("leaves the comment in the run's workstream, as the agent's", async () => {
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    const intent: Intent = { type: "startRun", connectionId: "mock", item: itemRef("CA-412"), spec: spec("investigate", { workstream: "ws-1", name: "ca-412-in-a-workstream" }) };
+    const p = await backend.proposalsCreate(intent);
+    const queued = await backend.runsApprove(p.id, (await backend.runsReview(p.id)).digest);
+    for (let i = 0; i < 4; i++) backend.runs.advance(queued.id);
+    const run = (await backend.runsGet(queued.id))!;
+    const [draft] = commentsOf(backend, run);
+    expect(draft).toMatchObject({ createdBy: "agent", origin: { type: "run", runId: run.id, workstream: "ws-1" } });
+    expect((await backend.proposalsList({ workstream: "ws-1" })).map((d) => d.id)).toContain(draft.id);
+    const [loose] = commentsOf(backend, await finished(backend));
+    expect(loose.origin).toMatchObject({ type: "run", workstream: null });
   });
 
   it("makes one, even when the run is advanced again, and none for a run with no ticket", async () => {
@@ -167,7 +181,7 @@ describe("the sample Pip", () => {
     await mockAsk(req, backend, 0);
     const after = backend.proposals.get(draft.id)!;
     expect(after.state.type).toBe("pending");
-    expect(after.createdBy).toBe("user");
+    expect(after.createdBy).toBe("agent");
     expect(after.intent.type === "comment" && docText(after.intent.body)).not.toBe(before);
     expect(after.revisions[after.revisions.length - 1]?.note).toBe("Revised by Pip");
     expect(backend.proposals.list({ states: ["applied"] }).filter((p) => p.intent.type === "comment")).toHaveLength(0);
@@ -268,6 +282,18 @@ describe("what the person sees", () => {
     expect(runDraftOf([pending()], "other")).toBeUndefined();
     expect(runDraftOf([pending({ state: { type: "skipped" } })], "r1")).toBeUndefined();
     expect(runDraftOf([pending({ origin: { type: "board" } })], "r1")).toBeUndefined();
+  });
+
+  it("marks a draft an agent run left as drafted by an agent, and no other", () => {
+    const props = { statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() };
+    const html = (p: Proposal) => renderToStaticMarkup(<DraftCard proposal={p} {...props} />);
+    const agent = html(pending({ createdBy: "agent", origin: { type: "run", runId: "r1", shortId: "ab12cd34", workstream: "ws-1" } }));
+    expect(agent).toContain('data-created-by="agent"');
+    expect(agent).toContain("Drafted by an agent");
+    expect(agent).toContain("From agent run");
+    for (const other of [pending(), pending({ createdBy: "pip", origin: { type: "chat", requestId: "q1" } })]) {
+      expect(html(other)).not.toContain("Drafted by an agent");
+    }
   });
 
   it("offers Discuss with Pip on a comment from a run, and not on any other", () => {

@@ -1,6 +1,7 @@
 import type { AskOutcome, AskRequest } from "./claude";
 import { mockAsk, mockCancel, mockPipEvents, type PipDrafter } from "./mockPip";
 import { REMOVED, mockPipTurns } from "./mockPipTurns";
+import { GENERAL_CONVERSATION, conversationId } from "../lib/conversations";
 
 /** How many of Pip's turns may run at once across every conversation (PIP_PROCESSES in src-tauri/src/agent/queue.rs). */
 export const PIP_PROCESSES = 2;
@@ -121,7 +122,7 @@ export function resetMockPipQueue() {
   queue = createTurnQueue<Waiting>();
 }
 
-const conversationOf = (req: AskRequest) => req.conversation ?? "workspace";
+const conversationOf = (req: AskRequest) => conversationId(req.conversation ?? GENERAL_CONVERSATION);
 
 function start({ req, drafter, pace }: Waiting) {
   mockPipTurns.setStatus(req.requestId, "running");

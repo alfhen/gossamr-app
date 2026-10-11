@@ -1,3 +1,4 @@
+import { conversationId } from "../lib/conversations";
 import { readStored, writeStored } from "../workspace/storage";
 import type { ScreenContext } from "../types";
 import type { StoredTurn, TurnMeta, TurnUsage } from "./claude";
@@ -81,15 +82,18 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
   // A turn cut off by a reload starts over, so what it had said is dropped; one that can't be asked again is failed.
   const cutOff = (t: MockTurn): MockTurn =>
     !restart && t.ask ? { ...t, status: "queued", text: "", steps: [] } : { ...t, status: "failed", error: t.status === "queued" ? NEVER_RAN : INTERRUPTED, ask: undefined };
-  all = (Array.isArray(stored) ? stored.filter(isTurn) : []).filter((t) => t.createdAt >= horizon).map((t) => (going(t) ? cutOff(t) : t));
+  // Turns kept under General's old name are General's, as the app's schema moves them once.
+  const adopt = (t: MockTurn): MockTurn => (conversationId(t.conversation) === t.conversation ? t : { ...t, conversation: conversationId(t.conversation) });
+  all = (Array.isArray(stored) ? stored.filter(isTurn) : []).filter((t) => t.createdAt >= horizon).map((t) => adopt(going(t) ? cutOff(t) : t));
   let resumable = all.filter((t) => going(t) && t.ask).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   if (stored !== null) save();
 
   return {
     /** The turns of `conversation`, oldest first, with what a running one has said so far. */
     turns(conversation: string): StoredTurn[] {
+      const wanted = conversationId(conversation);
       return all
-        .filter((t) => t.conversation === conversation)
+        .filter((t) => t.conversation === wanted)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
         .map(({ ask: _, ...t }) => {
           const l = live.get(t.requestId);
@@ -100,6 +104,11 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
     /** Whether a turn with this request id is kept. */
     has(requestId: string): boolean {
       return all.some((t) => t.requestId === requestId);
+    },
+
+    /** The conversation the question `requestId` was asked in, or null when no such turn is kept. */
+    conversationOf(requestId: string): string | null {
+      return all.find((t) => t.requestId === requestId)?.conversation ?? null;
     },
 
     /** The turns a reload cut off, oldest first, once: the caller asks each again. */
@@ -116,7 +125,7 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
         ...all,
         {
           requestId,
-          conversation,
+          conversation: conversationId(conversation),
           prompt,
           ...(meta.quote ? { quote: meta.quote } : {}),
           ...(meta.looking ? { looking: meta.looking } : {}),

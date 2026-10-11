@@ -8,6 +8,7 @@ import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
+import { useWorkstreams } from "./workstreamsStore";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -60,6 +61,24 @@ describe("starting an agent from a ticket", () => {
     expect(review!.ticketBlock).toContain("CA-401");
     expect(s().preflight?.blocking).toBe(false);
     expect(blockReason()).toBeNull();
+  });
+
+  it("links a run drafted on a ticket with an open workstream to it, and no other", async () => {
+    const ws = await backend.workstreamsOpen(CA);
+    useWorkstreams.getState().init(backend);
+    await vi.waitFor(() => expect(useWorkstreams.getState().list).toHaveLength(1));
+    try {
+      await s().begin({ item: CA });
+      await s().chooseRepo("acme/storefront");
+      expect(s().review!.spec.workstream).toBe(ws.id);
+      expect((await backend.proposalsList({ workstream: ws.id })).map((p) => p.id)).toEqual([s().proposalId]);
+      s().close();
+      await s().begin({ item: itemRef("CA-402") });
+      await s().chooseRepo("acme/storefront");
+      expect(s().review!.spec.workstream).toBeUndefined();
+    } finally {
+      useWorkstreams.getState().dispose();
+    }
   });
 
   it("opens the draft it already made instead of making another", async () => {

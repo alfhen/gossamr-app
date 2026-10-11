@@ -53,7 +53,7 @@ describe("the sample backend proposes a breakdown when a Triage finishes", () =>
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const run = await finished(backend, "triage");
     const [draft] = subtasksOf(backend, run);
-    expect(draft).toMatchObject({ state: { type: "pending" }, createdBy: "user", origin: { type: "run", runId: run.id } });
+    expect(draft).toMatchObject({ state: { type: "pending" }, createdBy: "agent", origin: { type: "run", runId: run.id } });
     expect(draft.intent).toMatchObject({ type: "subtasks", parent: { key: "CA-412" } });
     const outcome = await backend.runsOutcome(run.id);
     expect(outcome.subtasks).toHaveLength(4);

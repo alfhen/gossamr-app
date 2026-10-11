@@ -9,7 +9,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showAgentsNeedingMe", "openAgentSafety", "jumpToItem", "askPip"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showAgentsNeedingMe", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -240,6 +240,34 @@ describe("agent commands", () => {
     expect(a.openAgentSafety).toHaveBeenCalled();
     expect(named("Show agents that need me").hint).toBe("2 waiting");
     expect(named("Start an agent…").stay).toBeFalsy();
+  });
+
+  it("lists Start a workstream on the peeked ticket only with a ticket and Agents on", () => {
+    const ticket = { key: "CA-401", workstream: false };
+    const find = (c: Parameters<typeof buildCommands>[3]) => buildCommands([], [], noop, c).filter((x) => x.id === "workstream:start");
+    expect(find({ ...ctx, agents: true })).toEqual([]);
+    expect(find({ ...ctx, agents: true, ticket: null })).toEqual([]);
+    expect(find({ ...ctx, agents: false, ticket })).toEqual([]);
+    expect(find({ ...ctx, agents: true, ticket }).map((c) => c.label)).toEqual(["Start a workstream on CA-401"]);
+    expect(find({ ...ctx, agents: true, ticket: { ...ticket, workstream: true } }).map((c) => c.label)).toEqual(["Open the workstream on CA-401"]);
+    const a = actions();
+    const [entry] = rankCommands(buildCommands([], [], a, { ...ctx, agents: true, ticket }), "start a workstream");
+    expect(entry.label).toBe("Start a workstream on CA-401");
+    entry.run();
+    expect(a.startWorkstream).toHaveBeenCalled();
+  });
+
+  it("offers to close the peeked ticket's workstream only when it has one, and asks first", () => {
+    const ticket = { key: "CA-401", workstream: true };
+    const find = (c: Parameters<typeof buildCommands>[3]) => buildCommands([], [], noop, c).filter((x) => x.id === "workstream:close");
+    expect(find({ ...ctx, agents: true, ticket: { ...ticket, workstream: false } })).toEqual([]);
+    expect(find({ ...ctx, agents: false, ticket })).toEqual([]);
+    expect(find({ ...ctx, agents: true, ticket }).map((c) => [c.label, c.hint])).toEqual([["Close the workstream on CA-401…", "asks first"]]);
+    const a = actions();
+    const [entry] = rankCommands(buildCommands([], [], a, { ...ctx, agents: true, ticket }), "close the workstream");
+    expect(entry.id).toBe("workstream:close");
+    entry.run();
+    expect(a.closeWorkstream).toHaveBeenCalled();
   });
 
   it("finds start an agent by its plain words", () => {

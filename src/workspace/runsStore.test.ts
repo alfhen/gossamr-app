@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Backend } from "../backend/types";
-import { NO_FILTERS } from "./agentsLogic";
+import { itemRef } from "../backend/mockConnector";
+import { NO_FILTERS, agentGroups } from "./agentsLogic";
+import { useWorkstreams } from "./workstreamsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
@@ -183,6 +185,30 @@ describe("the run sheet", () => {
     expect(s().selectedId).toBe(second);
     s().browse(-1);
     expect(s().sheet).toEqual({ type: "run", id: first.id });
+  });
+
+  it("browses in group order when the view groups by workstream, as the list on screen is", async () => {
+    const ws = await backend.workstreamsOpen(itemRef("CA-401"));
+    const draft = await backend.runsDraft({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-browse-1a2b", instruction: "", workstream: ws.id }, itemRef("CA-401"));
+    const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    useWorkstreams.getState().init(backend);
+    await s().reload();
+    await vi.waitFor(() => expect(useWorkstreams.getState().list).toHaveLength(1));
+    usePrefs.setState({ agentsGroup: "workstream" });
+    try {
+      const byWorkstream = agentGroups("workstream", s().runs, useWorkstreams.getState().list, NO_FILTERS, false, Date.now()).order;
+      const byState = agentGroups("state", s().runs, [], NO_FILTERS, false, Date.now()).order;
+      expect(byWorkstream[0]).toBe(run.id);
+      expect(byState.indexOf(run.id)).toBeGreaterThan(0);
+      s().openRun(run.id);
+      s().browse(-1);
+      expect(s().sheet).toEqual({ type: "run", id: run.id });
+      s().browse(1);
+      expect(s().sheet).toEqual({ type: "run", id: byWorkstream[1] });
+    } finally {
+      usePrefs.setState({ agentsGroup: "state" });
+      useWorkstreams.getState().dispose();
+    }
   });
 
   it("does not browse from the safety sheet", async () => {

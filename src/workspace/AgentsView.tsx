@@ -1,13 +1,31 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
-import type { CodeChange, Run, RunsEnvironment } from "../types";
+import { STAGE_LABEL, labelsByRun } from "../lib/workstreamStage";
+import type { CodeChange, Run, RunsEnvironment, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { AgentCard, agentId, type AgentItemProps } from "./AgentCard";
 import { Icon } from "./AgentIcons";
 import { AgentRow, AgentRowHeader } from "./AgentRow";
 import { AgentsBanners } from "./AgentsBanners";
 import { AgentsEmpty, AgentsIntro, NoMatch } from "./AgentsEmpty";
-import { ALL, LANES, LANE_IDS, filterOptions, groupRuns, isFiltered, laneIsFolded, navOrder, stepRun, stoppable, summaryLine, type AgentFilters, type LaneGroup, type LaneId } from "./agentsLogic";
+import {
+  AGENTS_GROUPS,
+  ALL,
+  LANES,
+  LANE_IDS,
+  agentGroups,
+  filterOptions,
+  isFiltered,
+  laneIsFolded,
+  stepRun,
+  stoppable,
+  summaryLine,
+  type AgentFilters,
+  type AgentsGroup,
+  type LaneGroup,
+  type LaneId,
+  type WorkstreamGroup,
+} from "./agentsLogic";
 import { useFooterHeight } from "./CanvasFooter";
 import { failureAction } from "./failureActions";
 import type { FailureAct } from "./failureHelp";
@@ -16,10 +34,12 @@ import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
 import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
+import { useWorkstreams } from "./workstreamsStore";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
 const VIEW_LABEL: Record<AgentsViewMode, string> = { cards: "Cards", list: "List" };
+const GROUP_LABEL: Record<AgentsGroup, string> = { state: "State", workstream: "Workstream" };
 
 /** Re-renders now and then so ages and the quiet chip move without a refresh. */
 function useNow(everyMs = 30_000) {
@@ -30,6 +50,8 @@ function useNow(everyMs = 30_000) {
   }, [everyMs]);
   return now;
 }
+
+const NO_WORKSTREAMS: readonly WorkstreamView[] = [];
 
 export type KeyAction = { type: "select"; id: string } | { type: "clear" };
 
@@ -106,6 +128,7 @@ export interface AgentsActions {
   filter(patch: Partial<AgentFilters>): void;
   clearFilters(): void;
   setView(view: AgentsViewMode): void;
+  setGroup(group: AgentsGroup): void;
   toggleEarlier(): void;
   setIntro(open: boolean): void;
   dismissIntro(): void;
@@ -120,7 +143,7 @@ export interface AgentsActions {
   openSafety(): void;
 }
 
-function Toolbar({ runs, filters, view, introShown, on }: { runs: readonly Run[]; filters: AgentFilters; view: AgentsViewMode; introShown: boolean; on: AgentsActions }) {
+function Toolbar({ runs, filters, view, group, introShown, on }: { runs: readonly Run[]; filters: AgentFilters; view: AgentsViewMode; group: AgentsGroup; introShown: boolean; on: AgentsActions }) {
   const { repos, tickets } = useMemo(() => filterOptions(runs), [runs]);
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-ws-sep px-6 py-1.5">
@@ -138,6 +161,22 @@ function Toolbar({ runs, filters, view, introShown, on }: { runs: readonly Run[]
           </button>
         ))}
       </div>
+      <span className="inline-flex items-center gap-1.5 text-sm text-ws-ink3">
+        Group by
+        <span role="group" aria-label="Group by" className="inline-flex gap-0.5 rounded-[7px] border border-ws-sep2 p-0.5">
+          {AGENTS_GROUPS.map((g) => (
+            <button
+              key={g}
+              type="button"
+              aria-pressed={group === g}
+              onClick={() => on.setGroup(g)}
+              className={`rounded-[5px] px-2 py-px text-sm ${group === g ? "bg-ws-sel font-semibold text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"}`}
+            >
+              {GROUP_LABEL[g]}
+            </button>
+          ))}
+        </span>
+      </span>
       <Select label="state" all="All states" value={filters.lane} options={LANE_IDS.map((l) => [l, LANES[l].title])} onChange={(v) => on.filter({ lane: v as LaneId | "all" })} />
       <Select label="repo" all="All repos" value={filters.repo} options={repos.map((r) => [r, r])} onChange={(v) => on.filter({ repo: v })} />
       <Select label="ticket" all="All tickets" value={filters.ticket} options={tickets.map((t) => [t, t])} onChange={(v) => on.filter({ ticket: v })} />
@@ -174,6 +213,29 @@ function Lane({ group, folded, onToggle, children }: { group: LaneGroup; folded:
   );
 }
 
+/** A workstream's runs in the Agents view, under its title and the stage they give it. */
+function WorkstreamSection({ group, children }: { group: WorkstreamGroup; children: ReactNode }) {
+  return (
+    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} className="grid gap-2.5">
+      <div className="flex min-w-0 items-center gap-2">
+        {group.id && (
+          <span aria-hidden className="text-ws-pip">
+            ◆
+          </span>
+        )}
+        <h3 className={`m-0 min-w-0 truncate text-sm font-semibold ${group.id ? "text-ws-ink" : "text-ws-ink2"}`}>{group.title}</h3>
+        {group.stage && (
+          <span data-stage={group.stage} className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
+            {STAGE_LABEL[group.stage]}
+          </span>
+        )}
+        <span className="text-xs text-ws-ink3">{group.runs.length}</span>
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export interface AgentsScreenProps {
   runs: readonly Run[];
   status: "idle" | "loading" | "ready" | "error";
@@ -184,6 +246,10 @@ export interface AgentsScreenProps {
   earlierOpen: boolean;
   introShown: boolean;
   view: AgentsViewMode;
+  /** How runs are grouped; by state (the lanes) when absent. */
+  group?: AgentsGroup;
+  /** The open workstreams, for their titles when grouped by workstream. */
+  workstreams?: readonly WorkstreamView[];
   stopping: boolean;
   /** Failed runs the person has taken the Terminal step for. */
   opened: ReadonlySet<string>;
@@ -200,20 +266,22 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, stopping, opened, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, on }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, on }: AgentsScreenProps) {
   const footer = useFooterHeight();
-  const groups = useMemo(() => groupRuns(runs, filters, now), [runs, filters, now]);
-  const order = useMemo(() => navOrder(groups, earlierOpen, filters), [groups, earlierOpen, filters]);
+  const { lanes, workstreams: wsGroups, order } = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now), [group, runs, workstreams, filters, earlierOpen, now]);
   const filtered = isFiltered(filters);
-  const shown = groups.reduce((n, g) => n + g.runs.length, 0);
+  const shown = (lanes ?? wsGroups ?? []).reduce((n, g) => n + g.runs.length, 0);
+  // A run's short name in its workstream shows in the lanes too, as it does in the conversation that uses it.
+  const labels = useMemo(() => Object.fromEntries(labelsByRun(runs)), [runs]);
 
-  const props = (run: Run, at: number): AgentItemProps => ({
+  const props = (run: Run, at: number, label?: string): AgentItemProps => ({
     run,
     now,
     selected: selectedId === run.id,
     position: at,
     total: order.length,
     ticketTitle: ticketTitle(run),
+    label,
     onOpen: () => on.open(run.id),
     onAttach: () => on.attach(run.id),
     draftReady: !!draftReady?.(run),
@@ -229,6 +297,22 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
   });
 
   let position = 0;
+  /** A group's runs as rows or cards, whichever the layout is. */
+  const items = (title: string, list: readonly Run[], header: boolean, labels: Record<string, string> = {}) =>
+    view === "list" ? (
+      <div role="group" aria-label={title} className="overflow-hidden rounded-[10px] border border-ws-sep">
+        {header && <AgentRowHeader />}
+        {list.map((r) => (
+          <AgentRow key={r.id} {...props(r, ++position, labels[r.id])} />
+        ))}
+      </div>
+    ) : (
+      <div role="group" aria-label={title} className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,340px),1fr))] gap-3">
+        {list.map((r) => (
+          <AgentCard key={r.id} {...props(r, ++position, labels[r.id])} />
+        ))}
+      </div>
+    );
   const waiting = status === "idle" || (status === "loading" && runs.length === 0);
 
   return (
@@ -249,7 +333,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
         </button>
         <StopAll count={stoppable(runs).length} busy={stopping} onStop={on.stopAll} />
       </header>
-      <Toolbar runs={runs} filters={filters} view={view} introShown={introShown} on={on} />
+      <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} on={on} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-20">
         <div className="grid gap-5.5">
           <AgentsBanners environment={environment} loadError={status === "error" ? error : null} onCheckAgain={on.checkEnvironment} onRetry={on.retry} />
@@ -262,23 +346,16 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
             !introShown && status !== "error" && <AgentsEmpty />
           ) : shown === 0 ? (
             <NoMatch hidden={runs.length} onClear={on.clearFilters} />
+          ) : wsGroups ? (
+            wsGroups.map((g, gi) => (
+              <WorkstreamSection key={g.id ?? "none"} group={g}>
+                {items(g.title, g.runs, gi === 0, g.labels)}
+              </WorkstreamSection>
+            ))
           ) : (
-            groups.map((g, gi) => (
+            (lanes ?? []).map((g, gi) => (
               <Lane key={g.lane} group={g} folded={laneIsFolded(g.lane, earlierOpen, filters)} onToggle={g.lane === "earlier" && !filtered ? on.toggleEarlier : undefined}>
-                {view === "list" ? (
-                  <div role="group" aria-label={g.title} className="overflow-hidden rounded-[10px] border border-ws-sep">
-                    {gi === 0 && <AgentRowHeader />}
-                    {g.runs.map((r) => (
-                      <AgentRow key={r.id} {...props(r, ++position)} />
-                    ))}
-                  </div>
-                ) : (
-                  <div role="group" aria-label={g.title} className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,340px),1fr))] gap-3">
-                    {g.runs.map((r) => (
-                      <AgentCard key={r.id} {...props(r, ++position)} />
-                    ))}
-                  </div>
-                )}
+                {items(g.title, g.runs, gi === 0, labels)}
               </Lane>
             ))
           )}
@@ -321,6 +398,7 @@ const actions: AgentsActions = {
   filter: (patch) => useRuns.getState().setFilter(patch),
   clearFilters: () => useRuns.getState().clearFilters(),
   setView: (view) => usePrefs.getState().setAgentsView(view),
+  setGroup: (group) => usePrefs.getState().setAgentsGroup(group),
   toggleEarlier: () => useRuns.getState().setEarlierOpen(!useRuns.getState().earlierOpen),
   setIntro: (open) => useRuns.getState().setIntroOpen(open),
   dismissIntro: () => {
@@ -377,13 +455,15 @@ export function AgentsView() {
   const stopping = useRuns((s) => s.stopping);
   const opened = useRuns((s) => s.terminalOpened);
   const view = usePrefs((s) => s.agentsView);
+  const group = usePrefs((s) => s.agentsGroup);
+  const workstreams = useWorkstreams((s) => s.list);
   const introSeen = usePrefs((s) => s.agentsIntroSeen);
   const items = useWorkspace((s) => s.items);
   const proposals = useWorkspace((s) => s.proposals);
   const now = useNow();
   const changes = useBuildChanges(runs);
 
-  const order = useMemo(() => navOrder(groupRuns(runs, filters, now), earlierOpen, filters), [runs, filters, earlierOpen, now]);
+  const order = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now).order, [group, runs, workstreams, filters, earlierOpen, now]);
   const orderRef = useRef(order);
   orderRef.current = order;
 
@@ -433,6 +513,8 @@ export function AgentsView() {
       earlierOpen={earlierOpen}
       introShown={introOpen ?? (!introSeen && runs.length === 0)}
       view={view}
+      group={group}
+      workstreams={workstreams}
       stopping={stopping}
       opened={opened}
       now={now}

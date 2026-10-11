@@ -8,6 +8,7 @@ import { useRuns } from "./runsStore";
 import { readStored, writeStored } from "./storage";
 import { useTabs } from "./tabsStore";
 import { messageOf, useToasts } from "./toasts";
+import { useWorkstreams } from "./workstreamsStore";
 
 const LAST_REPO_KEY = "gossamr-agent-repo";
 const LAST_PROJECT_KEY = "gossamr-agent-project";
@@ -211,7 +212,9 @@ export const useRunSetup = create<SetupState>((set, get) => {
       const project = ticketlessShape(item, kind) ? await projectFor(backend, repo) : null;
       if (!current(mine)) return;
       set({ project });
-      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: kind === "build", report: get().reportAvailable, plan: null, planFromRun: kind === "build" ? planFromRun : null, buildAccount: null, buildFromRun: kind === "review" ? buildFromRun : null, project };
+      // A run on a ticket with an open workstream belongs to it, so the person's own runs group with Pip's.
+      const workstream = item ? useWorkstreams.getState().forItem(item.key, item.connectionId)?.workstream.id : undefined;
+      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: kind === "build", report: get().reportAvailable, plan: null, planFromRun: kind === "build" ? planFromRun : null, buildAccount: null, buildFromRun: kind === "review" ? buildFromRun : null, project, ...(workstream ? { workstream } : {}) };
       const draft = await backend.runsDraft(spec, item);
       if (!current(mine)) return void backend.proposalsSkip(draft.id).catch(() => {});
       set({ proposalId: draft.id, ownDraft: true });

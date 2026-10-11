@@ -87,3 +87,63 @@ describe("drafts kept across a reload", () => {
     expect(again.draft(comment, null, "r2").id).not.toBe(back[0].id);
   });
 });
+
+describe("drafts an agent run left", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const fromRun = (proposals: MockProposals, workstream: string | null) => proposals.fromRun(comment, "From agent run", { type: "run", runId: "r1", shortId: null, workstream });
+  const textOf = (intent: Intent) => (intent.type === "comment" ? docText(intent.body) : "");
+
+  it("are the agent's, listed under their run's workstream, and Pip revises them only from that workstream", () => {
+    const proposals = new MockProposals(async () => []);
+    const inWs = fromRun(proposals, "ws-1");
+    const loose = fromRun(proposals, null);
+    expect(inWs.createdBy).toBe("agent");
+    expect(proposals.list({ workstream: "ws-1" }).map((p) => p.id)).toEqual([inWs.id]);
+
+    expect(() => proposals.pipRevise(inWs.id, "Elsewhere", "ws-2")).toThrow(/belongs to another workstream/);
+    expect(() => proposals.pipRevise(inWs.id, "From General")).toThrow(/belongs to another workstream/);
+    expect(textOf(proposals.pipRevise(inWs.id, "Same workstream", "ws-1").intent)).toBe("Same workstream");
+    expect(textOf(proposals.pipRevise(loose.id, "Anywhere", "ws-1").intent)).toBe("Anywhere");
+    expect(() => proposals.pipRevise(proposals.draft(comment).id, "x", "ws-1")).not.toThrow();
+  });
+
+  it("stays the person's once they edit a description an agent left", async () => {
+    const proposals = new MockProposals(async () => []);
+    const body = (text: string) => ({ blocks: [{ type: "paragraph" as const, content: [{ type: "text" as const, text, marks: [] }] }] });
+    const rewrite: Intent = { type: "rewrite", item: ref, title: null, body: { from: body("old"), to: body("new"), fromText: "old", toText: "new" }, flattened: [] };
+    const left = proposals.fromRun(rewrite, "From agent run", { type: "run", runId: "r1", shortId: null, workstream: "ws-1" });
+    await proposals.edit(left.id, { type: "rewrite", body: "mine" });
+    expect(() => proposals.pipRevise(left.id, { description: "Pip's" }, "ws-1")).toThrow(/edited this description draft/);
+  });
+
+  it("stay the person's once they edit any of them, while Pip's own edited draft stays Pip's to revise", async () => {
+    const proposals = new MockProposals(async () => []);
+    const left = fromRun(proposals, "ws-1");
+    await proposals.edit(left.id, { type: "comment", body: "Mine", mentions: [] });
+    expect(() => proposals.pipRevise(left.id, "Pip's", "ws-1")).toThrow(/the user edited this draft/);
+    const subtasks = proposals.fromRun({ type: "subtasks", parent: ref, summaries: ["a"] }, "From agent run", { type: "run", runId: "r1", shortId: null, workstream: "ws-1" });
+    await proposals.edit(subtasks.id, { type: "subtasks", summaries: ["mine"] });
+    expect(() => proposals.pipRevise(subtasks.id, { summaries: ["Pip's"] }, "ws-1")).toThrow(/the user edited this draft/);
+    const own = proposals.draft(comment);
+    await proposals.edit(own.id, { type: "comment", body: "Mine", mentions: [] });
+    expect(textOf(proposals.pipRevise(own.id, "Pip's").intent)).toBe("Pip's");
+  });
+
+  it("keep a run draft stored as the user's before agents had their own maker revisable from any conversation", () => {
+    const saved = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => saved.get(k) ?? null, setItem: (k: string, v: string) => void saved.set(k, v), removeItem: (k: string) => void saved.delete(k) });
+    const first = new MockProposals(async () => []);
+    first.keep("kept", () => true);
+    const legacy = fromRun(first, null);
+    const raw = JSON.parse([...saved.values()][0]) as Array<Record<string, unknown>>;
+    saved.set([...saved.keys()][0], JSON.stringify(raw.map((p) => ({ ...p, createdBy: "user", origin: { type: "run", runId: "r1", shortId: null } }))));
+
+    const again = new MockProposals(async () => []);
+    again.keep("kept", () => true);
+    const [back] = again.list();
+    expect(back).toMatchObject({ createdBy: "user", origin: { type: "run", runId: "r1" } });
+    expect(textOf(again.pipRevise(back.id, "Reworded", "ws-1").intent)).toBe("Reworded");
+    expect(legacy.createdBy).toBe("agent");
+  });
+});

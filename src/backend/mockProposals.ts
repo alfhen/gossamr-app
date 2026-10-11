@@ -1,10 +1,10 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT } from "./mockRunKinds";
-import { targetOf } from "../lib/proposals";
+import { leftByRun, targetOf, workstreamOf } from "../lib/proposals";
 import { followUpProblem } from "../workspace/followUp";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { readStored, writeStored } from "../workspace/storage";
-import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, WorkItemKind } from "../types";
+import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, WorkItemKind, WorkstreamActor } from "../types";
 
 const CONNECTION = "mock";
 const SUMMARY_LIMIT = 255;
@@ -31,6 +31,18 @@ function rewriteProblem(i: Extract<Intent, { type: "rewrite" }>): string | null 
   return null;
 }
 
+/** Who an audit line names for a draft's maker (`actor_of` in src-tauri/src/proposals.rs). */
+export function actorOf(by: Proposal["createdBy"]): WorkstreamActor {
+  switch (by) {
+    case "pip":
+      return "pip";
+    case "agent":
+      return "run";
+    default:
+      return "person";
+  }
+}
+
 /** Drafts held in memory for the sample-data backend. `apply` performs an approved intent and returns what it created. */
 export class MockProposals {
   private drafts: Proposal[] = [];
@@ -43,13 +55,16 @@ export class MockProposals {
   /** Called with each draft that was applied, for a backend that has to tell its own listeners. */
   onApplied: (p: Proposal) => void = () => {};
 
+  /** Called when a draft was made, approved, skipped or retired, for the audit of its workstream; set by the backend that keeps them. */
+  audit: (p: Proposal, actor: WorkstreamActor, action: string) => void = () => {};
+
   constructor(private readonly apply: (intent: Intent, already: ItemRef[]) => Promise<ItemRef[]>) {}
 
-  /** Stores a draft the way the assistant would. */
-  draft(intent: Intent, label: string | null = null, requestId = "sample"): Proposal {
+  /** Stores a draft the way the assistant would; `workstream` is the conversation's when it was asked in one. */
+  draft(intent: Intent, label: string | null = null, requestId = "sample", workstream: string | null = null): Proposal {
     const problem = intent.type === "rewrite" ? rewriteProblem(intent) : null;
     if (problem) throw new Error(problem);
-    return this.store(intent, label, { type: "chat", requestId }, "pip");
+    return this.store(intent, label, workstream ? { type: "chat", requestId, workstream } : { type: "chat", requestId }, "pip");
   }
 
   /** Stores a draft the person made by hand. */
@@ -65,9 +80,9 @@ export class MockProposals {
     return Promise.resolve(this.store(intent, label, { type: "board" }, "user"));
   }
 
-  /** Stores a draft the person made from an agent run's result. */
+  /** Stores a draft an agent run's result left for the person, in the run's workstream. */
   fromRun(intent: Intent, label: string | null, origin: Extract<ProposalOrigin, { type: "run" }>): Proposal {
-    return this.store(intent, label, origin, "user");
+    return this.store(intent, label, origin, "agent");
   }
 
   private store(intent: Intent, label: string | null, origin: ProposalOrigin, createdBy: Proposal["createdBy"]): Proposal {
@@ -89,6 +104,7 @@ export class MockProposals {
     };
     this.drafts = [p, ...this.drafts];
     this.changed();
+    this.audit(p, actorOf(createdBy), "draft_created");
     return p;
   }
 
@@ -97,7 +113,8 @@ export class MockProposals {
       (p) =>
         (!query.states || query.states.includes(p.state.type)) &&
         (!query.item || targetOf(p.intent)?.externalId === query.item.externalId) &&
-        (!query.connectionId || query.connectionId === CONNECTION),
+        (!query.connectionId || query.connectionId === CONNECTION) &&
+        (!query.workstream || workstreamOf(p) === query.workstream),
     );
   }
 
@@ -141,16 +158,21 @@ export class MockProposals {
     this.changed();
   }
 
+  /** The person's change to a draft, kept as an `Edited` revision as the backend keeps every edit. */
+  private edited(p: Proposal, intent: Intent): Proposal {
+    return this.set(p.id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Edited", intent }], error: null });
+  }
+
   async edit(id: string, edit: ProposalEdit) {
     const p = this.pending(id);
     const { intent } = p;
     if (edit.type === "comment" && intent.type === "comment") {
       if (!edit.body.trim()) throw new Error("a comment can't be empty");
-      return this.set(id, { intent: { ...intent, body: edit.quote?.trim() ? quoteAfterFirst(docFromText(edit.body), edit.quote.trim()) : docFromText(edit.body) }, error: null });
+      return this.edited(p, { ...intent, body: edit.quote?.trim() ? quoteAfterFirst(docFromText(edit.body), edit.quote.trim()) : docFromText(edit.body) });
     }
     if (edit.type === "subtasks" && intent.type === "subtasks") {
       if (!edit.summaries.length || edit.summaries.some((s) => !s.trim())) throw new Error("list at least one subtask");
-      return this.set(id, { intent: { ...intent, summaries: edit.summaries }, error: null });
+      return this.edited(p, { ...intent, summaries: edit.summaries });
     }
     if (edit.type === "create" && intent.type === "create") {
       if (edit.title !== undefined && !edit.title.trim()) throw new Error("a new item needs a title");
@@ -161,7 +183,7 @@ export class MockProposals {
         ...(edit.body !== undefined ? { body: docFromText(edit.body) } : {}),
         ...(edit.kind ? { kind: edit.kind } : {}),
       };
-      return this.set(id, { intent: { ...intent, container: edit.container ?? intent.container, fields }, error: null });
+      return this.edited(p, { ...intent, container: edit.container ?? intent.container, fields });
     }
     if (edit.type === "rewrite" && intent.type === "rewrite") {
       if ((edit.title !== undefined && !intent.title) || (edit.body !== undefined && !intent.body)) throw new Error(`this draft doesn't change the ${edit.title !== undefined ? "title" : "description"}`);
@@ -213,13 +235,18 @@ export class MockProposals {
     throw new Error("that edit doesn't fit this draft");
   }
 
-  /** Pip's change to the text of its own pending comment, or of the pending comment, new ticket or breakdown an agent run left for the person. A ticket may change its title and type too, its project never; a breakdown only its summaries. */
-  pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; kind?: WorkItemKind; summaries?: string[] }): Proposal {
+  /** Pip's change to the text of its own pending comment, or of the pending comment, new ticket or breakdown an agent run left for the person. A ticket may change its title and type too, its project never; a breakdown only its summaries. A draft of a workstream is revised only from that workstream's conversation (`workstream`). */
+  pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; kind?: WorkItemKind; summaries?: string[] }, workstream: string | null = null): Proposal {
     const { body, title, description, kind, summaries } = typeof change === "string" ? { body: change, title: undefined, description: undefined, kind: undefined, summaries: undefined } : change;
     const p = this.pending(id);
+    const ownWorkstream = () => {
+      const of = workstreamOf(p);
+      if (of !== null && of !== workstream) throw new Error("that draft belongs to another workstream");
+    };
     if (p.intent.type === "rewrite") {
-      if (p.createdBy !== "pip" && !(p.origin.type === "run" && p.createdBy === "user")) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
       if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this description draft, so Pip can't change it any more");
+      if (p.createdBy !== "pip" && !leftByRun(p)) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
+      ownWorkstream();
       const was = p.intent;
       if ((title !== undefined && !was.title) || (description !== undefined && !was.body)) throw new Error("this draft doesn't change that field; retire it and propose a new one");
       const intent: Intent = {
@@ -232,15 +259,19 @@ export class MockProposals {
       return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
     }
     if (p.intent.type === "followUp") {
-      if (p.createdBy !== "pip") throw new Error("that draft wasn't made by Pip, so Pip can't change it");
       if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this follow-up, so Pip can't change it any more");
+      if (p.createdBy !== "pip") throw new Error("that draft wasn't made by Pip, so Pip can't change it");
+      ownWorkstream();
       const problem = followUpProblem(body ?? "");
       if (problem) throw new Error(problem);
       const intent: Intent = { ...p.intent, message: (body ?? "").trim() };
       return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
     }
-    const left = p.origin.type === "run" && (p.intent.type === "comment" || p.intent.type === "create" || p.intent.type === "subtasks") && p.createdBy === "user";
+    const left = leftByRun(p) && (p.intent.type === "comment" || p.intent.type === "create" || p.intent.type === "subtasks");
+    // Person edits are final: what an agent left is the person's once they have edited it.
+    if (left && p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this draft, so Pip can't change it any more");
     if (p.createdBy !== "pip" && !left) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
+    ownWorkstream();
     let intent: Intent;
     if (p.intent.type === "comment") intent = { ...p.intent, body: docFromText(body ?? docText(p.intent.body)) };
     else if (p.intent.type === "create") {
@@ -264,7 +295,9 @@ export class MockProposals {
     const p = this.get(id);
     if (p?.state.type === "skipped") return p;
     this.pending(id);
-    return this.set(id, { state: { type: "skipped" } });
+    const skipped = this.set(id, { state: { type: "skipped" } });
+    this.audit(skipped, "person", "draft_skipped");
+    return skipped;
   }
 
   /** A pending build draft's plan read again from its run, for `MockRuns.refreshPlan`: the text and whether it was settled, both replaced. */
@@ -289,6 +322,7 @@ export class MockProposals {
       const created = await this.apply(p.intent, p.created);
       const applied = this.set(id, { state: { type: "applied" }, created: [...p.created, ...created], error: null });
       this.onApplied(applied);
+      this.audit(applied, "person", "draft_approved");
       return applied;
     } catch (e) {
       return this.set(id, { state: { type: "pending" }, error: String(e) });

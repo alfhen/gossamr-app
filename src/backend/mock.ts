@@ -38,21 +38,24 @@ import type {
   Transition,
   Uploaded,
   WorkFilter,
+  WorkstreamsChanged,
 } from "../types";
 import { fold, type Mention } from "../lib/mentions";
 import { docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
-import { targetOf } from "../lib/proposals";
+import { targetOf, workstreamOf } from "../lib/proposals";
+import { workstreamOfConversation } from "../lib/conversations";
 import { MockProposals } from "./mockProposals";
 import { mockPipTurns } from "./mockPipTurns";
+import { MockWorkstreams } from "./mockWorkstreams";
 
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
 import { MockRuns } from "./mockRuns";
 import { seedDrafts } from "./mockDrafts";
-import type { MockOptions } from "./mockWatch";
+import { exposeMockClock, type MockOptions } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
 import type { Backend, ReadScope } from "./types";
 
@@ -386,6 +389,15 @@ export class MockBackend implements Backend {
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined);
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
     this.runs = new MockRuns(this.proposals, options.runs);
+    this.workstreams = new MockWorkstreams(
+      () => this.runs.list(),
+      (ref) => this.connector.item(ref)?.title ?? null,
+    );
+    this.runs.workstreams = this.workstreams;
+    // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
+    this.proposals.audit = (p, actor, action) => void this.workstreams.record(workstreamOf(p), actor, action, { proposalId: p.id });
+    // A run that moved on may have moved its workstream's stage on.
+    this.runs.onChanged(() => this.workstreams.changed());
     this.runs.ticketText = (ref) => {
       const w = this.connector.item(ref);
       if (!w) return null;
@@ -394,6 +406,7 @@ export class MockBackend implements Backend {
     this.runs.ticketDoc = (ref) => this.connector.item(ref)?.body ?? null;
     this.runs.pullRequest = (repo, number) => this.github.code.change(repo, number);
     this.runs.seedPlanDescriptions();
+    exposeMockClock(this.runs, this.workstreams);
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
     this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));
@@ -431,6 +444,50 @@ export class MockBackend implements Backend {
 
   /** Scripted agent runs, with `advance()` as their clock. */
   readonly runs: MockRuns;
+
+  /** Workstreams, kept in this browser; their stages follow `runs`. */
+  readonly workstreams: MockWorkstreams;
+
+  async workstreamsOpen(item: ItemRef | null, title?: string) {
+    return this.workstreams.open(item, title ?? null);
+  }
+
+  async workstreamsGet(id: string) {
+    return this.workstreams.get(id);
+  }
+
+  async workstreamsList(includeClosed = false) {
+    return this.workstreams.list(includeClosed);
+  }
+
+  async workstreamsClose(id: string) {
+    return this.workstreams.close(id);
+  }
+
+  async workstreamsSetNotes(id: string, notes: string) {
+    return this.workstreams.setNotes(id, notes, "person");
+  }
+
+  async workstreamsEvents(id: string) {
+    return this.workstreams.events(id);
+  }
+
+  onWorkstreamsChanged(listener: (c: WorkstreamsChanged) => void) {
+    return this.workstreams.onChanged(listener);
+  }
+
+  /** The workstream whose conversation the question `requestId` was asked in, as the app reads it from the turn. */
+  private workstreamOfRequest(requestId: string): string | null {
+    return workstreamOfConversation(mockPipTurns.conversationOf(requestId));
+  }
+
+  /** The workstream a draft Pip makes while answering `requestId` belongs to: the conversation's, unless the draft is about another ticket than the workstream's, as `propose` decides. */
+  private workstreamOfDraft(requestId: string, intent: Intent): string | null {
+    const ws = this.workstreamOfRequest(requestId);
+    const target = targetOf(intent);
+    if (!ws || !target) return ws;
+    return this.workstreams.get(ws)?.workstream.itemKey === target.key ? ws : null;
+  }
 
   /** Agents are on in the sample build, as the browser build has always shown them. */
   private agentsOn = true;
@@ -633,7 +690,7 @@ export class MockBackend implements Backend {
 
   /** Stores a draft the way the assistant would, for the scripted Pip. */
   async pipDraft(intent: Intent, label: string | null, requestId: string) {
-    return this.proposals.draft(intent, label, requestId);
+    return this.proposals.draft(intent, label, requestId, this.workstreamOfDraft(requestId, intent));
   }
 
   /** Drafts a text edit the way propose_description_edit does: against the ticket as it reads now, with a sample revision. */
@@ -646,7 +703,7 @@ export class MockBackend implements Backend {
       part === "title"
         ? { type: "rewrite", item, title: { from: now.title, to: `${now.title} (scoped)` }, body: null, flattened: [] }
         : { type: "rewrite", item, title: null, body: bodyChange(now.body, from ? `${from}\n\n${scope}` : scope), flattened: [] };
-    return this.proposals.draft(intent, null, requestId);
+    return this.proposals.draft(intent, null, requestId, this.workstreamOfDraft(requestId, intent));
   }
 
   pipRuns() {
@@ -657,12 +714,13 @@ export class MockBackend implements Backend {
     return this.proposals.list({ states: ["pending"] });
   }
 
-  async pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[] }) {
-    return this.proposals.pipRevise(id, change);
+  /** Revises a draft the way `revise_proposal` does, from the conversation `requestId` was asked in: a draft of a workstream only from that workstream's. */
+  async pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[] }, requestId?: string) {
+    return this.proposals.pipRevise(id, change, requestId ? this.workstreamOfRequest(requestId) : null);
   }
 
   pipRunDraft(item: ItemRef, focus: string | null, requestId: string) {
-    return this.runs.pipDraft(item, focus, requestId);
+    return this.runs.pipDraft(item, focus, requestId, this.workstreamOfRequest(requestId));
   }
 
   pipFollowUp(runId: string, message: string, reason: string, requestId: string) {
@@ -674,7 +732,7 @@ export class MockBackend implements Backend {
   }
 
   pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string) {
-    return this.runs.pipTicketlessDraft(repo, prompt, requestId);
+    return this.runs.pipTicketlessDraft(repo, prompt, requestId, this.workstreamOfRequest(requestId));
   }
 
   proposalsEdit(id: string, edit: ProposalEdit) {

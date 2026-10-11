@@ -1,5 +1,7 @@
 import type { Run } from "../types";
 import { itemKey } from "../lib/filter";
+import { labelsByRun } from "../lib/workstreamStage";
+import { RunLabel } from "./AgentCard";
 import { useWorkspace } from "../workspaceStore";
 import { useAgentsEnabled } from "./agentsFlag";
 import { runTitle, stateView } from "./agentsLogic";
@@ -12,11 +14,13 @@ interface CardProps {
   now: number;
   /** The ticket's title when it is cached. */
   ticketTitle: string | null;
+  /** The run's short name in its workstream (`R1`), when it is in one. */
+  label?: string;
   onOpen(): void;
 }
 
 /** A run in Pip's pane: its state, what it is doing, and a way into the run's sheet. */
-export function PipRunCard({ run, now, ticketTitle, onOpen }: CardProps) {
+export function PipRunCard({ run, now, ticketTitle, label, onOpen }: CardProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -25,6 +29,7 @@ export function PipRunCard({ run, now, ticketTitle, onOpen }: CardProps) {
       <Dot tone={view.tone} live={view.live} />
       <div className="grid min-w-0 flex-1 leading-snug">
         <span className="flex min-w-0 items-baseline gap-1.5">
+          <RunLabel label={label} />
           {run.item && <span className="shrink-0 font-mono text-xs font-semibold text-ws-ink2">{run.item.key}</span>}
           <b className="min-w-0 truncate text-sm font-semibold">{title}</b>
         </span>
@@ -39,9 +44,13 @@ export function PipRunCard({ run, now, ticketTitle, onOpen }: CardProps) {
   );
 }
 
-/** Up to three live runs above the drafts: the ones that need the person, then the ones working. Absent while agents are off or nothing is going. */
-export function PipRunStripView({ runs, enabled, now, titleOf, onOpen }: { runs: readonly Run[]; enabled: boolean; now: number; titleOf(run: Run): string | null; onOpen(run: Run): void }) {
-  const shown = stripRuns(runs);
+/**
+ * Up to three live runs above the drafts: the ones that need the person, then the ones working. In a workstream's
+ * conversation (`workstream`), only that workstream's runs. Absent while agents are off or nothing is going.
+ */
+export function PipRunStripView({ runs, enabled, now, workstream = null, titleOf, onOpen }: { runs: readonly Run[]; enabled: boolean; now: number; workstream?: string | null; titleOf(run: Run): string | null; onOpen(run: Run): void }) {
+  const labels = labelsByRun(runs);
+  const shown = stripRuns(workstream ? runs.filter((r) => r.spec.workstream === workstream) : runs);
   if (!enabled || !shown.length) return null;
   return (
     <section aria-label="Your agents" className="grid gap-1.5">
@@ -49,13 +58,13 @@ export function PipRunStripView({ runs, enabled, now, titleOf, onOpen }: { runs:
         Your agents <span className="font-normal">{shown.length}</span>
       </h3>
       {shown.map((run) => (
-        <PipRunCard key={run.id} run={run} now={now} ticketTitle={titleOf(run)} onOpen={() => onOpen(run)} />
+        <PipRunCard key={run.id} run={run} now={now} ticketTitle={titleOf(run)} label={labels.get(run.id)} onOpen={() => onOpen(run)} />
       ))}
     </section>
   );
 }
 
-export function PipRunStrip() {
+export function PipRunStrip({ workstream = null }: { workstream?: string | null }) {
   const enabled = useAgentsEnabled();
   const runs = useRuns((s) => s.runs);
   const items = useWorkspace((s) => s.items);
@@ -64,6 +73,7 @@ export function PipRunStrip() {
       runs={runs}
       enabled={enabled}
       now={Date.now()}
+      workstream={workstream}
       titleOf={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
       onOpen={(run) => useRuns.getState().openRun(run.id, { stay: true })}
     />

@@ -333,6 +333,11 @@ export function DraftCard({ proposal: p, statusName, people, working, error, onA
         )}
         {p.origin.type === "run" && (
           <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
+            {p.createdBy === "agent" && (
+              <span data-created-by="agent" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
+                Drafted by an agent
+              </span>
+            )}
             From agent run{" "}
             {onOpenRun ? (
               <button type="button" onClick={() => onOpenRun((p.origin as { runId: string }).runId)} className="font-mono font-semibold text-ws-pip hover:underline">

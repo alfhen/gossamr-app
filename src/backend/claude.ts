@@ -72,7 +72,7 @@ export interface AskRequest {
   sessionId: string | null;
   /** Screenshots for this question only, as base64. */
   images?: ImageData[];
-  /** Where the turn is kept: the Pip pane's conversation, or a ticket key for the classic drawer. */
+  /** Where the turn is kept: the Pip pane's `general` or a workstream's `ws:<id>`, or a ticket key for the classic drawer. */
   conversation?: string;
   meta?: TurnMeta;
 }

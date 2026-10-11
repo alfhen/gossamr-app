@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { itemKey } from "../lib/filter";
-import type { CodeChange, ItemRef, Run, RunKind } from "../types";
+import { STAGE_LABEL } from "../lib/workstreamStage";
+import type { CodeChange, ItemRef, Run, RunKind, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { RunLabel } from "./AgentCard";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { StateChip } from "./AgentParts";
 import { progressText, runTitle } from "./agentsLogic";
@@ -108,7 +110,23 @@ export function AgentMenu({ item }: { item: ItemRef }) {
 
 export const runsOfTicket = (runs: readonly Run[], ref: ItemRef) => runs.filter((r) => r.item && itemKey(r.item) === itemKey(ref));
 
-export function TicketAgentRows({ runs, now, title, onOpen }: { runs: readonly Run[]; now: number; title: string | null; onOpen(id: string): void }) {
+/** The workstream line at the head of "Agents on this ticket": its title and the stage its runs give it. */
+export function WorkstreamLine({ workstream }: { workstream: WorkstreamView }) {
+  return (
+    <p data-workstream={workstream.workstream.id} className="m-0 mb-1.5 flex min-w-0 items-center gap-1.5 text-sm text-ws-ink2">
+      <span aria-hidden className="text-ws-pip">
+        ◆
+      </span>
+      <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
+      <span className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip" data-stage={workstream.stage}>
+        {STAGE_LABEL[workstream.stage]}
+      </span>
+    </p>
+  );
+}
+
+/** A ticket's runs, each with its short name (`R1`) when `labels` has one. */
+export function TicketAgentRows({ runs, now, title, labels = {}, onOpen }: { runs: readonly Run[]; now: number; title: string | null; labels?: Readonly<Record<string, string>>; onOpen(id: string): void }) {
   if (!runs.length) return <p className="m-0 text-ws-ink3">None yet. Starting one is a draft you approve first.</p>;
   return (
     <ul className="m-0 grid list-none gap-1.5 p-0">
@@ -116,6 +134,7 @@ export function TicketAgentRows({ runs, now, title, onOpen }: { runs: readonly R
         <li key={r.id}>
           <button type="button" onClick={() => onOpen(r.id)} data-state={r.state} className="grid w-full gap-1 rounded-[10px] border border-ws-sep bg-ws-win px-3 py-2 text-left hover:border-ws-sep2">
             <span className="flex min-w-0 items-center gap-2">
+              <RunLabel label={labels[r.id]} />
               <b className="min-w-0 truncate font-semibold">{runTitle(r, title)}</b>
               <span className="ml-auto shrink-0">
                 <StateChip run={r} now={now} />
@@ -129,8 +148,19 @@ export function TicketAgentRows({ runs, now, title, onOpen }: { runs: readonly R
   );
 }
 
-export function TicketAgents({ item, title }: { item: ItemRef; title: string }) {
+/** "Agents on this ticket": the ticket's open workstream, if it has one, with its stage, then its runs labelled R1, R2 within it. */
+export function TicketAgentsView({ runs, now, title, workstream, onOpen }: { runs: readonly Run[]; now: number; title: string | null; workstream: WorkstreamView | null; onOpen(id: string): void }) {
+  const labels = workstream ? Object.fromEntries(workstream.labels) : undefined;
+  return (
+    <>
+      {workstream && <WorkstreamLine workstream={workstream} />}
+      <TicketAgentRows runs={runs} now={now} title={title} labels={labels} onOpen={onOpen} />
+    </>
+  );
+}
+
+export function TicketAgents({ item, title, workstream = null }: { item: ItemRef; title: string; workstream?: WorkstreamView | null }) {
   const runs = useRuns((s) => s.runs);
   const mine = runsOfTicket(runs, item);
-  return <TicketAgentRows runs={mine} now={Date.now()} title={title} onOpen={(id) => useRuns.getState().openRun(id, { stay: true })} />;
+  return <TicketAgentsView runs={mine} now={Date.now()} title={title} workstream={workstream} onOpen={(id) => useRuns.getState().openRun(id, { stay: true })} />;
 }

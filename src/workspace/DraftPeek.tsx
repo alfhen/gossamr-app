@@ -3,6 +3,7 @@ import { useAutoHeight } from "../components/autoHeight";
 import { useBackend } from "../backend/useBackend";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { containerKey } from "../lib/filter";
+import { leftByRun } from "../lib/proposals";
 import type { Person, Proposal, WorkContainer, WorkItemKind } from "../types";
 import { allContainers, useWorkspace } from "../workspaceStore";
 import { createdItemKey, draftAfter, draftItem, draftKey, editFor, fieldsOf, ITEM_KINDS, placeOf, waitingCreates, type DraftFields, type DraftPlace } from "./draftTicket";
@@ -441,7 +442,7 @@ function OpenDraft({ proposal: p, ...motion }: { proposal: Create } & Motion) {
       onCreate={create}
       onClose={() => useTabs.getState().select(null)}
       onOpenRun={p.origin.type === "run" ? () => openRunOf(p) : undefined}
-      onFinishWithPip={p.origin.type === "run" && p.createdBy === "user" ? () => finishWithPip(p) : undefined}
+      onFinishWithPip={leftByRun(p) ? () => finishWithPip(p) : undefined}
       {...motion}
     />
   );

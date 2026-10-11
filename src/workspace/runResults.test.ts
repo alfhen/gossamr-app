@@ -171,8 +171,8 @@ describe("drafting from a run", () => {
     s().openRun(run.id);
     await s().draftComment(run.id);
     const [draft] = drafts();
-    expect(draft.origin).toEqual({ type: "run", runId: run.id, shortId: run.shortId });
-    expect(draft).toMatchObject({ createdBy: "user", state: { type: "pending" }, label: `From agent run ${run.shortId}` });
+    expect(draft.origin).toEqual({ type: "run", runId: run.id, shortId: run.shortId, workstream: null });
+    expect(draft).toMatchObject({ createdBy: "agent", state: { type: "pending" }, label: `From agent run ${run.shortId}` });
     expect(draft.intent).toMatchObject({ type: "comment", item: { key: "DEVOPS-455" } });
     expect(JSON.stringify(draft.intent)).toContain("add a backoff to the consumer and close the alert.");
     expect(JSON.stringify(draft.intent)).toContain("Pull request: https://github.com/acme/storefront/pull/518");

@@ -52,7 +52,7 @@ describe("a finished plan run in the sample build", () => {
     const run = planRun(b);
     const [draft] = rewrites(b);
     expect(draft.origin).toMatchObject({ type: "run", runId: run.id });
-    expect(draft.createdBy).toBe("user");
+    expect(draft.createdBy).toBe("agent");
     if (draft.intent.type !== "rewrite" || !draft.intent.body) throw new Error("a description rewrite");
     const to = draft.intent.body.toText;
     expect(to).toContain("## Gossamr Plan");

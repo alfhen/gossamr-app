@@ -1,5 +1,5 @@
 import { and } from "../lib/filter";
-import { targetOf } from "../lib/proposals";
+import { leftByRun, targetOf } from "../lib/proposals";
 import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import type { Intent, ItemRef, Proposal, Run, ScreenContext, WorkFilter } from "../types";
@@ -8,6 +8,7 @@ import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
 import type { AskRequest, ClaudeEvent } from "./claude";
 import { mockPipTurns, mockUsage } from "./mockPipTurns";
+import { GENERAL_CONVERSATION } from "../lib/conversations";
 
 /** What the scripted Pip does for one question. */
 export interface PipScript {
@@ -218,7 +219,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   }
   const breakdownTalk = talksBreakdown.exec(prompt);
   const breakdown = (id: string | null | undefined) =>
-    drafts.find((d) => d.id === id && d.state.type === "pending" && d.intent.type === "subtasks" && (d.createdBy === "pip" || (d.origin.type === "run" && d.createdBy === "user")));
+    drafts.find((d) => d.id === id && d.state.type === "pending" && d.intent.type === "subtasks" && (d.createdBy === "pip" || leftByRun(d)));
   if (breakdownTalk) {
     const left = breakdown(breakdownTalk[1]);
     if (!left) return { steps: [], text: "I can't find that breakdown draft any more, or it has been decided already, so there is nothing to discuss.", filter: null, draft: null };
@@ -269,7 +270,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     };
   }
   const descriptionTalk = talksDescription.exec(prompt);
-  const description = (id: string | null | undefined) => drafts.find((d) => d.id === id && d.state.type === "pending" && d.origin.type === "run" && d.createdBy === "user" && d.intent.type === "rewrite" && !!d.intent.body);
+  const description = (id: string | null | undefined) => drafts.find((d) => d.id === id && d.state.type === "pending" && leftByRun(d) && d.intent.type === "rewrite" && !!d.intent.body);
   if (descriptionTalk) {
     const left = description(descriptionTalk[1]);
     if (!left) return { steps: [], text: "I can't find that description draft any more, or it has been decided already, so there is nothing to discuss.", filter: null, draft: null };
@@ -482,7 +483,7 @@ export interface PipDrafter {
   /** The drafts Pip can see. */
   pipDrafts(): Proposal[];
   /** Revises a comment or new-ticket draft that came from a run, the way `revise_proposal` does. */
-  pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[] }): Promise<unknown>;
+  pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[] }, requestId?: string): Promise<unknown>;
   /** Drafts a title or description edit the way propose_description_edit does. */
   pipRewrite(item: ItemRef, part: "title" | "description", requestId: string): Promise<unknown>;
   /** Drafts a follow-up for a finished run the way propose_follow_up does. */
@@ -525,7 +526,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   running.set(req.requestId, () => (stopped = true));
   const session = req.sessionId ?? `mock-session-${req.requestId}`;
   // Kept the way the app keeps a turn: the question now, steps as they come, the answer and its usage at the end.
-  mockPipTurns.begin(req.conversation ?? "workspace", req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 });
+  mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 });
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });
@@ -538,7 +539,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       emit(req.requestId, { type: "tool", label });
     }
     if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
-    if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, description: script.revise.description, summaries: script.revise.summaries });
+    if (!stopped && script.revise) await drafter?.pipRevise?.(script.revise.id, { body: script.revise.body, title: script.revise.title, description: script.revise.description, summaries: script.revise.summaries }, req.requestId);
     if (!stopped && script.rewrite) await drafter?.pipRewrite?.(script.rewrite.item, script.rewrite.part, req.requestId);
     if (!stopped && script.followUp) await drafter?.pipFollowUp?.(script.followUp.runId, script.followUp.message, script.followUp.reason, req.requestId);
     if (!stopped && script.runDraft) await drafter?.pipRunDraft?.(script.runDraft.item, script.runDraft.focus, req.requestId);

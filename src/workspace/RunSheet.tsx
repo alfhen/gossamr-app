@@ -6,7 +6,7 @@ import { useWorkspace } from "../workspaceStore";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
 import { StateChip } from "./AgentParts";
-import { KIND_LABEL, ageText, formatTokens, groupRuns, navOrder, permissionRequest, progressText, quietMinutes, quietText, repoName, runTitle, stateView } from "./agentsLogic";
+import { KIND_LABEL, agentGroups, ageText, formatTokens, permissionRequest, progressText, quietMinutes, quietText, repoName, runTitle, stateView } from "./agentsLogic";
 import { openTicketByKey } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { failureAction } from "./failureActions";
@@ -25,6 +25,10 @@ import { askPip } from "./askPip";
 import { followOutcome } from "./followOutcome";
 import { useRuns } from "./runsStore";
 import { useRunSetup } from "./runSetupStore";
+import { usePrefs } from "./prefs";
+import { useWorkstreams } from "./workstreamsStore";
+import { labelsByRun } from "../lib/workstreamStage";
+import { RunLabel, RunRef } from "./AgentCard";
 
 export interface RunSheetActions extends ResultActions {
   close(): void;
@@ -49,6 +53,8 @@ export interface RunSheetViewProps {
   ticketTitle: string | null;
   /** Where the run is among those j and k walk through. */
   place: { index: number; total: number } | null;
+  /** The run's short name in its workstream (`R1`), when it is in one. */
+  label?: string;
   wide: boolean;
   onWide(): void;
   events: readonly RunEvent[] | null;
@@ -243,7 +249,7 @@ function BriefBody({ brief }: { brief: RunSheetViewProps["brief"] }): ReactNode 
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, cleanup = null, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, cleanup = null, on }: RunSheetViewProps) {
   const view = stateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -264,12 +270,17 @@ export function RunSheetView({ run, now, ticketTitle, place, wide, onWide, event
     >
       <div data-state={run.state} data-tone={view.tone} className="grid gap-2.5">
         <div className="flex items-center gap-1.5 text-xs font-medium text-ws-ink2">
+          <RunLabel label={label} />
           <Icon name={KIND_ICON[run.spec.kind]} className="size-[13px] text-ws-ink3" />
           {KIND_LABEL[run.spec.kind]}
           <span aria-hidden className="text-ws-ink3">
             ·
           </span>
           <span className="font-mono">{repoName(run.spec.repo)}</span>
+          <span aria-hidden className="text-ws-ink3">
+            ·
+          </span>
+          <RunRef run={run} />
         </div>
         <h2 className="m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{title}</h2>
         <Facts run={run} now={now} ticketTitle={ticketTitle} on={on} />
@@ -354,6 +365,9 @@ export function RunSheet({ id }: { id: string }) {
   const runs = useRuns((s) => s.runs);
   const filters = useRuns((s) => s.filters);
   const earlierOpen = useRuns((s) => s.earlierOpen);
+  const group = usePrefs((s) => s.agentsGroup);
+  const workstreams = useWorkstreams((s) => s.list);
+  const label = useMemo(() => labelsByRun(runs).get(id), [runs, id]);
   const ticket = useWorkspace((s) => (run?.item ? s.items[itemKey(run.item)] : undefined));
   const [wide, setWide] = useState(false);
   const [events, setEvents] = useState<RunEvent[] | null>(null);
@@ -405,10 +419,10 @@ export function RunSheet({ id }: { id: string }) {
   }, [backend, id, progress]);
 
   const place = useMemo(() => {
-    const order = navOrder(groupRuns(runs, filters, now), earlierOpen, filters);
+    const order = agentGroups(group, runs, workstreams, filters, earlierOpen, now).order;
     const at = order.indexOf(id);
     return at < 0 ? null : { index: at + 1, total: order.length };
-  }, [runs, filters, earlierOpen, id, now]);
+  }, [group, runs, workstreams, filters, earlierOpen, id, now]);
 
   const tickets = useMemo(() => Object.values(items).map((i) => ({ key: i.item.key, title: i.title })), [items]);
   if (!run) return null;
@@ -484,6 +498,6 @@ export function RunSheet({ id }: { id: string }) {
       backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
     },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} on={on} />;
 }
 

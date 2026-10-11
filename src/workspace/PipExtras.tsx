@@ -6,7 +6,6 @@ import { pendingDrafts, useWorkspace } from "../workspaceStore";
 import { useAgentsEnabled } from "./agentsFlag";
 import { useActiveTab } from "./hooks";
 import { nudgeCandidates, nudgeDelay, NUDGE_SHOWN_MS, pickNudge, type Nudge, type NudgeScene } from "./nudges";
-import { WORKSPACE_CONVERSATION } from "./PipPane";
 import { PipAvatar } from "./PipAvatar";
 import { lookAt } from "./pipGaze";
 import { chipCount, unassignedIn, useItemScene, useScreen } from "./pipHooks";
@@ -16,6 +15,8 @@ import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
+import { paneConversation } from "./workstreamsStore";
+import { isPaneConversation } from "../lib/conversations";
 
 /** The line under the filter bar after Pip narrowed the view; hidden once the person edits the filter themselves. */
 export function PipFilterNote({ filtered, onUndo, onDismiss }: { filtered: PipFiltered; onUndo(): void; onDismiss(): void }) {
@@ -45,9 +46,9 @@ export function FilterNote() {
   return <PipFilterNote filtered={filtered} onUndo={() => usePip.getState().undoFilter()} onDismiss={() => usePip.getState().clearFiltered()} />;
 }
 
-/** Applies a filter Pip asked for, but only for a question asked in this pane; other conversations don't get to change the view. */
+/** Applies a filter Pip asked for, but only for a question asked in the conversation the pane shows (General or the focused workstream's); other conversations don't get to change the view. */
 export function handlePipView({ requestId, filter, note }: PipView) {
-  const asked = useClaude.getState().byTicket[WORKSPACE_CONVERSATION]?.turns.some((t) => t.requestId === requestId);
+  const asked = useClaude.getState().byTicket[paneConversation()]?.turns.some((t) => t.requestId === requestId);
   if (asked) usePip.getState().applyFilter(filter, note, requestId);
 }
 
@@ -183,7 +184,7 @@ function useNudges() {
 export function PipLauncher() {
   const proposals = useWorkspace((s) => s.proposals);
   const nudge = usePip((s) => s.nudge);
-  const thinking = useClaude((s) => !!s.byTicket[WORKSPACE_CONVERSATION]?.turns.some((t) => t.status === "running"));
+  const thinking = useClaude((s) => Object.entries(s.byTicket).some(([id, c]) => isPaneConversation(id) && c.turns.some((t) => t.status === "running")));
   const drafts = pendingDrafts({ proposals }).length;
   const peekOpen = useTabs((s) => !!s.selected && s.marked.length <= 1);
   const peekWidth = usePaneWidths().peek;

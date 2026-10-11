@@ -384,11 +384,15 @@ export interface WorkPatch {
 }
 
 export type ProposalOrigin =
-  | { type: "chat"; requestId: string }
+  /** Drafted by Pip while answering `requestId`, in a workstream's conversation when `workstream` is set. */
+  | { type: "chat"; requestId: string; workstream?: string | null }
   | { type: "board" }
   | { type: "autopilot"; eventId: string }
-  /** Made by the person from an agent run's result; the text is the agent's. */
-  | { type: "run"; runId: string; shortId: string | null };
+  /** Made from an agent run's result; the text is the agent's. `workstream` is the run's own. */
+  | { type: "run"; runId: string; shortId: string | null; workstream?: string | null };
+
+/** Who drafted a proposal. `agent` is a run's result made into a draft; drafts stored before it existed say `user`. */
+export type ProposalMaker = "user" | "pip" | "autopilot" | "agent";
 
 export type ProposalState =
   | { type: "pending" }
@@ -419,7 +423,7 @@ export interface Proposal {
   createdAt: string;
   updatedAt: string;
   origin: ProposalOrigin;
-  createdBy: "user" | "pip" | "autopilot";
+  createdBy: ProposalMaker;
   intent: Intent;
   /** What the approve button says when the intent doesn't (a transition's name). */
   label: string | null;
@@ -439,6 +443,8 @@ export interface ProposalQuery {
   states?: ProposalStateKind[];
   item?: ItemRef;
   connectionId?: string;
+  /** Drafts made in this workstream, or that would start a run in it. */
+  workstream?: string;
 }
 
 /** A person's edit to a draft, in the terms the editor works in. */
@@ -497,6 +503,8 @@ export interface RunSpec {
   project?: ContainerRef | null;
   /** Whether the agent is asked to report its result through Gossamr's run-report tool, when Gossamr offers it. */
   report?: boolean;
+  /** The workstream the run belongs to. Part of what the person approves, never part of the prompt. */
+  workstream?: string | null;
 }
 
 export type RunState = "queued" | "launching" | "working" | "needsAnswer" | "needsPermission" | "systemBlocked" | "done" | "failed" | "stopped" | "unknown";
@@ -694,6 +702,78 @@ export interface RunQuery {
   states?: RunState[];
   item?: ItemRef;
   connectionId?: string;
+  /** Runs linked to this workstream. */
+  workstream?: string;
+}
+
+/** Mirrors src-tauri/src/domain/workstream.rs. How much Pip may do on its own; `manage` is stored but has no behaviour yet. */
+export type WorkstreamMode = "advise" | "manage";
+
+/** Where a workstream is, derived from its runs and never stored. */
+export type WorkstreamStage = "intake" | "investigate" | "triage" | "plan" | "build" | "review" | "verify" | "done";
+
+/** Supervisor limits, reserved; `null` is no limit set. */
+export interface WorkstreamBudget {
+  autoTurns: number | null;
+  wakes: number | null;
+  tokens: number | null;
+}
+
+/** What a workstream has used of its budget, reserved. */
+export interface WorkstreamSpend {
+  autoTurns: number;
+  wakes: number;
+  tokens: number;
+}
+
+/** One piece of work (usually a ticket) that the person, Pip and the runs linked to it carry from intake to done. */
+export interface Workstream {
+  id: string;
+  connectionId: string;
+  /** The ticket it is about; a ticketless workstream has none. */
+  itemKey: string | null;
+  repo: string | null;
+  title: string;
+  /** The Pip session its conversation resumes. */
+  pipSession: string | null;
+  mode: WorkstreamMode;
+  heldReason: string | null;
+  /** Pip's own notes, at most 2 KB. */
+  notes: string | null;
+  createdAt: string;
+  closedAt: string | null;
+  budget: WorkstreamBudget;
+  spent: WorkstreamSpend;
+}
+
+/** A workstream with the stage its runs give it, their ids (newest first) and short names (`[runId, "R1"]`, oldest first). */
+export interface WorkstreamView {
+  workstream: Workstream;
+  stage: WorkstreamStage;
+  runs: string[];
+  labels: [string, string][];
+}
+
+/** Who did something recorded in a workstream's audit. */
+export type WorkstreamActor = "person" | "pip" | "supervisor" | "run";
+
+/** One line of a workstream's append-only audit. Text is never kept, only its digest or length. */
+export interface WorkstreamEvent {
+  workstreamId: string;
+  seq: number;
+  at: string;
+  actor: WorkstreamActor;
+  /** e.g. `opened`, `closed`, `notes_set`, `run_approved`, `run_stopped`, `run_answered`, `run_retried`. */
+  action: string;
+  runId: string | null;
+  proposalId: string | null;
+  digest: string | null;
+  detail: string | null;
+}
+
+/** Emitted as the `workstreams-changed` event when a workstream was opened, closed or changed. */
+export interface WorkstreamsChanged {
+  connectionId: string;
 }
 
 /** Emitted as the `runs-changed` event. */
