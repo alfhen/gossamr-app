@@ -8,60 +8,36 @@ import type { Run, RunKind, RunSpec } from "../types";
  */
 
 /** What a read-only run's prompt says instead of Allow. */
-export const READ_ONLY_REFUSES =
-  "This run is read-only: Claude Code refuses this.";
+export const READ_ONLY_REFUSES = "This run is read-only: Claude Code refuses this.";
 /** Why Allow isn't offered for a request Gossamr may not have whole. */
-export const NOT_EXACT =
-  "Gossamr can't show this request whole, so it doesn't offer Allow. Open it in Terminal to read it there.";
-export const HAS_COMMAND_INSIDE =
-  "This command has a command inside it, so Gossamr can't check what it runs: Gossamr doesn't allow this.";
-export const PUSH_NOT_APPROVED =
-  "This Build wasn't approved to push: Gossamr doesn't allow this.";
-export const DRAFT_PR_ONLY =
-  "A Build opens only a draft pull request, with --draft: Gossamr doesn't allow this.";
-export const NEVER_MERGES =
-  "A Build never merges, readies, reviews or closes its pull request: Gossamr doesn't allow this.";
-export const NO_GOSSAMR_TOOLS =
-  "A run never uses Gossamr's own tools: Gossamr doesn't allow this.";
-export const NO_OTHER_SERVERS =
-  "Gossamr can't check what another server's tool does, such as a write to GitHub or Jira: Gossamr doesn't allow this.";
-export const GITHUB_READS_ONLY =
-  "A Build only reads GitHub, besides opening its draft pull request: Gossamr doesn't allow this.";
-export const NO_GIT_SETTINGS =
-  "A Build never changes its repository's git settings, remotes or hooks: Gossamr doesn't allow this.";
-export const HAS_ESCAPES =
-  "This command has escaped characters, so Gossamr can't check what it runs: Gossamr doesn't allow this.";
+export const NOT_EXACT = "Gossamr can't show this request whole, so it doesn't offer Allow. Open it in Terminal to read it there.";
+export const HAS_COMMAND_INSIDE = "This command has a command inside it, so Gossamr can't check what it runs: Gossamr doesn't allow this.";
+export const PUSH_NOT_APPROVED = "This Build wasn't approved to push: Gossamr doesn't allow this.";
+export const DRAFT_PR_ONLY = "A Build opens only a draft pull request, with --draft: Gossamr doesn't allow this.";
+export const NEVER_MERGES = "A Build never merges, readies, reviews or closes its pull request: Gossamr doesn't allow this.";
+export const NO_GOSSAMR_TOOLS = "A run never uses Gossamr's own tools: Gossamr doesn't allow this.";
+export const NO_OTHER_SERVERS = "Gossamr can't check what another server's tool does, such as a write to GitHub or Jira: Gossamr doesn't allow this.";
+export const GITHUB_READS_ONLY = "A Build only reads GitHub, besides opening its draft pull request: Gossamr doesn't allow this.";
+export const NO_GIT_SETTINGS = "A Build never changes its repository's git settings, remotes or hooks: Gossamr doesn't allow this.";
+export const HAS_ESCAPES = "This command has escaped characters, so Gossamr can't check what it runs: Gossamr doesn't allow this.";
 /** Why Allow isn't offered for a Build's command that isn't one of the plain ones Gossamr can check. */
-export const UNCHECKED =
-  "Gossamr offers Allow once only for plain commands it can check, such as git, ls or cat. Open the run in Terminal to read this one and answer it there.";
+export const UNCHECKED = "Gossamr offers Allow once only for plain commands it can check, such as git, ls or cat. Open the run in Terminal to read this one and answer it there.";
 
 /** Why a push other than the Build's own branch is refused, naming the branch. */
-export const ownBranchOnly = (name: string) =>
-  `A Build pushes only its own branch, worktree-${name}, to origin: Gossamr doesn't allow this.`;
+export const ownBranchOnly = (name: string) => `A Build pushes only its own branch, worktree-${name}, to origin: Gossamr doesn't allow this.`;
 
 /** Masked text, as redaction leaves it (`MASK`). */
 const MASK = "[redacted]";
 /** How much of a request the tracker keeps (`NEEDS_KEPT`): one this long may have been cut. */
 const NEEDS_KEPT = 500;
-const READ_ONLY_KINDS: readonly RunKind[] = [
-  "investigate",
-  "triage",
-  "plan",
-  "review",
-  "verify",
-];
+const READ_ONLY_KINDS: readonly RunKind[] = ["investigate", "triage", "plan", "review", "verify"];
 
 export interface PermissionAsk {
   tool: string;
   command: string;
 }
 
-export type AllowKind =
-  | "offered"
-  | "readOnly"
-  | "forbidden"
-  | "notExact"
-  | "unchecked";
+export type AllowKind = "offered" | "readOnly" | "forbidden" | "notExact" | "unchecked";
 
 /** Whether Allow once is offered, the request as read (null when it isn't in the usual form), and, when it isn't offered, why. */
 export interface PermissionOffer {
@@ -71,34 +47,19 @@ export interface PermissionOffer {
 }
 
 /** `approve <Tool>: <command>`: "approve" in any case, a tool name with no space or colon, then the command. Null for any other text. */
-export function parsePermission(
-  needs: string | null | undefined,
-): PermissionAsk | null {
+export function parsePermission(needs: string | null | undefined): PermissionAsk | null {
   const m = /^approve\s+([^:\s]+):\s*([\s\S]*)$/i.exec(needs?.trim() ?? "");
   return m ? { tool: m[1], command: m[2] } : null;
 }
 
 /** What the person must have read to answer: the command, or the whole request when it isn't in the usual form. */
-export const readAs = (needs: string | null | undefined): string =>
-  parsePermission(needs)?.command ?? (needs ?? "").trim();
+export const readAs = (needs: string | null | undefined): string => parsePermission(needs)?.command ?? (needs ?? "").trim();
 
 /** A request that may not be what the agent asked: masked, cut at the length the tracker keeps, holding a NUL, or with no command. */
-const notWhole = (needs: string, ask: PermissionAsk) =>
-  needs.includes(MASK) ||
-  [...needs].length >= NEEDS_KEPT ||
-  needs.includes("\0") ||
-  !ask.command.trim();
+const notWhole = (needs: string, ask: PermissionAsk) => needs.includes(MASK) || [...needs].length >= NEEDS_KEPT || needs.includes("\0") || !ask.command.trim();
 
 const refusal = (allow: AllowKind, why: string | null): string | null =>
-  allow === "offered"
-    ? null
-    : allow === "readOnly"
-      ? READ_ONLY_REFUSES
-      : allow === "notExact"
-        ? NOT_EXACT
-        : allow === "unchecked"
-          ? UNCHECKED
-          : why;
+  allow === "offered" ? null : allow === "readOnly" ? READ_ONLY_REFUSES : allow === "notExact" ? NOT_EXACT : allow === "unchecked" ? UNCHECKED : why;
 
 /** Whether Allow once is offered for the run's prompt. A read-only run comes first, so its prompt always says why it is refused. */
 export function permissionOffer(
@@ -108,21 +69,13 @@ export function permissionOffer(
 ): PermissionOffer {
   const needs = run.needs ?? "";
   const ask = parsePermission(needs);
-  const say = (
-    allow: AllowKind,
-    a: PermissionAsk | null,
-    why: string | null = null,
-  ): PermissionOffer => ({ ask: a, allow, reason: refusal(allow, why) });
-  if (READ_ONLY_KINDS.includes(run.spec.kind) || run.readOnly)
-    return say("readOnly", ask);
+  const say = (allow: AllowKind, a: PermissionAsk | null, why: string | null = null): PermissionOffer => ({ ask: a, allow, reason: refusal(allow, why) });
+  if (READ_ONLY_KINDS.includes(run.spec.kind) || run.readOnly) return say("readOnly", ask);
   if (!ask) return say("notExact", null);
   if (notWhole(needs, ask)) return say("notExact", ask);
   const why = forbidden(run.spec, ask);
   if (why) return say("forbidden", ask, why);
-  const unchecked =
-    ask.tool.toLowerCase() === "bash" &&
-    !plain(ask.command) &&
-    !ownBranchPush(ask.command.split(/\s+/).filter(Boolean), run.spec.name);
+  const unchecked = ask.tool.toLowerCase() === "bash" && !plain(ask.command) && !ownBranchPush(ask.command.split(/\s+/).filter(Boolean), run.spec.name);
   return say(unchecked ? "unchecked" : "offered", ask);
 }
 
@@ -131,29 +84,19 @@ export function permissionOffer(
  * `runs/permission.rs`: git and push in any spelling is a push, allowed only as the whole command `git push origin
  * <its branch>`, and a command whose words Gossamr can't read as the shell will isn't offered Allow.
  */
-function forbidden(
-  spec: Pick<RunSpec, "allowPush" | "name">,
-  ask: PermissionAsk,
-): string | null {
+function forbidden(spec: Pick<RunSpec, "allowPush" | "name">, ask: PermissionAsk): string | null {
   const tool = ask.tool.toLowerCase();
   if (tool.startsWith("mcp__gossamr")) return NO_GOSSAMR_TOOLS;
   if (tool.startsWith("mcp__")) return NO_OTHER_SERVERS;
-  if (["edit", "write", "multiedit", "notebookedit"].includes(tool))
-    return gitPath(ask.command) ? NO_GIT_SETTINGS : null;
+  if (["edit", "write", "multiedit", "notebookedit"].includes(tool)) return gitPath(ask.command) ? NO_GIT_SETTINGS : null;
   if (tool !== "bash") return null;
   const command = ask.command;
-  if (["$(", "`", "<(", ">("].some((s) => command.includes(s)))
-    return HAS_COMMAND_INSIDE;
+  if (["$(", "`", "<(", ">("].some((s) => command.includes(s))) return HAS_COMMAND_INSIDE;
   const plainCase = unquoted(command);
   const plain = plainCase.toLowerCase();
-  const segments = plainCase
-    .split(/[&|;\n]/)
-    .map((segment) => segment.split(/\s+/).map(bare).filter(Boolean));
+  const segments = plainCase.split(/[&|;\n]/).map((segment) => segment.split(/\s+/).map(bare).filter(Boolean));
   // Settings first: a push redirected by them would read as the Build's own.
-  const settings =
-    [".git/", ".gitconfig", "/git/config", "hookspath"].some((s) =>
-      plain.includes(s),
-    ) || plain.split(/\s+/).some((w) => gitPath(bare(w)));
+  const settings = [".git/", ".gitconfig", "/git/config", "hookspath"].some((s) => plain.includes(s)) || plain.split(/\s+/).some((w) => gitPath(bare(w)));
   if (
     settings ||
     segments.some((words) => {
@@ -163,14 +106,9 @@ function forbidden(
   )
     return NO_GIT_SETTINGS;
   // A push in any spelling, or a word git may be made to read as one, through a variable, a glob or braces.
-  if (
-    plain.includes("git") &&
-    (plain.includes("push") || /[$*?[{]/.test(command))
-  ) {
+  if (plain.includes("git") && (plain.includes("push") || /[$*?[{]/.test(command))) {
     if (!spec.allowPush) return PUSH_NOT_APPROVED;
-    return ownBranchPush(command.split(/\s+/).filter(Boolean), spec.name)
-      ? null
-      : ownBranchOnly(spec.name);
+    return ownBranchPush(command.split(/\s+/).filter(Boolean), spec.name) ? null : ownBranchOnly(spec.name);
   }
   for (const words of segments) {
     const why = forbiddenSegment(spec, words);
@@ -185,98 +123,42 @@ const unquoted = (text: string) => text.replace(/['"\\]/g, "");
 /** A path inside a repository's `.git`, or git's own settings file. */
 function gitPath(path: string): boolean {
   const p = path.trim().toLowerCase().replace(/\\/g, "/");
-  return (
-    p.split("/").some((part) => part === ".git" || part === ".gitconfig") ||
-    p.includes("/git/config")
-  );
+  return p.split("/").some((part) => part === ".git" || part === ".gitconfig") || p.includes("/git/config");
 }
 
 /** A word of a command with the brackets around it taken off, so `(git` and `{gh` read as `git` and `gh`. */
 const bare = (token: string) => token.replace(/^[(){}]+|[(){}]+$/g, "");
 
 /** The program a word names, in any case: `/usr/bin/GH` names `gh`. */
-const program = (word: string) =>
-  word.slice(word.lastIndexOf("/") + 1).toLowerCase();
+const program = (word: string) => word.slice(word.lastIndexOf("/") + 1).toLowerCase();
 
 /** Shells and interpreters, which run whatever code they are given. */
-const INTERPRETERS = [
-  "sh",
-  "bash",
-  "zsh",
-  "dash",
-  "ksh",
-  "fish",
-  "csh",
-  "tcsh",
-  "python",
-  "node",
-  "nodejs",
-  "deno",
-  "bun",
-  "perl",
-  "ruby",
-  "php",
-  "lua",
-  "pwsh",
-  "osascript",
-];
+const INTERPRETERS = ["sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "python", "node", "nodejs", "deno", "bun", "perl", "ruby", "php", "lua", "pwsh", "osascript"];
 /** Programs that run the program named after them. */
-const WRAPPERS = [
-  "xargs",
-  "env",
-  "exec",
-  "command",
-  "builtin",
-  "sudo",
-  "doas",
-  "nohup",
-  "nice",
-  "time",
-  "timeout",
-  "watch",
-  "parallel",
-  "-exec",
-  "-execdir",
-];
+const WRAPPERS = ["xargs", "env", "exec", "command", "builtin", "sudo", "doas", "nohup", "nice", "time", "timeout", "watch", "parallel", "-exec", "-execdir"];
 
 /** A shell or interpreter, with or without its version: `python3.12` is `python`. */
-const interpreter = (name: string) =>
-  INTERPRETERS.includes(name.replace(/[\d.]+$/, ""));
+const interpreter = (name: string) => INTERPRETERS.includes(name.replace(/[\d.]+$/, ""));
 
 /** What Gossamr forbids in one command of a Bash line, by its unquoted words: GitHub writes and code it can't read. */
-function forbiddenSegment(
-  spec: Pick<RunSpec, "allowPush" | "name">,
-  words: readonly string[],
-): string | null {
+function forbiddenSegment(spec: Pick<RunSpec, "allowPush" | "name">, words: readonly string[]): string | null {
   const at = words.findIndex((w) => program(w) === "gh");
-  return (
-    (at >= 0 ? github(spec, words.slice(at + 1)) : null) ??
-    (runsCode(words) ? HAS_COMMAND_INSIDE : null)
-  );
+  return (at >= 0 ? github(spec, words.slice(at + 1)) : null) ?? (runsCode(words) ? HAS_COMMAND_INSIDE : null);
 }
 
 /** `gh` with `rest` after it: only the draft pull request the Build may open and reads. `gh api` writes or may, whatever its method. */
-function github(
-  spec: Pick<RunSpec, "allowPush">,
-  rest: readonly string[],
-): string | null {
+function github(spec: Pick<RunSpec, "allowPush">, rest: readonly string[]): string | null {
   const [group = "", verb = ""] = rest;
-  if (group === "api")
-    return rest.some((w) => w.toLowerCase().includes("merge"))
-      ? NEVER_MERGES
-      : GITHUB_READS_ONLY;
-  if (group === "pr" && ["merge", "ready", "review", "close"].includes(verb))
-    return NEVER_MERGES;
+  if (group === "api") return rest.some((w) => w.toLowerCase().includes("merge")) ? NEVER_MERGES : GITHUB_READS_ONLY;
+  if (group === "pr" && ["merge", "ready", "review", "close"].includes(verb)) return NEVER_MERGES;
   if (group === "pr" && verb === "create") {
     if (!spec.allowPush) return PUSH_NOT_APPROVED;
     return rest.includes("--draft") ? null : DRAFT_PR_ONLY;
   }
   const reads =
-    (["pr", "issue"].includes(group) &&
-      ["view", "list", "status", "diff", "checks"].includes(verb)) ||
+    (["pr", "issue"].includes(group) && ["view", "list", "status", "diff", "checks"].includes(verb)) ||
     (group === "run" && ["view", "list", "watch"].includes(verb)) ||
-    (["repo", "release", "workflow"].includes(group) &&
-      ["view", "list"].includes(verb)) ||
+    (["repo", "release", "workflow"].includes(group) && ["view", "list"].includes(verb)) ||
     (group === "auth" && verb === "status") ||
     ["version", "--version"].includes(group);
   return reads ? null : GITHUB_READS_ONLY;
@@ -292,38 +174,11 @@ function gitSettings(rest: readonly string[]): boolean {
   const after = rest.slice(at);
   if (after[0] === "config") {
     const args = after.slice(1);
-    const reads = [
-      "--get",
-      "--get-all",
-      "--get-regexp",
-      "--list",
-      "-l",
-      "get",
-      "list",
-    ];
-    const writes = [
-      "--add",
-      "--unset",
-      "--unset-all",
-      "--replace-all",
-      "--rename-section",
-      "--remove-section",
-      "--edit",
-      "-e",
-      "set",
-      "unset",
-      "edit",
-    ];
-    return !(
-      args.some((w) => reads.includes(w)) &&
-      !args.some((w) => writes.includes(w))
-    );
+    const reads = ["--get", "--get-all", "--get-regexp", "--list", "-l", "get", "list"];
+    const writes = ["--add", "--unset", "--unset-all", "--replace-all", "--rename-section", "--remove-section", "--edit", "-e", "set", "unset", "edit"];
+    return !(args.some((w) => reads.includes(w)) && !args.some((w) => writes.includes(w)));
   }
-  if (after[0] === "remote")
-    return !(
-      after[1] === undefined ||
-      ["-v", "--verbose", "show", "get-url"].includes(after[1])
-    );
+  if (after[0] === "remote") return !(after[1] === undefined || ["-v", "--verbose", "show", "get-url"].includes(after[1]));
   return false;
 }
 
@@ -340,17 +195,9 @@ function runsCode(words: readonly string[]): boolean {
     if (!named(at)) return false;
     const name = program(word);
     const next = words[at + 1];
-    const inline =
-      next === undefined || next.startsWith("-") || next.startsWith("<");
-    const awk =
-      ["awk", "gawk", "mawk", "nawk"].includes(name) &&
-      words.some((w) => w.includes("system") || w.includes("getline"));
-    return (
-      ["eval", "source", "."].includes(name) ||
-      (interpreter(name) && inline) ||
-      awk ||
-      /[$*?[]/.test(word)
-    );
+    const inline = next === undefined || next.startsWith("-") || next.startsWith("<");
+    const awk = ["awk", "gawk", "mawk", "nawk"].includes(name) && words.some((w) => w.includes("system") || w.includes("getline"));
+    return ["eval", "source", "."].includes(name) || (interpreter(name) && inline) || awk || /[$*?[]/.test(word);
   });
 }
 
@@ -360,16 +207,9 @@ const assignment = (word: string) => /^[A-Za-z0-9_]+=/.test(word);
 /** `git push [-u|--set-upstream] origin <worktree-name | HEAD:worktree-name>`, word for word. */
 function ownBranchPush(tokens: readonly string[], name: string): boolean {
   if (tokens[0] !== "git" || tokens[1] !== "push") return false;
-  const rest =
-    tokens[2] === "-u" || tokens[2] === "--set-upstream"
-      ? tokens.slice(3)
-      : tokens.slice(2);
+  const rest = tokens[2] === "-u" || tokens[2] === "--set-upstream" ? tokens.slice(3) : tokens.slice(2);
   const branch = `worktree-${name}`;
-  return (
-    rest.length === 2 &&
-    rest[0] === "origin" &&
-    (rest[1] === branch || rest[1] === `HEAD:${branch}`)
-  );
+  return rest.length === 2 && rest[0] === "origin" && (rest[1] === branch || rest[1] === `HEAD:${branch}`);
 }
 
 /** Programs a Build's Bash command may be offered Allow for (`PLAIN`): ones that do what their words say and run nothing else. */
@@ -410,24 +250,7 @@ const PLAIN = [
 /** Programs that write or move where later commands write: their paths stay inside the checkout. */
 const WRITERS = ["mkdir", "touch", "cp", "mv", "rm", "cd"];
 /** git commands that only read, or change the checkout and its history, never its settings or another repository. */
-const GIT_PLAIN = [
-  "status",
-  "diff",
-  "log",
-  "show",
-  "add",
-  "commit",
-  "branch",
-  "checkout",
-  "switch",
-  "restore",
-  "fetch",
-  "stash",
-  "rev-parse",
-  "ls-files",
-  "blame",
-  "merge-base",
-];
+const GIT_PLAIN = ["status", "diff", "log", "show", "add", "commit", "branch", "checkout", "switch", "restore", "fetch", "stash", "rev-parse", "ls-files", "blame", "merge-base"];
 /** Options that make an otherwise plain program run another. */
 const RUNS_ANOTHER = [
   "--pre",
@@ -454,10 +277,7 @@ const RUNS_ANOTHER = [
  */
 function plain(command: string): boolean {
   const segments = shellWords(command);
-  return (
-    !!segments &&
-    segments.filter((words) => words.length > 0).every(plainSegment)
-  );
+  return !!segments && segments.filter((words) => words.length > 0).every(plainSegment);
 }
 
 /** The commands of a Bash line and each one's words as the shell reads them, quotes joined: null when the line has anything `plain` doesn't read, or a quote left open. */
@@ -497,25 +317,11 @@ function shellWords(command: string): string[][] | null {
 /** One command of a plain Bash line, by its words. */
 function plainSegment(words: readonly string[]): boolean {
   const name = words[0];
-  if (
-    !PLAIN.includes(name) ||
-    words.some(
-      (w) => RUNS_ANOTHER.some((o) => w.startsWith(o)) || w.includes("::"),
-    )
-  )
-    return false;
+  if (!PLAIN.includes(name) || words.some((w) => RUNS_ANOTHER.some((o) => w.startsWith(o)) || w.includes("::"))) return false;
   if (name === "git" && !GIT_PLAIN.includes(words[1] ?? "")) return false;
   // A writer's paths are relative and stay below where the run is; `cd` goes somewhere named, never home or back.
-  const below = (w: string) =>
-    w !== "" &&
-    !w.startsWith("/") &&
-    !w.includes("=/") &&
-    w !== "-" &&
-    !w.split("/").includes("..");
-  return (
-    !WRITERS.includes(name) ||
-    (words.slice(1).every(below) && (name !== "cd" || words.length === 2))
-  );
+  const below = (w: string) => w !== "" && !w.startsWith("/") && !w.includes("=/") && w !== "-" && !w.split("/").includes("..");
+  return !WRITERS.includes(name) || (words.slice(1).every(below) && (name !== "cd" || words.length === 2));
 }
 
 /** What a denied run is woken with, after the reminder (`DENIED_MESSAGE`): fixed text quoting nothing of the agent's request. */
