@@ -170,7 +170,7 @@ impl AgentProvider for ClaudeCodeProvider {
             if !finished {
                 let tail = stderr_tail.await.unwrap_or_default();
                 let message = outcome.map(String::from).unwrap_or(if tail.is_empty() { "Claude exited unexpectedly".into() } else { tail });
-                let _ = tx.send(AgentEvent::Done { session_id: session, ok: false, message: Some(message) });
+                let _ = tx.send(AgentEvent::Done { session_id: session, ok: false, message: Some(message), usage: None });
             }
         });
         Ok(rx)

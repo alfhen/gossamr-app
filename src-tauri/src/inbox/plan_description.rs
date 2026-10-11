@@ -33,6 +33,10 @@ fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
 
+/// How the intro paragraph `intro` writes starts. An approved section is matched by this, not by the whole sentence, so
+/// a draft written on another day or before the run had a short id is still recognised.
+const INTRO_START: &str = "Drafted by an agent run";
+
 fn intro(run: &Run) -> String {
     let date = run.ended_at.unwrap_or(run.queued_at).format("%Y-%m-%d");
     let which = run.short_id.as_ref().map(|s| format!(" ({s})")).unwrap_or_default();
@@ -79,6 +83,18 @@ fn is_plan_rewrite(p: &Proposal) -> bool {
 
 fn from_run(p: &Proposal, run_id: &str) -> bool {
     matches!(&p.origin, Origin::Run { run_id: r, .. } if r == run_id) && is_plan_rewrite(p)
+}
+
+/// The `Gossamr Plan` section a description draft ends with, as Markdown, without the intro paragraph Gossamr put at its
+/// top. Empty when nothing but the intro is left.
+fn plan_text_of(p: &Proposal) -> Option<String> {
+    let Intent::Rewrite { body: Some(b), .. } = &p.intent else { return None };
+    let mut section = b.to.plan_section()?;
+    let first = section.blocks.first().map(|b| Doc { blocks: vec![b.clone()] }.plain_text());
+    if first.is_some_and(|text| text.trim_start().starts_with(INTRO_START)) {
+        section.blocks.remove(0);
+    }
+    Some(section.to_markdown().trim().to_string())
 }
 
 fn section_of(p: &Proposal) -> Option<String> {
@@ -201,6 +217,16 @@ impl Core {
             _ => None,
         };
         Ok(Some(PlanDescription { draft, unavailable }))
+    }
+
+    /// The plan as the person settled it on the ticket: the newest description draft from `run` that was applied, with
+    /// the edits the person made before approving it and without Gossamr's intro paragraph. `None` when no such draft
+    /// was applied, so a build falls back to the run's own answer. Waiting, skipped, retired and failed drafts don't count.
+    pub(super) async fn approved_plan_of(&self, run: &Run) -> Result<Option<String>> {
+        let Some(item) = run.item.clone() else { return Ok(None) };
+        let found = self.proposals(&ProposalQuery { item: Some(item), ..Default::default() }).await?;
+        let newest = found.into_iter().filter(|p| from_run(p, &run.id) && p.state == ProposalState::Applied).max_by_key(|p| (p.updated_at, p.created_at));
+        Ok(newest.and_then(|p| plan_text_of(&p)).filter(|text| !text.is_empty()))
     }
 
     /// Why a description draft can't be made now, without making one.
@@ -475,6 +501,25 @@ mod tests {
         assert!(block.contains("Gossamr Plan (the agreed plan") && block.contains("Round in one place.") && block.contains("1. Fix the rounding."), "{block}");
         let review = fx.core.runs_review(&build.id).await.unwrap();
         assert!(review.ticket_block.as_deref().unwrap().contains("left out here") && review.prompt.matches("Round in one place.").count() == 1, "one copy of the plan in the prompt");
+    }
+
+    #[tokio::test]
+    async fn only_an_applied_draft_is_the_settled_plan_and_one_left_with_only_the_intro_is_none() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = plan_with(&fx, PLAN).await;
+        let made = fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().unwrap();
+        assert_eq!(fx.core.approved_plan_of(&run).await.unwrap(), None, "a waiting draft isn't settled");
+        let (_, to) = rewrite_of(&made);
+        let intro_only = format!("Hi\n\n## Gossamr Plan\n\n{}", to.plan_section().unwrap().blocks.first().map(|b| Doc { blocks: vec![b.clone()] }.to_markdown()).unwrap());
+        fx.core.edit_proposal(&made.id, &Edit::Rewrite { title: None, body: Some(intro_only) }).await.unwrap();
+        assert_eq!(fx.core.approve_proposal(&made.id).await.unwrap().state, ProposalState::Applied);
+        assert_eq!(fx.core.approved_plan_of(&run).await.unwrap(), None, "nothing but the intro is no plan");
+
+        let other = plan_with(&fx, "1. Another idea.").await;
+        let next = fx.core.auto_draft_run_plan_description(&other.id).await.unwrap().unwrap();
+        assert_eq!(fx.core.approve_proposal(&next.id).await.unwrap().state, ProposalState::Applied);
+        assert_eq!(fx.core.approved_plan_of(&other).await.unwrap().as_deref(), Some("1. Another idea."));
+        assert_eq!(fx.core.approved_plan_of(&run).await.unwrap(), None, "another run's draft is not this run's plan");
     }
 
     #[tokio::test]

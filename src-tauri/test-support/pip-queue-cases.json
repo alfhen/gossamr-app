@@ -1,0 +1,106 @@
+[
+  {
+    "name": "turns in one conversation run one at a time, in the order they were sent, continuing the session",
+    "steps": [
+      { "op": "enqueue", "id": "a1", "conversation": "A", "expect": "start" },
+      { "op": "enqueue", "id": "a2", "conversation": "A", "expect": { "waiting": 1 } },
+      { "op": "enqueue", "id": "a3", "conversation": "A", "expect": { "waiting": 2 } },
+      { "op": "position", "id": "a1", "expect": 0 },
+      { "op": "position", "id": "a3", "expect": 2 },
+      { "op": "finish", "id": "a1", "session": "s-a", "started": [{ "id": "a2", "session": "s-a" }] },
+      { "op": "position", "id": "a3", "expect": 1 },
+      { "op": "finish", "id": "a2", "session": "s-a", "started": [{ "id": "a3", "session": "s-a" }] },
+      { "op": "finish", "id": "a3", "session": "s-a", "started": [] }
+    ],
+    "statuses": { "a1": "done", "a2": "done", "a3": "done" }
+  },
+  {
+    "name": "no more than two run at once across three conversations, and the oldest waiting starts first",
+    "steps": [
+      { "op": "enqueue", "id": "a1", "conversation": "A", "expect": "start" },
+      { "op": "enqueue", "id": "b1", "conversation": "B", "expect": "start" },
+      { "op": "enqueue", "id": "c1", "conversation": "C", "expect": { "waiting": 0 } },
+      { "op": "enqueue", "id": "a2", "conversation": "A", "expect": { "waiting": 1 } },
+      { "op": "finish", "id": "a1", "session": "s-a", "started": [{ "id": "c1", "session": null }] },
+      { "op": "finish", "id": "b1", "session": "s-b", "started": [{ "id": "a2", "session": "s-a" }] },
+      { "op": "finish", "id": "c1", "session": "s-c", "started": [] },
+      { "op": "finish", "id": "a2", "session": "s-a", "started": [] }
+    ],
+    "statuses": { "a1": "done", "b1": "done", "c1": "done", "a2": "done" }
+  },
+  {
+    "name": "a conversation waits behind its own turn even when there is room elsewhere",
+    "steps": [
+      { "op": "enqueue", "id": "a1", "conversation": "A", "expect": "start" },
+      { "op": "enqueue", "id": "a2", "conversation": "A", "expect": { "waiting": 1 } },
+      { "op": "enqueue", "id": "b1", "conversation": "B", "expect": "start" },
+      { "op": "finish", "id": "b1", "session": "s-b", "started": [] },
+      { "op": "finish", "id": "a1", "session": null, "started": [{ "id": "a2", "session": null }] }
+    ],
+    "statuses": { "a1": "done", "a2": "running", "b1": "done" }
+  },
+  {
+    "name": "removing a waiting turn drops it and the rest move up",
+    "steps": [
+      { "op": "enqueue", "id": "a1", "conversation": "A", "expect": "start" },
+      { "op": "enqueue", "id": "a2", "conversation": "A", "expect": { "waiting": 1 } },
+      { "op": "enqueue", "id": "a3", "conversation": "A", "expect": { "waiting": 2 } },
+      { "op": "remove", "id": "a2", "expect": "waiting" },
+      { "op": "position", "id": "a2", "expect": null },
+      { "op": "position", "id": "a3", "expect": 1 },
+      { "op": "remove", "id": "a2", "expect": "unknown" },
+      { "op": "finish", "id": "a1", "session": "s-a", "started": [{ "id": "a3", "session": "s-a" }] }
+    ],
+    "statuses": { "a1": "done", "a2": "removed", "a3": "running" }
+  },
+  {
+    "name": "removing the running turn only reports it, and its end lets the next one start",
+    "steps": [
+      { "op": "enqueue", "id": "a1", "conversation": "A", "expect": "start" },
+      { "op": "enqueue", "id": "a2", "conversation": "A", "expect": { "waiting": 1 } },
+      { "op": "remove", "id": "a1", "expect": "inFlight" },
+      { "op": "position", "id": "a1", "expect": 0 },
+      { "op": "finish", "id": "a1", "ok": false, "session": "s-a", "started": [{ "id": "a2", "session": "s-a" }] },
+      { "op": "finish", "id": "a2", "session": "s-a", "started": [] }
+    ],
+    "statuses": { "a1": "failed", "a2": "done" }
+  },
+  {
+    "name": "a session the page sent is kept rather than replaced",
+    "steps": [
+      { "op": "enqueue", "id": "a1", "conversation": "A", "expect": "start" },
+      { "op": "enqueue", "id": "a2", "conversation": "A", "session": "from-page", "expect": { "waiting": 1 } },
+      { "op": "finish", "id": "a1", "session": "s-a", "started": [{ "id": "a2", "session": "from-page" }] }
+    ],
+    "statuses": { "a1": "done", "a2": "running" }
+  },
+  {
+    "name": "unknown ids, and finishing a turn that never started, change nothing",
+    "steps": [
+      { "op": "finish", "id": "zz", "session": "s-z", "started": [] },
+      { "op": "remove", "id": "zz", "expect": "unknown" },
+      { "op": "position", "id": "zz", "expect": null },
+      { "op": "enqueue", "id": "a1", "conversation": "A", "expect": "start" },
+      { "op": "enqueue", "id": "a2", "conversation": "A", "expect": { "waiting": 1 } },
+      { "op": "finish", "id": "a2", "session": "s-x", "started": [] },
+      { "op": "position", "id": "a2", "expect": 1 },
+      { "op": "finish", "id": "a1", "session": null, "started": [{ "id": "a2", "session": null }] },
+      { "op": "finish", "id": "a1", "session": null, "started": [] }
+    ],
+    "statuses": { "a1": "done", "a2": "running" }
+  },
+  {
+    "name": "a conversation that waits only for room starts once room is made, even after a removal",
+    "steps": [
+      { "op": "enqueue", "id": "a1", "conversation": "A", "expect": "start" },
+      { "op": "enqueue", "id": "b1", "conversation": "B", "expect": "start" },
+      { "op": "enqueue", "id": "c1", "conversation": "C", "expect": { "waiting": 0 } },
+      { "op": "enqueue", "id": "d1", "conversation": "D", "expect": { "waiting": 0 } },
+      { "op": "remove", "id": "c1", "expect": "waiting" },
+      { "op": "finish", "id": "b1", "session": null, "started": [{ "id": "d1", "session": null }] },
+      { "op": "enqueue", "id": "c2", "conversation": "C", "expect": { "waiting": 0 } },
+      { "op": "finish", "id": "a1", "session": null, "started": [{ "id": "c2", "session": null }] }
+    ],
+    "statuses": { "a1": "done", "b1": "done", "c1": "removed", "d1": "running", "c2": "running" }
+  }
+]

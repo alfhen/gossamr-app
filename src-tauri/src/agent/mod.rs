@@ -6,26 +6,30 @@ mod drafts;
 mod github;
 pub mod images;
 pub mod mcp;
+pub mod queue;
 mod runs;
 pub mod sandbox;
 
 #[cfg(test)]
 pub(crate) mod conformance;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use crate::auth::Scope;
 use crate::config::AppConfig;
+use crate::db::PipTurn;
 use crate::domain::{ClonePlan, ProposalQuery, StateKind};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 use context::ScreenContext;
 use images::ImageInput;
 use mcp::McpServer;
+use queue::{Enqueued, QueueItem, Removed, TurnQueue};
 use sandbox::Sandbox;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -35,7 +39,39 @@ pub enum AgentEvent {
     Text { text: String },
     /// A step the agent took, in words a person can read.
     Tool { label: String },
-    Done { session_id: Option<String>, ok: bool, message: Option<String> },
+    Done {
+        session_id: Option<String>,
+        ok: bool,
+        message: Option<String>,
+        /// What the turn cost, when the provider reports it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<TurnUsage>,
+    },
+    /// The turn waits behind `ahead` turns of its conversation, or for room when that is 0. Only `AgentService` says
+    /// this, never a provider.
+    Queued { ahead: usize },
+    /// The turn left the queue and its provider is starting. Only `AgentService` says this, never a provider.
+    Running,
+}
+
+impl AgentEvent {
+    /// Whether this is about the turn queue rather than from the agent itself.
+    pub fn is_queue_news(&self) -> bool {
+        matches!(self, AgentEvent::Queued { .. } | AgentEvent::Running)
+    }
+}
+
+/// The tokens and money one turn used, as the provider reported them. A turn stopped before its provider reported has
+/// none: the Claude CLI reports usage only in its closing `result` line, which a stopped process never writes, so totals
+/// built from these undercount stopped turns.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cost_usd: Option<f64>,
 }
 
 /// Pip's local MCP server, the only tool surface a run is given. The token is valid for this one run.
@@ -106,6 +142,13 @@ pub trait AgentProvider: Send + Sync {
     fn cancel(&self, run_id: &str);
 }
 
+/// The conversation a request belongs to when the page doesn't say: the workspace's Pip pane.
+pub const WORKSPACE_CONVERSATION: &str = "workspace";
+
+fn workspace() -> String {
+    WORKSPACE_CONVERSATION.into()
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AskRequest {
@@ -116,7 +159,40 @@ pub struct AskRequest {
     pub context: ScreenContext,
     #[serde(default)]
     pub images: Vec<ImageInput>,
+    /// Where the turn is kept: `workspace` for the Pip pane, a ticket key for the classic drawer.
+    #[serde(default = "workspace")]
+    pub conversation: String,
+    /// How the page showed the question, kept with it so the conversation reads the same after a restart.
+    #[serde(default)]
+    pub meta: Option<TurnMeta>,
 }
+
+/// What the page showed with a question besides its words. Images are counted, not kept.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TurnMeta {
+    pub quote: Option<String>,
+    pub looking: Option<String>,
+    pub image_count: u32,
+}
+
+/// What a turn has said and done so far, kept in memory while it runs so a reloaded page can show it.
+#[derive(Debug, Clone, Default)]
+struct LiveTurn {
+    text: String,
+    steps: Vec<String>,
+}
+
+/// What became of a question when it was sent: started straight away, or queued behind `ahead` turns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskOutcome {
+    pub queued: bool,
+    pub ahead: usize,
+}
+
+/// Why a turn that was taken out of the queue never ran.
+pub const REMOVED: &str = "Removed before it started";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -143,22 +219,156 @@ pub struct AgentService {
     providers: HashMap<&'static str, Arc<dyn AgentProvider>>,
     config: Mutex<AppConfig>,
     running: Mutex<HashMap<String, Arc<dyn AgentProvider>>>,
+    live: Mutex<HashMap<String, LiveTurn>>,
+    queue: Mutex<TurnQueue<QueueItem>>,
+    /// Turns stopped while their provider was still starting; it is stopped as soon as it has.
+    stop_early: Mutex<HashSet<String>>,
+    /// Request ids `ask` is recording and queueing, so the same id sent twice at once is taken only once.
+    sending: Mutex<HashSet<String>>,
+}
+
+/// A request id reserved in `AgentService::sending` until `ask` is done with it.
+struct Sending<'a> {
+    set: &'a Mutex<HashSet<String>>,
+    id: String,
+}
+
+impl Drop for Sending<'_> {
+    fn drop(&mut self) {
+        self.set.lock().expect("lock poisoned").remove(&self.id);
+    }
+}
+
+/// Recording a turn is best effort, and a sign-out mid-turn is expected to refuse it.
+fn recorded(r: Result<()>) {
+    match r {
+        Ok(()) | Err(Error::SiteChanged) | Err(Error::NotSignedIn) => {}
+        Err(e) => eprintln!("couldn't record Pip's turn: {e}"),
+    }
 }
 
 impl AgentService {
     pub fn new(core: Arc<Core>, mcp: McpServer, providers: Vec<Arc<dyn AgentProvider>>, config: AppConfig) -> Self {
         let providers = providers.into_iter().map(|p| (p.id(), p)).collect();
-        Self { core, mcp, providers, config: Mutex::new(config), running: Mutex::new(HashMap::new()) }
-    }
-
-    pub fn cancel(&self, request_id: &str) {
-        let provider = self.running.lock().expect("lock poisoned").get(request_id).cloned();
-        if let Some(p) = provider {
-            p.cancel(request_id);
+        Self {
+            core,
+            mcp,
+            providers,
+            config: Mutex::new(config),
+            running: Mutex::new(HashMap::new()),
+            live: Mutex::new(HashMap::new()),
+            queue: Mutex::new(TurnQueue::default()),
+            stop_early: Mutex::new(HashSet::new()),
+            sending: Mutex::new(HashSet::new()),
         }
     }
 
-    pub async fn ask(self: &Arc<Self>, req: AskRequest, sink: UpdateSink) -> Result<()> {
+    /// Stops a turn. One still waiting is taken out of the queue and ends failed without starting; the running one is
+    /// stopped by its provider, and the next waiting turn of its conversation then starts.
+    pub async fn cancel(&self, request_id: &str) {
+        let removed = {
+            let mut queue = self.queue.lock().expect("lock poisoned");
+            let removed = queue.remove(request_id);
+            if matches!(removed, Removed::InFlight) {
+                // Its provider may still be starting and not know the run yet; `start` stops it once it does. Marked
+                // under the queue's lock, so the turn can't end in between and leave the mark behind.
+                self.stop_early.lock().expect("lock poisoned").insert(request_id.to_string());
+            }
+            removed
+        };
+        match removed {
+            Removed::Waiting(QueueItem::User { scope, req, sink }) => {
+                recorded(self.core.pip_turn_finish(&scope, &req.request_id, "", false, Some(REMOVED), None, None).await);
+                sink(Update { request_id: req.request_id, event: AgentEvent::Done { session_id: None, ok: false, message: Some(REMOVED.into()), usage: None } });
+            }
+            Removed::InFlight => {
+                let provider = self.running.lock().expect("lock poisoned").get(request_id).cloned();
+                if let Some(p) = provider {
+                    p.cancel(request_id);
+                }
+            }
+            Removed::Unknown => {}
+        }
+    }
+
+    /// The turns of `conversation`, with what any turn still running has said so far.
+    pub async fn turns(&self, conversation: &str) -> Result<Vec<PipTurn>> {
+        let mut turns = self.core.pip_turns(conversation).await?;
+        let live = self.live.lock().expect("lock poisoned");
+        for t in turns.iter_mut().filter(|t| t.status == "running" || t.status == "queued") {
+            if let Some(l) = live.get(&t.request_id) {
+                t.text = l.text.clone();
+                t.steps = l.steps.clone();
+            }
+        }
+        Ok(turns)
+    }
+
+    /// Queues a question. It starts now when its conversation has nothing running and there is room, and otherwise
+    /// once the turns ahead of it have ended; either way its events go to `sink`.
+    pub async fn ask(self: &Arc<Self>, req: AskRequest, sink: UpdateSink) -> Result<AskOutcome> {
+        // Checked and reserved under the queue's lock, and held until the turn is queued, so a second send of the same id
+        // can't pass the check while the first is still being recorded.
+        let _sending = {
+            let queue = self.queue.lock().expect("lock poisoned");
+            let mut sending = self.sending.lock().expect("lock poisoned");
+            if queue.position(&req.request_id).is_some() || !sending.insert(req.request_id.clone()) {
+                return Err(Error::Claude("That question was already sent.".into()));
+            }
+            Sending { set: &self.sending, id: req.request_id.clone() }
+        };
+        let scope = self.core.scope().await?;
+        let meta = req.meta.clone().unwrap_or_else(|| TurnMeta { image_count: req.images.len() as u32, ..Default::default() });
+        // Kept as waiting until its provider has started, so a reload shows it either way.
+        recorded(self.core.pip_turn_begin(&scope, &req.conversation, &req.request_id, &req.prompt, &meta, "queued").await);
+        let (conversation, run_id) = (req.conversation.clone(), req.request_id.clone());
+        let item = QueueItem::User { scope, req, sink: sink.clone() };
+        let entered = self.queue.lock().expect("lock poisoned").enqueue(&conversation, &run_id, item);
+        match entered {
+            Enqueued::Start(QueueItem::User { scope, req, sink }) => match self.start(scope.clone(), req, sink).await {
+                Ok(()) => Ok(AskOutcome { queued: false, ahead: 0 }),
+                Err(e) => {
+                    recorded(self.core.pip_turn_finish(&scope, &run_id, "", false, Some(&e.to_string()), None, None).await);
+                    self.release(&run_id, None);
+                    Err(e)
+                }
+            },
+            Enqueued::Waiting { ahead } => {
+                sink(Update { request_id: run_id, event: AgentEvent::Queued { ahead } });
+                Ok(AskOutcome { queued: true, ahead })
+            }
+        }
+    }
+
+    /// Ends `run_id`'s place in the queue and starts what may run now.
+    fn release(self: &Arc<Self>, run_id: &str, session: Option<String>) {
+        let next = {
+            let mut queue = self.queue.lock().expect("lock poisoned");
+            self.stop_early.lock().expect("lock poisoned").remove(run_id);
+            queue.finished(run_id, session)
+        };
+        for (_, item) in next {
+            let this = self.clone();
+            tokio::spawn(async move { this.start_queued(item).await });
+        }
+    }
+
+    /// Starts a turn that waited. A turn sent without a session continues the one its conversation's last turn ended
+    /// with. When it cannot start it ends failed through its own sink, and the queue moves on.
+    async fn start_queued(self: Arc<Self>, item: QueueItem) {
+        let QueueItem::User { scope, mut req, sink } = item;
+        if req.session_id.is_none() {
+            req.session_id = self.queue.lock().expect("lock poisoned").session(&req.conversation);
+        }
+        let run_id = req.request_id.clone();
+        if let Err(e) = self.start(scope.clone(), req, sink.clone()).await {
+            recorded(self.core.pip_turn_finish(&scope, &run_id, "", false, Some(&e.to_string()), None, None).await);
+            sink(Update { request_id: run_id.clone(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(e.to_string()), usage: None } });
+            self.release(&run_id, None);
+        }
+    }
+
+    async fn start(self: &Arc<Self>, scope: Scope, req: AskRequest, sink: UpdateSink) -> Result<()> {
         let id = self.config.lock().expect("lock poisoned").agent_provider.clone();
         let provider = self
             .providers
@@ -167,7 +377,6 @@ impl AgentService {
             .ok_or_else(|| Error::Claude(format!("The assistant provider “{id}” isn't available.")))?;
         check_images(&req.images, provider.capabilities())?;
 
-        let scope = self.core.scope().await?;
         let mut context = req.context.in_connection(&crate::tracker::Connection::jira_id(&scope));
         let mut handed: std::collections::HashSet<String> = context::keys_in(&req.prompt).into_iter().collect();
         if let Some(r) = &context.item {
@@ -212,8 +421,11 @@ impl AgentService {
         };
 
         // Registered before the run starts, since the agent may call the tools straight away.
-        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), mcp::PipRun { scope, handed, read, read_runs: Default::default() });
+        self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), mcp::PipRun { scope: scope.clone(), handed, read, read_runs: Default::default() });
         self.running.lock().expect("lock poisoned").insert(run_id.clone(), provider.clone());
+        self.live.lock().expect("lock poisoned").insert(run_id.clone(), LiveTurn::default());
+        recorded(self.core.pip_turn_status(&scope, &run_id, "running").await);
+        sink(Update { request_id: run_id.clone(), event: AgentEvent::Running });
         let mut events = match provider.run(agent_req).await {
             Ok(e) => e,
             Err(e) => {
@@ -221,28 +433,61 @@ impl AgentService {
                 return Err(e);
             }
         };
+        if self.stop_early.lock().expect("lock poisoned").remove(&run_id) {
+            provider.cancel(&run_id);
+        }
 
         let this = self.clone();
         let key = context.item.map(|r| r.key);
         tokio::spawn(async move {
             let mut session = None;
+            let mut ended = false;
             while let Some(event) = events.recv().await {
+                // A provider never says these; the queue's own are sent by `ask` and `start`.
+                if event.is_queue_news() {
+                    continue;
+                }
                 match &event {
                     AgentEvent::Started { session_id } => session = Some(session_id.clone()),
-                    AgentEvent::Done { session_id: Some(id), .. } => session = Some(id.clone()),
-                    _ => {}
+                    AgentEvent::Text { text } => this.live_turn(&run_id, |l| l.text.push_str(text)),
+                    AgentEvent::Tool { label } => {
+                        this.live_turn(&run_id, |l| l.steps.push(label.clone()));
+                        recorded(this.core.pip_turn_step(&scope, &run_id, label).await);
+                    }
+                    AgentEvent::Queued { .. } | AgentEvent::Running => {}
+                    AgentEvent::Done { session_id, ok, message, usage } => {
+                        if let Some(id) = session_id {
+                            session = Some(id.clone());
+                        }
+                        let text = this.live.lock().expect("lock poisoned").get(&run_id).map(|l| l.text.clone()).unwrap_or_default();
+                        let error = message.as_deref().or((!ok).then_some("Pip stopped"));
+                        recorded(this.core.pip_turn_finish(&scope, &run_id, &text, *ok, error, session.as_deref(), usage.as_ref()).await);
+                        ended = true;
+                    }
                 }
                 sink(Update { request_id: run_id.clone(), event });
             }
-            if let Some(id) = session {
-                let _ = this.core.remember_claude_session(key.as_deref(), &id).await;
+            if !ended {
+                let text = this.live.lock().expect("lock poisoned").get(&run_id).map(|l| l.text.clone()).unwrap_or_default();
+                recorded(this.core.pip_turn_finish(&scope, &run_id, &text, false, Some("Pip stopped"), session.as_deref(), None).await);
+            }
+            if let Some(id) = &session {
+                let _ = this.core.remember_claude_session(key.as_deref(), id).await;
             }
             this.finish(&run_id);
+            this.release(&run_id, session);
         });
         Ok(())
     }
 
+    fn live_turn(&self, run_id: &str, f: impl FnOnce(&mut LiveTurn)) {
+        if let Some(l) = self.live.lock().expect("lock poisoned").get_mut(run_id) {
+            f(l);
+        }
+    }
+
     fn finish(&self, run_id: &str) {
+        self.live.lock().expect("lock poisoned").remove(run_id);
         self.running.lock().expect("lock poisoned").remove(run_id);
         self.mcp.runs.lock().expect("lock poisoned").remove(run_id);
         self.mcp.revoke(run_id);
@@ -282,5 +527,479 @@ mod tests {
         assert_eq!(with.images[0].media_type, "image/png");
         let without: AskRequest = serde_json::from_str(r#"{"requestId":"r","prompt":"p","sessionId":null}"#).unwrap();
         assert!(without.images.is_empty());
+        assert_eq!((without.conversation.as_str(), without.meta), (WORKSPACE_CONVERSATION, None));
+
+        let kept: AskRequest = serde_json::from_str(
+            r#"{"requestId":"r","prompt":"p","sessionId":null,"conversation":"CA-1","meta":{"quote":"q","looking":"CA-1","imageCount":2}}"#,
+        )
+        .unwrap();
+        assert_eq!(kept.conversation, "CA-1");
+        assert_eq!(kept.meta, Some(TurnMeta { quote: Some("q".into()), looking: Some("CA-1".into()), image_count: 2 }));
+        let partial: AskRequest = serde_json::from_str(r#"{"requestId":"r","prompt":"p","sessionId":null,"meta":{}}"#).unwrap();
+        assert_eq!(partial.meta, Some(TurnMeta::default()));
+    }
+
+    mod recording {
+        use super::*;
+        use crate::agent::runs::testing::FakePlanner;
+        use crate::inbox::testing::{fixture, Fixture};
+        use std::time::Duration;
+        use tokio::sync::Notify;
+
+        /// Sends `events`, waits for `gate` when there is one, then ends with a `Done` carrying usage. `refuse` makes
+        /// `run` itself fail.
+        struct Fake {
+            events: Vec<AgentEvent>,
+            gate: Option<Arc<Notify>>,
+            refuse: bool,
+        }
+
+        fn usage() -> TurnUsage {
+            TurnUsage { input_tokens: 31, output_tokens: 7, cache_creation_tokens: 0, cache_read_tokens: 12, cost_usd: Some(0.0021) }
+        }
+
+        #[async_trait]
+        impl AgentProvider for Fake {
+            fn id(&self) -> &'static str {
+                "fake"
+            }
+
+            fn capabilities(&self) -> AgentCaps {
+                AgentCaps { mcp: true, resume: false, streaming: true, reads_code: false, read_only_sandbox: true, vision: false }
+            }
+
+            async fn run(&self, _req: AgentRequest) -> Result<EventStream> {
+                if self.refuse {
+                    return Err(Error::Claude("Claude isn't installed".into()));
+                }
+                let (tx, rx) = mpsc::unbounded_channel();
+                let (events, gate) = (self.events.clone(), self.gate.clone());
+                tokio::spawn(async move {
+                    let _ = tx.send(AgentEvent::Started { session_id: "sess-1".into() });
+                    for e in events {
+                        let _ = tx.send(e);
+                    }
+                    if let Some(g) = gate {
+                        g.notified().await;
+                    }
+                    let _ = tx.send(AgentEvent::Done { session_id: Some("sess-1".into()), ok: true, message: None, usage: Some(usage()) });
+                });
+                Ok(rx)
+            }
+
+            fn cancel(&self, _run_id: &str) {}
+        }
+
+        async fn service(fx: &Fixture, fake: Fake) -> Arc<AgentService> {
+            let server = McpServer::start(fx.core.clone(), FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
+            let config = AppConfig { agent_provider: "fake".into(), ..AppConfig::default() };
+            Arc::new(AgentService::new(fx.core.clone(), server, vec![Arc::new(fake)], config))
+        }
+
+        fn ask(id: &str) -> AskRequest {
+            AskRequest {
+                request_id: id.into(),
+                prompt: "What changed?".into(),
+                session_id: None,
+                context: ScreenContext::default(),
+                images: Vec::new(),
+                conversation: WORKSPACE_CONVERSATION.into(),
+                meta: Some(TurnMeta { quote: None, looking: Some("the board".into()), image_count: 0 }),
+            }
+        }
+
+        async fn settled(svc: &AgentService, id: &str) -> PipTurn {
+            for _ in 0..200 {
+                let turns = svc.turns(WORKSPACE_CONVERSATION).await.unwrap();
+                if let Some(t) = turns.into_iter().find(|t| t.request_id == id && t.status != "running") {
+                    return t;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("turn {id} never finished");
+        }
+
+        fn text(t: &str) -> AgentEvent {
+            AgentEvent::Text { text: t.into() }
+        }
+
+        #[tokio::test]
+        async fn a_finished_turn_is_recorded_with_its_text_steps_session_and_usage() {
+            let fx = fixture().await;
+            let events = vec![AgentEvent::Tool { label: "Looked up CA-1".into() }, text("Two "), text("things.")];
+            let svc = service(&fx, Fake { events, gate: None, refuse: false }).await;
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let into = seen.clone();
+            svc.ask(ask("q1"), Arc::new(move |u| into.lock().unwrap().push(u.event))).await.unwrap();
+
+            let t = settled(&svc, "q1").await;
+            assert_eq!((t.status.as_str(), t.text.as_str(), t.prompt.as_str()), ("done", "Two things.", "What changed?"));
+            assert_eq!(t.steps, ["Looked up CA-1"]);
+            assert_eq!((t.session_id.as_deref(), t.usage), (Some("sess-1"), Some(usage())));
+            assert_eq!(t.looking.as_deref(), Some("the board"));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert!(matches!(seen.lock().unwrap().last(), Some(AgentEvent::Done { usage: Some(_), .. })), "the page is told the usage too");
+        }
+
+        #[tokio::test]
+        async fn a_provider_that_cannot_start_leaves_a_failed_turn() {
+            let fx = fixture().await;
+            let svc = service(&fx, Fake { events: vec![], gate: None, refuse: true }).await;
+            let err = svc.ask(ask("q1"), Arc::new(|_| {})).await.unwrap_err();
+            assert!(err.to_string().contains("isn't installed"));
+            let turns = svc.turns(WORKSPACE_CONVERSATION).await.unwrap();
+            assert_eq!(turns.len(), 1);
+            assert_eq!(turns[0].status, "failed");
+            assert!(turns[0].error.as_deref().unwrap_or_default().contains("isn't installed"));
+            assert!(svc.live.lock().unwrap().is_empty(), "nothing is left in memory");
+        }
+
+        #[tokio::test]
+        async fn a_turn_still_running_shows_what_it_has_said_so_far() {
+            let fx = fixture().await;
+            let gate = Arc::new(Notify::new());
+            let events = vec![AgentEvent::Tool { label: "Listed the drafts".into() }, text("Half an ")];
+            let svc = service(&fx, Fake { events, gate: Some(gate.clone()), refuse: false }).await;
+            svc.ask(ask("q1"), Arc::new(|_| {})).await.unwrap();
+
+            let mut mid = None;
+            for _ in 0..200 {
+                let turns = svc.turns(WORKSPACE_CONVERSATION).await.unwrap();
+                if turns.first().is_some_and(|t| t.text == "Half an ") {
+                    mid = turns.into_iter().next();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let mid = mid.expect("the partial answer is overlaid");
+            assert_eq!((mid.status.as_str(), mid.steps.len()), ("running", 1));
+            let stored = fx.core.pip_turns(WORKSPACE_CONVERSATION).await.unwrap();
+            assert_eq!((stored[0].text.as_str(), stored[0].steps.len()), ("", 1), "text is written once, on Done; steps as they come");
+
+            gate.notify_one();
+            let t = settled(&svc, "q1").await;
+            assert_eq!((t.status.as_str(), t.text.as_str()), ("done", "Half an "));
+        }
+
+        #[tokio::test]
+        async fn a_sign_out_mid_turn_writes_nothing_afterwards() {
+            let fx = fixture().await;
+            let gate = Arc::new(Notify::new());
+            let svc = service(&fx, Fake { events: vec![text("secret")], gate: Some(gate.clone()), refuse: false }).await;
+            svc.ask(ask("q1"), Arc::new(|_| {})).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            fx.core.sign_out().await.unwrap();
+            gate.notify_one();
+            for _ in 0..100 {
+                if svc.live.lock().unwrap().is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let rows = crate::db::Db::open(&fx.dir.join("inbox-site-me.sqlite")).unwrap();
+            assert!(rows.pip_turns(WORKSPACE_CONVERSATION).unwrap().is_empty());
+        }
+
+    mod queueing {
+        use super::*;
+        use crate::agent::runs::testing::FakePlanner;
+        use crate::inbox::testing::{fixture, Fixture};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        use tokio::sync::Notify;
+
+        /// Holds every run open until the test opens its gate, and counts how many run at once.
+        #[derive(Default)]
+        struct Counting {
+            now: AtomicUsize,
+            most: AtomicUsize,
+            /// Each run started, with the session it was asked to continue.
+            started: Mutex<Vec<(String, Option<String>)>>,
+            gates: Mutex<HashMap<String, Arc<Notify>>>,
+            stopped: Mutex<HashSet<String>>,
+        }
+
+        #[derive(Clone, Default)]
+        struct Fake(Arc<Counting>);
+
+        #[async_trait]
+        impl AgentProvider for Fake {
+            fn id(&self) -> &'static str {
+                "fake"
+            }
+
+            fn capabilities(&self) -> AgentCaps {
+                AgentCaps { mcp: true, resume: true, streaming: true, reads_code: false, read_only_sandbox: true, vision: false }
+            }
+
+            async fn run(&self, req: AgentRequest) -> Result<EventStream> {
+                let c = self.0.clone();
+                c.started.lock().unwrap().push((req.run_id.clone(), req.session.clone()));
+                let now = c.now.fetch_add(1, Ordering::SeqCst) + 1;
+                c.most.fetch_max(now, Ordering::SeqCst);
+                let gate = Arc::new(Notify::new());
+                c.gates.lock().unwrap().insert(req.run_id.clone(), gate.clone());
+                let (tx, rx) = mpsc::unbounded_channel();
+                let session = req.session.unwrap_or_else(|| format!("sess-{}", req.run_id));
+                tokio::spawn(async move {
+                    let _ = tx.send(AgentEvent::Started { session_id: session.clone() });
+                    gate.notified().await;
+                    let stopped = c.stopped.lock().unwrap().contains(&req.run_id);
+                    let _ = tx.send(AgentEvent::Text { text: format!("answer {}", req.run_id) });
+                    c.now.fetch_sub(1, Ordering::SeqCst);
+                    let message = stopped.then(|| "Stopped".to_string());
+                    let _ = tx.send(AgentEvent::Done { session_id: Some(session), ok: !stopped, message, usage: None });
+                });
+                Ok(rx)
+            }
+
+            fn cancel(&self, run_id: &str) {
+                self.0.stopped.lock().unwrap().insert(run_id.into());
+                if let Some(g) = self.0.gates.lock().unwrap().get(run_id) {
+                    g.notify_one();
+                }
+            }
+        }
+
+        impl Fake {
+            fn started(&self) -> Vec<String> {
+                self.0.started.lock().unwrap().iter().map(|(id, _)| id.clone()).collect()
+            }
+
+            fn session_of(&self, id: &str) -> Option<String> {
+                self.0.started.lock().unwrap().iter().find(|(r, _)| r == id).and_then(|(_, s)| s.clone())
+            }
+
+            async fn until_started(&self, n: usize) {
+                for _ in 0..300 {
+                    if self.started().len() >= n {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                panic!("only {:?} started, waiting for {n}", self.started());
+            }
+
+            /// Lets run `id` end, once it has started.
+            async fn open(&self, id: &str) {
+                for _ in 0..300 {
+                    let gate = self.0.gates.lock().unwrap().get(id).cloned();
+                    if let Some(g) = gate {
+                        g.notify_one();
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                panic!("{id} never started");
+            }
+        }
+
+        type Seen = Arc<Mutex<Vec<(String, AgentEvent)>>>;
+
+        async fn service(fx: &Fixture, fake: Fake) -> (Arc<AgentService>, Seen, UpdateSink) {
+            let server = McpServer::start(fx.core.clone(), FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
+            let config = AppConfig { agent_provider: "fake".into(), ..AppConfig::default() };
+            let svc = Arc::new(AgentService::new(fx.core.clone(), server, vec![Arc::new(fake)], config));
+            let seen: Seen = Arc::default();
+            let into = seen.clone();
+            (svc, seen, Arc::new(move |u: Update| into.lock().unwrap().push((u.request_id, u.event))))
+        }
+
+        fn ask(id: &str, conversation: &str) -> AskRequest {
+            AskRequest {
+                request_id: id.into(),
+                prompt: format!("question {id}"),
+                session_id: None,
+                context: ScreenContext::default(),
+                images: Vec::new(),
+                conversation: conversation.into(),
+                meta: None,
+            }
+        }
+
+        fn events_of(seen: &Seen, id: &str) -> Vec<AgentEvent> {
+            seen.lock().unwrap().iter().filter(|(r, _)| r == id).map(|(_, e)| e.clone()).collect()
+        }
+
+        async fn status(fx: &Fixture, conversation: &str, id: &str) -> String {
+            fx.core.pip_turns(conversation).await.unwrap().into_iter().find(|t| t.request_id == id).map(|t| t.status).unwrap_or_default()
+        }
+
+        async fn until_status(fx: &Fixture, conversation: &str, id: &str, want: &str) {
+            for _ in 0..300 {
+                if status(fx, conversation, id).await == want {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("{id} is {}, never {want}", status(fx, conversation, id).await);
+        }
+
+        #[tokio::test]
+        async fn turns_in_one_conversation_run_one_after_another_and_continue_the_session() {
+            let fx = fixture().await;
+            let fake = Fake::default();
+            let (svc, seen, sink) = service(&fx, fake.clone()).await;
+            assert_eq!(svc.ask(ask("q1", "A"), sink.clone()).await.unwrap(), AskOutcome { queued: false, ahead: 0 });
+            assert_eq!(svc.ask(ask("q2", "A"), sink.clone()).await.unwrap(), AskOutcome { queued: true, ahead: 1 });
+            assert_eq!(svc.ask(ask("q3", "A"), sink.clone()).await.unwrap(), AskOutcome { queued: true, ahead: 2 });
+            fake.until_started(1).await;
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            assert_eq!(fake.started(), ["q1"], "the others wait");
+            assert_eq!(events_of(&seen, "q2"), [AgentEvent::Queued { ahead: 1 }]);
+
+            fake.open("q1").await;
+            fake.until_started(2).await;
+            fake.open("q2").await;
+            fake.until_started(3).await;
+            fake.open("q3").await;
+            until_status(&fx, "A", "q3", "done").await;
+
+            assert_eq!(fake.started(), ["q1", "q2", "q3"]);
+            assert_eq!(fake.0.most.load(Ordering::SeqCst), 1, "never two at once in one conversation");
+            assert_eq!(fake.session_of("q1"), None);
+            assert_eq!(fake.session_of("q2").as_deref(), Some("sess-q1"), "a queued turn continues the session the one before it ended with");
+            assert_eq!(fake.session_of("q3").as_deref(), Some("sess-q1"));
+            let q2 = events_of(&seen, "q2");
+            assert_eq!(q2[..2], [AgentEvent::Queued { ahead: 1 }, AgentEvent::Running]);
+            assert!(matches!(q2.last(), Some(AgentEvent::Done { ok: true, .. })));
+        }
+
+        #[tokio::test]
+        async fn a_question_still_being_recorded_cannot_be_sent_again() {
+            let fx = fixture().await;
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            // As a first send of q1 holds it between its check and its place in the queue, while it records the turn.
+            svc.sending.lock().unwrap().insert("q1".into());
+            assert!(svc.ask(ask("q1", "A"), sink.clone()).await.is_err(), "the second send is refused");
+            assert_eq!(status(&fx, "A", "q1").await, "", "and records nothing");
+            svc.sending.lock().unwrap().clear();
+
+            svc.ask(ask("q1", "A"), sink.clone()).await.unwrap();
+            assert!(svc.sending.lock().unwrap().is_empty(), "a send that went through leaves nothing reserved");
+            fake.open("q1").await;
+            until_status(&fx, "A", "q1", "done").await;
+            assert_eq!(fake.started(), ["q1"]);
+        }
+
+        #[tokio::test]
+        async fn four_conversations_never_run_more_than_two_at_once() {
+            let fx = fixture().await;
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            let mut outcomes = Vec::new();
+            for c in ["A", "B", "C", "D"] {
+                outcomes.push(svc.ask(ask(&format!("{c}1"), c), sink.clone()).await.unwrap().queued);
+            }
+            assert_eq!(outcomes, [false, false, true, true]);
+            fake.until_started(2).await;
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            assert_eq!(fake.started().len(), 2);
+
+            fake.open("A1").await;
+            fake.until_started(3).await;
+            fake.open("B1").await;
+            fake.until_started(4).await;
+            fake.open("C1").await;
+            fake.open("D1").await;
+            for (c, id) in [("A", "A1"), ("B", "B1"), ("C", "C1"), ("D", "D1")] {
+                until_status(&fx, c, id, "done").await;
+            }
+            assert_eq!(fake.started(), ["A1", "B1", "C1", "D1"], "the oldest waiting turn starts first");
+            assert_eq!(fake.0.most.load(Ordering::SeqCst), 2);
+        }
+
+        #[tokio::test]
+        async fn a_waiting_turn_that_is_cancelled_ends_failed_and_never_starts() {
+            let fx = fixture().await;
+            let fake = Fake::default();
+            let (svc, seen, sink) = service(&fx, fake.clone()).await;
+            svc.ask(ask("q1", "A"), sink.clone()).await.unwrap();
+            svc.ask(ask("q2", "A"), sink.clone()).await.unwrap();
+            svc.ask(ask("q3", "A"), sink.clone()).await.unwrap();
+            assert_eq!(status(&fx, "A", "q2").await, "queued");
+
+            svc.cancel("q2").await;
+            let q2 = events_of(&seen, "q2");
+            assert!(matches!(q2.last(), Some(AgentEvent::Done { ok: false, message: Some(m), .. }) if m == REMOVED), "{q2:?}");
+            assert_eq!(status(&fx, "A", "q2").await, "failed");
+
+            fake.open("q1").await;
+            fake.until_started(2).await;
+            fake.open("q3").await;
+            until_status(&fx, "A", "q3", "done").await;
+            assert_eq!(fake.started(), ["q1", "q3"]);
+            let turns = fx.core.pip_turns("A").await.unwrap();
+            assert_eq!(turns.iter().find(|t| t.request_id == "q2").and_then(|t| t.error.as_deref()), Some(REMOVED));
+            svc.cancel("q2").await;
+            assert_eq!(events_of(&seen, "q2").len(), 2, "cancelling it again does nothing");
+        }
+
+        #[tokio::test]
+        async fn stopping_the_running_turn_starts_the_next() {
+            let fx = fixture().await;
+            let fake = Fake::default();
+            let (svc, seen, sink) = service(&fx, fake.clone()).await;
+            svc.ask(ask("q1", "A"), sink.clone()).await.unwrap();
+            svc.ask(ask("q2", "A"), sink.clone()).await.unwrap();
+            fake.until_started(1).await;
+
+            svc.cancel("q1").await;
+            until_status(&fx, "A", "q1", "failed").await;
+            fake.until_started(2).await;
+            assert!(matches!(events_of(&seen, "q1").last(), Some(AgentEvent::Done { ok: false, .. })));
+            assert!(!fake.0.stopped.lock().unwrap().contains("q2"), "only the running turn is stopped");
+            fake.open("q2").await;
+            until_status(&fx, "A", "q2", "done").await;
+        }
+
+        #[tokio::test]
+        async fn a_queued_turn_is_kept_as_queued_then_running_then_done() {
+            let fx = fixture().await;
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            svc.ask(ask("q1", "A"), sink.clone()).await.unwrap();
+            svc.ask(ask("q2", "A"), sink.clone()).await.unwrap();
+            assert_eq!(status(&fx, "A", "q2").await, "queued");
+            let shown = svc.turns("A").await.unwrap();
+            assert_eq!(shown.iter().map(|t| t.status.as_str()).collect::<Vec<_>>(), ["running", "queued"]);
+
+            fake.open("q1").await;
+            until_status(&fx, "A", "q2", "running").await;
+            fake.open("q2").await;
+            until_status(&fx, "A", "q2", "done").await;
+            assert_eq!(svc.turns("A").await.unwrap()[1].text, "answer q2");
+        }
+
+        #[tokio::test]
+        async fn a_queued_turn_that_cannot_start_fails_through_its_own_sink_and_the_queue_moves_on() {
+            let fx = fixture().await;
+            let fake = Fake::default();
+            let (svc, seen, sink) = service(&fx, fake.clone()).await;
+            svc.ask(ask("q1", "A"), sink.clone()).await.unwrap();
+            let mut bad = ask("q2", "A");
+            bad.images = vec![images::tests::png()];
+            svc.ask(bad, sink.clone()).await.unwrap();
+            svc.ask(ask("q3", "A"), sink.clone()).await.unwrap();
+
+            fake.open("q1").await;
+            fake.until_started(2).await;
+            assert_eq!(fake.started(), ["q1", "q3"]);
+            let q2 = events_of(&seen, "q2");
+            assert!(matches!(q2.last(), Some(AgentEvent::Done { ok: false, message: Some(m), .. }) if m.contains("can't look at images")), "{q2:?}");
+            assert_eq!(status(&fx, "A", "q2").await, "failed");
+            fake.open("q3").await;
+            until_status(&fx, "A", "q3", "done").await;
+        }
+
+        #[tokio::test]
+        async fn the_same_request_is_not_queued_twice() {
+            let fx = fixture().await;
+            let (svc, _, sink) = service(&fx, Fake::default()).await;
+            svc.ask(ask("q1", "A"), sink.clone()).await.unwrap();
+            assert!(svc.ask(ask("q1", "A"), sink.clone()).await.is_err());
+        }
+    }
     }
 }

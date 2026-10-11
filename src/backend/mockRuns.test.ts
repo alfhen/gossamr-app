@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Intent, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
+import { PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED } from "./mockRunKinds";
 import { mockDigest } from "./mockRuns";
 
 const spec: RunSpec = {
@@ -279,5 +281,90 @@ describe("mock runs of every kind", () => {
     expect((await backend.runsPreflight({ ...spec, ...storefront, kind: "build" })).rows.some((r) => /may push/.test(r.text))).toBe(false);
     const fork = await backend.runsPreflight({ ...spec, ...webshop, kind: "review", pr: 215 });
     expect(fork.blocking).toBe(true);
+  });
+});
+
+describe("a build from a plan run says whether a person settled the plan, as the backend does", () => {
+  const NOW = Date.parse("2026-09-30T12:00:00Z");
+  const sample = () => new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
+  const planRun = (b: MockBackend) => b.runs.list().find((r) => r.spec.kind === "plan")!;
+  const descriptionDraft = (b: MockBackend) => b.proposals.list().find((p) => p.intent.type === "rewrite" && p.state.type === "pending")!;
+  let n = 0;
+  const build = async (b: MockBackend) => {
+    const plan = planRun(b);
+    const made = await b.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: plan.id, name: `ca-401-build-${(n++).toString(16).padStart(4, "0")}` }, plan.item);
+    if (made.intent.type !== "startRun") throw new Error("a run draft");
+    return { made, spec: made.intent.spec, review: b.runs.review(made.id) };
+  };
+  const settle = async (b: MockBackend, extra: string) => {
+    const draft = descriptionDraft(b);
+    if (draft.intent.type !== "rewrite" || !draft.intent.body) throw new Error("a description draft");
+    await b.proposalsEdit(draft.id, { type: "rewrite", body: `${draft.intent.body.toText}\n\n${extra}` });
+    expect((await b.proposalsApprove(draft.id)).state.type).toBe("applied");
+  };
+
+  it("uses the same sentences as domain/run.rs", () => {
+    const rust = readFileSync(new URL("../../src-tauri/src/domain/run.rs", import.meta.url), "utf8");
+    const constant = (name: string) => new RegExp(`const ${name}: &str = "([^"]*)";`).exec(rust)?.[1];
+    expect(constant("PLAN_FOLLOW")).toBe(PLAN_FOLLOW);
+    expect(constant("PLAN_FOLLOW_UNEDITED")).toBe(PLAN_FOLLOW_UNEDITED);
+    expect(PLAN_FOLLOW_UNEDITED).not.toContain("edited and approved");
+    expect(PLAN_FOLLOW_UNEDITED).toContain("do not deviate silently");
+  });
+
+  it("carries the run's raw answer, marked unsettled, while the description draft waits, with an amber preflight row", async () => {
+    const b = sample();
+    const plan = planRun(b);
+    const { spec, review } = await build(b);
+    expect(spec.planApproved).toBe(false);
+    expect(spec.plan).toBe(plan.result);
+    expect(review.prompt).toContain(`${PLAN_FOLLOW_UNEDITED}\n\nPlan from run ${plan.id}:\n<<<PLAN\n## Approach`);
+    expect(review.prompt).not.toContain("edited and approved");
+    const pre = await b.runsPreflight(spec);
+    expect(pre.rows).toContainEqual({ level: "amber", text: `This build follows run ${plan.id}'s own plan, which nobody edited or approved on the ticket. Approve the Gossamr Plan draft first, or edit the plan below.` });
+    expect(pre.blocking).toBe(false);
+  });
+
+  it("carries the description draft the person edited and approved, without its intro, and says a person settled it", async () => {
+    const b = sample();
+    const plan = planRun(b);
+    await settle(b, "Marker line the person added.");
+    const { spec, review } = await build(b);
+    expect(spec.planApproved).toBe(true);
+    expect(spec.plan).toContain("Marker line the person added.");
+    expect(spec.plan).toContain("Move the three welcome emails");
+    expect(spec.plan).not.toContain("Drafted by an agent run");
+    expect(review.prompt).toContain(`${PLAN_FOLLOW}\n\nPlan from run ${plan.id}:\n<<<PLAN\n${spec.plan}\nPLAN>>>`);
+    const pre = await b.runsPreflight(spec);
+    expect(pre.rows.some((r) => r.level === "green" && r.text.includes(`follows the plan from run ${plan.id}`))).toBe(true);
+  });
+
+  it("puts the mark into the digest", async () => {
+    const { spec } = await build(sample());
+    expect(mockDigest({ ...spec, planApproved: true })).not.toBe(mockDigest(spec));
+    expect(mockDigest({ ...spec, planApproved: false })).toBe(mockDigest({ ...spec, planApproved: undefined }));
+  });
+
+  it("reads the settled plan when asked again after approving, and a plan the person edits in the draft is theirs until it is removed", async () => {
+    const b = sample();
+    const { made } = await build(b);
+    await settle(b, "Settled later.");
+    const fresh = await b.runsRefreshPlan(made.id);
+    expect(fresh.intent.type === "startRun" && fresh.intent.spec).toMatchObject({ planApproved: true });
+    expect(fresh.intent.type === "startRun" && fresh.intent.spec.plan).toContain("Settled later.");
+
+    const c = sample();
+    const own = await build(c);
+    const unchanged = await c.proposalsEdit(own.made.id, { type: "run", plan: own.spec.plan! });
+    expect(unchanged.intent.type === "startRun" && unchanged.intent.spec.planApproved).toBe(false);
+    const edited = await c.proposalsEdit(own.made.id, { type: "run", plan: "1. My own plan." });
+    expect(edited.intent.type === "startRun" && edited.intent.spec.planApproved).toBe(true);
+    expect(c.runs.review(own.made.id).prompt).toContain(PLAN_FOLLOW);
+    const removed = await c.proposalsEdit(own.made.id, { type: "run", plan: "" });
+    expect(removed.intent.type === "startRun" && removed.intent.spec).toMatchObject({ plan: null, planFromRun: null, planApproved: false });
+    const again = await build(c);
+    await c.proposalsEdit(again.made.id, { type: "run", plan: "1. Mine." });
+    const triage = await c.proposalsEdit(again.made.id, { type: "run", kind: "triage" });
+    expect(triage.intent.type === "startRun" && triage.intent.spec).toMatchObject({ plan: null, planApproved: false });
   });
 });

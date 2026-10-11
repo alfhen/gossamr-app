@@ -233,7 +233,28 @@ CREATE TABLE run_report_tokens (
 ) WITHOUT ROWID;
 CREATE INDEX run_report_tokens_run ON run_report_tokens(run_id);";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS];
+/// Pip's conversations, so one outlives a reload and a restart. A turn is two rows under its request id: the person's
+/// (`role` 'user': the prompt and `meta`, the quote, what Pip was looking at and how many images were sent) and Pip's
+/// (`role` 'pip': the answer, its steps, status, session and usage). 'wake' is kept for turns nobody typed.
+const PIP_TURNS: &str = "
+CREATE TABLE pip_turns (
+  conversation TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  prompt TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL DEFAULT '',
+  steps TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL,
+  error TEXT,
+  session_id TEXT,
+  meta TEXT,
+  usage TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (request_id, role)
+) WITHOUT ROWID;
+CREATE INDEX pip_turns_conversation ON pip_turns(conversation, created_at);";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -260,7 +281,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
-        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links", "runs", "run_events", "run_reports", "run_report_tokens"] {
+        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links", "runs", "run_events", "run_reports", "run_report_tokens", "pip_turns"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
@@ -390,14 +411,44 @@ mod tests {
         for t in ["proposals", "item_links"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 8);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
     }
 
     #[test]
-    fn a_fresh_file_is_at_version_eight() {
+    fn a_fresh_file_is_at_version_nine() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 8);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
+    }
+
+    #[test]
+    fn a_version_eight_file_keeps_its_runs_and_drafts_and_gains_pip_turns() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..8] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 8).unwrap();
+        conn.execute(
+            "INSERT INTO runs (id, proposal_id, connection_id, kind, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES ('r1', 'p1', 'c', 'investigate', 'a/b', '/w', 'done', 't', 't', '{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO proposals (id, connection_id, state, created_at, updated_at, data) VALUES ('p1', 'c', 'pending', 't', 't', '{}')", []).unwrap();
+        conn.execute("INSERT INTO run_reports (run_id, revision) VALUES ('r1', 2)", []).unwrap();
+        assert!(!tables(&conn).contains(&"pip_turns".to_string()));
+
+        migrate(&mut conn).unwrap();
+
+        for t in ["runs", "proposals", "run_reports"] {
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
+        }
+        assert!(tables(&conn).contains(&"pip_turns".to_string()));
+        assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
+
+        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
     }
 
     #[test]
@@ -427,7 +478,10 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         conn.execute("INSERT INTO sync_state (connection_id, cursor) VALUES ('c', 'x')", []).unwrap();
+        conn.execute("INSERT INTO pip_turns (conversation, request_id, role, status, created_at) VALUES ('workspace', 'q1', 'pip', 'done', 't')", []).unwrap();
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
     }
 }

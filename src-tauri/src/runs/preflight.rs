@@ -123,8 +123,8 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
             } else if config_dir.is_some() {
                 rows.add(Level::Green, "Agents run as you, with your Claude settings (no default permission mode is set)");
             }
-            if let Some(from) = spec.and_then(|s| s.plan_from_run.as_deref().zip(s.plan.as_deref())) {
-                rows.add(Level::Green, format!("This build follows the plan from run {} as written in the prompt ({} characters). If the plan is wrong it is told to stop and say so.", from.0, from.1.chars().count()));
+            if let Some(spec) = spec {
+                plan_row(&mut rows, spec);
             }
             if let Some(from) = spec.and_then(|s| s.build_from_run.as_deref().zip(s.build_account.as_deref())) {
                 rows.add(Level::Green, format!("This review carries the builder's account from run {} in the prompt ({} characters), as a claim to check against the diff.", from.0, from.1.chars().count()));
@@ -151,6 +151,17 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
     }
     let blocking = rows.0.iter().any(|r| r.level == Level::Red);
     Preflight { rows: rows.0, blocking }
+}
+
+/// Green for a plan a person settled; amber, never red, for the planning run's own answer, which the person may still
+/// choose to build from.
+fn plan_row(rows: &mut Rows, spec: &RunSpec) {
+    let Some((from, plan)) = spec.plan_from_run.as_deref().zip(spec.plan.as_deref()) else { return };
+    if spec.plan_approved {
+        rows.add(Level::Green, format!("This build follows the plan from run {from} as written in the prompt ({} characters). If the plan is wrong it is told to stop and say so.", plan.chars().count()));
+    } else {
+        rows.add(Level::Amber, format!("This build follows run {from}'s own plan, which nobody edited or approved on the ticket. Approve the Gossamr Plan draft first, or edit the plan below."));
+    }
 }
 
 /// Amber, not red: the config is read as Claude writes it today, and a folder it doesn't list may still be trusted.

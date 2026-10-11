@@ -7,6 +7,7 @@ import { needsPerson, resultHeadline, runTitle, stateView } from "../workspace/a
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
 import type { AskRequest, ClaudeEvent } from "./claude";
+import { mockPipTurns, mockUsage } from "./mockPipTurns";
 
 /** What the scripted Pip does for one question. */
 export interface PipScript {
@@ -490,6 +491,8 @@ export interface PipDrafter {
   pipRunDraft(item: ItemRef, focus: string | null, requestId: string): Promise<unknown>;
   /** Drafts an investigation with no ticket the way propose_run does: Pip gives a repository and a prompt, the backend builds the rest. */
   pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string): Promise<unknown>;
+  /** Whether a draft from the question `requestId` is kept already. */
+  pipDrafted(requestId: string): boolean;
 }
 
 const listeners = new Set<Listener>();
@@ -499,6 +502,10 @@ const running = new Map<string, () => void>();
 const discussing = new Map<string, string>();
 
 export const mockPipEvents = {
+  /** Tells every listener about `e`, as the app's `claude` event does. */
+  emit(requestId: string, e: ClaudeEvent) {
+    listeners.forEach((l) => l(requestId, e));
+  },
   on(cb: Listener) {
     listeners.add(cb);
     return () => void listeners.delete(cb);
@@ -509,21 +516,25 @@ export const mockPipEvents = {
   },
 };
 
-const emit = (id: string, e: ClaudeEvent) => listeners.forEach((l) => l(id, e));
+const emit = (id: string, e: ClaudeEvent) => mockPipEvents.emit(id, e);
 const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Streams the scripted answer for `req`. `drafter` receives the draft the script proposes. */
-export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | null, pace = 25): Promise<void> {
+/** Streams the scripted answer for `req` and resolves with the session it used. `drafter` receives the draft the script proposes. */
+export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | null, pace = 25): Promise<string> {
   let stopped = false;
   running.set(req.requestId, () => (stopped = true));
   const session = req.sessionId ?? `mock-session-${req.requestId}`;
+  // Kept the way the app keeps a turn: the question now, steps as they come, the answer and its usage at the end.
+  mockPipTurns.begin(req.conversation ?? "workspace", req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 });
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });
+  let said = "";
   try {
     for (const label of script.steps) {
       await pause(pace * 6);
       if (stopped) break;
+      mockPipTurns.step(req.requestId, label);
       emit(req.requestId, { type: "tool", label });
     }
     if (!stopped && script.draft) await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId);
@@ -536,9 +547,17 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
     for (const word of script.text.match(/\S+\s*/g) ?? []) {
       if (stopped) break;
       await pause(pace);
+      said += word;
+      mockPipTurns.text(req.requestId, word);
       emit(req.requestId, { type: "text", text: word });
     }
-    emit(req.requestId, { type: "done", sessionId: session, ok: !stopped, message: stopped ? "Stopped" : null });
+    const usage = mockUsage(req.prompt, said);
+    mockPipTurns.finish(req.requestId, { ok: !stopped, error: stopped ? "Stopped" : null, sessionId: session, usage });
+    emit(req.requestId, { type: "done", sessionId: session, ok: !stopped, message: stopped ? "Stopped" : null, usage });
+    return session;
+  } catch (err) {
+    mockPipTurns.finish(req.requestId, { ok: false, error: String(err), sessionId: session, usage: null });
+    throw err;
   } finally {
     running.delete(req.requestId);
   }

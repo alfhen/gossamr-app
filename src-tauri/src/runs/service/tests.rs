@@ -936,11 +936,18 @@ mod kinds {
         let review = rig.fx.core.runs_review(&p.id).await.unwrap();
         let run = rig.fx.core.runs_approve(&p.id, &review.digest).await.unwrap();
         let pre = rig.svc.preflight(Some(run.spec.clone())).await.unwrap();
-        assert!(pre.rows.iter().any(|r| r.level == Level::Green && r.text.contains(&format!("follows the plan from run {}", plan.id))), "{pre:?}");
+        let unedited = format!("This build follows run {}'s own plan, which nobody edited or approved on the ticket. Approve the Gossamr Plan draft first, or edit the plan below.", plan.id);
+        assert!(pre.rows.iter().any(|r| r.level == Level::Amber && r.text == unedited), "{pre:?}");
+        assert!(!pre.blocking, "an unedited plan warns and doesn't block");
+        assert!(!pre.rows.iter().any(|r| r.level == Level::Green && r.text.contains("follows the plan from run")));
+        let settled = rig.svc.preflight(Some(RunSpec { plan_approved: true, ..run.spec.clone() })).await.unwrap();
+        assert!(settled.rows.iter().any(|r| r.level == Level::Green && r.text.contains(&format!("follows the plan from run {}", plan.id))), "{settled:?}");
+        assert!(!settled.rows.iter().any(|r| r.text.contains("nobody edited")));
         rig.svc.launch(&run.id).await.unwrap();
         let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
         assert_eq!(req.prompt, review.prompt);
         assert!(req.prompt.contains("<<<PLAN\n## Approach\n\nRound once.") && req.prompt.contains("do not deviate silently") && req.prompt.contains("do not push"));
+        assert!(req.prompt.contains("planning run's own answer") && !req.prompt.contains("edited and approved"));
     }
 
     #[tokio::test]

@@ -150,7 +150,7 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
           }
         >
           <p className="m-0 text-xs text-ws-ink2">
-            The plan a person approved from run {planFrom}, sent whole and as data. {editor?.plan ? "Edit it before you approve; what is here is exactly what the agent gets. It is read again from the run only when you press the button." : ""} {plan.length.toLocaleString("en")} characters.
+            {review.spec.planApproved ? `The plan a person approved from run ${planFrom}` : `The unedited plan from run ${planFrom}, which nobody approved on the ticket`}, sent whole and as data. {editor?.plan ? "Edit it before you approve; what is here is exactly what the agent gets. It is read again from the run only when you press the button." : ""} {plan.length.toLocaleString("en")} characters.
           </p>
           {editor?.plan ? (
             <textarea

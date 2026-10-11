@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { mockAsk, mockPipEvents, scriptPip } from "../backend/mockPip";
-import type { AskRequest, ClaudeEvent } from "../backend/claude";
+import { claude, type AskRequest, type ClaudeEvent } from "../backend/claude";
 import { ALL } from "../lib/filter";
 import type { ScreenContext, WorkEvent } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
+import { askPip } from "./askPip";
 import { handlePipView } from "./PipExtras";
+import { useToasts } from "./toasts";
 import { commentNotes, historyNotes, linkRows } from "./peekLogic";
 import { NUDGE_GAP_MS, NUDGE_DWELL_MS, LARGE_LIST, nudgeCandidates, nudgeDelay, pickNudge, type NudgeScene } from "./nudges";
 import { isStillFiltered, usePip } from "./pipStore";
@@ -277,5 +279,24 @@ describe("peek logic", () => {
     const name = (a: string | null) => (a === "sam" ? "Sam" : "Nobody");
     expect(commentNotes(events, name).map((n) => [n.who, n.text])).toEqual([["Sam", "first"], ["Sam", "later"]]);
     expect(historyNotes(events, name).map((n) => n.text)).toEqual(["moved from To Do to Done"]);
+  });
+});
+
+describe("askPip", () => {
+  it("queues a question while Pip is answering instead of refusing it", async () => {
+    useClaude.setState({ byTicket: { workspace: { sessionId: "s1", turns: [{ requestId: "r1", prompt: "first", steps: [], text: "", status: "running", error: null }] } } });
+    const toasts = useToasts.getState().toasts.length;
+    const sent: AskRequest[] = [];
+    const ask = vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), { queued: true, ahead: 1 }));
+    try {
+      askPip("and then?");
+      await vi.waitFor(() => expect(useClaude.getState().byTicket.workspace.turns).toHaveLength(2));
+      await vi.waitFor(() => expect(useClaude.getState().byTicket.workspace.turns[1].status).toBe("queued"));
+    } finally {
+      ask.mockRestore();
+    }
+    expect(useToasts.getState().toasts).toHaveLength(toasts);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ prompt: "and then?", sessionId: "s1", conversation: "workspace" });
   });
 });

@@ -130,6 +130,9 @@ impl Harness {
         if dones != 1 || !matches!(all.last(), Some(AgentEvent::Done { .. })) {
             return Err(format!("a run must end with exactly one Done: {all:?}"));
         }
+        if all.iter().any(AgentEvent::is_queue_news) {
+            return Err(format!("only the service says a turn is queued or running: {all:?}"));
+        }
         Ok(all)
     }
 
@@ -629,7 +632,7 @@ impl AgentProvider for Scripted {
                 tokio::select! { _ = work => false, _ = cancel_rx => true }
             };
             let message = stopped.then(|| "Stopped".to_string());
-            let _ = tx.send(AgentEvent::Done { session_id: None, ok: !stopped && !crashes, message });
+            let _ = tx.send(AgentEvent::Done { session_id: None, ok: !stopped && !crashes, message, usage: None });
             live.fetch_sub(1, Ordering::SeqCst);
         });
         Ok(rx)

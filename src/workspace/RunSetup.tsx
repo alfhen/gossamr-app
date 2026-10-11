@@ -257,10 +257,24 @@ function Heading({ p }: { p: SetupViewProps }) {
           This review follows build run {p.review.spec.buildFromRun}, pinned to the pull request&apos;s commit as GitHub has it now. What the builder says it did is its own part of the prompt below, in full, and you can edit it before you start. The reviewer is told to check it against the diff and the ticket, not to believe it.
         </p>
       )}
-      {p.review?.spec.planFromRun && p.review.plan && (
+      {p.review?.spec.planFromRun && p.review.plan && p.review.spec.planApproved && (
         <p className="m-0 text-ws-ink2">
           This build follows the plan from run {p.review.spec.planFromRun}. The plan is its own part of the prompt below, in full, and you can edit it before you start. If the plan turns out to be wrong, the agent is told to stop and say so instead of working around it.
         </p>
+      )}
+      {p.review?.spec.planFromRun && p.review.plan && !p.review.spec.planApproved && (
+        <div data-plan-unedited role="note" className="grid gap-1.5 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1.5 text-sm">
+          <p className="m-0">
+            This build follows the unedited plan from run {p.review.spec.planFromRun}: the planning run&apos;s own answer, because the description draft that adds this plan to the ticket wasn&apos;t approved. The agent is told nobody settled it. Approve that description draft on the ticket and read the plan again, or edit the plan below before you start.
+          </p>
+          {p.on.refreshPlan && (
+            <span>
+              <Btn disabled={p.busy || p.phase !== "ready"} onClick={p.on.refreshPlan}>
+                Read the plan again
+              </Btn>
+            </span>
+          )}
+        </div>
       )}
     </div>
   );

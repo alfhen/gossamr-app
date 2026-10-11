@@ -15,6 +15,7 @@ impl From<rusqlite::Error> for Error {
 
 mod cache;
 mod code;
+mod pip_turns;
 mod proposals;
 mod reports;
 mod runs;
@@ -23,6 +24,9 @@ mod watch;
 
 pub use cache::{stamp, SyncState, Upserted};
 pub use code::CachedHttp;
+pub use pip_turns::PipTurn;
+#[cfg(test)]
+pub use pip_turns::{INTERRUPTED, NEVER_RAN};
 
 pub struct Db {
     conn: Connection,

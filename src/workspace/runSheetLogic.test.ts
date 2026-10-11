@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { renderPrompt } from "../backend/mockRuns";
 import type { CodeChange, Preflight, Proposal, Run, RunReview, RunSpec, RunState } from "../types";
-import { MAY_TOUCH, defaultRepo, kindBlock, permissionMode, prChoices, reviewablePr, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, linkedRepo, repoChoices, repoShortage, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
+import { MAY_TOUCH, defaultRepo, kindBlock, permissionMode, prChoices, reviewablePr, savedAsTyped, sheetKey, findRunDraft, flagCounts, formatBytes, highlights, launchCommand, linkedRepo, PLAN_INTRO, PLAN_INTRO_UNEDITED, repoChoices, repoShortage, splitPrompt, startBlock, stopControl, timelineTone } from "./runSheetLogic";
 
 const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
   kind: "investigate",
@@ -342,5 +342,20 @@ describe("the permission mode named beside the push option", () => {
     expect(permissionMode({ rows: [{ level: "green", text: "Agents run as you, in your permission mode: auto" }], blocking: false })).toBe("auto");
     expect(permissionMode({ rows: [{ level: "green", text: "Agents run as you, with your Claude settings (no default permission mode is set)" }], blocking: false })).toBeNull();
     expect(permissionMode(null)).toBeNull();
+  });
+});
+
+describe("the plan part of a build's prompt", () => {
+  it("starts at either opening sentence, settled or not, and the parts still give back the prompt", () => {
+    for (const planApproved of [true, false]) {
+      const r = review({ kind: "build", instruction: "Make the change.", plan: "1. Fix it.", planFromRun: "run-7", planApproved, focus: "Mind the refunds.", ticketBlock: "CA-1: t" });
+      const parts = splitPrompt(r);
+      expect(parts.map((p) => p.id)).toEqual(["base", "template", "focus", "plan", "ticket"]);
+      const plan = parts.find((p) => p.id === "plan")!.text;
+      expect(plan.startsWith(planApproved ? PLAN_INTRO : PLAN_INTRO_UNEDITED)).toBe(true);
+      expect(plan.endsWith("<<<PLAN\n1. Fix it.\nPLAN>>>")).toBe(true);
+      expect(plan.includes("edited and approved")).toBe(planApproved);
+      expect(joined(r)).toBe(r.prompt);
+    }
   });
 });

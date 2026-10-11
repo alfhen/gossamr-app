@@ -10,6 +10,7 @@ import { AgentMenuView } from "./AgentMenu";
 import { DraftCard } from "./DraftCard";
 import { KIND_LABEL } from "./agentsLogic";
 import { PromptParts } from "./RunPrompt";
+import { RunSetupView, type SetupViewProps } from "./RunSetup";
 import { RunSheetView, type RunSheetActions } from "./RunSheet";
 import { buildFromPlanControl, buildFromPlanOptions, planCommentControl, planCommentMessage, savedAsTyped, startBlock } from "./runSheetLogic";
 
@@ -164,9 +165,72 @@ describe("a build draft that follows a plan", () => {
   it("says so on its card, with the plan's size, and not for other drafts", async () => {
     const made = await backend.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: plan.id }, plan.item);
     const html = card(made);
-    expect(html).toContain("Follows the plan from run");
+    expect(html).toContain("Follows the unedited plan from run");
     expect(html).toContain("shown whole in the prompt");
+    if (made.intent.type !== "startRun") throw new Error("a run draft");
+    const settled = card({ ...made, intent: { ...made.intent, spec: { ...made.intent.spec, planApproved: true } } });
+    expect(settled).toContain("Follows the plan from run");
+    expect(settled).not.toContain("unedited");
     const plain = await backend.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: null, name: "ca-401-other-0a1b" }, plan.item);
     expect(card(plain)).not.toContain("Follows the plan");
+  });
+});
+
+describe("the setup sheet of a build that follows a plan", () => {
+  const props = (review: RunReview, refreshPlan = vi.fn()): SetupViewProps => ({
+    item: plan.item,
+    ticketTitle: "Welcome flow refresh",
+    kind: "build",
+    kindEditable: false,
+    pr: null,
+    prs: { status: "idle", query: "", choices: [], error: null },
+    repo: plan.spec.repo,
+    repos: [plan.spec.repo],
+    shortage: null,
+    reposError: null,
+    repoEditable: false,
+    ticketless: false,
+    project: null,
+    projects: [],
+    choice: null,
+    review,
+    preflight: null,
+    phase: "ready",
+    busy: false,
+    error: null,
+    cloning: false,
+    cloneError: null,
+    changed: false,
+    fromPip: false,
+    instruction: review.instruction,
+    onInstruction: vi.fn(),
+    base: review.spec.base,
+    onBase: vi.fn(),
+    wide: false,
+    onWide: vi.fn(),
+    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn(), chooseKind: vi.fn(), chooseProject: vi.fn(), searchPrs: vi.fn(), choosePr: vi.fn(), setAllowPush: vi.fn(), refreshPlan },
+  });
+  const drafted = async (planApproved?: boolean) => {
+    const made = await backend.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: plan.id, name: `ca-401-setup-${planApproved ? "a" : "b"}${Math.random().toString(16).slice(2, 6)}` }, plan.item);
+    const review = backend.runs.review(made.id);
+    return planApproved === undefined ? review : { ...review, spec: { ...review.spec, planApproved } };
+  };
+
+  it("says, as a note, that the build follows the unedited plan when no plan draft was approved, and offers to read it again", async () => {
+    const review = await drafted();
+    expect(review.spec.planApproved).toBe(false);
+    const html = renderToStaticMarkup(<RunSetupView {...props(review)} />);
+    expect(html).toMatch(/<div data-plan-unedited="true" role="note"/);
+    expect(html).toContain(`follows the unedited plan from run ${plan.id}`);
+    expect(html).toContain("the description draft that adds this plan to the ticket wasn&#x27;t approved");
+    expect(button(html, "Read the plan again")).toBeTruthy();
+    expect(html).not.toContain("This build follows the plan from run");
+  });
+
+  it("keeps today's sentence and shows no note when a person settled the plan", async () => {
+    const html = renderToStaticMarkup(<RunSetupView {...props(await drafted(true))} />);
+    expect(html).not.toContain("data-plan-unedited");
+    expect(html).not.toContain("unedited");
+    expect(html).toContain(`This build follows the plan from run ${plan.id}.`);
   });
 });

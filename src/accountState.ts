@@ -1,4 +1,4 @@
-import { stopWatchingProposals, useClaude } from "./claudeStore";
+import { forgetConversations, stopWatchingProposals } from "./claudeStore";
 import { stopClassicSync, useStore } from "./store";
 import { resetPip } from "./workspace/pipStore";
 import { readStored, writeStored } from "./workspace/storage";
@@ -22,10 +22,7 @@ export function resetAccountState(accountId: string | null) {
   const changed = accountId !== lastAccount();
   stopClassicSync();
   stopWatchingProposals();
-  for (const conversation of Object.values(useClaude.getState().byTicket)) {
-    conversation.turns.forEach((t) => t.images?.forEach((i) => URL.revokeObjectURL(i.url)));
-  }
-  useClaude.setState({ open: false, byTicket: {}, proposals: [] });
+  forgetConversations();
   resetPip(changed);
   useWorkspace.getState().dispose();
   useToasts.getState().clear();

@@ -485,6 +485,8 @@ export interface RunSpec {
   plan?: string | null;
   /** The plan run it came from. Set with `plan`, builds only. */
   planFromRun?: string | null;
+  /** Whether `plan` is text a person settled: the applied Gossamr Plan description draft, or a plan edited in this draft. */
+  planApproved?: boolean;
   /** For a review made from a build run: the builder's final answer, sent as data apart from the instruction. */
   buildAccount?: string | null;
   /** The build run it came from. Set with `buildAccount`, reviews only. */
