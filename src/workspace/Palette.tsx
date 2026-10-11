@@ -5,7 +5,7 @@ import { itemsByFilter, pendingDrafts, useWorkspace } from "../workspaceStore";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
+import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
 import { useAgentsEnabled } from "./agentsFlag";
@@ -15,6 +15,7 @@ import { useRunSetup } from "./runSetupStore";
 import { useAttention, useRuns } from "./runsStore";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
 import { openTicketByKey } from "./jump";
+import { focusPeekOf } from "./PeekSheet";
 import { useGithubUi } from "./githubUi";
 import { openPull } from "./openPull";
 import { openOnPipHome, togglePip, useWorkstreams } from "./workstreamsStore";
@@ -169,7 +170,8 @@ export function appActions(): CommandActions {
         (e) => ws.report(`Couldn't ${watched ? "watch" : "unwatch"} ${target.name}`, e),
       );
     },
-    openTicket: (key) => void openTicketByKey(key),
+    // A ticket opened from here takes the keyboard into its peek, not back to the board behind it.
+    openTicket: (key) => void openTicketByKey(key).then((shown) => shown && focusPeekOf(key)),
     openActivity: () => tabs.setRoute("activity"),
     openDrafts: () => (useActivity.getState().setChip("drafts"), tabs.setRoute("activity")),
     connectGithub: () => useGithubUi.getState().openConnect(),
@@ -198,7 +200,10 @@ export function appActions(): CommandActions {
       if (open) useWorkstreams.getState().askClose(open.workstream.id);
     },
     holdAllWorkstreams: () => void useWorkstreams.getState().holdAll(),
-    jumpToItem,
+    jumpToItem: (item) => {
+      jumpToItem(item);
+      focusPeekOf(item.item.key);
+    },
     askPip,
     openPipHome: () => tabs.setRoute("pip"),
     openWorkstream: openOnPipHome,
@@ -219,7 +224,8 @@ export async function askPipToPlan(item: WorkItem) {
   askPip(`plan ${item.item.key}`);
 }
 
-type Step = { type: "search" } | { type: "project" } | { type: "title"; container: WorkContainer };
+/** What the palette asks: anything, a new ticket's project, then its title, or (opened by 'Start a workstream…') the ticket to start a workstream on. */
+type Step = { type: "search" } | { type: "project" } | { type: "title"; container: WorkContainer } | { type: "workstream" };
 
 const currentProject = (): ContainerRef | null => {
   const f = activeTab(useTabs.getState()).filter;
@@ -276,10 +282,13 @@ export function Palette() {
   const selected = useTabs((s) => s.selected);
   const workstreams = useWorkstreams((s) => s.list);
   const tab = useTabs((s) => activeTab(s));
-  // Opened to do one thing (as Pip home's 'Start a workstream'), the search starts with its words.
-  const [query, setQuery] = useState(() => usePrefs.getState().paletteSeed);
+  // Opened to do one thing, the search starts with its words; opened by Pip home's 'Start a workstream…', it asks for the
+  // ticket alone, offering the person's own first.
+  const [seed] = useState(() => usePrefs.getState().paletteSeed);
+  const [query, setQuery] = useState(() => (seed === START_WORKSTREAM ? "" : seed));
   const [active, setActive] = useState(0);
-  const [step, setStep] = useState<Step>({ type: "search" });
+  const [step, setStep] = useState<Step>(() => (seed === START_WORKSTREAM ? { type: "workstream" } : { type: "search" }));
+  const me = useWorkspace((s) => s.me);
   const unwatched = useUnwatchedMatches(query, step.type === "search");
 
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
@@ -297,6 +306,7 @@ export function Palette() {
       return title ? [{ id: "new:create", group: "Create" as const, icon: "＋", label: `Draft “${title}” in ${container.name}`, hint: "↵", run: () => void draftTicket(container, title) }] : [];
     }
     const actions = { ...appActions(), newTicket: () => go({ type: "project" }) };
+    if (step.type === "workstream") return startWorkstreamCommands(Object.values(items), START_WORKSTREAM + query, workstreams, actions, SUGGESTED_TICKETS, me);
     const ticket = peekedTicket();
     const ctx: CommandContext = {
       project: projectOf(tab.filter) ?? null,
@@ -324,16 +334,17 @@ export function Palette() {
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams]);
+  }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me]);
 
-  const prompting = step.type !== "search";
+  // A new ticket's project and title are steps back to the search; the workstream's ticket is all the palette was opened for.
+  const prompting = step.type === "project" || step.type === "title";
   return (
     <PaletteView
       query={query}
       results={results}
       active={Math.min(active, Math.max(0, results.length - 1))}
-      placeholder={step.type === "project" ? "Which project is the ticket for?" : step.type === "title" ? `Title of the new ${step.container.name} ticket` : undefined}
-      empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : undefined}
+      placeholder={step.type === "project" ? "Which project is the ticket for?" : step.type === "title" ? `Title of the new ${step.container.name} ticket` : step.type === "workstream" ? "Start a workstream: type a ticket key or words" : undefined}
+      empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : step.type === "workstream" ? (query.trim() ? `No ticket without a workstream matches “${query}”.` : "Every open ticket has a workstream already.") : undefined}
       hints={prompting ? ["↑↓ move", "↵ select", "esc back"] : undefined}
       onQuery={(q) => (setQuery(q), setActive(0))}
       onActive={setActive}

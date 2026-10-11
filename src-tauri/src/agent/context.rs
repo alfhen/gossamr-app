@@ -763,10 +763,12 @@ mod tests {
             rules: Default::default(),
             basis: None,
             drifted: Vec::new(),
+            resume_mode: None,
         };
         WorkstreamContext {
             workstream,
             stage: Stage::Triage,
+            review_blocking: false,
             runs: vec![("R1".into(), stopped), ("R2".into(), triage)],
             drafts,
             recent_person_actions: vec![WorkstreamEvent::new("w1", Actor::Person, "run_stopped", now()).run("r1")],
@@ -774,6 +776,15 @@ mod tests {
             event: None,
             last_trip: None,
         }
+    }
+
+    #[test]
+    fn a_workstream_whose_newest_review_is_blocking_says_so_after_its_stage() {
+        let mut ws = in_workstream(vec![]);
+        ws.stage = crate::domain::workstream::Stage::Review;
+        assert!(ws.block().contains("· stage Review\n"), "{}", ws.block());
+        ws.review_blocking = true;
+        assert!(ws.block().contains("· stage Review · the newest review asked for changes\n"), "{}", ws.block());
     }
 
     #[test]

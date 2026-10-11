@@ -3,7 +3,7 @@ import { REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, le
 import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import type { BasisField, Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
-import { needsPerson, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
+import { liveCounts, liveWords, needsPerson, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
 import type { AskRequest, ClaudeEvent, EventMeta } from "./claude";
@@ -426,10 +426,12 @@ export function agentSummary(runs: readonly Run[], now: number): string {
   const waiting = runs.filter(needsPerson);
   const going = runs.filter((r) => r.state === "working" || r.state === "launching" || r.state === "queued");
   const done = runs.filter((r) => r.state === "done");
+  const live = liveCounts(runs, now);
   const line = (r: Run) => `- **${r.item?.key ?? r.spec.repo}** ${stateView(r, now).label.toLowerCase()}${r.lastDetail ? `: ${r.lastDetail}` : r.needs ? `: ${r.needs}` : ""}`;
   const part = (title: string, list: readonly Run[]) => (list.length ? `${title}\n${list.slice(0, 5).map(line).join("\n")}` : "");
   return [
-    `You have ${runs.length} agent ${runs.length === 1 ? "run" : "runs"}: ${waiting.length} waiting on you, ${going.length} working, ${done.length} ready to review.`,
+    // Counted as the Agents view's summary and Pip home's footer count them, quiet runs apart.
+    `You have ${runs.length} agent ${runs.length === 1 ? "run" : "runs"}: ${[`${waiting.length} waiting on you`, ...(liveWords(live).length ? liveWords(live) : ["none running"]), ...(live.quiet ? [`${live.quiet} quiet`] : []), `${done.length} ready to review`].join(", ")}.`,
     part("Waiting on you", waiting),
     part("Working", going),
     part("Ready to review", done),

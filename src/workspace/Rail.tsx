@@ -236,14 +236,23 @@ function HoldAllButton() {
   );
 }
 
-/** "1 needs you" or "3 need you" over a rail button. */
-function NeedsBadge({ count }: { count: number }) {
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** A count over a rail button, named and titled with what it counts: three of them sit side by side and count different things. */
+function RailBadge({ count, what }: { count: number; what: string }) {
   return (
-    <span aria-label={`${count} ${count === 1 ? "needs" : "need"} you`} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
+    <span aria-label={what} title={what} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
       {count > 99 ? "99+" : count}
     </span>
   );
 }
+
+/** What each rail badge counts, as its tooltip says and as the button's name ends ("Agents, 3 agent runs wait on you"). */
+export const railBadgeText = {
+  activity: (n: number) => plural(n, "unread update", "unread updates"),
+  agents: (n: number) => `${plural(n, "agent run waits", "agent runs wait")} on you`,
+  pipHome: (n: number) => `${plural(n, "item waits", "items wait")} in Needs you`,
+};
 
 /**
  * Pip home, with how many things wait on the person across the workstreams. Its context menu (a right click, or the
@@ -259,7 +268,7 @@ function PipHomeButton({ current }: { current: boolean }) {
   return (
     <div ref={root} className="relative">
       <RailButton
-        label={count > 0 ? `Pip home, ${count} ${count === 1 ? "needs" : "need"} you` : "Pip home"}
+        label={count > 0 ? `Pip home, ${railBadgeText.pipHome(count)}` : "Pip home"}
         hint={PIP_HOME_HINT}
         tip={!open}
         current={current}
@@ -275,7 +284,7 @@ function PipHomeButton({ current }: { current: boolean }) {
         className={`text-lg ${plain(current)}`}
       >
         <span aria-hidden>⌂</span>
-        {count > 0 && <NeedsBadge count={count} />}
+        {count > 0 && <RailBadge count={count} what={railBadgeText.pipHome(count)} />}
       </RailButton>
       {open && (
         <div role="dialog" aria-label="Needs you" className="absolute bottom-0 left-full z-40 ml-2 w-[300px] overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win text-ws-ink shadow-ws-pop">
@@ -340,22 +349,14 @@ export function Rail() {
         <ViewsButton />
       </nav>
       <div className="flex shrink-0 flex-col items-center gap-2 border-t border-ws-sep pt-2.5">
-        <RailButton label="Activity" current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
+        <RailButton label={unread > 0 ? `Activity, ${railBadgeText.activity(unread)}` : "Activity"} current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
           <BellIcon />
-          {unread > 0 && (
-            <span aria-label={`${unread} unread`} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
-              {unread > 99 ? "99+" : unread}
-            </span>
-          )}
+          {unread > 0 && <RailBadge count={unread} what={railBadgeText.activity(unread)} />}
         </RailButton>
         {agentsEnabled && (
-          <RailButton label={attention > 0 ? `Agents, ${attention} ${attention === 1 ? "needs" : "need"} you` : "Agents"} current={route === "agents"} onClick={() => setRoute("agents")} className={`text-lg ${plain(route === "agents")}`}>
+          <RailButton label={attention > 0 ? `Agents, ${railBadgeText.agents(attention)}` : "Agents"} current={route === "agents"} onClick={() => setRoute("agents")} className={`text-lg ${plain(route === "agents")}`}>
             <Icon name="term" className="size-[19px]" />
-            {attention > 0 && (
-              <span aria-label={`${attention} ${attention === 1 ? "needs" : "need"} you`} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
-                {attention > 99 ? "99+" : attention}
-              </span>
-            )}
+            {attention > 0 && <RailBadge count={attention} what={railBadgeText.agents(attention)} />}
           </RailButton>
         )}
         {agentsEnabled && <PipHomeButton current={route === "pip"} />}

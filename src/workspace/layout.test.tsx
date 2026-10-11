@@ -2,14 +2,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { ALL, and } from "../lib/filter";
+import { ALL, and, YOUR_TURN_WHY } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, PRESETS, showsEntry, visibleChips, withProject } from "./filters";
 import { Header, ProjectMenu, ViewSegment } from "./Header";
 import { HOLD_ALL_NOTE, Rail, RailButton, RailTip } from "./Rail";
 import { COMPOSER_CLEAR, ToastHost, toastPlacement } from "./ToastHost";
 import { useToasts, LIFETIME_MS, MAX_QUEUED, STALE_MS } from "./toasts";
-import { MORE_BUTTON, tabWindow } from "./TabBar";
+import { MORE_BUTTON, sameWindow, tabWindow } from "./TabBar";
 import { canvasRoom } from "./Workspace";
 import { RowBadges } from "./ListView";
 import { useAgentsFlag } from "./agentsFlag";
@@ -17,7 +17,7 @@ import { useWorkstreams } from "./workstreamsStore";
 import type { WorkstreamView, Run } from "../types";
 import { SavedViewsPanel, type SavedViewsPanelProps } from "./SavedViews";
 import { buildTabItems } from "./tabItems";
-import { useTabs, type Tab } from "./tabsStore";
+import { loadTabs, useTabs, type Tab } from "./tabsStore";
 import { afterRunStarted } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 
@@ -33,13 +33,13 @@ describe("tab items", () => {
       { id: "b", name: "Not pinned", filter: { type: "mine" } as const },
     ];
     const items = buildTabItems([tab("t1"), tab("t2", { type: "stale", days: 9 })], "t1", views, label);
-    expect(names(items)).toEqual(["Needs me", "Mine", "Blocked", "Going stale", "Everything", "Mine soon", "custom t2"]);
+    expect(names(items)).toEqual(["Your turn", "Mine", "Blocked", "Going stale", "Everything", "Mine soon", "custom t2"]);
     expect(items.map((i) => i.kind)).toEqual(["preset", "preset", "preset", "preset", "preset", "view", "custom"]);
   });
 
   it("marks the preset the active tab shows, whichever project it is in", () => {
     const items = buildTabItems([tab("t", and({ type: "container", container: containerRef("WEB") }, { type: "needsMe" }))], "t", [], label);
-    expect(items.filter((i) => i.active).map((i) => i.label)).toEqual(["Needs me"]);
+    expect(items.filter((i) => i.active).map((i) => i.label)).toEqual(["Your turn"]);
   });
 
   it("shows the active tab as its own closable tab when it is titled or filtered in a way no preset is", () => {
@@ -50,7 +50,7 @@ describe("tab items", () => {
   });
 
   it("does not show an unpinned saved view twice when it has the same name as a preset", () => {
-    const items = buildTabItems([tab("t", { type: "needsMe" }, "Needs me")], "t", [], label);
+    const items = buildTabItems([tab("t", { type: "needsMe" }, "Your turn")], "t", [], label);
     expect(items.filter((i) => i.kind === "custom")).toHaveLength(0);
   });
 
@@ -96,7 +96,7 @@ describe("SavedViewsPanel", () => {
 
   it("lists built-in and saved views with rename, reorder, pin and remove for each saved one", () => {
     const out = render();
-    expect(out).toContain("Needs me");
+    expect(out).toContain("Your turn");
     expect(out).toContain(">5<");
     for (const what of ["Rename First", "Remove saved view First", "Move First down", "Unpin First from the tabs", "Pin Second as a tab", "Move Second up"]) expect(out).toContain(`aria-label="${what}"`);
     expect(out).toMatch(/aria-label="Move First up"[^>]*disabled/);
@@ -139,7 +139,7 @@ describe("header and rail", () => {
   it("renders the workspace header with presets carrying live counts", () => {
     const out = renderToStaticMarkup(<Header />);
     expect(out).toContain('role="tablist"');
-    for (const name of ["Needs me", "Mine", "Blocked", "Going stale", "Everything"]) expect(out).toContain(`title="${name}"`);
+    for (const name of ["Your turn", "Mine", "Blocked", "Going stale", "Everything"]) expect(out).toContain(`title="${name}"`);
     expect(out).toContain(" of ");
     expect(out).toContain("data-tauri-drag-region");
   });
@@ -230,14 +230,24 @@ describe("nothing covers anything", () => {
     expect(tabWindow([], 100, 0, -1)).toEqual({ start: 0, end: 0, offset: 0 });
   });
 
+  it("squeezes the one tab shown, rather than cutting off its close button, when even it is wider than the room", () => {
+    const spans = [0, 1, 2].map((i) => ({ left: i * 202, size: 200 }));
+    const room = 2 * MORE_BUTTON + 120;
+    expect(tabWindow(spans, room, 0, 1)).toEqual({ start: 1, end: 1, offset: 202, width: 120, squeeze: 120 });
+    // A tab that fits is never squeezed.
+    expect(tabWindow(spans, 2 * MORE_BUTTON + 250, 0, 1).squeeze).toBeUndefined();
+    // A tab that grows past the room at the same width must still be squeezed: the strip doesn't keep the old window.
+    expect(sameWindow({ start: 1, end: 1, offset: 202, width: 120 }, { start: 1, end: 1, offset: 202, width: 120, squeeze: 120 })).toBe(false);
+  });
+
   it("gives a narrow row's badges as named icons with tooltips, none of them dropped", () => {
     const all = { needsMe: true, blocked: true, draft: { id: "d1", to: "Done" }, moreDrafts: 2 } as const;
     const full = renderToStaticMarkup(<RowBadges {...all} compact={false} />);
-    for (const words of [">Needs you<", "⛓ blocked", "✦ draft → ", "Done"]) expect(full).toContain(words);
+    for (const words of [">Your turn<", "⛓ blocked", "✦ draft → ", "Done"]) expect(full).toContain(words);
     const compact = renderToStaticMarkup(<RowBadges {...all} compact />);
     const icons = [...compact.matchAll(/<span role="img" aria-label="([^"]+)" title="([^"]+)"/g)].map((m) => [m[1], m[2]]);
     expect(icons).toEqual([
-      ["Needs you", "Needs you"],
+      ["Your turn", YOUR_TURN_WHY],
       ["Blocked", "Blocked"],
       ["A draft waits for approval: Done", "A draft waits for approval: Done"],
       ["2 more drafts waiting", "2 more drafts waiting"],
@@ -428,5 +438,21 @@ describe("the toast queue", () => {
         expect(texts().length, `${started.state} then ${now}`).toBe(news ? 1 : 0);
       }
     });
+  });
+});
+
+describe("tabs kept from before Your turn", () => {
+  it("renames a tab opened from the old Needs me view to Your turn, and nothing else of that name", () => {
+    const tabs = [
+      { id: "a", title: "Needs me", filter: { type: "needsMe" }, view: "list" },
+      { id: "b", title: "Needs me", filter: { type: "blocked" }, view: "list" },
+    ];
+    const saved = JSON.stringify({ tabs, activeId: "a" });
+    vi.stubGlobal("localStorage", { getItem: (k: string) => (k === "gossamr-tabs" ? saved : null), setItem: () => {}, removeItem: () => {} });
+    try {
+      expect(loadTabs().tabs.map((t) => t.title)).toEqual(["Your turn", "Needs me"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

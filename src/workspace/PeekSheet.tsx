@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBackend } from "../backend/useBackend";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docFromText } from "../lib/docs";
@@ -463,7 +463,7 @@ export function WorkstreamControl({ item, workstream, onStart, onOpen, confirmin
   return (
     <span data-workstream={workstream.workstream.id} className="inline-flex items-center gap-2 rounded-md bg-ws-pip-soft px-2.5 py-0.5 text-sm text-ws-pip">
       <span title={workstream.workstream.title}>
-        <span aria-hidden>◆ </span>Workstream · <b data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>{stageText(workstream.stage, workstream.waitingForPr)}</b>
+        <span aria-hidden>◆ </span>Workstream · <b data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>{stageText(workstream.stage, workstream.waitingForPr, workstream.reviewBlocking)}</b>
       </span>
       <button type="button" onClick={onOpen} className="font-semibold underline">
         Open in Pip
@@ -562,9 +562,52 @@ function DraftSheet({ id, ...shell }: { id: string } & Motion) {
   return <LiveDraftPeek proposalId={id} width={width} {...shell} />;
 }
 
+/** About two seconds of frames: long enough for the peek to open, short enough that a stale ask doesn't linger. */
+const PEEK_FOCUS_FRAMES = 120;
+
+interface PeekFocusable {
+  focus(options?: FocusOptions): void;
+  hasAttribute?(name: string): boolean;
+  setAttribute?(name: string, value: string): void;
+  querySelector?(selector: string): unknown;
+}
+
+/**
+ * Hands the keyboard to the peek of ticket `key` once it shows, as when the palette opens a ticket: its title, so the next
+ * Tab is one of the peek's own controls rather than the board's behind it. The title sits at the top of the peek, so it
+ * is focused without scrolling anything. Gives up after about two seconds. Returns a cancel.
+ */
+export function focusPeekOf(key: string, root: { querySelector(selector: string): unknown } = document, frame: (go: () => void) => number = requestAnimationFrame, cancel: (n: number) => void = cancelAnimationFrame): () => void {
+  let handle = 0;
+  let tries = 0;
+  const find = () => {
+    const peek = root.querySelector(`#peek-sheet[aria-label="Details for ${key.replace(/["\\]/g, "\\$&")}"]`) as PeekFocusable | null;
+    if (peek) {
+      const el = (peek.querySelector?.("h2") as PeekFocusable | null) ?? peek;
+      if (el.hasAttribute && !el.hasAttribute("tabindex")) el.setAttribute?.("tabindex", "-1");
+      return el.focus({ preventScroll: true });
+    }
+    if (++tries < PEEK_FOCUS_FRAMES) handle = frame(find);
+  };
+  handle = frame(find);
+  return () => cancel(handle);
+}
+
+/** Set as a peek gives way to the next one (j or k) with the keyboard in it, so that one takes the keyboard on. */
+let keyboardInPeek = false;
+
 function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem } & Motion) {
   const ref = item.item;
   const key = itemKey(ref);
+  // Stepping with j and k from inside the peek (as one opened from the palette has the keyboard) swaps it for the next
+  // one; the keyboard goes along to it rather than falling to the page.
+  useLayoutEffect(() => {
+    const carried = keyboardInPeek;
+    keyboardInPeek = false;
+    const at = document.activeElement;
+    if (carried && (!at || at === document.body)) focusPeekOf(ref.key);
+    return () => void (keyboardInPeek = !!document.activeElement?.closest("#peek-sheet"));
+  }, []);
   const width = usePaneWidths().peek;
   const backend = useBackend();
   const all = useWorkspace((s) => s.items);
@@ -613,8 +656,14 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       if (menuOpen) return setMenuOpen(false);
       const inside = !!document.activeElement?.closest("#peek-sheet");
       useTabs.getState().select(null);
-      // Over Pip home, Pip home hands the keyboard back to what opened the peek.
-      if (inside && useTabs.getState().route !== "pip") requestAnimationFrame(() => (canvasElement(ref) ?? document.getElementById("workspace-main"))?.focus());
+      // Over Pip home, Pip home hands the keyboard back to what opened the peek. Elsewhere it goes to the ticket's card, or
+      // to the canvas when the card doesn't take focus (as when the peek was opened from the palette), never nowhere.
+      if (inside && useTabs.getState().route !== "pip")
+        requestAnimationFrame(() => {
+          const card = canvasElement(ref);
+          card?.focus();
+          if (!card || document.activeElement !== card) document.getElementById("workspace-main")?.focus();
+        });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

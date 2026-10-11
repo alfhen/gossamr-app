@@ -1,24 +1,27 @@
 import { describe, expect, it } from "vitest";
-import type { RunKind, RunState, WorkstreamStage } from "../types";
+import type { ReviewVerdict, RunKind, RunState, WorkstreamStage } from "../types";
 import fixtures from "./workstreamStage.fixtures.json";
-import { runLabels, stage, type StagedRun } from "./workstreamStage";
+import { reviewBlocking, runLabels, stage, stageText, type StagedRun } from "./workstreamStage";
 
 interface Case {
   name: string;
-  runs: { kind: string; state: string; queuedAt: string }[];
+  runs: { kind: string; state: string; queuedAt: string; verdict?: string }[];
   stage: string;
+  /** Whether the newest finished review is blocking with nothing in progress; false when not given. */
+  reviewBlocking?: boolean;
   /** When given, the label of each run, in the order listed. */
   labels?: string[];
 }
 
 /** Runs as the Rust test builds them from a case: `r0`, `r1`… in the order listed. */
-const runsOf = (c: Case): StagedRun[] => c.runs.map((r, n) => ({ id: `r${n}`, state: r.state as RunState, queuedAt: r.queuedAt, spec: { kind: r.kind as RunKind } }));
+const runsOf = (c: Case): StagedRun[] => c.runs.map((r, n) => ({ id: `r${n}`, state: r.state as RunState, queuedAt: r.queuedAt, spec: { kind: r.kind as RunKind }, verdict: (r.verdict ?? null) as ReviewVerdict | null }));
 
 const run = (id: string, kind: RunKind, state: RunState, queuedAt: string): StagedRun => ({ id, state, queuedAt, spec: { kind } });
 
 describe("workstream stage, on the fixtures the Rust side also runs", () => {
   it.each(fixtures as Case[])("$name", (c) => {
     expect(stage(runsOf(c))).toBe(c.stage as WorkstreamStage);
+    expect(reviewBlocking(runsOf(c))).toBe(c.reviewBlocking ?? false);
   });
 
   it("covers every stage", () => {
@@ -35,6 +38,15 @@ describe("workstream stage, on the fixtures the Rust side also runs", () => {
     expect(runsOf(c).map((r) => labels.get(r.id))).toEqual(c.labels);
     const reversed = new Map(runLabels(runsOf(c).reverse()));
     expect(runsOf(c).map((r) => reversed.get(r.id))).toEqual(c.labels);
+  });
+});
+
+describe("stage text", () => {
+  it("says changes are needed only at review, and the wait for a pull request first", () => {
+    expect(stageText("review", null, true)).toBe("Review · changes needed");
+    expect(stageText("review", null, false)).toBe("Review");
+    expect(stageText("done", null, true)).toBe("Done");
+    expect(stageText("build", "r1", false)).toBe("Build · waiting for PR");
   });
 });
 

@@ -307,9 +307,9 @@ test.describe("no overlap", () => {
     await expect.poll(async () => (await placed())[0]).toBe("in");
     expect(await placed()).not.toContain("cut");
     // Choosing a tab from the keyboard brings the strip back to it.
-    await page.getByRole("tab", { name: /^Needs me/ }).click();
+    await page.getByRole("tab", { name: /^Your turn/ }).click();
     await page.keyboard.press("ArrowLeft");
-    await expect(page.getByRole("tab", { selected: true })).not.toHaveText(/^Needs me/);
+    await expect(page.getByRole("tab", { selected: true })).not.toHaveText(/^Your turn/);
     const now = await box(page.getByRole("tab", { selected: true }));
     const stripNow = await box(tablist);
     expect(now.x).toBeGreaterThanOrEqual(stripNow.x - 1);
@@ -322,15 +322,15 @@ test.describe("no overlap", () => {
     // A narrow row shortens its title before it gives up a badge: a blocked ticket that needs you still says both.
     const blocked = list.getByRole("option").filter({ hasText: "DEVOPS-471" });
     await expect(blocked.locator("[data-row-badges]")).toHaveAttribute("data-row-badges", "full");
-    for (const badge of [blocked.getByText("Needs you", { exact: true }), blocked.getByText("⛓ blocked", { exact: true })]) {
+    for (const badge of [blocked.getByText("Your turn", { exact: true }), blocked.getByText("⛓ blocked", { exact: true })]) {
       await expect(badge).toBeVisible();
       const b = await box(badge);
       const cell = await box(blocked.locator("[data-row-badges]"));
       expect(b.y + b.height).toBeLessThanOrEqual(cell.y + cell.height + 1);
       expect(b.x + b.width).toBeLessThanOrEqual(cell.x + cell.width + 1);
     }
-    await expect(blocked.locator("[data-row-title]")).toHaveAttribute("title", /· Needs you · blocked/);
-    for (const badge of await list.getByText(/^(⛓ blocked|Needs you)$/).all()) {
+    await expect(blocked.locator("[data-row-title]")).toHaveAttribute("title", /· Your turn · blocked/);
+    for (const badge of await list.getByText(/^(⛓ blocked|Your turn)$/).all()) {
       const b = await box(badge);
       expect(b.x + b.width).toBeLessThanOrEqual((await peekLeft()) + 1);
     }
@@ -345,10 +345,10 @@ test.describe("no overlap", () => {
     const blocked = list.getByRole("option").filter({ hasText: "DEVOPS-471" });
     await expect(blocked.locator("[data-row-badges]")).toHaveAttribute("data-row-badges", "compact");
     const cell = await box(blocked.locator("[data-row-badges]"));
-    for (const name of ["Needs you", "Blocked"]) {
+    for (const [name, title] of [["Your turn", /^Your turn: an unread update/], ["Blocked", /^Blocked$/]] as const) {
       const icon = blocked.getByRole("img", { name, exact: true }).last();
       await expect(icon).toBeVisible();
-      await expect(icon).toHaveAttribute("title", name);
+      await expect(icon).toHaveAttribute("title", title);
       const b = await box(icon);
       expect(b.x + b.width).toBeLessThanOrEqual(cell.x + cell.width + 1);
       expect(b.y + b.height).toBeLessThanOrEqual(cell.y + cell.height + 1);

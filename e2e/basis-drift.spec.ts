@@ -26,19 +26,19 @@ test("a description edited in Jira holds the managed workstream and says why; Re
   await editTicket(page, "CA-401", { description: "Someone rewrote the welcome flow: three emails, not two." });
   // The row, the Needs you tray and the rail all say why, and the rail says to read the ticket first.
   await expect(row.locator("[data-status]")).toHaveText(`· ${DESCRIPTION_HELD}`);
-  await expect(needsYouTray(page).getByRole("button", { name: new RegExp(`^CA-401 · ${DESCRIPTION_HELD}`) })).toHaveCount(1);
+  await expect(needsYouTray(page).getByRole("button", { name: new RegExp(`^CA-401 · .+ · ${DESCRIPTION_HELD}`) })).toHaveCount(1);
   await expect(banner(page)).toHaveAttribute("data-held-banner", "tripwire:basis_drift");
   await expect(banner(page)).toContainText("Held: the ticket's description changed in Jira");
   await expect(banner(page).locator("[data-drift-hint]")).toContainText("Read CA-401 as it is now before you resume");
   await noTripwireText(page);
+  await expect(banner(page)).toContainText("Automatic steps are paused. Resume turns them back on.");
   await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveAttribute("aria-checked", "false");
   expect(await driftedLines(page)).toEqual(["description"]);
   expect(await jiraWrites(page)).toEqual([]);
 
-  // Resumed and managed again, it works from the ticket as it reads now.
+  // Resumed, it is managed again as it was before the hold, and works from the ticket as it reads now.
   await banner(page).getByRole("button", { name: "Resume" }).click();
   await expect(banner(page)).toHaveCount(0);
-  await stepRail(page).getByRole("switch", { name: "Manage this workstream" }).click();
   await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveAttribute("aria-checked", "true");
   const actions = (await workstreamEvents(page)).map((e) => e.action);
   expect(actions.slice(actions.lastIndexOf("resumed"))).toContain("basis_captured");
@@ -78,7 +78,7 @@ test("moving a workstream's ticket to another status leaves it be; moving it to 
 
   await editTicket(page, "CA-402", { statusId: "Sent" });
   await expect(row.locator("[data-status]")).toHaveText("· Held: the ticket was moved to Done");
-  await expect(needsYouTray(page).getByRole("button", { name: /^CA-402 · Held: the ticket was moved to Done/ })).toHaveCount(1);
+  await expect(needsYouTray(page).getByRole("button", { name: /^CA-402 · .+ · Held: the ticket was moved to Done/ })).toHaveCount(1);
   await expect(banner(page)).toContainText("Held: the ticket was moved to Done");
   await noTripwireText(page);
   expect(await driftedLines(page)).toEqual(["status"]);

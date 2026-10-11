@@ -1,6 +1,6 @@
 import { answerProblem } from "../lib/answer";
 import { containerKey, itemKey } from "../lib/filter";
-import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type ReadOnly, type Run, type RunKind, type RunOutcome, type RunReview, type RunSpec, type WorkContainer } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type ReadOnly, type Run, type RunKind, type RunOutcome, type RunState, type RunReview, type RunSpec, type WorkContainer } from "../types";
 import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
@@ -18,6 +18,13 @@ export const COPY = {
   startsNow: "Starts right away. You can stop it once it's working.",
   changed: "This draft changed. Read it again.",
 } as const;
+
+/** The three lines at the top of the safety sheet, true for each kind: what read-only steps may do, what a Build may do, and what always waits for the person. */
+export const SAFETY_SUMMARY: readonly { icon: "check" | "hand" | "lock"; text: string }[] = [
+  { icon: "check", text: "Investigate, Triage, Plan, Review and Verify only read: Claude Code refuses their edits and writes. Review and Verify may run the repository's tests." },
+  { icon: "hand", text: "Build changes code in its own worktree and runs with your own Claude settings, which decide whether it can push a branch or open a pull request. Its prompt asks it to push only when Pushing is ticked, and to stay out of Jira; both are requests, not locks." },
+  { icon: "lock", text: "Gossamr posts nothing to Jira or GitHub until you approve it." },
+];
 
 export interface MayTouch {
   tone: "yes" | "ask" | "no";
@@ -273,7 +280,10 @@ export const resumable = (run: Pick<Run, "state" | "unsentAnswer" | "stoppedByLi
 
 export const RESUME_TEXT = "Please carry on from where you stopped.";
 
-export const answerDraft = (run: Pick<Run, "state" | "unsentAnswer" | "suggestedReply" | "stoppedByLimit">) => run.unsentAnswer ?? (run.suggestedReply?.trim() ? run.suggestedReply : null) ?? (resumable(run) ? RESUME_TEXT : "");
+export const answerDraft = (run: Pick<Run, "state" | "unsentAnswer" | "stoppedByLimit">) => run.unsentAnswer ?? (resumable(run) ? RESUME_TEXT : "");
+
+/** What Claude suggested answering, offered beside the box for the person to take, never put in it for them. */
+export const suggestedAnswer = (run: Pick<Run, "suggestedReply" | "unsentAnswer">) => (run.unsentAnswer ? null : run.suggestedReply?.trim() || null);
 
 /** Stopped or finished runs that may have carried on in a session Gossamr could not be sure of. A stopped run holding an answer to send stays with its own session until that is sent. */
 export const offeredSessions = (run: Pick<Run, "state" | "possibleContinuations" | "unsentAnswer">) => (run.state === "done" || (run.state === "stopped" && !run.unsentAnswer) ? (run.possibleContinuations ?? []) : []);
@@ -794,3 +804,10 @@ export function permissionMode(preflight: Preflight | null): string | null {
   }
   return null;
 }
+
+/**
+ * What the run sheet's body scrolls back to the top on (SheetFrame's `topOn`): each state the run goes through once the
+ * person stopped it from the sheet, so its title and the Stopped pill come back into view; nothing before that, since a
+ * run moving on by itself would pull whoever reads its timeline away from where they were.
+ */
+export const sheetTopOn = (run: Pick<Run, "state">, stoppedHere: boolean): RunState | null => (stoppedHere ? run.state : null);

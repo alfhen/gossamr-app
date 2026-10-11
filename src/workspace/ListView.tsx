@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
-import { itemKey } from "../lib/filter";
+import { itemKey, YOUR_TURN, YOUR_TURN_WHY } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
-import { AgeChip, AttentionDot, Avatar, NeedsPill, StatusPill } from "./CanvasBits";
+import { AgeChip, AttentionDot, Avatar, StatusPill, TurnPill } from "./CanvasBits";
 import { PrBadge } from "./DevBits";
 import { CanvasFooter } from "./CanvasFooter";
 import { daysQuiet } from "./boardLogic";
@@ -63,7 +63,7 @@ type RowProps = Pick<ItemCardProps, "item" | "assignee" | "now" | "blocked" | "n
 /** A row's badges and status in words, for the title's tooltip: a narrow row may have no room to show them all. */
 export function badgeWords(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "moreDrafts">, status: string): string[] {
   return [
-    ...(p.needsMe ? ["Needs you"] : []),
+    ...(p.needsMe ? [YOUR_TURN] : []),
     ...(p.blocked ? ["blocked"] : []),
     ...(p.draft ? [`draft → ${p.draft.to}`] : []),
     ...(p.moreDrafts > 0 ? [`${p.moreDrafts} more ${p.moreDrafts === 1 ? "draft" : "drafts"}`] : []),
@@ -101,20 +101,20 @@ function useCompactBadges(cell: RefObject<HTMLElement | null>, badges: RefObject
 }
 
 /**
- * A row's badges: Needs you, blocked, the waiting draft and how many more. `compact`, for a row too narrow to show them
+ * A row's badges: Your turn, blocked, the waiting draft and how many more. `compact`, for a row too narrow to show them
  * in words, gives each as an icon with its name and a tooltip instead, so none of them is lost.
  */
 export function RowBadges(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "moreDrafts"> & { compact: boolean }) {
   const more = p.moreDrafts > 0 ? `${p.moreDrafts} more ${p.moreDrafts === 1 ? "draft" : "drafts"} waiting` : "";
   if (p.compact) {
-    const icon = (label: string, className: string, glyph: string) => (
-      <span role="img" aria-label={label} title={label} className={`grid h-4 min-w-4 place-items-center rounded-full px-0.5 text-[11px] leading-none font-semibold ${className}`}>
+    const icon = (label: string, className: string, glyph: string, tip = label) => (
+      <span role="img" aria-label={label} title={tip} className={`grid h-4 min-w-4 place-items-center rounded-full px-0.5 text-[11px] leading-none font-semibold ${className}`}>
         {glyph}
       </span>
     );
     return (
       <>
-        {p.needsMe && icon("Needs you", "bg-ws-pip-soft text-ws-pip", "!")}
+        {p.needsMe && icon(YOUR_TURN, "bg-ws-pip-soft text-ws-pip", "!", YOUR_TURN_WHY)}
         {p.blocked && icon("Blocked", "bg-ws-blocked-soft text-ws-blocked", "⛓")}
         {p.draft && icon(`A draft waits for approval: ${p.draft.to}`, "bg-ws-pip-soft text-ws-pip", "✦")}
         {more && icon(more, "text-ws-pip", `+${p.moreDrafts}`)}
@@ -123,7 +123,7 @@ export function RowBadges(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "m
   }
   return (
     <>
-      {p.needsMe && <NeedsPill />}
+      {p.needsMe && <TurnPill />}
       {p.blocked && <span className="text-xs text-ws-blocked">⛓ blocked</span>}
       {p.draft && (
         <span className="rounded-full bg-ws-pip-soft px-2 py-px text-xs font-semibold text-ws-pip" title="A draft is waiting for approval">

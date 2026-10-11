@@ -52,7 +52,7 @@ test("with three agents running a 4th approved run waits for a slot, never over 
   const running: string[] = [];
   for (const key of ["CA-401", "CA-402", "CA-403"]) {
     await openSetup(page, key);
-    await expect(setup(page).locator('[data-level="green"]', { hasText: /agents running$/ })).toBeVisible();
+    await expect(setup(page).locator('[data-level="green"]', { hasText: /agent slots in use \(including ones waiting on you\)$/ })).toBeVisible();
     running.push(await start(page));
   }
   for (const id of running) await advanceRuns(page, 2, id);
@@ -60,7 +60,7 @@ test("with three agents running a 4th approved run waits for a slot, never over 
 
   // The 4th: the checks say it will wait, and Start stays on.
   await openSetup(page, "CA-404");
-  const wait = setup(page).locator('[data-level="amber"]', { hasText: "3 of 3 agents are running. This one will wait for a slot and start when one finishes." });
+  const wait = setup(page).locator('[data-level="amber"]', { hasText: "3 of 3 agent slots are in use, including ones waiting on you. This one will wait for a slot and start when one finishes." });
   await expect(wait).toBeVisible();
   await expect(setup(page).locator('[data-level="red"]')).toHaveCount(0);
   const fourth = await start(page);

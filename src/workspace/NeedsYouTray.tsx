@@ -40,8 +40,14 @@ export function useNeedsYou(): NeedsYouItem[] {
   const runs = useRuns((s) => s.runs);
   const seenFailed = useRuns((s) => s.seenFailed);
   const proposals = useWorkspace((s) => s.proposals);
+  const items = useWorkspace((s) => s.items);
+  const peeked = useWorkspace((s) => s.peeked);
   const heldAt = useHeldTimes();
-  return useMemo(() => needsYouItems({ workstreams, runs, proposals: Object.values(proposals), seenFailed, heldAt }), [workstreams, runs, proposals, seenFailed, heldAt]);
+  return useMemo(() => {
+    // A ticket peeked from outside the watched projects has its title there.
+    const titles = new Map([...Object.values(peeked).map((p) => [p.item.item.key, p.item.title] as const), ...Object.values(items).map((i) => [i.item.key, i.title] as const)]);
+    return needsYouItems({ workstreams, runs, proposals: Object.values(proposals), seenFailed, heldAt, titleOf: (key) => titles.get(key) });
+  }, [workstreams, runs, proposals, seenFailed, heldAt, items, peeked]);
 }
 
 /**
@@ -59,9 +65,15 @@ export function openNeedsYou(item: NeedsYouItem) {
   if (item.target.type === "run") useRuns.getState().openRun(item.target.id, { stay: true });
 }
 
-/** An item's line: its label, and how long it has waited, except for a hold, which says what it says. */
-export function needsYouText(item: NeedsYouItem, now: Date): string {
-  return item.kind === "held" ? item.label : `${item.label} · ${relativeTime(item.at, now)}`;
+/** What an item waits on, and how long it has waited, except for a hold, which says what it says. */
+export function needsYouReason(item: Pick<NeedsYouItem, "kind" | "reason" | "at">, now: Date): string {
+  return item.kind === "held" ? item.reason : `${item.reason} · ${relativeTime(item.at, now)}`;
+}
+
+/** An item's whole line, for its name and tooltip: the ticket with its title, then what it waits on. */
+export function needsYouText(item: Pick<NeedsYouItem, "kind" | "head" | "reason" | "at">, now: Date): string {
+  const reason = needsYouReason(item, now);
+  return item.head ? `${item.head} · ${reason}` : reason;
 }
 
 export interface NeedsYouTrayProps {
@@ -98,9 +110,20 @@ export function NeedsYouTray({ items, compact = false, onPick, now = new Date() 
                   onPick?.(item);
                   openNeedsYou(item);
                 }}
-                className="w-full truncate rounded px-2 py-1 text-left text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip"
+                aria-label={needsYouText(item, now)}
+                title={needsYouText(item, now)}
+                className="grid w-full rounded px-2 py-1 text-left text-sm leading-snug text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip"
               >
-                {needsYouText(item, now)}
+                <span data-needs-you-head className="truncate text-ws-ink">
+                  {item.head ?? needsYouReason(item, now)}
+                </span>
+                {/* Hidden, so the item's text reads as one line where it is read as text. */}
+                {item.head && <span hidden> · </span>}
+                {item.head && (
+                  <span data-needs-you-reason className="truncate text-xs text-ws-ink3">
+                    {needsYouReason(item, now)}
+                  </span>
+                )}
               </button>
             </li>
           ))}

@@ -2,7 +2,7 @@ import { keysIn } from "../lib/devLinks";
 import { safeGithubUrl } from "../lib/githubUrl";
 import type { ContainerRef, FeedEntry, FeedQuery, ItemRef, PersonRef, Proposal, Run, WorkEvent, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { targetOf } from "../lib/proposals";
-import { itemKey } from "../lib/filter";
+import { itemKey, YOUR_TURN } from "../lib/filter";
 import type { WorkItem } from "../types";
 import { KIND_LABEL, permissionRequest, resultHeadline } from "./agentsLogic";
 
@@ -17,7 +17,7 @@ export const chipsFor = (o: { agents: boolean }): readonly ActivityChip[] => (o.
 export const CHIP_LABEL: Record<ActivityChip, string> = {
   pip: "Pip & agents",
   all: "All",
-  needsMe: "Needs me",
+  needsMe: YOUR_TURN,
   mentions: "Mentions",
   comments: "Comments",
   status: "Status changes",
@@ -25,7 +25,7 @@ export const CHIP_LABEL: Record<ActivityChip, string> = {
   drafts: "Drafts",
 };
 
-/** Needs me is what is still unread: the inbox marks an event read once it has been dealt with. */
+/** Your turn is what is still unread: the inbox marks an event read once it has been dealt with. */
 export function queryFor(chip: ActivityChip, container: ContainerRef | null): FeedQuery {
   const base: FeedQuery = { container };
   switch (chip) {

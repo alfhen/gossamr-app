@@ -298,13 +298,21 @@ export function parseQuery(q: string, lookup: QueryLookup): WorkFilter {
   return and(...tokenize(q).map((t) => term(t, lookup)));
 }
 
+/**
+ * The name of the tickets waiting on the person's reply (the `needsMe` filter), wherever it shows: the tab and saved
+ * view, the Activity chip, the command and the pill on a ticket. "Needs you" stays Pip home's, for runs, drafts and holds.
+ */
+export const YOUR_TURN = "Your turn";
+/** Why a ticket is the person's turn, for the pill's tooltip. */
+export const YOUR_TURN_WHY = "Your turn: an unread update, an unanswered mention, or a comment on your ticket since you last acted";
+
 const CATEGORY_LABEL: Record<WorkCategory, string> = { todo: "to do", active: "in progress", done: "done" };
 
 /** A short label for a chip. */
 export function describeFilter(f: WorkFilter, lookup: Pick<QueryLookup, "containers" | "people" | "items">): string {
   switch (f.type) {
     case "needsMe":
-      return "Needs me";
+      return YOUR_TURN;
     case "mine":
       return "Assigned to me";
     case "unassigned":

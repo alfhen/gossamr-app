@@ -15,6 +15,7 @@ import { nudgedOutside, runNudges, runStatesNow } from "./pipRuns";
 import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
+import { useRunSetup } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
 import { focusedConversation, useWorkstreams } from "./workstreamsStore";
 import { isPaneConversation } from "../lib/conversations";
@@ -208,7 +209,11 @@ export function PipLauncher() {
   const drafts = pendingDrafts({ proposals }).length;
   const peekOpen = useTabs((s) => !!s.selected && s.marked.length <= 1);
   const peekWidth = usePaneWidths().peek;
+  // An agent sheet's own buttons sit where the launcher does, Start agent among them: it steps aside while one is open.
+  const runSheetOpen = useRuns((s) => s.sheet !== null);
+  const setupOpen = useRunSetup((s) => s.open);
   useNudges();
+  if (runSheetOpen || setupOpen) return null;
   return <Launcher clearRight={peekOpen ? peekWidth : 0} drafts={drafts} thinking={thinking} onOpen={() => usePrefs.getState().setPipOpen(true)} nudge={nudge && <NudgeBubble nudge={nudge} />} />;
 }
 

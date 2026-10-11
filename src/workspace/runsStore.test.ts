@@ -7,7 +7,7 @@ import { useWorkstreams } from "./workstreamsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
-import { useRuns } from "./runsStore";
+import { browseList, useRuns } from "./runsStore";
 import { attentionCount } from "./agentsLogic";
 
 const memory = () => {
@@ -34,12 +34,49 @@ describe("starting an agent for the first time", () => {
     usePrefs.setState({ agentsIntroSeen: false });
     s().setPicking(true);
     expect(s().sheet).toEqual({ type: "safety" });
+    expect(s().afterIntro).not.toBeNull();
     expect(s().picking).toBe(false);
     expect(usePrefs.getState().agentsIntroSeen).toBe(true);
     s().closeSheet();
+    expect(s().afterIntro).toBeNull();
     s().setPicking(true);
     expect(s().picking).toBe(true);
     expect(s().sheet).toBeNull();
+  });
+
+  it("keeps what the person asked for and carries it on, once, when they continue", () => {
+    usePrefs.setState({ agentsIntroSeen: false });
+    const then = vi.fn();
+    expect(s().ensureAgentsIntro(then)).toBe(false);
+    expect(s().afterIntro).toBe(then);
+    expect(then).not.toHaveBeenCalled();
+    s().continueIntro();
+    expect(then).toHaveBeenCalledTimes(1);
+    expect(s().sheet).toBeNull();
+    s().continueIntro();
+    expect(then).toHaveBeenCalledTimes(1);
+    // Seen now: the next action goes straight through.
+    expect(s().ensureAgentsIntro(then)).toBe(true);
+  });
+
+  it("starts picking the ticket after Got it, continue", () => {
+    usePrefs.setState({ agentsIntroSeen: false });
+    s().setPicking(true);
+    s().continueIntro();
+    expect(s().picking).toBe(true);
+  });
+
+  it("drops what the person asked for when they close the sheet with Esc or ×, or open another", () => {
+    for (const close of [() => s().closeSheet(), () => s().openSafety(), () => s().openRun("r1", { stay: true })]) {
+      usePrefs.setState({ agentsIntroSeen: false });
+      const then = vi.fn();
+      s().ensureAgentsIntro(then);
+      close();
+      expect(s().afterIntro).toBeNull();
+      s().continueIntro();
+      expect(then).not.toHaveBeenCalled();
+      s().closeSheet();
+    }
   });
 });
 
@@ -363,6 +400,35 @@ describe("the run sheet", () => {
       expect(send).toHaveBeenCalledWith(run.id, "Yes, keep it.");
       expect(s().runs.find((r) => r.id === run.id)).toMatchObject({ state: "working", needs: null, shortId: run.shortId });
       expect(s().answering.size).toBe(0);
+    });
+
+    it("says the answer went, and marks it sent until the run reports progress", async () => {
+      const run = await asking();
+      await s().answer(run.id, "Yes, keep it.");
+      await settle();
+      expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toContainEqual(["Answer sent. Claude is picking it back up.", "info"]);
+      const now = s().runs.find((r) => r.id === run.id)!;
+      expect(s().answered[run.id]).toBe(now.lastProgressAt);
+    });
+
+    it("keeps the run sheet's place in the browse order when the answered run changes lane", async () => {
+      const run = await asking();
+      s().openRun(run.id);
+      const before = [...s().browseOrder!];
+      const at = before.indexOf(run.id);
+      await s().answer(run.id, "Yes, keep it.");
+      await settle();
+      expect(s().runs.find((r) => r.id === run.id)?.state).toBe("working");
+      // The live order has moved it to Running; the sheet still walks the order it opened with.
+      const live = agentGroups("state", s().runs, [], NO_FILTERS, false, Date.now()).order;
+      expect(live.indexOf(run.id)).not.toBe(at);
+      expect(browseList(s().browseOrder, live).indexOf(run.id)).toBe(at);
+      s().browse(1);
+      expect(s().sheet).toEqual({ type: "run", id: before[at + 1] });
+      s().browse(-1);
+      expect(s().sheet).toEqual({ type: "run", id: run.id });
+      s().closeSheet();
+      expect(s().browseOrder).toBeNull();
     });
 
     it("says why it failed and lets the person try again", async () => {

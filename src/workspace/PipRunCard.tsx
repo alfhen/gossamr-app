@@ -6,8 +6,9 @@ import { useWorkspace } from "../workspaceStore";
 import { useAgentsEnabled } from "./agentsFlag";
 import { runTitle, stateView, waitsForSlot } from "./agentsLogic";
 import { Dot, RowText, TONE } from "./AgentParts";
-import { stripRuns } from "./pipRuns";
+import { STRIP_SHOWN, stripRuns } from "./pipRuns";
 import { useRuns } from "./runsStore";
+import { useTabs } from "./tabsStore";
 
 interface CardProps {
   run: Run;
@@ -62,18 +63,41 @@ export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = f
   );
 }
 
+interface StripProps {
+  runs: readonly Run[];
+  enabled: boolean;
+  now: number;
+  workstream?: string | null;
+  /** Failed runs the person has looked at, which leave the strip as they leave the Needs you tray. */
+  seenFailed?: ReadonlySet<string>;
+  titleOf(run: Run): string | null;
+  onOpen(run: Run): void;
+  /** Opens the Agents view, offered when there are more runs than the strip shows. */
+  onSeeAll?(): void;
+}
+
 /**
- * Up to three live runs above the drafts: the ones that need the person, then the ones working. In a workstream's
- * conversation (`workstream`), only that workstream's runs. Absent while agents are off or nothing is going.
+ * Up to three live runs above the drafts: the ones that need the person (unseen failures among them), then the ones
+ * working. In a workstream's conversation (`workstream`), only that workstream's runs. When it lists more such runs than
+ * it shows, the header says how many of them it shows and links to the Agents view; never when nothing was cut. Absent while agents are off or nothing is going.
  */
-export function PipRunStripView({ runs, enabled, now, workstream = null, titleOf, onOpen }: { runs: readonly Run[]; enabled: boolean; now: number; workstream?: string | null; titleOf(run: Run): string | null; onOpen(run: Run): void }) {
+export function PipRunStripView({ runs, enabled, now, workstream = null, seenFailed, titleOf, onOpen, onSeeAll }: StripProps) {
   const labels = labelsByRun(runs);
-  const shown = stripRuns(workstream ? runs.filter((r) => r.spec.workstream === workstream) : runs);
+  const scope = workstream ? runs.filter((r) => r.spec.workstream === workstream) : runs;
+  // Out of the runs it would list, not every run there is: one finished or seen is not left out, only not listed.
+  const listed = stripRuns(scope, seenFailed);
+  const shown = listed.slice(0, STRIP_SHOWN);
   if (!enabled || !shown.length) return null;
+  const more = shown.length < listed.length;
   return (
     <section aria-label="Your agents" className="grid gap-1.5">
-      <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
-        Your agents <span className="font-normal">{shown.length}</span>
+      <h3 className="m-0 flex items-baseline gap-1.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+        Your agents <span data-strip-count className="font-normal">{more ? `${shown.length} of ${listed.length}` : shown.length}</span>
+        {more && onSeeAll && (
+          <button type="button" onClick={onSeeAll} className="ml-auto font-semibold tracking-normal text-ws-accent normal-case hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
+            See all in Agents
+          </button>
+        )}
       </h3>
       {shown.map((run) => (
         <PipRunCard key={run.id} run={run} now={now} ticketTitle={titleOf(run)} label={labels.get(run.id)} onOpen={() => onOpen(run)} />
@@ -85,6 +109,7 @@ export function PipRunStripView({ runs, enabled, now, workstream = null, titleOf
 export function PipRunStrip({ workstream = null }: { workstream?: string | null }) {
   const enabled = useAgentsEnabled();
   const runs = useRuns((s) => s.runs);
+  const seenFailed = useRuns((s) => s.seenFailed);
   const items = useWorkspace((s) => s.items);
   return (
     <PipRunStripView
@@ -92,6 +117,8 @@ export function PipRunStrip({ workstream = null }: { workstream?: string | null 
       enabled={enabled}
       now={Date.now()}
       workstream={workstream}
+      seenFailed={seenFailed}
+      onSeeAll={() => useTabs.getState().setRoute("agents")}
       titleOf={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
       onOpen={(run) => useRuns.getState().openRun(run.id, { stay: true })}
     />

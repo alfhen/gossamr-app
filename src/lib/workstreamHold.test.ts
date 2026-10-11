@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
-import type { Workstream } from "../types";
-import { budgetLevel, budgetView, heldText, ruleText } from "./workstreamHold";
+import type { BudgetView, Workstream } from "../types";
+import { TURN_HELP, budgetLevel, budgetView, heldBanner, heldText, ruleText, tripwireResumeText } from "./workstreamHold";
 
 describe("heldText", () => {
   it("says nothing for a workstream that isn't held", () => {
@@ -14,7 +14,12 @@ describe("heldText", () => {
     expect(heldText(HELD_RESTART)).toBe("Held after a restart");
     expect(heldText(HELD_PERSON)).toBe("Held by you");
     expect(heldText(HELD_ALL)).toBe("Held: Hold all");
-    expect(heldText(HELD_BUDGET)).toBe("Budget used up. Say carry on to continue");
+    expect(heldText(HELD_BUDGET)).toBe("Held: automatic turns used up. Resume to give it 6 more");
+    const budget = (autoTurns: [number, number], wakes: [number, number]): BudgetView => ({ autoTurns: { used: autoTurns[0], limit: autoTurns[1] }, wakes: { used: wakes[0], limit: wakes[1] }, level: "spent" });
+    // A message to Pip starts the automatic turns again, so it is offered while they are what ran out, never for the wakes.
+    expect(heldText(HELD_BUDGET, null, budget([3, 3], [3, 12]))).toBe("Held: automatic turns used up. Resume, or write to Pip, to give it 3 more");
+    expect(heldText(HELD_BUDGET, null, budget([2, 6], [12, 12]))).toBe("Held: wakes used up. Resume to give it 12 more");
+    expect(heldText(HELD_BUDGET, null, budget([6, 6], [12, 12]))).toBe("Held: wakes used up. Resume to give it 12 more");
     expect(heldText(HELD_DAILY)).toBe("Held: today's Pip turns are used up");
     expect(heldText(HELD_QUOTA)).toBe("Paused: quota");
   });
@@ -45,6 +50,26 @@ describe("heldText", () => {
     expect(heldText(drift)).toBe("Held: the ticket changed since the workstream opened");
     expect(heldText("tripwire:marker", ["description"])).toContain("data markers");
     expect(heldText(HELD_PERSON, ["description"])).toBe("Held by you");
+  });
+
+  it("says for a tripwire that took Manage away that automatic steps are paused and Resume turns them back on", () => {
+    const drift = `${TRIPWIRE}basis_drift`;
+    expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: "manage" })).toBe("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
+    expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: null })).toBe("Held: the ticket's description changed in Jira. Resume only lifts the hold; Manage stays off.");
+    expect(tripwireResumeText(`${TRIPWIRE}marker`, "manage")).toBe("Automatic steps are paused. Resume turns them back on.");
+    // A trip that landed on another hold took Manage away too: that hold's banner says so, as the switch does.
+    expect(tripwireResumeText(HELD_PERSON, "manage")).toBe("Automatic steps are paused. Resume turns them back on.");
+    expect(heldBanner({ heldReason: HELD_PERSON, resumeMode: "manage" })).toBe("Held by you. Automatic steps are paused. Resume turns them back on.");
+    // Any other hold says only why; the budget's says how many turns resuming gives.
+    expect(tripwireResumeText(HELD_PERSON, null, "manage")).toBeNull();
+    expect(heldBanner({ heldReason: HELD_PERSON })).toBe("Held by you");
+    expect(heldBanner({ heldReason: HELD_BUDGET })).toBe("Held: automatic turns used up. Resume to give it 6 more");
+    // Manage switched back on while a tripwire holds it: Resume turns the automatic steps on, whatever resumeMode says.
+    expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: null, mode: "manage" })).toBe("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
+    expect(tripwireResumeText(`${TRIPWIRE}marker`, null, "manage")).toBe("Automatic steps are paused. Resume turns them back on.");
+    expect(tripwireResumeText(`${TRIPWIRE}marker`, null, "advise")).toBe("Resume only lifts the hold; Manage stays off.");
+    expect(heldBanner({ heldReason: null })).toBeNull();
+    expect(TURN_HELP).toMatch(/^An automatic turn is each time Pip acts without you asking/);
   });
 
   it("names every rule", () => {

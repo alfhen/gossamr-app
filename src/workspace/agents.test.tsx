@@ -10,7 +10,7 @@ import { AgentsBanners } from "./AgentsBanners";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
-import { Rail } from "./Rail";
+import { Rail, railBadgeText } from "./Rail";
 import { useRuns } from "./runsStore";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -440,24 +440,30 @@ describe("the rail", () => {
   it("puts the count in the button's label and shows it as a badge", () => {
     set(eight());
     const [, label, inner] = agents(renderToStaticMarkup(<Rail />));
-    expect(label).toBe("Agents, 3 need you");
+    expect(label).toBe("Agents, 3 agent runs wait on you");
+    expect(inner).toContain('aria-label="3 agent runs wait on you" title="3 agent runs wait on you"');
     expect(inner).toContain(">3<");
     expect(inner).toContain("bg-ws-pip");
   });
 
   it("counts a failed run only until it has been seen", () => {
     set(eight(), [eight().find((r) => r.state === "failed")!.id]);
-    expect(agents(renderToStaticMarkup(<Rail />))[1]).toBe("Agents, 2 need you");
+    expect(agents(renderToStaticMarkup(<Rail />))[1]).toBe("Agents, 2 agent runs wait on you");
   });
 
   it("says needs for one and drops the badge at zero", () => {
     set([run("needsAnswer")]);
-    expect(agents(renderToStaticMarkup(<Rail />))[1]).toBe("Agents, 1 needs you");
+    expect(agents(renderToStaticMarkup(<Rail />))[1]).toBe("Agents, 1 agent run waits on you");
     set([run("working"), run("working", { id: "quiet", lastProgressAt: iso(300) }), run("done", { id: "d" })]);
     const [, label, inner] = agents(renderToStaticMarkup(<Rail />));
     expect(label).toBe("Agents");
     expect(inner).not.toContain("bg-ws-pip");
     set([]);
+  });
+
+  it("names what each badge counts, in words no other badge uses", () => {
+    expect([railBadgeText.activity(24), railBadgeText.agents(3), railBadgeText.pipHome(4)]).toEqual(["24 unread updates", "3 agent runs wait on you", "4 items wait in Needs you"]);
+    expect([railBadgeText.activity(1), railBadgeText.agents(1), railBadgeText.pipHome(1)]).toEqual(["1 unread update", "1 agent run waits on you", "1 item waits in Needs you"]);
   });
 
   it("sits beside Activity in the bottom group", () => {

@@ -7,6 +7,7 @@ import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, PipConversation, useAnswe
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { ConversationLine, escapeCancelsTurn, useConversationDrafts, usePipChips } from "./PipPane";
 import { popoverOpen } from "./Popover";
+import { START_WORKSTREAM } from "./commands";
 import { usePrefs } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
@@ -15,9 +16,10 @@ import { composerFooter, needsYouCount, workstreamStatus, type NeedsYouItem } fr
 import { usePipHome, type PipHomeColumn, type PipHomeFocus } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { focusComposer, focusedConversation, useHomeWorkstream, useWorkstreams } from "./workstreamsStore";
-import { pipHomeKey, type PipHomeItemKind } from "./pipHomeKeys";
+import { TABBABLE, pipHomeKey, wrapTab, type PipHomeItemKind } from "./pipHomeKeys";
 import { InlineStartContext } from "./InlineStart";
 import { StepRail } from "./StepRail";
+import { useNow } from "./AgentsView";
 import { pipHomeHints } from "./footerHints";
 import { ShortcutHint } from "./ShortcutHint";
 
@@ -33,7 +35,7 @@ const ROW = "grid w-full gap-0.5 rounded-lg px-2.5 py-1.5 text-left outline-none
 
 /** A row's stage, then its short status unless the stage already says it ("Build · waiting for PR"). */
 function RowStatus({ view, runs, waiting }: { view: WorkstreamView; runs: readonly Run[]; waiting: number }) {
-  const stage = stageText(view.stage, view.waitingForPr);
+  const stage = stageText(view.stage, view.waitingForPr, view.reviewBlocking);
   const status = workstreamStatus(view, runs, waiting);
   return (
     <span className="flex min-w-0 gap-1 text-xs text-ws-ink3">
@@ -65,8 +67,8 @@ export interface WorkstreamListProps {
   tray?: ReactNode;
 }
 
-/** What 'Start a workstream…' opens the palette with: the words its 'Start a workstream on KEY' entries answer to. */
-export const START_WORKSTREAM = "start a workstream on ";
+/** What the list says before there is any workstream: what one is, in a line. */
+export const NO_WORKSTREAMS = "No workstreams yet. A workstream follows one ticket from investigation to a reviewed pull request, with Pip keeping track.";
 
 /** "1 needs you", "3 need you"; nothing when nothing does. */
 function NeedsBadge({ count }: { count: number }) {
@@ -110,7 +112,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           </li>
         ))}
       </ul>
-      {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">No workstreams yet. Start one on a ticket below, or from its peek.</p>}
+      {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{NO_WORKSTREAMS}</p>}
       <div className="mt-auto grid gap-1 border-t border-ws-sep px-1.5 py-2">
         <button
           type="button"
@@ -296,6 +298,10 @@ function overlayOpen(): boolean {
   );
 }
 
+/** The page's Tab stops in order: enabled, shown and not taken out of the order. */
+const tabStops = () =>
+  Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && !el.closest("[hidden], [inert]") && el.getClientRects().length > 0);
+
 const show = (el: HTMLElement | null | undefined) => {
   if (!el) return false;
   el.scrollIntoView?.({ block: "nearest" });
@@ -332,10 +338,20 @@ function usePipHomeKeys() {
     };
     const onKey = (ev: globalThis.KeyboardEvent) => {
       if (ev.defaultPrevented) return;
+      if (ev.key === "Tab") {
+        const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        const round = wrapTab(ev, tabStops(), active, !!active?.closest("[data-pip-home]"));
+        if (round) {
+          ev.preventDefault();
+          round.focus();
+        }
+        return;
+      }
       const column = usePipHome.getState().column;
       const list = items(column);
       const at = list.indexOf(document.activeElement as HTMLElement);
-      const action = pipHomeKey(ev, { column, overlay: overlayOpen(), count: list.length, at, kind: itemKind(list[at]) });
+      const steps = document.querySelector('[data-pip-home-column="rail"] [data-step-rail]') !== null;
+      const action = pipHomeKey(ev, { column, overlay: overlayOpen(), count: list.length, at, kind: itemKind(list[at]), steps });
       if (!action) return;
       ev.preventDefault();
       const el = list[at];
@@ -397,7 +413,9 @@ export function PipHome() {
   const workstream = useHomeWorkstream();
   const runs = useRuns((s) => s.runs);
   const needsYou = useNeedsYou();
-  const footer = useMemo(() => composerFooter(runs, needsYou), [runs, needsYou]);
+  // The same clock as the Agents view's, so a run gone quiet leaves "running" here when it does there.
+  const now = useNow();
+  const footer = useMemo(() => composerFooter(runs, needsYou, now), [runs, needsYou, now]);
   useTurnEscape();
   useFocusTarget();
   usePipHomeKeys();

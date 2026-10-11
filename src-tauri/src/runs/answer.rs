@@ -143,6 +143,8 @@ impl RunService {
                 run.needs = None;
                 run.suggested_reply = None;
                 run.unsent_answer = None;
+                // What it said while it asked ("waiting for an answer") is over; the tracker fills in what it does next.
+                run.last_detail = None;
                 run.error = None;
                 run.failure = None;
                 run.ended_at = None;
@@ -230,3 +232,31 @@ impl RunService {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod answered {
+    use crate::domain::RunState;
+    use crate::runs::rig::ready_with;
+    use crate::runs::service::Timing;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn an_answer_clears_what_the_run_said_while_it_asked_and_records_you_answered() {
+        let fast = Timing { recover_window: Duration::from_millis(300), worktree_grace: Duration::from_millis(300), poll: Duration::from_millis(10), stop_wait: Duration::from_millis(100), stop_settle: Duration::ZERO, rm_wait: Duration::from_millis(5) };
+        let rig = ready_with(|svc| svc.with_timing(fast)).await;
+        let run = rig.launched(1).await;
+        rig.job(run.short_id.as_ref().unwrap(), |j| j.detail = Some("Waiting for an answer".into()));
+        rig.session(&run, |e| {
+            e.state = Some("blocked".into());
+            e.pid = None;
+        });
+        rig.poll().await;
+        let run = rig.get(&run).await;
+        assert_eq!((run.state, run.last_detail.as_deref()), (RunState::NeedsAnswer, Some("Waiting for an answer")));
+        let answered = rig.svc.answer(&run.id, "Use the staging database.").await.unwrap();
+        assert_eq!(answered.last_detail, None);
+        assert_eq!(rig.get(&run).await.last_detail, None, "it is stored cleared, not only returned");
+        let events = rig.fx.core.run_events(&run.id).await.unwrap();
+        assert_eq!(events.last().map(|e| (e.kind.as_str(), e.text.as_str())), Some(("answered", "You answered")));
+    }
+}

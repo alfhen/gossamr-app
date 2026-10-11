@@ -15,10 +15,10 @@ const NOW = new Date("2026-09-30T12:00:00Z");
 const ago = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000).toISOString();
 
 const items: NeedsYouItem[] = [
-  { key: "draft:d1", kind: "draft", workstreamId: "ws-1", label: "CA-401 · Draft comment", at: ago(12), target: { type: "draft", id: "d1" } },
-  { key: "run:r2", kind: "question", workstreamId: "ws-1", label: "R2 asks a question", at: ago(5), target: { type: "run", id: "r2" } },
-  { key: "held:ws-2", kind: "held", workstreamId: "ws-2", label: "Held: budget", at: ago(2), target: { type: "workstream" } },
-  { key: "draft:d9", kind: "draft", workstreamId: null, label: "CA-500 · Draft move", at: ago(1), target: { type: "draft", id: "d9" } },
+  { key: "draft:d1", kind: "draft", workstreamId: "ws-1", label: "CA-401 · Draft comment", head: "CA-401 · Welcome flow refresh", reason: "Draft comment", at: ago(12), target: { type: "draft", id: "d1" } },
+  { key: "run:r2", kind: "question", workstreamId: "ws-1", label: "R2 asks a question", head: null, reason: "R2 asks a question", at: ago(5), target: { type: "run", id: "r2" } },
+  { key: "held:ws-2", kind: "held", workstreamId: "ws-2", label: "Held: budget", head: null, reason: "Held: budget", at: ago(2), target: { type: "workstream" } },
+  { key: "draft:d9", kind: "draft", workstreamId: null, label: "CA-500 · Draft move", head: "CA-500", reason: "Draft move", at: ago(1), target: { type: "draft", id: "d9" } },
 ];
 
 beforeEach(() => {
@@ -38,8 +38,18 @@ describe("the Needs you tray", () => {
     const html = renderToStaticMarkup(<NeedsYouTray items={items} now={NOW} />);
     expect(html).toContain('<section aria-label="Needs you"');
     expect(html).toMatch(/data-needs-you-count[^>]*>4</);
-    const lines = [...html.matchAll(/data-needs-you-item="[^"]+"[^>]*>([^<]+)</g)].map((m) => m[1]);
-    expect(lines).toEqual(["CA-401 · Draft comment · 12m", "R2 asks a question · 5m", "Held: budget", "CA-500 · Draft move · 1m"]);
+    const heads = [...html.matchAll(/data-needs-you-head="true"[^>]*>([^<]+)</g)].map((m) => m[1]);
+    expect(heads).toEqual(["CA-401 · Welcome flow refresh", "R2 asks a question · 5m", "Held: budget", "CA-500"]);
+    const reasons = [...html.matchAll(/data-needs-you-reason="true"[^>]*>([^<]+)</g)].map((m) => m[1]);
+    expect(reasons).toEqual(["Draft comment · 12m", "Draft move · 1m"]);
+  });
+
+  it("puts the ticket and its title on the first line and the wait on the second, with the whole line as the name and tooltip", () => {
+    const html = renderToStaticMarkup(<NeedsYouTray items={items.slice(0, 1)} now={NOW} />);
+    expect(html).toContain('aria-label="CA-401 · Welcome flow refresh · Draft comment · 12m"');
+    expect(html).toContain('title="CA-401 · Welcome flow refresh · Draft comment · 12m"');
+    expect(html.indexOf("data-needs-you-head")).toBeLessThan(html.indexOf("data-needs-you-reason"));
+    expect(needsYouText(items[3], NOW)).toBe("CA-500 · Draft move · 1m");
   });
 
   it("says so when nothing waits", () => {

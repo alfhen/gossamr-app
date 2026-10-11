@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
+import { TurnPill } from "./CanvasBits";
 import { relativeTime } from "../lib/views";
 import type { ContainerRef, FeedEntry, ItemRef, Proposal } from "../types";
 import { allContainers, nameOf, pendingDrafts, useWorkspace } from "../workspaceStore";
@@ -76,7 +77,7 @@ export function FeedRow({ entry: e, actor, title, now, selected, needsMe, openab
         </button>
         <div className="mt-1 flex items-center gap-1 text-sm text-ws-ink3">
           <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
-          {needsMe && <span className="ml-1 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Needs you</span>}
+          {needsMe && <TurnPill className="ml-1" />}
           <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
             {openable && (
               <button type="button" className={action} onClick={onShow}>
@@ -152,7 +153,7 @@ export function CodeFeedRow({ entry: e, ticketTitle, now, selected, position, to
         <div className="mt-1 flex items-center gap-1 text-sm text-ws-ink3">
           <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
           <span className="rounded-full bg-ws-sel px-2 text-xs">{codeVerb(e.kind)}</span>
-          {e.needsYou && e.unread && <span className="ml-1 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Needs you</span>}
+          {e.needsYou && e.unread && <TurnPill className="ml-1" why={CODE_TURN_WHY} />}
           <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
             {e.url && (
               <button type="button" className={action} onClick={onOpenGithub}>
@@ -181,6 +182,11 @@ export interface RunRowProps {
   onOpen(): void;
   onMarkRead(): void;
 }
+
+/** Why a GitHub entry is under Your turn, for its pill's tooltip. */
+const CODE_TURN_WHY = "Your turn: a review request, a failed check, a mention, an assignment or a review on your pull request you haven't opened";
+/** Why an agent entry is under Your turn, for its pill's tooltip. */
+const RUN_TURN_WHY = "Your turn: an agent run is waiting on you, and you haven't opened this yet";
 
 const RUN_CHIP: Record<RunEntry["kind"], string> = { started: "Started", needsYou: "Needs you", finished: "Finished", failed: "Failed" };
 
@@ -221,7 +227,7 @@ export function RunFeedRow({ entry: e, ticketTitle, now, selected, position, tot
         <div className="mt-1 flex items-center gap-1 text-sm text-ws-ink3">
           <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
           <span className="rounded-full bg-ws-sel px-2 text-xs">{RUN_CHIP[e.kind]}</span>
-          {e.needsYou && e.unread && e.kind !== "needsYou" && <span className="ml-1 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Needs you</span>}
+          {e.needsYou && e.unread && e.kind !== "needsYou" && <TurnPill className="ml-1" why={RUN_TURN_WHY} />}
           <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
             <button type="button" className={action} onClick={onOpen}>
               Open run

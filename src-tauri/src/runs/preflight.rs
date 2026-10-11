@@ -154,15 +154,21 @@ pub async fn preflight(spec: Option<&RunSpec>, tools: &dyn ToolchainSource, inde
     }
     if live >= cap {
         // Not red: an approved run over the cap stays queued and starts by itself once a slot frees.
-        rows.add(Level::Amber, format!("{live} of {cap} agents are running. This one will wait for a slot and start when one finishes."));
+        rows.add(Level::Amber, format!("{live} of {cap} agent slots are in use, including ones waiting on you. This one will wait for a slot and start when one finishes."));
     } else {
-        rows.add(Level::Green, format!("{live} of {cap} agents running"));
+        rows.add(Level::Green, slots_row(live, cap));
     }
     if let Some(spec) = spec {
         rows.add(Level::Green, format!("What runs: {}", &spec.digest()[..12]));
     }
     let blocking = rows.0.iter().any(|r| r.level == Level::Red);
     Preflight { rows: rows.0, blocking }
+}
+
+/// The green cap row. A run waiting on the person holds a slot as one at work does, so it counts slots in use, not
+/// agents running, which the Agents view counts differently.
+fn slots_row(live: usize, cap: usize) -> String {
+    format!("{live} of {cap} agent slots in use (including ones waiting on you)")
 }
 
 /// Green for a plan a person settled; amber, never red, for the planning run's own answer, which the person may still
@@ -204,4 +210,12 @@ async fn clone_row(rows: &mut Rows, git: &Git, spec: &RunSpec) {
     };
     let level = if note.is_empty() { Level::Green } else { Level::Amber };
     rows.add(level, format!("Clone: {} on {}. {note}", path.display(), clone.branch).trim_end().to_owned());
+}
+
+#[cfg(test)]
+mod row_tests {
+    #[test]
+    fn the_cap_row_counts_slots_including_runs_waiting_on_the_person() {
+        assert_eq!(super::slots_row(2, 6), "2 of 6 agent slots in use (including ones waiting on you)");
+    }
 }

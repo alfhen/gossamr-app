@@ -426,6 +426,7 @@ export class MockBackend implements Backend {
     // A draft pull request a build opened turns up on the code host, which ends its workstream's wait for it.
     this.runs.onPullRequest = (change) => this.github.code.addPullRequest(change);
     this.workstreams.prOf = (runId) => this.runs.pullRequestOf(runId);
+    this.workstreams.verdictOf = (run) => this.runs.resolvedOf(run.id)?.verdict ?? null;
     this.workstreams.ticketOf = (key) => this.connector.item(itemRef(key));
     // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for drift.
     this.proposals.onWritten = (p) => {

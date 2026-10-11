@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoHeight } from "../components/autoHeight";
 import { hunkLinesAround } from "../lib/diffHunks";
 import { REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
 import type { Proposal, ReviewAccess } from "../types";
@@ -10,7 +11,9 @@ import { usePullView, type PullDiffState } from "./pullViewStore";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
 import type { ScreenContext } from "../types";
-import { editThenPost, followDraft, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+import { editThenPost, editThenPullView, settlesEdit, followDraft, SUMMARY, MARKDOWN_HINT, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+
+vi.mock("../components/autoHeight", async (original) => ({ ...(await original<typeof import("../components/autoHeight")>()), useAutoHeight: vi.fn() }));
 
 const RETRY = "src/consumer/retry.ts";
 const at = (line: number, body: string) => ({ path: RETRY, line, side: "RIGHT" as const, body });
@@ -92,8 +95,8 @@ describe("a GitHub review draft's card", () => {
     }
     expect(html.match(/data-review-hunk/g)).toHaveLength(2);
     // Each comment's own line is the marked one.
-    expect(html).toMatch(/data-hunk-target=""[^>]*>(?:(?!<\/div>).)*42<\/span><span class="pr-2">\+ {4}try \{ return await handle\(message\); \} catch \{ continue; \}<\/span>/);
-    expect(html).toMatch(/data-hunk-target=""[^>]*>(?:(?!<\/div>).)*17<\/span><span class="pr-2">\+const MAX = 5;<\/span>/);
+    expect(html).toMatch(/data-hunk-target=""[^>]*>(?:(?!<\/div>).)*42<\/span><span class="min-w-0 pr-2 whitespace-pre-wrap \[overflow-wrap:anywhere\]">\+ {4}try \{ return await handle\(message\); \} catch \{ continue; \}<\/span>/);
+    expect(html).toMatch(/data-hunk-target=""[^>]*>(?:(?!<\/div>).)*17<\/span><span class="min-w-0 pr-2 whitespace-pre-wrap \[overflow-wrap:anywhere\]">\+const MAX = 5;<\/span>/);
     expect(html).toMatch(/<textarea id="review-summary-r1"[^>]*>Gossamr review of #218 at a1b2c3d4: blocking.<\/textarea>/);
     expect(html).toMatch(/<button[^>]*>Post review<\/button>/);
     expect(html).toMatch(/<button[^>]*>Discard<\/button>/);
@@ -167,6 +170,16 @@ describe("a GitHub review draft's card", () => {
     expect(reworded).toEqual({ summary: "My summary.", comments: [{ ...at(42, "**Blocking:** the retry loop never backs off."), dropped: true }] });
     // Untouched, Pip's version is taken whole.
     expect(followDraft(intent, { ...intent, summary: "Pip's summary.", comments: [at(42, "Pip's words.")] }, intent.summary, intent.comments.map((c) => ({ ...c, dropped: false })))).toEqual({ summary: "Pip's summary.", comments: [{ ...at(42, "Pip's words."), dropped: false }] });
+  });
+
+  it("keeps what the person typed back during a save, even when it matches the draft before the save", () => {
+    // The card saved summary B and comment 42 as B; while the save was on its way the person typed both back to A.
+    const saved = { ...intent, summary: "B summary.", comments: [at(42, "B words."), intent.comments[1]] };
+    const back = intent.comments.map((c) => ({ ...c, dropped: false }));
+    const kept = followDraft(intent, saved, intent.summary, back, new Set([SUMMARY, `${intent.comments[0].path}:42:${intent.comments[0].side}`]));
+    expect(kept).toEqual({ summary: intent.summary, comments: back });
+    // Without the save's touched fields, the same values would read as untouched and take the saved draft.
+    expect(followDraft(intent, saved, intent.summary, back).summary).toBe("B summary.");
   });
 
   it("marks a draft the person edited, and says when a revision was Pip's", () => {
@@ -244,5 +257,62 @@ describe("a GitHub review draft's card", () => {
     expect(html).toContain("data-github-review");
     expect(html).toContain("Loading the diff…");
     expect(html).toMatch(/<button[^>]*>Post review<\/button>/);
+  });
+});
+
+describe("a GitHub review draft's card in the peek (D9, D20, D21, D32)", () => {
+  it("Open PR view saves the person's unsent edit first, takes it into the store, and only then opens the view", async () => {
+    const order: string[] = [];
+    const saved = draft({ intent: { ...intent, summary: "My words." }, revisions: [{ at: "2026-10-01T10:01:00Z", note: "Edited" }] as Proposal["revisions"] });
+    const saveEdit = vi.fn(async () => (order.push("save"), saved));
+    const took = vi.fn(() => order.push("took"));
+    const open = vi.fn(() => order.push("open"));
+    await editThenPullView(draft(), { type: "githubReview", summary: "My words." }, { saveEdit, took, open });
+    expect(saveEdit).toHaveBeenCalledWith("r1", { type: "githubReview", summary: "My words." });
+    expect(took).toHaveBeenCalledWith(saved);
+    expect(order).toEqual(["save", "took", "open"]);
+    // With nothing edited, it only opens.
+    order.length = 0;
+    await editThenPullView(draft(), null, { saveEdit, took, open });
+    expect(order).toEqual(["open"]);
+    // A refused edit opens nothing, so the view never shows words the card doesn't.
+    order.length = 0;
+    await expect(editThenPullView(draft(), { type: "githubReview", summary: "" }, { saveEdit: () => Promise.reject(new Error("no")), took, open })).rejects.toThrow("no");
+    expect(order).toEqual([]);
+    // Text typed while the save was on its way stays an unsent edit, so the saved draft arriving can't overwrite it.
+    expect(settlesEdit(3, 3)).toBe(true);
+    expect(settlesEdit(3, 4)).toBe(false);
+  });
+
+  it("says beside Post that it posts the inline comments and the summary as a comment review, never a verdict", () => {
+    expect(postsWhat(2)).toBe("Posts 2 inline comments and the summary as a comment review (not Approve or Request changes), at the reviewed commit.");
+    expect(postsWhat(1)).toBe("Posts 1 inline comment and the summary as a comment review (not Approve or Request changes), at the reviewed commit.");
+    expect(postsWhat(0)).toBe("Posts the summary as a comment review (not Approve or Request changes), at the reviewed commit.");
+    expect(render(draft(), canPost)).toContain(`data-review-posts="true" class="m-0 text-sm text-ws-ink3">${postsWhat(2).replace(/'/g, "&#x27;")} Nothing goes to GitHub until you post it here.`);
+    // A dropped comment isn't counted.
+    const one = render(draft(), canPost, sample(), { summary: intent.summary, comments: intent.comments.map((c, i) => ({ ...c, dropped: i === 1 })) });
+    expect(one).toContain(postsWhat(1));
+  });
+
+  it("notes under the text boxes that their words are Markdown that GitHub formats, and ties each box to the note", () => {
+    const html = render(draft(), canPost);
+    expect(MARKDOWN_HINT).toBe("Markdown, formatted on GitHub");
+    expect(html).toContain(`<p id="review-markdown-r1" data-review-markdown="true" class="m-0 text-xs text-ws-ink3">${MARKDOWN_HINT}</p>`);
+    expect(html.match(/<textarea[^>]*aria-describedby="review-markdown-r1"/g)).toHaveLength(3);
+    // Once posted there is nothing to type, and no note.
+    expect(render(draft({ state: { type: "applied" } }), canPost)).not.toContain("data-review-markdown");
+  });
+
+  it("grows each text box with its words, and wraps long diff lines rather than cut them off", () => {
+    vi.mocked(useAutoHeight).mockClear();
+    const long = "**Nit:** " + "this sentence goes on. ".repeat(20);
+    const html = render(draft({ intent: { ...intent, comments: [at(42, long), at(17, "Short.")] } }), canPost);
+    expect(vi.mocked(useAutoHeight).mock.calls.map(([, value]) => value)).toEqual([intent.summary, long, "Short."]);
+    expect(html.match(/<textarea[^>]*class="[^"]*resize-none/g)).toHaveLength(3);
+    // A box scrolled into view keeps clear of the pinned action bar.
+    expect(html.match(/<textarea[^>]*class="[^"]*scroll-mb-16/g)).toHaveLength(3);
+    expect(html).not.toMatch(/data-hunk-line="[^"]*" class="flex whitespace-pre /);
+    expect(html).not.toContain("overflow-x-auto");
+    expect(html).toContain("whitespace-pre-wrap [overflow-wrap:anywhere]");
   });
 });

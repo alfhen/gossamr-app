@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { itemKey } from "../lib/filter";
+import { itemKey, YOUR_TURN, YOUR_TURN_WHY } from "../lib/filter";
 import type { StatusDef, WorkItem } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { useActivity } from "./activityStore";
@@ -36,12 +36,17 @@ export function AgeChip({ days, className = "" }: { days: number; className?: st
 
 export function AttentionDot({ needsMe, unread }: { needsMe: boolean; unread: boolean }) {
   if (!needsMe && !unread) return null;
-  const label = needsMe ? "Needs you" : "Unread updates";
-  return <span role="img" aria-label={label} title={label} className={`size-1.5 flex-none rounded-full ${needsMe ? "bg-ws-pip" : "bg-ws-accent"}`} />;
+  const label = needsMe ? YOUR_TURN : "Unread updates";
+  return <span role="img" aria-label={label} title={needsMe ? YOUR_TURN_WHY : label} className={`size-1.5 flex-none rounded-full ${needsMe ? "bg-ws-pip" : "bg-ws-accent"}`} />;
 }
 
-export function NeedsPill() {
-  return <span className="rounded-full bg-ws-pip-soft px-2 py-px text-xs font-semibold text-ws-pip">Needs you</span>;
+/** The pill on a ticket, or an Activity entry, waiting on the person: Your turn, with why in its tooltip. */
+export function TurnPill({ why = YOUR_TURN_WHY, className = "py-px" }: { why?: string; className?: string }) {
+  return (
+    <span title={why} data-your-turn className={`rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip ${className}`}>
+      {YOUR_TURN}
+    </span>
+  );
 }
 
 /** Which items need the person and which have unread updates, for the dots on every canvas. */

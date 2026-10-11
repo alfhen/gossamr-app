@@ -1,22 +1,23 @@
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { Markdown } from "../components/Markdown";
-import { draftsForTurn } from "../lib/proposals";
+import { draftsForTurn, targetOf } from "../lib/proposals";
 import { REMOVED_TURN } from "../backend/claude";
 import { useClaude, type Turn } from "../claudeStore";
 import { filesIn } from "../lib/attachments";
-import { COMMAND_HELP, RUN_REF_NOTE, WORKSTREAM_VERBS, runComposerVerb, runRef, type VerbOutcome } from "../lib/composerVerbs";
+import { COMMAND_HELP, RUN_REF_NOTE, WORKSTREAM_VERBS, runComposerVerb, runRef, type CommandHelp, type VerbOutcome } from "../lib/composerVerbs";
 import { labelsByRun } from "../lib/workstreamStage";
 import { workstreamOfConversation } from "../lib/conversations";
 import { MAX_IMAGES, defaultQuestion } from "../lib/pipImages";
-import type { Proposal, Workstream } from "../types";
-import { LiveDraftPreview } from "./DraftPreview";
+import type { ItemRef, Proposal, Workstream } from "../types";
+import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
 import { PIP_INPUT_ID, PIP_ROOT, stepDraftCards, upToNewestDraft } from "./draftKeys";
 import { PipRunStrip } from "./PipRunCard";
 import { AttachButton, AttachedThumbs, TurnImages, type useAttachments } from "./PipImages";
 import { currentContext } from "./pipHooks";
 import { appliedState, usePip, type AppliedState } from "./pipStore";
 import { usePopover } from "./Popover";
-import { placeholderFor } from "./suggestions";
+import { chipPageAction, placeholderFor } from "./suggestions";
+import { planRewriteDraft } from "./pipHomeLogic";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useAgentsEnabled } from "./agentsFlag";
@@ -246,8 +247,29 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
   );
 }
 
-/** Drafts still waiting that no question in this conversation made, such as ones from before a restart. */
-export function EarlierDrafts({ proposals, turns }: { proposals: Proposal[]; turns: Turn[] }) {
+/** Whether a draft is about `ticket`. */
+const onTicket = (p: Proposal, ticket: ItemRef) => {
+  const target = targetOf(p.intent);
+  // The key is for display only: a moved or renamed ticket keeps its id.
+  return target?.externalId === ticket.externalId && target.connectionId === ticket.connectionId;
+};
+
+/** Drafts split for a pane about one ticket: those on it, shown, and the rest, folded away. With no ticket, all are shown. */
+export function draftsForTicket(drafts: readonly Proposal[], ticket: ItemRef | null): { shown: Proposal[]; others: Proposal[] } {
+  if (!ticket) return { shown: [...drafts], others: [] };
+  return { shown: drafts.filter((p) => onTicket(p, ticket)), others: drafts.filter((p) => !onTicket(p, ticket)) };
+}
+
+/** The row that folds a ticket pane's drafts on other tickets: "+3 drafts on other tickets". */
+export const otherTicketsRow = (n: number) => `+${n} draft${n === 1 ? "" : "s"} on other tickets`;
+
+/**
+ * Drafts still waiting that no question in this conversation made, such as ones from before a restart. In a pane about
+ * one ticket (`ticket`), that ticket's drafts are listed and the rest fold into one row, so the conversation isn't pushed
+ * below drafts about other work.
+ */
+export function EarlierDrafts({ proposals, turns, ticket = null }: { proposals: Proposal[]; turns: Turn[]; ticket?: ItemRef | null }) {
+  const [unfolded, setUnfolded] = useState(false);
   const asked = new Set(turns.map((t) => t.requestId));
   const unasked = (p: Proposal) => !(p.origin.type === "chat" && asked.has(p.origin.requestId));
   const waiting = proposals.filter((p) => p.state.type === "pending" && unasked(p));
@@ -258,17 +280,31 @@ export function EarlierDrafts({ proposals, turns }: { proposals: Proposal[]; tur
   // rather than vanishing from under the person.
   const retired = proposals.filter((p) => p.state.type === "retired" && shown.current.has(p.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   if (!waiting.length && !retired.length) return null;
+  const { shown: listed, others } = draftsForTicket([...waiting, ...retired], ticket);
   return (
     <section aria-label="Drafts" className="grid gap-1.5">
       <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
         Drafts waiting <span className="font-normal">{waiting.length}</span>
       </h3>
-      {waiting.map((p) => (
+      {listed.map((p) => (
         <LiveDraftPreview key={p.id} proposal={p} />
       ))}
-      {retired.map((p) => (
-        <LiveDraftPreview key={p.id} proposal={p} />
-      ))}
+      {others.length > 0 && (
+        <button
+          type="button"
+          data-other-tickets
+          aria-expanded={unfolded}
+          onClick={() => setUnfolded(!unfolded)}
+          className="justify-self-start rounded-md px-1.5 py-0.5 text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+        >
+          <span aria-hidden>{unfolded ? "▾ " : "▸ "}</span>
+          {otherTicketsRow(others.length)}
+        </button>
+      )}
+      {unfolded &&
+        others.map((p) => (
+          <LiveDraftPreview key={p.id} proposal={p} />
+        ))}
     </section>
   );
 }
@@ -314,7 +350,7 @@ function IntroAction({ conversation, text }: { conversation: string; text: strin
  * The conversation itself: running agents, drafts left from before, then each question with its answer. Up and down move
  * between its draft cards. `primary` is the one action a workstream's empty conversation offers under its intro.
  */
-export function PipConversation({ conversation, proposals, bodyRef, primary = null }: { conversation: string; proposals: Proposal[]; bodyRef?: RefObject<HTMLDivElement | null>; primary?: string | null }) {
+export function PipConversation({ conversation, proposals, bodyRef, primary = null, ticket = null }: { conversation: string; proposals: Proposal[]; bodyRef?: RefObject<HTMLDivElement | null>; primary?: string | null; /** The ticket a pane is about, whose drafts it lists ahead of the rest. */ ticket?: ItemRef | null }) {
   const turns = useClaude((s) => s.byTicket[conversation]?.turns) ?? NO_TURNS;
   const workstreamId = workstreamOfConversation(conversation);
   const workstream = useWorkstreams((s) => (workstreamId ? (s.list.find((v) => v.workstream.id === workstreamId)?.workstream ?? null) : null));
@@ -329,7 +365,7 @@ export function PipConversation({ conversation, proposals, bodyRef, primary = nu
   return (
     <div ref={ref} data-pip-conversation-body onKeyDown={(ev) => stepDraftCards(ev, ev.currentTarget)} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 pt-3 pb-4">
       <PipRunStrip workstream={workstreamId} />
-      <EarlierDrafts proposals={proposals} turns={turns} />
+      <EarlierDrafts key={ticket ? `${ticket.connectionId}:${ticket.key}` : ""} proposals={proposals} turns={turns} ticket={ticket} />
       {turns.length === 0 &&
         (workstreamId ? (
           <div className="grid gap-2.5">
@@ -339,7 +375,7 @@ export function PipConversation({ conversation, proposals, bodyRef, primary = nu
             {primary && <IntroAction conversation={conversation} text={primary} />}
           </div>
         ) : (
-          <p className="m-0 text-ws-ink2">I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing changes until you approve.</p>
+          <p className="m-0 text-ws-ink2">I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing is posted to Jira or GitHub until you approve.</p>
         ))}
       {turns.map((t) => (
         <TurnView key={t.requestId} turn={t} proposals={proposals} afterQueued={t.status === "queued" && t.requestId !== firstQueued} />
@@ -392,9 +428,27 @@ export function ComposerFooter({ text }: { text: string }) {
 /** What the Commands popover says about Manage: the rules start routine steps, Pip starts nothing, Jira waits. */
 export const MANAGE_NOTE = "Automatic steps: in Manage, routine next steps start on their own by fixed rules. I start nothing myself, and every change to Jira still waits for you.";
 
-/** The commands the composer takes, with a line on each; a workstream's own only in a workstream, and Manage's note when it is managed. */
+/** How a command names its run outside a workstream, where cards show no R labels. */
+const RUN_ID_REF = "<run id>";
+
+/** What a run's id is, and what R1 is, outside a workstream. */
+export const GENERAL_RUN_REF_NOTE = "A run's id is on its card. R1, R2… are the names a workstream gives its runs, and work in its conversation.";
+
+/**
+ * The commands as the Commands popover lists them: in a workstream all of them, naming runs R1 as its cards do; elsewhere
+ * the run commands only, naming the run by its id.
+ */
+export function commandHelp(workstream: boolean): readonly CommandHelp[] {
+  if (workstream) return COMMAND_HELP;
+  return COMMAND_HELP.filter((c) => !(WORKSTREAM_VERBS as readonly string[]).includes(c.verb)).map((c) => ({ ...c, usage: c.usage.replace(/\bR1\b/, RUN_ID_REF) }));
+}
+
+/**
+ * The commands the composer takes, with a line on each; a workstream's own only in a workstream, and Manage's note when it
+ * is managed. Outside a workstream, where cards show no R labels, the examples name a run by its id.
+ */
 export function CommandsList({ workstream, manage }: { workstream: boolean; manage: boolean }) {
-  const shown = COMMAND_HELP.filter((c) => workstream || !(WORKSTREAM_VERBS as readonly string[]).includes(c.verb));
+  const shown = commandHelp(workstream);
   return (
     <div className="grid gap-2">
       <dl className="m-0 grid gap-1.5">
@@ -405,7 +459,7 @@ export function CommandsList({ workstream, manage }: { workstream: boolean; mana
           </div>
         ))}
       </dl>
-      <p className="m-0 text-ws-ink3">{RUN_REF_NOTE}</p>
+      <p className="m-0 text-ws-ink3">{workstream ? RUN_REF_NOTE : GENERAL_RUN_REF_NOTE}</p>
       {manage && (
         <p data-manage-note className="m-0 text-ws-ink3">
           {MANAGE_NOTE}
@@ -444,6 +498,27 @@ function CommandsHelp({ conversation }: { conversation: string }) {
       )}
     </div>
   );
+}
+
+interface DraftRoot {
+  querySelector(selector: string): unknown;
+  closest?(selector: string): unknown;
+}
+
+/**
+ * 'Show me the plan update', done on the page and never asked of Pip: the plan's description update waiting in the
+ * conversation's workstream comes into view with the keyboard on its card, or, where the conversation doesn't show its
+ * card, opens where it is read and approved (the ticket's peek). Nothing is approved.
+ */
+export function showPlanUpdate(conversation: string, root: DraftRoot | null) {
+  const id = workstreamOfConversation(conversation);
+  const view = id ? useWorkstreams.getState().list.find((v) => v.workstream.id === id) : undefined;
+  const draft = view ? planRewriteDraft(view, useRuns.getState().runs, Object.values(useWorkspace.getState().proposals)) : null;
+  if (!draft) return;
+  const card = root?.querySelector(`article[data-draft="${draft.id.replace(/["\\]/g, "\\$&")}"]`) as { focus(): void; scrollIntoView?(arg?: ScrollIntoViewOptions): void } | null;
+  if (!card) return openLiveDraft(draft, { inline: !!root?.closest?.("[data-pip-home]") });
+  card.scrollIntoView?.({ block: "nearest" });
+  card.focus();
 }
 
 interface ComposerProps {
@@ -536,7 +611,13 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
       {!queued && chips.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-3 pb-2">
           {chips.map((s) => (
-            <button key={s} type="button" onClick={() => ask(s)} className="rounded-full border border-ws-sep2 px-2.5 py-0.5 text-sm hover:border-ws-pip hover:text-ws-pip">
+            <button
+              key={s}
+              type="button"
+              // A chip with a page action does it here; any other is a question for Pip.
+              onClick={(ev) => (chipPageAction(s) === "showPlanUpdate" ? showPlanUpdate(conversation, ev.currentTarget.closest(PIP_ROOT)) : ask(s))}
+              className="rounded-full border border-ws-sep2 px-2.5 py-0.5 text-sm hover:border-ws-pip hover:text-ws-pip"
+            >
               {s}
             </button>
           ))}
@@ -567,7 +648,7 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
           aria-label="Ask Pip"
           placeholder={placeholderFor({ ...scene, images: attached.images.length > 0, quote: !!quote })}
           autoComplete="off"
-          className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 outline-none focus:border-ws-pip"
+          className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 focus:border-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
         />
         {agentsOn && <CommandsHelp conversation={conversation} />}
         {running && (

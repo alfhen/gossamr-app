@@ -12,12 +12,17 @@ export interface TabSpan {
   size: number;
 }
 
-/** Which tabs the strip shows: `start` to `end`, whole, `width` wide, scrolled `offset` in. No `width` when every tab fits. */
+/**
+ * Which tabs the strip shows: `start` to `end`, whole, `width` wide, scrolled `offset` in. No `width` when every tab fits.
+ * `squeeze` is set when even the one tab shown is wider than the room: that tab is drawn that narrow, its label cut short,
+ * so its count and close button stay in view.
+ */
 export interface TabWindow {
   start: number;
   end: number;
   offset: number;
   width?: number;
+  squeeze?: number;
 }
 
 /** Room each 'more tabs' button and the gap beside it takes, when the tabs don't all fit. */
@@ -28,6 +33,9 @@ export const MORE_BUTTON = 34;
  * as little as it can; a run that reaches the last tab takes in as many earlier ones as still fit. A tab is never cut: the
  * strip ends where the last whole one does, and buttons either side say how many more there are.
  */
+/** Whether two windows show the same thing, so the strip keeps the one it has. */
+export const sameWindow = (a: TabWindow, b: TabWindow) => a.start === b.start && a.end === b.end && a.offset === b.offset && a.width === b.width && a.squeeze === b.squeeze;
+
 export function tabWindow(spans: TabSpan[], room: number, from: number, active: number): TabWindow {
   const last = spans.length - 1;
   const right = (i: number) => spans[i].left + spans[i].size;
@@ -47,7 +55,9 @@ export function tabWindow(spans: TabSpan[], room: number, from: number, active: 
     end = endFrom(start);
   }
   while (end === last && start > 0 && right(end) - spans[start - 1].left <= fits) start--;
-  return { start, end, offset: spans[start].left - spans[0].left, width: Math.min(right(end) - spans[start].left, fits) };
+  const offset = spans[start].left - spans[0].left;
+  const whole = right(end) - spans[start].left;
+  return whole > fits ? { start, end, offset, width: fits, squeeze: fits } : { start, end, offset, width: whole };
 }
 
 export function TabStrip({
@@ -93,7 +103,7 @@ export function TabStrip({
     const spans = tabs.map((r) => ({ left: r.left - (tabs[0]?.left ?? 0), size: r.width }));
     const next = tabWindow(spans, box.clientWidth - (newTab.current?.offsetWidth ?? 0) - 4, start, follow ? active : -1);
     from.current = next.start;
-    setView((v) => (v.start === next.start && v.end === next.end && v.offset === next.offset && v.width === next.width ? v : next));
+    setView((v) => (sameWindow(v, next) ? v : next));
   };
   const refit = useRef(fit);
   // Only a committed render's `fit` may answer the observer: a discarded render could hold a different active tab.
@@ -138,7 +148,11 @@ export function TabStrip({
           onKeyDown={onKeyDown}
         >
           {items.map((item, i) => (
-            <div key={item.id} className={`-mb-px flex shrink-0 items-center border-b-2 ${item.active ? "border-ws-pip" : "border-transparent"}`}>
+            <div
+              key={item.id}
+              style={view.squeeze !== undefined && i === view.start ? { maxWidth: view.squeeze } : undefined}
+              className={`-mb-px flex shrink-0 items-center border-b-2 ${item.active ? "border-ws-pip" : "border-transparent"}`}
+            >
               <button
                 type="button"
                 role="tab"
@@ -147,17 +161,17 @@ export function TabStrip({
                 tabIndex={item.active ? 0 : -1}
                 title={item.label}
                 onClick={() => onActivate(item)}
-                className={`flex max-w-[260px] items-center gap-1.5 py-1.5 pl-3 font-semibold whitespace-nowrap ${item.tabId ? "pr-1" : "pr-3"} ${item.active ? "text-ws-ink" : "text-ws-ink2 hover:text-ws-ink"}`}
+                className={`flex min-w-0 max-w-[260px] items-center gap-1.5 py-1.5 pl-3 font-semibold whitespace-nowrap ${item.tabId ? "pr-1" : "pr-3"} ${item.active ? "text-ws-ink" : "text-ws-ink2 hover:text-ws-ink"}`}
               >
                 <span className="truncate">{item.label}</span>
-                <span className={`rounded-full px-1.5 text-xs font-semibold ${item.active ? "bg-ws-pip-soft text-ws-pip" : "bg-ws-sel text-ws-ink3"}`}>{counts[i]}</span>
+                <span className={`shrink-0 rounded-full px-1.5 text-xs font-semibold ${item.active ? "bg-ws-pip-soft text-ws-pip" : "bg-ws-sel text-ws-ink3"}`}>{counts[i]}</span>
               </button>
               {item.tabId && (
                 <button
                   type="button"
                   aria-label={`Close tab ${item.label}`}
                   onClick={() => onClose(item.tabId!)}
-                  className="mr-1 rounded px-1 text-lg leading-none text-ws-ink3 hover:bg-ws-hover hover:text-ws-ink"
+                  className="mr-1 shrink-0 rounded px-1 text-lg leading-none text-ws-ink3 hover:bg-ws-hover hover:text-ws-ink"
                 >
                   ×
                 </button>

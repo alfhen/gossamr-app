@@ -6,7 +6,8 @@ import { bodyChange, docFromMarkdown } from "../backend/mockMarkdown";
 import type { Proposal } from "../types";
 import { DraftCard, draftSummary, draftTitle } from "./DraftCard";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
-import { oneLine, rewriteBlocked, rewriteEdit, rewriteFields, takesBackendText, type Rewrite } from "./RewriteDiff";
+import { ONLY_SPACING, changedPairs, diffWords, oneLine, rewriteBlocked, rewriteEdit, rewriteFields, RewriteView, takesBackendText, type Rewrite } from "./RewriteDiff";
+import { diffLines } from "../lib/textDiff";
 import { targetOf } from "../lib/proposals";
 
 const OLD = "Retries back off.\n\nBackoff starts at two seconds.\n\nOpen question: who owns the alert?";
@@ -39,7 +40,10 @@ const draft = (i: Rewrite = intent(), over: Partial<Proposal> = {}): Proposal =>
 });
 
 const props = (p: Proposal) => ({ proposal: p, statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() });
-const lines = (html: string, kind: string) => [...html.matchAll(new RegExp(`data-line="${kind}"[^>]*>.*?<span class="min-w-0[^>]*><span class="sr-only">[^<]*</span>(.*?)</span>`, "g"))].map((m) => m[1]);
+/** The text of each line of `kind`, without the marks on its changed words. */
+const lines = (html: string, kind: string) => [...html.matchAll(new RegExp(`data-line="${kind}"[^>]*>.*?<span class="min-w-0[^>]*><span class="sr-only">[^<]*</span>(.*?)</span></div>`, "g"))].map((m) => m[1].replace(/<[^>]+>/g, ""));
+/** The card's text as a screen reader gets it, each line's hidden lead-in in brackets. */
+const spoken = (html: string) => html.replace(/<span class="sr-only">([^<]*)<\/span>/g, "[$1]").replace(/<[^>]+>/g, "");
 
 describe("a description edit draft", () => {
   beforeEach(() => {
@@ -74,9 +78,9 @@ describe("a description edit draft", () => {
 
   it("tells a screen reader which lines were added, removed or left alone, apart from the visible markers", () => {
     const html = renderToStaticMarkup(<DraftCard {...props(draft())} />);
-    expect(html).toContain('<span class="sr-only">Removed: </span>Retries back off.');
-    expect(html).toContain('<span class="sr-only">Added: </span>Retries back off and cap at five attempts.');
-    expect(html).toContain('<span class="sr-only">Unchanged: </span>Backoff starts at two seconds.');
+    expect(spoken(html)).toContain("[Removed: ]Retries back off.");
+    expect(spoken(html)).toContain("[Added: ]Retries back off and cap at five attempts.");
+    expect(spoken(html)).toContain("[Unchanged: ]Backoff starts at two seconds.");
     expect(html.match(/<span aria-hidden="true" class="w-3[^>]*>[+−]<\/span>/g)?.length).toBeGreaterThan(0);
     expect(html).toMatch(/role="group" aria-label="description changes"/);
   });
@@ -176,5 +180,70 @@ describe("approving through the backend", () => {
     expect(done.state.type).toBe("applied");
     const text = backend.connector.item(now.item)!.body.blocks.map((b) => b.type);
     expect(text).toEqual(["paragraph", "list"]);
+  });
+});
+
+describe("a changed line's words (D31)", () => {
+  const marked = (parts: { text: string; changed: boolean }[]) => parts.filter((p) => p.changed).map((p) => p.text);
+
+  it("marks only the words that differ on each side of a changed line", () => {
+    const d = diffWords("Drafted by an agent run (1000addd) on 2026-10-11.", "Drafted by an agent run (2000beef) on 2026-10-11.");
+    expect(marked(d.from)).toEqual(["1000addd"]);
+    expect(marked(d.to)).toEqual(["2000beef"]);
+    expect(d.from.map((p) => p.text).join("")).toBe("Drafted by an agent run (1000addd) on 2026-10-11.");
+    expect(d.to.map((p) => p.text).join("")).toBe("Drafted by an agent run (2000beef) on 2026-10-11.");
+    expect(d.spacingOnly).toBe(false);
+  });
+
+  it("says when two lines differ only in spacing, which no mark would show", () => {
+    expect(diffWords("Backoff starts at  two seconds. ", "Backoff starts at two seconds.").spacingOnly).toBe(true);
+    expect(diffWords("Tabs\there", "Tabs here").spacingOnly).toBe(true);
+    expect(diffWords("same", "same").spacingOnly).toBe(false);
+    expect(diffWords("one", "two").spacingOnly).toBe(false);
+  });
+
+  it("pairs each run of removed lines with the added lines after it, first with first", () => {
+    const rows = diffLines("a\nb\nkeep\nc", "A\nB\nextra\nkeep");
+    const kinds = rows.map((r) => r.kind);
+    expect(kinds).toEqual(["del", "del", "add", "add", "add", "same", "del"]);
+    const pairs = changedPairs(rows);
+    expect([...pairs.entries()].sort(([x], [y]) => x - y)).toEqual([
+      [0, 2],
+      [1, 3],
+      [2, 0],
+      [3, 1],
+    ]);
+  });
+
+  const body = (from: string, to: string): Rewrite => intent({ title: null, body: bodyChange(docFromMarkdown(from), to) });
+  const view = (i: Rewrite, runName: string | null = null) => renderToStaticMarkup(<RewriteView intent={i} title="" body={i.body!.toText} editing={false} onTitle={vi.fn()} onBody={vi.fn()} runName={runName} />);
+
+  it("highlights the changed words of a removed and added pair", () => {
+    const html = view(body("Retries back off.", "Retries back off quickly."));
+    expect(html.match(/<mark data-word-changed[^>]*>[^<]*<\/mark>/g)?.map((m) => m.replace(/<[^>]+>/g, ""))).toEqual([" quickly"]);
+    expect(html).not.toContain("data-spacing-only");
+  });
+
+  it("marks the words on both sides of a changed pair: what goes on the removed line, what comes on the added one", () => {
+    const html = view(body("Retries back off slowly.", "Retries back off quickly."));
+    const marked = (kind: string) => [...html.matchAll(new RegExp(`data-line="${kind}"[^>]*>(.*?)</div>`, "g"))].flatMap((m) => [...m[1].matchAll(/<mark data-word-changed[^>]*>([^<]*)<\/mark>/g)].map((w) => w[1].trim()));
+    expect(marked("del")).toEqual(["slowly"]);
+    expect(marked("add")).toEqual(["quickly"]);
+  });
+
+  it("notes a pair that differs only in spacing", () => {
+    const html = view(body("Retries back off.\n\nThen  stop.", "Retries back off.\n\nThen stop."));
+    expect(html).toContain(`data-spacing-only`);
+    expect(html).toContain(`(${ONLY_SPACING})`);
+    expect(ONLY_SPACING).toBe("only spacing changed");
+  });
+
+  it("names this draft's run only in the new text, so a plan's re-drafted intro no longer reads the same on both sides", () => {
+    const was = "## Gossamr Plan\n\nDrafted by an agent run (1000addd) on 2026-10-11. A person read and approved it in Gossamr before it was added here.";
+    const now = "## Gossamr Plan\n\nDrafted by an agent run (2000beef) on 2026-10-11. A person read and approved it in Gossamr before it was added here.";
+    const html = view(body(was, now), "the CA-401 plan");
+    expect(lines(html, "del")).toEqual(["Drafted by an agent run (1000addd) on 2026-10-11. A person read and approved it in Gossamr before it was added here."]);
+    expect(lines(html, "add")).toEqual(["Drafted by the CA-401 plan on 2026-10-11. A person read and approved it in Gossamr before it was added here."]);
+    expect(html).toContain("data-word-changed");
   });
 });

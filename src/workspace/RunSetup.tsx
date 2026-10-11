@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { CloneChoice, ContainerRef, FreshCopy, ItemRef, Preflight, RunKind, RunReview, WorkContainer } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
-import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
+import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame, pickerOpen } from "./AgentSheet";
 import { KIND_LABEL } from "./agentsLogic";
 import { PrPicker } from "./PrPicker";
 import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPrompt";
@@ -699,14 +699,14 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
         // The sheet's own fields start it; a field behind the sheet or a palette on top of it must not.
-        if (document.querySelector("[role=combobox]")) return;
+        if (pickerOpen()) return;
         const field = document.activeElement;
         if (field instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(field.tagName) && !frame()?.contains(field)) return;
         ev.preventDefault();
         void start();
         return;
       }
-      if (ev.key !== "Escape" || document.querySelector("[role=combobox]")) return;
+      if (ev.key !== "Escape" || pickerOpen()) return;
       // Captured so the ticket peek behind the sheet doesn't also close on the same key.
       ev.preventDefault();
       const field = document.activeElement;

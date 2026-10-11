@@ -27,6 +27,18 @@ const loadSeen = (): ReadonlySet<string> => {
 /** What the sheet over the screen shows; starting an agent has its own store. */
 export type RunSheetTarget = { type: "run"; id: string } | { type: "safety" };
 
+/**
+ * The order j and k walk through: the one the sheet opened with (`snapshot`), runs gone from it dropped and new ones
+ * added at the end, so a run that changes lane while its sheet is open keeps its place; the live order without one.
+ */
+export function browseList(snapshot: readonly string[] | null, live: readonly string[]): string[] {
+  if (!snapshot) return [...live];
+  const now = new Set(live);
+  const kept = snapshot.filter((id) => now.has(id));
+  const had = new Set(kept);
+  return [...kept, ...live.filter((id) => !had.has(id))];
+}
+
 interface RunsState {
   backend: Backend | null;
   runs: Run[];
@@ -50,6 +62,15 @@ interface RunsState {
   /** Runs the person just started and has not been told the outcome of: a launch that fails is announced and opened. */
   launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
+  /**
+   * What the person asked for when the one-time safety sheet opened instead; "Got it, continue" carries it on. Set only
+   * while the safety sheet is that intro, which is how the sheet knows to offer it.
+   */
+  afterIntro: (() => void) | null;
+  /** The order the run sheet browses in, taken when it opened; see `browseList`. */
+  browseOrder: readonly string[] | null;
+  /** Runs whose answer went through, with the progress time they had then: "Answer sent" shows until it moves on. */
+  answered: Readonly<Record<string, string>>;
   /** The ticket picker for starting an agent without a ticket open. */
   picking: boolean;
   init(backend: Backend): void;
@@ -70,8 +91,13 @@ interface RunsState {
   /** Shows a ticket's drafts, where a draft is approved, and closes the run sheet over it. */
   showDraft(item: ItemRef | null): void;
   setPicking(open: boolean): void;
-  /** False when it opened the safety sheet because the person has not seen it; callers stop there. */
-  ensureAgentsIntro(): boolean;
+  /**
+   * False when it opened the safety sheet because the person has not seen it; callers stop there, and `then`, what
+   * they were doing, runs when the person presses "Got it, continue". Closing the sheet any other way drops it.
+   */
+  ensureAgentsIntro(then?: () => void): boolean;
+  /** Closes the one-time safety sheet and carries on with what the person asked for before it opened. */
+  continueIntro(): void;
   /** Moves the run sheet to the next (`1`) or previous (`-1`) run, in the order the Agents view lists them, grouped as it is. */
   browse(delta: 1 | -1): void;
   stop(id: string): Promise<void>;
@@ -106,7 +132,10 @@ interface RunsState {
   setIntroOpen(open: boolean | null): void;
 }
 
-const idle = { runs: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, picking: false };
+const idle = { runs: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, afterIntro: null, browseOrder: null, picking: false };
+
+/** The order the Agents view lists runs in right now, grouped as it is. */
+const liveOrder = (s: Pick<RunsState, "runs" | "filters" | "earlierOpen">) => agentGroups(usePrefs.getState().agentsGroup, s.runs, useWorkstreams.getState().list, s.filters, s.earlierOpen, Date.now()).order;
 
 /** A run that was failed and is not any more starts over: if it fails again, the rail badge counts it again. */
 function forgetRecovered(seen: ReadonlySet<string>, runs: readonly Run[]): ReadonlySet<string> {
@@ -176,6 +205,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   stopping: false,
   drafting: null,
   answering: new Set<string>(),
+  answered: {},
   ...idle,
 
   init(backend) {
@@ -241,36 +271,42 @@ export const useRuns = create<RunsState>((set, get) => ({
   select: (selectedId) => set({ selectedId }),
 
   openRun(id, opts) {
-    set({ selectedId: id, filters: opts?.stay ? get().filters : NO_FILTERS, sheet: { type: "run", id } });
+    const filters = opts?.stay ? get().filters : NO_FILTERS;
+    set({ selectedId: id, filters, sheet: { type: "run", id }, afterIntro: null, browseOrder: liveOrder({ ...get(), filters }) });
     const tabs = useTabs.getState();
     if (!opts?.stay || tabs.route === "settings" || tabs.route === "activity") tabs.setRoute("agents");
   },
 
-  openSafety: () => set({ sheet: { type: "safety" } }),
-  closeSheet: () => set({ sheet: null }),
+  openSafety: () => set({ sheet: { type: "safety" }, afterIntro: null, browseOrder: null }),
+  closeSheet: () => set({ sheet: null, afterIntro: null, browseOrder: null }),
 
   showDraft(item) {
     get().closeSheet();
     if (item) openDraftsOn(item);
   },
-  ensureAgentsIntro() {
+  ensureAgentsIntro(then) {
     const prefs = usePrefs.getState();
     if (prefs.agentsIntroSeen) return true;
     prefs.setAgentsIntroSeen(true);
-    set({ sheet: { type: "safety" }, picking: false });
+    set({ sheet: { type: "safety" }, picking: false, afterIntro: then ?? (() => {}), browseOrder: null });
     return false;
   },
 
+  continueIntro() {
+    const then = get().afterIntro;
+    set({ sheet: null, afterIntro: null });
+    then?.();
+  },
+
   setPicking(picking) {
-    if (picking && !get().ensureAgentsIntro()) return;
+    if (picking && !get().ensureAgentsIntro(() => get().setPicking(true))) return;
     set({ picking });
   },
 
   browse(delta) {
-    const { sheet, runs, filters, earlierOpen } = get();
+    const { sheet, browseOrder } = get();
     if (sheet?.type !== "run") return;
-    const order = agentGroups(usePrefs.getState().agentsGroup, runs, useWorkstreams.getState().list, filters, earlierOpen, Date.now()).order;
-    const next = stepRun(order, sheet.id, delta);
+    const next = stepRun(browseList(browseOrder, liveOrder(get())), sheet.id, delta);
     if (next) set({ selectedId: next, sheet: { type: "run", id: next } });
   },
 
@@ -303,7 +339,9 @@ export const useRuns = create<RunsState>((set, get) => ({
     if (!backend || answering.has(id)) return;
     set({ answering: new Set([...answering, id]) });
     try {
-      await backend.runsAnswer(id, text);
+      const run = await backend.runsAnswer(id, text);
+      set({ answered: { ...get().answered, [id]: run.lastProgressAt } });
+      useToasts.getState().push("Answer sent. Claude is picking it back up.", "info");
     } catch (e) {
       useToasts.getState().push(`Couldn't send the answer: ${messageOf(e)}`);
     } finally {

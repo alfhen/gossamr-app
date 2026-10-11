@@ -893,6 +893,8 @@ export interface Workstream {
   basis: WorkstreamBasis | null;
   /** The basis fields (`BASIS_FIELDS`) whose drift held it, kept while it is held for `tripwire:basis_drift`. */
   drifted?: BasisField[];
+  /** The mode a tripwire took away, kept while it holds the workstream: resuming puts it back, unless the person chose a mode meanwhile. */
+  resumeMode?: WorkstreamMode | null;
 }
 
 /** The fields of a workstream's basis, as `BASIS_SUMMARY`, `BASIS_DESCRIPTION` and `BASIS_STATUS` name them. */
@@ -917,6 +919,8 @@ export interface WorkstreamView {
   labels: [string, string][];
   /** The newest finished build that published a pull request a sync hasn't found yet, while no review was queued after it. */
   waitingForPr?: string | null;
+  /** The newest finished review asked for changes and nothing is in progress: the stage is review, not done. */
+  reviewBlocking?: boolean;
   budget: BudgetView;
 }
 

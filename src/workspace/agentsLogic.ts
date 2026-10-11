@@ -253,6 +253,8 @@ export interface WorkstreamGroup {
   stage: WorkstreamStage | null;
   /** The workstream's build whose pull request hasn't been found yet, if any. */
   waitingForPr?: string | null;
+  /** The workstream's newest finished review asked for changes. */
+  reviewBlocking?: boolean;
   runs: Run[];
   /** Run id to its short name in the workstream (`R1` for the first queued), counted over all its runs so a filter never renumbers them. */
   labels: Record<string, string>;
@@ -278,7 +280,9 @@ export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonl
     const view = byId.get(id);
     const mine = sortRuns(all.filter((r) => shown.has(r.id)));
     if (!mine.length) continue;
-    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, stage: stage(all), waitingForPr: view?.waitingForPr ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
+    // The view knows each review's verdict; without one (a closed workstream) the runs alone give the stage.
+    const staged = view ? { stage: view.stage, reviewBlocking: view.reviewBlocking ?? false } : { stage: stage(all), reviewBlocking: false };
+    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, ...staged, waitingForPr: view?.waitingForPr ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
   }
   const latest = (g: WorkstreamGroup) => ageSince(g.runs[0]);
   groups.sort((a, b) => latest(b).localeCompare(latest(a)) || a.title.localeCompare(b.title));
@@ -309,22 +313,46 @@ export function stepRun(order: readonly string[], current: string | null, delta:
   return order[Math.min(order.length - 1, Math.max(0, at + delta))];
 }
 
+/** A run that needs the person, or a failed one they haven't looked at yet: what the rail badge and the Needs you tray count. */
+export const needsAttention = (run: Pick<Run, "id" | "state">, seenFailed: ReadonlySet<string>) => needsPerson(run) || (run.state === "failed" && !seenFailed.has(run.id));
+
 /** Runs that need the person, plus failed ones they haven't looked at yet. Quiet runs never count. */
 export function attentionCount(runs: readonly Run[], seenFailed: ReadonlySet<string>): number {
-  return runs.filter((r) => needsPerson(r) || (r.state === "failed" && !seenFailed.has(r.id))).length;
+  return runs.filter((r) => needsAttention(r, seenFailed)).length;
 }
+
+/**
+ * The runs at work, counted one way for the Agents view's summary and Pip home's composer footer so the two agree:
+ * `running` launching or working with recent progress, `quiet` working with none for a while, `queued` approved and
+ * about to start, `waiting` approved and waiting for a slot.
+ */
+export function liveCounts(runs: readonly Run[], now: number): { running: number; quiet: number; queued: number; waiting: number } {
+  const quiet = runs.filter((r) => quietMinutes(r, now) !== null).length;
+  const running = runs.filter((r) => r.state === "launching" || r.state === "working").length - quiet;
+  const waiting = runs.filter(waitsForSlot).length;
+  const queued = runs.filter((r) => r.state === "queued").length - waiting;
+  return { running, quiet, queued, waiting };
+}
+
+/** The live counts in words, in the order both lines give them: "2 running · 1 queued · 1 waiting for a slot". Quiet runs are said apart, where each line puts them. */
+export const liveWords = (c: ReturnType<typeof liveCounts>) => [c.running && `${c.running} running`, c.queued && `${c.queued} queued`, c.waiting && `${c.waiting} waiting for a slot`].filter((w): w is string => !!w);
+
+/**
+ * The count beside a lane's title. The Running lane holds queued runs too, so it says them apart with `liveCounts`
+ * ("2 running · 1 queued"), and its running number is the one the summary and Pip home's footer give; any other lane
+ * gives how many runs it holds.
+ */
+export const laneCount = (lane: LaneId, runs: readonly Run[], now: number): string => (lane === "running" ? liveWords(liveCounts(runs, now)).join(" · ") || "0" : String(runs.length));
 
 export function summaryLine(runs: readonly Run[], now: number): string {
   if (!runs.length) return "Nothing running";
   const count = (lane: LaneId) => runs.filter((r) => laneOf(r, now) === lane).length;
   const needs = count("needs");
-  const quiet = runs.filter((r) => quietMinutes(r, now) !== null).length;
+  const live = liveCounts(runs, now);
   const failed = runs.filter((r) => r.state === "failed").length;
   const unclear = runs.filter((r) => r.state === "unknown").length;
-  const waiting = runs.filter(waitsForSlot).length;
-  const running = count("running") - waiting;
   const done = count("done");
-  return [needs && `${needs} ${needs === 1 ? "needs" : "need"} you`, running && `${running} running`, waiting && `${waiting} waiting for a slot`, done && `${done} ready to review`, quiet && `${quiet} quiet`, failed && `${failed} failed`, unclear && `${unclear} unclear`]
+  return [needs && `${needs} ${needs === 1 ? "needs" : "need"} you`, ...liveWords(live), done && `${done} ready to review`, live.quiet && `${live.quiet} quiet`, failed && `${failed} failed`, unclear && `${unclear} unclear`]
     .filter(Boolean)
     .join(" · ") || "Nothing running";
 }
