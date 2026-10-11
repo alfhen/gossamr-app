@@ -89,6 +89,9 @@ export async function editThenPullView(p: Proposal, edit: ProposalEdit | null, t
   to.open();
 }
 
+/** Whether a finished save leaves the card with no unsent edit: only when nothing was typed after the save began. */
+export const settlesEdit = (editsAtStart: number, editsNow: number) => editsNow === editsAtStart;
+
 /** What Post review sends, said beside it: how many inline comments, and that it is a comment review, never a verdict. */
 export function postsWhat(comments: number): string {
   const inline = comments > 0 ? `${comments} inline comment${comments === 1 ? "" : "s"} and ` : "";
@@ -215,16 +218,27 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
   const canPost = !!access?.canPost;
   // Open PR view is saving the person's edit. A ref, set at once, so a second click in the same tick can't save and open twice.
   const savingNow = useRef(false);
+  /** How many edits the person has made; a save only settles the edits made before it started. */
+  const edits = useRef(0);
+  function markEdited() {
+    edited.current = true;
+    edits.current++;
+  }
   const pullView = () => {
     // Not disabled while it saves: a disabled button would drop the focus the view gives back on closing.
     if (savingNow.current) return;
     savingNow.current = true;
     const backend = useWorkspace.getState().backend;
     setSaveError(null);
+    const editsAtStart = edits.current;
     editThenPullView(p, backend ? edit : null, {
       saveEdit: (id, e) => backend!.proposalsEdit(id, e),
-      // What the backend now holds is what the card shows: it is no longer an unsent edit.
-      took: (saved) => ((edited.current = false), useWorkspace.setState((s) => ({ proposals: { ...s.proposals, [saved.id]: saved } }))),
+      // What the backend now holds is what the card showed when the save began. Text typed since stays an unsent edit, so the
+      // saved draft arriving is merged with it rather than replacing it.
+      took: (saved) => {
+        if (settlesEdit(editsAtStart, edits.current)) edited.current = false;
+        useWorkspace.setState((s) => ({ proposals: { ...s.proposals, [saved.id]: saved } }));
+      },
       open: pullViewOf(p),
     })
       .catch((e) => setSaveError(e instanceof Error ? e.message : String(e)))
@@ -232,7 +246,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
   };
   const hint = `review-markdown-${p.id}`;
   const change = (i: number, next: Partial<Held>) => {
-    edited.current = true;
+    markEdited();
     setComments((was) => was.map((c, j) => (j === i ? { ...c, ...next } : c)));
   };
 
@@ -294,7 +308,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
               disabled={working || state === "applying"}
               rows={Math.min(12, Math.max(3, summary.split("\n").length + 1))}
               onChange={(e) => {
-                edited.current = true;
+                markEdited();
                 setSummary(e.target.value);
               }}
               className="w-full scroll-mb-16 resize-none rounded-md border border-ws-sep2 bg-ws-win px-2 py-1.5 text-base font-normal [overflow-wrap:anywhere]"
@@ -317,7 +331,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
                       {c.side === "LEFT" && <span className="font-sans font-normal text-ws-ink3"> (old side)</span>}
                     </span>
                     {open && (
-                      <button type="button" disabled={working} aria-label={`${c.dropped ? "Restore" : "Drop"} comment on ${place}`} onClick={() => ((edited.current = true), setComments((was) => toggleDropped(was, i)))} className={`${button} ml-auto shrink-0 py-0.5 text-xs`}>
+                      <button type="button" disabled={working} aria-label={`${c.dropped ? "Restore" : "Drop"} comment on ${place}`} onClick={() => (markEdited(), setComments((was) => toggleDropped(was, i)))} className={`${button} ml-auto shrink-0 py-0.5 text-xs`}>
                         {c.dropped ? "Restore" : "Drop comment"}
                       </button>
                     )}

@@ -11,7 +11,7 @@ import { usePullView, type PullDiffState } from "./pullViewStore";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
 import type { ScreenContext } from "../types";
-import { editThenPost, editThenPullView, followDraft, MARKDOWN_HINT, postedLine, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+import { editThenPost, editThenPullView, settlesEdit, followDraft, MARKDOWN_HINT, postedLine, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
 
 vi.mock("../components/autoHeight", async (original) => ({ ...(await original<typeof import("../components/autoHeight")>()), useAutoHeight: vi.fn() }));
 
@@ -270,6 +270,9 @@ describe("a GitHub review draft's card in the peek (D9, D20, D21, D32)", () => {
     order.length = 0;
     await expect(editThenPullView(draft(), { type: "githubReview", summary: "" }, { saveEdit: () => Promise.reject(new Error("no")), took, open })).rejects.toThrow("no");
     expect(order).toEqual([]);
+    // Text typed while the save was on its way stays an unsent edit, so the saved draft arriving can't overwrite it.
+    expect(settlesEdit(3, 3)).toBe(true);
+    expect(settlesEdit(3, 4)).toBe(false);
   });
 
   it("says beside Post that it posts the inline comments and the summary as a comment review, never a verdict", () => {
