@@ -121,10 +121,13 @@ interface Props {
 }
 
 /**
- * The key hint of a card reached from the keyboard: it hangs just under the card, over what follows, and takes no clicks,
- * so showing or hiding it never changes the card's height or moves a button between a press and its click.
+ * The key hint of a card reached from the keyboard: it hangs just under the card and takes no clicks, so showing or
+ * hiding it never changes the card's height or moves a button between a press and its click. It is 22px tall with its
+ * gap, and every card keeps that much room below it (`KEY_HINT_ROOM`), so the hint never covers the card after it.
  */
-export const KEY_HINT = "pointer-events-none absolute top-full left-2.5 z-10 m-0 mt-1 max-w-[calc(100%-1.25rem)] rounded-md border border-ws-sep2 px-2 py-0.5 text-xs shadow-sm";
+export const KEY_HINT = "pointer-events-none absolute top-full left-2.5 z-10 m-0 mt-0.5 max-w-[calc(100%-1.25rem)] truncate rounded-md border border-ws-sep2 px-2 py-px text-xs leading-4 shadow-sm";
+/** The room under every draft card that its key hint hangs in: the hint's 20px and its 2px gap. */
+export const KEY_HINT_ROOM = "mb-[22px]";
 
 /** Hides the open review under `card` and keeps the keyboard on the card. */
 export function collapseReview(card: { focus(options?: FocusOptions): void }, close: () => void) {
@@ -280,7 +283,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
         // The hint hangs outside the card's box, so it goes at once: nothing under a pointer moves as it does.
         setArmed(false);
       }}
-      className={`relative scroll-mt-2 scroll-mb-9 rounded-xl border border-ws-sep2 bg-ws-win shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "applied" ? "opacity-70" : state === "skipped" || state === "retired" ? "opacity-45" : ""}`}
+      className={`relative ${KEY_HINT_ROOM} scroll-mt-2 scroll-mb-9 rounded-xl border border-ws-sep2 bg-ws-win shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "applied" ? "opacity-70" : state === "skipped" || state === "retired" ? "opacity-45" : ""}`}
     >
       <div data-draft-body className="overflow-hidden rounded-[inherit]">
         <div className={`flex items-center gap-2 px-2.5 py-1.5 text-sm font-semibold ${HEADER[state]}`}>

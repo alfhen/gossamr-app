@@ -1,4 +1,4 @@
-import { and, containerKey, filterChips, parseQuery, type QueryLookup } from "../lib/filter";
+import { and, containerKey, filterChips, parseQuery, YOUR_TURN, type QueryLookup } from "../lib/filter";
 import type { ContainerRef, WorkFilter } from "../types";
 
 /** Adds words typed in the filter box to the filter already in place. */
@@ -29,7 +29,7 @@ export interface SavedView {
 }
 
 export const BUILT_IN_VIEWS: SavedView[] = [
-  { id: "needs-me", name: "Needs me", filter: { type: "needsMe" } },
+  { id: "needs-me", name: YOUR_TURN, filter: { type: "needsMe" } },
   { id: "mine", name: "Assigned to me", filter: and({ type: "mine" }, { type: "open" }) },
   { id: "stale", name: "Stale", filter: { type: "stale", days: 5 } },
   { id: "blocked", name: "Blocked", filter: { type: "blocked" } },
@@ -37,7 +37,7 @@ export const BUILT_IN_VIEWS: SavedView[] = [
 
 /** The fixed tabs above the canvas, in the prototype's order. */
 export const PRESETS: SavedView[] = [
-  { ...BUILT_IN_VIEWS[0], name: "Needs me" },
+  { ...BUILT_IN_VIEWS[0] },
   { ...BUILT_IN_VIEWS[1], name: "Mine" },
   { ...BUILT_IN_VIEWS[3] },
   { ...BUILT_IN_VIEWS[2], name: "Going stale" },

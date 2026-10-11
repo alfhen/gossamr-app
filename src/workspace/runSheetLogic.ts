@@ -1,6 +1,6 @@
 import { answerProblem } from "../lib/answer";
 import { containerKey, itemKey } from "../lib/filter";
-import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type ReadOnly, type Run, type RunKind, type RunOutcome, type RunReview, type RunSpec, type WorkContainer } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type ReadOnly, type Run, type RunKind, type RunOutcome, type RunState, type RunReview, type RunSpec, type WorkContainer } from "../types";
 import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
@@ -22,7 +22,7 @@ export const COPY = {
 /** The three lines at the top of the safety sheet, true for each kind: what read-only steps may do, what a Build may do, and what always waits for the person. */
 export const SAFETY_SUMMARY: readonly { icon: "check" | "hand" | "lock"; text: string }[] = [
   { icon: "check", text: "Investigate, Triage, Plan, Review and Verify only read: Claude Code refuses their edits and writes. Review and Verify may run the repository's tests." },
-  { icon: "hand", text: "Build changes code in its own worktree, with your own Claude settings. It pushes its branch and opens a draft pull request only if you allow it, and staying out of Jira is a request, not a lock." },
+  { icon: "hand", text: "Build changes code in its own worktree, with your own Claude settings. It is told to push and open a draft pull request only when you allow it, and to stay out of Jira; both are requests, not locks." },
   { icon: "lock", text: "Gossamr posts nothing to Jira or GitHub until you approve it." },
 ];
 
@@ -804,3 +804,10 @@ export function permissionMode(preflight: Preflight | null): string | null {
   }
   return null;
 }
+
+/**
+ * What the run sheet's body scrolls back to the top on (SheetFrame's `topOn`): each state the run goes through once the
+ * person stopped it from the sheet, so its title and the Stopped pill come back into view; nothing before that, since a
+ * run moving on by itself would pull whoever reads its timeline away from where they were.
+ */
+export const sheetTopOn = (run: Pick<Run, "state">, stoppedHere: boolean): RunState | null => (stoppedHere ? run.state : null);

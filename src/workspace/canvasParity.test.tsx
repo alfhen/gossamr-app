@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { ALL, itemKey } from "../lib/filter";
+import { ALL, itemKey, YOUR_TURN_WHY } from "../lib/filter";
 import type { FeedEntry, StatusDef, WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
 import { AgeLayoutToggle, AgeRow } from "./AgeView";
@@ -185,8 +185,10 @@ describe("ListRow", () => {
 
   it("marks what needs the person, what is unread, blocked and drafted", () => {
     const out = renderToStaticMarkup(<ListRow {...rowProps({ needsMe: true, blocked: true, draft: { id: "d", to: "Done" }, moreDrafts: 2 })} />);
-    expect(out).toContain('aria-label="Needs you"');
-    expect(out).toContain("Needs you</span>");
+    expect(out).toContain('aria-label="Your turn"');
+    expect(out).toContain(`title="${YOUR_TURN_WHY}"`);
+    expect(out).toContain("Your turn</span>");
+    expect(out).not.toContain("Needs you");
     expect(out).toContain("blocked");
     expect(out).toContain("draft → Done");
     expect(out).toContain("✦ 2");
@@ -333,7 +335,7 @@ describe("map marks", () => {
     const out = render(props([item("A-1"), item("A-2")], { needsMe: new Set(["mock:A-1"]) }));
     expect((out.match(/data-pulse/g) ?? []).length).toBe(1);
     expect(out).toContain("ws-ring");
-    expect(out).toMatch(/aria-label="A-1 [^"]*needs you/);
+    expect(out).toMatch(/aria-label="A-1 [^"]*your turn/);
   });
 
   it("fills review statuses purple", () => {
@@ -346,6 +348,8 @@ describe("map marks", () => {
     expect(out).toContain("Review / QA");
     expect(out).toContain("5d+");
     expect(out).toContain("7d+");
-    expect(out).toContain("Needs you");
+    expect(out).toContain(`title="${YOUR_TURN_WHY}"`);
+    expect(out).toContain("Your turn");
+    expect(out).not.toContain("Needs you");
   });
 });

@@ -3,7 +3,7 @@ import { heldText } from "../lib/workstreamHold";
 import { byQueue, STAGE_LABEL, stageText } from "../lib/workstreamStage";
 import { HELD_BUDGET, HELD_DAILY } from "../types";
 import type { BasisField, CodeChange, Intent, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
-import { needsAttention, needsPerson, stateView, type Tone } from "./agentsLogic";
+import { liveCounts, liveWords, needsAttention, needsPerson, stateView, type Tone } from "./agentsLogic";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
 import type { WorkstreamSuggestionScene } from "./suggestions";
 import { runWorkstream } from "./workstreamsStore";
@@ -354,16 +354,16 @@ export function nextStep(chips: readonly Pick<StepChip, "kind" | "newest">[]): R
 }
 
 /**
- * Pip home's composer footer: "2 running · 1 queued · 2 need you", counting every run starting or at work and every
- * run waiting its turn, in a workstream or not, as everything waiting on the person (`needsYou`) is counted. "Running"
- * is the Agents view's word for runs at work, so the two read alike. It is told under the input, never in the conversation.
+ * Pip home's composer footer: "2 running · 1 quiet · 1 queued · 2 need you", counting every run in a workstream or not
+ * as the Agents view's summary does (`liveCounts`), so the two never disagree on how many are running, then everything
+ * waiting on the person (`needsYou`). It is told under the input, never in the conversation.
  */
-export function composerFooter(runs: readonly Run[], needsYou: readonly NeedsYouItem[]): string {
-  const working = runs.filter((r) => RUNNING.has(r.state)).length;
-  const queued = runs.filter((r) => r.state === "queued").length;
-  const agents = working === 0 ? "Nothing running" : `${working} running`;
+export function composerFooter(runs: readonly Run[], needsYou: readonly NeedsYouItem[], now: number = Date.now()): string {
+  const live = liveCounts(runs, now);
+  const rest = liveWords({ ...live, running: 0 });
+  const agents = [live.running ? `${live.running} running` : "Nothing running", ...(live.quiet ? [`${live.quiet} quiet`] : []), ...rest];
   const n = needsYou.length;
-  return [agents, ...(queued ? [`${queued} queued`] : []), n === 0 ? "nothing needs you" : `${n} ${n === 1 ? "needs" : "need"} you`].join(" · ");
+  return [...agents, n === 0 ? "nothing needs you" : `${n} ${n === 1 ? "needs" : "need"} you`].join(" · ");
 }
 
 /** The plan's description update of workstream `view` that waits for the person, the newest if there are several; null when none does. */

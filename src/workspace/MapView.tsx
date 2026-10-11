@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { summaryLine, type CodeSummary } from "../lib/devLinks";
+import { YOUR_TURN, YOUR_TURN_WHY } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { daysQuiet } from "./boardLogic";
 import { ageLevel, statusTone, type StatusTone } from "./canvasShared";
@@ -153,7 +154,7 @@ export function MapSvg({ layout, viewport, selected, marked, focused, hovered, b
               key={n.key}
               id={nodeId(n.key)}
               role="button"
-              aria-label={`${n.item.item.key} ${n.item.title}, ${n.item.status.name}${isBlocked ? ", blocked" : ""}${pulses ? ", needs you" : ""}${stale >= 2 ? `, quiet for ${days} days` : ""}${drafts[n.key] ? ", has a draft" : ""}${cluster ? `, in ${cluster.label}` : ""}`}
+              aria-label={`${n.item.item.key} ${n.item.title}, ${n.item.status.name}${isBlocked ? ", blocked" : ""}${pulses ? ", your turn" : ""}${stale >= 2 ? `, quiet for ${days} days` : ""}${drafts[n.key] ? ", has a draft" : ""}${cluster ? `, in ${cluster.label}` : ""}`}
               aria-pressed={isSelected}
               data-node={n.key}
               className="cursor-pointer motion-safe:transition-opacity"
@@ -236,9 +237,9 @@ export function MapKey() {
         <i className="size-2 rounded-full border border-dashed border-ws-blocked" />
         Blocked by another ticket
       </span>
-      <span className="flex items-center gap-1">
+      <span className="flex items-center gap-1" title={YOUR_TURN_WHY}>
         <i className="size-2 rounded-full border-2 border-ws-pip" />
-        Needs you
+        {YOUR_TURN}
       </span>
       <span className="flex items-center gap-1">
         <i className="size-2 rounded-full bg-ws-pip" />

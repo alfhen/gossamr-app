@@ -33,7 +33,9 @@ describe("palette commands", () => {
     expect(find("assigned to me")).toContain("Filter: Assigned to me");
     expect(find("stale")).toContain("Filter: Stale");
     expect(find("blocked")).toContain("Filter: Blocked");
-    expect(find("needs me")).toContain("Filter: Needs me");
+    expect(find("your turn")).toContain("Filter: Your turn");
+    // Its old name still finds it.
+    expect(find("needs me")).toContain("Filter: Your turn");
   });
 
   it("switches view, theme and settings", () => {
@@ -376,7 +378,7 @@ describe("Pip home in the palette", () => {
     const a = actions();
     const ca401 = items.find((i) => i.item.key === "CA-401")!;
     const found = startWorkstreamCommands(items, "start a workstream on ca-401", [], a);
-    expect(found[0]).toMatchObject({ id: "workstream:start:mock:CA-401", group: "Agents", label: "Start a workstream on CA-401" });
+    expect(found[0]).toMatchObject({ id: "workstream:start:mock:CA-401", group: "Workstreams", label: "Start a workstream on CA-401" });
     found[0].run();
     expect(a.startWorkstreamOn).toHaveBeenCalledWith(ca401);
     expect(startWorkstreamCommands(items, "workstream ca-401", [], a)[0]?.label).toBe("Start a workstream on CA-401");
@@ -384,7 +386,6 @@ describe("Pip home in the palette", () => {
     const open = [{ ...view("w1", "CA-401"), workstream: { ...view("w1", "CA-401").workstream, connectionId: ca401.item.connectionId } }] as Parameters<typeof workstreamCommands>[0];
     expect(startWorkstreamCommands(items, "workstream ca-401", open, a).some((c) => c.label === "Start a workstream on CA-401")).toBe(false);
     expect(startWorkstreamCommands(items, "ca-401", [], a)).toEqual([]);
-    expect(startWorkstreamCommands(items, "start a workstream", [], a)).toEqual([]);
     expect(startWorkstreamCommands(items, "start a workstream on ca-401", [], a)).toHaveLength(1);
   });
 
@@ -404,7 +405,8 @@ describe("Pip home in the palette", () => {
       at("T-8", "2026-09-04T00:00:00Z"),
     ];
     const open = [{ ...view("w1", "T-7"), workstream: { ...view("w1", "T-7").workstream, connectionId: pool[6].item.connectionId } }] as Parameters<typeof workstreamCommands>[0];
-    for (const query of ["start a workstream on ", "start a workstream on", "workstream on"]) {
+    // "start a workstream" alone asks the same question as "start a workstream on ".
+    for (const query of ["start a workstream on ", "start a workstream on", "workstream on", "start a workstream", "workstream"]) {
       const found = startWorkstreamCommands(pool, query, open, a, 3, [me]);
       // Mine first; then open ones, newest first; the done one and the one with a workstream left out; five at most.
       expect(found.map((c) => c.label)).toEqual(["Start a workstream on T-3", "Start a workstream on T-5", "Start a workstream on T-6", "Start a workstream on T-2", "Start a workstream on T-8"]);
@@ -412,9 +414,8 @@ describe("Pip home in the palette", () => {
     }
     startWorkstreamCommands(pool, START_WORKSTREAM, open, a, 3, [me])[0].run();
     expect(a.startWorkstreamOn).toHaveBeenCalledWith(pool[2]);
-    // Words after it narrow as before; "start a workstream" alone, or no workstream words, still offers nothing.
+    // Words after it narrow as before; no workstream words offer nothing.
     expect(startWorkstreamCommands(pool, `${START_WORKSTREAM}T-2`, open, a, 3, [me]).map((c) => c.label)).toEqual(["Start a workstream on T-2"]);
-    expect(startWorkstreamCommands(pool, "start a workstream", open, a, 3, [me])).toEqual([]);
     expect(startWorkstreamCommands(pool, "on", open, a, 3, [me])).toEqual([]);
   });
 

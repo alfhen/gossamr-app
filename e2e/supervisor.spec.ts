@@ -294,7 +294,9 @@ test("the budget warns in amber before it runs out, then holds with what to say"
 
   await finish(page, (await started(page, "triage", triage.id)).id);
   await expect(wakes(page)).toHaveCount(5);
-  await expect(heldBanner(page)).toHaveText(/^Held: automatic turns used up\. Resume, or write to Pip, to give it \d+ more/);
+  // The wakes ran out, which a message to Pip doesn't reset: only Resume is offered.
+  await expect(heldBanner(page)).toHaveText(/^Held: wakes used up\. Resume to give it 5 more/);
+  await expect(heldBanner(page)).not.toContainText("write to Pip");
   await expect(amber).toHaveCount(0);
   await expect(pipPane(page).getByRole("button", { name: "Resume" })).toBeVisible();
   expect(await jiraWrites(page)).toEqual([]);

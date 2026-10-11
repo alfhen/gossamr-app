@@ -40,9 +40,10 @@ describe("the workstream's controls", () => {
     expect(free).not.toContain("Resume");
     const reasons = [HELD_RESTART, HELD_PERSON, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_QUOTA, ...TRIPWIRES.map((t) => `${TRIPWIRE}${t}`)];
     for (const reason of reasons) {
-      const html = render(viewOf({ heldReason: reason }));
+      const view = viewOf({ heldReason: reason });
+      const html = render(view);
       expect(html).toContain(`data-held-banner="${reason}"`);
-      expect(html).toContain(heldText(reason)!.replace(/'/g, "&#x27;"));
+      expect(html).toContain(heldText(reason, null, view.budget)!.replace(/'/g, "&#x27;"));
       expect(html).toContain(">Resume</button>");
       expect(html).not.toContain(">Hold</button>");
     }
@@ -62,6 +63,10 @@ describe("the workstream's controls", () => {
     expect(render(own)).not.toContain("data-budget");
     expect(render(own)).toContain("Held: automatic turns used up. Resume, or write to Pip, to give it 2 more");
     expect(render(own)).toContain("data-turn-help");
+    // Held because the wakes ran out: a message to Pip would not lift it, so only Resume is offered.
+    const wakes = render(viewOf({ spent: { autoTurns: 1, wakes: 12, tokens: 0 }, heldReason: HELD_BUDGET }));
+    expect(wakes).toContain("Held: wakes used up. Resume to give it 12 more");
+    expect(wakes).not.toContain("write to Pip");
     // Spent, but held for something else: the line says so.
     expect(render({ ...own, workstream: { ...own.workstream, heldReason: HELD_PERSON } })).toContain('data-budget="spent"');
   });
@@ -80,6 +85,13 @@ describe("the workstream's controls", () => {
     expect(paused).toContain("Held: the ticket&#x27;s description changed in Jira. Automatic steps are paused. Resume turns them back on.");
     expect(paused).toContain("data-manage-paused");
     expect(paused).toMatch(/role="switch" aria-checked="false"/);
+    // A screen reader hears that Manage is paused, not only that it is off.
+    const described = /aria-describedby="([^"]+)"/.exec(paused)![1];
+    expect(paused).toMatch(new RegExp(`id="${described}" data-manage-paused[^>]*>paused<span class="sr-only"> until Resume</span>`));
+    // Manage switched back on during the hold: Resume starts the automatic steps again, so the banner can't say it stays off.
+    const switchedOn = render(viewOf({ heldReason: `${TRIPWIRE}basis_drift`, drifted: ["description"], resumeMode: null, mode: "manage" }));
+    expect(switchedOn).toContain("Automatic steps are paused. Resume turns them back on.");
+    expect(switchedOn).not.toContain("Manage stays off");
     const advised = render(viewOf({ heldReason: `${TRIPWIRE}marker`, mode: "advise" }));
     expect(advised).toContain("Resume only lifts the hold; Manage stays off.");
     expect(advised).not.toContain("data-manage-paused");

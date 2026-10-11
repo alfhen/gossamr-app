@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { ALL, and, filterChips } from "../lib/filter";
+import { ALL, and, filterChips, YOUR_TURN } from "../lib/filter";
 import type { ContainerRef, WorkFilter } from "../types";
 import { BUILT_IN_VIEWS, projectOf, sameProject, scopeTo, showsEntry, withProject, type SavedView } from "./filters";
 import { readStored, writeStored } from "./storage";
@@ -68,12 +68,15 @@ const blankTab = (): Tab => ({ id: newId(), title: null, filter: ALL, view: "lis
 
 const isFilter = (f: unknown): f is WorkFilter => typeof f === "object" && f !== null && typeof (f as { type?: unknown }).type === "string";
 
+/** A tab opened from the built-in Your turn view while it was still called "Needs me" goes on standing for it. */
+const retitled = (title: string, filter: WorkFilter) => (title === "Needs me" && filter.type === "needsMe" ? YOUR_TURN : title);
+
 function parseTab(t: unknown): Tab | null {
   const raw = t as Partial<Tab> | null;
   if (!raw || typeof raw.id !== "string" || !isFilter(raw.filter)) return null;
   return {
     id: raw.id,
-    title: typeof raw.title === "string" ? raw.title : null,
+    title: typeof raw.title === "string" ? retitled(raw.title, raw.filter) : null,
     filter: raw.filter,
     view: VIEW_MODES.find((v) => v === raw.view) ?? "list",
   };

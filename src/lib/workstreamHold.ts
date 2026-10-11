@@ -22,11 +22,22 @@ export function driftText(drifted: readonly BasisField[] | null | undefined): st
 }
 
 /**
- * What the page says about a workstream held for `reason` (`heldReason`); null when it isn't held. A basis-drift hold
- * says what changed when `drifted` names it, and a budget hold how many automatic turns resuming gives (`autoTurns`, the
- * workstream's limit).
+ * What a budget hold says: which limit ran out and what lifts it. Resume starts both counts again; a message to Pip
+ * starts only the automatic turns again, so it is offered only while the wakes are not what ran out. Without `budget`,
+ * the default limits and Resume alone.
  */
-export function heldText(reason: string | null | undefined, drifted?: readonly BasisField[] | null, autoTurns: number = AUTO_TURNS_DEFAULT): string | null {
+function budgetHeldText(budget: BudgetView | undefined): string {
+  const turns = budget?.autoTurns.limit ?? AUTO_TURNS_DEFAULT;
+  if (budget && budget.wakes.used >= budget.wakes.limit) return `Held: wakes used up. Resume to give it ${budget.wakes.limit} more`;
+  return budget ? `Held: automatic turns used up. Resume, or write to Pip, to give it ${turns} more` : `Held: automatic turns used up. Resume to give it ${turns} more`;
+}
+
+/**
+ * What the page says about a workstream held for `reason` (`heldReason`); null when it isn't held. A basis-drift hold
+ * says what changed when `drifted` names it, and a budget hold which limit ran out and what resuming gives (`budget`,
+ * the workstream's budget view).
+ */
+export function heldText(reason: string | null | undefined, drifted?: readonly BasisField[] | null, budget?: BudgetView): string | null {
   if (!reason) return null;
   switch (reason) {
     case HELD_RESTART:
@@ -36,7 +47,7 @@ export function heldText(reason: string | null | undefined, drifted?: readonly B
     case HELD_ALL:
       return "Held: Hold all";
     case HELD_BUDGET:
-      return `Held: automatic turns used up. Resume, or write to Pip, to give it ${autoTurns} more`;
+      return budgetHeldText(budget);
     case HELD_DAILY:
       return "Held: today's Pip turns are used up";
     case HELD_QUOTA:
@@ -52,23 +63,23 @@ export function heldText(reason: string | null | undefined, drifted?: readonly B
 
 /**
  * What Resume does for a tripwire hold, said after why it is held: a tripwire takes Manage away, so with `resumeMode`
- * set the automatic steps are paused and Resume turns them back on; without it Resume only lifts the hold. Null for any
- * other hold.
+ * set, or Manage switched back on during the hold (`mode`), the automatic steps are paused and Resume turns them back
+ * on; otherwise Resume only lifts the hold. Null for any other hold.
  */
-export function tripwireResumeText(reason: string | null | undefined, resumeMode: WorkstreamMode | null | undefined): string | null {
+export function tripwireResumeText(reason: string | null | undefined, resumeMode: WorkstreamMode | null | undefined, mode?: WorkstreamMode): string | null {
   if (!reason?.startsWith(TRIPWIRE)) return null;
-  return resumeMode === "manage" ? "Automatic steps are paused. Resume turns them back on." : "Resume only lifts the hold; Manage stays off.";
+  return resumeMode === "manage" || mode === "manage" ? "Automatic steps are paused. Resume turns them back on." : "Resume only lifts the hold; Manage stays off.";
 }
 
-/** The whole held banner of `ws`: why it is held, then for a tripwire what Resume does. `autoTurns` is its turn limit. */
-export function heldBanner(ws: Pick<Workstream, "heldReason" | "drifted" | "resumeMode">, autoTurns: number = AUTO_TURNS_DEFAULT): string | null {
-  const held = heldText(ws.heldReason, ws.drifted, autoTurns);
-  const resume = tripwireResumeText(ws.heldReason, ws.resumeMode);
+/** The whole held banner of `ws`: why it is held, then for a tripwire what Resume does. `budget` is its budget view. */
+export function heldBanner(ws: Pick<Workstream, "heldReason" | "drifted" | "resumeMode"> & { mode?: WorkstreamMode }, budget?: BudgetView): string | null {
+  const held = heldText(ws.heldReason, ws.drifted, budget);
+  const resume = tripwireResumeText(ws.heldReason, ws.resumeMode, ws.mode);
   return held && resume ? `${held}. ${resume}` : held;
 }
 
 /** What one automatic turn is, for the budget's meter and banner. */
-export const TURN_HELP = "An automatic turn is each time Pip acts without you asking, such as reading a finished run. Your next message resets the count.";
+export const TURN_HELP = "An automatic turn is each time Pip acts without you asking, such as reading a finished run. Your next message resets the count of turns; only Resume resets the wakes.";
 
 /** The short name of an auto-start rule, as switches show it. */
 export function ruleText(rule: WorkstreamRule): string {

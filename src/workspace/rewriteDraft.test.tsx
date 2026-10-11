@@ -224,6 +224,13 @@ describe("a changed line's words (D31)", () => {
     expect(html).not.toContain("data-spacing-only");
   });
 
+  it("marks the words on both sides of a changed pair: what goes on the removed line, what comes on the added one", () => {
+    const html = view(body("Retries back off slowly.", "Retries back off quickly."));
+    const marked = (kind: string) => [...html.matchAll(new RegExp(`data-line="${kind}"[^>]*>(.*?)</div>`, "g"))].flatMap((m) => [...m[1].matchAll(/<mark data-word-changed[^>]*>([^<]*)<\/mark>/g)].map((w) => w[1].trim()));
+    expect(marked("del")).toEqual(["slowly"]);
+    expect(marked("add")).toEqual(["quickly"]);
+  });
+
   it("notes a pair that differs only in spacing", () => {
     const html = view(body("Retries back off.\n\nThen  stop.", "Retries back off.\n\nThen stop."));
     expect(html).toContain(`data-spacing-only`);

@@ -110,8 +110,8 @@ interface Revealable {
  * does nothing, so only ⌘↵ or the Start button starts; Tab from there goes to Start. Only that one box scrolls, never
  * Pip home around it, as `scrollIntoView` would once the box can't scroll far enough.
  */
-export function revealReview(panel: Revealable) {
-  panel.focus({ preventScroll: true });
+export function revealReview(panel: Revealable, focus = true) {
+  if (focus) panel.focus({ preventScroll: true });
   const box = panel.closest(REVIEW_SCROLLER) as ({ scrollTop: number } & Pick<Revealable, "getBoundingClientRect">) | null;
   if (!box) return;
   const to = scrollTopFor(panel.getBoundingClientRect(), box.getBoundingClientRect(), box.scrollTop, "start");
@@ -306,10 +306,20 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
       });
     };
   }, []);
-  // Opened by the person just now: it comes into view, under the chips no more, with the keyboard in it.
+  // Opened by the person just now: it comes into view, under the chips no more, with the keyboard in it. While it is
+  // still loading it is short, and what scrolls it may not reach far enough to bring its top up: once it has grown it is
+  // brought up again, without moving the keyboard from wherever the person took it since.
+  const revealGrown = useRef(false);
   useLayoutEffect(() => {
-    if (ref.current && revealOnMount.delete(id)) revealReview(ref.current);
+    if (!ref.current || !revealOnMount.delete(id)) return;
+    revealReview(ref.current);
+    revealGrown.current = phase === "loading";
   }, [id]);
+  useLayoutEffect(() => {
+    if (!revealGrown.current || phase === "loading" || !ref.current) return;
+    revealGrown.current = false;
+    revealReview(ref.current, false);
+  }, [phase]);
   return (
     <div
       ref={ref}

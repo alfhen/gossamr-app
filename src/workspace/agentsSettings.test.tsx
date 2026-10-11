@@ -77,7 +77,9 @@ describe("the safety sheet as the one-time intro", () => {
     expect(lines).toEqual(SAFETY_SUMMARY.map((l) => l.text));
     expect(lines[0]).toMatch(/^Investigate, Triage, Plan, Review and Verify only read/);
     expect(lines[1]).toMatch(/^Build changes code in its own worktree/);
-    expect(lines[1]).toContain("draft pull request only if you allow it");
+    expect(lines[1]).toContain("told to push and open a draft pull request only when you allow it");
+    // Nothing enforces it, as the detail below says: the line can't promise a lock.
+    expect(lines[1]).toContain("both are requests, not locks");
     expect(lines[2]).toBe("Gossamr posts nothing to Jira or GitHub until you approve it.");
     expect(html.indexOf("data-safety-summary")).toBeLessThan(html.indexOf("What agents can touch"));
   });

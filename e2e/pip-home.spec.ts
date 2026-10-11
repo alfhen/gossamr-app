@@ -267,7 +267,7 @@ test("Needs you from the board: the rail's Pip home popover lists the same items
   await page.getByRole("button", { name: "All projects" }).click();
   await expect(pipHome(page)).toHaveCount(0);
   const button = homeButton(page);
-  await expect(button).toHaveAccessibleName(`Pip home, ${onHome.length} ${onHome.length === 1 ? "needs" : "need"} you`);
+  await expect(button).toHaveAccessibleName(`Pip home, ${onHome.length} ${onHome.length === 1 ? "item waits" : "items wait"} in Needs you`);
   await button.click({ button: "right" });
   const popover = page.getByRole("dialog", { name: "Needs you" });
   await expect(popover.locator("[data-needs-you-item]")).toHaveCount(onHome.length);

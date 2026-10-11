@@ -63,6 +63,15 @@ describe("workspace tabs", () => {
     expect(loaded.activeId).toBe("x");
   });
 
+  it("renames a tab opened from the old Needs me view to Your turn, and nothing else of that name", () => {
+    const tabs = [
+      { id: "a", title: "Needs me", filter: { type: "needsMe" }, view: "list" },
+      { id: "b", title: "Needs me", filter: { type: "blocked" }, view: "list" },
+    ];
+    localStorage.setItem("gossamr-tabs", JSON.stringify({ tabs, activeId: "a" }));
+    expect(loadTabs().tabs.map((t) => t.title)).toEqual(["Your turn", "Needs me"]);
+  });
+
   it("does not duplicate a chip added twice", () => {
     s().addFilter({ type: "blocked" });
     s().addFilter({ type: "blocked" });

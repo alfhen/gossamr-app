@@ -65,8 +65,9 @@ describe("FeedRow", () => {
   });
 
   it("flags tickets waiting on the person and words a mention as one", () => {
-    expect(row({ needsMe: true })).toContain("Needs you");
-    expect(row({ needsMe: false })).not.toContain("Needs you");
+    expect(row({ needsMe: true })).toMatch(/title="Your turn: an unread update[^"]*"[^>]*>Your turn</);
+    expect(row({ needsMe: false })).not.toContain("Your turn");
+    expect(row({ needsMe: true })).not.toContain("Needs you");
     expect(row({}, { mention: true })).toContain("mentioned you on");
   });
 
@@ -84,7 +85,7 @@ describe("FeedRow", () => {
 describe("the chips and notes", () => {
   it("lists every filter and presses the chosen one, with counts", () => {
     const out = renderToStaticMarkup(<ChipBar chip="mentions" counts={{ needsMe: 3, drafts: 2 }} onChange={vi.fn()} />);
-    for (const label of ["All", "Needs me", "Mentions", "Comments", "Status changes", "Assigned to me", "Drafts"]) expect(out).toContain(label);
+    for (const label of ["All", "Your turn", "Mentions", "Comments", "Status changes", "Assigned to me", "Drafts"]) expect(out).toContain(label);
     expect(out.match(/aria-pressed="true"/g)).toHaveLength(1);
     expect(out).toMatch(/aria-pressed="true"[^>]*>Mentions/);
     expect(out).toContain('ml-1 font-normal">3<');

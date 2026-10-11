@@ -175,7 +175,8 @@ test.describe("workstream stage and holds (D3, D10, D18)", () => {
     const manage = stepRail(page).getByRole("switch", { name: "Manage this workstream" });
     await expect(banner).toContainText("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
     await expect(manage).toHaveAttribute("aria-checked", "false");
-    await expect(stepRail(page).locator("[data-manage-paused]")).toHaveText("paused");
+    await expect(stepRail(page).locator("[data-manage-paused]")).toHaveText("paused until Resume");
+    await expect(manage).toHaveAccessibleDescription("paused until Resume");
     await expect(stepChip(page, "triage").locator("[data-step-auto]")).toHaveText("· waits for Resume");
     // Held, the queued triage doesn't launch.
     await advanceRuns(page, 1, triage.id);
@@ -205,7 +206,7 @@ test.describe("workstream stage and holds (D3, D10, D18)", () => {
     await expect(heldBanner(page)).toContainText("Held: automatic turns used up. Resume, or write to Pip, to give it 2 more");
     const help = heldBanner(page).locator("[data-turn-help]");
     await help.locator("summary").click();
-    await expect(help).toContainText("An automatic turn is each time Pip acts without you asking, such as reading a finished run. Your next message resets the count.");
+    await expect(help).toContainText("An automatic turn is each time Pip acts without you asking, such as reading a finished run. Your next message resets the count of turns; only Resume resets the wakes.");
 
     await heldBanner(page).getByRole("button", { name: "Resume" }).click();
     await expect(heldBanner(page)).toHaveCount(0);
@@ -248,7 +249,7 @@ test.describe("agent intro continues (D1, D25)", () => {
     const summary = sheet.locator("[data-safety-summary] li");
     await expect(summary).toHaveCount(3);
     await expect(summary.nth(0)).toHaveText(/^Investigate, Triage, Plan, Review and Verify only read: Claude Code refuses their edits and writes/);
-    await expect(summary.nth(1)).toHaveText(/^Build changes code in its own worktree.*pushes its branch and opens a draft pull request only if you allow it/);
+    await expect(summary.nth(1)).toHaveText(/^Build changes code in its own worktree.*told to push and open a draft pull request only when you allow it.*requests, not locks/);
     await expect(summary.nth(2)).toHaveText("Gossamr posts nothing to Jira or GitHub until you approve it.");
     await sheet.getByRole("button", { name: "Got it, continue" }).click();
     await expect(sheet).toHaveCount(0);
@@ -355,9 +356,11 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     const place = (await sheetHint(page).textContent())?.match(/(\d+) of (\d+)$/)?.slice(1);
     expect(place).toBeTruthy();
     await runSheet(page).getByRole("textbox", { name: "Your answer" }).fill("Yes, keep the old rounding for refunds.");
-    await runSheet(page).getByRole("button", { name: "Send answer" }).click();
+    await runSheet(page).getByRole("textbox", { name: "Your answer" }).press("ControlOrMeta+Enter");
     await expectToast(page, "Answer sent. Claude is picking it back up.");
     await expect(runSheet(page).locator("[data-answer-sent]")).toHaveText("Answer sent. Claude is picking it back up.");
+    // The answer box had the keyboard; it goes to the line that replaced it, not to the page.
+    await expect(runSheet(page).locator("[data-answer-sent]")).toBeFocused();
     await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "working");
     await expect(runSheet(page).getByText("You answered")).toBeVisible();
     await expect(sheetHint(page)).toHaveText(new RegExp(` · ${place![0]} of ${place![1]}$`));
@@ -387,15 +390,20 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     expect((await mockRuns(page)).find((r) => r.state === "needsAnswer")).toBeTruthy();
   });
 
-  test("copying the own-terminal command for a folder to trust enables Retry", async ({ page, context }) => {
+  test("copying the own-terminal command by hand, selected, enables Retry as the Copy button does", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openApp(page);
     await openPipHome(page);
     await needsYouTray(page).getByRole("button", { name: /^SUP-9 · .* needs its folder trusted/ }).click();
     const retry = runSheet(page).getByRole("button", { name: "Retry", exact: true });
     await expect(retry).toBeDisabled();
-    await runSheet(page).getByRole("button", { name: "Copy the command" }).click();
+    // Select the command's text and copy it with the keyboard; the Copy button is never pressed.
+    const command = runSheet(page).getByRole("button", { name: "Copy the command" }).locator("xpath=preceding-sibling::code");
+    await expect(command).toBeVisible();
+    await command.selectText();
+    await page.keyboard.press("ControlOrMeta+c");
     await expect(retry).toBeEnabled();
+    await expect(runSheet(page).getByRole("button", { name: "Copy the command" })).toHaveText("Copy");
   });
 });
 
@@ -455,6 +463,65 @@ async function generalRunDraft(page: Page, key = "CA-401") {
   return card;
 }
 
+test.describe("Your turn and Needs you name different things (D5)", () => {
+  test("the Jira inbox is Your turn on the tab, the ticket pill, the Activity chip and the palette; Needs you is left to Pip home", async ({ page }) => {
+    await openApp(page);
+    // The tab, and the pill on a ticket waiting on the person's reply, which says why.
+    const tab = page.getByRole("tab", { name: /^Your turn/ });
+    await expect(tab).toBeVisible();
+    await expect(page.getByRole("tab", { name: /^Needs me/ })).toHaveCount(0);
+    await tab.click();
+    const list = page.getByRole("listbox", { name: "Items" });
+    const pill = list.locator("[data-your-turn]").first();
+    await expect(pill).toHaveText("Your turn");
+    await expect(pill).toHaveAttribute("title", /^Your turn: an unread update, an unanswered mention, or a comment on your ticket/);
+    await expect(list.getByText("Needs you", { exact: true })).toHaveCount(0);
+
+    // The palette finds it by its new name and its old one.
+    await page.keyboard.press("ControlOrMeta+k");
+    const dialog = page.getByRole("dialog", { name: "Command palette" });
+    await dialog.getByRole("combobox").fill("needs me");
+    await expect(dialog.getByRole("option", { name: /Filter: Your turn/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+
+    // Activity's chip carries the same name, and so do its rows' pills.
+    await page.getByRole("button", { name: /^Activity/ }).click();
+    const chips = page.getByRole("group", { name: "Show" });
+    await chips.getByRole("button", { name: /^Your turn/ }).click();
+    await expect(chips.getByRole("button", { name: /^Needs me/ })).toHaveCount(0);
+    await expect(page.getByRole("feed", { name: "Activity" }).locator("[data-your-turn]").first()).toHaveAttribute("title", /^Your turn: /);
+  });
+
+  test("each rail badge names what it counts, in its tooltip and in its button's name, and no two read alike", async ({ page }) => {
+    await openApp(page);
+    await agentsSettled(page, true);
+    const named = async (button: RegExp, badge: RegExp) => {
+      const b = page.getByRole("button", { name: button });
+      await expect(b).toBeVisible();
+      const tip = b.locator("[title]").filter({ hasText: /^\d+\+?$/ });
+      await expect(tip).toHaveAttribute("title", badge);
+      return (await tip.getAttribute("title"))!;
+    };
+    const titles = [
+      await named(/^Activity, \d+ unread updates?$/, /^\d+ unread updates?$/),
+      await named(/^Agents, \d+ agent runs? waits? on you$/, /^\d+ agent runs? waits? on you$/),
+      await named(/^Pip home, \d+ items? waits? in Needs you$/, /^\d+ items? waits? in Needs you$/),
+    ];
+    expect(new Set(titles.map((t) => t.replace(/^\d+ /, ""))).size).toBe(3);
+  });
+});
+
+/** Whether `review` starts within 16px of the top of what scrolls it, or what scrolls it is as far down as it goes. */
+async function reviewAtTop(review: ReturnType<Page["locator"]>) {
+  return review.evaluate((el) => {
+    const box = el.closest<HTMLElement>('[data-pip-conversation-body], aside[aria-label="Steps"]');
+    if (!box) return false;
+    const gap = el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    return (gap >= 0 && gap <= 16) || box.scrollTop >= box.scrollHeight - box.clientHeight - 1;
+  });
+}
+
 test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
   /** Two comment drafts on CA-401 in the pane, with the peek closed again. */
   async function twoComments(page: Page) {
@@ -481,6 +548,9 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await expect(armed).toBeFocused();
     const hint = armed.getByRole("status");
     await expect(hint).toHaveText("a approve · s skip · ↵ open");
+    // It hangs in the room kept under every card, clear of the next card's title.
+    const under = (await hint.boundingBox())!;
+    expect(under.y + under.height).toBeLessThanOrEqual((await cards.last().boundingBox())!.y);
     // The hint hangs under the card: the card is as tall with it as without it.
     const tall = (await armed.boundingBox())!.height;
     await page.locator(PIP_INPUT).focus();
@@ -513,6 +583,10 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
     await expect.poll(() => focusIn(page, '[aria-label="Review and start"][role="group"]')).toBe(true);
     await expect(review).toBeInViewport();
+    // Once loaded, its top is at the top of the conversation, not halfway down under the chips; unless the conversation
+    // can't scroll any further.
+    await expect(review).toHaveAttribute("data-inline-start", /^(shown|changed|error)$/);
+    await expect.poll(() => reviewAtTop(review)).toBe(true);
     // Enter on the review itself starts nothing.
     await page.keyboard.press("Enter");
     expect(await mockRuns(page)).toEqual([]);
@@ -527,6 +601,26 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await expect(homeConversation(page)).toHaveText("General");
     await expect(card.getByRole("button", { name: "Review and start", exact: true })).toBeVisible();
     expect(await mockRuns(page)).toEqual([]);
+  });
+
+  test("a review opened under a longer conversation comes up to its top once it has loaded, clear of the chips", async ({ page }) => {
+    await generalRunDraft(page, "CA-404");
+    await page.locator(PIP_INPUT).fill("Investigate CA-402");
+    await page.locator(PIP_INPUT).press("Enter");
+    await homeSettled(page);
+    const card = homeRunCards(page, "CA-402").last();
+    await page.locator(PIP_INPUT).focus();
+    await page.keyboard.press("ArrowUp");
+    await expect(card).toBeFocused();
+    await page.keyboard.press("a");
+    const sheet = safety(page);
+    const review = card.getByRole("group", { name: "Review and start" });
+    await expect(review.or(sheet)).toBeVisible();
+    if (await sheet.isVisible()) await page.keyboard.press("Enter");
+    await expect(review).toHaveAttribute("data-inline-start", "shown");
+    await expect.poll(() => reviewAtTop(review)).toBe(true);
+    // The keyboard stays in it.
+    await expect.poll(() => focusIn(page, '[aria-label="Review and start"][role="group"]')).toBe(true);
   });
 
   test("s then a only cancels the skip: no approve ask, no safety sheet, no review", async ({ page }) => {
@@ -632,11 +726,22 @@ test.describe("starting a workstream and help (D6, D26)", () => {
     const rows = dialog.getByRole("option", { name: /^Start a workstream on [A-Z]+-\d+/ });
     await expect(rows.first()).toBeVisible();
     expect(await rows.count()).toBeLessThanOrEqual(5);
+    // Under their own heading, not Agents.
+    await expect(dialog.locator('li[role="presentation"]').first()).toHaveText("Workstreams");
     const key = /Start a workstream on ([A-Z]+-\d+)/.exec((await rows.first().textContent()) ?? "")![1];
     await page.keyboard.press("Enter");
     await expect(dialog).toHaveCount(0);
     await expect(workstreamRow(page, key)).toHaveAttribute("aria-selected", "true");
     await expect(homeConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} `));
+  });
+
+  test("typing 'start a workstream' in Ctrl+K lists tickets to start it on, not only Ask Pip", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await agentsSettled(page, true);
+    await page.keyboard.press("ControlOrMeta+k");
+    const dialog = page.getByRole("dialog", { name: "Command palette" });
+    await dialog.getByRole("combobox").fill("start a workstream");
+    await expect(dialog.getByRole("option", { name: /^Start a workstream on [A-Z]+-\d+/ }).first()).toBeVisible();
   });
 
   test("the Commands help in General names runs by their id and says what R1 is", async ({ page }) => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBackend } from "../backend/useBackend";
 import { itemKey } from "../lib/filter";
 import type { Run, RunEvent, RunOutcome, RunReview } from "../types";
@@ -15,7 +15,7 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { answerable, mayTouch, readOnlyNote, buildFromPlanOptions, canStartNow, reviewThisControl, reviewThisOptions, pendingBreakdownOn, pipAsks, stopControl } from "./runSheetLogic";
+import { answerable, sheetTopOn, mayTouch, readOnlyNote, buildFromPlanOptions, canStartNow, reviewThisControl, reviewThisOptions, pendingBreakdownOn, pipAsks, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { RunContinuation } from "./RunContinuation";
@@ -78,7 +78,30 @@ export interface RunSheetViewProps {
   cleanup?: string | null;
   /** Where the run is in line for a slot, 1 for next, when it waits for one. */
   slotPlace?: number | null;
+  /** The person stopped it from this sheet: each state it goes through from then on shows from the top. */
+  stoppedHere?: boolean;
   on: RunSheetActions;
+}
+
+/**
+ * The line that says the person's answer went through. The answer box it replaces had the keyboard; once that box has
+ * gone, the keyboard lands here rather than on the page.
+ */
+function AnswerSent() {
+  const line = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const at = document.activeElement;
+      if (!at || at === document.body || !at.isConnected) line.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  return (
+    <p ref={line} tabIndex={-1} role="status" data-answer-sent className="m-0 flex items-center gap-1.5 text-sm font-semibold text-ws-pip outline-none">
+      <Icon name="check" className="size-3.5" />
+      Answer sent. Claude is picking it back up.
+    </p>
+  );
 }
 
 function OpenInTerminal({ run, on, filled = true }: { run: Run; on: RunSheetActions; filled?: boolean }) {
@@ -267,7 +290,7 @@ function BriefBody({ brief, readOnly }: { brief: RunSheetViewProps["brief"]; rea
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, answerSent = false, cleanup = null, slotPlace = null, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, answerSent = false, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
   const view = stateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -285,7 +308,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       wide={wide}
       onWide={onWide}
       onClose={on.close}
-      topOn={run.state}
+      topOn={sheetTopOn(run, stoppedHere)}
     >
       <div data-state={run.state} data-tone={view.tone} className="grid gap-2.5">
         <div className="flex items-center gap-1.5 text-xs font-medium text-ws-ink2">
@@ -304,12 +327,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
         <h2 className="m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{title}</h2>
         <AutoStarted run={run} className="text-sm" />
         <Facts run={run} now={now} ticketTitle={ticketTitle} on={on} />
-        {answerSent && (
-          <p role="status" data-answer-sent className="m-0 flex items-center gap-1.5 text-sm font-semibold text-ws-pip">
-            <Icon name="check" className="size-3.5" />
-            Answer sent. Claude is picking it back up.
-          </p>
-        )}
+        {answerSent && <AnswerSent />}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -406,6 +424,7 @@ export function RunSheet({ id }: { id: string }) {
   const [events, setEvents] = useState<RunEvent[] | null>(null);
   const [brief, setBrief] = useState<RunSheetViewProps["brief"]>(null);
   const [confirmStop, setConfirmStop] = useState(false);
+  const [stoppedHere, setStoppedHere] = useState(false);
   const [outcome, setOutcome] = useState<RunOutcome | null>(null);
   const [pickBlocker, setPickBlocker] = useState(false);
   const items = useWorkspace((s) => s.items);
@@ -425,6 +444,7 @@ export function RunSheet({ id }: { id: string }) {
 
   useEffect(() => {
     setConfirmStop(false);
+    setStoppedHere(false);
     setBrief(null);
     setEvents(null);
     setOutcome(null);
@@ -467,7 +487,7 @@ export function RunSheet({ id }: { id: string }) {
     attach: () => void store.attach(id),
     askStop: () => setConfirmStop(true),
     cancelStop: () => setConfirmStop(false),
-    stop: () => (setConfirmStop(false), void store.stop(id)),
+    stop: () => (setConfirmStop(false), setStoppedHere(true), void store.stop(id)),
     startNow: () => void store.startNow(id),
     answer: (text) => void store.answer(id, text),
     adoptSession: (session) => store.adoptSession(id, session),
@@ -541,6 +561,6 @@ export function RunSheet({ id }: { id: string }) {
       backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
     },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
 }
 

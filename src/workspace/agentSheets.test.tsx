@@ -10,7 +10,10 @@ import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsSettingsView, type CleanupOffer } from "./AgentsSettings";
 import { RunSetupView, setupBlock, type SetupViewProps } from "./RunSetup";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
-import { prChoices } from "./runSheetLogic";
+import { prChoices, sheetTopOn } from "./runSheetLogic";
+import { PipLauncher } from "./PipExtras";
+import { useRuns } from "./runsStore";
+import { useRunSetup } from "./runSetupStore";
 import { placesOf } from "./RunWhere";
 import { offsetText } from "./RunTimeline";
 
@@ -688,5 +691,32 @@ describe("the Agent menu on a ticket", () => {
     const plain = renderToStaticMarkup(<TicketAgentsView runs={[run("done")]} now={NOW} title="A ticket" workstream={null} onOpen={vi.fn()} />);
     expect(plain).not.toContain("Workstream:");
     expect(plain).not.toContain("data-run-label");
+  });
+});
+
+describe("what an agent sheet keeps clear", () => {
+  it("hides the Pip launcher while a run sheet or the setup sheet is open, so Start agent is never under it", () => {
+    // A static render reads each store's initial state.
+    const runs = useRuns.getInitialState() as { sheet: unknown };
+    const setup = useRunSetup.getInitialState() as { open: boolean };
+    const launcher = (sheet: unknown, open: boolean) => {
+      [runs.sheet, setup.open] = [sheet, open];
+      return renderToStaticMarkup(<PipLauncher />);
+    };
+    try {
+      expect(launcher(null, false)).toContain("data-pip-launcher");
+      expect(launcher({ type: "run", id: "r1" }, false)).toBe("");
+      expect(launcher({ type: "safety" }, false)).toBe("");
+      expect(launcher(null, true)).toBe("");
+    } finally {
+      [runs.sheet, setup.open] = [null, false];
+    }
+  });
+
+  it("brings the run sheet back to the top on each state after the person's own Stop, and never on a state change before it", () => {
+    const states: RunState[] = ["working", "needsAnswer", "done"];
+    expect(new Set(states.map((s) => sheetTopOn(run(s), false)))).toEqual(new Set([null]));
+    expect(states.map((s) => sheetTopOn(run(s), true))).toEqual(states);
+    expect(sheetTopOn(run("stopped"), true)).not.toBe(sheetTopOn(run("working"), true));
   });
 });

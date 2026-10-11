@@ -321,17 +321,31 @@ export function attentionCount(runs: readonly Run[], seenFailed: ReadonlySet<str
   return runs.filter((r) => needsAttention(r, seenFailed)).length;
 }
 
+/**
+ * The runs at work, counted one way for the Agents view's summary and Pip home's composer footer so the two agree:
+ * `running` launching or working with recent progress, `quiet` working with none for a while, `queued` approved and
+ * about to start, `waiting` approved and waiting for a slot.
+ */
+export function liveCounts(runs: readonly Run[], now: number): { running: number; quiet: number; queued: number; waiting: number } {
+  const quiet = runs.filter((r) => quietMinutes(r, now) !== null).length;
+  const running = runs.filter((r) => r.state === "launching" || r.state === "working").length - quiet;
+  const waiting = runs.filter(waitsForSlot).length;
+  const queued = runs.filter((r) => r.state === "queued").length - waiting;
+  return { running, quiet, queued, waiting };
+}
+
+/** The live counts in words, in the order both lines give them: "2 running · 1 queued · 1 waiting for a slot". Quiet runs are said apart, where each line puts them. */
+export const liveWords = (c: ReturnType<typeof liveCounts>) => [c.running && `${c.running} running`, c.queued && `${c.queued} queued`, c.waiting && `${c.waiting} waiting for a slot`].filter((w): w is string => !!w);
+
 export function summaryLine(runs: readonly Run[], now: number): string {
   if (!runs.length) return "Nothing running";
   const count = (lane: LaneId) => runs.filter((r) => laneOf(r, now) === lane).length;
   const needs = count("needs");
-  const quiet = runs.filter((r) => quietMinutes(r, now) !== null).length;
+  const live = liveCounts(runs, now);
   const failed = runs.filter((r) => r.state === "failed").length;
   const unclear = runs.filter((r) => r.state === "unknown").length;
-  const waiting = runs.filter(waitsForSlot).length;
-  const running = count("running") - waiting;
   const done = count("done");
-  return [needs && `${needs} ${needs === 1 ? "needs" : "need"} you`, running && `${running} running`, waiting && `${waiting} waiting for a slot`, done && `${done} ready to review`, quiet && `${quiet} quiet`, failed && `${failed} failed`, unclear && `${unclear} unclear`]
+  return [needs && `${needs} ${needs === 1 ? "needs" : "need"} you`, ...liveWords(live), done && `${done} ready to review`, live.quiet && `${live.quiet} quiet`, failed && `${failed} failed`, unclear && `${unclear} unclear`]
     .filter(Boolean)
     .join(" · ") || "Nothing running";
 }

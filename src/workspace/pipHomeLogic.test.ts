@@ -3,6 +3,8 @@ import { MockBackend } from "../backend/mock";
 import { heldText } from "../lib/workstreamHold";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import { agentSummary } from "../backend/mockPip";
+import { summaryLine } from "./agentsLogic";
 import { planRewriteDraft, batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -372,16 +374,40 @@ describe("drafts by step", () => {
 describe("composerFooter", () => {
   it("counts every run at work, in a workstream or General, the queued ones apart, and everything that needs the person", () => {
     const ws = view("ws-1", "CA-401", { runs: ["a", "b", "c", "d"] });
-    const runs = [run("a", "investigate", "working"), run("b", "triage", "queued"), run("c", "plan", "launching"), run("d", "build", "done"), run("x", "plan", "working", { item: ref("CA-999"), spec: { ...base.spec, kind: "plan", workstream: null } })];
+    const fresh = { lastProgressAt: iso(1) };
+    const runs = [run("a", "investigate", "working", fresh), run("b", "triage", "queued"), run("c", "plan", "launching"), run("d", "build", "done"), run("x", "plan", "working", { ...fresh, item: ref("CA-999"), spec: { ...base.spec, kind: "plan", workstream: null } })];
     const items = needsYouItems(input({ workstreams: [ws], proposals: [draft("p1", comment("CA-401"), 5), draft("p2", comment("CA-401"), 4)] }));
     // "Running", the word the Agents view's lane uses for runs at work.
-    expect(composerFooter(runs, items)).toBe("3 running · 1 queued · 2 need you");
-    expect(composerFooter([runs[0]], items.slice(0, 1))).toBe("1 running · 1 needs you");
+    expect(composerFooter(runs, items, NOW)).toBe("3 running · 1 queued · 2 need you");
+    expect(composerFooter([runs[0]], items.slice(0, 1), NOW)).toBe("1 running · 1 needs you");
     // A run outside any workstream is working as much as one in it.
-    expect(composerFooter([runs[4]], [])).toBe("1 running · nothing needs you");
+    expect(composerFooter([runs[4]], [], NOW)).toBe("1 running · nothing needs you");
     // Waiting at the cap is not working.
-    expect(composerFooter([runs[1]], [])).toBe("Nothing running · 1 queued · nothing needs you");
-    expect(composerFooter([], [])).toBe("Nothing running · nothing needs you");
+    expect(composerFooter([runs[1]], [], NOW)).toBe("Nothing running · 1 queued · nothing needs you");
+    expect(composerFooter([run("w", "plan", "queued", { slotWaitSince: iso(2) })], [], NOW)).toBe("Nothing running · 1 waiting for a slot · nothing needs you");
+    // A run with no progress for a while is quiet, as the Agents view says, not running.
+    expect(composerFooter([runs[0], run("q", "plan", "working", { lastProgressAt: iso(60) })], [], NOW)).toBe("1 running · 1 quiet · nothing needs you");
+    expect(composerFooter([], [], NOW)).toBe("Nothing running · nothing needs you");
+  });
+
+  it("never disagrees with the Agents view's summary on how many runs are running, quiet, queued or waiting for a slot", () => {
+    const runs = [
+      run("a", "investigate", "working", { lastProgressAt: iso(1) }),
+      run("b", "triage", "working", { lastProgressAt: iso(1) }),
+      run("q", "plan", "working", { lastProgressAt: iso(60) }),
+      run("l", "plan", "launching"),
+      run("u", "review", "queued"),
+      run("w", "build", "queued", { slotWaitSince: iso(3) }),
+      run("n", "plan", "needsAnswer"),
+      run("d", "build", "done"),
+      run("f", "review", "failed"),
+    ];
+    const counts = (line: string) => Object.fromEntries(["running", "quiet", "queued", "waiting for a slot"].map((w) => [w, Number(new RegExp(`(\\d+) ${w}`).exec(line)?.[1] ?? 0)]));
+    const footer = composerFooter(runs, [], NOW);
+    expect(counts(footer)).toEqual({ running: 3, quiet: 1, queued: 1, "waiting for a slot": 1 });
+    expect(counts(footer)).toEqual(counts(summaryLine(runs, NOW)));
+    // And the sample's Pip, asked what the agents are doing, says the same.
+    expect(counts(agentSummary(runs, NOW).split("\n")[0])).toEqual(counts(footer));
   });
 });
 

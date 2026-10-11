@@ -1,4 +1,4 @@
-import { itemKey } from "../lib/filter";
+import { itemKey, YOUR_TURN } from "../lib/filter";
 import type { ContainerRef, Intent, PersonRef, RunKind, WorkContainer, WorkFilter, WorkItem, WorkstreamView } from "../types";
 import type { SavedView } from "./filters";
 import { THEMES, THEME_LABEL, type ThemeMode } from "./prefs";
@@ -8,7 +8,7 @@ import { isWorkConnection } from "./domains";
 import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
 
-export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Agents" | "Ask Pip";
+export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Agents" | "Workstreams" | "Ask Pip";
 
 export interface Command {
   id: string;
@@ -105,7 +105,7 @@ const sameProject = (a: ContainerRef | null, b: ContainerRef) => !!a && a.connec
 
 const FILTERS: { id: string; label: string; keywords: string; filter: WorkFilter }[] = [
   { id: "mine", label: "Assigned to me", keywords: "mine my tickets", filter: { type: "mine" } },
-  { id: "needs-me", label: "Needs me", keywords: "waiting reply mention", filter: { type: "needsMe" } },
+  { id: "needs-me", label: YOUR_TURN, keywords: "needs me waiting reply mention", filter: { type: "needsMe" } },
   { id: "stale", label: "Stale", keywords: "old quiet no update", filter: { type: "stale", days: 5 } },
   { id: "blocked", label: "Blocked", keywords: "stuck blocker", filter: { type: "blocked" } },
   { id: "unassigned", label: "Unassigned", keywords: "nobody free", filter: { type: "unassigned" } },
@@ -297,11 +297,10 @@ export function startWorkstreamCommands(items: readonly WorkItem[], query: strin
   const asked = /^\s*(?:start\s+)?(?:a\s+)?workstream(?:\s+(?:on\b\s*)?(.*))?$/i.exec(query);
   if (!asked) return [];
   const rest = asked[1]?.trim() ?? "";
-  // "start a workstream" alone names no ticket; "start a workstream on " is the question still being asked.
-  if (!rest && !/\bon\s*$/i.test(query)) return [];
   const taken = new Set(open.filter((v) => v.workstream.closedAt === null && v.workstream.itemKey).map((v) => `${v.workstream.connectionId}:${v.workstream.itemKey}`));
   const free = (item: WorkItem) => !taken.has(`${item.item.connectionId}:${item.item.key}`);
-  const start = (item: WorkItem): Command => ({ id: `workstream:start:${itemKey(item.item)}`, group: "Agents", icon: "◇", label: `Start a workstream on ${item.item.key}`, hint: item.title, keywords: "workstream pip conversation track ticket", run: () => a.startWorkstreamOn(item) });
+  const start = (item: WorkItem): Command => ({ id: `workstream:start:${itemKey(item.item)}`, group: "Workstreams", icon: "◇", label: `Start a workstream on ${item.item.key}`, hint: item.title, keywords: "workstream pip conversation track ticket", run: () => a.startWorkstreamOn(item) });
+  // "start a workstream" alone, or "start a workstream on " still being typed: the tickets it could be on.
   if (!rest) {
     const mine = (item: WorkItem) => !!item.assignee && me.some((m) => m.connectionId === item.assignee!.connectionId && m.accountId === item.assignee!.accountId);
     return items

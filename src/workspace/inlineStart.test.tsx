@@ -4,7 +4,7 @@ import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import type { ItemRef, Proposal, RunKind, RunSpec } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { DraftPreview, KEY_HINT, LiveDraftPreview, collapseReview, openLiveDraft } from "./DraftPreview";
+import { DraftPreview, KEY_HINT, KEY_HINT_ROOM, LiveDraftPreview, collapseReview, openLiveDraft } from "./DraftPreview";
 import { escapeCollapses } from "./draftKeys";
 import { CLOSED_INLINE, InlineStartContext, InlineStartView, inlineStartBlock, inlineStartKey, inlineStartable, revealReview, tabToStart, useInlineStarts, type InlineActions } from "./InlineStart";
 import { usePrefs } from "./prefs";
@@ -317,6 +317,12 @@ describe("which run drafts start in place", () => {
     const loose = { ...panel, focus: vi.fn(), closest: vi.fn(() => null) };
     revealReview(loose);
     expect(loose.focus).toHaveBeenCalled();
+    // Brought up again once it has loaded and grown, it scrolls without taking the keyboard from where the person put it.
+    const grown = { ...panel, focus: vi.fn() };
+    box.scrollTop = 100;
+    revealReview(grown, false);
+    expect(grown.focus).not.toHaveBeenCalled();
+    expect(box.scrollTop).toBe(492);
 
     const tab = (over: Partial<{ shiftKey: boolean; target: unknown }> = {}) => ({ key: "Tab", shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, target: panel, currentTarget: panel, ...over });
     const start = { disabled: false, focus: vi.fn() };
@@ -332,10 +338,14 @@ describe("which run drafts start in place", () => {
   it("opens a ticket draft's peek on one press of its button, and its key hint never changes the card's height", () => {
     // The hint hangs outside the card's box and takes no clicks: showing or hiding it moves nothing under a pointer.
     for (const cls of ["absolute", "top-full", "pointer-events-none"]) expect(KEY_HINT.split(" ")).toContain(cls);
+    // Every card keeps room under it for the hint: 16px of text, 2px of padding and 2px of border, 2px off the card.
+    expect(KEY_HINT.split(" ")).toEqual(expect.arrayContaining(["leading-4", "py-px", "border", "mt-0.5"]));
+    expect(KEY_HINT_ROOM).toBe("mb-[22px]");
     const comment: Proposal = { ...runDraft("investigate"), id: "p-comment", intent: { type: "comment", item: CA, body: { blocks: [] } } as unknown as Proposal["intent"] };
     const onOpen = vi.fn();
     const html = renderToStaticMarkup(<DraftPreview proposal={comment} statusName={null} targetTitle={null} onOpen={onOpen} />);
     expect(html).toContain(">Review on CA-401 →</button>");
+    expect(html).toMatch(/<article[^>]*class="relative mb-\[22px\] /);
     // Not reached from the keyboard, the card shows no hint at all.
     expect(html).not.toContain('role="status"');
     // The button's one press: on Pip home the peek opens on the ticket, with nothing else to press first.
