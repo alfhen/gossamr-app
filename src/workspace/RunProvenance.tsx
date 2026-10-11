@@ -2,14 +2,19 @@ import { fromRunPhrase, runPhrase } from "../lib/runNames";
 import type { Proposal } from "../types";
 import { useRuns } from "./runsStore";
 
+/** The run draft `p` came from as the person knows it, "the CA-402 review", for any line that names it. */
+export function useFromRunName(p: Proposal): string {
+  const runId = p.origin.type === "run" ? p.origin.runId : null;
+  const run = useRuns((s) => (runId ? s.runs.find((r) => r.id === runId) : undefined));
+  return fromRunPhrase(p, run);
+}
+
 /**
  * "From the CA-402 review": the run a draft came from, named by ticket and step, never by its id. With `onOpen` the name
  * opens the run.
  */
 export function FromRun({ proposal: p, onOpen, className = "font-semibold text-ws-pip hover:underline" }: { proposal: Proposal; onOpen?: () => void; className?: string }) {
-  const runId = p.origin.type === "run" ? p.origin.runId : null;
-  const run = useRuns((s) => (runId ? s.runs.find((r) => r.id === runId) : undefined));
-  const name = fromRunPhrase(p, run);
+  const name = useFromRunName(p);
   return (
     <>
       From{" "}

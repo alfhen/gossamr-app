@@ -1,4 +1,4 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { itemKey } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { AgeChip, AttentionDot, Avatar, NeedsPill, StatusPill } from "./CanvasBits";
@@ -71,8 +71,79 @@ export function badgeWords(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "
   ];
 }
 
+/** The room a row's title keeps before its badges turn into icons: about ten letters. */
+const TITLE_ROOM = 96;
+
+/**
+ * Whether the badges of a row, side by side, would leave its title less than `TITLE_ROOM`: then they show as icons. The
+ * full set's width is measured while it is on screen and kept; `content` changing shows the full set again to measure it.
+ */
+function useCompactBadges(cell: RefObject<HTMLElement | null>, badges: RefObject<HTMLElement | null>, content: string): boolean {
+  const [compact, setCompact] = useState(false);
+  const full = useRef<{ content: string; width: number } | null>(null);
+  useLayoutEffect(() => {
+    const c = cell.current;
+    const b = badges.current;
+    if (!c || !b) return;
+    const check = () => {
+      if (!compact) full.current = { content, width: b.scrollWidth };
+      else if (full.current?.content !== content) return setCompact(false);
+      const width = full.current?.width ?? 0;
+      setCompact(width > 0 && width > c.clientWidth - TITLE_ROOM - 8);
+    };
+    check();
+    if (typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(check);
+    watch.observe(c);
+    return () => watch.disconnect();
+  }, [cell, badges, compact, content]);
+  return compact;
+}
+
+/**
+ * A row's badges: Needs you, blocked, the waiting draft and how many more. `compact`, for a row too narrow to show them
+ * in words, gives each as an icon with its name and a tooltip instead, so none of them is lost.
+ */
+export function RowBadges(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "moreDrafts"> & { compact: boolean }) {
+  const more = p.moreDrafts > 0 ? `${p.moreDrafts} more ${p.moreDrafts === 1 ? "draft" : "drafts"} waiting` : "";
+  if (p.compact) {
+    const icon = (label: string, className: string, glyph: string) => (
+      <span role="img" aria-label={label} title={label} className={`grid h-4 min-w-4 place-items-center rounded-full px-0.5 text-[11px] leading-none font-semibold ${className}`}>
+        {glyph}
+      </span>
+    );
+    return (
+      <>
+        {p.needsMe && icon("Needs you", "bg-ws-pip-soft text-ws-pip", "!")}
+        {p.blocked && icon("Blocked", "bg-ws-blocked-soft text-ws-blocked", "⛓")}
+        {p.draft && icon(`A draft waits for approval: ${p.draft.to}`, "bg-ws-pip-soft text-ws-pip", "✦")}
+        {more && icon(more, "text-ws-pip", `+${p.moreDrafts}`)}
+      </>
+    );
+  }
+  return (
+    <>
+      {p.needsMe && <NeedsPill />}
+      {p.blocked && <span className="text-xs text-ws-blocked">⛓ blocked</span>}
+      {p.draft && (
+        <span className="rounded-full bg-ws-pip-soft px-2 py-px text-xs font-semibold text-ws-pip" title="A draft is waiting for approval">
+          ✦ draft → {p.draft.to}
+        </span>
+      )}
+      {more && (
+        <span className="text-xs text-ws-pip" title={more}>
+          ✦ {p.moreDrafts}
+        </span>
+      )}
+    </>
+  );
+}
+
 export function ListRow(p: RowProps) {
   const { item } = p;
+  const cell = useRef<HTMLSpanElement>(null);
+  const badges = useRef<HTMLSpanElement>(null);
+  const compact = useCompactBadges(cell, badges, `${p.needsMe}|${p.blocked}|${p.draft?.to ?? ""}|${p.moreDrafts}`);
   const days = daysQuiet(item, p.now);
   const lit = p.marked ? "bg-ws-accent-soft shadow-[inset_3px_0_0_var(--color-ws-accent)]" : p.selected ? "bg-ws-pip-soft shadow-[inset_3px_0_0_var(--color-ws-pip)]" : "hover:bg-ws-hover";
   return (
@@ -88,25 +159,14 @@ export function ListRow(p: RowProps) {
         <AttentionDot needsMe={p.needsMe} unread={p.unread} />
         <span className="truncate font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
       </span>
-      <span className="flex min-w-0 items-center gap-2">
-        {/* The title gives way first, all the way down to a few letters, before any badge does; only then do whole badges drop
-            onto a hidden second line, least telling first, never half of one. The title's tooltip names them all. */}
+      <span ref={cell} className="flex min-w-0 items-center gap-2">
+        {/* The title gives way first, down to a few letters; past that the badges turn into icons, each named and with a
+            tooltip, so a narrow row loses none of them. The title's tooltip names them all too. */}
         <span data-row-title title={[item.title, ...badgeWords(p, item.status.name)].join(" · ")} className="min-w-[6ch] shrink-[100] truncate">
           {item.title}
         </span>
-        <span data-row-badges className="flex max-h-[22px] min-w-0 shrink-[0.01] flex-wrap items-center gap-x-2 gap-y-10 overflow-hidden whitespace-nowrap [&>*]:shrink-0">
-          {p.needsMe && <NeedsPill />}
-          {p.blocked && <span className="text-xs text-ws-blocked">⛓ blocked</span>}
-          {p.draft && (
-            <span className="rounded-full bg-ws-pip-soft px-2 py-px text-xs font-semibold text-ws-pip" title="A draft is waiting for approval">
-              ✦ draft → {p.draft.to}
-            </span>
-          )}
-          {p.moreDrafts > 0 && (
-            <span className="text-xs text-ws-pip" title="Drafts waiting on this ticket">
-              ✦ {p.moreDrafts}
-            </span>
-          )}
+        <span ref={badges} data-row-badges={compact ? "compact" : "full"} className="flex min-w-0 shrink-[0.01] items-center gap-x-2 overflow-hidden whitespace-nowrap [&>*]:shrink-0">
+          <RowBadges {...p} compact={compact} />
         </span>
       </span>
       <span className="flex justify-end @max-[640px]:hidden">

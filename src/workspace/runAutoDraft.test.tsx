@@ -8,6 +8,7 @@ import { mockAsk, scriptPip } from "../backend/mockPip";
 import { jiraNote } from "../backend/mockRunResult";
 import { SCRIPTED_RESULT } from "../backend/mockRuns";
 import { docFromText, docText } from "../lib/docs";
+import { withRunNamed } from "../lib/runNames";
 import type { Backend } from "../backend/types";
 import type { Intent, Proposal, Run, RunKind, RunOutcome, RunSpec, ScreenContext } from "../types";
 import { toRunEntries } from "./activityLogic";
@@ -342,5 +343,32 @@ describe("what the person sees", () => {
     const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={settings} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(html).toContain("Draft a Jira comment when an agent finishes");
     expect(html).toMatch(/<input type="checkbox"[^>]*checked/);
+  });
+});
+
+describe("a plan's description update, on its card", () => {
+  const backend = new MockBackend({ runs: { seed: "kinds", epoch: Date.parse("2026-09-30T12:00:00Z"), planDescription: true } });
+  const plan: Run = backend.runs.list().find((r) => r.spec.kind === "plan")!;
+
+  it("names the run by ticket and step on the card, while the description that goes to Jira keeps the run's id", () => {
+    const draft = backend.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === plan.id)!;
+    expect(draft).toBeTruthy();
+    const written = draft.intent.type === "rewrite" ? draft.intent.body!.toText : "";
+    // The audit trail in Jira: the run's id stays in what is written.
+    expect(written).toContain(`Drafted by an agent run (${plan.shortId})`);
+    const props = { statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() };
+    const html = renderToStaticMarkup(<DraftCard proposal={draft} {...props} />);
+    expect(html).toContain("Drafted by the CA-401 run on ");
+    expect(html).not.toContain(plan.shortId!);
+    expect(html).not.toContain("Drafted by an agent run");
+    // Every other line is shown as written.
+    expect(html).toContain("A person read and approved it in Gossamr before it was added here.");
+  });
+
+  it("puts the run's name where Gossamr's text gives its id, and changes nothing else", () => {
+    expect(withRunNamed("Drafted by an agent run (1000addd) on 2026-09-29. A person read it.", "the CA-401 plan")).toBe("Drafted by the CA-401 plan on 2026-09-29. A person read it.");
+    expect(withRunNamed("[Cut here. The plan was 9000 characters. The whole of it is in agent run 1000addd.]", "the CA-401 plan")).toBe("[Cut here. The plan was 9000 characters. The whole of it is in the CA-401 plan.]");
+    expect(withRunNamed("Drafted by an agent run on 2026-09-29.", "the CA-401 plan")).toBe("Drafted by an agent run on 2026-09-29.");
+    expect(withRunNamed("Keep me (abc).", "x")).toBe("Keep me (abc).");
   });
 });

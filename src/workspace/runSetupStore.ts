@@ -52,9 +52,19 @@ export function afterRunStarted(run: Run, item: ItemRef | null, { switchToAgents
   runs.select(run.id);
   if (switchToAgents) useTabs.getState().setRoute("agents");
   // Over the cap an approved run waits for a slot; it isn't announced as started.
-  const text = run.state === "queued" && run.slotWaitSince ? `Approved${item ? ` the agent on ${item.key}` : ""}. Every slot is taken, so it waits and starts when one of the running agents finishes.` : `Agent started${item ? ` on ${item.key}` : ""}. It runs in the background.`;
-  useToasts.getState().push(text, "info", { label: "Open", run: () => runs.openRun(run.id) });
+  const waits = run.state === "queued" && !!run.slotWaitSince;
+  const text = waits ? `Approved${item ? ` the agent on ${item.key}` : ""}. Every slot is taken, so it waits and starts when one of the running agents finishes.` : `Agent started${item ? ` on ${item.key}` : ""}. It runs in the background.`;
+  // Once the run has moved on (it finished, stopped or asks something; or, waiting for a slot, it got one) the note is
+  // old news, and one still queued behind another is dropped.
+  const current = () => {
+    const now = useRuns.getState().runs.find((r) => r.id === run.id)?.state ?? run.state;
+    return !RUN_MOVED_ON.has(now) && !(waits && now !== "queued");
+  };
+  useToasts.getState().push(text, "info", { label: "Open", run: () => runs.openRun(run.id) }, { current });
 }
+
+/** Run states after which a note that it started, or is waiting for a slot, is no longer news. */
+const RUN_MOVED_ON = new Set<Run["state"]>(["done", "failed", "stopped", "needsAnswer", "needsPermission", "systemBlocked"]);
 
 export type SetupPhase = "preparing" | "ready" | "starting";
 

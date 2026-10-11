@@ -22,7 +22,7 @@ import { RetiredDraft } from "./RetiredDraft";
 import { answerProblem, MAX_ANSWER } from "../lib/answer";
 import { answerTitle, editThenSend, isSendKey, NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
-import { FromRun, RunName } from "./RunProvenance";
+import { FromRun, RunName, useFromRunName } from "./RunProvenance";
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
   pending: "Needs your approval",
@@ -156,6 +156,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const [editing, setEditing] = useState(false);
   const edited = useRef(false);
   const rewrite = intent.type === "rewrite" ? intent : null;
+  const runName = useFromRunName(p);
   const [newTitle, setNewTitle] = useState(rewriteFields(rewrite).title);
   const [newText, setNewText] = useState(rewriteFields(rewrite).text);
   const rewriteEdited = useRef(false);
@@ -299,6 +300,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             disabled={!open}
             onTitle={(v) => ((rewriteEdited.current = true), setNewTitle(v))}
             onBody={(v) => ((rewriteEdited.current = true), setNewText(v))}
+            runName={p.origin.type === "run" ? runName : null}
           />
         )}
         {intent.type === "link" && (

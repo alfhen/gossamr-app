@@ -342,7 +342,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
           ))}
       </div>
 
-      <RunContinuation key={run.id} run={run} adopt={on.adoptSession} />
+      <RunContinuation key={`continue-${run.id}`} run={run} adopt={on.adoptSession} />
       {attention && <Attention run={run} opened={opened} answering={answering} slotPlace={slotPlace} on={on} />}
       {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingBreakdown} drafting={drafting} on={on} />}
       {outcome?.change && <Changes change={outcome.change} on={on} />}
@@ -352,7 +352,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       </Sec>
 
       <RunWhere run={run} disk={disk} onReveal={on.reveal} />
-      <RunCleanup key={run.id} run={run} reason={cleanup} />
+      <RunCleanup key={`cleanup-${run.id}`} run={run} reason={cleanup} />
 
       <Sec title="What this agent may touch">
         {run.readOnly && (

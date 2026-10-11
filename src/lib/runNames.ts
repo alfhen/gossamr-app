@@ -1,3 +1,4 @@
+/** How runs, drafts and spans of time read to the person: by what they are, never by an id or a raw count of hours. */
 import type { Proposal, Run, RunKind } from "../types";
 
 /** A run's step as a noun, for "the CA-402 review". The same steps the Agents view labels Investigate, Plan, Review... */
@@ -71,4 +72,27 @@ export function fromRunPhrase(p: Pick<Proposal, "intent">, run: Named | null | u
   const key = draftTicket(p.intent);
   if (!key) return "an agent run";
   return `the ${key} ${p.intent.type === "githubReview" ? "review" : "run"}`;
+}
+
+/**
+ * Text Gossamr wrote into a ticket that names the run it came from by id ("Drafted by an agent run (1000addd) on …", "The
+ * whole of it is in agent run 1000addd."), as a card shows it: by `name`, "the CA-401 plan". For showing only; what goes
+ * to the tracker keeps the id, as an audit trail there.
+ */
+export function withRunNamed(text: string, name: string): string {
+  return text.replace(/\bDrafted by an agent run \([^)\s]+\)/g, `Drafted by ${name}`).replace(/\bin agent run [^\s\]]+?(?=\.?(?:\]|\s|$))/g, `in ${name}`);
+}
+
+/**
+ * A span of `minutes` as a person reads it: "under a minute", "40 min" below two hours, "3 h" below two days, then
+ * "10 days". Each unit is rounded down, so a run quiet for 247 hours reads "10 days", never "247 h".
+ */
+export function humanDuration(minutes: number): string {
+  const m = Number.isFinite(minutes) ? Math.max(0, Math.floor(minutes)) : 0;
+  if (m < 1) return "under a minute";
+  if (m < 120) return `${m} min`;
+  const hours = Math.floor(m / 60);
+  if (hours < 48) return `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return `${days} ${days === 1 ? "day" : "days"}`;
 }

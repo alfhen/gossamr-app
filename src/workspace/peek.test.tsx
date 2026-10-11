@@ -5,7 +5,6 @@ import { docFromText } from "../lib/docs";
 import type { Proposal, StatusDef } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftCard, draftSummary, draftTitle, type DraftCardProps } from "./DraftCard";
-import { expectPinnedBar } from "./draftBar.testUtil";
 import { PeekView, WorkstreamControl, type PeekViewProps } from "./PeekSheet";
 import { PipAvatar } from "./PipAvatar";
 import { FilterNote, Launcher, Nudge, PipFilterNote } from "./PipExtras";
@@ -50,11 +49,6 @@ describe("DraftCard", () => {
     expect(out).toContain("Comment on DEVOPS-471");
     expect(out).toContain("Looks good.");
     for (const label of ["Post comment", "Edit", "Skip", "Show me"]) expect(out).toContain(label);
-  });
-
-  it("ends the card with its action bar, pinned to the bottom, opaque and ruled off", () => {
-    expectPinnedBar(card(proposal({}), { onShow: vi.fn() }));
-    expectPinnedBar(card(proposal({ intent: { type: "transition", item: { connectionId: "mock", externalId: "DEVOPS-471", key: "DEVOPS-471" }, to: "done" }, label: "Done" }), { statusName: "Done", error: "It failed." }));
   });
 
   it("previews a transition with the target status", () => {

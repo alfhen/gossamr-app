@@ -1,4 +1,4 @@
-import { humanDuration } from "../lib/durations";
+import { humanDuration } from "../lib/runNames";
 import { relativeTime } from "../lib/views";
 import { runLabels, stage } from "../lib/workstreamStage";
 import type { Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";

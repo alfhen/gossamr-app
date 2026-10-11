@@ -1959,7 +1959,7 @@ export class MockRuns {
     if (!note?.text) throw new Error("the run finished without a written answer, so there is nothing to draft");
     const body = commentText(note, this.changes.get(id) ?? null, run.spec.kind, resolved.source === "summaryOnly", resolved.status === "blocked");
     const same = this.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "comment" && p.intent.item.externalId === item.externalId && docText(p.intent.body) === body);
-    if (same) throw new Error(`that comment is already waiting as a draft on ${item.key} (draft ${same.id})`);
+    if (same) throw new Error(`that comment is already waiting as a draft on ${item.key}`);
     return this.proposals.fromRun({ type: "comment", item, body: docFromText(body) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));
   }
 
@@ -1974,7 +1974,7 @@ export class MockRuns {
     const fitted = fit(plan, PLAN_COMMENT_LIMIT, (total) => `[Cut here. The plan is ${total} characters and a Jira comment holds about ${PLAN_COMMENT_LIMIT}. The whole plan is in the agent run.]`);
     const body = `Implementation plan from an agent that was asked to only read code and change nothing. Read it and change what is wrong before relying on it.\n\n${fitted.text}`;
     const same = this.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "comment" && p.intent.item.externalId === item.externalId && docText(p.intent.body) === body);
-    if (same) throw new Error(`that comment is already waiting as a draft on ${item.key} (draft ${same.id})`);
+    if (same) throw new Error(`that comment is already waiting as a draft on ${item.key}`);
     const label = run.shortId ? `${PLAN_LABEL} ${run.shortId}` : PLAN_LABEL;
     const proposal = this.proposals.fromRun({ type: "comment", item, body: docFromText(body) }, label, this.fromRun(run));
     return { proposal, cut: fitted.cut, total: fitted.total };
