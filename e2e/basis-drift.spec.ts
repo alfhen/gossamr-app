@@ -3,7 +3,7 @@ import { askPip, editTicket, finishOnHome, homeConversation, homeRunCards, homeS
 
 // New workstreams open in Manage, where the supervisor checks the ticket against the basis the workstream recorded.
 const MANAGED = "runs=empty&wsManage=1";
-const DESCRIPTION_HELD = "Held: tripwire, the ticket's description changed in Jira";
+const DESCRIPTION_HELD = "Held: the ticket's description changed in Jira";
 
 /** Opens a workstream on `key` from its peek, then shows it on Pip home. */
 async function homeWorkstream(page: Page, key: string) {
@@ -14,6 +14,8 @@ async function homeWorkstream(page: Page, key: string) {
 }
 
 const banner = (page: Page) => stepRail(page).locator("[data-held-banner]");
+/** The machinery's name for a safety hold never reaches the screen, only what happened. */
+const noTripwireText = async (page: Page) => expect(page.locator("body")).not.toContainText(/tripwire/i);
 const driftedLines = async (page: Page) => (await workstreamEvents(page)).filter((e) => e.action === "basis_drifted").map((e) => e.detail);
 
 test("a description edited in Jira holds the managed workstream and says why; Resume takes the ticket as it is, and Pip's next wake mentions it", async ({ page }) => {
@@ -28,6 +30,7 @@ test("a description edited in Jira holds the managed workstream and says why; Re
   await expect(banner(page)).toHaveAttribute("data-held-banner", "tripwire:basis_drift");
   await expect(banner(page)).toContainText("Held: the ticket's description changed in Jira");
   await expect(banner(page).locator("[data-drift-hint]")).toContainText("Read CA-401 as it is now before you resume");
+  await noTripwireText(page);
   await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveAttribute("aria-checked", "false");
   expect(await driftedLines(page)).toEqual(["description"]);
   expect(await jiraWrites(page)).toEqual([]);
@@ -74,9 +77,10 @@ test("moving a workstream's ticket to another status leaves it be; moving it to 
   await expect(row.locator("[data-status]")).not.toContainText("Held");
 
   await editTicket(page, "CA-402", { statusId: "Sent" });
-  await expect(row.locator("[data-status]")).toHaveText("· Held: tripwire, the ticket was moved to Done");
-  await expect(needsYouTray(page).getByRole("button", { name: /^CA-402 · Held: tripwire, the ticket was moved to Done/ })).toHaveCount(1);
+  await expect(row.locator("[data-status]")).toHaveText("· Held: the ticket was moved to Done");
+  await expect(needsYouTray(page).getByRole("button", { name: /^CA-402 · Held: the ticket was moved to Done/ })).toHaveCount(1);
   await expect(banner(page)).toContainText("Held: the ticket was moved to Done");
+  await noTripwireText(page);
   expect(await driftedLines(page)).toEqual(["status"]);
   expect(await jiraWrites(page)).toEqual([]);
 });

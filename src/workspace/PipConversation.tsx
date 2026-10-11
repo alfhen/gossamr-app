@@ -4,17 +4,18 @@ import { draftsForTurn } from "../lib/proposals";
 import { REMOVED_TURN } from "../backend/claude";
 import { useClaude, type Turn } from "../claudeStore";
 import { filesIn } from "../lib/attachments";
-import { runComposerVerb, runRef, type VerbOutcome } from "../lib/composerVerbs";
+import { COMMAND_HELP, RUN_REF_NOTE, WORKSTREAM_VERBS, runComposerVerb, runRef, type VerbOutcome } from "../lib/composerVerbs";
 import { labelsByRun } from "../lib/workstreamStage";
 import { workstreamOfConversation } from "../lib/conversations";
 import { MAX_IMAGES, defaultQuestion } from "../lib/pipImages";
-import type { Proposal } from "../types";
+import type { Proposal, Workstream } from "../types";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PIP_INPUT_ID, PIP_ROOT, stepDraftCards, upToNewestDraft } from "./draftKeys";
 import { PipRunStrip } from "./PipRunCard";
 import { AttachButton, AttachedThumbs, TurnImages, type useAttachments } from "./PipImages";
 import { currentContext } from "./pipHooks";
 import { appliedState, usePip, type AppliedState } from "./pipStore";
+import { usePopover } from "./Popover";
 import { placeholderFor } from "./suggestions";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -197,8 +198,8 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
           {turn.imageCount === 1 ? "1 image was sent with this; it isn't kept." : `${turn.imageCount} images were sent with this; they aren't kept.`}
         </p>
       )}
-      <div className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
-        {turn.prompt}
+      <div data-user-bubble className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
+        {turn.shown ?? turn.prompt}
         {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{turn.quote}</blockquote>}
       </div>
       {turn.status === "queued" && (
@@ -227,7 +228,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
         </ul>
       )}
       {turn.text && (
-        <div className="ws-legacy">
+        <div data-pip-answer className="ws-legacy">
           <Markdown text={turn.text} />
         </div>
       )}
@@ -284,8 +285,36 @@ function useQueued(conversation: string): boolean {
   return useClaude((s) => (s.byTicket[conversation]?.turns ?? NO_TURNS).some((t) => t.status === "queued"));
 }
 
-/** The conversation itself: running agents, drafts left from before, then each question with its answer. Up and down move between its draft cards. */
-export function PipConversation({ conversation, proposals, bodyRef }: { conversation: string; proposals: Proposal[]; bodyRef?: RefObject<HTMLDivElement | null> }) {
+/**
+ * The one sentence a workstream's empty conversation opens with: what it is for. The commands and what Manage does are
+ * behind the composer's Commands button, not here.
+ */
+export function workstreamIntro(workstream: Pick<Workstream, "itemKey" | "title"> | null): string {
+  const key = workstream?.itemKey ?? null;
+  const title = workstream?.title?.trim() || null;
+  const name = title ? (key && !title.startsWith(key) ? `${key} ${title}` : title) : (key ?? "this ticket");
+  return `Everything for ${name} stays here: its agents, drafts and our conversation.`;
+}
+
+/** The workstream intro's one button: the conversation's first suggestion, asked through the composer as its chip would be. */
+function IntroAction({ conversation, text }: { conversation: string; text: string }) {
+  return (
+    <button
+      type="button"
+      data-intro-action
+      onClick={() => usePip.getState().askIn(conversation, text)}
+      className="justify-self-start rounded-md bg-gradient-to-br from-ws-pip to-ws-pip2 px-3 py-1 font-semibold text-ws-on-pip hover:brightness-105 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+    >
+      {text}
+    </button>
+  );
+}
+
+/**
+ * The conversation itself: running agents, drafts left from before, then each question with its answer. Up and down move
+ * between its draft cards. `primary` is the one action a workstream's empty conversation offers under its intro.
+ */
+export function PipConversation({ conversation, proposals, bodyRef, primary = null }: { conversation: string; proposals: Proposal[]; bodyRef?: RefObject<HTMLDivElement | null>; primary?: string | null }) {
   const turns = useClaude((s) => s.byTicket[conversation]?.turns) ?? NO_TURNS;
   const workstreamId = workstreamOfConversation(conversation);
   const workstream = useWorkstreams((s) => (workstreamId ? (s.list.find((v) => v.workstream.id === workstreamId)?.workstream ?? null) : null));
@@ -298,17 +327,17 @@ export function PipConversation({ conversation, proposals, bodyRef }: { conversa
   }, [turns, proposals]);
 
   return (
-    <div ref={ref} onKeyDown={(ev) => stepDraftCards(ev, ev.currentTarget)} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 py-3">
+    <div ref={ref} data-pip-conversation-body onKeyDown={(ev) => stepDraftCards(ev, ev.currentTarget)} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 pt-3 pb-4">
       <PipRunStrip workstream={workstreamId} />
       <EarlierDrafts proposals={proposals} turns={turns} />
       {turns.length === 0 &&
         (workstreamId ? (
-          <p data-empty-workstream className="m-0 text-ws-ink2">
-            This is the workstream on {workstream?.itemKey ?? workstream?.title ?? "this ticket"}: its agents, drafts and our conversation stay together here. Ask me to investigate, triage or plan it. To act on one of its runs yourself, type /stop R1, /retry R1 or /answer R1 and your answer.{" "}
-            {workstream?.mode === "manage"
-              ? "It is in Manage: the routine next steps start on their own by fixed rules (see Automatic steps), I start nothing myself, and every change to Jira still waits for you."
-              : "Nothing changes until you approve."}
-          </p>
+          <div className="grid gap-2.5">
+            <p data-empty-workstream className="m-0 text-ws-ink2">
+              {workstreamIntro(workstream)}
+            </p>
+            {primary && <IntroAction conversation={conversation} text={primary} />}
+          </div>
         ) : (
           <p className="m-0 text-ws-ink2">I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing changes until you approve.</p>
         ))}
@@ -357,6 +386,63 @@ export function ComposerFooter({ text }: { text: string }) {
     <p role="status" data-composer-footer className="m-0 -mt-1 px-3 pb-2 text-xs text-ws-ink3">
       {text}
     </p>
+  );
+}
+
+/** What the Commands popover says about Manage: the rules start routine steps, Pip starts nothing, Jira waits. */
+export const MANAGE_NOTE = "Automatic steps: in Manage, routine next steps start on their own by fixed rules. I start nothing myself, and every change to Jira still waits for you.";
+
+/** The commands the composer takes, with a line on each; a workstream's own only in a workstream, and Manage's note when it is managed. */
+export function CommandsList({ workstream, manage }: { workstream: boolean; manage: boolean }) {
+  const shown = COMMAND_HELP.filter((c) => workstream || !(WORKSTREAM_VERBS as readonly string[]).includes(c.verb));
+  return (
+    <div className="grid gap-2">
+      <dl className="m-0 grid gap-1.5">
+        {shown.map((c) => (
+          <div key={c.verb} data-command={c.verb} className="grid">
+            <dt className="font-mono text-xs font-semibold text-ws-ink">{c.usage}</dt>
+            <dd className="m-0 text-ws-ink2">{c.meaning}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="m-0 text-ws-ink3">{RUN_REF_NOTE}</p>
+      {manage && (
+        <p data-manage-note className="m-0 text-ws-ink3">
+          {MANAGE_NOTE}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The composer's "?" button and the popover it opens with the commands; Esc closes the popover first and hands focus back. */
+function CommandsHelp({ conversation }: { conversation: string }) {
+  const { open, setOpen, root } = usePopover();
+  const workstreamId = workstreamOfConversation(conversation);
+  const manage = useWorkstreams((s) => (workstreamId ? s.list.find((v) => v.workstream.id === workstreamId)?.workstream.mode === "manage" : false));
+  const panel = `pip-commands-${conversation}`;
+  return (
+    <div ref={root} className="relative flex">
+      <button
+        type="button"
+        data-popover-trigger
+        aria-label="Commands"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? panel : undefined}
+        title="Commands"
+        onClick={() => setOpen(!open)}
+        className={`w-8 rounded-md border font-semibold text-ws-ink2 hover:border-ws-pip hover:text-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${open ? "border-ws-pip text-ws-pip" : "border-ws-sep2"}`}
+      >
+        ?
+      </button>
+      {open && (
+        <div id={panel} role="dialog" aria-label="Commands" className="absolute right-0 bottom-full z-40 mb-2 w-[300px] max-w-[80vw] rounded-xl border border-ws-sep2 bg-ws-win px-3 py-2.5 text-sm shadow-ws-pop">
+          <h3 className="m-0 mb-1.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Commands</h3>
+          <CommandsList workstream={workstreamId !== null} manage={manage} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -437,6 +523,14 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
     ask(input);
   };
 
+  // The workstream intro's button asks here, the same way its chip would.
+  const asking = usePip((s) => s.asking);
+  useEffect(() => {
+    if (!asking || asking.conversation !== conversation) return;
+    usePip.getState().clearAsking();
+    ask(asking.text);
+  }, [asking]);
+
   return (
     <>
       {!queued && chips.length > 0 && (
@@ -475,6 +569,7 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
           autoComplete="off"
           className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 outline-none focus:border-ws-pip"
         />
+        {agentsOn && <CommandsHelp conversation={conversation} />}
         {running && (
           <button type="button" onClick={() => useClaude.getState().cancel(conversation)} className="rounded-md border border-ws-sep2 px-3 font-semibold">
             Stop

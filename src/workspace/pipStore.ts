@@ -36,6 +36,8 @@ interface PipState {
   quote: string | null;
   /** A prompt waiting to land in the pane's input, in place of what is there or, with `append`, after it. */
   prefill: { text: string; append?: boolean } | null;
+  /** A suggestion chosen outside the composer (a workstream intro's button), for the composer of `conversation` to ask as its chip would. */
+  asking: { conversation: string; text: string } | null;
   applyFilter(filter: WorkFilter, note: string, requestId?: string): void;
   undoFilter(): void;
   clearFiltered(): void;
@@ -52,6 +54,9 @@ interface PipState {
   /** Adds text to the end of the pane's input, as typing that landed on a draft card does. */
   typeOn(text: string): void;
   clearPrefill(): void;
+  /** Asks `text` in `conversation` through its composer, exactly as tapping that suggestion's chip does. */
+  askIn(conversation: string, text: string): void;
+  clearAsking(): void;
 }
 
 const KEY = "gossamr-pip";
@@ -79,6 +84,7 @@ export const usePip = create<PipState>((set, get) => ({
   pinned: null,
   quote: null,
   prefill: null,
+  asking: null,
 
   applyFilter(filter, note, requestId) {
     const tabs = useTabs.getState();
@@ -128,6 +134,8 @@ export const usePip = create<PipState>((set, get) => ({
   },
   typeOn: (text) => set((s) => ({ prefill: s.prefill ? { ...s.prefill, text: s.prefill.text + text } : { text, append: true } })),
   clearPrefill: () => set({ prefill: null }),
+  askIn: (conversation, text) => set({ asking: { conversation, text } }),
+  clearAsking: () => set({ asking: null }),
 }));
 
 usePip.subscribe(({ dismissed }) => writeStored(KEY, { dismissed }));

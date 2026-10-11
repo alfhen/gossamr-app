@@ -1,3 +1,4 @@
+import { runPhrase } from "../lib/runNames";
 import type { Run, WorkstreamView } from "../types";
 import { needsPerson, runTitle, stateView } from "./agentsLogic";
 import type { Nudge } from "./nudges";
@@ -29,7 +30,7 @@ export function runNudges(runs: readonly Run[], announced: ReadonlySet<string>, 
       const title = runTitle(run, titleOf(run));
       if (needsPerson(run)) return { id, kind: "run-needs", text: `${title} needs you. Want to look at what it asks?`, action: { type: "open-run", id: run.id } };
       if (run.state === "failed") return { id, kind: "run-failed", text: `${title} failed. Want to see why?`, action: { type: "open-run", id: run.id } };
-      return { id, kind: "run-done", text: `${title} finished. Want me to sum up what it found?`, action: { type: "ask", prompt: `What did the agent find in run ${run.id}?` } };
+      return { id, kind: "run-done", text: `${title} finished. Want me to sum up what it found?`, action: { type: "ask", prompt: `What did the agent find in run ${run.id}?`, shown: `What did ${runPhrase(run)} find?` } };
     });
 }
 

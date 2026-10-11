@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunKind, RunState } from "../types";
-import { COMPOSER_VERBS, VERB_HINT, parseVerb, resolveRun, runComposerVerb, runRef } from "./composerVerbs";
+import { COMMAND_HELP, COMPOSER_VERBS, RUN_REF_NOTE, VERB_HINT, WORKSTREAM_VERBS, parseVerb, resolveRun, runComposerVerb, runRef } from "./composerVerbs";
 
 const base = new MockBackend().runs.list()[0];
 const run = (id: string, state: RunState, workstream: string | null, queuedAt: string, kind: RunKind = "investigate", shortId: string | null = null): Run => ({ ...base, id, state, shortId, queuedAt, spec: { ...base.spec, kind, workstream } });
@@ -50,6 +50,18 @@ describe("parsing", () => {
     const got = parseVerb("/nudge R1");
     expect(got).toEqual({ type: "problem", message: `/nudge isn't a command. ${VERB_HINT}` });
     for (const verb of COMPOSER_VERBS) expect(VERB_HINT).toContain(`/${verb}`);
+  });
+
+  it("lists each command once for the Commands popover, as the help line names them", () => {
+    expect(COMMAND_HELP.map((c) => c.verb)).toEqual([...COMPOSER_VERBS]);
+    for (const c of COMMAND_HELP) {
+      expect(VERB_HINT).toContain(c.usage);
+      expect(c.usage.startsWith(`/${c.verb}`)).toBe(true);
+      expect(c.meaning).toMatch(/^[A-Z].*\.$/);
+    }
+    expect(VERB_HINT).toBe("Commands are /stop R1, /retry R1 and /answer R1 your answer, and in a workstream /hold and /resume. R1 is a run in this workstream; a run's id works anywhere.");
+    expect(VERB_HINT.endsWith(RUN_REF_NOTE)).toBe(true);
+    for (const verb of WORKSTREAM_VERBS) expect(COMMAND_HELP.find((c) => c.verb === verb)?.usage).toBe(`/${verb}`);
   });
 
   it("lets everything else through to Pip", () => {

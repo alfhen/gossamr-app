@@ -5,6 +5,7 @@ import { docFromText } from "../lib/docs";
 import type { Proposal, StatusDef } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftCard, draftSummary, draftTitle, type DraftCardProps } from "./DraftCard";
+import { expectPinnedBar } from "./draftBar.testUtil";
 import { PeekView, WorkstreamControl, type PeekViewProps } from "./PeekSheet";
 import { PipAvatar } from "./PipAvatar";
 import { FilterNote, Launcher, Nudge, PipFilterNote } from "./PipExtras";
@@ -49,6 +50,11 @@ describe("DraftCard", () => {
     expect(out).toContain("Comment on DEVOPS-471");
     expect(out).toContain("Looks good.");
     for (const label of ["Post comment", "Edit", "Skip", "Show me"]) expect(out).toContain(label);
+  });
+
+  it("ends the card with its action bar, pinned to the bottom, opaque and ruled off", () => {
+    expectPinnedBar(card(proposal({}), { onShow: vi.fn() }));
+    expectPinnedBar(card(proposal({ intent: { type: "transition", item: { connectionId: "mock", externalId: "DEVOPS-471", key: "DEVOPS-471" }, to: "done" }, label: "Done" }), { statusName: "Done", error: "It failed." }));
   });
 
   it("previews a transition with the target status", () => {
@@ -165,6 +171,14 @@ describe("PeekView", () => {
     expect(wide).not.toContain('role="separator"');
     expect(wide).toContain("ws-peek-out");
     expect(view({ motion: "none" })).not.toContain("ws-peek");
+  });
+
+  it("keeps the room under the last section as an element, not as the scroller's padding a sticky bar would stop above", () => {
+    const out = view();
+    const scroller = out.match(/<div data-peek-scroll[^>]*>/)![0];
+    expect(scroller).toContain("scroll-pt-11");
+    expect(scroller).not.toMatch(/\bpb-/);
+    expect(out).toMatch(/<div aria-hidden="true" data-peek-end="true" class="[^"]*h-24[^"]*"><\/div><\/div><\/aside>/);
   });
 
   it("tells the person how to browse", () => {

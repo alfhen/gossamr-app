@@ -53,6 +53,12 @@ const P = {
       <path d="m10.5 10.5 3.5 3.5" strokeLinecap="round" />
     </>
   ),
+  pause: (
+    <>
+      <rect x="3.75" y="2.75" width="3" height="10.5" rx="1" className="fill-ws-warn/35" />
+      <rect x="9.25" y="2.75" width="3" height="10.5" rx="1" className="fill-ws-warn/35" />
+    </>
+  ),
   chevron: <path d="M4.5 6.5 8 10l3.5-3.5" strokeLinecap="round" strokeLinejoin="round" />,
   external: <path d="M9 3h4v4M13 3 7.5 8.5M11 9.5V13H3V5h3.5" strokeLinecap="round" strokeLinejoin="round" />,
 };

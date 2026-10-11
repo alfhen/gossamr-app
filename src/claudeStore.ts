@@ -18,6 +18,8 @@ export interface Turn {
   looking?: string;
   /** Text the question was about; the assistant is given it after the prompt. */
   quote?: string;
+  /** The short line the person's bubble shows when `prompt` is an instruction the page wrote for Pip. Never sent to Pip. */
+  shown?: string;
   /** Pictures sent with the question. Shown from memory; a follow-up in the same session does not attach them again. */
   images?: ShownImage[];
   /** How many pictures were sent, for a turn restored without them. */
@@ -39,7 +41,7 @@ interface ClaudeState {
   /** Every draft the backend holds. The chat cards read from here, so drafts outlive the conversation that made them. */
   proposals: Proposal[];
   setOpen(open: boolean): void;
-  ask(ticketKey: string, prompt: string, sessionId: string | null, context?: ScreenContext, extra?: { looking?: string; quote?: string; images?: PipImage[] }): Promise<void>;
+  ask(ticketKey: string, prompt: string, sessionId: string | null, context?: ScreenContext, extra?: { looking?: string; quote?: string; images?: PipImage[]; shown?: string }): Promise<void>;
   /** Stops the turn being answered in the conversation. Turns queued behind it stay queued. */
   cancel(ticketKey: string): void;
   /** Takes a queued turn out of the queue before it runs. */
@@ -112,6 +114,7 @@ export function turnFromStored(t: StoredTurn): Turn {
     error: t.error,
     ...(t.looking ? { looking: t.looking } : {}),
     ...(t.quote ? { quote: t.quote } : {}),
+    ...(t.shown ? { shown: t.shown } : {}),
     ...(t.imageCount ? { imageCount: t.imageCount } : {}),
     ...(t.usage ? { usage: t.usage } : {}),
     ...(t.kind === "wake" ? { kind: "wake" as const } : {}),
@@ -180,7 +183,12 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
         context,
         ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}),
         conversation: ticketKey,
-        meta: { ...(shown.quote ? { quote: shown.quote } : {}), ...(shown.looking ? { looking: shown.looking } : {}), imageCount: images.length },
+        meta: {
+          ...(shown.quote ? { quote: shown.quote } : {}),
+          ...(shown.looking ? { looking: shown.looking } : {}),
+          ...(shown.shown ? { shown: shown.shown } : {}),
+          imageCount: images.length,
+        },
       });
       // The `queued` event usually says this first; the answer to `ask` can come after the turn already started.
       if (outcome?.queued && !begun.has(requestId)) updateByRequest(requestId, (c) => applyEvent(c, requestId, { type: "queued", ahead: outcome.ahead }));

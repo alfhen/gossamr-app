@@ -342,7 +342,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
         <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
       </header>
       <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} on={on} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-20">
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-[max(80px,var(--ws-launcher-clear,0px))]">
         <div className="grid gap-5.5">
           <AgentsBanners environment={environment} loadError={status === "error" ? error : null} onCheckAgain={on.checkEnvironment} onRetry={on.retry} />
           {introShown && <AgentsIntro onDismiss={on.dismissIntro} />}

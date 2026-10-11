@@ -651,7 +651,7 @@ impl Core {
         let resolved = self.resolved_of(&run).await?;
         let result = run.result.as_deref().unwrap_or("");
         let proposal = resolved.ticket.clone().or_else(|| ticket_from_answer(result)).ok_or_else(|| refuse("the run finished without a written answer, so there is nothing to draft"))?;
-        self.draft_ticket_once(&run, &proposal).await?.map_err(|existing| refuse(format!("that run already has a ticket draft ({}), {}", existing.id, state_words(&existing.state))))
+        self.draft_ticket_once(&run, &proposal).await?.map_err(|existing| refuse(format!("that run already has a ticket draft, {}", state_words(&existing.state))))
     }
 
     /// The same draft, made when an investigation that was started to end as a ticket finishes. Only a result with a
@@ -1018,7 +1018,7 @@ pub(in crate::inbox) mod tests {
         let first = fx.core.auto_draft_run_ticket(&run.id).await.unwrap().unwrap();
         assert_eq!(fx.core.auto_draft_run_ticket(&run.id).await.unwrap(), None, "waiting");
         let err = fx.core.draft_run_ticket(&run.id).await.unwrap_err().to_string();
-        assert!(err.contains(&first.id) && err.contains("waiting for you"), "{err}");
+        assert!(err.ends_with("that run already has a ticket draft, waiting for you") && !err.contains(&first.id), "says what became of it, never its id: {err}");
 
         fx.core.skip_proposal(&first.id).await.unwrap();
         assert_eq!(fx.core.auto_draft_run_ticket(&run.id).await.unwrap(), None, "skipped");

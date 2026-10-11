@@ -107,7 +107,7 @@ export type ReadOnly = { mode: string; allow: string[]; deny: string[]; guard: s
 /** One launch as the mock launcher made it (`MockLaunch` in src/backend/mockRuns.ts). */
 export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; guard: string; autoStart: string | null; at: string };
 interface Handle {
-  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number }[];
+  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null }[];
   launches(): MockLaunch[];
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   scriptNext(kind: string, script: Script): void;
@@ -472,4 +472,22 @@ export async function reviewedDraft(page: Page, query = "") {
   const review = peekSheet(page).getByRole("article", { name: "GitHub review of acme/webshop#218" });
   await expect(review).toHaveCount(1);
   return review;
+}
+
+/**
+ * Waits for a toast saying `text`. Toasts come one at a time (src/workspace/ToastHost.tsx), so the ones queued ahead of it
+ * are dismissed as the person would, until it is the one on screen.
+ */
+export async function expectToast(page: Page, text: string | RegExp) {
+  const toast = page.locator("[data-toast]");
+  await expect
+    .poll(
+      async () => {
+        if (await toast.filter({ hasText: text }).count()) return true;
+        if (await toast.count()) await toast.getByRole("button", { name: "Dismiss" }).click({ timeout: 1000 }).catch(() => {});
+        return false;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
 }

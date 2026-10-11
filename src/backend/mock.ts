@@ -43,6 +43,7 @@ import type {
   Transition,
   Uploaded,
   WorkFilter,
+  WorkItem,
   WorkstreamMode,
   WorkstreamRule,
   WorkstreamsChanged,
@@ -985,7 +986,40 @@ export class MockBackend implements Backend {
   }
 
   async peekItem(ref: ItemRef) {
-    return this.connector.peek(ref);
+    return this.connector.peek(ref) ?? this.pastTicket(ref);
+  }
+
+  /**
+   * A ticket only a sample run names, such as CA-377 or DEVOPS-455, read the way a live peek reads one the cache doesn't
+   * hold: a finished ticket in its project, titled from the run's branch name. Null for any key no run names.
+   */
+  private pastTicket(ref: ItemRef): WorkItem | null {
+    const key = ref.key.toUpperCase();
+    const run = this.runs.list().find((r) => r.item?.key.toUpperCase() === key);
+    const container = this.connector.listContainers(true).find((c) => c.key === key.slice(0, key.lastIndexOf("-")));
+    if (!run?.item || !container) return null;
+    const words = run.spec.name.replace(/^[a-z][a-z0-9]*-\d+-/, "").replace(/-[0-9a-f]{4}$/, "").replace(/-/g, " ");
+    const at = run.queuedAt;
+    return {
+      item: itemRef(key),
+      container: container.ref,
+      kind: "task",
+      title: words ? words.charAt(0).toUpperCase() + words.slice(1) : key,
+      body: { blocks: [] },
+      status: container.workflow.statuses.find((s) => s.category === "done") ?? container.workflow.statuses[0],
+      assignee: null,
+      reporter: null,
+      priority: null,
+      parent: null,
+      labels: [],
+      created: at,
+      updated: run.endedAt ?? at,
+      links: [],
+      commentCount: 0,
+      lastCommenter: null,
+      extra: null,
+      unwatched: !this.connector.listContainers().some((c) => c.key === container.key),
+    };
   }
 
   async cacheContainers(opts: ReadScope = {}) {

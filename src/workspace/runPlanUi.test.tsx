@@ -165,11 +165,11 @@ describe("a build draft that follows a plan", () => {
   it("says so on its card, with the plan's size, and not for other drafts", async () => {
     const made = await backend.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: plan.id }, plan.item);
     const html = card(made);
-    expect(html).toContain("Follows the unedited plan from run");
+    expect(html).toContain("Follows the unedited plan from <b");
     expect(html).toContain("shown whole in the prompt");
     if (made.intent.type !== "startRun") throw new Error("a run draft");
     const settled = card({ ...made, intent: { ...made.intent, spec: { ...made.intent.spec, planApproved: true } } });
-    expect(settled).toContain("Follows the plan from run");
+    expect(settled).toContain("Follows the plan from <b");
     expect(settled).not.toContain("unedited");
     const plain = await backend.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: null, name: "ca-401-other-0a1b" }, plan.item);
     expect(card(plain)).not.toContain("Follows the plan");

@@ -1,10 +1,54 @@
-import type { KeyboardEvent } from "react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ALL, describeFilter } from "../lib/filter";
 import { useItemsByFilter } from "../workspaceStore";
 import { projectOf, sameProject, scopeTo, withProject } from "./filters";
 import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
 import { buildTabItems, type TabItem } from "./tabItems";
 import { useTabs } from "./tabsStore";
+
+/** A tab's place in the strip: its left edge from the first tab's, and its width. */
+export interface TabSpan {
+  left: number;
+  size: number;
+}
+
+/** Which tabs the strip shows: `start` to `end`, whole, `width` wide, scrolled `offset` in. No `width` when every tab fits. */
+export interface TabWindow {
+  start: number;
+  end: number;
+  offset: number;
+  width?: number;
+}
+
+/** Room each 'more tabs' button and the gap beside it takes, when the tabs don't all fit. */
+export const MORE_BUTTON = 34;
+
+/**
+ * The run of whole tabs a strip `room` wide shows, starting from `from`. With `active` set, that tab is always in it, moving
+ * as little as it can; a run that reaches the last tab takes in as many earlier ones as still fit. A tab is never cut: the
+ * strip ends where the last whole one does, and buttons either side say how many more there are.
+ */
+export function tabWindow(spans: TabSpan[], room: number, from: number, active: number): TabWindow {
+  const last = spans.length - 1;
+  const right = (i: number) => spans[i].left + spans[i].size;
+  if (last < 0 || right(last) - spans[0].left <= room) return { start: 0, end: Math.max(0, last), offset: 0 };
+  const fits = Math.max(0, room - 2 * MORE_BUTTON);
+  const endFrom = (s: number) => {
+    let e = s;
+    while (e < last && right(e + 1) - spans[s].left <= fits) e++;
+    return e;
+  };
+  let start = Math.min(Math.max(0, from), last);
+  if (active >= 0 && active < start) start = active;
+  let end = endFrom(start);
+  if (active > end) {
+    start = active;
+    while (start > 0 && right(active) - spans[start - 1].left <= fits) start--;
+    end = endFrom(start);
+  }
+  while (end === last && start > 0 && right(end) - spans[start - 1].left <= fits) start--;
+  return { start, end, offset: spans[start].left - spans[0].left, width: Math.min(right(end) - spans[start].left, fits) };
+}
 
 export function TabStrip({
   items,
@@ -32,40 +76,101 @@ export function TabStrip({
     requestAnimationFrame(() => document.getElementById(`tab-${next.id}`)?.focus());
   };
 
+  // One line of whole tabs: when the canvas is narrow (the peek and Pip both open) the strip shows as many as fit, always
+  // the active one among them, and says how many more lie either side, never a tab cut mid-word.
+  const room = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const newTab = useRef<HTMLButtonElement>(null);
+  const active = items.findIndex((i) => i.active);
+  const [view, setView] = useState<TabWindow>({ start: 0, end: Math.max(0, items.length - 1), offset: 0 });
+  const from = useRef(0);
+  /** Works out the run of tabs that fits from `start`, keeping the active tab in it when `follow`. */
+  const fit = (follow: boolean, start = from.current) => {
+    const el = list.current;
+    const box = room.current;
+    if (!el || !box) return;
+    const tabs = [...el.children].map((t) => t.getBoundingClientRect());
+    const spans = tabs.map((r) => ({ left: r.left - (tabs[0]?.left ?? 0), size: r.width }));
+    const next = tabWindow(spans, box.clientWidth - (newTab.current?.offsetWidth ?? 0) - 4, start, follow ? active : -1);
+    from.current = next.start;
+    setView((v) => (v.start === next.start && v.end === next.end && v.offset === next.offset && v.width === next.width ? v : next));
+  };
+  const refit = useRef(fit);
+  refit.current = fit;
+  // The canvas narrowing as the peek or the Pip pane opens, or a tab's count growing, refits the strip around the active tab.
+  useLayoutEffect(() => {
+    const box = room.current;
+    if (!box || typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(() => refit.current(true));
+    watch.observe(box);
+    return () => watch.disconnect();
+  }, []);
+  useLayoutEffect(() => fit(true), [active, items.length, counts.join()]);
+  // Scrolling is the strip's own doing: put it back if focus or the browser moves it.
+  const pin = () => {
+    if (list.current && Math.abs(list.current.scrollLeft - view.offset) > 0.5) list.current.scrollLeft = view.offset;
+  };
+  useLayoutEffect(pin, [view]);
+  const before = view.width === undefined ? 0 : view.start;
+  const after = view.width === undefined ? 0 : items.length - 1 - view.end;
+  const page = (ahead: boolean) => fit(false, ahead ? view.end + 1 : Math.max(0, view.start - (view.end - view.start + 1)));
+  const moreButton = "w-[30px] shrink-0 mb-1 rounded text-xs font-semibold text-ws-ink2 hover:bg-ws-hover disabled:invisible";
+
   return (
     <div className="flex items-end gap-1 border-b border-ws-sep">
-      <div role="tablist" aria-label="Views" className="flex min-w-0 items-end gap-0.5 overflow-x-auto overflow-y-hidden" onKeyDown={onKeyDown}>
-        {items.map((item, i) => (
-          <div key={item.id} className={`-mb-px flex shrink-0 items-center border-b-2 ${item.active ? "border-ws-pip" : "border-transparent"}`}>
-            <button
-              type="button"
-              role="tab"
-              id={`tab-${item.id}`}
-              aria-selected={item.active}
-              tabIndex={item.active ? 0 : -1}
-              title={item.label}
-              onClick={() => onActivate(item)}
-              className={`flex max-w-[260px] items-center gap-1.5 py-1.5 pl-3 font-semibold whitespace-nowrap ${item.tabId ? "pr-1" : "pr-3"} ${item.active ? "text-ws-ink" : "text-ws-ink2 hover:text-ws-ink"}`}
-            >
-              <span className="truncate">{item.label}</span>
-              <span className={`rounded-full px-1.5 text-xs font-semibold ${item.active ? "bg-ws-pip-soft text-ws-pip" : "bg-ws-sel text-ws-ink3"}`}>{counts[i]}</span>
-            </button>
-            {item.tabId && (
+      <div ref={room} className="flex min-w-0 flex-1 items-end gap-1">
+        {view.width !== undefined && (
+          <button type="button" aria-label={`Show ${before} earlier ${before === 1 ? "tab" : "tabs"}`} title={`${before} more`} disabled={!before} onClick={() => page(false)} className={moreButton}>
+            ‹ {before}
+          </button>
+        )}
+        <div
+          ref={list}
+          role="tablist"
+          aria-label="Views"
+          data-more={before || after ? `${before} ${after}` : undefined}
+          onScroll={pin}
+          style={{ width: view.width }}
+          className="relative flex min-w-0 shrink-0 items-end gap-0.5 overflow-hidden"
+          onKeyDown={onKeyDown}
+        >
+          {items.map((item, i) => (
+            <div key={item.id} className={`-mb-px flex shrink-0 items-center border-b-2 ${item.active ? "border-ws-pip" : "border-transparent"}`}>
               <button
                 type="button"
-                aria-label={`Close tab ${item.label}`}
-                onClick={() => onClose(item.tabId!)}
-                className="mr-1 rounded px-1 text-lg leading-none text-ws-ink3 hover:bg-ws-hover hover:text-ws-ink"
+                role="tab"
+                id={`tab-${item.id}`}
+                aria-selected={item.active}
+                tabIndex={item.active ? 0 : -1}
+                title={item.label}
+                onClick={() => onActivate(item)}
+                className={`flex max-w-[260px] items-center gap-1.5 py-1.5 pl-3 font-semibold whitespace-nowrap ${item.tabId ? "pr-1" : "pr-3"} ${item.active ? "text-ws-ink" : "text-ws-ink2 hover:text-ws-ink"}`}
               >
-                ×
+                <span className="truncate">{item.label}</span>
+                <span className={`rounded-full px-1.5 text-xs font-semibold ${item.active ? "bg-ws-pip-soft text-ws-pip" : "bg-ws-sel text-ws-ink3"}`}>{counts[i]}</span>
               </button>
-            )}
-          </div>
-        ))}
+              {item.tabId && (
+                <button
+                  type="button"
+                  aria-label={`Close tab ${item.label}`}
+                  onClick={() => onClose(item.tabId!)}
+                  className="mr-1 rounded px-1 text-lg leading-none text-ws-ink3 hover:bg-ws-hover hover:text-ws-ink"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        {view.width !== undefined && (
+          <button type="button" aria-label={`Show ${after} more ${after === 1 ? "tab" : "tabs"}`} title={`${after} more`} disabled={!after} onClick={() => page(true)} className={moreButton}>
+            {after} ›
+          </button>
+        )}
+        <button ref={newTab} type="button" aria-label="New tab" title="New tab" onClick={onNew} className="mb-1 shrink-0 rounded px-2 text-lg leading-none text-ws-ink2 hover:bg-ws-hover">
+          +
+        </button>
       </div>
-      <button type="button" aria-label="New tab" title="New tab" onClick={onNew} className="mb-1 rounded px-2 text-lg leading-none text-ws-ink2 hover:bg-ws-hover">
-        +
-      </button>
       <span className="mb-2 ml-auto shrink-0 px-1 text-sm text-ws-ink3" aria-live="polite">
         {shown} of {total}
       </span>

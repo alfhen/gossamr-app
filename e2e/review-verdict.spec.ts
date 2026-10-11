@@ -88,7 +88,8 @@ test("a Review the person starts from Review this finishes with a blocking verdi
   const review = peekSheet(page).getByRole("article", { name: "GitHub review of acme/webshop#218" });
   await expect(review).toHaveCount(1);
   await expect(peekSheet(page).getByRole("article", { name: "Comment on CA-402" })).toHaveCount(1);
-  await expect(review.locator("[data-review-summary]")).toContainText("Gossamr review of #218 at a1b2c3d4: blocking (1 blocking, 1 should-fix, 1 nit).");
+  // The summary opens as a reviewer would write it, without the pull request's number or commit.
+  await expect(review.locator("[data-review-summary]")).toHaveValue(/^Not ready to merge yet: 1 blocking issue, 1 should-fix and 1 nit\.\n\n/);
   // The finding without a line in the diff is in the summary; the other two sit at their lines.
   await expect(review.locator("[data-review-summary]")).toContainText("no test covers the timeout path. (src/consumer/retry.test.ts)");
   const comments = review.locator("[data-review-comment]");

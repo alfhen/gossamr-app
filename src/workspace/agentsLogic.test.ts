@@ -78,9 +78,10 @@ describe("lanes", () => {
     expect(laneOf(run("needsAnswer", { lastProgressAt: iso(600) }), NOW)).toBe("needs");
   });
 
-  it("says quiet in minutes, then in hours, and never stuck", () => {
+  it("says quiet in minutes, then in hours, then in days, and never stuck", () => {
     expect(quietText(40)).toBe("Quiet for 40 min");
     expect(quietText(180)).toBe("Quiet for 3 h");
+    expect(quietText(247 * 60)).toBe("Quiet for 10 days");
     expect(quietText(40)).not.toMatch(/stuck/i);
   });
 

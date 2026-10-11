@@ -28,6 +28,11 @@ describe("heldText", () => {
     expect(heldText("something newer")).toBe("Held");
   });
 
+  it("never says tripwire to the person, for any hold", () => {
+    const reasons = [HELD_RESTART, HELD_PERSON, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_QUOTA, ...TRIPWIRES.map((k) => `${TRIPWIRE}${k}`), `${TRIPWIRE}other`];
+    for (const reason of reasons) for (const drifted of [undefined, ["summary"] as const, ["status"] as const]) expect(heldText(reason, drifted)).not.toMatch(/tripwire/i);
+  });
+
   it("says what changed in Jira for a basis-drift hold", () => {
     const drift = `${TRIPWIRE}basis_drift`;
     expect(heldText(drift, ["description"])).toBe("Held: the ticket's description changed in Jira");

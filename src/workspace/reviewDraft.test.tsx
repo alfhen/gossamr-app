@@ -4,11 +4,13 @@ import { hunkLinesAround } from "../lib/diffHunks";
 import { REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
 import type { Proposal, ReviewAccess } from "../types";
 import { DraftCard } from "./DraftCard";
+import { draftPreviewBody } from "./DraftPreview";
 import { usePullView, type PullDiffState } from "./pullViewStore";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
 import type { ScreenContext } from "../types";
 import { editThenPost, followDraft, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+import { expectPinnedBar } from "./draftBar.testUtil";
 
 const RETRY = "src/consumer/retry.ts";
 const at = (line: number, body: string) => ({ path: RETRY, line, side: "RIGHT" as const, body });
@@ -43,13 +45,23 @@ afterEach(() => {
   usePullView.setState({ target: null, opener: null });
 });
 
+describe("a GitHub review draft's preview", () => {
+  it("shows the summary exactly as it will be posted, its last line included", () => {
+    const summary = "Not ready yet.\n\nDrafted by a Gossamr agent reviewing CA-402; posted only after a person approved it in Gossamr.";
+    const body = draftPreviewBody(draft({ intent: { ...intent, summary } }), null);
+    expect(body.startsWith(`${summary}\n\n`)).toBe(true);
+  });
+});
+
 describe("a GitHub review draft's card", () => {
   it("shows the hunk around each comment with its line marked, under a path:line heading, with an editable body", () => {
     const html = render(draft(), canPost);
     expect(html).toContain('aria-label="GitHub review of acme/webshop#218"');
     expect(html).toContain("acme/webshop#218");
     expect(html).toMatch(/data-review-commit[^>]*>a1b2c3d4</);
-    expect(html).toContain("From agent run");
+    // No ticket and no run known here: the run is named plainly, never by its id.
+    expect(html).toContain("From <b>an agent run</b>");
+    expect(html).not.toContain("abcd1234");
     for (const line of [42, 17]) {
       expect(html).toContain(`data-review-comment="${RETRY}:${line}"`);
       expect(html).toContain(`aria-label="Comment on ${RETRY}:${line}"`);
@@ -189,6 +201,11 @@ describe("a GitHub review draft's card", () => {
     // The sample Pip reads it as a talk about this draft and changes nothing yet.
     const reply = scriptPip(prompt, { view: null, item: null, filter: null, selection: [] } as unknown as ScreenContext, [], [], Date.now(), [draft()]);
     expect([reply.discussed, reply.revise ?? null]).toEqual(["r1", null]);
+  });
+
+  it("ends the card with its action bar, pinned to the bottom, opaque and ruled off, notes and errors above it", () => {
+    expectPinnedBar(render(draft(), canPost));
+    expectPinnedBar(renderToStaticMarkup(<ReviewDraft proposal={draft()} statusName={null} people={[]} working={false} error="GitHub said no." onApprove={vi.fn()} onSkip={vi.fn()} access={cantPost} diff={sample()} />));
   });
 
   it("is the card DraftCard shows for a GitHub review", () => {

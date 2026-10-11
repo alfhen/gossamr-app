@@ -147,6 +147,9 @@ describe("an edited description update in the sample build", () => {
     const [draft] = rewrites(b);
     await b.proposalsEdit(draft.id, { type: "rewrite", body: "Hello\n\n## Gossamr Plan\n\nThe person's own words." });
     await expect(b.runsDraftPlanDescription(run.id)).rejects.toThrow(/you edited/);
+    const why = await b.runsDraftPlanDescription(run.id).catch((e: Error) => e.message);
+    expect(why).toContain(run.item!.key);
+    expect(why).not.toContain(draft.id);
     expect(rewrites(b)).toHaveLength(1);
     expect(b.proposals.get(draft.id)?.state.type).toBe("pending");
   });
@@ -172,6 +175,8 @@ describe("Pip and a plan's description draft", () => {
     const first = ask(b, `Let's talk about the description update draft ${draft.id} on ${run.item!.key}, drafted from agent run ${run.id}. Read the whole run first.`, null);
     expect(first.discussed).toBe(draft.id);
     expect(first.revise).toBeUndefined();
+    expect(first.text).toContain(`the description update for ${run.item!.key}`);
+    for (const id of [draft.id, run.id, run.shortId ?? run.id]) expect(first.text).not.toContain(id);
     const script = ask(b, "shorter please", draft.id);
     expect(script.revise).toBeUndefined();
     expect(script.text).toContain("## Gossamr Plan");

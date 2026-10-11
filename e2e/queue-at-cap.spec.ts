@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, landOnWorkspace, mockRuns, peekSheet, peekTicket } from "./support/app";
+import { advanceRuns, expectToast, landOnWorkspace, mockRuns, peekSheet, peekTicket } from "./support/app";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
@@ -104,7 +104,7 @@ test("a run waiting for a slot can be stopped from its sheet, and Stop all stops
     waiting.push(await start(page));
   }
   // Announced as waiting, not as started, and counted apart from the running ones.
-  await expect(page.getByText("Approved the agent on CA-405. Every slot is taken, so it waits and starts when one of the running agents finishes.")).toBeVisible();
+  await expectToast(page, "Approved the agent on CA-405. Every slot is taken, so it waits and starts when one of the running agents finishes.");
   await expect(page.locator("main")).toContainText("3 running · 2 waiting for a slot");
 
   // From its sheet the second in line says it starts on its own, offers no Start now, and can be stopped.

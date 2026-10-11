@@ -113,7 +113,7 @@ test("in one workstream Pip drafts investigate, triage with findings, plan, a bu
   await settlePlan(page);
   const before = await runCount(page);
   await ask(page, "build it");
-  await expect(pipPane(page)).toContainText("I drafted a build of CA-401 following plan run");
+  await expect(pipPane(page)).toContainText("I drafted a build of CA-401 following the CA-401 plan.");
   await openNewestDraft(page);
   await expect(setup(page).locator("[data-pip-chain]")).toContainText("Drafted by Pip from run");
   await expect(setup(page).locator("[data-pip-chain]")).toContainText("the plan below was filled in by Gossamr from that run");
@@ -178,7 +178,7 @@ test("in one workstream Pip drafts investigate, triage with findings, plan, a bu
 
   // The review is pinned to the build's pull request, carries its account, is adversarial and reports a verdict.
   await ask(page, "review it");
-  await expect(pipPane(page)).toContainText("I drafted a review of CA-401 following build run");
+  await expect(pipPane(page)).toContainText("I drafted a review of CA-401 following the CA-401 build.");
   await expect(runCards(page)).toHaveCount(reviewDrafts + 1);
   await openNewestDraft(page);
   await expect(setup(page).locator("[data-pip-chain]")).toContainText("the account below was filled in by Gossamr from that run");

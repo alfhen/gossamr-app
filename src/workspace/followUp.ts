@@ -8,7 +8,8 @@ export const FOLLOW_UP_LIMIT = 4000;
 /** The run a follow-up is for, as people name it elsewhere: the session id, or a prefix of the run id when none is known. */
 export const followUpRunLabel = (i: FollowUpIntent) => i.shortId ?? i.runId.slice(0, 8);
 
-export const followUpTitle = (i: FollowUpIntent) => `Follow-up for run ${followUpRunLabel(i)}`;
+/** "Follow-up for the CA-412 run": named by its ticket, so the person never reads a run id; a run with no ticket by its label. */
+export const followUpTitle = (i: FollowUpIntent) => (i.item ? `Follow-up for the ${i.item.key} run` : `Follow-up for run ${followUpRunLabel(i)}`);
 
 /** The pass the agent would be on once this is sent: the run's count, one higher. */
 export const nextPass = (run: Pick<Run, "passes"> | null | undefined) => (run?.passes ?? 1) + 1;

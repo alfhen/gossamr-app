@@ -11,7 +11,7 @@ import { draftStatus } from "./boardLogic";
 import { showMe } from "./jump";
 import { KIND_LABEL } from "./agentsLogic";
 import { askPip } from "./askPip";
-import { commentWithPipPrompt } from "./runSheetLogic";
+import { PIP_SHOWN, pipAsks } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
@@ -22,6 +22,7 @@ import { RetiredDraft } from "./RetiredDraft";
 import { answerProblem, MAX_ANSWER } from "../lib/answer";
 import { answerTitle, editThenSend, isSendKey, NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
+import { FromRun, RunName } from "./RunProvenance";
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
   pending: "Needs your approval",
@@ -333,12 +334,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             )}
             {intent.spec.plan?.trim() && intent.spec.planFromRun && (
               <p data-plan-from className="m-0 text-sm text-ws-ink2">
-                Follows the {intent.spec.planApproved ? "" : "unedited "}plan from run <b className="font-mono font-semibold">{intent.spec.planFromRun}</b> ({intent.spec.plan.length.toLocaleString("en")} characters, shown whole in the prompt).
+                Follows the {intent.spec.planApproved ? "" : "unedited "}plan from <RunName id={intent.spec.planFromRun} /> ({intent.spec.plan.length.toLocaleString("en")} characters, shown whole in the prompt).
               </p>
             )}
             {intent.spec.buildAccount?.trim() && intent.spec.buildFromRun && (
               <p data-build-from className="m-0 text-sm text-ws-ink2">
-                Checks the builder&apos;s account from run <b className="font-mono font-semibold">{intent.spec.buildFromRun}</b> ({intent.spec.buildAccount.length.toLocaleString("en")} characters, shown whole in the prompt) as a claim, not as evidence.
+                Checks the builder&apos;s account from <RunName id={intent.spec.buildFromRun} /> ({intent.spec.buildAccount.length.toLocaleString("en")} characters, shown whole in the prompt) as a claim, not as evidence.
               </p>
             )}
             {intent.spec.focus?.trim() && (
@@ -458,14 +459,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                 Drafted by an agent
               </span>
             )}
-            From agent run{" "}
-            {onOpenRun ? (
-              <button type="button" onClick={() => onOpenRun((p.origin as { runId: string }).runId)} className="font-mono font-semibold text-ws-pip hover:underline">
-                {p.origin.shortId ?? "(no session id)"}
-              </button>
-            ) : (
-              <b className="font-mono">{p.origin.shortId ?? "(no session id)"}</b>
-            )}
+            <FromRun proposal={p} onOpen={onOpenRun ? () => onOpenRun((p.origin as { runId: string }).runId) : undefined} />
             . The words are the agent&apos;s. Read and edit them before you approve.
           </p>
         )}
@@ -477,7 +471,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           </p>
         )}
         {(open || onShow) && (
-          <div className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
+          <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
             {onShow && (
               <button type="button" onClick={onShow} className="mr-auto text-sm text-ws-pip hover:underline">
                 Show me
@@ -559,7 +553,7 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
 
   const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
   const answer = useAnswerRun(p);
-  const discuss = () => p.origin.type === "run" && askPip(commentWithPipPrompt({ id: p.origin.runId, item: target ?? null }, p.id));
+  const discuss = () => p.origin.type === "run" && askPip(pipAsks.comment({ id: p.origin.runId, item: target ?? null }, p.id));
   const review = p.intent.type === "githubReview" ? p.intent : null;
   const access = useRepoReviewAccess(review?.connectionId ?? null, review?.repo ?? null);
 
@@ -581,7 +575,7 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
                 void run(async () => {
                   // The person's edit is saved first, so Pip reads their version, and it is theirs from then on.
                   if (edit && backend) await backend.proposalsEdit(p.id, edit);
-                  askPip(reviewWithPipPrompt(p));
+                  askPip({ prompt: reviewWithPipPrompt(p), shown: PIP_SHOWN.review });
                   return null;
                 })
             : undefined

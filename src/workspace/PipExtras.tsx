@@ -4,6 +4,7 @@ import { useClaude } from "../claudeStore";
 import { itemKey } from "../lib/filter";
 import { pendingDrafts, useWorkspace } from "../workspaceStore";
 import { useAgentsEnabled } from "./agentsFlag";
+import { askPip } from "./askPip";
 import { useActiveTab } from "./hooks";
 import { nudgeCandidates, nudgeDelay, NUDGE_SHOWN_MS, pickNudge, type Nudge, type NudgeScene } from "./nudges";
 import { PipAvatar } from "./PipAvatar";
@@ -79,6 +80,12 @@ export function Nudge({ text, onOpen, onDismiss, onHold }: { text: string; onOpe
   );
 }
 
+/**
+ * How far the canvases' lists scroll on past their last row while the launcher floats over them, published on <main>
+ * as `--ws-launcher-clear`: the launcher's height, its nudge bubble beside it and a margin, so no row stays under them.
+ */
+export const LAUNCHER_CLEAR = 112;
+
 /** Keeps the launcher clear of the footer and, while the ticket peek is open, of the peek. */
 export const launcherStyle = (clearRight = 0) => ({ right: `calc(${clearRight}px + 1.25rem)`, bottom: "calc(var(--ws-footer-h, 2rem) + 0.75rem)" });
 
@@ -89,8 +96,10 @@ export function Launcher({ drafts, onOpen, nudge, thinking = false, clearRight =
     if (showing) requestAnimationFrame(() => lookAt(bubble.current));
   }, [showing]);
   return (
-    <div style={launcherStyle(clearRight)} className="absolute z-30 flex max-w-[calc(100%-2.5rem)] items-center gap-2.5">
-      <div ref={bubble}>{nudge}</div>
+    <div data-pip-launcher style={launcherStyle(clearRight)} className="absolute z-30 flex max-w-[calc(100%-2.5rem)] items-center gap-2.5">
+      <div ref={bubble} data-pip-nudge>
+        {nudge}
+      </div>
       <div className="relative">
         <i aria-hidden className="pip-thread pointer-events-none absolute bottom-full left-1/2 h-[46px] w-[1.5px] -translate-x-1/2 opacity-60" />
         <button
@@ -115,7 +124,9 @@ function act(n: Nudge) {
   pip.dismiss(n.id);
   switch (n.action.type) {
     case "ask":
-      pip.openWith(n.action.prompt);
+      // A question the page wrote for Pip, with a short line for the person, is asked as it is; any other is left to edit.
+      if (n.action.shown) askPip({ prompt: n.action.prompt, shown: n.action.shown });
+      else pip.openWith(n.action.prompt);
       break;
     case "filter":
       pip.applyFilter(n.action.filter, n.action.note);

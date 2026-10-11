@@ -206,6 +206,25 @@ pub struct TurnMeta {
     pub quote: Option<String>,
     pub looking: Option<String>,
     pub image_count: u32,
+    /// The short line the person's bubble shows when the prompt is an instruction the page wrote for Pip ("Discuss this
+    /// review"). Display only: it is kept with the turn and never sent to Claude.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shown: Option<String>,
+}
+
+/// The most of a `shown` line that is kept, in characters.
+const SHOWN_MAX_CHARS: usize = 200;
+
+/// A `shown` line as it is kept: trimmed, cut to `SHOWN_MAX_CHARS`, and none when nothing is left.
+fn shown_line(shown: Option<String>) -> Option<String> {
+    let line = shown?.trim().to_string();
+    if line.is_empty() {
+        return None;
+    }
+    Some(match line.char_indices().nth(SHOWN_MAX_CHARS) {
+        Some((cut, _)) => line[..cut].trim_end().to_string(),
+        None => line,
+    })
 }
 
 /// What a turn has said and done so far, kept in memory while it runs so a reloaded page can show it.
@@ -385,7 +404,8 @@ impl AgentService {
             Sending { set: &self.sending, id: req.request_id.clone() }
         };
         let scope = self.core.scope().await?;
-        let meta = req.meta.clone().unwrap_or_else(|| TurnMeta { image_count: req.images.len() as u32, ..Default::default() });
+        let mut meta = req.meta.clone().unwrap_or_else(|| TurnMeta { image_count: req.images.len() as u32, ..Default::default() });
+        meta.shown = shown_line(meta.shown.take());
         // Kept as waiting until its provider has started, so a reload shows it either way.
         recorded(self.core.pip_turn_begin(&scope, &req.conversation, &req.request_id, &req.prompt, &meta, "queued").await);
         let workstream = workstream_of_conversation(&req.conversation).map(str::to_string);
@@ -785,7 +805,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(kept.conversation, "CA-1");
-        assert_eq!(kept.meta, Some(TurnMeta { quote: Some("q".into()), looking: Some("CA-1".into()), image_count: 2 }));
+        assert_eq!(kept.meta, Some(TurnMeta { quote: Some("q".into()), looking: Some("CA-1".into()), image_count: 2, ..Default::default() }));
         let partial: AskRequest = serde_json::from_str(r#"{"requestId":"r","prompt":"p","sessionId":null,"meta":{}}"#).unwrap();
         assert_eq!(partial.meta, Some(TurnMeta::default()));
     }
@@ -868,7 +888,7 @@ mod tests {
                 context: ScreenContext::default(),
                 images: Vec::new(),
                 conversation: GENERAL_CONVERSATION.into(),
-                meta: Some(TurnMeta { quote: None, looking: Some("the board".into()), image_count: 0 }),
+                meta: Some(TurnMeta { quote: None, looking: Some("the board".into()), image_count: 0, ..Default::default() }),
                 event: None,
             }
         }
@@ -904,6 +924,27 @@ mod tests {
             assert_eq!(t.looking.as_deref(), Some("the board"));
             tokio::time::sleep(Duration::from_millis(20)).await;
             assert!(matches!(seen.lock().unwrap().last(), Some(AgentEvent::Done { usage: Some(_), .. })), "the page is told the usage too");
+        }
+
+        #[tokio::test]
+        async fn a_stored_turn_keeps_the_short_line_the_bubble_shows_and_caps_a_long_one() {
+            let fx = fixture().await;
+            let svc = service(&fx, Fake { events: vec![text("Fine.")], gate: None, refuse: false }).await;
+            let mut short = ask("q1");
+            short.prompt = "Let's talk about the GitHub review draft p-1: read it with get_proposal.".into();
+            short.meta.as_mut().unwrap().shown = Some("  Discuss this review ".into());
+            svc.ask(short, Arc::new(|_| {})).await.unwrap();
+            let t = settled(&svc, "q1").await;
+            assert_eq!(t.shown.as_deref(), Some("Discuss this review"));
+            assert!(t.prompt.contains("get_proposal"), "the instruction itself is what is kept as the prompt");
+
+            let mut long = ask("q2");
+            long.meta.as_mut().unwrap().shown = Some("é".repeat(SHOWN_MAX_CHARS + 50));
+            svc.ask(long, Arc::new(|_| {})).await.unwrap();
+            let t = settled(&svc, "q2").await;
+            assert_eq!(t.shown.map(|s| s.chars().count()), Some(SHOWN_MAX_CHARS));
+            svc.ask(ask("q3"), Arc::new(|_| {})).await.unwrap();
+            assert_eq!(settled(&svc, "q3").await.shown, None);
         }
 
         #[tokio::test]

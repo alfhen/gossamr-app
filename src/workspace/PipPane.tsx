@@ -174,9 +174,12 @@ export function usePipChips(workstream: WorkstreamView | null = null) {
     workstream: workstreamScene,
   });
   // A workstream's chips name its own runs already, at most six of them.
-  const chips = agentsOn && hasRuns && screen.route !== "settings" && !quote && !(workstreamScene && workstreamChips(workstreamScene).length) && !base.includes(runSummaryPrompt()) ? [...base, runSummaryPrompt()] : base;
+  const all = agentsOn && hasRuns && screen.route !== "settings" && !quote && !(workstreamScene && workstreamChips(workstreamScene).length) && !base.includes(runSummaryPrompt()) ? [...base, runSummaryPrompt()] : base;
+  // A workstream's empty conversation offers its first suggestion as the intro's one button, and not again as a chip.
+  const primary = workstreamScene && turns.length === 0 && !quote ? (workstreamChips(workstreamScene)[0] ?? null) : null;
+  const chips = primary ? all.filter((c) => c !== primary) : all;
   const scene = { itemKey: itemScene?.key ?? null, route: screen.route, runOpen: !!context.run, workstream: !!workstream };
-  return { chips, scene, kind, label, context, words, quote, following: pinned === null };
+  return { chips, primary, scene, kind, label, context, words, quote, following: pinned === null };
 }
 
 /** The line naming the conversation: "General", or "Workstream: <title> · <Stage>" with only the title cut short. */
@@ -212,7 +215,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const attached = useAttachments();
   const drop = useFileDrop((files) => void attached.add(files));
   const proposalList = useConversationDrafts(conversation, workstream);
-  const { chips, scene, kind, label, context, words, quote, following } = usePipChips(workstream);
+  const { chips, primary, scene, kind, label, context, words, quote, following } = usePipChips(workstream);
 
   usePaneEscape(onClose);
 
@@ -241,7 +244,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
         <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
         {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
       </header>
-      <PipConversation key={conversation} conversation={conversation} proposals={proposalList} />
+      <PipConversation key={conversation} conversation={conversation} proposals={proposalList} primary={primary} />
       <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} />
     </aside>
   );

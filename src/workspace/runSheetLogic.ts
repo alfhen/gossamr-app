@@ -441,6 +441,21 @@ export function commentControl(run: Pick<Run, "item" | "result">): DraftControl 
 }
 
 /**
+ * The short line the person's bubble shows for each instruction below. Pip gets the whole instruction; the person sees
+ * what they asked for, without the tool names and ids that make Pip behave.
+ */
+export const PIP_SHOWN = {
+  review: "Discuss this review",
+  draft: "Discuss this draft",
+  comment: "Draft a comment from this run",
+  plan: "Discuss this plan",
+  finish: "Tidy up this ticket draft",
+  description: "Draft a description update from this run",
+  breakdown: "Discuss this breakdown",
+  subtasks: "Suggest subtasks from this run",
+} as const;
+
+/**
  * What "Discuss with Pip" and "Draft with Pip" send. Pip reads the run itself, all of it, so the prompt names the run
  * and the draft and never carries their text.
  */
@@ -625,6 +640,23 @@ export function descriptionWithPipPrompt(run: { id: string; item: { key: string 
   const key = run.item?.key ?? "its ticket";
   return `Draft an update to the description of ${key} so it follows what run ${run.id} found. Read the whole run first: get_run, then get_run_result until it says that is the end. Then read ${key} with get_item and propose the complete revised description with propose_description_edit, keeping everything the run doesn't change word for word. Don't say anything has been changed in Jira.`;
 }
+
+/** An instruction the page writes for Pip, with the short line the person's bubble shows for it: one never goes without the other. */
+export interface PipAsk {
+  prompt: string;
+  shown: string;
+}
+
+type RunOf = { id: string; item: { key: string } | null };
+
+/** Every instruction a run's sheet, a draft's card or a draft's peek sends Pip, each paired with its `PIP_SHOWN` line. */
+export const pipAsks = {
+  comment: (run: RunOf, draftId: string | null = null): PipAsk => ({ prompt: commentWithPipPrompt(run, draftId), shown: draftId ? PIP_SHOWN.draft : PIP_SHOWN.comment }),
+  planDescription: (run: RunOf, draftId: string): PipAsk => ({ prompt: planDescriptionWithPipPrompt(run, draftId), shown: PIP_SHOWN.plan }),
+  finish: (run: { id: string }, draftId: string): PipAsk => ({ prompt: finishWithPipPrompt(run, draftId), shown: PIP_SHOWN.finish }),
+  description: (run: RunOf): PipAsk => ({ prompt: descriptionWithPipPrompt(run), shown: PIP_SHOWN.description }),
+  breakdown: (run: RunOf, draftId: string | null = null): PipAsk => ({ prompt: breakdownWithPipPrompt(run, draftId), shown: draftId ? PIP_SHOWN.breakdown : PIP_SHOWN.subtasks }),
+};
 
 /** The breakdown draft a run left, if it is still waiting: the one the person can open, discuss or approve. */
 export function runBreakdownDraftOf(proposals: Record<string, Proposal> | readonly Proposal[], runId: string): Proposal | undefined {

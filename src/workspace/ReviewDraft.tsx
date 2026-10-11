@@ -7,6 +7,7 @@ import type { DraftCardProps } from "./DraftCard";
 import { peekFocusAfterLeaving } from "./peekDrafts";
 import { openPullView, sameCommit, usePullDiff, type PullDiffState } from "./pullViewStore";
 import { takesBackendText } from "./RewriteDiff";
+import { FromRun } from "./RunProvenance";
 
 type Review = Extract<Proposal["intent"], { type: "githubReview" }>;
 
@@ -213,14 +214,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
         </p>
         {p.origin.type === "run" && (
           <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
-            From agent run{" "}
-            {onOpenRun ? (
-              <button type="button" onClick={() => onOpenRun((p.origin as { runId: string }).runId)} className="font-mono font-semibold text-ws-pip hover:underline">
-                {p.origin.shortId ?? "(no session id)"}
-              </button>
-            ) : (
-              <b className="font-mono">{p.origin.shortId ?? "(no session id)"}</b>
-            )}
+            <FromRun proposal={p} onOpen={onOpenRun ? () => onOpenRun((p.origin as { runId: string }).runId) : undefined} />
             . Gossamr made it from the review&apos;s findings; read and edit it before you post.
           </p>
         )}
@@ -320,7 +314,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
             {shownError ?? problem}
           </p>
         )}
-        <div className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
+        <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
           <button type="button" onClick={pullView} className={`${open && !canPost ? primary : button} ${open && !canPost ? "" : "mr-auto"}`}>
             Open PR view
           </button>

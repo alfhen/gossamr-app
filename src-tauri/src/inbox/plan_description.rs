@@ -163,8 +163,8 @@ impl Core {
                 return Ok(Made::Have);
             }
             let waiting = |p: &&Proposal| p.state == ProposalState::Pending && is_plan_rewrite(p) && matches!(p.origin, Origin::Run { .. });
-            if let Some(edited) = found.iter().filter(waiting).find(|p| proposals::person_edited_rewrite(p)) {
-                return Ok(Made::Gap(format!("A description update you edited is already waiting on {} (draft {}). Approve or skip it, then draft the plan again.", item.key, edited.id)));
+            if found.iter().filter(waiting).any(proposals::person_edited_rewrite) {
+                return Ok(Made::Gap(format!("A description update you edited is already waiting on {}. Approve or skip it, then draft the plan again.", item.key)));
             }
             let at = Utc::now();
             for older in found.iter().filter(waiting) {
@@ -372,7 +372,7 @@ mod tests {
         fx.core.save_run(&run).await.unwrap();
         assert!(fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().is_none());
         let why = fx.core.draft_run_plan_description(&run.id).await.unwrap_err().to_string();
-        assert!(why.contains("you edited") && why.contains(&first.id), "{why}");
+        assert!(why.contains("you edited") && why.contains("CA-1") && !why.contains(&first.id), "names the ticket, never the draft's id: {why}");
         let later = plan_with(&fx, "1. Another run's idea.").await;
         assert!(fx.core.auto_draft_run_plan_description(&later.id).await.unwrap().is_none(), "another run's plan doesn't replace it either");
         let kept = fx.core.proposal(&first.id).await.unwrap().unwrap();

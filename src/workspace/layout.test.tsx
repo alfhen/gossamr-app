@@ -6,7 +6,14 @@ import { ALL, and } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, PRESETS, showsEntry, visibleChips, withProject } from "./filters";
 import { Header, ProjectMenu, ViewSegment } from "./Header";
-import { Rail, RailTip } from "./Rail";
+import { HOLD_ALL_NOTE, Rail, RailButton, RailTip } from "./Rail";
+import { COMPOSER_CLEAR, ToastHost, toastPlacement } from "./ToastHost";
+import { useToasts } from "./toasts";
+import { MORE_BUTTON, tabWindow } from "./TabBar";
+import { canvasRoom } from "./Workspace";
+import { useAgentsFlag } from "./agentsFlag";
+import { useWorkstreams } from "./workstreamsStore";
+import type { WorkstreamView } from "../types";
 import { SavedViewsPanel, type SavedViewsPanelProps } from "./SavedViews";
 import { buildTabItems } from "./tabItems";
 import { useTabs, type Tab } from "./tabsStore";
@@ -167,5 +174,91 @@ describe("header and rail", () => {
     const out = renderToStaticMarkup(<RailTip label="Search" hint="⌘K" at={{ x: 66, y: 20 }} />);
     expect(out).toContain('role="tooltip"');
     expect(out).toContain("⌘K");
+  });
+});
+
+describe("nothing covers anything", () => {
+  it("shows one toast at a time, with how many wait behind it", () => {
+    vi.useFakeTimers();
+    try {
+      useToasts.getState().push("Agent started", "info");
+      useToasts.getState().push("Watching 4 repositories", "info");
+      Object.assign(useToasts.getInitialState(), { toasts: useToasts.getState().toasts });
+      const out = renderToStaticMarkup(<ToastHost />);
+      expect(out.match(/data-toast="true"/g)).toHaveLength(1);
+      expect(out).toContain("Agent started");
+      expect(out).not.toContain("Watching 4 repositories");
+      expect(out).toContain("+1 more");
+    } finally {
+      useToasts.getState().clear();
+      Object.assign(useToasts.getInitialState(), { toasts: [] });
+      vi.useRealTimers();
+    }
+  });
+
+  it("puts toasts bottom right of the canvas, above the launcher and left of the peek, and in Pip home's Steps column", () => {
+    const canvas = toastPlacement("workspace", 520);
+    expect(canvas.right).toBe("calc(520px + 1.25rem)");
+    expect(canvas.bottom).toContain("var(--ws-launcher-clear, 0px)");
+    expect(canvas.bottom).toContain("var(--ws-footer-h, 2rem)");
+    expect(canvas).not.toHaveProperty("top");
+    expect(toastPlacement("agents", 0).right).toBe("calc(0px + 1.25rem)");
+    // Pip home: inside the Steps column, which is at least 240px wide, or above the composer when a peek covers it.
+    const home = toastPlacement("pip", 0);
+    expect(home.right).toBe(16);
+    expect(Number(home.maxWidth)).toBeLessThanOrEqual(240 + 2 * 16 + 16);
+    expect(toastPlacement("pip", 520).bottom).toContain(`${COMPOSER_CLEAR}px`);
+    expect(toastPlacement("pip", 520).right).toBe("calc(520px + 1.25rem)");
+  });
+
+  it("shows a run of whole tabs that always holds the active one, and ends where the last whole tab does", () => {
+    // Five 100px tabs, 2px apart: 0..100, 102..202, 204..304, 306..406, 408..508.
+    const spans = [0, 1, 2, 3, 4].map((i) => ({ left: i * 102, size: 100 }));
+    expect(tabWindow(spans, 600, 0, 4)).toEqual({ start: 0, end: 4, offset: 0 });
+    // Room for two whole tabs once the 'more' buttons are in: never a third cut short.
+    const room = 2 * MORE_BUTTON + 250;
+    expect(tabWindow(spans, room, 0, 0)).toEqual({ start: 0, end: 1, offset: 0, width: 202 });
+    // The strip narrowing (the peek and the Pip pane opening) with the last tab active brings it in, not the first two.
+    expect(tabWindow(spans, room, 0, 4)).toEqual({ start: 3, end: 4, offset: 306, width: 202 });
+    expect(tabWindow(spans, room, 3, 1)).toEqual({ start: 1, end: 2, offset: 102, width: 202 });
+    // Paging on with no tab to follow keeps the start the person chose, filling back from the last tab.
+    expect(tabWindow(spans, room, 2, -1)).toEqual({ start: 2, end: 3, offset: 204, width: 202 });
+    expect(tabWindow(spans, room, 9, -1)).toEqual({ start: 3, end: 4, offset: 306, width: 202 });
+    expect(tabWindow([], 100, 0, -1)).toEqual({ start: 0, end: 0, offset: 0 });
+  });
+
+  it("makes room for the peek beside the workspace canvas only", () => {
+    expect(canvasRoom("workspace", true, 520)).toBe(520);
+    expect(canvasRoom("workspace", false, 520)).toBe(0);
+    expect(canvasRoom("agents", true, 520)).toBe(0);
+  });
+
+  it("names every rail button", () => {
+    expect(renderToStaticMarkup(<RailButton label="Pip" onClick={vi.fn()}>x</RailButton>)).toContain('aria-label="Pip"');
+    const out = renderToStaticMarkup(<Rail />);
+    const buttons = out.match(/<button[^>]*>/g) ?? [];
+    expect(buttons.length).toBeGreaterThan(5);
+    for (const b of buttons) expect(b).toMatch(/aria-label="[^"]+"/);
+    expect(out).not.toContain("⌕");
+  });
+
+  it("draws Hold all as a pause icon with a note on what it does", () => {
+    const flag = useAgentsFlag.getInitialState();
+    const ws = useWorkstreams.getInitialState();
+    const before = { enabled: flag.enabled, list: ws.list };
+    const view = { workstream: { id: "ws-1", closedAt: null, mode: "manage", heldReason: null } } as unknown as WorkstreamView;
+    Object.assign(flag, { enabled: true });
+    Object.assign(ws, { list: [view] });
+    try {
+      const out = renderToStaticMarkup(<Rail />);
+      const hold = /<button[^>]*aria-label="Hold all workstreams"[^>]*>(.*?)<\/button>/s.exec(out)![1];
+      expect(hold).toContain("<svg");
+      expect(hold).not.toContain("⏸");
+      expect(HOLD_ALL_NOTE).toMatch(/agents carry on/);
+      for (const b of out.match(/<button[^>]*>/g) ?? []) expect(b).toMatch(/aria-label="[^"]+"/);
+    } finally {
+      Object.assign(flag, { enabled: before.enabled });
+      Object.assign(ws, { list: before.list });
+    }
   });
 });

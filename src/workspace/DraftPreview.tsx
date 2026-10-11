@@ -257,7 +257,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
         if (pointer.current) return void window.addEventListener("mouseup", () => setTimeout(() => setArmed(false), 0), { once: true, capture: true });
         setArmed(false);
       }}
-      className={`overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "applied" ? "opacity-70" : state === "skipped" || state === "retired" ? "opacity-45" : ""}`}
+      className={`scroll-my-2 overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "applied" ? "opacity-70" : state === "skipped" || state === "retired" ? "opacity-45" : ""}`}
     >
       <div className={`flex items-center gap-2 px-2.5 py-1.5 text-sm font-semibold ${HEADER[state]}`}>
         <span aria-hidden>{ICON[p.intent.type]}</span>

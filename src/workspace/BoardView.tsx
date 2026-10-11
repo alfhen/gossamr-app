@@ -238,7 +238,7 @@ export function BoardView({ tab, items }: CanvasProps) {
                       {column.status.name}
                       <span className="ml-auto font-semibold text-ws-ink3">{column.items.length}</span>
                     </div>
-                    <div className="-m-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-1">
+                    <div className="-m-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-1 pb-[calc(var(--ws-launcher-clear,0px)+4px)]">
                       {ghosts.map((g) => (
                         <GhostCard key={g.draft.id} item={g.item} draft={g.draft} onApprove={(d) => cards.cardProps(g.item).onApprove(d)} onSkip={(d) => cards.cardProps(g.item).onSkip(d)} />
                       ))}

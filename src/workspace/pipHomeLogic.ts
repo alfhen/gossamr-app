@@ -1,7 +1,7 @@
 import { inWorkstreamPane, targetOf, workstreamOf } from "../lib/proposals";
 import { heldText } from "../lib/workstreamHold";
 import { byQueue, STAGE_LABEL } from "../lib/workstreamStage";
-import { HELD_BUDGET, HELD_DAILY, TRIPWIRE } from "../types";
+import { HELD_BUDGET, HELD_DAILY } from "../types";
 import type { BasisField, CodeChange, Intent, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
 import { needsPerson, stateView, type Tone } from "./agentsLogic";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
@@ -10,13 +10,15 @@ import { runWorkstream } from "./workstreamsStore";
 
 /** Pure helpers behind Pip home's workstream rows and its Needs you tray. They read the live stores' values and decide nothing. */
 
-/** What a workstream's held banner says, shortened for a row or the tray: "Held: budget", "Held by you", "Held: tripwire, …". */
+/**
+ * What a workstream's held banner says, shortened for a row or the tray: "Held: budget", "Held by you", "Held: the
+ * ticket's description changed in Jira". A safety hold reads as the banner does, in plain words.
+ */
 export function shortHeld(reason: string | null | undefined, drifted?: readonly BasisField[] | null): string | null {
   const text = heldText(reason, drifted);
   if (!text || !reason) return null;
   if (reason === HELD_BUDGET) return "Held: budget";
   if (reason === HELD_DAILY) return "Held: daily turns";
-  if (reason.startsWith(TRIPWIRE)) return `Held: tripwire, ${text.replace(/^Held: /, "")}`;
   return text;
 }
 
@@ -318,6 +320,21 @@ export function stepChips(runs: readonly Run[], events: readonly Pick<Workstream
       pr: kind === "build" ? buildPullRequest(own, changes) : null,
     };
   });
+}
+
+/**
+ * The step the rail points the person at next, from its chips (in `STEP_KINDS` order): the furthest step that has a run,
+ * while its newest run hasn't finished well; once it has, the step after it. The first step when nothing has run, and
+ * null once Verify is done.
+ */
+export function nextStep(chips: readonly Pick<StepChip, "kind" | "newest">[]): RunKind | null {
+  let furthest = -1;
+  chips.forEach((c, i) => {
+    if (c.newest) furthest = i;
+  });
+  if (furthest < 0) return chips[0]?.kind ?? null;
+  if (chips[furthest].newest?.state !== "done") return chips[furthest].kind;
+  return chips[furthest + 1]?.kind ?? null;
 }
 
 /**

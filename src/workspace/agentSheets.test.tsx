@@ -106,6 +106,8 @@ describe("the run sheet, by state", () => {
     expect(html).not.toContain('role="alert"');
     expect(html).not.toMatch(/stuck/i);
     expect(sheet(run("working", { lastProgressAt: iso(29) }))).not.toContain("Quiet for");
+    expect(sheet(run("working", { lastProgressAt: iso(247 * 60) }))).toContain("Quiet for 10 days");
+    expect(sheet(run("working", { lastProgressAt: iso(247 * 60) }))).not.toMatch(/\d{3,} h\b/);
   });
 
   describe("a failed launch the person can fix", () => {

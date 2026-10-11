@@ -169,7 +169,7 @@ export function HomeConversation({ workstream, footer = null }: { workstream: Wo
   const attached = useAttachments();
   const drop = useFileDrop((files) => void attached.add(files));
   const proposals = useConversationDrafts(conversation, workstream);
-  const { chips, scene, label } = usePipChips(workstream);
+  const { chips, primary, scene, label } = usePipChips(workstream);
   return (
     <section aria-label="Conversation" data-pip-root {...drop.handlers} className="relative flex min-h-0 min-w-0 flex-col bg-ws-win">
       {drop.over && (
@@ -186,7 +186,7 @@ export function HomeConversation({ workstream, footer = null }: { workstream: Wo
           <ConversationLine conversation={conversation} workstream={workstream} />
         </div>
       </header>
-      <PipConversation key={conversation} conversation={conversation} proposals={proposals} />
+      <PipConversation key={conversation} conversation={conversation} proposals={proposals} primary={primary} />
       <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} footer={footer} />
     </section>
   );

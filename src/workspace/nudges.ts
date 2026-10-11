@@ -5,7 +5,7 @@ import type { Route } from "./tabsStore";
 
 export type NudgeKind = "empty-filter" | "large-list" | "unassigned-view" | "waiting" | "blocked" | "stale" | "unowned" | "run-needs" | "run-done" | "run-failed";
 
-export type NudgeAction = { type: "open" } | { type: "ask"; prompt: string } | { type: "filter"; filter: WorkFilter; note: string } | { type: "open-run"; id: string };
+export type NudgeAction = { type: "open" } | { type: "ask"; prompt: string; /** The short line the bubble shows; with it the question is sent straight away. */ shown?: string } | { type: "filter"; filter: WorkFilter; note: string } | { type: "open-run"; id: string };
 
 export interface Nudge {
   /** What dismissal is remembered under: the kind, plus the ticket for the ones about a ticket. */

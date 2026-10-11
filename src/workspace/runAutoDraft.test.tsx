@@ -172,7 +172,9 @@ describe("the sample Pip", () => {
     expect(script.steps).toContain("Read the rest of its result");
     expect(script.revise ?? null).toBeNull();
     expect(script.draft).toBeNull();
-    expect(script.text).toContain(draft.id);
+    expect(script.text).toContain("the comment draft on CA-");
+    for (const id of [draft.id, run.id, run.shortId ?? run.id]) expect(script.text).not.toContain(id);
+    expect(script.text).not.toMatch(/\b(get|list|propose|revise|retire|set)_[a-z_]+/);
   });
 
   it("revises the draft the run left when asked, keeping it a draft the person approves", async () => {
@@ -291,7 +293,8 @@ describe("what the person sees", () => {
     const agent = html(pending({ createdBy: "agent", origin: { type: "run", runId: "r1", shortId: "ab12cd34", workstream: "ws-1" } }));
     expect(agent).toContain('data-created-by="agent"');
     expect(agent).toContain("Drafted by an agent");
-    expect(agent).toContain("From agent run");
+    expect(agent).toMatch(/From <button[^>]*>the CA-412 run<\/button>|From <b>the CA-412 run<\/b>/);
+    expect(agent).not.toContain("ab12cd34");
     for (const other of [pending(), pending({ createdBy: "pip", origin: { type: "chat", requestId: "q1" } })]) {
       expect(html(other)).not.toContain("Drafted by an agent");
     }

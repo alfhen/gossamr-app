@@ -17,8 +17,13 @@ test("a draft a run left shows it was drafted by an agent and can still be appro
   await expect(draft).toBeVisible();
   const badge = draft.locator('[data-created-by="agent"]');
   await expect(badge).toHaveText("Drafted by an agent");
-  await expect(draft.locator("[data-provenance=run]")).toContainText("From agent run");
+  // Named by ticket and step, never by the run's id, and the name opens the run.
+  const from = draft.locator("[data-provenance=run]");
+  await expect(from).toContainText("From the CA-401 plan");
+  await expect(from).not.toContainText(/\b[0-9a-f]{8}\b/);
   await expect(draft.getByRole("button", { name: "Update description" })).toBeEnabled();
+  await from.getByRole("button", { name: "the CA-401 plan" }).click();
+  await expect(page.getByRole("dialog", { name: "Agent run" })).toBeVisible();
 });
 
 test("a draft Pip made shows Proposed by Pip and no agent badge", async ({ page }) => {

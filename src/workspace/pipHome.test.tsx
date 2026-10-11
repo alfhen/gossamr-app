@@ -129,12 +129,18 @@ describe("Pip home", () => {
     // The controls are the step rail's on Pip home, so there is one Manage switch on screen.
     expect(html).not.toContain("Manage this workstream");
     expect(html).toContain("data-empty-workstream");
+    // Its first suggestion is the intro's one button, not a chip as well.
+    expect(html).toMatch(/data-intro-action="true"[^>]*>Investigate CA-401<\/button>/);
+    expect(html.match(/>Investigate CA-401</g)).toHaveLength(1);
+    expect(html).not.toContain("/stop R1");
     const steps = renderToStaticMarkup(<StepsColumn workstream={noted} />);
     expect(steps).toContain("Pip&#x27;s notes");
     expect(steps).toContain("Plan first, then build.");
     expect(steps).toContain("Manage this workstream");
     expect(steps.indexOf("Plan first, then build.")).toBeLessThan(steps.indexOf("Manage this workstream"));
     for (const step of ["investigate", "triage", "plan", "build", "review", "verify"]) expect(steps).toContain(`data-step="${step}"`);
+    expect(steps).toContain('data-step-next="investigate"');
+    expect(steps.match(/data-step-quiet="true"/g)).toHaveLength(5);
     expect(renderToStaticMarkup(<StepsColumn workstream={view} />)).toContain("No notes yet.");
   });
 });

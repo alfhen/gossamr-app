@@ -9,7 +9,8 @@ import { allContainers, useWorkspace } from "../workspaceStore";
 import { createdItemKey, draftAfter, draftItem, draftKey, editFor, fieldsOf, ITEM_KINDS, placeOf, waitingCreates, type DraftFields, type DraftPlace } from "./draftTicket";
 import { askPip } from "./askPip";
 import { openTicketByKey } from "./jump";
-import { finishWithPipPrompt } from "./runSheetLogic";
+import { pipAsks } from "./runSheetLogic";
+import { FromRun } from "./RunProvenance";
 import { useRuns } from "./runsStore";
 import { usePrefs } from "./prefs";
 import { PeekView, type DraftSlots, type PeekViewProps } from "./PeekSheet";
@@ -104,14 +105,7 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
           <span>New ticket draft</span>
           {p.origin.type === "run" && (
             <span className="font-normal">
-              · From agent run{" "}
-              {onOpenRun ? (
-                <button type="button" onClick={onOpenRun} title="Open the run this draft came from" className="rounded px-1 font-semibold underline decoration-dotted hover:bg-ws-hover">
-                  {p.origin.shortId ?? "open it"}
-                </button>
-              ) : (
-                p.origin.shortId
-              )}
+              · <FromRun proposal={p} onOpen={onOpenRun} className="rounded px-1 font-semibold underline decoration-dotted hover:bg-ws-hover" />
             </span>
           )}
           <span className="font-normal">· not created yet</span>
@@ -269,7 +263,7 @@ const openRunOf = (p: Proposal) => p.origin.type === "run" && useRuns.getState()
 
 function finishWithPip(p: Proposal) {
   if (p.origin.type !== "run") return;
-  askPip(finishWithPipPrompt({ id: p.origin.runId }, p.id));
+  askPip(pipAsks.finish({ id: p.origin.runId }, p.id));
 }
 
 type Motion = Pick<DraftPeekViewProps, "motion" | "wide" | "width" | "onWide" | "onMotionEnd">;
