@@ -1,4 +1,4 @@
-import type { BasisField, Intent, ItemRef, Proposal, ProposalMaker } from "../types";
+import type { BasisField, Intent, ItemRef, Proposal, ProposalMaker, ReviewComment } from "../types";
 
 /** Fails to compile when a switch over a union misses a case, and throws if one slips through at run time. */
 export function unreachable(value: never): never {
@@ -20,6 +20,7 @@ export function targetOf(intent: Intent): ItemRef | null {
     case "startRun":
     case "followUp":
     case "runAnswer":
+    case "githubReview":
       return intent.item;
     case "create":
       return null;
@@ -31,9 +32,46 @@ export function targetOf(intent: Intent): ItemRef | null {
 /** Whether a draft is sent to a run with a button of its own rather than applied with `proposalsApprove`. */
 export const isRunDraft = (intent: Intent) => intent.type === "startRun" || intent.type === "followUp" || intent.type === "runAnswer";
 
-/** The drafts a screen that can only approve with `proposalsApprove` may offer: a run is approved with `runsApprove` after its prompt is shown, a follow-up with `runsSendFollowUp`, an answer with `runsAnswerDraft`. */
+/** Whether a draft is a review posted to GitHub with a button of its own, never applied with `proposalsApprove`. */
+export const isReviewDraft = (intent: Intent) => intent.type === "githubReview";
+
+/** The error a review draft keeps when GitHub said its lines no longer match the pull request, as `REVIEW_OUTDATED_NOTE` in `inbox/review_drafts.rs`. The card reads it as outdated. */
+export const REVIEW_OUTDATED_NOTE = "GitHub says this review's lines no longer match the pull request; it is outdated. Discard it or edit the comments and try again.";
+
+/** The error a review draft keeps when a post may have reached GitHub though no answer said so, as `REVIEW_MAYBE_POSTED_NOTE` in `inbox/review_drafts.rs`: the draft keeps `maybePosted`, and its next post looks on GitHub first. */
+export const REVIEW_MAYBE_POSTED_NOTE = "GitHub may have posted this review already; Gossamr checks the pull request before sending it again.";
+
+/** Why a review that may be on GitHub already isn't sent again once Gossamr looked and didn't find it, as `REVIEW_NOT_FOUND_NOTE` in `inbox/review_drafts.rs`: only Post anyway sends it. */
+export const REVIEW_NOT_FOUND_NOTE = "Gossamr looked on the pull request and didn't find the review it may have posted. Check the pull request; if the review isn't there, choose Post anyway to send it.";
+
+/** Why a review draft that changed since the person looked at it isn't posted, as `REVIEW_CHANGED` in `inbox/review_drafts.rs`. */
+export const REVIEW_CHANGED = "this review changed since you looked at it; read it again before posting";
+
+/** Why a person's edit of a review draft can't put a comment somewhere new, as `REVIEW_EDIT_KEEPS_POSITIONS` in `proposals.rs`. */
+export const REVIEW_EDIT_KEEPS_POSITIONS = "an edit can't move a comment or add one at a new line; ask Pip to add it";
+
+/** Why Pip can't revise a review draft the person edited, as `REVIEW_IS_THE_USERS` in `proposals.rs`. */
+export const REVIEW_IS_THE_USERS = "the user edited this review draft, so Pip can't change it any more";
+
+/** Why Pip can't put a review comment at `path:line`, as `Core::revise_review_as_pip` refuses it. */
+export const offTheDiff = (path: string, line: number) => `${path}:${line} isn't a line the pull request's diff shows; call get_proposal to see the lines it has`;
+
+type ReviewText = { summary: string; comments: ReviewComment[] };
+
+/** What is wrong with the person's edit of a review draft, as `edit_noted` refuses it: they reword and drop, never move or add a comment, and nothing is left blank. */
+export function reviewEditProblem(was: ReviewText, next: ReviewText): string | null {
+  if (!next.summary.trim()) return "a review's summary can't be empty";
+  if (next.comments.some((c) => !c.body.trim())) return "a review's comment can't be empty";
+  const at = (c: ReviewComment) => `${c.path}\n${c.line}\n${c.side}`;
+  const known = new Set(was.comments.map(at));
+  if (next.comments.some((c) => !known.has(at(c)))) return REVIEW_EDIT_KEEPS_POSITIONS;
+  if (new Set(next.comments.map(at)).size !== next.comments.length) return "there are two comments on one line; merge them into one";
+  return null;
+}
+
+/** The drafts a screen that can only approve with `proposalsApprove` may offer: a run is approved with `runsApprove` after its prompt is shown, a follow-up with `runsSendFollowUp`, an answer with `runsAnswerDraft`, and a review is posted to GitHub with its own button. */
 export function withoutRunDrafts(proposals: Proposal[]): Proposal[] {
-  return proposals.filter((p) => !isRunDraft(p.intent));
+  return proposals.filter((p) => !isRunDraft(p.intent) && !isReviewDraft(p.intent));
 }
 
 /** Drafts Pip made while answering one question, oldest first so they read in the order they were proposed. */
@@ -91,7 +129,7 @@ export const REPLACED_REASON = "Replaced by a newer draft";
 
 /**
  * What a newer draft of the same kind replaces in a workstream: one move, one description update, one triage update and
- * one breakdown per ticket, and one answer per run. Comments accumulate, and the other kinds have rules of their own. As
+ * one breakdown per ticket, one answer per run, and one review per pull request. Comments accumulate, and the other kinds have rules of their own. As
  * `Intent::supersession_key`.
  */
 export function supersessionKey(intent: Intent): string | null {
@@ -104,6 +142,8 @@ export function supersessionKey(intent: Intent): string | null {
       return `subtasks:${intent.parent.externalId}`;
     case "runAnswer":
       return `runAnswer:${intent.runId}`;
+    case "githubReview":
+      return `githubReview:${intent.repo.toLowerCase()}#${intent.number}`;
     case "comment":
     case "create":
     case "link":

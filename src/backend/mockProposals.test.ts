@@ -5,7 +5,7 @@ import type { Intent, ScreenContext } from "../types";
 import type { AskRequest } from "./claude";
 import { mockAsk, mockPipEvents } from "./mockPip";
 import { mockPipTurns } from "./mockPipTurns";
-import { PLAN_IS_THE_USERS, REPLACED_REASON, WORKSTREAM_PENDING_CAP } from "../lib/proposals";
+import { PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_EDIT_KEEPS_POSITIONS, WORKSTREAM_PENDING_CAP } from "../lib/proposals";
 import { MockBackend } from "./mock";
 import { MockProposals } from "./mockProposals";
 import { bodyChange } from "./mockMarkdown";
@@ -253,5 +253,31 @@ describe("mock draft hygiene in Pip's words", () => {
     // In the person's words: no workstream id or tool names.
     expect(said).toBe("I couldn't draft that: this workstream already has 8 drafts waiting for you. Decide some and I'll draft more");
     expect(b.proposals.list().filter((p) => p.intent.type === "transition")).toEqual([]);
+  });
+});
+
+describe("the person's edit of a review draft", () => {
+  const at = (line: number, body: string) => ({ path: "src/consumer/retry.ts", line, side: "RIGHT" as const, body });
+  const review: Intent = { type: "githubReview", connectionId: "github:sample", item: ref, runId: "run-1", repo: "acme/webshop", number: 218, commitSha: "a1b2c3d4e5f6", summary: "Gossamr review of #218.", comments: [at(42, "No backoff."), at(17, "Nit: name.")] };
+
+  it("rewords and drops comments, keeps the pull request and commit, and is marked Edited", async () => {
+    const proposals = new MockProposals(async () => []);
+    const p = proposals.fromRun(review, null, { type: "run", runId: "run-1", shortId: "abc" });
+    const edited = await proposals.edit(p.id, { type: "githubReview", comments: [at(42, " Please add a backoff. ")] });
+    expect(edited.intent).toEqual({ ...review, comments: [at(42, "Please add a backoff.")] });
+    expect(edited.revisions[edited.revisions.length - 1]?.note).toBe("Edited");
+    const summary = await proposals.edit(p.id, { type: "githubReview", summary: " Mine. " });
+    expect(summary.intent.type === "githubReview" && [summary.intent.summary, summary.intent.comments.length]).toEqual(["Mine.", 1]);
+  });
+
+  it("refuses to move a comment, add one or leave anything blank, and changes nothing", async () => {
+    const proposals = new MockProposals(async () => []);
+    const p = proposals.fromRun(review, null, { type: "run", runId: "run-1", shortId: "abc" });
+    await expect(proposals.edit(p.id, { type: "githubReview", comments: [at(43, "x")] })).rejects.toThrow(REVIEW_EDIT_KEEPS_POSITIONS);
+    await expect(proposals.edit(p.id, { type: "githubReview", comments: [at(42, "x"), { ...at(42, "y"), side: "LEFT" }] })).rejects.toThrow(REVIEW_EDIT_KEEPS_POSITIONS);
+    await expect(proposals.edit(p.id, { type: "githubReview", summary: "  " })).rejects.toThrow("summary can't be empty");
+    await expect(proposals.edit(p.id, { type: "githubReview", comments: [at(42, " ")] })).rejects.toThrow("comment can't be empty");
+    expect(proposals.get(p.id)!.intent).toEqual(review);
+    expect(proposals.get(p.id)!.revisions).toEqual([]);
   });
 });

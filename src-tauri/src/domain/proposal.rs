@@ -104,6 +104,65 @@ pub enum Intent {
         #[serde(default)]
         question: Option<String>,
     },
+    /// A plain comment review of pull request `number` in `repo` at `commit_sha`, built by Gossamr from a Review run's
+    /// findings. Never applied through a tracker: only the person's approval posts it, and only ever as a comment
+    /// review. `item` is the run's ticket, for grouping only; `connection_id` is the code host's.
+    #[serde(rename_all = "camelCase")]
+    GithubReview {
+        connection_id: String,
+        item: Option<ItemRef>,
+        run_id: String,
+        repo: String,
+        number: u64,
+        commit_sha: String,
+        summary: String,
+        comments: Vec<ReviewComment>,
+    },
+}
+
+/// Which side of a diff a review comment sits on: the old file's lines or the new file's. Spelled as GitHub spells it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum DiffSide {
+    Left,
+    Right,
+}
+
+/// One inline comment of a review draft, at a line of the pull request's diff.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewComment {
+    pub path: String,
+    pub line: u32,
+    pub side: DiffSide,
+    pub body: String,
+}
+
+/// The review an approved `GithubReview` became on the host.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostedReview {
+    pub id: u64,
+    pub url: String,
+    pub at: DateTime<Utc>,
+}
+
+/// A review Gossamr sent to GitHub without learning whether it went through: the post failed in transit or on GitHub's
+/// side, or Gossamr closed while it was out. Kept apart from the draft's `error`, so an edit or a revision doesn't
+/// clear it, until GitHub is seen to have the review or the person chooses to post anyway.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaybePosted {
+    /// When it was sent.
+    pub at: DateTime<Utc>,
+    /// The commit it was sent against.
+    pub commit_sha: String,
+    /// The summary it was sent with, by which it is found on the pull request whatever the draft says now.
+    pub summary: String,
+    /// When Gossamr last looked on the pull request for it and didn't find it, or couldn't look. Set, the person may
+    /// choose to post anyway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<DateTime<Utc>>,
 }
 
 impl Intent {
@@ -113,13 +172,14 @@ impl Intent {
             Intent::Comment { item, .. } | Intent::Transition { item, .. } | Intent::Update { item, .. } | Intent::Rewrite { item, .. } => Some(item),
             Intent::Link { from, .. } => Some(from),
             Intent::Subtasks { parent, .. } => Some(parent),
-            Intent::StartRun { item, .. } | Intent::FollowUp { item, .. } | Intent::RunAnswer { item, .. } => item.as_ref(),
+            Intent::StartRun { item, .. } | Intent::FollowUp { item, .. } | Intent::RunAnswer { item, .. } | Intent::GithubReview { item, .. } => item.as_ref(),
             Intent::Create { .. } => None,
         }
     }
 
     /// What a newer draft of the same kind replaces in a workstream: one move, one description update, one triage
-    /// update and one breakdown per ticket, and one answer per run. Comments legitimately accumulate, and new tickets,
+    /// update and one breakdown per ticket, one answer per run, and one review per pull request (its repository
+    /// compared without regard to case). Comments legitimately accumulate, and new tickets,
     /// links, run starts and follow-ups have rules of their own, so they have no key.
     pub fn supersession_key(&self) -> Option<(&'static str, String)> {
         match self {
@@ -128,6 +188,7 @@ impl Intent {
             Intent::Update { item, .. } => Some(("update", item.external_id.clone())),
             Intent::Subtasks { parent, .. } => Some(("subtasks", parent.external_id.clone())),
             Intent::RunAnswer { run_id, .. } => Some(("runAnswer", run_id.clone())),
+            Intent::GithubReview { repo, number, .. } => Some(("githubReview", format!("{}#{number}", repo.to_lowercase()))),
             Intent::Comment { .. } | Intent::Create { .. } | Intent::Link { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } => None,
         }
     }
@@ -325,6 +386,12 @@ pub struct Proposal {
     /// The newer draft of the same kind that replaced this one in its workstream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<String>,
+    /// The review an approved `GithubReview` posted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posted: Option<PostedReview>,
+    /// The post of a `GithubReview` whose outcome isn't known; its next post looks for it on GitHub first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maybe_posted: Option<MaybePosted>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -409,7 +476,7 @@ pub fn reconcile(proposal: &Proposal, items: &[WorkItem], ctx: &ReconcileContext
             if exists { retire("the link already exists") } else { Verdict::Keep }
         }
         Intent::Rewrite { title, body, .. } => reconcile_rewrite(title.as_ref(), body.as_ref(), current),
-        Intent::Subtasks { .. } | Intent::Create { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } => Verdict::Keep,
+        Intent::Subtasks { .. } | Intent::Create { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } | Intent::GithubReview { .. } => Verdict::Keep,
     }
 }
 
@@ -515,6 +582,8 @@ mod tests {
             error: None,
             run: None,
             superseded_by: None,
+            posted: None,
+            maybe_posted: None,
         }
     }
 
@@ -856,5 +925,68 @@ mod tests {
         assert_eq!((start.workstream(), start.origin.kind()), (Some("w2"), "board"));
         let query: ProposalQuery = serde_json::from_value(serde_json::json!({ "workstream": "w1" })).unwrap();
         assert_eq!(query.workstream.as_deref(), Some("w1"));
+    }
+
+    fn review(repo: &str, number: u64) -> Intent {
+        Intent::GithubReview {
+            connection_id: "github:ann".into(),
+            item: Some(item_ref("1")),
+            run_id: "run-1".into(),
+            repo: repo.into(),
+            number,
+            commit_sha: "a1b2c3d4e5f6".into(),
+            summary: "Gossamr review of #218.".into(),
+            comments: vec![
+                ReviewComment { path: "src/consumer/retry.ts".into(), line: 42, side: DiffSide::Right, body: "**Blocking:** no backoff.".into() },
+                ReviewComment { path: "src/old.ts".into(), line: 3, side: DiffSide::Left, body: "Removed too early.".into() },
+            ],
+        }
+    }
+
+    #[test]
+    fn a_review_serialises_with_a_github_review_tag_and_github_s_sides_and_reads_back() {
+        let intent = review("acme/webshop", 218);
+        let json = serde_json::to_value(&intent).unwrap();
+        assert_eq!(json["type"], "githubReview");
+        assert_eq!((json["connectionId"].as_str(), json["runId"].as_str(), json["commitSha"].as_str()), (Some("github:ann"), Some("run-1"), Some("a1b2c3d4e5f6")));
+        assert_eq!(json["comments"][0]["side"], "RIGHT");
+        assert_eq!(json["comments"][1]["side"], "LEFT");
+        assert_eq!(json["comments"][0]["line"], 42);
+        assert_eq!(serde_json::from_value::<Intent>(json).unwrap(), intent);
+        assert_eq!(intent.target(), Some(&item_ref("1")));
+        assert!(intent.covers(&review("acme/webshop", 218)));
+    }
+
+    #[test]
+    fn a_review_is_kept_by_reconcile_whatever_its_ticket_does() {
+        let item = work_item("1", "todo");
+        let mut moved = work_item("1", "done");
+        moved.comment_count = 5;
+        assert_eq!(run(&proposal(review("acme/webshop", 218), &item), &[moved]), Verdict::Keep);
+    }
+
+    #[test]
+    fn one_review_per_pull_request_whatever_the_case_of_its_repository() {
+        let key = |r: &str, n| review(r, n).supersession_key();
+        assert_eq!(key("acme/webshop", 218), Some(("githubReview", "acme/webshop#218".to_string())));
+        assert_eq!(key("Acme/WebShop", 218), key("acme/webshop", 218));
+        assert_ne!(key("acme/webshop", 219), key("acme/webshop", 218));
+        assert_ne!(key("acme/other", 218), key("acme/webshop", 218));
+    }
+
+    #[test]
+    fn proposals_stored_before_reviews_were_posted_still_read() {
+        let p = proposal(review("acme/webshop", 218), &work_item("1", "todo"));
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("posted").is_none() && json.get("maybePosted").is_none(), "an unset field isn't written");
+        assert_eq!(serde_json::from_value::<Proposal>(json).unwrap(), p);
+        let unsure = Proposal { maybe_posted: Some(MaybePosted { at: now(), commit_sha: "a1b2c3d4e5f6".into(), summary: "Sent.".into(), checked_at: None }), ..p.clone() };
+        let json = serde_json::to_value(&unsure).unwrap();
+        assert_eq!((json["maybePosted"]["commitSha"].as_str(), json["maybePosted"]["summary"].as_str()), (Some("a1b2c3d4e5f6"), Some("Sent.")));
+        assert_eq!(serde_json::from_value::<Proposal>(json).unwrap(), unsure);
+        let posted = Proposal { posted: Some(PostedReview { id: 7, url: "https://github.com/acme/webshop/pull/218#pullrequestreview-7".into(), at: now() }), ..p };
+        let json = serde_json::to_value(&posted).unwrap();
+        assert_eq!(json["posted"]["id"], 7);
+        assert_eq!(serde_json::from_value::<Proposal>(json).unwrap(), posted);
     }
 }

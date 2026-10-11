@@ -331,6 +331,7 @@ impl WorkTracker for JiraTracker {
             Intent::StartRun { .. } => Err(Error::Proposal("a run is approved with its own button, not applied to Jira".into())),
             Intent::FollowUp { .. } => Err(Error::Proposal("a follow-up is sent back with its own button, not applied to Jira".into())),
             Intent::RunAnswer { .. } => Err(Error::Proposal("an answer is sent to the agent with its own button, not applied to Jira".into())),
+            Intent::GithubReview { .. } => Err(Error::Proposal("a review is posted to GitHub with its own button, not applied to Jira".into())),
             Intent::Subtasks { parent, summaries } => {
                 let (keys, error) = self.client.create_subtasks(scope, &parent.external_id, summaries).await?;
                 let connection = self.connection_id.as_str();

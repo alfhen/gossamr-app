@@ -462,3 +462,260 @@ async fn listed_pull_requests_carry_their_head_repository_too() {
     let found = host(&server).pull_requests("acme/webshop", since).await.unwrap();
     assert_eq!(found.changes[0].head_repo.as_deref(), Some("mallory/webshop"));
 }
+
+#[tokio::test]
+async fn a_review_reads_the_files_of_a_pull_request_with_long_patches_cut_at_a_whole_line_and_nothing_else() {
+    let hunks: serde_json::Value = serde_json::from_str(include_str!("../../../../src/lib/diffHunks.fixtures.json")).unwrap();
+    let retry = hunks["patches"]["retry"].as_str().unwrap();
+    // 25_002 lines of "+line\n" is far past the limit, so the cut lands inside one and it is dropped.
+    let long: String = format!("@@ -0,0 +1,30000 @@\n{}", "+line\n".repeat(25_002));
+    let page1 = serde_json::json!([{ "filename": "src/consumer/retry.ts", "status": "modified", "additions": 6, "deletions": 1, "patch": retry }]);
+    let page2 = serde_json::json!([{ "filename": "src/generated.ts", "status": "added", "additions": 30000, "deletions": 0, "patch": long }, { "filename": "docs/logo.png", "status": "added" }]);
+    let server = serve(vec![
+        ("/repos/acme/webshop/pulls/218/files?per_page=100", vec![Reply::ok(&page1.to_string()).header("link", "</repos/acme/webshop/pulls/218/files?per_page=100&page=2>; rel=\"next\"")]),
+        ("/repos/acme/webshop/pulls/218/files?per_page=100&page=2", vec![Reply::ok(&page2.to_string())]),
+    ])
+    .await;
+    let files = host(&server).pull_files("acme/webshop", 218).await.unwrap();
+    assert_eq!(files.iter().map(|f| (f.path.as_str(), f.truncated)).collect::<Vec<_>>(), [("src/consumer/retry.ts", false), ("src/generated.ts", true), ("docs/logo.png", false)]);
+    assert_eq!(files[0].patch.as_deref(), Some(retry), "a patch under the limit is kept whole");
+    let cut = files[1].patch.as_deref().unwrap();
+    assert!(cut.chars().count() <= super::read::REVIEW_PATCH_LIMIT && !cut.ends_with('\n') && cut.ends_with("+line"), "cut at a whole line");
+    let shown = cut.lines().count() as u32 - 1;
+    use crate::codehost::diff::commentable;
+    use crate::domain::DiffSide;
+    assert!(commentable(cut, shown, DiffSide::Right));
+    assert!(!commentable(cut, shown + 1, DiffSide::Right), "nothing past the cut");
+    assert_eq!(files[2].patch, None);
+    let seen = server.seen.lock().unwrap().clone();
+    assert!(seen.iter().all(|s| s.method == "GET" && s.target.contains("/pulls/218/files")), "only the files list is read: {:?}", server.targets());
+    assert_eq!(seen.len(), 2);
+}
+
+const REVIEWS_POST: &str = "POST /repos/acme/webshop/pulls/218/reviews";
+
+fn review_comments() -> Vec<crate::domain::ReviewComment> {
+    use crate::domain::{DiffSide, ReviewComment};
+    vec![
+        ReviewComment { path: "src/consumer/retry.ts".into(), line: 42, side: DiffSide::Right, body: "**Blocking:** no backoff.".into() },
+        ReviewComment { path: "src/consumer/old.ts".into(), line: 7, side: DiffSide::Left, body: "Removed too early.".into() },
+    ]
+}
+
+#[tokio::test]
+async fn a_review_is_posted_once_as_a_comment_with_its_commit_summary_and_inline_comments() {
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::ok("{\"id\":901,\"html_url\":\"https://github.com/acme/webshop/pull/218#pullrequestreview-901\"}")])]).await;
+    let posted = host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "Gossamr review of #218.", &review_comments()).await.unwrap();
+    assert_eq!((posted.id, posted.url.as_str()), (901, "https://github.com/acme/webshop/pull/218#pullrequestreview-901"));
+    let seen = server.seen.lock().unwrap().clone();
+    let [one] = seen.as_slice() else { panic!("{:?}", server.targets()) };
+    assert_eq!((one.method.as_str(), one.target.as_str()), ("POST", "/repos/acme/webshop/pulls/218/reviews"));
+    let body: serde_json::Value = serde_json::from_str(&one.body).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "commit_id": "a1b2c3d4e5f6",
+            "body": "Gossamr review of #218.",
+            "event": "COMMENT",
+            "comments": [
+                { "path": "src/consumer/retry.ts", "line": 42, "side": "RIGHT", "body": "**Blocking:** no backoff." },
+                { "path": "src/consumer/old.ts", "line": 7, "side": "LEFT", "body": "Removed too early." }
+            ]
+        })
+    );
+    assert_eq!(one.headers.get("authorization").map(String::as_str), Some("Bearer tok"));
+}
+
+#[tokio::test]
+async fn a_review_that_fails_at_the_gateway_is_not_sent_again() {
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::status(502, "{\"message\":\"bad gateway\"}"), Reply::ok("{\"id\":1}")])]).await;
+    let err = host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
+    assert!(matches!(err, Error::CodeHost { status: 502, .. }), "{err}");
+    assert_eq!(server.targets().len(), 1, "a write is never repeated");
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::hang_up(), Reply::ok("{\"id\":1}")])]).await;
+    assert!(host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &[]).await.is_err());
+    assert_eq!(server.targets().len(), 1, "not even after a failure in transit");
+}
+
+#[tokio::test]
+async fn refused_reviews_read_plainly_and_a_403_means_the_repository_cannot_take_reviews() {
+    let server = serve(vec![
+        ("/repos/acme/webshop", vec![Reply::ok("{\"full_name\":\"acme/webshop\",\"name\":\"webshop\",\"private\":true,\"permissions\":{\"pull\":true,\"push\":true}}")]),
+        (REVIEWS_POST, vec![Reply::status(403, "{\"message\":\"Resource not accessible by personal access token\"}")]),
+        ("POST /repos/acme/webshop/pulls/219/reviews", vec![Reply::status(404, "{\"message\":\"Not Found\"}")]),
+        ("POST /repos/acme/webshop/pulls/220/reviews", vec![Reply::status(422, "{\"message\":\"Unprocessable Entity\",\"errors\":[\"Line could not be resolved\"]}")]),
+    ])
+    .await;
+    let host = host(&server);
+    assert!(host.review_access("acme/webshop").await.unwrap().can_post, "a fine-grained token with push may post");
+    let err = host.post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &[]).await.unwrap_err();
+    assert_eq!(err.to_string(), "GitHub refused to post the review: the token can't write to pull requests in acme/webshop. Open the PR view instead, or reconnect GitHub with write access.");
+    let access = host.review_access("acme/webshop").await.unwrap();
+    assert!(!access.can_post && access.reason.as_deref() == Some(err.to_string().as_str()), "the refusal wins over the permissions: {access:?}");
+    let err = host.post_review("acme/webshop", 219, "a1b2c3d4e5f6", "s", &[]).await.unwrap_err();
+    assert_eq!(err.to_string(), "GitHub couldn't find pull request #219 in acme/webshop, or the token can't see it.");
+    let err = host.post_review("acme/webshop", 220, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
+    let Error::ReviewOutdated(said) = &err else { panic!("{err:?}") };
+    assert!(said.contains("Line could not be resolved"), "{said}");
+    assert_eq!(server.targets().iter().filter(|t| t.ends_with("/reviews")).count(), 3, "each was sent once");
+}
+
+#[tokio::test]
+async fn a_422_that_isnt_about_the_reviews_lines_says_what_github_said_rather_than_outdated() {
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::status(422, "{\"message\":\"Unprocessable Entity\",\"errors\":[\"User can only have one pending review per pull request\"]}")])]).await;
+    let err = host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
+    let Error::CodeHost { status: 422, message } = &err else { panic!("{err:?}") };
+    assert_eq!(message, "GitHub didn't accept the review: User can only have one pending review per pull request.");
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::status(422, "{\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"commit_id is not part of the pull request\"}]}")])]).await;
+    let err = host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
+    assert!(matches!(&err, Error::ReviewOutdated(said) if said.contains("commit_id is not part of the pull request")), "{err:?}");
+}
+
+#[tokio::test]
+async fn githubs_words_in_a_refused_review_are_kept_on_one_line_without_control_characters_or_secrets_and_cut_short() {
+    let said = format!("Body is too long\\n\\u001b[31mred\\u001b[0m ghp_abcdefghijklmnopqrstuvwxyz0123456789 {}", "x ".repeat(400));
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::status(422, &format!("{{\"message\":\"Validation Failed\",\"errors\":[\"{said}\"]}}"))])]).await;
+    let err = host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
+    let Error::CodeHost { status: 422, message } = &err else { panic!("{err:?}") };
+    assert!(message.starts_with("GitHub didn't accept the review: Body is too long [31mred"), "{message}");
+    assert!(!message.chars().any(char::is_control) && !message.contains("ghp_abc"), "{message}");
+    assert!(message.chars().count() < 400, "{}", message.chars().count());
+}
+
+#[tokio::test]
+async fn a_post_refused_for_single_sign_on_isnt_remembered_as_the_repository_refusing_reviews() {
+    let server = serve(vec![
+        ("/repos/acme/webshop", vec![Reply::ok("{\"full_name\":\"acme/webshop\",\"name\":\"webshop\",\"private\":true,\"permissions\":{\"pull\":true,\"push\":true}}")]),
+        (REVIEWS_POST, vec![Reply::status(403, "{\"message\":\"Resource protected by organization SAML enforcement.\"}").header("x-github-sso", "required; url=https://github.com/orgs/acme/sso?authorization_request=1")]),
+    ])
+    .await;
+    let host = host(&server);
+    let err = host.post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &[]).await.unwrap_err();
+    assert!(err.to_string().contains("SAML single sign-on"), "{err}");
+    assert!(host.refused_reviews.lock().unwrap().is_empty(), "authorising single sign-on lifts it");
+    assert!(host.review_access("acme/webshop").await.unwrap().can_post);
+}
+
+#[tokio::test]
+async fn a_403_that_isnt_about_the_tokens_access_keeps_githubs_words_and_isnt_remembered() {
+    let server = serve(vec![
+        ("/repos/acme/webshop", vec![Reply::ok("{\"full_name\":\"acme/webshop\",\"name\":\"webshop\",\"private\":true,\"permissions\":{\"pull\":true,\"push\":true}}")]),
+        (REVIEWS_POST, vec![Reply::status(403, "{\"message\":\"Repository was archived so is read-only.\"}")]),
+    ])
+    .await;
+    let host = host(&server);
+    let err = host.post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &[]).await.unwrap_err();
+    let Error::CodeHost { status: 403, message } = &err else { panic!("{err:?}") };
+    assert!(message.contains("Repository was archived so is read-only"), "{message}");
+    assert_ne!(*message, super::write::no_write_access("acme/webshop"));
+    assert!(host.refused_reviews.lock().unwrap().is_empty(), "it says nothing lasting about the token");
+    assert!(host.review_access("acme/webshop").await.unwrap().can_post);
+}
+
+#[tokio::test]
+async fn only_a_422_naming_a_whole_word_of_the_reviews_place_is_outdated() {
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::status(422, "{\"message\":\"Validation Failed\",\"errors\":[\"Too many inline comments; the pipeline allows at most 50\"]}")])]).await;
+    let err = host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
+    assert!(matches!(&err, Error::CodeHost { status: 422, message } if message.contains("Too many inline comments")), "{err:?}");
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::status(422, "{\"message\":\"Validation Failed\",\"errors\":[\"pull_request_review_thread.line must be part of the diff\"]}")])]).await;
+    let err = host(&server).post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
+    assert!(matches!(&err, Error::ReviewOutdated(said) if said.contains("must be part of the diff")), "{err:?}");
+}
+
+#[tokio::test]
+async fn a_rate_limited_post_says_so_rather_than_blaming_the_token() {
+    let server = serve(vec![(REVIEWS_POST, vec![Reply::status(403, "{\"message\":\"API rate limit exceeded\"}").header("x-ratelimit-remaining", "0").header("x-ratelimit-reset", "4102444800")])]).await;
+    let host = host(&server);
+    assert!(matches!(host.post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &[]).await, Err(Error::RateLimited { .. })));
+    assert!(host.refused_reviews.lock().unwrap().is_empty(), "a rate limit says nothing about access");
+}
+
+#[tokio::test]
+async fn review_access_follows_a_classic_tokens_scopes_and_a_fine_grained_tokens_permissions() {
+    let repo = |private: bool, pull: bool, push: bool| format!("{{\"full_name\":\"acme/webshop\",\"name\":\"webshop\",\"private\":{private},\"permissions\":{{\"pull\":{pull},\"push\":{push}}}}}");
+    let cases: Vec<(Option<&str>, String, bool, Option<&str>)> = vec![
+        (Some("repo, read:org"), repo(true, true, false), true, None),
+        (Some("public_repo"), repo(false, true, false), true, None),
+        (Some("public_repo"), repo(true, true, false), false, Some("it has only the public_repo scope, and the repository is private")),
+        (Some("read:org, notifications"), repo(false, true, true), false, Some("it lacks the repo scope")),
+        (Some(""), repo(false, true, true), false, Some("it lacks the repo scope")),
+        (Some("repo"), repo(true, false, false), false, Some("it can't read the repository")),
+        (None, repo(true, true, true), true, None),
+        (None, repo(true, true, false), false, Some("it lacks write access to its pull requests")),
+    ];
+    for (scopes, body, can_post, why) in cases {
+        let reply = match scopes {
+            Some(s) => Reply::ok(&body).header("x-oauth-scopes", s),
+            None => Reply::ok(&body),
+        };
+        let server = serve(vec![("/repos/acme/webshop", vec![reply])]).await;
+        let access = host(&server).review_access("acme/webshop").await.unwrap();
+        assert_eq!(access.can_post, can_post, "{scopes:?} {body}");
+        assert_eq!(access.reason, why.map(|w| format!("This GitHub token can't post reviews on acme/webshop ({w}).")), "{scopes:?} {body}");
+        assert!(server.seen.lock().unwrap().iter().all(|s| s.method == "GET"));
+    }
+}
+
+#[test]
+fn the_one_write_to_github_is_the_comment_review_in_write_rs() {
+    let elsewhere = [
+        ("github/mod.rs", include_str!("mod.rs")),
+        ("github/read.rs", include_str!("read.rs")),
+        ("github/wire.rs", include_str!("wire.rs")),
+        ("codehost/mod.rs", include_str!("../mod.rs")),
+        ("codehost/events.rs", include_str!("../events.rs")),
+        ("codehost/links.rs", include_str!("../links.rs")),
+        ("codehost/diff.rs", include_str!("../diff.rs")),
+        ("codehost/keys.rs", include_str!("../keys.rs")),
+    ];
+    for (name, source) in elsewhere {
+        assert!(!source.contains("post_json") && !source.contains(".post(") && !source.contains(".put(") && !source.contains(".patch("), "{name} writes to GitHub");
+    }
+    let write = include_str!("write.rs");
+    assert_eq!(write.matches("post_json(").count(), 1, "one request");
+    assert_eq!(write.matches("/reviews").count(), 1, "to one endpoint");
+    assert!(write.contains("const EVENT: &str = \"COMMENT\";") && !write.contains("APPROVE") && !write.contains("REQUEST_CHANGES"), "as a comment only");
+    let http = include_str!("http.rs");
+    assert_eq!(http.matches(".post(").count(), 1, "the transport has one way to post, post_json");
+}
+
+#[tokio::test]
+async fn a_pull_diff_reads_the_pull_request_and_its_files_and_nothing_else() {
+    let server = serve(vec![
+        ("/repos/acme/webshop/pulls/208", vec![Reply::ok(PULL_208)]),
+        ("/repos/acme/webshop/pulls/208/files?per_page=100", vec![Reply::ok(FILES)]),
+    ])
+    .await;
+    let diff = host(&server).pull_diff("acme/webshop", 208).await.unwrap();
+    assert_eq!((diff.change.number, diff.change.title.as_str()), (Some(208), "CA-208: Route checkout through the gateway"));
+    assert_eq!(diff.change.sha.as_deref(), Some("aaa1111"), "the head commit, to tell whether a review is outdated");
+    assert_eq!(diff.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["src/gateway/routes.ts", "docs/logo.png", "src/big.ts"]);
+    assert!(diff.files[0].patch.is_some());
+    let seen = server.seen.lock().unwrap().clone();
+    assert!(seen.iter().all(|s| s.method == "GET"), "reads only: {:?}", server.targets());
+    assert_eq!(server.targets(), ["/repos/acme/webshop/pulls/208", "/repos/acme/webshop/pulls/208/files?per_page=100"]);
+}
+
+#[tokio::test]
+async fn review_comments_read_the_reviews_and_at_most_three_pages_of_inline_comments_and_nothing_else() {
+    let reviews = r#"[{"id":5,"user":{"login":"bea"},"state":"CHANGES_REQUESTED","submitted_at":"2026-09-30T09:00:00Z","body":"Please add a backoff."},{"id":6,"user":null,"state":"COMMENTED","submitted_at":null}]"#;
+    let page = |n: u32| format!(r#"[{{"path":"src/a.ts","line":{n},"original_line":{n},"side":"RIGHT","user":{{"login":"bea"}},"body":"Comment {n}","created_at":"2026-09-30T09:00:00Z","pull_request_review_id":5}}]"#);
+    let next = |n: u32| format!("</repos/acme/webshop/pulls/208/comments?per_page=100&page={n}>; rel=\"next\"");
+    let outdated = r#"[{"path":"src/b.ts","line":null,"original_line":9,"side":"RIGHT","user":{"login":"cy"},"body":"Old","created_at":null,"pull_request_review_id":99}]"#;
+    let server = serve(vec![
+        ("/repos/acme/webshop/pulls/208/reviews?per_page=100", vec![Reply::ok(reviews)]),
+        ("/repos/acme/webshop/pulls/208/comments?per_page=100", vec![Reply::ok(&page(1)).header("link", &next(2))]),
+        ("/repos/acme/webshop/pulls/208/comments?per_page=100&page=2", vec![Reply::ok(outdated).header("link", &next(3))]),
+        ("/repos/acme/webshop/pulls/208/comments?per_page=100&page=3", vec![Reply::ok(&page(3)).header("link", &next(4))]),
+        ("/repos/acme/webshop/pulls/208/comments?per_page=100&page=4", vec![Reply::ok(&page(4))]),
+    ])
+    .await;
+    let got = host(&server).review_comments("acme/webshop", 208).await.unwrap();
+    assert_eq!(got.reviews.len(), 2);
+    assert_eq!((got.reviews[0].author.as_deref(), got.reviews[0].state.as_str(), got.reviews[0].body.as_str()), (Some("bea"), "CHANGES_REQUESTED", "Please add a backoff."));
+    assert_eq!((got.reviews[1].author.as_deref(), got.reviews[1].body.as_str()), (None, ""));
+    let rows: Vec<_> = got.comments.iter().map(|c| (c.path.as_str(), c.line, c.original_line, c.state.as_deref(), c.body.as_str())).collect();
+    assert_eq!(rows, [("src/a.ts", Some(1), Some(1), Some("CHANGES_REQUESTED"), "Comment 1"), ("src/b.ts", None, Some(9), None, "Old"), ("src/a.ts", Some(3), Some(3), Some("CHANGES_REQUESTED"), "Comment 3")], "three pages at most");
+    assert!(server.seen.lock().unwrap().iter().all(|s| s.method == "GET"), "reads only: {:?}", server.targets());
+    assert_eq!(server.targets().len(), 4);
+}

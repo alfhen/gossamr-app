@@ -1,0 +1,434 @@
+{
+  "patches": {
+    "retry": "@@ -14,6 +14,8 @@ import { Message } from \"./message\";\n import { Queue } from \"./queue\";\n import { handle } from \"./handle\";\n \n+const MAX = 5;\n+\n export async function consume(queue: Queue) {\n   const batch = await queue.take();\n   for (const message of batch) {\n@@ -36,5 +38,8 @@ export async function consume(queue: Queue) {\n export async function retry(message: Message) {\n   let attempt = 0;\n-  await handle(message);\n+  while (attempt < MAX) {\n+    attempt += 1;\n+    try { return await handle(message); } catch { continue; }\n+  }\n   throw new Error(\"gave up\");\n }\n\\ No newline at end of file",
+    "index": "@@ -1,3 +1,3 @@\n-export { consume } from \"./consume\";\n+export { consume, retry } from \"./retry\";\n export type { Message } from \"./message\";\n export type { Queue } from \"./queue\";",
+    "cut": "@@ -1,2 +1,8 @@\n first\n+second\n+third",
+    "empty": ""
+  },
+  "parse": [
+    {
+      "patch": "retry",
+      "hunks": [
+        {
+          "leftStart": 14,
+          "leftLines": 6,
+          "rightStart": 14,
+          "rightLines": 8,
+          "lines": [
+            [
+              "context",
+              14,
+              14
+            ],
+            [
+              "context",
+              15,
+              15
+            ],
+            [
+              "context",
+              16,
+              16
+            ],
+            [
+              "added",
+              null,
+              17
+            ],
+            [
+              "added",
+              null,
+              18
+            ],
+            [
+              "context",
+              17,
+              19
+            ],
+            [
+              "context",
+              18,
+              20
+            ],
+            [
+              "context",
+              19,
+              21
+            ]
+          ]
+        },
+        {
+          "leftStart": 36,
+          "leftLines": 5,
+          "rightStart": 38,
+          "rightLines": 8,
+          "lines": [
+            [
+              "context",
+              36,
+              38
+            ],
+            [
+              "context",
+              37,
+              39
+            ],
+            [
+              "deleted",
+              38,
+              null
+            ],
+            [
+              "added",
+              null,
+              40
+            ],
+            [
+              "added",
+              null,
+              41
+            ],
+            [
+              "added",
+              null,
+              42
+            ],
+            [
+              "added",
+              null,
+              43
+            ],
+            [
+              "context",
+              39,
+              44
+            ],
+            [
+              "context",
+              40,
+              45
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "patch": "index",
+      "hunks": [
+        {
+          "leftStart": 1,
+          "leftLines": 3,
+          "rightStart": 1,
+          "rightLines": 3,
+          "lines": [
+            [
+              "deleted",
+              1,
+              null
+            ],
+            [
+              "added",
+              null,
+              1
+            ],
+            [
+              "context",
+              2,
+              2
+            ],
+            [
+              "context",
+              3,
+              3
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "patch": "cut",
+      "hunks": [
+        {
+          "leftStart": 1,
+          "leftLines": 2,
+          "rightStart": 1,
+          "rightLines": 8,
+          "lines": [
+            [
+              "context",
+              1,
+              1
+            ],
+            [
+              "added",
+              null,
+              2
+            ],
+            [
+              "added",
+              null,
+              3
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "patch": "empty",
+      "hunks": []
+    }
+  ],
+  "commentable": [
+    {
+      "name": "an added line on the right",
+      "patch": "retry",
+      "line": 42,
+      "side": "RIGHT",
+      "expect": true
+    },
+    {
+      "name": "another added line on the right",
+      "patch": "retry",
+      "line": 17,
+      "side": "RIGHT",
+      "expect": true
+    },
+    {
+      "name": "a context line on the right",
+      "patch": "retry",
+      "line": 44,
+      "side": "RIGHT",
+      "expect": true
+    },
+    {
+      "name": "a context line on the left",
+      "patch": "retry",
+      "line": 39,
+      "side": "LEFT",
+      "expect": true
+    },
+    {
+      "name": "a deleted line on the left",
+      "patch": "retry",
+      "line": 38,
+      "side": "LEFT",
+      "expect": true
+    },
+    {
+      "name": "an added line's number on the left is another line",
+      "patch": "retry",
+      "line": 42,
+      "side": "LEFT",
+      "expect": false
+    },
+    {
+      "name": "a deleted line's number on the right is a context line",
+      "patch": "retry",
+      "line": 38,
+      "side": "RIGHT",
+      "expect": true
+    },
+    {
+      "name": "between hunks",
+      "patch": "retry",
+      "line": 30,
+      "side": "RIGHT",
+      "expect": false
+    },
+    {
+      "name": "above the first hunk",
+      "patch": "retry",
+      "line": 13,
+      "side": "RIGHT",
+      "expect": false
+    },
+    {
+      "name": "below the last hunk",
+      "patch": "retry",
+      "line": 46,
+      "side": "RIGHT",
+      "expect": false
+    },
+    {
+      "name": "line 0",
+      "patch": "retry",
+      "line": 0,
+      "side": "RIGHT",
+      "expect": false
+    },
+    {
+      "name": "inside a cut patch",
+      "patch": "cut",
+      "line": 3,
+      "side": "RIGHT",
+      "expect": true
+    },
+    {
+      "name": "past where a patch was cut",
+      "patch": "cut",
+      "line": 4,
+      "side": "RIGHT",
+      "expect": false
+    },
+    {
+      "name": "past where a patch was cut, at the end its header promised",
+      "patch": "cut",
+      "line": 8,
+      "side": "RIGHT",
+      "expect": false
+    },
+    {
+      "name": "no patch",
+      "patch": "empty",
+      "line": 1,
+      "side": "RIGHT",
+      "expect": false
+    }
+  ],
+  "hunkAround": [
+    {
+      "name": "three lines either side, kept inside the hunk",
+      "patch": "retry",
+      "line": 42,
+      "side": "RIGHT",
+      "context": 3,
+      "expect": "-  await handle(message);\n+  while (attempt < MAX) {\n+    attempt += 1;\n+    try { return await handle(message); } catch { continue; }\n+  }\n   throw new Error(\"gave up\");\n }"
+    },
+    {
+      "name": "one line either side",
+      "patch": "retry",
+      "line": 17,
+      "side": "RIGHT",
+      "context": 1,
+      "expect": " \n+const MAX = 5;\n+"
+    },
+    {
+      "name": "a deleted line",
+      "patch": "retry",
+      "line": 38,
+      "side": "LEFT",
+      "context": 1,
+      "expect": "   let attempt = 0;\n-  await handle(message);\n+  while (attempt < MAX) {"
+    },
+    {
+      "name": "at the top of a hunk",
+      "patch": "index",
+      "line": 1,
+      "side": "LEFT",
+      "context": 2,
+      "expect": "-export { consume } from \"./consume\";\n+export { consume, retry } from \"./retry\";\n export type { Message } from \"./message\";"
+    },
+    {
+      "name": "outside every hunk",
+      "patch": "retry",
+      "line": 30,
+      "side": "RIGHT",
+      "context": 3,
+      "expect": null
+    }
+  ],
+  "where": [
+    {
+      "text": "src/consumer/retry.ts:42",
+      "expect": [
+        "src/consumer/retry.ts",
+        42
+      ]
+    },
+    {
+      "text": "src/consumer/retry.ts:42-50",
+      "expect": [
+        "src/consumer/retry.ts",
+        42
+      ]
+    },
+    {
+      "text": "src/consumer/retry.ts:42:7",
+      "expect": [
+        "src/consumer/retry.ts",
+        42
+      ]
+    },
+    {
+      "text": "  `src/consumer/retry.ts:17`  ",
+      "expect": [
+        "src/consumer/retry.ts",
+        17
+      ]
+    },
+    {
+      "text": "./src/a.ts:3",
+      "expect": [
+        "src/a.ts",
+        3
+      ]
+    },
+    {
+      "text": "README.md:1",
+      "expect": [
+        "README.md",
+        1
+      ]
+    },
+    {
+      "text": "src/consumer/retry.test.ts",
+      "expect": null
+    },
+    {
+      "text": "src/consumer/retry.ts:0",
+      "expect": null
+    },
+    {
+      "text": "src/consumer/retry.ts:",
+      "expect": null
+    },
+    {
+      "text": "src/consumer/retry.ts:abc",
+      "expect": null
+    },
+    {
+      "text": "src/consumer/retry.ts:42-",
+      "expect": null
+    },
+    {
+      "text": "src/consumer/retry.ts:42:",
+      "expect": null
+    },
+    {
+      "text": "my file.ts:3",
+      "expect": null
+    },
+    {
+      "text": "https://github.com/acme/webshop/blob/main/src/a.ts:3",
+      "expect": null
+    },
+    {
+      "text": "github.com://x:3",
+      "expect": null
+    },
+    {
+      "text": "/etc/passwd:1",
+      "expect": null
+    },
+    {
+      "text": "../outside.ts:4",
+      "expect": null
+    },
+    {
+      "text": "src/../../outside.ts:4",
+      "expect": null
+    },
+    {
+      "text": "npm test exited 1",
+      "expect": null
+    },
+    {
+      "text": ":12",
+      "expect": null
+    },
+    {
+      "text": "",
+      "expect": null
+    }
+  ]
+}

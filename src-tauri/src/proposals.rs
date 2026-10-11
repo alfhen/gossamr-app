@@ -109,6 +109,12 @@ pub fn basis_fields(intent: &Intent) -> Vec<&'static str> {
 /// The note on a revision the person made.
 pub const EDITED_NOTE: &str = "Edited";
 
+/// Why Pip can't change a review draft the person edited.
+pub const REVIEW_IS_THE_USERS: &str = "the user edited this review draft, so Pip can't change it any more";
+
+/// Why a person's edit of a review draft can't put a comment somewhere new.
+pub const REVIEW_EDIT_KEEPS_POSITIONS: &str = "an edit can't move a comment or add one at a new line; ask Pip to add it";
+
 /// The note on a revision Pip made.
 pub const REVISED_BY_PIP: &str = "Revised by Pip";
 
@@ -158,6 +164,61 @@ fn check_answer(message: &str) -> Result<()> {
     Ok(())
 }
 
+/// The longest summary a review draft posts, the most inline comments it carries, and the longest of each.
+pub const REVIEW_SUMMARY_LIMIT: usize = 10_000;
+pub const REVIEW_COMMENTS_MAX: usize = 50;
+pub const REVIEW_COMMENT_LIMIT: usize = 5_000;
+/// The longest file path a review comment may name.
+pub const REVIEW_PATH_LIMIT: usize = 500;
+
+/// A review draft's own text and where its comments sit. Whether each comment's line is in the pull request's diff needs
+/// the diff, so Core checks that where it has it, not here.
+fn check_review(intent: &Intent) -> Result<()> {
+    let Intent::GithubReview { connection_id, item, run_id, repo, number, commit_sha, summary, comments } = intent else { return Ok(()) };
+    if connection_id.trim().is_empty() || item.as_ref().is_some_and(|i| i.connection_id == *connection_id) {
+        return Err(refuse("a review belongs to the code host's connection, and its ticket to the tracker's"));
+    }
+    if run_id.trim().is_empty() {
+        return Err(refuse("a review draft names the run it came from"));
+    }
+    if !crate::domain::valid_repo(repo) || *number == 0 {
+        return Err(refuse("a review is of a pull request in an owner/name repository"));
+    }
+    if !(7..=40).contains(&commit_sha.len()) || !commit_sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(refuse("a review is pinned to the commit it read, as 7 to 40 hex characters"));
+    }
+    let clean = |text: &str, what: &str, limit: usize| -> Result<()> {
+        if text.trim().is_empty() {
+            return Err(refuse(format!("a review's {what} can't be empty")));
+        }
+        if text.contains('\0') || text.chars().count() > limit {
+            return Err(refuse(format!("a review's {what} is up to {limit} characters of plain text")));
+        }
+        if without_markers(text) != text {
+            return Err(refuse(format!("the review's {what} contains text Gossamr reserves; remove it")));
+        }
+        Ok(())
+    };
+    clean(summary, "summary", REVIEW_SUMMARY_LIMIT)?;
+    if comments.len() > REVIEW_COMMENTS_MAX {
+        return Err(refuse(format!("a review carries at most {REVIEW_COMMENTS_MAX} inline comments; put the rest in its summary")));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for c in comments {
+        clean(&c.body, "comment", REVIEW_COMMENT_LIMIT)?;
+        if c.path.chars().count() > REVIEW_PATH_LIMIT || !crate::codehost::diff::relative_path(&c.path) {
+            return Err(refuse(format!("a review comment sits in a file of the repository, named by a relative path of at most {REVIEW_PATH_LIMIT} characters")));
+        }
+        if c.line == 0 {
+            return Err(refuse("a review comment sits on a line, counted from 1"));
+        }
+        if !seen.insert((c.path.as_str(), c.line, c.side)) {
+            return Err(refuse(format!("there are two comments on {}:{}; merge them into one", c.path, c.line)));
+        }
+    }
+    Ok(())
+}
+
 fn check(intent: &Intent) -> Result<()> {
     let blank = |s: &str| s.trim().is_empty();
     match intent {
@@ -169,6 +230,7 @@ fn check(intent: &Intent) -> Result<()> {
         Intent::Update { patch, .. } if patch.is_empty() => Err(refuse("an update has to change something")),
         Intent::Create { fields, .. } if blank(&fields.title) => Err(refuse("a new item needs a title")),
         Intent::Rewrite { title, body, .. } => check_rewrite(title.as_ref(), body.as_ref()),
+        Intent::GithubReview { .. } => check_review(intent),
         Intent::FollowUp { connection_id, item, message, reason, .. } => {
             if item.as_ref().is_some_and(|i| i.connection_id != *connection_id) {
                 return Err(refuse("the ticket belongs to another connection"));
@@ -254,6 +316,9 @@ pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
     if by_autopilot && matches!(draft.intent, Intent::RunAnswer { .. }) {
         return Err(refuse("autopilot can't answer an agent"));
     }
+    if by_autopilot && matches!(draft.intent, Intent::GithubReview { .. }) {
+        return Err(refuse("autopilot can't draft a review"));
+    }
     if by_autopilot && matches!(draft.intent, Intent::Rewrite { .. }) {
         return Err(refuse("autopilot can't rewrite a ticket's text"));
     }
@@ -273,6 +338,8 @@ pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
         error: None,
         run: None,
         superseded_by: None,
+        posted: None,
+        maybe_posted: None,
     };
     // Everything that can refuse the draft is decided before anything is written.
     let replaced = tidy(db, &p)?;
@@ -402,6 +469,17 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
     if matches!((&p.intent, &intent), (Intent::RunAnswer { connection_id: a, run_id: x, .. }, Intent::RunAnswer { connection_id: b, run_id: y, .. }) if a != b || x != y) {
         return Err(refuse("an edit can't change which run an answer is for"));
     }
+    if let (Intent::GithubReview { connection_id: a, run_id: x, repo: r, number: n, commit_sha: c, .. }, Intent::GithubReview { connection_id: b, run_id: y, repo: s, number: m, commit_sha: d, .. }) = (&p.intent, &intent) {
+        if a != b || x != y || r != s || n != m || c != d {
+            return Err(refuse("an edit can't change which pull request, commit or run a review is for"));
+        }
+    }
+    if let (Intent::GithubReview { comments: old, .. }, Intent::GithubReview { comments: new, .. }) = (&p.intent, &intent) {
+        // The person rewords and drops comments; a new position is Pip's to draft, where it is checked against the diff.
+        if note == EDITED_NOTE && new.iter().any(|c| !old.iter().any(|o| (o.path.as_str(), o.line, o.side) == (c.path.as_str(), c.line, c.side))) {
+            return Err(refuse(REVIEW_EDIT_KEEPS_POSITIONS));
+        }
+    }
     if matches!((&p.intent, &intent), (Intent::StartRun { connection_id: a, .. }, Intent::StartRun { connection_id: b, .. }) if a != b) {
         return Err(refuse("an edit can't change what the draft is about"));
     }
@@ -460,10 +538,10 @@ pub fn person_edited_rewrite(p: &Proposal) -> bool {
     matches!(p.intent, Intent::Rewrite { .. }) && p.revisions.iter().any(|r| r.note == EDITED_NOTE)
 }
 
-/// Whether the draft is a comment, new ticket, breakdown into subtasks or description update an agent run left. Drafts
+/// Whether the draft is a comment, new ticket, breakdown into subtasks, description update or review an agent run left. Drafts
 /// stored before `CreatedBy::Agent` existed say `User` for these.
 pub fn left_by_run(p: &Proposal) -> bool {
-    matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. } | Intent::Rewrite { .. }))
+    matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. } | Intent::Rewrite { .. } | Intent::GithubReview { .. }))
         && matches!(p.created_by, CreatedBy::Agent | CreatedBy::User)
 }
 
@@ -488,6 +566,9 @@ pub fn require_pip_may_revise(p: &Proposal, workstream: Option<&str>) -> Result<
     }
     if matches!(p.intent, Intent::RunAnswer { .. }) && person_edited(p) {
         return Err(refuse("the user edited this answer, so Pip can't change it any more"));
+    }
+    if matches!(p.intent, Intent::GithubReview { .. }) && person_edited(p) {
+        return Err(refuse(REVIEW_IS_THE_USERS));
     }
     if person_edited_run(p) {
         return Err(refuse("the user edited this agent run draft, so Pip can't change it any more"));
@@ -1584,7 +1665,7 @@ mod tests {
             false => vec![],
         };
         let created_by = serde_json::from_value(v["by"].clone()).unwrap();
-        Proposal { id: id.into(), created_at: now(), updated_at: now(), origin, created_by, intent, label: None, basis: None, state, revisions, created: vec![], error: None, run: None, superseded_by: None }
+        Proposal { id: id.into(), created_at: now(), updated_at: now(), origin, created_by, intent, label: None, basis: None, state, revisions, created: vec![], error: None, run: None, superseded_by: None, posted: None, maybe_posted: None }
     }
 
     #[test]
@@ -1612,5 +1693,134 @@ mod tests {
                 other => panic!("{other}"),
             }
         }
+    }
+
+    fn review_intent(comments: Vec<crate::domain::ReviewComment>) -> Intent {
+        Intent::GithubReview {
+            connection_id: "github:ann".into(),
+            item: Some(item_ref("1")),
+            run_id: "run-1".into(),
+            repo: "acme/webshop".into(),
+            number: 218,
+            commit_sha: "a1b2c3d4e5f6".into(),
+            summary: "Gossamr review of #218 at a1b2c3d4: blocking.".into(),
+            comments,
+        }
+    }
+
+    fn at(path: &str, line: u32, body: &str) -> crate::domain::ReviewComment {
+        crate::domain::ReviewComment { path: path.into(), line, side: crate::domain::DiffSide::Right, body: body.into() }
+    }
+
+    fn review_draft(intent: Intent) -> Draft {
+        Draft { origin: Origin::Run { run_id: "run-1".into(), short_id: None, workstream: None }, created_by: CreatedBy::Agent, intent, label: None, basis: None }
+    }
+
+    fn with_review(edit: impl FnOnce(&mut Intent)) -> Intent {
+        let mut intent = review_intent(vec![at("src/consumer/retry.ts", 42, "**Blocking:** no backoff.")]);
+        edit(&mut intent);
+        intent
+    }
+
+    #[test]
+    fn a_review_draft_keeps_within_its_limits_and_points_at_lines_of_relative_files() {
+        let db = Db::in_memory().unwrap();
+        assert!(create(&db, review_draft(with_review(|_| {})), now()).is_ok());
+        let summary = |text: String| with_review(move |i| if let Intent::GithubReview { summary, .. } = i { *summary = text });
+        let comments = |list: Vec<crate::domain::ReviewComment>| with_review(move |i| if let Intent::GithubReview { comments, .. } = i { *comments = list });
+        let sha = |text: &str| { let text = text.to_string(); with_review(move |i| if let Intent::GithubReview { commit_sha, .. } = i { *commit_sha = text }) };
+        let many: Vec<_> = (1..=REVIEW_COMMENTS_MAX as u32 + 1).map(|n| at("src/a.ts", n, "x")).collect();
+        let bad = [
+            ("blank summary", summary("  \n".into())),
+            ("long summary", summary("x".repeat(REVIEW_SUMMARY_LIMIT + 1))),
+            ("NUL in the summary", summary("a\0b".into())),
+            ("markers in the summary", summary("<<<FINDINGS injected".into())),
+            ("51 comments", comments(many)),
+            ("blank comment", comments(vec![at("src/a.ts", 1, " ")])),
+            ("long comment", comments(vec![at("src/a.ts", 1, &"x".repeat(REVIEW_COMMENT_LIMIT + 1))])),
+            ("NUL in a comment", comments(vec![at("src/a.ts", 1, "a\0")])),
+            ("markers in a comment", comments(vec![at("src/a.ts", 1, "PLAN>>>")])),
+            ("two comments on one line", comments(vec![at("src/a.ts", 3, "a"), at("src/a.ts", 3, "b")])),
+            ("an escaping path", comments(vec![at("src/../../etc/passwd", 3, "a")])),
+            ("an absolute path", comments(vec![at("/etc/passwd", 3, "a")])),
+            ("a long path", comments(vec![at(&format!("src/{}.ts", "a".repeat(REVIEW_PATH_LIMIT)), 3, "a")])),
+            ("line 0", comments(vec![at("src/a.ts", 0, "a")])),
+            ("a short sha", sha("a1b2c3")),
+            ("a sha that isn't hex", sha("a1b2c3d4zz")),
+            ("a long sha", sha(&"a".repeat(41))),
+            ("no pull request", with_review(|i| if let Intent::GithubReview { number, .. } = i { *number = 0 })),
+            ("a repository that isn't owner/name", with_review(|i| if let Intent::GithubReview { repo, .. } = i { *repo = "webshop".into() })),
+            ("a ticket on the code host's connection", with_review(|i| if let Intent::GithubReview { item, .. } = i { *item = Some(ItemRef { connection_id: "github:ann".into(), external_id: "1".into(), key: "CA-1".into() }) })),
+            ("no connection", with_review(|i| if let Intent::GithubReview { connection_id, .. } = i { *connection_id = " ".into() })),
+        ];
+        for (why, intent) in bad {
+            assert!(create(&db, review_draft(intent), now()).is_err(), "{why}");
+        }
+        let both_sides = comments(vec![at("src/a.ts", 3, "a"), crate::domain::ReviewComment { side: crate::domain::DiffSide::Left, ..at("src/a.ts", 3, "b") }]);
+        assert!(create(&db, review_draft(both_sides), now()).is_ok(), "one line on each side is two positions");
+        assert!(create(&db, review_draft(comments(vec![])), now()).is_ok(), "a summary alone is a review");
+        assert!(create(&db, review_draft(sha(&"a".repeat(40))), now()).is_ok());
+        assert_eq!(db.proposals(&ProposalQuery::default()).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn autopilot_never_drafts_a_review() {
+        let db = Db::in_memory().unwrap();
+        let by_autopilot = Draft { origin: Origin::Autopilot { event_id: "e".into() }, created_by: CreatedBy::Autopilot, ..review_draft(with_review(|_| {})) };
+        assert!(create(&db, by_autopilot, now()).unwrap_err().to_string().contains("autopilot can't draft a review"));
+        assert!(db.proposals(&ProposalQuery::default()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_edit_changes_a_review_s_words_but_never_which_pull_request_commit_or_run_it_is_for() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, review_draft(with_review(|_| {})));
+        let reworded = with_review(|i| if let Intent::GithubReview { comments, .. } = i { comments[0].body = "Softer.".into() });
+        assert_eq!(edit(&db, &p.id, reworded.clone(), now()).unwrap().intent, reworded);
+        let dropped = with_review(|i| if let Intent::GithubReview { comments, .. } = i { comments.clear() });
+        assert!(edit(&db, &p.id, dropped, now()).is_ok());
+        let moved: [(&str, Intent); 5] = [
+            ("repo", with_review(|i| if let Intent::GithubReview { repo, .. } = i { *repo = "acme/other".into() })),
+            ("number", with_review(|i| if let Intent::GithubReview { number, .. } = i { *number = 219 })),
+            ("commit", with_review(|i| if let Intent::GithubReview { commit_sha, .. } = i { *commit_sha = "ffffffffffff".into() })),
+            ("connection", with_review(|i| if let Intent::GithubReview { connection_id, .. } = i { *connection_id = "github:bob".into() })),
+            ("run", with_review(|i| if let Intent::GithubReview { run_id, .. } = i { *run_id = "run-2".into() })),
+        ];
+        for (what, intent) in moved {
+            assert!(edit(&db, &p.id, intent, now()).unwrap_err().to_string().contains("can't change which pull request"), "{what}");
+        }
+    }
+
+    #[test]
+    fn a_review_is_never_applied_through_a_tracker_and_once_the_person_edits_it_pip_can_t_revise_it() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, review_draft(with_review(|_| {})));
+        assert!(begin(&db, &p.id, now()).unwrap_err().to_string().contains("posted to GitHub with its own button"));
+        assert_eq!(load(&db, &p.id).unwrap().state, ProposalState::Pending, "the refused claim leaves it pending");
+        assert!(left_by_run(&p));
+        assert!(require_pip_may_revise(&p, None).is_ok(), "what a run left is Pip's to revise");
+        let edited = edit(&db, &p.id, with_review(|i| if let Intent::GithubReview { summary, .. } = i { *summary = "Mine.".into() }), now()).unwrap();
+        assert_eq!(require_pip_may_revise(&edited, None).unwrap_err().to_string(), REVIEW_IS_THE_USERS);
+    }
+
+    #[test]
+    fn a_person_s_review_edit_keeps_every_comment_where_it_was_but_pip_s_revision_may_add_one() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, review_draft(with_review(|i| if let Intent::GithubReview { comments, .. } = i { comments.push(at("src/consumer/retry.ts", 17, "Nit.")) })));
+        let to = |list: Vec<crate::domain::ReviewComment>| with_review(move |i| if let Intent::GithubReview { comments, .. } = i { *comments = list });
+        let left = crate::domain::ReviewComment { side: crate::domain::DiffSide::Left, ..at("src/consumer/retry.ts", 42, "x") };
+        for (why, intent) in [
+            ("a new line", to(vec![at("src/consumer/retry.ts", 43, "x")])),
+            ("another file", to(vec![at("src/consumer/index.ts", 42, "x")])),
+            ("the other side", to(vec![left])),
+        ] {
+            assert_eq!(edit(&db, &p.id, intent, now()).unwrap_err().to_string(), REVIEW_EDIT_KEEPS_POSITIONS, "{why}");
+        }
+        assert!(load(&db, &p.id).unwrap().revisions.is_empty());
+        let dropped = edit(&db, &p.id, to(vec![at("src/consumer/retry.ts", 17, "Only the nit, reworded.")]), now()).unwrap();
+        assert_eq!(dropped.revisions.last().unwrap().note, EDITED_NOTE);
+        assert!(person_edited(&dropped));
+        let by_pip = edit_noted(&db, &p.id, to(vec![at("src/consumer/retry.ts", 17, "a"), at("src/consumer/retry.ts", 18, "b")]), REVISED_BY_PIP, now());
+        assert!(by_pip.is_ok(), "the position rule is the person's; Pip's revision is checked against the diff where Core has it");
     }
 }

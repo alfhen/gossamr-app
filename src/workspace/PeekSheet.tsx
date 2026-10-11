@@ -625,7 +625,12 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
     usePrefs.getState().setPeekSection(id, false);
     requestAnimationFrame(() => document.getElementById(`peek-${id}`)?.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" }));
   };
-  const drafts = draftsForItem({ proposals }, ref).reverse();
+  const waiting = draftsForItem({ proposals }, ref).reverse();
+  // A review posted from here stays, saying it went and linking to it, until the peek closes; it is decided, not waiting.
+  const reviewsShown = useRef(new Set<string>());
+  waiting.forEach((p) => p.intent.type === "githubReview" && reviewsShown.current.add(p.id));
+  const posted = draftsForItem({ proposals }, ref, ["applied"]).filter((p) => reviewsShown.current.has(p.id)).reverse();
+  const drafts = [...waiting, ...posted];
   const pendingMove = drafts.find((d) => d.intent.type === "transition");
   const proposedMove = pendingMove ? (draftStatus(pendingMove, wf)?.name ?? pendingMove.label) : null;
   const checking = opaque && known === null && !movesFailed;
@@ -683,7 +688,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       banner={readOnly ? <PeekNotice unwatched={!!item.unwatched} containerName={containerName} connectionId={ref.connectionId} containerId={item.container.externalId} /> : undefined}
       drafts={
         drafts.length > 0 ? (
-          <SectionCard id="drafts" title="Drafts waiting" count={drafts.length}>
+          <SectionCard id="drafts" title="Drafts waiting" count={waiting.length}>
             {drafts.map((p) => (
               <LiveDraftCard key={p.id} proposal={p} jump={false} />
             ))}

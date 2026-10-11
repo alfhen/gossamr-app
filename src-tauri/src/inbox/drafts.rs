@@ -12,7 +12,7 @@ use crate::auth::Scope;
 use crate::db::Db;
 use crate::domain::{
     default_instruction, Actor, Basis, TICKETLESS_STARTER, WorkstreamEvent, CodeChange, CodeChangeState, ContainerRef, CreatedBy, Doc, Intent, ItemKind, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind,
-    RunEvent, RunQuery, RunReview, RunSpec,
+    ReviewComment, RunEvent, RunQuery, RunReview, RunSpec,
 };
 use crate::error::{Error, Result};
 use crate::model::MentionRef;
@@ -61,6 +61,14 @@ pub enum Edit {
     /// The answer a run that asked a question is sent.
     RunAnswer {
         message: String,
+    },
+    /// A review draft's summary and inline comments; the ones left out stay as they are. The person may reword and
+    /// drop comments here, never move one or add one (`proposals::edit`).
+    GithubReview {
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        comments: Option<Vec<ReviewComment>>,
     },
     /// A run's settings; the ones left out stay as they are. Only the person edits these.
     #[serde(rename_all = "camelCase")]
@@ -150,6 +158,21 @@ impl Edit {
                 message: message.trim().to_string(),
                 question: question.clone(),
             }),
+            (Edit::GithubReview { summary, comments }, Intent::GithubReview { connection_id, item, run_id, repo, number, commit_sha, summary: was_summary, comments: was_comments }) => {
+                Ok(Intent::GithubReview {
+                    connection_id: connection_id.clone(),
+                    item: item.clone(),
+                    run_id: run_id.clone(),
+                    repo: repo.clone(),
+                    number: *number,
+                    commit_sha: commit_sha.clone(),
+                    summary: summary.as_deref().map_or_else(|| was_summary.clone(), |s| s.trim().to_string()),
+                    comments: comments.as_ref().map_or_else(
+                        || was_comments.clone(),
+                        |list| list.iter().map(|c| ReviewComment { body: c.body.trim().to_string(), ..c.clone() }).collect(),
+                    ),
+                })
+            }
             (Edit::Rewrite { title, body }, Intent::Rewrite { item, title: was_title, body: was_body, flattened }) => {
                 let mut changed_title = was_title.clone();
                 let mut changed_body = was_body.clone();
@@ -1610,5 +1633,62 @@ mod tests {
         assert!(err.to_string().contains("doesn't change the title"), "{err}");
         assert!(Edit::Rewrite { title: None, body: Some("x".into()) }.apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
         assert!(matches!(serde_json::from_str::<Edit>(r#"{"type":"rewrite","body":"x"}"#).unwrap(), Edit::Rewrite { title: None, body: Some(_) }));
+    }
+
+    fn review(comments: Vec<ReviewComment>) -> Intent {
+        Intent::GithubReview {
+            connection_id: "github:ann".into(),
+            item: Some(item_ref("1")),
+            run_id: "run-1".into(),
+            repo: "acme/webshop".into(),
+            number: 218,
+            commit_sha: "a1b2c3d4e5f6".into(),
+            summary: "Gossamr review of #218: blocking.".into(),
+            comments,
+        }
+    }
+
+    fn at(line: u32, body: &str) -> ReviewComment {
+        ReviewComment { path: "src/consumer/retry.ts".into(), line, side: crate::domain::DiffSide::Right, body: body.into() }
+    }
+
+    #[test]
+    fn a_review_edit_rewords_and_drops_and_keeps_the_pull_request_commit_and_connection() {
+        let current = review(vec![at(42, "No backoff."), at(17, "Nit: name.")]);
+        let edit: Edit = serde_json::from_str(r#"{"type":"githubReview","comments":[{"path":"src/consumer/retry.ts","line":42,"side":"RIGHT","body":" Softer. "}]}"#).unwrap();
+        let Intent::GithubReview { connection_id, repo, number, commit_sha, run_id, summary, comments, .. } = edit.apply_to(&current).unwrap() else { panic!() };
+        assert_eq!((connection_id.as_str(), repo.as_str(), number, commit_sha.as_str(), run_id.as_str()), ("github:ann", "acme/webshop", 218, "a1b2c3d4e5f6", "run-1"));
+        assert_eq!(summary, "Gossamr review of #218: blocking.", "a summary left out stays");
+        assert_eq!(comments, [at(42, "Softer.")]);
+        let Intent::GithubReview { summary, comments, .. } = (Edit::GithubReview { summary: Some(" Mine. ".into()), comments: None }).apply_to(&current).unwrap() else { panic!() };
+        assert_eq!((summary.as_str(), comments.len()), ("Mine.", 2), "comments left out stay");
+        assert!((Edit::GithubReview { summary: None, comments: None }).apply_to(&Intent::Transition { item: item_ref("1"), to: "d".into() }).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_person_rewords_and_drops_review_comments_but_never_moves_or_adds_one() {
+        let fx = crate::inbox::testing::fixture().await;
+        let draft = Draft {
+            origin: Origin::Run { run_id: "run-1".into(), short_id: None, workstream: None },
+            created_by: CreatedBy::Agent,
+            intent: review(vec![at(42, "No backoff."), at(17, "Nit: name.")]),
+            label: None,
+            basis: None,
+        };
+        let p = fx.core.with_proposals(|db| proposals::create(db, draft, Utc::now())).await.unwrap();
+        let edit = |comments: Vec<ReviewComment>| Edit::GithubReview { summary: None, comments: Some(comments) };
+        let edited = fx.core.edit_proposal(&p.id, &edit(vec![at(42, "Please add a backoff.")])).await.unwrap();
+        let Intent::GithubReview { comments, .. } = &edited.intent else { panic!() };
+        assert_eq!(comments, &[at(42, "Please add a backoff.")]);
+        assert_eq!(edited.revisions.last().unwrap().note, proposals::EDITED_NOTE, "the Edited lock applies");
+        assert!(proposals::require_pip_may_revise(&edited, None).is_err());
+        for (why, moved) in [("moved", vec![at(43, "x")]), ("added", vec![at(42, "x"), at(17, "back again")])] {
+            let err = fx.core.edit_proposal(&p.id, &edit(moved)).await.unwrap_err();
+            assert_eq!(err.to_string(), proposals::REVIEW_EDIT_KEEPS_POSITIONS, "{why}");
+        }
+        let blank = fx.core.edit_proposal(&p.id, &Edit::GithubReview { summary: Some(" ".into()), comments: None }).await.unwrap_err();
+        assert!(blank.to_string().contains("summary can't be empty"), "{blank}");
+        let now = fx.core.proposal(&p.id).await.unwrap().unwrap();
+        assert_eq!(now.intent, edited.intent, "a refused edit changes nothing");
     }
 }

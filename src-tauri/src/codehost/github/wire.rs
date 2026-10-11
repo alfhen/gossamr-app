@@ -22,6 +22,8 @@ pub struct Permissions {
     pub push: bool,
     #[serde(default)]
     pub triage: bool,
+    #[serde(default)]
+    pub pull: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,8 +32,18 @@ pub struct Repo {
     pub name: String,
     #[serde(default)]
     pub archived: bool,
+    #[serde(default)]
+    pub private: bool,
     pub pushed_at: Option<String>,
     pub permissions: Option<Permissions>,
+}
+
+/// What GitHub answers to a posted review, as much of it as Gossamr keeps.
+#[derive(Debug, Deserialize)]
+pub struct ReviewPosted {
+    pub id: u64,
+    #[serde(default)]
+    pub html_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,6 +191,26 @@ pub struct Review {
     pub user: Option<Owner>,
     pub state: String,
     pub submitted_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub commit_id: Option<String>,
+    #[serde(default)]
+    pub html_url: Option<String>,
+}
+
+/// An inline comment on a pull request, as `/pulls/{n}/comments` lists it.
+#[derive(Debug, Deserialize)]
+pub struct PullComment {
+    pub path: String,
+    pub line: Option<u32>,
+    pub original_line: Option<u32>,
+    pub side: Option<String>,
+    pub user: Option<Owner>,
+    #[serde(default)]
+    pub body: String,
+    pub created_at: Option<DateTime<Utc>>,
+    pub pull_request_review_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -477,7 +509,7 @@ mod tests {
     use super::*;
 
     fn review(user: &str, state: &str) -> Review {
-        Review { id: 1, user: Some(Owner { login: user.into() }), state: state.into(), submitted_at: None }
+        Review { id: 1, user: Some(Owner { login: user.into() }), state: state.into(), submitted_at: None, body: None, commit_id: None, html_url: None }
     }
 
     fn run(status: &str, conclusion: Option<&str>) -> CheckRun {

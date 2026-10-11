@@ -435,7 +435,8 @@ pub fn tripwire_of(input: &TripInput) -> Option<(&'static str, Option<String>)> 
 /// and a workstream's hold, mode and spend; ask where a run would go, start a run an auto-start rule produced, send a fix
 /// round, launch runs that wait, and stop a run. There is deliberately no tracker or registry here, nor anything that
 /// approves a draft or comments on, transitions, creates subtasks under or attaches to a Jira item: orchestration can't
-/// write to Jira, whatever it is told. The supervisor holds only this.
+/// write to Jira, whatever it is told. Nor is there anything that posts to GitHub: posting a review is the person's
+/// alone (`Core::post_review_draft`, from their approval). The supervisor holds only this.
 #[async_trait]
 pub trait SupervisorCore: Send + Sync {
     async fn scope(&self) -> Result<Scope>;

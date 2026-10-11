@@ -136,3 +136,28 @@ describe("draft hygiene fixtures, as proposals.rs runs them", () => {
     expect(verdict.type === "refuse" && verdict.reason).toContain("the user edited draft 1 of the same kind on A-1");
   });
 });
+
+const githubReview = (repo: string, item: ReturnType<typeof ref> | null = ref("CA-1")): Intent => ({
+  type: "githubReview",
+  connectionId: "github:ada",
+  item,
+  runId: "run-1",
+  repo,
+  number: 218,
+  commitSha: "a1b2c3d4e5f6",
+  summary: "Gossamr review of #218.",
+  comments: [{ path: "src/consumer/retry.ts", line: 42, side: "RIGHT", body: "No backoff." }],
+});
+
+describe("GitHub review drafts", () => {
+  it("are grouped under their run's ticket and keyed by pull request, whatever the case of its repository", () => {
+    expect(targetOf(githubReview("acme/webshop"))?.key).toBe("CA-1");
+    expect(targetOf(githubReview("acme/webshop", null))).toBeNull();
+    expect(supersessionKey(githubReview("Acme/WebShop"))).toBe("githubReview:acme/webshop#218");
+  });
+
+  it("are left out for screens that approve with proposalsApprove", () => {
+    const all = [proposal("1", subtasks("A-1")), proposal("2", githubReview("acme/webshop"))];
+    expect(withoutRunDrafts(all).map((p) => p.id)).toEqual(["1"]);
+  });
+});

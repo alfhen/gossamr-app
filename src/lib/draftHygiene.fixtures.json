@@ -1243,5 +1243,438 @@
       }
     },
     "expect": "supersede"
+  },
+  {
+    "name": "two reviews of one pull request",
+    "kind": "key",
+    "a": {
+      "type": "githubReview",
+      "connectionId": "github:ann",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "runId": "run-1",
+      "repo": "acme/webshop",
+      "number": 218,
+      "commitSha": "a1b2c3d4e5f6",
+      "summary": "Gossamr review.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** no backoff."
+        }
+      ]
+    },
+    "b": {
+      "type": "githubReview",
+      "connectionId": "github:ann",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "runId": "run-2",
+      "repo": "acme/webshop",
+      "number": 218,
+      "commitSha": "ffffffffffff",
+      "summary": "Gossamr review.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** no backoff."
+        }
+      ]
+    },
+    "same": true
+  },
+  {
+    "name": "two reviews of one pull request, its repository spelt differently",
+    "kind": "key",
+    "a": {
+      "type": "githubReview",
+      "connectionId": "github:ann",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "runId": "run-1",
+      "repo": "acme/webshop",
+      "number": 218,
+      "commitSha": "a1b2c3d4e5f6",
+      "summary": "Gossamr review.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** no backoff."
+        }
+      ]
+    },
+    "b": {
+      "type": "githubReview",
+      "connectionId": "github:ann",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "runId": "run-2",
+      "repo": "Acme/WebShop",
+      "number": 218,
+      "commitSha": "a1b2c3d4e5f6",
+      "summary": "Gossamr review.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** no backoff."
+        }
+      ]
+    },
+    "same": true
+  },
+  {
+    "name": "reviews of two pull requests",
+    "kind": "key",
+    "a": {
+      "type": "githubReview",
+      "connectionId": "github:ann",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "runId": "run-1",
+      "repo": "acme/webshop",
+      "number": 218,
+      "commitSha": "a1b2c3d4e5f6",
+      "summary": "Gossamr review.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** no backoff."
+        }
+      ]
+    },
+    "b": {
+      "type": "githubReview",
+      "connectionId": "github:ann",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "runId": "run-1",
+      "repo": "acme/webshop",
+      "number": 219,
+      "commitSha": "a1b2c3d4e5f6",
+      "summary": "Gossamr review.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** no backoff."
+        }
+      ]
+    },
+    "same": false
+  },
+  {
+    "name": "reviews of the same number in two repositories",
+    "kind": "key",
+    "a": {
+      "type": "githubReview",
+      "connectionId": "github:ann",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "runId": "run-1",
+      "repo": "acme/webshop",
+      "number": 218,
+      "commitSha": "a1b2c3d4e5f6",
+      "summary": "Gossamr review.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** no backoff."
+        }
+      ]
+    },
+    "b": {
+      "type": "githubReview",
+      "connectionId": "github:ann",
+      "item": {
+        "connectionId": "c",
+        "externalId": "1",
+        "key": "CA-1"
+      },
+      "runId": "run-1",
+      "repo": "acme/gateway",
+      "number": 218,
+      "commitSha": "a1b2c3d4e5f6",
+      "summary": "Gossamr review.",
+      "comments": [
+        {
+          "path": "src/consumer/retry.ts",
+          "line": 42,
+          "side": "RIGHT",
+          "body": "**Blocking:** no backoff."
+        }
+      ]
+    },
+    "same": false
+  },
+  {
+    "name": "the next review round replaces the last one's draft",
+    "kind": "decide",
+    "older": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "githubReview",
+        "connectionId": "github:ann",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "runId": "run-1",
+        "repo": "acme/webshop",
+        "number": 218,
+        "commitSha": "a1b2c3d4e5f6",
+        "summary": "Gossamr review.",
+        "comments": [
+          {
+            "path": "src/consumer/retry.ts",
+            "line": 42,
+            "side": "RIGHT",
+            "body": "**Blocking:** no backoff."
+          }
+        ]
+      }
+    },
+    "newer": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "githubReview",
+        "connectionId": "github:ann",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "runId": "run-2",
+        "repo": "acme/webshop",
+        "number": 218,
+        "commitSha": "ffffffffffff",
+        "summary": "Gossamr review.",
+        "comments": [
+          {
+            "path": "src/consumer/retry.ts",
+            "line": 42,
+            "side": "RIGHT",
+            "body": "**Blocking:** no backoff."
+          }
+        ]
+      }
+    },
+    "expect": "supersede"
+  },
+  {
+    "name": "a review draft the person edited stays beside the next round's",
+    "kind": "decide",
+    "older": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "edited": true,
+      "intent": {
+        "type": "githubReview",
+        "connectionId": "github:ann",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "runId": "run-1",
+        "repo": "acme/webshop",
+        "number": 218,
+        "commitSha": "a1b2c3d4e5f6",
+        "summary": "Gossamr review.",
+        "comments": [
+          {
+            "path": "src/consumer/retry.ts",
+            "line": 42,
+            "side": "RIGHT",
+            "body": "Mine."
+          }
+        ]
+      }
+    },
+    "newer": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "githubReview",
+        "connectionId": "github:ann",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "runId": "run-2",
+        "repo": "acme/webshop",
+        "number": 218,
+        "commitSha": "ffffffffffff",
+        "summary": "Gossamr review.",
+        "comments": [
+          {
+            "path": "src/consumer/retry.ts",
+            "line": 42,
+            "side": "RIGHT",
+            "body": "**Blocking:** no backoff."
+          }
+        ]
+      }
+    },
+    "expect": "alongside"
+  },
+  {
+    "name": "a review of another pull request is left alone",
+    "kind": "decide",
+    "older": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "githubReview",
+        "connectionId": "github:ann",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "runId": "run-1",
+        "repo": "acme/webshop",
+        "number": 217,
+        "commitSha": "a1b2c3d4e5f6",
+        "summary": "Gossamr review.",
+        "comments": [
+          {
+            "path": "src/consumer/retry.ts",
+            "line": 42,
+            "side": "RIGHT",
+            "body": "**Blocking:** no backoff."
+          }
+        ]
+      }
+    },
+    "newer": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "githubReview",
+        "connectionId": "github:ann",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "runId": "run-2",
+        "repo": "acme/webshop",
+        "number": 218,
+        "commitSha": "a1b2c3d4e5f6",
+        "summary": "Gossamr review.",
+        "comments": [
+          {
+            "path": "src/consumer/retry.ts",
+            "line": 42,
+            "side": "RIGHT",
+            "body": "**Blocking:** no backoff."
+          }
+        ]
+      }
+    },
+    "expect": "unrelated"
+  },
+  {
+    "name": "a review in another workstream is left alone",
+    "kind": "decide",
+    "older": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w2",
+      "intent": {
+        "type": "githubReview",
+        "connectionId": "github:ann",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "runId": "run-1",
+        "repo": "acme/webshop",
+        "number": 218,
+        "commitSha": "a1b2c3d4e5f6",
+        "summary": "Gossamr review.",
+        "comments": [
+          {
+            "path": "src/consumer/retry.ts",
+            "line": 42,
+            "side": "RIGHT",
+            "body": "**Blocking:** no backoff."
+          }
+        ]
+      }
+    },
+    "newer": {
+      "by": "agent",
+      "origin": "run",
+      "workstream": "w1",
+      "intent": {
+        "type": "githubReview",
+        "connectionId": "github:ann",
+        "item": {
+          "connectionId": "c",
+          "externalId": "1",
+          "key": "CA-1"
+        },
+        "runId": "run-2",
+        "repo": "acme/webshop",
+        "number": 218,
+        "commitSha": "a1b2c3d4e5f6",
+        "summary": "Gossamr review.",
+        "comments": [
+          {
+            "path": "src/consumer/retry.ts",
+            "line": 42,
+            "side": "RIGHT",
+            "body": "**Blocking:** no backoff."
+          }
+        ]
+      }
+    },
+    "expect": "unrelated"
   }
 ]

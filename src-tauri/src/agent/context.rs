@@ -123,7 +123,9 @@ pub const MANAGER: &str = "This conversation belongs to a workstream, and you ma
      sends; otherwise tell the person what it asks. A turn that opens with [Event] lines is a wake: Gossamr, not the person, \
      asked you because a run changed; reply in at most about three lines. A workstream holds at most 8 drafts waiting for \
      the person, and a new draft of the same kind on the same ticket (a move, a description update, a triage update or \
-     subtasks) replaces your older one, so draft the one you mean rather than several.";
+     subtasks) replaces your older one, so draft the one you mean rather than several. A finished review leaves its findings \
+     as a GitHub review draft beside its Jira comment, and a newer round's draft replaces the older one unless the person \
+     edited it: point the person to it rather than repeating its comments, and revise it only when they ask.";
 
 pub fn system_prompt(role: Role, reads_code: bool, edits_text: bool) -> String {
     let assistant = assistant_prompt(reads_code, edits_text);
@@ -177,7 +179,7 @@ fn assistant_prompt(reads_code: bool, edits_text: bool) -> String {
          When the screen is Agents, the person is looking at their agent runs and not at a board: there is no ticket list \
          or ticked ticket. The Agents screen line counts the runs after the person's filter, while the agent runs block \
          can list runs outside it. Use list_runs and get_run for the run ids in the block. \
-         You can see the user's agent runs: list_runs, get_run, get_run_result and get_run_events only read them. get_run shows the start of a result and the part the run marked for Jira; before you write or change anything from a run, read the rest with get_run_result (it says where the next page starts) and never say a result was cut off while more can be fetched. When a run has left a comment or a new-ticket draft for the user, you may change its text (a ticket's title, description and type) with revise_proposal if they ask; they still approve it. A description update a run left carries its 'Gossamr Plan', the plan a build follows, so only the user changes it: say what you would change instead. propose_run saves a draft that starts \
+         You can see the user's agent runs: list_runs, get_run, get_run_result and get_run_events only read them. get_run shows the start of a result and the part the run marked for Jira; before you write or change anything from a run, read the rest with get_run_result (it says where the next page starts) and never say a result was cut off while more can be fetched. When a run has left a comment or a new-ticket draft for the user, you may change its text (a ticket's title, description and type) with revise_proposal if they ask; they still approve it. A review's findings reach the pull request only as a GitHub review draft the user approves in Gossamr: read it with get_proposal and the pull request's existing comments with list_review_comments, and when asked, reword, drop or add a comment (at a line the diff shows) with revise_proposal; it stays a draft, you can't post it, and once the user has edited it it is theirs. A description update a run left carries its 'Gossamr Plan', the plan a build follows, so only the user changes it: say what you would change instead. propose_run saves a draft that starts \
          an agent only after the user reads the exact prompt and approves it; on a ticket you give its key, a kind and at most a short \
          focus note, and the prompt and ticket text are not yours to write. When the user asks a question about the code and no ticket \
          covers it, you may propose an investigation with no ticket: leave out the key and give a repository from list_watched_repos and \
@@ -254,6 +256,7 @@ fn intent_summary(p: &Proposal) -> String {
         Intent::Link { from, to, .. } => format!("link {} to {}", from.key, to.key),
         Intent::FollowUp { run_id, reason, .. } => format!("follow-up for run {run_id}: “{}”", clip(reason)),
         Intent::RunAnswer { run_id, message, .. } => format!("answer for run {run_id}: “{}”", clip(message)),
+        Intent::GithubReview { repo, number, comments, .. } => format!("GitHub review of {repo}#{number}: {} comments", comments.len()),
         Intent::StartRun { item, spec, .. } => match item {
             Some(item) => format!("start an agent on {} in {}", item.key, spec.repo),
             None => format!("start an agent in {} with no ticket: “{}”", spec.repo, clip(&spec.instruction)),
@@ -360,6 +363,8 @@ mod tests {
             error: None,
             run: None,
             superseded_by: None,
+            posted: None,
+            maybe_posted: None,
         }
     }
 
@@ -849,5 +854,17 @@ mod tests {
             assert!(p.contains(needed), "{needed}");
         }
         assert!(p.matches("You cannot start, stop or answer a run").count() == 2, "kept by both parts");
+    }
+
+    #[test]
+    fn pip_is_told_a_review_draft_is_only_a_draft_it_may_revise_until_the_user_edits_it() {
+        const SENTENCE: &str = "A review's findings reach the pull request only as a GitHub review draft the user approves in Gossamr: read it with get_proposal and the pull request's existing comments with list_review_comments, and when asked, reword, drop or add a comment (at a line the diff shows) with revise_proposal; it stays a draft, you can't post it, and once the user has edited it it is theirs.";
+        for (reads_code, edits_text) in [(false, true), (true, true), (true, false), (false, false)] {
+            assert!(system_prompt(Role::Assistant, reads_code, edits_text).contains(SENTENCE));
+            assert!(system_prompt(Role::Manager, reads_code, edits_text).contains(SENTENCE));
+        }
+        let manager = system_prompt(Role::Manager, false, true);
+        assert!(manager.contains("as a GitHub review draft beside its Jira comment") && manager.contains("revise it only when they ask"));
+        assert!(!system_prompt(Role::Assistant, false, true).contains("beside its Jira comment"));
     }
 }

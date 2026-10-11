@@ -49,6 +49,9 @@ import type {
   FeedQuery,
   Footprint,
   PullRequestDetail,
+  ReviewAccess,
+  ChangedFile,
+  PullDiff,
   Stray,
   TreeEntry,
   WatchChange,
@@ -234,6 +237,18 @@ export class JiraBackend implements Backend {
     return invoke<PullRequestDetail>("code_pull_request", { reference });
   }
 
+  codePullFiles(connectionId: string, repo: string, number: number) {
+    return invoke<ChangedFile[]>("code_pull_files", { connectionId, repo, number });
+  }
+
+  codePullDiff(connectionId: string, repo: string, number: number) {
+    return invoke<PullDiff>("code_pull_diff", { connectionId, repo, number });
+  }
+
+  codeReviewAccess(connectionId: string, repo: string) {
+    return invoke<ReviewAccess>("code_review_access", { connectionId, repo });
+  }
+
   codeSearch(query: string) {
     return invoke<CodeChange[]>("code_search", { query });
   }
@@ -297,6 +312,10 @@ export class JiraBackend implements Backend {
 
   proposalsApprove(id: string) {
     return invoke<Proposal>("proposals_approve", { id });
+  }
+
+  proposalsPostReview(id: string, revisions: number, postAnyway = false) {
+    return invoke<Proposal>("proposals_post_review", { id, revisions, postAnyway });
   }
 
   onProposalsChanged(listener: (change: ProposalsChanged) => void) {

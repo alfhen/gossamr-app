@@ -4,7 +4,9 @@ import { docText } from "../lib/docs";
 import { autoLink, liveMentions, type Mention } from "../lib/mentions";
 import { targetOf, unreachable } from "../lib/proposals";
 import { useBackend } from "../backend/useBackend";
-import type { Person, Proposal, ProposalEdit } from "../types";
+import type { Person, Proposal, ProposalEdit, ReviewAccess } from "../types";
+import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
+import { editThenPost, ReviewDraft, reviewWithPipPrompt } from "./ReviewDraft";
 import { draftStatus } from "./boardLogic";
 import { showMe } from "./jump";
 import { KIND_LABEL } from "./agentsLogic";
@@ -58,6 +60,8 @@ export function draftTitle(p: Proposal, runLabel?: string | null): string {
       return followUpTitle(i);
     case "runAnswer":
       return answerTitle(i, runLabel);
+    case "githubReview":
+      return `GitHub review of ${i.repo}#${i.number}`;
     default:
       return unreachable(i);
   }
@@ -89,6 +93,8 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
       return i.reason;
     case "runAnswer":
       return i.message.replace(/\s+/g, " ");
+    case "githubReview":
+      return `${i.comments.length} inline comment${i.comments.length === 1 ? "" : "s"}: ${i.summary.split("\n")[0]}`;
     default:
       return unreachable(i);
   }
@@ -101,7 +107,8 @@ export interface DraftCardProps {
   people: Person[];
   working: boolean;
   error: string | null;
-  onApprove(edit: ProposalEdit | null): void;
+  /** `postAnyway` is a review's Post anyway: the person's choice to send one that may already be on GitHub. */
+  onApprove(edit: ProposalEdit | null, options?: { postAnyway?: boolean }): void;
   onSkip(): void;
   /** Opens the setup sheet for a run draft, the one place it is approved. */
   onReview?(): void;
@@ -109,8 +116,8 @@ export interface DraftCardProps {
   onShow?(): void;
   /** Opens the agent run a draft was made from. */
   onOpenRun?(runId: string): void;
-  /** Present on a comment made from a run's result: opens Pip on the run and this draft. */
-  onDiscuss?(): void;
+  /** Present on a comment or a review made from a run's result: opens Pip on the run and this draft. A review card hands over the person's unsent edit, saved first so Pip reads their version. */
+  onDiscuss?(edit?: ProposalEdit | null): void;
   /** For a follow-up, the pass the agent would be on once it is sent. */
   pass?: number;
   /** Sends a follow-up back to its run, after saving the edit. */
@@ -119,6 +126,8 @@ export interface DraftCardProps {
   answer?: AnswerRun | null;
   /** Sends an answer to its run, after saving the edit. */
   onSendAnswer?(edit: ProposalEdit | null, message: string): void;
+  /** For a GitHub review, whether the token may post it; null while that is being asked. Approving a review posts it. */
+  access?: ReviewAccess | null;
 }
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
@@ -126,10 +135,12 @@ const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-w
 
 export function DraftCard(props: DraftCardProps) {
   const p = props.proposal;
-  if (p.state.type !== "retired") return <DraftCardBody {...props} />;
+  // A review has a card of its own: its comments sit over their lines of the diff, and it is posted to GitHub, not applied.
+  const Body = p.intent.type === "githubReview" ? ReviewDraft : DraftCardBody;
+  if (p.state.type !== "retired") return <Body {...props} />;
   return (
     <RetiredDraft proposal={p} title={draftTitle(p, props.answer?.label)} state={BADGE.retired}>
-      <DraftCardBody {...props} />
+      <Body {...props} />
     </RetiredDraft>
   );
 }
@@ -475,7 +486,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             {open && (
               <>
                 {onDiscuss && (
-                  <button type="button" disabled={working} onClick={onDiscuss} title="Pip reads the whole run and this draft, and changes the draft if you ask" className={button}>
+                  <button type="button" disabled={working} onClick={() => onDiscuss()} title="Pip reads the whole run and this draft, and changes the draft if you ask" className={button}>
                     Discuss with Pip
                   </button>
                 )}
@@ -549,6 +560,8 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
   const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
   const answer = useAnswerRun(p);
   const discuss = () => p.origin.type === "run" && askPip(commentWithPipPrompt({ id: p.origin.runId, item: target ?? null }, p.id));
+  const review = p.intent.type === "githubReview" ? p.intent : null;
+  const access = useRepoReviewAccess(review?.connectionId ?? null, review?.repo ?? null);
 
   return (
     <DraftCard
@@ -560,7 +573,19 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
       onShow={jump && target && item ? () => showMe(target) : undefined}
       onSkip={() => void run(() => useWorkspace.getState().skip(p.id))}
       onOpenRun={(id) => useRuns.getState().openRun(id)}
-      onDiscuss={p.origin.type === "run" && p.intent.type === "comment" ? discuss : undefined}
+      onDiscuss={
+        p.origin.type === "run" && p.intent.type === "comment"
+          ? discuss
+          : review
+            ? (edit) =>
+                void run(async () => {
+                  // The person's edit is saved first, so Pip reads their version, and it is theirs from then on.
+                  if (edit && backend) await backend.proposalsEdit(p.id, edit);
+                  askPip(reviewWithPipPrompt(p));
+                  return null;
+                })
+            : undefined
+      }
       pass={pass}
       onSendBack={(edit, message) =>
         void run(async () => {
@@ -578,8 +603,18 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
         })
       }
       onReview={p.intent.type === "startRun" ? () => void useRunSetup.getState().begin({ proposalId: p.id }) : undefined}
-      onApprove={(edit) =>
+      access={access}
+      onApprove={(edit, options) =>
         void run(async () => {
+          // A review goes to GitHub by its own path, and only on this approval; never through the tracker.
+          if (review) {
+            if (!backend) return null;
+            // The person's edit is saved first, so what is posted is what the card shows.
+            const done = await editThenPost(p.id, edit, p.revisions.length, { saveEdit: (id, e) => backend.proposalsEdit(id, e), post: (id, revisions) => useWorkspace.getState().postReview(id, revisions, options?.postAnyway) });
+            // A refusal may have been for want of access, which is then asked again.
+            if (done.error) useReviewAccess.getState().forget(review.connectionId, review.repo);
+            return done;
+          }
           if (edit && backend) await backend.proposalsEdit(p.id, edit);
           return useWorkspace.getState().approve(p.id);
         })

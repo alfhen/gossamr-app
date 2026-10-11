@@ -287,3 +287,21 @@ async fn an_answer_to_an_agent_is_refused_and_nothing_is_sent_to_jira() {
     assert!(matches!(&err, Error::Proposal(m) if m.contains("its own button")), "{err}");
     assert!(server.seen.lock().unwrap().is_empty(), "no request reached Jira");
 }
+
+#[tokio::test]
+async fn a_github_review_is_refused_and_nothing_is_sent_to_jira() {
+    let server = serve(vec![]).await;
+    let review = Intent::GithubReview {
+        connection_id: "github:ann".into(),
+        item: Some(item("CA-1")),
+        run_id: "r1".into(),
+        repo: "acme/webshop".into(),
+        number: 218,
+        commit_sha: "a1b2c3d4e5f6".into(),
+        summary: "Gossamr review of #218.".into(),
+        comments: vec![crate::domain::ReviewComment { path: "src/consumer/retry.ts".into(), line: 42, side: crate::domain::DiffSide::Right, body: "No backoff.".into() }],
+    };
+    let err = tracker(&server).apply(&review).await.unwrap_err();
+    assert!(matches!(&err, Error::Proposal(m) if m.contains("posted to GitHub with its own button")), "{err}");
+    assert!(server.seen.lock().unwrap().is_empty(), "no request reached Jira");
+}

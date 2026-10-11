@@ -1,12 +1,14 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
-import { capRefusal, leftByRun, PLAN_IS_THE_USERS, REPLACED_REASON, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
+import { capRefusal, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
+import { commentable } from "../lib/diffHunks";
 import { followUpProblem } from "../workspace/followUp";
 import { answerProblem } from "../lib/answer";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { planSectionOf } from "./mockPlanSection";
 import { readStored, writeStored } from "../workspace/storage";
-import type { Intent, ItemRef, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, WorkItemKind, WorkstreamActor } from "../types";
+import { AnswerLostError, ReviewOutdatedError } from "./mockGithub";
+import type { ChangedFile, Intent, ItemRef, MaybePosted, PostedReview, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, ReviewComment, WorkItemKind, WorkstreamActor } from "../types";
 
 /** A description update carrying a `Gossamr Plan` section that an agent run left: the plan a build follows once the person approves it. As `is_run_plan_rewrite` in `proposals.rs`. */
 export const isRunPlanRewrite = (p: Proposal) => p.origin.type === "run" && p.intent.type === "rewrite" && !!p.intent.body && !!planSectionOf(p.intent.body.to);
@@ -94,6 +96,7 @@ export class MockProposals {
       if (intent.container.connectionId !== CONNECTION) return Promise.reject(new Error("that item belongs to another connection"));
     } else if (intent.type === "followUp") return Promise.reject(new Error("only Pip proposes a follow-up"));
     else if (intent.type === "runAnswer") return Promise.reject(new Error("only Pip proposes an answer; answer the run yourself from its card"));
+    else if (intent.type === "githubReview") return Promise.reject(new Error("a review draft is made from a review run's findings"));
     else if (intent.type !== "startRun" && !targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
     if (intent.type === "transition" && !intent.to.trim()) return Promise.reject(new Error("a transition needs a target status"));
     const problem = intent.type === "rewrite" ? rewriteProblem(intent) : null;
@@ -192,6 +195,11 @@ export class MockProposals {
     return next;
   }
 
+  /** Tells the listeners the drafts may read differently, as when the pull request a review draft is about moved on. */
+  touch() {
+    this.changed();
+  }
+
   private changed() {
     if (this.kept) writeStored(this.kept.key, this.drafts.filter(this.kept.which));
     this.listeners.forEach((l) => l({ connectionId: CONNECTION }));
@@ -258,6 +266,16 @@ export class MockProposals {
       if (problem) throw new Error(problem);
       return this.edited(p, { ...intent, message: edit.message.trim() });
     }
+    if (edit.type === "githubReview" && intent.type === "githubReview") {
+      const next: Intent = {
+        ...intent,
+        summary: edit.summary !== undefined ? edit.summary.trim() : intent.summary,
+        comments: edit.comments ? edit.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body.trim() })) : intent.comments,
+      };
+      const problem = reviewEditProblem(intent, next);
+      if (problem) throw new Error(problem);
+      return this.edited(p, next);
+    }
     if (edit.type === "run" && intent.type === "startRun") {
       if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
       const { instruction, base, clonePath, kind, name, pr, allowPush, report, plan, buildAccount, project } = edit;
@@ -295,13 +313,45 @@ export class MockProposals {
   }
 
   /** Pip's change to the text of its own pending comment, or of the pending comment, new ticket or breakdown an agent run left for the person. A ticket may change its title and type too, its project never; a breakdown only its summaries. A draft of a workstream is revised only from that workstream's conversation (`workstream`). */
-  pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; kind?: WorkItemKind; summaries?: string[] }, workstream: string | null = null): Proposal {
+  pipRevise(
+    id: string,
+    change: string | { body?: string; title?: string; description?: string; kind?: WorkItemKind; summaries?: string[]; comments?: ReviewComment[] },
+    workstream: string | null = null,
+    /** The pull request's files at the reviewed commit, for a review draft: a comment at a new position must sit on a line they show. Why not, when they can't be read. */
+    files: ChangedFile[] | { unreadable: string } | null = null,
+  ): Proposal {
     const { body, title, description, kind, summaries } = typeof change === "string" ? { body: change, title: undefined, description: undefined, kind: undefined, summaries: undefined } : change;
+    const comments = typeof change === "string" ? undefined : change.comments;
     const p = this.pending(id);
     const ownWorkstream = () => {
       const of = workstreamOf(p);
       if (of !== null && of !== workstream) throw new Error("that draft belongs to another workstream");
     };
+    if (p.intent.type === "githubReview") {
+      // As `Core::revise_review_as_pip`: the person's edit makes it theirs; a new position must be one the diff shows. It stays a draft.
+      if (p.revisions.some((r) => r.note === "Edited")) throw new Error(REVIEW_IS_THE_USERS);
+      if (p.createdBy !== "pip" && !leftByRun(p)) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
+      ownWorkstream();
+      const was = p.intent;
+      if (body === undefined && comments === undefined) throw new Error("body (the new summary) or comments (the complete new list) is required");
+      const next: Intent = {
+        ...was,
+        summary: body?.trim() || was.summary,
+        comments: (comments ?? was.comments).map((c) => ({ path: c.path.trim(), line: c.line, side: c.side ?? "RIGHT", body: c.body.trim() })),
+      };
+      const at = (c: ReviewComment) => `${c.path}\n${c.line}\n${c.side}`;
+      const known = new Set(was.comments.map(at));
+      const fresh = next.comments.filter((c) => !known.has(at(c)));
+      if (fresh.length) {
+        if (!files || "unreadable" in files) throw new Error(`couldn't read the pull request's diff at the reviewed commit to place the new comments (${files?.unreadable ?? "it couldn't be read"}); reword or drop the comments it has instead, or try again later`);
+        const off = fresh.find((c) => !files.some((f) => f.path === c.path && !!f.patch && commentable(f.patch, c.line, c.side)));
+        if (off) throw new Error(offTheDiff(off.path, off.line));
+      }
+      const blank = next.comments.find((c) => !c.body);
+      if (blank) throw new Error(`the comment on ${blank.path}:${blank.line} needs a body; leave a comment out of the list to drop it`);
+      if (new Set(next.comments.map(at)).size !== next.comments.length) throw new Error("there are two comments on one line; merge them into one");
+      return this.set(id, { intent: next, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent: next }], error: null });
+    }
     if (p.intent.type === "rewrite") {
       if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this description draft, so Pip can't change it any more");
       // A build follows the plan the person approves here and is told a person settled it, so none of it may be Pip's.
@@ -398,11 +448,59 @@ export class MockProposals {
     if (this.get(id)?.state.type === "pending") this.set(id, { error: why });
   }
 
+  /**
+   * Posts a pending review draft with `post`, as `Core::post_review_draft`: refused when it has other than the `seen`
+   * revisions the person looked at, claimed first, so it goes at most once, and never through the tracker. A refusal leaves
+   * it pending with the reason, or `REVIEW_OUTDATED_NOTE` when GitHub found its lines outdated. A post whose answer was
+   * lost stays as `maybePosted`, which edits leave alone; while it is set nothing is sent: `find` looks for it on GitHub,
+   * and when it isn't found the draft waits with `REVIEW_NOT_FOUND_NOTE` until the person chooses `postAnyway`.
+   */
+  async postReview(
+    id: string,
+    seen: number,
+    post: (p: Proposal & { intent: Extract<Intent, { type: "githubReview" }> }) => Promise<PostedReview>,
+    find: (p: Proposal & { intent: Extract<Intent, { type: "githubReview" }> }, sent: MaybePosted) => Promise<PostedReview | null>,
+    postAnyway = false,
+  ) {
+    const p = this.pending(id);
+    if (p.revisions.length !== seen) throw new Error(REVIEW_CHANGED);
+    if (p.intent.type !== "githubReview") throw new Error("only a review draft is posted to GitHub");
+    const review = { ...p, intent: p.intent };
+    const lookFor = postAnyway ? null : (p.maybePosted ?? null);
+    // What is about to be sent is kept with the claim, so it is looked for should no answer come.
+    const sending: MaybePosted | null = lookFor ?? { at: new Date().toISOString(), commitSha: p.intent.commitSha, summary: p.intent.summary, checkedAt: null };
+    this.set(id, { state: { type: "applying" }, error: null, maybePosted: sending });
+    const posted = (found: PostedReview) => {
+      const applied = this.set(id, { state: { type: "applied" }, posted: found, error: null, maybePosted: null });
+      this.audit(applied, "person", "draft_approved");
+      this.audit(applied, "person", "review_posted", `${review.intent.repo}#${review.intent.number} review ${found.id}`);
+      return applied;
+    };
+    if (lookFor) {
+      let why = REVIEW_NOT_FOUND_NOTE;
+      try {
+        const found = await find(review, lookFor);
+        if (found) return posted(found);
+      } catch (e) {
+        why = `${REVIEW_MAYBE_POSTED_NOTE} Gossamr couldn't check just now (${e instanceof Error ? e.message : String(e)}). Try again, or check the pull request and choose Post anyway.`;
+      }
+      return this.set(id, { state: { type: "pending" }, error: why, maybePosted: { ...lookFor, checkedAt: new Date().toISOString() } });
+    }
+    try {
+      return posted(await post(review));
+    } catch (e) {
+      if (e instanceof AnswerLostError) return this.set(id, { state: { type: "pending" }, error: `${REVIEW_MAYBE_POSTED_NOTE} (${e.message})` });
+      const error = e instanceof ReviewOutdatedError ? REVIEW_OUTDATED_NOTE : e instanceof Error ? e.message : String(e);
+      return this.set(id, { state: { type: "pending" }, error, maybePosted: null });
+    }
+  }
+
   async approve(id: string) {
     const p = this.pending(id);
     if (p.intent.type === "startRun") throw new Error("A run is approved with its own button");
     if (p.intent.type === "followUp") throw new Error("A follow-up is sent back with its own button");
     if (p.intent.type === "runAnswer") throw new Error("An answer is sent with its own button");
+    if (p.intent.type === "githubReview") throw new Error("A review is posted to GitHub with its own button");
     this.set(id, { state: { type: "applying" } });
     try {
       const created = await this.apply(p.intent, p.created);
