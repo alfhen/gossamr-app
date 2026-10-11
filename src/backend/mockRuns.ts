@@ -4,13 +4,20 @@ import { approvedPlanText, assemblePlan, planSectionOf } from "./mockPlanSection
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, scriptedFinish, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
+import { DENIED_MESSAGE, permissionOffer, readAs } from "../lib/permission";
 import { reviewText } from "./mockReviewDraft";
 import { followUpBlocker, followUpProblem } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import { makerName } from "../lib/proposals";
 import { revisedByPipUnedited, runAnswerProblem, type MockProposals } from "./mockProposals";
-import { textDigest, type MockWorkstreams } from "./mockWorkstreams";
+import { ESCALATION_GONE, textDigest, type MockWorkstreams } from "./mockWorkstreams";
+import { fixRoundMessage, marked, type ReviewFinding } from "./mockSupervisor";
 import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, BUILD_NEEDS_PLAN, PIP_CHAIN_KINDS, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT, FINDINGS_LIMIT, FINDINGS_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, checkoutParagraph, checksOutPr, readOnlyRules, testsParagraph, findingsLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
+
+/** Why a person's fix round isn't sent when none of the review's blocking findings cites a file and line, as `NOTHING_TO_FIX` in src-tauri/src/runs/follow_up.rs. */
+export const NOTHING_TO_FIX = "None of the review's blocking findings cites a file and line, so a fix round has nothing to send. Post the review or take it from here.";
+/** Why a person's fix round isn't sent when the review's output holds Gossamr's data markers, as `REVIEW_MARKED`. */
+export const REVIEW_MARKED = "The review's output holds text Gossamr reserves, so a fix round won't carry it. Post the review or take it from here.";
 
 const CONNECTION = "mock";
 export const GUARD =
@@ -511,6 +518,11 @@ export class MockRuns {
   private tick = 0;
   /** Run ids passed to `attach`, for tests. */
   readonly attached: string[] = [];
+  /**
+   * Waking a stopped session fails, as when `claude` exits or starts a copy: for a test to see what the person is left
+   * with after a Deny or their own fix round whose wake didn't go through.
+   */
+  wakeFails = false;
   /** What each run that was offered the report tool did with it. */
   private reports = new Map<string, MockReportRow>();
 
@@ -522,6 +534,8 @@ export class MockRuns {
   private followUps = new Map<string, { text: string; detail: string }[]>();
   /** When the person answered each run, oldest first: each is a "You answered" entry in its timeline. */
   private answeredAt = new Map<string, string[]>();
+  /** What the person did with each run's permission prompts, oldest first: each is an entry in its timeline. */
+  private permissionLog = new Map<string, { at: string; text: string; detail: string }[]>();
   /** Copies made in `~/Gossamr/agents` through `cloneFresh`. */
   private fresh = new Map<string, LocalClone>();
   /** Pull requests and branches by run id, standing in for what a sync would have cached. */
@@ -780,6 +794,15 @@ export class MockRuns {
     return next;
   }
 
+  /** Has a working run ask permission to run something, worded as the listing has it (`approve Bash: git push`), or one that asks already or is unclear ask for something else, for tests and for trying the sheet. */
+  askPermission(id: string, needs: string): Run {
+    const run = this.get(id);
+    if (run?.state !== "working" && run?.state !== "needsPermission" && run?.state !== "unknown") throw new Error("only a working run can ask permission");
+    const next = this.update(id, { state: "needsPermission", needs, lastProgressAt: this.now() });
+    this.changed();
+    return next;
+  }
+
   /** Has a running run go unclear for now, as `track` does when Claude reports a state it can't read, for tests. */
   lose(id: string): Run {
     const next = this.update(id, { state: "unknown", needs: null, error: "Claude reported the state \"odd\". Open in Terminal to look." });
@@ -806,6 +829,8 @@ export class MockRuns {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
     const next = { ...run, ...patch };
+    // The person's Allow once is for the prompt they chose it on, as `track` keeps it: gone once the run leaves it or asks something else.
+    if (next.permissionAllowed && (next.state !== "needsPermission" || next.needs !== run.needs)) next.permissionAllowed = null;
     this.runs = this.runs.map((r) => (r.id === id ? next : r));
     // An answer Pip suggested has nothing left to answer once the run finished or stopped without one, or moved on from
     // the question it answers, as `track` does: each draft is held to the question the run asks now, so one unclear in
@@ -1055,6 +1080,43 @@ export class MockRuns {
     return next;
   }
 
+  /**
+   * The person's "Run another fix round" on review `reviewRun`, which still blocks after the automatic fix rounds ran out,
+   * as `RunService::send_person_fix_round`: only while the workstream's escalation is about that review, the same build
+   * checks as an automatic round, and the message `fixRoundMessage` makes of the review's blocking findings. The audit
+   * gets `fix_round_person` (after the review) and then `fix_round_sent`, both by the person; neither is an `autostart`
+   * line, so the supervisor's count of automatic rounds stays as it was.
+   */
+  sendPersonFixRound(reviewRun: string): Run {
+    const review = this.get(reviewRun);
+    const ws = review?.spec.workstream;
+    const escalation = ws ? this.workstreams?.get(ws)?.escalation : null;
+    if (!review || !ws || !escalation || escalation.reviewRun !== review.id) throw new Error(ESCALATION_GONE);
+    const run = this.get(escalation.buildRun);
+    if (!run || run.spec.workstream !== ws) throw new Error("a fix round goes only to a workstream's build");
+    if (run.spec.kind !== "build" || !run.spec.allowPush) throw new Error("a fix round goes only to a workstream's build that pushes to a draft pull request");
+    if (run.state !== "done") throw new Error(`This build is ${run.state}, so it can't be sent a fix round.`);
+    const blocker = followUpBlocker(run);
+    if (blocker) throw new Error(`This build can't be sent back: ${blocker}.`);
+    const findings = (this.resolvedOf(review.id)?.findings ?? []) as ReviewFinding[];
+    const texts = [review.result, review.summary, ...findings.flatMap((f) => [f.text, f.where])].filter((t): t is string => !!t);
+    if (marked(texts)) throw new Error(REVIEW_MARKED);
+    const message = fixRoundMessage(findings);
+    if (!message) throw new Error(NOTHING_TO_FIX);
+    const digest = textDigest(message);
+    // A resume that fails records nothing, so the escalation stays the person's to choose.
+    if (this.wakeFails) throw new Error("Couldn't wake the agent: claude exited.");
+    this.workstreams?.record(ws, "person", "fix_round_person", { runId: run.id, digest, detail: `after ${review.id}` });
+    const passes = (run.passes ?? 1) + 1;
+    this.followUps.set(run.id, [...(this.followUps.get(run.id) ?? []), { text: "You asked for another pass: fix what the review found blocking", detail: `Pass ${passes}. Started by you after the ${escalation.rounds} automatic rounds.` }]);
+    const at = this.now();
+    const next = this.update(run.id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: at, lastProgressAt: at, lastDetail: "Reading the review's findings" });
+    this.markStale(run.id);
+    this.workstreams?.record(ws, "person", "fix_round_sent", { runId: run.id, digest, detail: String([...message].length) });
+    this.changed();
+    return next;
+  }
+
   /** The pull request as GitHub has it, or one this backend's own builds opened once it shows. */
   private findPullRequest(repo: string, number: number): CodeChange | null {
     const own = [...this.changes.values()].find((c) => this.opened.has(c.externalId) && c.repo.toLowerCase() === repo.toLowerCase() && c.number === number);
@@ -1236,12 +1298,67 @@ export class MockRuns {
     return this.answerKeeping(id, text, null);
   }
 
+  /** The run must still ask what the person read, as `read_check`. */
+  private permissionAsked(id: string, command: string): Run {
+    const run = this.get(id);
+    if (!run) throw new Error("that run no longer exists");
+    if (run.state !== "needsPermission") throw new Error(`This run is ${run.state}, so it isn't asking permission.`);
+    if (readAs(run.needs) !== command) throw new Error("The request changed after you read it. Read it again.");
+    return run;
+  }
+
+  private logPermission(id: string, at: string, text: string, command: string) {
+    this.permissionLog.set(id, [...(this.permissionLog.get(id) ?? []), { at, text, detail: command }]);
+  }
+
+  /**
+   * The person's Deny for the prompt they read as `command`, as `deny_permission`: the run is stopped, which refuses the
+   * request and is recorded then with the exact command, and woken in place told the person said no (`DENIED_MESSAGE`),
+   * so it is working again with the prompt gone. A wake that fails (`wakeFails`) leaves it stopped with the denial kept to
+   * send again.
+   */
+  denyPermission(id: string, command: string): Run {
+    const run = this.permissionAsked(id, command);
+    if (!run.shortId) throw new Error("This run has no session to answer.");
+    const at = this.now();
+    this.logPermission(id, at, "You denied this request", command);
+    this.workstreams?.record(run.spec.workstream, "person", "permission_denied", { runId: id, detail: command });
+    if (this.wakeFails) {
+      const why = "Couldn't wake the agent: claude exited.";
+      this.update(id, { state: "stopped", needs: null, suggestedReply: null, unsentAnswer: DENIED_MESSAGE, permissionAllowed: null, error: why, endedAt: at, lastProgressAt: at });
+      this.changed();
+      throw new Error(`${why} Your denial is kept on the run, to send again.`);
+    }
+    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, permissionAllowed: null, error: null, endedAt: null, lastProgressAt: at, lastDetail: null });
+    this.markStale(id);
+    this.changed();
+    return next;
+  }
+
+  /**
+   * The person's Allow once for the prompt they read as `command`, as `allow_permission_once`: only when `permissionOffer`
+   * offers it, Terminal is opened on the session (`attach`) for the person to answer Yes there, and only then is the choice
+   * recorded. The run is neither stopped nor resumed; it stays asking until Claude Code has the answer.
+   */
+  allowPermissionOnce(id: string, command: string): Run {
+    const run = this.permissionAsked(id, command);
+    const offer = permissionOffer(run);
+    if (offer.reason) throw new Error(offer.reason);
+    this.attach(id);
+    const at = this.now();
+    this.logPermission(id, at, "You chose Allow once, in Terminal", command);
+    const next = this.update(id, { permissionAllowed: { command, at } });
+    this.changed();
+    this.workstreams?.record(next.spec.workstream, "person", "permission_allowed_in_terminal", { runId: id, detail: command });
+    return next;
+  }
+
   /** `answer`, retiring the run's other waiting answer drafts but `keep` once it has gone, as `answer_keeping`. */
   private answerKeeping(id: string, text: string, keep: string | null): Run {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
     const again = run.state === "stopped" && (!!run.unsentAnswer || !!run.stoppedByLimit);
-    if (run.state !== "needsAnswer" && !again) throw new Error(run.state === "needsPermission" ? "A permission prompt can only be answered in Terminal." : `This run is ${run.state}, so it isn't waiting for an answer.`);
+    if (run.state !== "needsAnswer" && !again) throw new Error(run.state === "needsPermission" ? "This run is asking permission: answer it with Allow once or Deny." : `This run is ${run.state}, so it isn't waiting for an answer.`);
     const problem = answerProblem(text);
     if (problem) throw new Error(problem);
     const resumed = run.stoppedByLimit ? { stoppedByLimit: false, continuedAt: this.now() } : {};
@@ -1916,6 +2033,7 @@ export class MockRuns {
     for (const f of this.followUps.get(id) ?? []) lines.splice(lines.length - (run.state === "done" ? 1 : 0), 0, ["follow_up", f.text, f.detail]);
     const events = lines.map(([kind, text, detail], i): RunEvent => ({ runId: id, seq: i + 1, at: at(i * 2), kind, text, detail }));
     const answers = (this.answeredAt.get(id) ?? []).map((when): RunEvent => ({ runId: id, seq: 0, at: when, kind: "answered", text: "You answered", detail: null }));
+    for (const p of this.permissionLog.get(id) ?? []) answers.push({ runId: id, seq: 0, at: p.at, kind: "permission", text: p.text, detail: p.detail });
     if (!answers.length) return events;
     // In time order, as the backend's store gives them: an answer lands where it happened.
     return [...events, ...answers].sort((a, b) => a.at.localeCompare(b.at)).map((e, i) => ({ ...e, seq: i + 1 }));

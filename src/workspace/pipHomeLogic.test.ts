@@ -4,7 +4,7 @@ import { heldText } from "../lib/workstreamHold";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { agentSummary } from "../backend/mockPip";
-import { NO_FILTERS, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
+import { NO_FILTERS, attentionCount, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
 import { planRewriteDraft, batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -96,7 +96,7 @@ describe("needsYouItems", () => {
       ["runStart", "CA-401 · Start Investigate"],
       ["draft", "CA-401 · Draft comment"],
       ["question", "CA-401 · R1 asks a question"],
-      ["permission", "CA-401 · R2 needs permission"],
+      ["permission", "CA-401 · R2 asks to run a command"],
       ["failure", "CA-401 · R3 failed"],
       ["permission", "CA-999 · Investigate agent needs its folder trusted"],
       ["permission", "Investigate agent needs permission"],
@@ -104,6 +104,18 @@ describe("needsYouItems", () => {
     expect(items.find((i) => i.kind === "draft")?.target).toEqual({ type: "draft", id: "d-comment" });
     expect(items.find((i) => i.kind === "question")?.target).toEqual({ type: "run", id: "r-q" });
     expect(items.find((i) => i.kind === "held")?.target).toEqual({ type: "workstream" });
+  });
+
+  it("keeps a permission prompt the person chose Allow once for as waiting in Terminal, and asks again once the run asks something else", () => {
+    const asking = run("r-p", "build", "needsPermission", { needs: "approve Bash: git push -u origin worktree-x" });
+    const listed = (r: Run) => needsYouItems(input({ workstreams: [ws1], runs: [r] })).map((i) => i.label);
+    expect(listed(asking)).toEqual(["CA-401 · R2 asks to run a command"]);
+    const allowed = { ...asking, permissionAllowed: { command: "git push -u origin worktree-x", at: iso(1) } };
+    expect(listed(allowed)).toEqual(["CA-401 · R2 waits for your Yes in Terminal"]);
+    // Counted as the rail badge counts it.
+    expect(needsYouItems(input({ workstreams: [ws1], runs: [allowed] }))).toHaveLength(attentionCount([allowed], new Set()));
+    // A new request the Allow once wasn't for: the person is asked again.
+    expect(listed({ ...allowed, needs: "approve Bash: pnpm install" })).toEqual(["CA-401 · R2 asks to run a command"]);
   });
 
   it("lists oldest first, by when each started waiting", () => {
@@ -148,6 +160,18 @@ describe("needsYouItems", () => {
       }),
     );
     expect(items).toEqual([]);
+  });
+
+  it("brings a review that still blocks after the fix rounds to the person once, by its workstream, and lets it go when the view does", () => {
+    const escalated: WorkstreamView = { ...view("ws-1", "CA-401", { runs: ["r-b", "r-rev"] }), escalation: { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R2", buildLabel: "R1", rounds: 2, reviewDraft: null, at: iso(7) } };
+    const items = needsYouItems(input({ workstreams: [escalated], titleOf: () => "Checkout fails" }));
+    expect(items).toEqual([
+      { key: "escalation:r-rev", kind: "escalation", workstreamId: "ws-1", label: "CA-401 · review still blocks after 2 fix rounds", head: "CA-401 · Checkout fails", reason: "review still blocks after 2 fix rounds", at: iso(7), target: { type: "escalation" } },
+    ]);
+    expect(needsYouCount(items, "ws-1")).toBe(1);
+    // Chosen (the view has no escalation any more) or closed: it goes.
+    expect(needsYouItems(input({ workstreams: [{ ...escalated, escalation: undefined }] }))).toEqual([]);
+    expect(needsYouItems(input({ workstreams: [{ ...escalated, workstream: { ...escalated.workstream, closedAt: iso(1) } }] }))).toEqual([]);
   });
 
   it("labels budget and tripwire holds the short way", () => {
@@ -300,12 +324,16 @@ describe("the step chips", () => {
 
   it("count the build's fix rounds from the audit, out of two, and say when it waits for its pull request", () => {
     const build = run("r4", "build", "done");
-    const sent = { action: "fix_round_sent", runId: "r4" };
+    const sent = { action: "fix_round_sent", runId: "r4", actor: "supervisor" } as const;
+    const yours = { ...sent, actor: "person" } as const;
     expect(chip(stepChips([build], [], {}, [], { now: NOW }), "build").fixRound).toBeNull();
-    expect(chip(stepChips([build], [{ action: "wake", runId: "r4" }, sent], {}, [], { now: NOW }), "build").fixRound).toBe(`fix round 1/${FIX_ROUNDS}`);
+    expect(chip(stepChips([build], [{ action: "wake", runId: "r4", actor: "pip" }, sent], {}, [], { now: NOW }), "build").fixRound).toBe(`fix round 1/${FIX_ROUNDS}`);
     expect(chip(stepChips([build], [sent, sent], {}, [], { now: NOW }), "build").fixRound).toBe("fix round 2/2");
+    // The person's rounds past the cap are said as theirs, not as a third automatic one.
+    expect(chip(stepChips([build], [sent, sent, yours], {}, [], { now: NOW }), "build").fixRound).toBe("fix round 3 (yours, after 2 automatic)");
+    expect(chip(stepChips([build], [sent, sent, yours, yours], {}, [], { now: NOW }), "build").fixRound).toBe("fix round 4 (2 yours, after 2 automatic)");
     // Another workstream's build, or none, counts nothing.
-    expect(chip(stepChips([build], [{ action: "fix_round_sent", runId: "other" }], {}, [], { now: NOW }), "build").fixRound).toBeNull();
+    expect(chip(stepChips([build], [{ action: "fix_round_sent", runId: "other", actor: "supervisor" }], {}, [], { now: NOW }), "build").fixRound).toBeNull();
     expect(chip(stepChips([build], [], {}, [], { now: NOW, waitingForPr: "r4" }), "build")).toMatchObject({ state: "waiting for PR", tone: "warn" });
   });
 

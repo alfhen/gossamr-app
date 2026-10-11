@@ -11,7 +11,7 @@ import { usePullView, type PullDiffState } from "./pullViewStore";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
 import type { ScreenContext } from "../types";
-import { editThenPost, editThenPullView, followDraft, MARKDOWN_HINT, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+import { editThenPost, editThenPullView, followDraft, keptOlderNote, MARKDOWN_HINT, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
 
 vi.mock("../components/autoHeight", async (original) => ({ ...(await original<typeof import("../components/autoHeight")>()), useAutoHeight: vi.fn() }));
 
@@ -301,5 +301,25 @@ describe("a GitHub review draft's card in the peek (D9, D20, D21, D32)", () => {
     expect(html).not.toMatch(/data-hunk-line="[^"]*" class="flex whitespace-pre /);
     expect(html).not.toContain("overflow-x-auto");
     expect(html).toContain("whitespace-pre-wrap [overflow-wrap:anywhere]");
+  });
+});
+
+describe("an older review of the same pull request left standing", () => {
+  const older = (over: Partial<Proposal> = {}) => draft({ id: "old", createdAt: "2026-10-01T09:00:00Z", origin: { type: "run", runId: "run-0", shortId: null }, intent: { ...intent, runId: "run-0" }, ...over });
+  const edited = older({ revisions: [{ at: "2026-10-01T09:30:00Z", note: "Edited", intent: { ...intent, runId: "run-0", summary: "Mine." } }] });
+  const at = (p: Proposal, all: Proposal[]) => renderToStaticMarkup(<ReviewDraft proposal={p} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} access={canPost} diff={sample()} drafts={all} />);
+
+  it("says on the newer card that one the person edited is still waiting", () => {
+    expect(keptOlderNote(draft(), [edited, draft()])).toBe("An older review of #218 that you edited is still waiting; this one didn't replace it.");
+    expect(at(draft(), [edited, draft()])).toContain("An older review of #218 that you edited is still waiting; this one didn&#x27;t replace it.");
+    // Not on the older card itself, nor for one the newer review replaced or that was posted.
+    expect(at(edited, [edited, draft()])).not.toContain("data-review-kept-older");
+    expect(at(draft(), [older({ state: { type: "retired", reason: "Replaced by a newer draft" } }), draft()])).not.toContain("data-review-kept-older");
+    expect(at(draft(), [older({ state: { type: "applied" } }), draft()])).not.toContain("data-review-kept-older");
+  });
+
+  it("says so for one GitHub may have already", () => {
+    const unsure = older({ maybePosted: { at: "2026-10-01T09:40:00Z", commitSha: "a1b2c3d4e5f6", summary: "S.", checkedAt: null } });
+    expect(keptOlderNote(draft(), [unsure, draft()])).toBe("An older review of #218 that may already be on GitHub is still waiting; this one didn't replace it.");
   });
 });

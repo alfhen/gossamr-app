@@ -1,6 +1,6 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
-import { capRefusal, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
+import { capRefusal, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reviewSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
 import { commentable } from "../lib/diffHunks";
 import { followUpProblem } from "../workspace/followUp";
 import { answerProblem } from "../lib/answer";
@@ -77,8 +77,8 @@ export class MockProposals {
   /** Told of a draft the moment its write went through, before it reads as applied, as the backend takes a workstream's basis again then. */
   onWritten: (p: Proposal) => void = () => {};
 
-  /** Called when a draft was made, approved, skipped or retired, for the audit of its workstream; set by the backend that keeps them. */
-  audit: (p: Proposal, actor: WorkstreamActor, action: string, detail?: string) => void = () => {};
+  /** Called when a draft was made, approved, skipped or retired, for the audit of its workstream (or of `workstream` when given); set by the backend that keeps them. */
+  audit: (p: Proposal, actor: WorkstreamActor, action: string, detail?: string, workstream?: string | null) => void = () => {};
 
   constructor(private readonly apply: (intent: Intent, already: ItemRef[]) => Promise<ItemRef[]>) {}
 
@@ -127,16 +127,37 @@ export class MockProposals {
       run: null,
     };
     // Everything that can refuse the draft is decided before anything is stored, as `create` in `proposals.rs`.
-    const replaced = this.tidy(p);
+    const { replaced, kept } = this.tidy(p);
     this.drafts = [p, ...this.drafts.map((d) => (replaced.includes(d) ? { ...d, state: { type: "retired" as const, reason: REPLACED_REASON }, supersededBy: p.id, updatedAt: now } : d))];
     this.changed();
     this.audit(p, actorOf(createdBy), "draft_created");
-    for (const old of replaced) this.audit(this.get(old.id)!, actorOf(createdBy), "draft_superseded", p.id);
+    // Said in the older draft's workstream, or in the new one's for an older draft in none, as `record_beside`.
+    const beside = (old: Proposal, action: string) => this.audit(old, actorOf(createdBy), action, p.id, workstreamOf(old) ? undefined : workstreamOf(p));
+    for (const old of replaced) beside(this.get(old.id)!, "draft_superseded");
+    for (const { proposal, why } of kept) beside(proposal, why);
     return p;
   }
 
-  /** The older drafts `p` replaces in its workstream; throws when it would replace one the person owns, or when Pip already has the workstream's share waiting. As `tidy` in `proposals.rs`. */
-  private tidy(p: Proposal): Proposal[] {
+  /**
+   * The older drafts `p` replaces in its workstream, and the ones it leaves standing with why; throws when it would
+   * replace one the person owns, or when Pip already has the workstream's share waiting. A review an agent run left is
+   * tidied by its pull request instead, in any workstream or none (`tidy_reviews`). As `tidy` in `proposals.rs`.
+   */
+  private tidy(p: Proposal): { replaced: Proposal[]; kept: { proposal: Proposal; why: string }[] } {
+    if (isRunReview(p)) {
+      const replaced: Proposal[] = [];
+      const kept: { proposal: Proposal; why: string }[] = [];
+      for (const older of this.drafts.filter((d) => d.state.type === "pending")) {
+        const verdict = reviewSupersession(older, p);
+        if (verdict === "supersede") replaced.push(older);
+        else if (verdict) kept.push({ proposal: older, why: verdict });
+      }
+      return { replaced, kept };
+    }
+    return { replaced: this.tidyWorkstream(p), kept: [] };
+  }
+
+  private tidyWorkstream(p: Proposal): Proposal[] {
     const ws = workstreamOf(p);
     if (!ws || p.createdBy === "autopilot" || (p.createdBy === "user" && p.origin.type !== "run")) return [];
     const open = this.drafts.filter((d) => (d.state.type === "pending" || d.state.type === "applying") && workstreamOf(d) === ws);

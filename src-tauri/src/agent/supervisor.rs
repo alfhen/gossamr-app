@@ -298,7 +298,7 @@ fn fact_line(f: &WakeFact) -> String {
         line.push_str(&format!("; sent fix round {} to build {}", r.round, label(&r.build)));
     }
     if f.exhausted {
-        line.push_str(&format!("; review still blocking after {} fix rounds", autostart::FIX_ROUNDS_MAX));
+        line.push_str(&format!("; review still blocking after {} fix rounds; the person chooses what happens next", autostart::FIX_ROUNDS_MAX));
     }
     if f.waiting_for_pr {
         line.push_str("; waiting for its pull request");

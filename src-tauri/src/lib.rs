@@ -663,6 +663,30 @@ async fn workstreams_set_mode(app: AppHandle, core: State<'_, CoreState>, id: St
     Ok(ws)
 }
 
+/// The person's "Run another fix round" on a review that still blocks after the automatic fix rounds: sends the build
+/// one more round with the review's blocking findings. Only while that review is waiting for their choice; Pip has no
+/// way to call this.
+#[tauri::command]
+async fn workstreams_fix_round(app: AppHandle, runs: State<'_, RunsState>, review_run: String) -> Result<Run> {
+    let run = runs.send_person_fix_round(&review_run).await;
+    if let Ok(run) = &run {
+        runs_changed(&app, &run.connection_id);
+        workstreams_changed(&app, &run.connection_id);
+    }
+    run
+}
+
+/// The person's "I'll take it from here" on a review that still blocks after the automatic fix rounds: the workstream
+/// goes to Advise and nothing else changes. Pip has no way to call this.
+#[tauri::command]
+async fn workstreams_take_over(app: AppHandle, runs: State<'_, RunsState>, id: String, review_run: String) -> Result<Workstream> {
+    // Under the launch lock, as the person's fix round is, so the two choices can't both go through.
+    let ws = runs.take_over_escalation(&id, &review_run).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    runs_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
 /// The person holds a workstream: nothing wakes Pip or starts on its own in it; its runs carry on.
 #[tauri::command]
 async fn workstreams_hold(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String) -> Result<Workstream> {
@@ -765,6 +789,25 @@ async fn runs_stop(runs: State<'_, RunsState>, id: String) -> Result<Run> {
 #[tauri::command]
 async fn runs_answer(runs: State<'_, RunsState>, id: String, text: String) -> Result<Run> {
     runs.answer(&id, &text).await
+}
+
+/// The person's Deny for the permission prompt they read as `command`: stops the session and wakes it in place, told
+/// the request was refused. Pip has no way to call this.
+#[tauri::command]
+async fn runs_deny_permission(app: AppHandle, runs: State<'_, RunsState>, id: String, command: String) -> Result<Run> {
+    let run = runs.deny_permission(&id, &command).await?;
+    runs_changed(&app, &run.connection_id);
+    Ok(run)
+}
+
+/// The person's Allow once for the permission prompt they read as `command`, when Gossamr's policy offers it: records
+/// the choice and opens the session in Terminal, where the person answers Claude Code's own prompt. Pip has no way to
+/// call this.
+#[tauri::command]
+async fn runs_allow_permission_once(app: AppHandle, runs: State<'_, RunsState>, id: String, command: String) -> Result<Run> {
+    let run = runs.allow_permission_once(&id, &command).await?;
+    runs_changed(&app, &run.connection_id);
+    Ok(run)
 }
 
 /// Approves a follow-up the person has read (`message` is what they saw; a draft that changed since is refused): sends the finished agent back for another pass with its message.
@@ -1363,6 +1406,8 @@ pub fn run() {
             runs_suggest_name,
             runs_stop,
             runs_answer,
+            runs_deny_permission,
+            runs_allow_permission_once,
             runs_send_follow_up,
             runs_answer_draft,
             runs_adopt_session,
@@ -1393,6 +1438,8 @@ pub fn run() {
             workstreams_set_notes,
             workstreams_events,
             workstreams_set_mode,
+            workstreams_fix_round,
+            workstreams_take_over,
             workstreams_hold,
             workstreams_resume,
             workstreams_set_rule,

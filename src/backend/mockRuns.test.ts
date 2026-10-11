@@ -5,8 +5,9 @@ import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { FINDINGS_LIMIT, FINDINGS_PREFACE, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, READ_ONLY_GUARD, readOnlyRules, specProblem, withoutMarkers } from "./mockRunKinds";
 import { MockSupervisor } from "./mockSupervisor";
-import { MockWorkstreams } from "./mockWorkstreams";
+import { ESCALATION_GONE, MockWorkstreams } from "./mockWorkstreams";
 import { heldText } from "../lib/workstreamHold";
+import { DENIED_MESSAGE } from "../lib/permission";
 import { mockAsk } from "./mockPip";
 import { GUARD as GUARD_TEXT, MOVED_ON, VERIFY_UNPINNED, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
@@ -127,7 +128,7 @@ describe("mock runs", () => {
     await expect(backend.runsAnswer(asking.id, "   ")).rejects.toThrow(/Write an answer/);
     await expect(backend.runsAnswer(asking.id, "x".repeat(4001))).rejects.toThrow(/up to 4000 characters/);
     await expect(backend.runsAnswer(asking.id, "a\0b")).rejects.toThrow(/plain text/);
-    await expect(backend.runsAnswer(permission.id, "Yes")).rejects.toThrow(/only be answered in Terminal/);
+    await expect(backend.runsAnswer(permission.id, "Yes")).rejects.toThrow(/answer it with Allow once or Deny/);
     const after = await backend.runsAnswer(asking.id, "Yes");
     expect(after).toMatchObject({ id: asking.id, state: "working", needs: null, suggestedReply: null, shortId: asking.shortId });
     await expect(backend.runsAnswer(asking.id, "Again")).rejects.toThrow(/isn't waiting for an answer/);
@@ -1089,5 +1090,109 @@ describe("the sample's workstreams, held and reviewed", () => {
     expect(banner()).toBe("Held: automatic turns used up. Resume, or write to Pip, to give it 6 more");
     store.personWrote(ws.id);
     expect(store.get(ws.id)?.workstream.heldReason).toBeNull();
+  });
+});
+
+describe("answering a permission prompt, as runs/permission.rs", () => {
+  const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront" };
+  const PUSH = "git push -u origin worktree-ca-401-fix";
+
+  /** A Build (or `kind`) in a workstream on CA-401, working, with no supervisor of its own unless `supervised`. */
+  async function working(kind: RunSpec["kind"] = "build", supervised = false) {
+    const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: supervised });
+    if (!supervised) b.supervisor.dispose();
+    const ws = b.workstreams.open(itemRef("CA-401")).id;
+    const made = await b.runsDraft({ ...spec, ...storefront, kind, instruction: "", name: "ca-401-fix", ticketBlock: null, workstream: ws, allowPush: kind === "build" }, itemRef("CA-401"));
+    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    b.runs.advance(run.id);
+    b.runs.advance(run.id);
+    expect(b.runs.get(run.id)?.state).toBe("working");
+    return { b, ws, run: b.runs.get(run.id)! };
+  }
+  const audit = (b: MockBackend, ws: string, action: string) => b.workstreams.events(ws).filter((e) => e.action === action);
+
+  it("Deny wakes the run told no: working again, the prompt gone, and the audit names the person and the exact command", async () => {
+    const { b, ws, run } = await working("investigate");
+    b.runs.askPermission(run.id, "approve Bash: rm -rf node_modules");
+    const after = await b.runsDenyPermission(run.id, "rm -rf node_modules");
+    expect(after).toMatchObject({ state: "working", needs: null, permissionAllowed: null, digest: run.digest });
+    expect(audit(b, ws, "permission_denied")).toEqual([expect.objectContaining({ actor: "person", runId: run.id, detail: "rm -rf node_modules" })]);
+    expect(b.runs.events(run.id)).toContainEqual(expect.objectContaining({ kind: "permission", text: "You denied this request", detail: "rm -rf node_modules" }));
+    expect(b.runs.attached).toEqual([]);
+    await expect(b.runsDenyPermission(run.id, "rm -rf node_modules")).rejects.toThrow("This run is working, so it isn't asking permission.");
+  });
+
+  it("a Deny whose wake fails leaves the run stopped with the denial kept, recorded once with the exact command", async () => {
+    const { b, ws, run } = await working("investigate");
+    b.runs.askPermission(run.id, "approve Bash: rm -rf node_modules");
+    b.runs.wakeFails = true;
+    await expect(b.runsDenyPermission(run.id, "rm -rf node_modules")).rejects.toThrow("Your denial is kept on the run, to send again.");
+    expect(b.runs.get(run.id)).toMatchObject({ state: "stopped", unsentAnswer: DENIED_MESSAGE, error: expect.stringContaining("Couldn't wake") });
+    const denied = [expect.objectContaining({ actor: "person", runId: run.id, detail: "rm -rf node_modules" })];
+    expect(audit(b, ws, "permission_denied")).toEqual(denied);
+    // Send again carries it, and the denial isn't recorded twice.
+    b.runs.wakeFails = false;
+    expect(await b.runsAnswer(run.id, DENIED_MESSAGE)).toMatchObject({ state: "working", unsentAnswer: null });
+    expect(audit(b, ws, "permission_denied")).toEqual(denied);
+  });
+
+  it("Allow once on a Build opens Terminal, records the exact command and keeps the run asking until Claude Code has the answer", async () => {
+    const { b, ws, run } = await working();
+    b.runs.askPermission(run.id, `approve Bash: ${PUSH}`);
+    const after = await b.runsAllowPermissionOnce(run.id, PUSH);
+    expect(after).toMatchObject({ state: "needsPermission", permissionAllowed: { command: PUSH, at: expect.any(String) }, digest: run.digest });
+    expect(b.runs.attached).toEqual([run.id]);
+    expect(audit(b, ws, "permission_allowed_in_terminal")).toEqual([expect.objectContaining({ actor: "person", runId: run.id, detail: PUSH })]);
+    expect(b.runs.events(run.id)).toContainEqual(expect.objectContaining({ kind: "permission", text: "You chose Allow once, in Terminal", detail: PUSH }));
+    // The person answering in Terminal: the run moves on, and the choice goes with the prompt.
+    b.runs.advance(run.id);
+    expect(b.runs.get(run.id)).toMatchObject({ state: "working", permissionAllowed: null });
+  });
+
+  it("refuses Allow once on a read-only run, a forbidden push and a request that changed, recording nothing", async () => {
+    const ro = await working("investigate");
+    ro.b.runs.askPermission(ro.run.id, "approve Bash: ls");
+    await expect(ro.b.runsAllowPermissionOnce(ro.run.id, "ls")).rejects.toThrow("This run is read-only: Claude Code refuses this.");
+    const { b, ws, run } = await working();
+    b.runs.askPermission(run.id, "approve Bash: git push origin main");
+    await expect(b.runsAllowPermissionOnce(run.id, "git push origin main")).rejects.toThrow("A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this.");
+    await expect(b.runsAllowPermissionOnce(run.id, PUSH)).rejects.toThrow("The request changed after you read it. Read it again.");
+    await expect(b.runsDenyPermission(run.id, PUSH)).rejects.toThrow("The request changed after you read it. Read it again.");
+    for (const r of [ro, { b, ws, run }]) {
+      expect(r.b.runs.attached).toEqual([]);
+      expect(r.b.runs.get(r.run.id)).toMatchObject({ state: "needsPermission" });
+      expect(r.b.runs.get(r.run.id)?.permissionAllowed ?? null).toBeNull();
+      expect(r.b.workstreams.events(r.ws).filter((e) => e.action.startsWith("permission"))).toEqual([]);
+    }
+  });
+
+  it("forgets an Allow once when the run asks for something else", async () => {
+    const { b, run } = await working();
+    b.runs.askPermission(run.id, `approve Bash: ${PUSH}`);
+    await b.runsAllowPermissionOnce(run.id, PUSH);
+    b.runs.askPermission(run.id, "approve Bash: pnpm install");
+    expect(b.runs.get(run.id)).toMatchObject({ state: "needsPermission", needs: "approve Bash: pnpm install", permissionAllowed: null });
+  });
+
+  it("the supervisor's passes never answer a permission prompt", async () => {
+    const { b, ws, run } = await working("build", true);
+    b.runs.askPermission(run.id, `approve Bash: ${PUSH}`);
+    const asking = b.runs.get(run.id);
+    b.supervisor.check();
+    new MockSupervisor({ runs: b.runs, workstreams: b.workstreams, proposals: b.proposals, wake: () => {}, hasWaitingWake: () => false }).check();
+    expect(b.runs.get(run.id)).toEqual(asking);
+    expect(b.runs.attached).toEqual([]);
+    expect(b.workstreams.events(ws).filter((e) => e.action.startsWith("permission"))).toEqual([]);
+  });
+});
+
+describe("the person's fix round, as RunService::send_person_fix_round", () => {
+  it("is refused unless the review is waiting for the person's choice, and changes nothing then", async () => {
+    const backend = new MockBackend();
+    const done = (await backend.runsList()).find((r) => r.state === "done")!;
+    const before = await backend.runsList();
+    await expect(backend.workstreamsFixRound(done.id)).rejects.toThrow(ESCALATION_GONE);
+    await expect(backend.workstreamsFixRound("no-such-run")).rejects.toThrow(ESCALATION_GONE);
+    expect(await backend.runsList()).toEqual(before);
   });
 });

@@ -355,6 +355,14 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_answer", { id, text });
   }
 
+  runsDenyPermission(id: string, command: string) {
+    return invoke<Run>("runs_deny_permission", { id, command });
+  }
+
+  runsAllowPermissionOnce(id: string, command: string) {
+    return invoke<Run>("runs_allow_permission_once", { id, command });
+  }
+
   runsSendFollowUp(proposalId: string, message: string) {
     return invoke<Run>("runs_send_follow_up", { proposalId, message });
   }
@@ -527,6 +535,14 @@ export class JiraBackend implements Backend {
 
   workstreamsSetMode(id: string, mode: WorkstreamMode) {
     return invoke<Workstream>("workstreams_set_mode", { id, mode });
+  }
+
+  workstreamsFixRound(reviewRun: string) {
+    return invoke<Run>("workstreams_fix_round", { reviewRun });
+  }
+
+  workstreamsTakeOver(id: string, reviewRun: string) {
+    return invoke<Workstream>("workstreams_take_over", { id, reviewRun });
   }
 
   workstreamsHold(id: string) {

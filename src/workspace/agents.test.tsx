@@ -10,6 +10,7 @@ import { AgentsBanners } from "./AgentsBanners";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
+import { StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
 import { Rail, railBadgeText } from "./Rail";
 import { useRuns } from "./runsStore";
 
@@ -209,12 +210,23 @@ describe("grouped by workstream", () => {
 });
 
 describe("cards", () => {
-  it("shows the exact command a permission prompt waits on, and one way to answer it", () => {
-    const html = card(run("needsPermission", { needs: "approve Bash: git push origin HEAD", shortId: "1000a000" }));
-    expect(html).toContain("git push origin HEAD");
-    expect(html).toContain("Open in Terminal");
-    expect(html.match(/<button/g)).toHaveLength(1);
-    for (const word of ["Allow", "Deny", "Approve", "Nudge", "Stop"]) expect(html).not.toContain(word);
+  it("shows the exact command a permission prompt waits on, with Allow once only on a Build, Deny, and Stop said to abandon the run", () => {
+    const asking = run("needsPermission", { needs: "approve Bash: git push -u origin worktree-ca-401-fix", shortId: "1000a000", readOnly: null });
+    const build = card({ ...asking, spec: { ...asking.spec, kind: "build", allowPush: true, name: "ca-401-fix" } });
+    expect(build).toContain("git push -u origin worktree-ca-401-fix");
+    expect(buttonsOf(build)).toEqual(["Copy", "Allow once in Terminal", "Deny", "Stop the run (abandons it)"]);
+    const ro = card({ ...asking, spec: { ...asking.spec, kind: "investigate" } });
+    expect(ro).toContain("This run is read-only: Claude Code refuses this.");
+    expect(buttonsOf(ro)).toEqual(["Copy", "Deny", "Stop the run (abandons it)"]);
+    for (const html of [build, ro]) for (const word of ["Approve", "Nudge", "Always"]) expect(html).not.toContain(word);
+  });
+
+  it("asks before a card's Stop abandons the run, as the sheet does", () => {
+    const html = renderToStaticMarkup(<StopRunConfirm name="R4" onStop={vi.fn()} onKeep={vi.fn()} />);
+    expect(html).toContain('role="group" aria-label="Stop this run"');
+    expect(html).toContain(stopRunQuestion("R4"));
+    expect(stopRunQuestion("R4")).toBe("Stop R4? It abandons the run.");
+    expect(buttonsOf(html)).toEqual(["Yes, stop", "Keep going"]);
   });
 
   it("shows a question with Open in Terminal and no answer box", () => {
@@ -269,8 +281,10 @@ describe("cards", () => {
 
   it("has no Stop or Nudge on any card; Stop all is in the header only", () => {
     const out = screen();
+    // The one exception: a permission prompt can be answered by abandoning the run, and says so.
     for (const a of articles(out)) {
-      expect(a).not.toMatch(/Stop|Nudge/);
+      expect(a.replace(/>Stop the run \(abandons it\)</g, "><")).not.toMatch(/Stop|Nudge/);
+      if (a.includes("Stop the run")) expect(a).toContain('data-state="needsPermission"');
     }
     expect(out).toContain("Stop all");
     expect(out).not.toContain("Nudge");

@@ -194,8 +194,12 @@ export function HomeConversation({ workstream, footer = null }: { workstream: Wo
   );
 }
 
-/** The element on Pip home `target` names: a draft's card, a run's card, or the held banner's Resume (the banner itself without one). */
+/**
+ * The element on Pip home `target` names: a draft's card, a run's card, the held banner's Resume (the banner itself
+ * without one), or the first choice on the card of a review that still blocks after the fix rounds.
+ */
 function targetElement(root: ParentNode, target: PipHomeFocus): HTMLElement | null {
+  if (target.type === "escalation") return root.querySelector<HTMLElement>("[data-escalation] button") ?? root.querySelector<HTMLElement>("[data-escalation]");
   if (target.type === "workstream") return root.querySelector<HTMLElement>("[data-held-banner] button") ?? root.querySelector<HTMLElement>("[data-held-banner]");
   const attr = target.type === "draft" ? "data-draft" : "data-run-id";
   const sel = `[${attr}="${CSS.escape(target.id)}"]`;

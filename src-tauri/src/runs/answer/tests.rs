@@ -90,7 +90,7 @@ async fn the_agents_own_words_come_with_the_reminder_whatever_the_answer_says() 
 #[tokio::test]
 async fn only_a_question_is_answered() {
     let (rig, run) = asking().await;
-    for (state, said) in [(RunState::NeedsPermission, "permission prompt"), (RunState::SystemBlocked, "sign in"), (RunState::Working, "working"), (RunState::Done, "done"), (RunState::Stopped, "stopped"), (RunState::Unknown, "unknown")] {
+    for (state, said) in [(RunState::NeedsPermission, "Allow once or Deny"), (RunState::SystemBlocked, "sign in"), (RunState::Working, "working"), (RunState::Done, "done"), (RunState::Stopped, "stopped"), (RunState::Unknown, "unknown")] {
         rig.set(&run, |r| r.state = state).await;
         let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();
         assert!(why.contains(said) || why.contains("isn't waiting"), "{state:?}: {why}");

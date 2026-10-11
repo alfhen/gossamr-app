@@ -3,6 +3,7 @@ import { Switch } from "../components/Switch";
 import { RULE_SWITCH, TURN_HELP, budgetNote, heldBanner, ruleText } from "../lib/workstreamHold";
 import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { Btn } from "./AgentSheet";
+import { EscalationCard } from "./EscalationCard";
 import { usePopover } from "./Popover";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -160,8 +161,8 @@ export interface ControlsViewProps {
 }
 
 /**
- * Under the workstream's line in the Pip pane: the Manage switch, why it is held with Resume, the budget once it runs low,
- * Hold and Stop, and the automatic steps. Everything comes from the workstream's view, the same in the app and the sample.
+ * Under the workstream's line in the Pip pane: the Manage switch, why it is held with Resume, a review that still blocks
+ * after the fix rounds with the person's choices, the budget once it runs low, Hold and Stop, and the automatic steps. Everything comes from the workstream's view, the same in the app and the sample.
  */
 export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop }: ControlsViewProps) {
   const ws = view.workstream;
@@ -215,6 +216,8 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
           </Btn>
         </div>
       )}
+      {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
+      <EscalationCard key={ws.id} view={view} />
       {note && !(note.level === "spent" && ws.heldReason === HELD_BUDGET) && (
         <div className="grid gap-0.5">
           <p data-budget={note.level} title={TURN_HELP} className={`m-0 text-sm ${note.level === "amber" ? "text-ws-warn" : "text-ws-blocked"}`}>

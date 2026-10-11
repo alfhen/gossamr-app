@@ -351,12 +351,34 @@ impl Harness {
 pub async fn run_tools_are_read_only(h: &Harness) -> std::result::Result<(), String> {
     let listed = h.rpc("runs-ro", "tools/list", json!({})).await;
     let names: Vec<&str> = listed["result"]["tools"].as_array().ok_or("no tool list")?.iter().filter_map(|t| t["name"].as_str()).collect();
-    for forbidden in ["start_run", "stop_run", "answer_run", "attach_run", "rm_run", "approve_run", "hold_workstream", "resume_workstream", "set_workstream_mode", "send_fix_round", "launch_waiting"] {
+    for forbidden in [
+        "start_run",
+        "stop_run",
+        "answer_run",
+        "attach_run",
+        "rm_run",
+        "approve_run",
+        "hold_workstream",
+        "resume_workstream",
+        "set_workstream_mode",
+        "send_fix_round",
+        "launch_waiting",
+        "deny_permission",
+        "allow_permission",
+        "allow_permission_once",
+        "answer_permission",
+        "fix_round",
+        "person_fix_round",
+        "take_over",
+        "post_review",
+    ] {
         if names.contains(&forbidden) {
             return Err(format!("{forbidden} is offered"));
         }
     }
-    if let Some(name) = names.iter().find(|n| n.starts_with("approve") || n.contains("merge") || n.contains("push") || n.contains("hold") || n.contains("resume") || n.contains("mode")) {
+    if let Some(name) = names.iter().find(|n| {
+        n.starts_with("approve") || n.contains("merge") || n.contains("push") || n.contains("hold") || n.contains("resume") || n.contains("mode") || n.contains("permission") || n.contains("escalat") || n.contains("fix_round") || n.contains("take_over") || n.contains("post_review")
+    }) {
         return Err(format!("{name} is offered"));
     }
     let run = seed_run(h, 1, |r| r.state = RunState::Working).await;
@@ -1682,6 +1704,155 @@ pub async fn wake_turns_with_the_rules_on_start_only_what_a_rule_started() -> st
     Ok(())
 }
 
+/// A run of `kind` in the world's workstream, approved by the person and launched, waiting on a permission prompt for
+/// `needs`.
+async fn asking_permission(w: &World, n: u32, kind: crate::domain::RunKind, needs: &str) -> Run {
+    let (core, rig) = (&w.rig.fx.core, &w.rig);
+    let spec = RunSpec { kind, allow_push: kind == crate::domain::RunKind::Build, workstream: Some(w.ws.clone()), ..rig.spec(n) };
+    let p = core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let digest = core.runs_review(&p.id).await.unwrap().digest;
+    let queued = core.runs_approve(&p.id, &digest).await.unwrap();
+    let run = rig.svc.start_now(&queued.id).await.unwrap();
+    rig.poll().await;
+    rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some(needs.into()));
+    rig.session(&run, |e| {
+        e.status = Some("waiting".into());
+        e.waiting_for = Some("permission prompt".into());
+    });
+    rig.poll().await;
+    rig.get(&run).await
+}
+
+/// A Manage workstream with a Build and a read-only run each waiting on a permission prompt: the supervisor's passes
+/// and a wake turn whose Pip calls every tool it has, with arguments naming those runs, neither allow nor deny either.
+/// The sessions are never stopped, woken or attached, the runs keep waiting with nothing allowed, and the audit has no
+/// permission line: only the person answers a permission prompt.
+pub async fn autostart_and_pip_never_answer_a_permission_prompt() -> std::result::Result<(), String> {
+    use crate::domain::RunKind;
+    let w = World::start().await;
+    let build = asking_permission(&w, 1, RunKind::Build, &format!("approve Bash: git push -u origin worktree-{}", w.rig.spec(1).name)).await;
+    let verify = asking_permission(&w, 2, RunKind::Verify, "approve Bash: rm -rf node_modules").await;
+    for run in [&build, &verify] {
+        if run.state != RunState::NeedsPermission {
+            return Err(format!("run {} isn't waiting on its prompt: {:?}", run.id, run.state));
+        }
+    }
+    let calls_before = w.rig.cli.0.lock().unwrap().calls.len();
+    *w.pip.args.lock().unwrap() = [
+        ("propose_answer", json!({ "run_id": build.id, "text": "Yes, allow it." })),
+        ("propose_follow_up", json!({ "run_id": verify.id, "message": "Deny the prompt and carry on." })),
+        ("get_run", json!({ "id": build.id })),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    w.sweep().await;
+    w.rig.poll().await;
+    w.sweep().await;
+    if w.pip.turns.load(Ordering::SeqCst) == 0 {
+        return Err("Pip was never woken for the prompts, so its tools weren't tried".into());
+    }
+    let offered = w.pip.offered.lock().unwrap().clone();
+    if let Some(name) = offered.iter().find(|n| n.contains("permission") || n.contains("allow") || n.contains("deny")) {
+        return Err(format!("{name} is offered to Pip"));
+    }
+    let calls: Vec<String> = w.rig.cli.0.lock().unwrap().calls[calls_before..].to_vec();
+    let ids: Vec<String> = [&build, &verify].iter().filter_map(|r| r.short_id.as_ref().map(|s| s.to_string())).collect();
+    if let Some(call) = calls.iter().find(|c| ids.iter().any(|id| c.ends_with(id.as_str())) || c.starts_with("resume:")) {
+        return Err(format!("a session waiting on a prompt was touched: {call}"));
+    }
+    if !w.rig.opened.0.lock().unwrap().is_empty() {
+        return Err("Terminal was opened without the person".into());
+    }
+    for run in [&build, &verify] {
+        let now = w.rig.get(run).await;
+        if now.state != RunState::NeedsPermission || now.permission_allowed.is_some() {
+            return Err(format!("run {} was answered without the person: {:?}, {:?}", run.id, now.state, now.permission_allowed));
+        }
+    }
+    if let Some(line) = w.events().await.into_iter().find(|e| e.action.starts_with("permission")) {
+        return Err(format!("a permission was answered without the person: {line:?}"));
+    }
+    Ok(())
+}
+
+/// A Manage workstream whose build was sent its two automatic fix rounds and whose newest review still blocks: the
+/// supervisor gives it to the person (one `fix_rounds_exhausted` line), and more passes and a wake turn whose Pip calls
+/// every tool it has, with arguments naming the build and the review, choose none of the person's options. No
+/// `fix_round_person` or `escalation_taken` line, the workstream stays in Manage, the build isn't resumed again, the
+/// review's GitHub draft stays pending, and nothing is written to GitHub or Jira.
+pub async fn pip_and_autostart_never_choose_an_escalation_option() -> std::result::Result<(), String> {
+    use crate::domain::{workstream::Mode, Actor, RunKind, StateKind};
+    let w = World::start().await;
+    let (core, fx, scope) = (&w.rig.fx.core, &w.rig.fx, &w.rig.fx.scope);
+    let spec = RunSpec { kind: RunKind::Build, allow_push: true, workstream: Some(w.ws.clone()), ..w.rig.spec(1) };
+    let p = core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
+    let queued = core.runs_approve(&p.id, &core.runs_review(&p.id).await.unwrap().digest).await.unwrap();
+    let build = w.rig.svc.start_now(&queued.id).await.map_err(|e| e.to_string())?;
+    let build = w.finish(&build, BUILT).await;
+    for n in 1..=2 {
+        let line = WorkstreamEvent::new(&w.ws, Actor::Supervisor, "autostart", chrono::Utc::now()).run(&build.id).detail(format!("fix_round after rev{n}"));
+        core.record_workstream_event(scope, line).await.unwrap();
+    }
+    let spec = RunSpec { kind: RunKind::Review, build_from_run: Some(build.id.clone()), pr: Some(12), pr_sha: Some(FIXED.into()), report: true, workstream: Some(w.ws.clone()), ..w.rig.spec(2) };
+    let mut review = Run::queued("rev3".into(), "p-rev3".into(), build.connection_id.clone(), build.item.clone(), spec, "f".into(), chrono::Utc::now());
+    (review.state, review.ended_at, review.result, review.result_complete) = (RunState::Done, Some(chrono::Utc::now()), Some(BLOCKING.into()), true);
+    fx.insert_run(&review).await;
+    let draft = core.auto_draft_run_review(&review.id).await.map_err(|e| e.to_string())?.ok_or("the review left no GitHub draft")?;
+    let resumes = w.rig.cli.0.lock().unwrap().resumes.len();
+    *w.pip.args.lock().unwrap() = [
+        ("propose_follow_up", json!({ "run_id": build.id, "message": "Fix the blocking finding again." })),
+        ("get_run", json!({ "id": review.id })),
+        ("get_proposal", json!({ "id": draft.id })),
+        ("revise_proposal", json!({ "id": draft.id, "summary": "Post this as it is." })),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    w.sweep().await;
+    w.sweep().await;
+    w.sweep().await;
+    if w.pip.turns.load(Ordering::SeqCst) == 0 {
+        return Err("Pip was never woken for the review, so its tools weren't tried".into());
+    }
+    let offered = w.pip.offered.lock().unwrap().clone();
+    if let Some(name) = offered.iter().find(|n| n.contains("escalat") || n.contains("fix_round") || n.contains("take_over") || n.contains("post_review") || n.contains("mode")) {
+        return Err(format!("{name} is offered to Pip"));
+    }
+    let events = w.events().await;
+    let exhausted: Vec<_> = events.iter().filter(|e| e.action == "fix_rounds_exhausted").collect();
+    if !matches!(exhausted.as_slice(), [e] if e.run_id.as_deref() == Some("rev3")) {
+        return Err(format!("the review wasn't given to the person once: {exhausted:?}"));
+    }
+    if let Some(line) = events.iter().find(|e| matches!(e.action.as_str(), "fix_round_person" | "escalation_taken" | "mode_set") && e.actor != Actor::Person) {
+        return Err(format!("an option was chosen without the person: {line:?}"));
+    }
+    if let Some(line) = events.iter().find(|e| matches!(e.action.as_str(), "fix_round_person" | "escalation_taken" | "fix_round_sent")) {
+        return Err(format!("an option was chosen without the person: {line:?}"));
+    }
+    let view = core.workstream(scope, &w.ws).await.unwrap().ok_or("no workstream")?;
+    if view.workstream.mode != Mode::Manage {
+        return Err(format!("the workstream left Manage: {:?}", view.workstream.mode));
+    }
+    if view.escalation.as_ref().map(|e| e.review_run.as_str()) != Some("rev3") {
+        return Err(format!("the review isn't waiting for the person: {:?}", view.escalation));
+    }
+    if w.rig.cli.0.lock().unwrap().resumes.len() != resumes || w.rig.get(&build).await.state != RunState::Done {
+        return Err("the build was sent back without the person".into());
+    }
+    let reviews: Vec<_> = core.proposals_in(scope, &ProposalQuery::default()).await.unwrap().into_iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).collect();
+    if !matches!(reviews.as_slice(), [p] if p.id == draft.id && p.state.kind() == StateKind::Pending) {
+        return Err(format!("the review draft isn't the one waiting: {:?}", reviews.iter().map(|p| (&p.id, p.state.kind())).collect::<Vec<_>>()));
+    }
+    if let Some(write) = fx.github_seen().into_iter().find(|(method, _)| method != "GET") {
+        return Err(format!("GitHub was written to without the person: {write:?}"));
+    }
+    if !fx.tracker.intents().is_empty() {
+        return Err("Jira was written".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1772,6 +1943,16 @@ mod tests {
         let of_run: Vec<_> = drafts.iter().filter(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == done.id)).map(|p| p.intent.clone()).collect();
         assert!(matches!(of_run.as_slice(), [Intent::GithubReview { number: 12, commit_sha, .. }] if commit_sha == FIRST), "only the review draft, which nothing else makes: {of_run:?}");
         assert!(w.rig.fx.github_seen().iter().all(|(method, _)| method == "GET"), "nothing was posted");
+    }
+
+    #[tokio::test]
+    async fn autostart_and_pip_never_answer_a_permission_prompt() {
+        super::autostart_and_pip_never_answer_a_permission_prompt().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pip_and_autostart_never_choose_an_escalation_option() {
+        super::pip_and_autostart_never_choose_an_escalation_option().await.unwrap();
     }
 
     #[tokio::test]

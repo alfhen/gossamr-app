@@ -118,7 +118,8 @@ pub const MANAGER: &str = "This conversation belongs to a workstream, and you ma
      recommends, the build once the person approved the plan, the review once the build's pull request is found, and at \
      most two fix rounds when a review blocks): an [Event] line says when Gossamr started one, so don't draft that step \
      again, and still never say it started until list_runs shows it Working. When an [Event] says a review still blocks \
-     after the fix rounds, bring it to the person. When an [Event] says a run needs an answer, read its question with \
+     after the fix rounds, bring it to the person: they choose to run another fix round, take it from here (the workstream \
+     goes to Advise) or post the review draft as it is, and you can't pick one for them or draft a fix round for it. When an [Event] says a run needs an answer, read its question with \
      get_run and, if the ticket or the plan settles it, suggest a reply with propose_answer, which the person reads and \
      sends; otherwise tell the person what it asks. A turn that opens with [Event] lines is a wake: Gossamr, not the person, \
      asked you because a run changed; reply in at most about three lines. A workstream holds at most 8 drafts waiting for \
@@ -775,6 +776,7 @@ mod tests {
             waiting_for_pr: None,
             event: None,
             last_trip: None,
+            escalation: None,
         }
     }
 
@@ -785,6 +787,18 @@ mod tests {
         assert!(ws.block().contains("· stage Review\n"), "{}", ws.block());
         ws.review_blocking = true;
         assert!(ws.block().contains("· stage Review · the newest review asked for changes\n"), "{}", ws.block());
+    }
+
+    #[test]
+    fn a_review_that_still_blocks_after_the_fix_rounds_is_told_as_the_person_s_choice() {
+        let mut ws = in_workstream(vec![]);
+        assert!(!ws.block().contains("Waiting for the person"));
+        ws.escalation = Some(crate::inbox::Escalation { review_run: "r5".into(), build_run: "r3".into(), review_label: "R5".into(), build_label: "R3".into(), rounds: 2, review_draft: Some("p9".into()), at: now() });
+        let block = ws.block();
+        assert!(
+            block.contains("Waiting for the person: review R5 still blocks after 2 fix rounds. They choose: run another fix round, take it from here (the workstream goes to Advise), or post the review draft as it is. Only they can choose: explain the options when asked; don't draft a fix round or a follow-up for it.\n"),
+            "{block}"
+        );
     }
 
     #[test]
@@ -864,6 +878,8 @@ mod tests {
             "Some steps start automatically by rules the person switched on",
             "still never say it started until list_runs shows it Working",
             "review still blocks after the fix rounds, bring it to the person",
+            "they choose to run another fix round, take it from here (the workstream goes to Advise) or post the review draft as it is",
+            "you can't pick one for them or draft a fix round for it",
             &format!("at most {} drafts waiting for", crate::proposals::WORKSTREAM_PENDING_CAP),
             "a new draft of the same kind on the same ticket",
             "replaces your older one",

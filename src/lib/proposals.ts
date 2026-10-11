@@ -198,6 +198,42 @@ export function supersession(older: Proposal, newer: Proposal, isPlanRewrite: (p
   return { type: "supersede" };
 }
 
+/** The audit line an older review draft of the same pull request gets when a newer review leaves it standing because the person edited it, as `KEPT_EDITED` in `proposals.rs`. */
+export const KEPT_EDITED = "draft_kept_edited";
+/** The same when GitHub may already have the older one, as `KEPT_MAYBE_POSTED`. */
+export const KEPT_MAYBE_POSTED = "draft_kept_maybe_posted";
+
+/** Whether `p` is a review draft an agent run left, which is tidied by its pull request rather than its workstream (`tidy_reviews`). */
+export const isRunReview = (p: Proposal) => p.createdBy === "agent" && p.origin.type === "run" && p.intent.type === "githubReview";
+
+/**
+ * What a new review of a pull request does to an older pending review draft, as `review_supersession` in `proposals.rs`:
+ * the person's edit and a post that may be on GitHub keep it (the audit line says which); anything else made by Pip or
+ * an agent is replaced. Null when it isn't a review draft of the same pull request on the same code host, or isn't
+ * pending (one being posted, or posted, is never touched).
+ */
+export function reviewSupersession(older: Proposal, newer: Proposal): "supersede" | typeof KEPT_EDITED | typeof KEPT_MAYBE_POSTED | null {
+  if (newer.intent.type !== "githubReview" || older.intent.type !== "githubReview") return null;
+  const same = older.intent.connectionId === newer.intent.connectionId && supersessionKey(older.intent) === supersessionKey(newer.intent);
+  if (!same || older.id === newer.id || older.state.type !== "pending" || !machineMade(older)) return null;
+  if (older.revisions.some((r) => r.note === "Edited")) return KEPT_EDITED;
+  if (older.maybePosted) return KEPT_MAYBE_POSTED;
+  return "supersede";
+}
+
+/**
+ * The older pending review drafts of the same pull request that a newer review `p` left standing, with why: the person
+ * edited them, or GitHub may have them already. Each is still waiting beside `p`.
+ */
+export function keptOlderReviews(p: Proposal, all: readonly Proposal[]): { proposal: Proposal; why: typeof KEPT_EDITED | typeof KEPT_MAYBE_POSTED }[] {
+  if (!isRunReview(p)) return [];
+  return all.flatMap((older) => {
+    if (older.createdAt > p.createdAt) return [];
+    const why = reviewSupersession(older, p);
+    return why === KEPT_EDITED || why === KEPT_MAYBE_POSTED ? [{ proposal: older, why }] : [];
+  });
+}
+
 /** What Pip is told when a workstream already holds its share of drafts, as in `proposals.rs`. */
 export const capRefusal = (workstream: string) =>
   `Workstream ${workstream} already has ${WORKSTREAM_PENDING_CAP} drafts waiting for the user. Don't draft more until they decide some; revise one with revise_proposal or withdraw one with retire_proposal.`;

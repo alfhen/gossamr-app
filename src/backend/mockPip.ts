@@ -332,7 +332,7 @@ function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstr
       if (started) return `${name(id)} finished. ${KIND_WORD[started[1] as RunKind] ?? started[1]} ${started[2]} ${startedState(started[1], started[2])}.`;
       const fix = /; sent fix round (\d+) to build (\S+)/.exec(rest);
       if (fix) return `${who} still blocks, so fix round ${fix[1]} went to build ${fix[2]}. A fresh review follows its new commit.`;
-      if (rest.includes("; review still blocking after")) return "The review still blocks after 2 fix rounds. Over to you.";
+      if (rest.includes("; review still blocking after")) return "The review still blocks after 2 fix rounds. Over to you. Run another fix round, take it from here, or post the review as is.";
       if (rest.includes("; waiting for its pull request")) return `${who} finished. Its review starts once its pull request shows up.`;
       if (rest.includes("; plan recommended: no")) return `${who} finished and doesn't recommend a plan, so nothing starts on its own. Tell me if you want one.`;
       if (rest.includes("; verdict: pass")) return `${who} passed. Nothing else starts on its own; the pull request is yours to mark ready.`;

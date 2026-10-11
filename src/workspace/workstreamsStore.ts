@@ -43,6 +43,10 @@ interface WorkstreamsState {
   loadGlobals(): Promise<void>;
   /** The person's Manage switch: in `manage` the supervisor wakes Pip and starts the routine steps. False when it couldn't. */
   setMode(id: string, mode: WorkstreamMode): Promise<boolean>;
+  /** The person's "Run another fix round" on review `reviewRun`, which still blocks after the automatic rounds. The build it went to, null when it couldn't. */
+  fixRound(reviewRun: string): Promise<Run | null>;
+  /** The person's "I'll take it from here" on review `reviewRun`: workstream `id` goes to Advise. False when it couldn't. */
+  takeOver(id: string, reviewRun: string): Promise<boolean>;
   /** Holds workstream `id`: no wakes and no automatic steps; its running agents carry on. False when it couldn't. */
   hold(id: string): Promise<boolean>;
   /** Lifts workstream `id`'s hold, whatever held it. False when it couldn't. */
@@ -199,6 +203,15 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     },
 
     setMode: (id, mode) => ok(mode === "manage" ? "Couldn't let Pip manage the workstream" : "Couldn't stop Pip managing the workstream", (b) => b.workstreamsSetMode(id, mode)),
+
+    async fixRound(reviewRun) {
+      const done = await act("Couldn't send another fix round", (b) => b.workstreamsFixRound(reviewRun));
+      if (!done.ok) return null;
+      void useRuns.getState().reload();
+      return done.value;
+    },
+
+    takeOver: (id, reviewRun) => ok("Couldn't take the workstream over", (b) => b.workstreamsTakeOver(id, reviewRun)),
 
     hold: (id) => ok("Couldn't hold the workstream", (b) => b.workstreamsHold(id)),
 

@@ -107,12 +107,15 @@ export type ReadOnly = { mode: string; allow: string[]; deny: string[]; guard: s
 /** One launch as the mock launcher made it (`MockLaunch` in src/backend/mockRuns.ts). */
 export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; guard: string; autoStart: string | null; at: string };
 interface Handle {
-  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null }[];
+  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null; digest: string; name: string }[];
   launches(): MockLaunch[];
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   scriptNext(kind: string, script: Script): void;
   askRun(id: string, question: string): void;
+  askPermission(id: string, needs: string): void;
+  attached(): string[];
   jiraWrites(): { proposalId: string; type: string; key: string | null }[];
+  reviewDrafts(): ReviewDraftRow[];
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
   holdPip(on: boolean): void;
   pipIdle(): boolean;
@@ -122,6 +125,8 @@ interface Handle {
   githubPostsTried(): number;
   loseNextReviewAnswer(kept: boolean): void;
 }
+/** A GitHub review draft as the sample backend holds it (`MockReviewDraft` in src/backend/mockWatch.ts); `pull` is "repo#number". */
+export type ReviewDraftRow = { id: string; runId: string; pull: string; state: string; supersededBy: string | null; edited: boolean };
 /** One review posted to the sample GitHub (`GithubWrite` in src/backend/mockGithub.ts). */
 export type GithubWrite = {
   proposalId: string;
@@ -183,6 +188,25 @@ export const askRun = (page: Page, id: string, question: string) =>
     { id, question, missing: NO_MOCK },
   );
 
+/** Has working run `id` ask permission for `needs`, worded as the listing has it (`approve Bash: git push`), as `MockRuns.askPermission`. */
+export const askPermission = (page: Page, id: string, needs: string) =>
+  page.evaluate(
+    ({ id, needs, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.askPermission(id, needs);
+    },
+    { id, needs, missing: NO_MOCK },
+  );
+
+/** The run ids Terminal was opened on, oldest first. */
+export const mockAttached = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.attached();
+  }, NO_MOCK);
+
 /** Every write the sample tracker made, with the draft the person approved for it. */
 export const jiraWrites = (page: Page) =>
   page.evaluate((missing) => {
@@ -190,6 +214,17 @@ export const jiraWrites = (page: Page) =>
     if (!mock) throw new Error(missing);
     return mock.jiraWrites();
   }, NO_MOCK);
+
+/** Every GitHub review draft, newest first, with its state and what replaced it. */
+export const reviewDrafts = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.reviewDrafts();
+  }, NO_MOCK);
+
+/** The GitHub review drafts still waiting for the person, newest first. */
+export const pendingReviewDrafts = async (page: Page) => (await reviewDrafts(page)).filter((d) => d.state === "pending");
 
 /** Every review posted to the sample GitHub, oldest first, with the draft the person approved for it: the only GitHub writes there are. */
 export const githubWrites = (page: Page) =>

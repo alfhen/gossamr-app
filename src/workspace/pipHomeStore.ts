@@ -8,7 +8,7 @@ export type PipHomeColumn = (typeof PIP_HOME_COLUMNS)[number];
  * A card on Pip home something asked to bring into view: a draft, a run, or the selected workstream's held banner. A run
  * `where: "rail"` is its card on the step rail, whose step opens for it; otherwise the first card of it on Pip home.
  */
-export type PipHomeFocus = { type: "draft"; id: string } | { type: "run"; id: string; where?: "rail" } | { type: "workstream" };
+export type PipHomeFocus = { type: "draft"; id: string } | { type: "run"; id: string; where?: "rail" } | { type: "workstream" } | { type: "escalation" };
 
 interface PipHomeState {
   /** The workstream whose conversation Pip home shows, by id; null is General. */

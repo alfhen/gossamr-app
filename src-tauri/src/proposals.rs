@@ -342,7 +342,7 @@ pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
         maybe_posted: None,
     };
     // Everything that can refuse the draft is decided before anything is written.
-    let replaced = tidy(db, &p)?;
+    let Tidied { replaced, kept } = tidy(db, &p)?;
     db.insert_proposal(&p)?;
     record(db, &p, actor_of(p.created_by), "draft_created", at);
     for mut old in replaced {
@@ -350,9 +350,29 @@ pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
         old.superseded_by = Some(p.id.clone());
         old.updated_at = at;
         db.save_proposal(&old)?;
-        record_detailed(db, &old, actor_of(p.created_by), "draft_superseded", Some(&p.id), at);
+        record_beside(db, &old, &p, "draft_superseded", at);
+    }
+    for (old, action) in kept {
+        record_beside(db, &old, &p, action, at);
     }
     Ok(p)
+}
+
+/// Records `action` on the older draft `old` that the new draft `new` replaced or left standing, with the new one's id:
+/// in `old`'s workstream, or, for a draft in none, in `new`'s, so the workstream the new draft is in says what happened.
+fn record_beside(db: &Db, old: &Proposal, new: &Proposal, action: &str, at: DateTime<Utc>) {
+    let actor = actor_of(new.created_by);
+    if old.workstream().is_some() {
+        return record_detailed(db, old, actor, action, Some(&new.id), at);
+    }
+    let Some(ws) = new.workstream() else { return };
+    let appended = db.workstream(ws).and_then(|stored| match stored {
+        Some(_) => db.append_workstream_event(&WorkstreamEvent::new(ws, actor, action, at).proposal(&old.id).detail(&new.id)).map(|_| ()),
+        None => Ok(()),
+    });
+    if let Err(e) = appended {
+        eprintln!("couldn't record {action} of draft {} in workstream {ws}: {e}", old.id);
+    }
 }
 
 /// The most drafts a workstream holds waiting for the person before Pip is told to stop drafting.
@@ -409,12 +429,64 @@ pub fn supersession(older: &Proposal, newer: &Proposal) -> Supersession {
     Supersession::Supersede
 }
 
-/// Keeps a workstream's drafts tidy: returns the older drafts `p` replaces, or refuses it when it would replace one the
-/// person owns, or when Pip already has the workstream's full share of drafts waiting. Writes nothing.
-fn tidy(db: &Db, p: &Proposal) -> Result<Vec<Proposal>> {
-    let Some(ws) = p.workstream() else { return Ok(Vec::new()) };
+/// The audit line an older review draft of the same pull request gets when a newer review leaves it standing because
+/// the person edited it: theirs to post or discard. Its detail is the newer draft's id.
+pub const KEPT_EDITED: &str = "draft_kept_edited";
+/// The same when GitHub may already have the older one: its next post looks for it there first.
+pub const KEPT_MAYBE_POSTED: &str = "draft_kept_maybe_posted";
+
+/// What a new draft does to the drafts already stored: the ones it replaces, and the ones it would have replaced but
+/// leaves standing, each with the audit line that says why.
+#[derive(Debug, Default)]
+struct Tidied {
+    replaced: Vec<Proposal>,
+    kept: Vec<(Proposal, &'static str)>,
+}
+
+/// What a new review of a pull request does to an older pending review draft: the person's edit and a post that may be
+/// on GitHub keep it; anything else made by Pip or an agent is replaced. `None` when it isn't a review draft of the same
+/// pull request on the same code host, or isn't pending (one being posted, or posted, is never touched).
+pub fn review_supersession(older: &Proposal, newer: &Proposal) -> Option<std::result::Result<(), &'static str>> {
+    let Intent::GithubReview { connection_id: new_on, .. } = &newer.intent else { return None };
+    let Intent::GithubReview { connection_id: old_on, .. } = &older.intent else { return None };
+    let same = old_on == new_on && older.intent.supersession_key() == newer.intent.supersession_key();
+    if !same || older.id == newer.id || older.state != ProposalState::Pending || !machine_made(older) {
+        return None;
+    }
+    if person_edited(older) {
+        return Some(Err(KEPT_EDITED));
+    }
+    if older.maybe_posted.is_some() {
+        return Some(Err(KEPT_MAYBE_POSTED));
+    }
+    Some(Ok(()))
+}
+
+/// A new review an agent run left replaces the older pending review drafts of the same pull request, whichever
+/// workstream they are in or none: one pull request has one review waiting for the person. Writes nothing.
+fn tidy_reviews(db: &Db, p: &Proposal) -> Result<Tidied> {
+    let pending = db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })?;
+    let mut tidied = Tidied::default();
+    for older in pending {
+        match review_supersession(&older, p) {
+            Some(Ok(())) => tidied.replaced.push(older),
+            Some(Err(why)) => tidied.kept.push((older, why)),
+            None => {}
+        }
+    }
+    Ok(tidied)
+}
+
+/// Keeps a workstream's drafts tidy: says which older drafts `p` replaces, or refuses it when it would replace one the
+/// person owns, or when Pip already has the workstream's full share of drafts waiting. A review an agent run left is
+/// tidied by its pull request instead (`tidy_reviews`). Writes nothing.
+fn tidy(db: &Db, p: &Proposal) -> Result<Tidied> {
+    if p.created_by == CreatedBy::Agent && matches!(p.origin, Origin::Run { .. }) && matches!(p.intent, Intent::GithubReview { .. }) {
+        return tidy_reviews(db, p);
+    }
+    let Some(ws) = p.workstream() else { return Ok(Tidied::default()) };
     if !machine_made(p) {
-        return Ok(Vec::new());
+        return Ok(Tidied::default());
     }
     let open = db.proposals(&ProposalQuery { workstream: Some(ws.into()), states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() })?;
     let mut replaced = Vec::new();
@@ -431,7 +503,7 @@ fn tidy(db: &Db, p: &Proposal) -> Result<Vec<Proposal>> {
             "Workstream {ws} already has {WORKSTREAM_PENDING_CAP} drafts waiting for the user. Don't draft more until they decide some; revise one with revise_proposal or withdraw one with retire_proposal."
         )));
     }
-    Ok(replaced)
+    Ok(Tidied { replaced, kept: Vec::new() })
 }
 
 fn load(db: &Db, id: &str) -> Result<Proposal> {
@@ -1721,6 +1793,86 @@ mod tests {
         let mut intent = review_intent(vec![at("src/consumer/retry.ts", 42, "**Blocking:** no backoff.")]);
         edit(&mut intent);
         intent
+    }
+
+    /// A review draft an agent run left on `repo#number`, in workstream `ws` or none.
+    fn review_of(ws: Option<&str>, run: &str, repo: &str, number: u64) -> Draft {
+        let intent = with_review(|i| {
+            if let Intent::GithubReview { run_id, repo: r, number: n, .. } = i {
+                (*run_id, *r, *n) = (run.into(), repo.into(), number);
+            }
+        });
+        Draft { origin: Origin::Run { run_id: run.into(), short_id: None, workstream: ws.map(Into::into) }, ..review_draft(intent) }
+    }
+
+    fn replaced_by(db: &Db, id: &str) -> Option<String> {
+        let p = db.proposal(id).unwrap().unwrap();
+        (p.state == ProposalState::Retired(REPLACED_REASON.into())).then_some(p.superseded_by).flatten()
+    }
+
+    #[test]
+    fn a_new_review_of_a_pull_request_replaces_its_older_pending_review_drafts_wherever_they_are() {
+        let db = Db::in_memory().unwrap();
+        stored_workstream(&db, "w1");
+        stored_workstream(&db, "w2");
+        let same_ws = made(&db, review_of(Some("w1"), "run-1", "acme/webshop", 218));
+        let other_ws = made(&db, review_of(Some("w2"), "run-2", "acme/webshop", 218));
+        assert_eq!(replaced_by(&db, &same_ws.id).as_deref(), Some(other_ws.id.as_str()), "another workstream's review of the same pull request replaces it");
+        let no_ws = made(&db, review_of(None, "run-3", "ACME/Webshop", 218));
+        assert_eq!(replaced_by(&db, &other_ws.id).as_deref(), Some(no_ws.id.as_str()), "a review in no workstream, and the repository's case doesn't matter");
+        let other_pr = made(&db, review_of(Some("w1"), "run-4", "acme/webshop", 219));
+        let other_repo = made(&db, review_of(Some("w1"), "run-5", "acme/other", 218));
+        let newest = made(&db, review_of(Some("w1"), "run-6", "acme/webshop", 218));
+        assert_eq!(replaced_by(&db, &no_ws.id).as_deref(), Some(newest.id.as_str()));
+        for id in [&other_pr.id, &other_repo.id, &newest.id] {
+            assert_eq!(state_of(&db, id), ProposalState::Pending, "{id}");
+        }
+        let pending: Vec<_> = db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() }).unwrap();
+        assert_eq!(pending.iter().filter(|p| p.intent.supersession_key() == newest.intent.supersession_key()).count(), 1, "one review of the pull request waits");
+
+        let w1 = db.workstream_events("w1").unwrap();
+        let line = |events: &[WorkstreamEvent], id: &str| events.iter().find(|e| e.action == "draft_superseded" && e.proposal_id.as_deref() == Some(id)).map(|e| (e.actor, e.detail.clone()));
+        assert_eq!(line(&w1, &same_ws.id), Some((Actor::Run, Some(other_ws.id.clone()))), "said in the older draft's own workstream");
+        assert_eq!(line(&db.workstream_events("w2").unwrap(), &other_ws.id), Some((Actor::Run, Some(no_ws.id.clone()))));
+        assert_eq!(line(&w1, &no_ws.id), Some((Actor::Run, Some(newest.id.clone()))), "one in no workstream is said in the new draft's");
+
+        let elsewhere = made(&db, Draft { intent: with_review(|i| if let Intent::GithubReview { connection_id, run_id, .. } = i { (*connection_id, *run_id) = ("github:bob".into(), "run-7".into()) }), ..review_of(Some("w1"), "run-7", "acme/webshop", 218) });
+        assert_eq!((state_of(&db, &newest.id), state_of(&db, &elsewhere.id)), (ProposalState::Pending, ProposalState::Pending), "another code host connection's review is its own");
+    }
+
+    #[test]
+    fn a_new_review_keeps_an_older_one_the_person_edited_or_that_may_be_posted_and_never_touches_a_posted_one() {
+        let db = Db::in_memory().unwrap();
+        stored_workstream(&db, "w1");
+        let edited = made(&db, review_of(Some("w1"), "run-1", "acme/webshop", 218));
+        edit(&db, &edited.id, with_review(|i| if let Intent::GithubReview { summary, .. } = i { *summary = "Mine.".into() }), now()).unwrap();
+        let mut unsure = made(&db, review_of(None, "run-2", "acme/webshop", 218));
+        unsure.maybe_posted = Some(crate::domain::MaybePosted { at: now(), commit_sha: "a1b2c3d4e5f6".into(), summary: "Sent.".into(), checked_at: None });
+        db.save_proposal(&unsure).unwrap();
+        let mut posted = made(&db, review_of(Some("w1"), "run-3", "acme/webshop", 218));
+        posted.state = ProposalState::Applied;
+        db.save_proposal(&posted).unwrap();
+        let mut posting = made(&db, review_of(Some("w1"), "run-4", "acme/webshop", 218));
+        posting.state = ProposalState::Applying;
+        db.save_proposal(&posting).unwrap();
+        let revised = made(&db, review_of(Some("w1"), "run-5", "acme/webshop", 218));
+        let mut reworded = revised.intent.clone();
+        if let Intent::GithubReview { summary, .. } = &mut reworded {
+            *summary = "Pip's.".into();
+        }
+        edit_noted(&db, &revised.id, reworded, REVISED_BY_PIP, now()).unwrap();
+
+        let new = made(&db, review_of(Some("w1"), "run-6", "acme/webshop", 218));
+        assert_eq!(state_of(&db, &edited.id), ProposalState::Pending, "the person's edit is theirs");
+        assert_eq!(state_of(&db, &unsure.id), ProposalState::Pending, "GitHub may have it");
+        assert_eq!((state_of(&db, &posted.id), state_of(&db, &posting.id)), (ProposalState::Applied, ProposalState::Applying), "posted and posting are never touched");
+        assert_eq!(replaced_by(&db, &revised.id).as_deref(), Some(new.id.as_str()), "Pip's revision isn't the person's edit");
+
+        let events = db.workstream_events("w1").unwrap();
+        let kept = |action: &str, id: &str| events.iter().any(|e| e.action == action && e.actor == Actor::Run && e.proposal_id.as_deref() == Some(id) && e.detail.as_deref() == Some(new.id.as_str()));
+        assert!(kept(KEPT_EDITED, &edited.id), "{events:?}");
+        assert!(kept(KEPT_MAYBE_POSTED, &unsure.id), "{events:?}");
+        assert!(!events.iter().any(|e| e.proposal_id.as_deref().is_some_and(|p| p == posted.id || p == posting.id) && e.action != "draft_created"));
     }
 
     #[test]

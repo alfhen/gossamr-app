@@ -36,14 +36,72 @@ beforeEach(() => {
 });
 
 describe("the run sheet, by state", () => {
-  it("shows the exact command a permission prompt waits on with one way to answer it, and no Allow or Deny", () => {
-    const html = sheet(run("needsPermission", { needs: "approve Bash: git push origin HEAD && echo 'done'" }));
-    expect(html).toContain("Claude is asking permission");
-    expect(html).toContain("git push origin HEAD &amp;&amp; echo &#x27;done&#x27;");
-    expect(html).toContain('data-copy="git push origin HEAD &amp;&amp; echo &#x27;done&#x27;"');
-    expect(buttons(html).filter((b) => b === "Open in Terminal")).toHaveLength(1);
-    for (const word of ["Allow", "Deny", "Nudge", "Send answer", "don&#x27;t ask again"]) expect(html).not.toContain(word);
-    expect(html).toContain("Gossamr can&#x27;t answer for you");
+  describe("a permission prompt", () => {
+    const build = (needs: string, over: Partial<Run> = {}) => {
+      const base = run("needsPermission", { needs, ...over });
+      return { ...base, spec: { ...base.spec, kind: "build" as const, allowPush: true, name: "ca-401-fix" }, readOnly: null };
+    };
+    const investigate = (needs: string) => {
+      const base = run("needsPermission", { needs });
+      return { ...base, spec: { ...base.spec, kind: "investigate" as const } };
+    };
+    /** The permission box's buttons, in tab order: the document's, as none of them is taken out of it. */
+    const asked = (html: string) => /<div data-permission-ask[\s\S]*?(?=<section)/.exec(html)?.[0] ?? "";
+    const primary = (html: string) => [...asked(html).matchAll(/<button[^>]*border-ws-pip bg-ws-pip[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
+
+    it("on a Build, says plainly what it wants to run and offers Allow once as the one primary button, then Deny and Stop", () => {
+      const html = sheet(build("approve Bash: mkdir -p dist && echo 'done'"), { label: "R3" });
+      expect(html).toContain("R3 wants to run this command:");
+      expect(html).toContain('data-copy="mkdir -p dist &amp;&amp; echo &#x27;done&#x27;"');
+      expect(buttons(asked(html))).toEqual(["Copy", "Allow once in Terminal", "Deny", "Stop the run (abandons it)"]);
+      expect(primary(html)).toEqual(["Allow once in Terminal"]);
+      expect(asked(html)).not.toContain('tabindex="-1"');
+      expect(html).toContain("Claude Code takes a yes only in its own prompt. Allow once opens this run in Terminal and copies the command: choose Yes there for this command only.");
+      expect(html).toContain("Claude is told you said no and carries on without it.");
+      for (const word of ["Open in Terminal", "Send answer", "don&#x27;t ask again", "Always"]) expect(asked(html)).not.toContain(word);
+    });
+
+    it("on a Build asking for a command Gossamr can't check, offers no Allow: it says why and opens Terminal instead", () => {
+      const html = sheet(build("approve Bash: pnpm test"));
+      expect(html).toContain("Gossamr offers Allow once only for plain commands it can check, such as git, ls or cat.");
+      expect(buttons(asked(html))).toEqual(["Copy", "Deny", "Open in Terminal", "Stop the run (abandons it)"]);
+      expect(primary(html)).toEqual(["Open in Terminal"]);
+    });
+
+    it("on a read-only run, says Claude Code refuses it and renders no Allow at all: Deny is the primary answer", () => {
+      const html = sheet(investigate("approve Bash: rm -rf node_modules"));
+      expect(html).toContain("This run is read-only: Claude Code refuses this.");
+      expect(html).not.toContain("Allow");
+      expect(buttons(asked(html))).toEqual(["Copy", "Deny", "Stop the run (abandons it)"]);
+      expect(primary(html)).toEqual(["Deny"]);
+    });
+
+    it("on a push Gossamr forbids, gives the rule and no Allow; on a request it can't read whole, Open in Terminal", () => {
+      const forbidden = sheet(build("approve Bash: git push origin main"));
+      expect(forbidden).toContain("A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn&#x27;t allow this.");
+      expect(buttons(asked(forbidden))).toEqual(["Copy", "Deny", "Stop the run (abandons it)"]);
+      const odd = sheet(build("Claude wants to do something"));
+      expect(odd).toContain("Claude is asking permission:");
+      expect(odd).toContain("Gossamr can&#x27;t show this request whole");
+      expect(buttons(asked(odd))).toEqual(["Copy", "Deny", "Open in Terminal", "Stop the run (abandons it)"]);
+    });
+
+    it("after Allow once, confirms in a status line the keyboard can land on, and Allow is gone", () => {
+      const command = "git push -u origin worktree-ca-401-fix";
+      const r = build(`approve Bash: ${command}`, { permissionAllowed: { command, at: iso(0) } });
+      const html = sheet(r, { permissionAnswered: { kind: "allowed", command, at: iso(0), copied: true } });
+      expect(html).toMatch(/<p tabindex="-1" role="status" data-permission-sent="allowed"[^>]*>[\s\S]*Opened in Terminal, command copied. Choose Yes there for this command only.<\/p>/);
+      expect(buttons(asked(html))).toEqual(["Copy", "Deny", "Open in Terminal", "Stop the run (abandons it)"]);
+      // Not copied: the line doesn't say it was.
+      expect(sheet(r, { permissionAnswered: { kind: "allowed", command, at: iso(0), copied: false } })).toContain("Opened in Terminal. Choose Yes there for this command only.");
+    });
+
+    it("after Deny, the run is working again and the sheet confirms it at the top until the run reports something new", () => {
+      const r = run("working", { lastProgressAt: iso(0) });
+      const denied = { kind: "denied" as const, command: "rm -rf node_modules", at: iso(0), copied: false };
+      expect(sheet(r, { permissionAnswered: denied })).toMatch(/<p tabindex="-1" role="status" data-permission-sent="denied"[^>]*>[\s\S]*Denied. Claude is carrying on without it.<\/p>/);
+      expect(sheet(r)).not.toContain("data-permission-sent");
+    });
   });
 
   describe("a question", () => {

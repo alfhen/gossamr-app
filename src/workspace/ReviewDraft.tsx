@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type TextareaHTMLAttribut
 import { Link } from "../components/Adf";
 import { useAutoHeight } from "../components/autoHeight";
 import { hunkLinesAround } from "../lib/diffHunks";
-import { REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
+import { KEPT_EDITED, keptOlderReviews, REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
 import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } from "../types";
 import type { DraftCardProps } from "./DraftCard";
 import { peekFocusAfterLeaving } from "./peekDrafts";
@@ -98,6 +98,19 @@ export function postsWhat(comments: number): string {
 /** Under the review's text boxes: what GitHub does with their words. */
 export const MARKDOWN_HINT = "Markdown, formatted on GitHub";
 
+/**
+ * What the card says of an older review of the same pull request that this one left standing, as `keptOlderReviews`
+ * finds it: the person edited it, or GitHub may have it already. Null when there is none.
+ */
+export function keptOlderNote(p: Proposal, all: readonly Proposal[]): string | null {
+  const kept = keptOlderReviews(p, all);
+  if (!kept.length) return null;
+  const number = (p.intent as Review).number;
+  return kept.some((k) => k.why === KEPT_EDITED)
+    ? `An older review of #${number} that you edited is still waiting; this one didn't replace it.`
+    : `An older review of #${number} that may already be on GitHub is still waiting; this one didn't replace it.`;
+}
+
 /** A review's text box, as tall as its words, so a long comment never hides behind a scroll of its own. */
 function GrowingText(props: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string }) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -140,8 +153,26 @@ export function ReviewHunk({ file, line, side }: { file: ChangedFile | null | un
  * that can be dropped. Post review saves the person's edit first, then posts it as one comment review, and only when the
  * token may post; otherwise the card says why and shows the review in the in-app pull request view instead.
  */
-export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, onOpenRun, onDiscuss, access = null, diff: given, initial }: DraftCardProps & { /** What a test shows instead of reading it. */ diff?: PullDiffState; /** The card as the person left it, for a test. */ initial?: { summary: string; comments: Held[] } }) {
+export function ReviewDraft({
+  proposal: p,
+  working,
+  error,
+  onApprove,
+  onSkip,
+  onOpenRun,
+  onDiscuss,
+  access = null,
+  diff: given,
+  initial,
+  drafts: givenDrafts,
+}: DraftCardProps & {
+  /** What a test shows instead of reading it. */ diff?: PullDiffState;
+  /** The card as the person left it, for a test. */ initial?: { summary: string; comments: Held[] };
+  /** The drafts there are, for a test; otherwise read from the workspace. */ drafts?: readonly Proposal[];
+}) {
   const review = p.intent as Review;
+  const stored = useWorkspace((s) => s.proposals);
+  const olderKept = p.state.type === "pending" ? keptOlderNote(p, givenDrafts ?? Object.values(stored)) : null;
   const title = `GitHub review of ${review.repo}#${review.number}`;
   const [summary, setSummary] = useState(initial?.summary ?? review.summary);
   const [comments, setComments] = useState<Held[]>(() => initial?.comments ?? held(review));
@@ -262,6 +293,11 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
           <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
             <FromRun proposal={p} onOpen={onOpenRun ? () => onOpenRun((p.origin as { runId: string }).runId) : undefined} />
             . Gossamr made it from the review&apos;s findings; read and edit it before you post.
+          </p>
+        )}
+        {olderKept && (
+          <p data-review-kept-older role="note" className="m-0 rounded-md border border-ws-sep2 bg-ws-bar px-2 py-1 text-sm text-ws-ink2">
+            {olderKept}
           </p>
         )}
         {moved && (

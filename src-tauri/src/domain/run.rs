@@ -904,6 +904,19 @@ pub struct Run {
     /// has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_only: Option<ReadOnly>,
+    /// Set when the person chose Allow once for the permission prompt the run is waiting on, which they then answer in
+    /// Terminal (`runs/permission.rs`); cleared once the run moves on or asks something else. Not part of the spec, so
+    /// the digest is untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_allowed: Option<PermissionAllowed>,
+}
+
+/// The exact command the person chose to allow once, and when.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionAllowed {
+    pub command: String,
+    pub at: DateTime<Utc>,
 }
 
 impl Run {
@@ -988,6 +1001,7 @@ impl Run {
             auto_start: None,
             slot_wait_since: None,
             read_only: None,
+            permission_allowed: None,
         }
     }
 }
@@ -1814,6 +1828,20 @@ mod tests {
         let json = serde_json::to_value(&waiting).unwrap();
         assert!(json["slotWaitSince"].is_string());
         assert_eq!(serde_json::from_value::<Run>(json).unwrap(), waiting);
+    }
+
+    #[test]
+    fn a_permission_allowed_once_round_trips_leaves_the_digest_alone_and_old_runs_still_read() {
+        let plain = Run::queued("r".into(), "p".into(), "c".into(), None, spec(), "f".into(), Utc::now());
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("permissionAllowed").is_none(), "a run nobody allowed anything for stores nothing new");
+        assert_eq!(serde_json::from_value::<Run>(json).unwrap().permission_allowed, None);
+        let allowed = Run { permission_allowed: Some(PermissionAllowed { command: "git push origin worktree-x".into(), at: Utc::now() }), ..plain.clone() };
+        let json = serde_json::to_value(&allowed).unwrap();
+        assert_eq!(json["permissionAllowed"]["command"], "git push origin worktree-x");
+        let back: Run = serde_json::from_value(json).unwrap();
+        assert_eq!(back, allowed);
+        assert_eq!((back.digest.as_str(), back.spec.digest()), (plain.digest.as_str(), plain.spec.digest()), "answering a prompt is not part of what is approved");
     }
 
     #[test]

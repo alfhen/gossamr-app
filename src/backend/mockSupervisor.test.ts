@@ -3,7 +3,7 @@ import type { AutoStartSwitches, Run, RunKind, RunSpec, Workstream, WorkstreamRu
 import { MockBackend } from "./mock";
 import type { MockOptions } from "./mockWatch";
 import { itemRef } from "./mockConnector";
-import { MockWorkstreams, basisOfItem, driftOf, type BasisTicket } from "./mockWorkstreams";
+import { ESCALATION_GONE, MockWorkstreams, basisOfItem, driftOf, type BasisTicket } from "./mockWorkstreams";
 import { docFromText } from "../lib/docs";
 import fixtures from "./supervisor.fixtures.json";
 import { FIX_FINDING_LIMIT, FIX_INSTRUCTION, FIX_PREFACE, MockSupervisor, budgetLevel, decideAutostart, decideWake, eventLine, fixRoundMessage, keysIn, planRecommended, tripwireOf } from "./mockSupervisor";
@@ -556,6 +556,104 @@ describe("the sample supervisor", () => {
     expect(tripwireOf({ ws, marked: null, runs: [run("1", "build", "failed"), run("2", "build", "failed")], events: [] })).toEqual({ kind: "repeated_failure", run: "2" });
     // What the person set going again after they saw it doesn't trip it again.
     expect(tripwireOf({ ws, marked: null, runs: [run("1", "build", "failed"), run("2", "build", "failed")], events: [{ seq: 4, at: "2026-10-01T10:05:00Z", actor: "person", action: "resumed" }] })).toBeNull();
+  });
+});
+
+describe("a review that still blocks after the automatic fix rounds", () => {
+  beforeEach(() => saved.clear());
+
+  /** A managed workstream whose build went through both automatic rounds, each review blocking, up to the third review. */
+  async function exhausted() {
+    const { b, wakes } = world();
+    const ws = b.workstreams.open(CA401).id;
+    b.workstreams.setBudget(ws, { autoTurns: 30, wakes: 40 });
+    const build = await toBuild(b, ws);
+    let review!: Run;
+    for (let round = 0; round < 3; round++) {
+      finish(b, build.id);
+      b.runs.surfacePullRequests();
+      review = newest(b, ws, "review")!;
+      finish(b, review.id);
+      if (round < 2) expect(b.workstreams.get(ws)?.escalation, `after review ${round + 1}`).toBeUndefined();
+    }
+    return { b, ws, build, review, wakes };
+  }
+  const ruleRounds = (b: MockBackend, ws: string) => b.workstreams.events(ws).filter((e) => e.action === "autostart" && e.detail?.startsWith("fix_round after ")).length;
+
+  it("waits for the person once the rounds are used up and the newest review blocks, offering its pending review draft", async () => {
+    const { b, ws, build, review } = await exhausted();
+    const draft = b.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "githubReview")!;
+    expect(b.workstreams.get(ws)?.escalation).toMatchObject({ reviewRun: review.id, buildRun: build.id, rounds: 2, reviewDraft: draft.id });
+    expect((await b.workstreamsList()).find((v) => v.workstream.id === ws)?.escalation).toEqual(b.workstreams.get(ws)?.escalation);
+    // The supervisor looking again neither sends a round nor changes the mode.
+    b.supervisor.check();
+    expect([ruleRounds(b, ws), b.workstreams.get(ws)?.workstream.mode, b.runs.get(build.id)?.state]).toEqual([2, "manage", "done"]);
+  });
+
+  it("sends the person's fix round past the cap, as theirs and not the rule's, and the next one needs a fresh click", async () => {
+    const { b, ws, build, review } = await exhausted();
+    const passes = b.runs.get(build.id)!.passes ?? 1;
+    const sent = await b.workstreamsFixRound(review.id);
+    expect(sent).toMatchObject({ id: build.id, state: "working", passes: passes + 1 });
+    const events = b.workstreams.events(ws);
+    expect(events.filter((e) => e.action === "fix_round_person").map((e) => [e.actor, e.runId, e.detail])).toEqual([["person", build.id, `after ${review.id}`]]);
+    expect(events.filter((e) => e.action === "fix_round_sent").map((e) => e.actor)).toEqual(["supervisor", "supervisor", "person"]);
+    expect(ruleRounds(b, ws)).toBe(2);
+    expect(b.workstreams.get(ws)?.escalation).toBeUndefined();
+    await expect(b.workstreamsFixRound(review.id)).rejects.toThrow(ESCALATION_GONE);
+
+    // The next review blocks too: back to the person, and the rule sends nothing of its own.
+    finish(b, build.id);
+    b.runs.surfacePullRequests();
+    const next = newest(b, ws, "review")!;
+    finish(b, next.id);
+    b.supervisor.check();
+    expect(b.workstreams.get(ws)?.escalation?.reviewRun).toBe(next.id);
+    expect(b.workstreams.events(ws).filter((e) => e.action === "fix_round_sent")).toHaveLength(3);
+    expect([ruleRounds(b, ws), b.workstreams.get(ws)?.workstream.mode, b.runs.get(build.id)?.state]).toEqual([2, "manage", "done"]);
+    await expect(b.workstreamsFixRound(review.id)).rejects.toThrow(ESCALATION_GONE);
+  });
+
+  it("a person's fix round whose wake fails records nothing and leaves the escalation offered", async () => {
+    const { b, ws, build, review } = await exhausted();
+    b.runs.wakeFails = true;
+    await expect(b.workstreamsFixRound(review.id)).rejects.toThrow("Couldn't wake");
+    expect(b.workstreams.events(ws).filter((e) => e.action === "fix_round_person" || (e.action === "fix_round_sent" && e.actor === "person"))).toEqual([]);
+    expect(b.workstreams.get(ws)?.escalation?.reviewRun).toBe(review.id);
+    expect(b.runs.get(build.id)?.state).toBe("done");
+    b.runs.wakeFails = false;
+    expect(await b.workstreamsFixRound(review.id)).toMatchObject({ id: build.id, state: "working" });
+  });
+
+  it("is taken over by the person: Advise with escalation_taken, and no run, draft or write changes", async () => {
+    const { b, ws, review } = await exhausted();
+    const before = { runs: b.runs.list(), drafts: b.proposals.list(), writes: [...b.proposals.writes] };
+    const taken = await b.workstreamsTakeOver(ws, review.id);
+    expect(taken.mode).toBe("advise");
+    expect(b.workstreams.events(ws).slice(-2).map((e) => [e.actor, e.action])).toEqual([
+      ["person", "escalation_taken"],
+      ["person", "mode_set"],
+    ]);
+    b.supervisor.check();
+    expect({ runs: b.runs.list(), drafts: b.proposals.list(), writes: [...b.proposals.writes] }).toEqual(before);
+    expect(b.workstreams.get(ws)?.escalation).toBeUndefined();
+    await expect(b.workstreamsTakeOver(ws, review.id)).rejects.toThrow(ESCALATION_GONE);
+    await expect(b.workstreamsFixRound(review.id)).rejects.toThrow(ESCALATION_GONE);
+  });
+
+  it("isn't raised for a third review that passes", async () => {
+    const { b, wakes } = world();
+    const ws = b.workstreams.open(CA401).id;
+    b.workstreams.setBudget(ws, { autoTurns: 30, wakes: 40 });
+    const build = await toBuild(b, ws);
+    for (let round = 0; round < 3; round++) {
+      finish(b, build.id);
+      b.runs.surfacePullRequests();
+      if (round === 2) b.runs.scriptNext("review", { verdict: "pass" });
+      finish(b, newest(b, ws, "review")!.id);
+    }
+    expect(b.workstreams.get(ws)?.escalation).toBeUndefined();
+    expect(wakes.length).toBeGreaterThan(0);
   });
 });
 

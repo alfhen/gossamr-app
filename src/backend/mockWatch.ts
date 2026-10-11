@@ -1,4 +1,4 @@
-import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type RunKind, type WatchChange, type WatchMode, type WatchRow, type WatchState } from "../types";
+import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type Proposal, type RunKind, type WatchChange, type WatchMode, type WatchRow, type WatchState } from "../types";
 import type { GithubWrite } from "./mockGithub";
 import type { ScriptedFinish } from "./mockRunResult";
 import type { MockLaunch } from "./mockRuns";
@@ -104,9 +104,9 @@ export interface MockHandle {
   /** Moves one run, or every unfinished run, a step along (queued, launching, working, done), as `MockRuns.advance` does. */
   advanceRuns(id?: string): void;
   /** The audit of every workstream, oldest first within each, as `workstreams_events` reads one. */
-  workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null }[];
+  workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   /** Every run the sample backend holds, newest first: its id, kind and state. */
-  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null }[];
+  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null; digest: string; name: string }[];
   /** Every launch so far, oldest first: the run, its kind, the read-only restriction the mock launcher passed (null for a Build) and the auto-start rule that started it, if one did. */
   launches(): MockLaunch[];
   /** Makes the draft pull requests finished builds opened show on the code host now, as a code sync finding them; true when there was one. */
@@ -115,8 +115,14 @@ export interface MockHandle {
   scriptNext(kind: RunKind, script: ScriptedFinish): void;
   /** Has working run `id` ask the person `question`, as `MockRuns.ask` does. */
   askRun(id: string, question: string): void;
+  /** Has working run `id` ask permission for `needs` (`approve Bash: git push`), as `MockRuns.askPermission` does. */
+  askPermission(id: string, needs: string): void;
+  /** The run ids Terminal was opened on (`runsAttach`, Allow once among them), oldest first. */
+  attached(): string[];
   /** Every write the sample tracker made, oldest first, with the draft the person approved for it. */
   jiraWrites(): { proposalId: string; type: string; key: string | null }[];
+  /** Every GitHub review draft, newest first: its pull request, the run it came from, its state, what replaced it and whether the person edited it. */
+  reviewDrafts(): MockReviewDraft[];
   /** Sets workstream `id`'s own limits for automatic turns and wakes. */
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
   /** Makes the scripted Pip wait, answering, after starting each turn (true) until let go (false). */
@@ -135,6 +141,16 @@ export interface MockHandle {
   loseNextReviewAnswer(kept: boolean): void;
 }
 
+/** A GitHub review draft as `reviewDrafts` lists it. */
+export interface MockReviewDraft {
+  id: string;
+  runId: string;
+  pull: string;
+  state: string;
+  supersededBy: string | null;
+  edited: boolean;
+}
+
 /** What `editTicket` changes on a sample ticket; the status is a status id or its name. */
 export interface TicketEdit {
   summary?: string;
@@ -144,9 +160,9 @@ export interface TicketEdit {
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; readonly attached: readonly string[] };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown };
-  proposals?: { writes: readonly { proposalId: string; intent: Intent }[] };
+  proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(key: string, change: TicketEdit): void };
   github?: { writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
@@ -160,7 +176,7 @@ declare global {
 /**
  * The scripted runs never move by themselves, so in a dev browser (never a build, never a test outside a browser) the sample
  * backend puts its clock on `globalThis.__gossamrMock`: `__gossamrMock.advanceRuns()` steps every unfinished run along and
- * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs, `launches()` lists every
+ * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs, `askPermission(id, needs)` has a run ask permission, `attached()` lists the runs Terminal was opened on, `reviewDrafts()` lists the GitHub review drafts, `launches()` lists every
  * launch with the read-only restriction the mock launcher passed Claude Code, and `surfacePullRequests()` shows the
  * draft pull requests finished builds opened without waiting, `githubWrites()` lists the reviews posted to the sample GitHub,
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
@@ -171,12 +187,20 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
     workstreamEvents: () => (workstreams ? workstreams.list(true).flatMap((v) => workstreams.events(v.workstream.id)) : []),
-    runs: () => runs.list().map((r) => ({ id: r.id, kind: r.spec.kind, state: r.state, prSha: r.spec.prSha ?? null, passes: r.passes ?? 1, key: r.item?.key ?? null, shortId: r.shortId ?? null })),
+    runs: () => runs.list().map((r) => ({ id: r.id, kind: r.spec.kind, state: r.state, prSha: r.spec.prSha ?? null, passes: r.passes ?? 1, key: r.item?.key ?? null, shortId: r.shortId ?? null, digest: r.digest, name: r.spec.name })),
     launches: () => runs.launches().map((l) => ({ ...l, readOnly: l.readOnly && { ...l.readOnly, allow: [...l.readOnly.allow], deny: [...l.readOnly.deny] } })),
     surfacePullRequests: () => runs.surfacePullRequests(),
     scriptNext: (kind, script) => runs.scriptNext(kind, script),
     askRun: (id, question) => void runs.ask(id, question),
+    askPermission: (id, needs) => void runs.askPermission(id, needs),
+    attached: () => [...runs.attached],
     jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent) })),
+    reviewDrafts: () =>
+      (proposals?.list() ?? []).flatMap((p) =>
+        p.intent.type === "githubReview"
+          ? [{ id: p.id, runId: p.intent.runId, pull: `${p.intent.repo.toLowerCase()}#${p.intent.number}`, state: p.state.type, supersededBy: p.supersededBy ?? null, edited: p.revisions.some((r) => r.note === "Edited") }]
+          : [],
+      ),
     setBudget: (id, budget) => void workstreams?.setBudget(id, budget),
     holdPip: (on) => pip?.hold(on),
     pipIdle: () => pip?.idle() ?? true,

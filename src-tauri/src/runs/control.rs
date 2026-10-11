@@ -204,6 +204,7 @@ impl RunService {
         let now = Utc::now();
         run.state = RunState::Stopped;
         run.needs = None;
+        run.permission_allowed = None;
         run.error = None;
         run.failure = None;
         run.ended_at = Some(now);

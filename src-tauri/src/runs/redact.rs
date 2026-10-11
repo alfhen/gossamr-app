@@ -5,7 +5,7 @@
 
 use std::ops::Range;
 
-const MASK: &str = "[redacted]";
+pub(crate) const MASK: &str = "[redacted]";
 const SECRET_NAMES: [&str; 8] = ["secret", "token", "password", "passwd", "api_key", "api-key", "apikey", "private"];
 const HEADERS: [&str; 4] = ["authorization:", "cookie:", "x-api-key:", "x-auth-token:"];
 
