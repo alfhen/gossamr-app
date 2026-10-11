@@ -87,6 +87,9 @@ describe("PipConversation", () => {
     const drafts = [comment("c1", null), other("o1", "DEVOPS-471"), comment("c2", null), other("o2", "WEB-101")];
     expect(draftsForTicket(drafts, itemRef("CA-412"))).toEqual({ shown: [drafts[0], drafts[2]], others: [drafts[1], drafts[3]] });
     expect(draftsForTicket(drafts, null)).toEqual({ shown: drafts, others: [] });
+    // A ticket moved to another project keeps its id but not its key: its drafts still belong to it.
+    const moved = { ...itemRef("CA-412"), key: "WEB-9" };
+    expect(draftsForTicket(drafts, moved)).toEqual({ shown: [drafts[0], drafts[2]], others: [drafts[1], drafts[3]] });
     expect([otherTicketsRow(1), otherTicketsRow(2)]).toEqual(["+1 draft on other tickets", "+2 drafts on other tickets"]);
 
     const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={drafts} ticket={itemRef("CA-412")} />);
