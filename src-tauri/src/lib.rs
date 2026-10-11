@@ -48,6 +48,7 @@ type CoreState = Arc<Core>;
 type AgentState = Arc<AgentService>;
 type LauncherState = Arc<dyn runs::launcher::RunLauncher>;
 type RunsState = Arc<runs::service::RunService>;
+type SupervisorState = Arc<agent::supervisor::Supervisor>;
 
 /// Sends the latest snapshot to the window and updates the Dock badge. Failures only mean there is nothing to
 /// show yet (e.g. signed out).
@@ -93,6 +94,15 @@ fn proposals_changed(app: &AppHandle, connection_id: &str) {
 /// Tells the page a workstream was opened, closed or changed, so it can re-read them.
 fn workstreams_changed(app: &AppHandle, connection_id: &str) {
     let _ = app.emit("workstreams-changed", serde_json::json!({ "connectionId": connection_id }));
+}
+
+/// A wake turn's event, which no page asked for: sent as `claude` like any turn's, with the conversation it belongs to
+/// and `kind: wake`, so the page can show a turn it didn't start.
+fn wake_update(app: &AppHandle, conversation: &str, update: agent::Update) {
+    let Ok(mut payload) = serde_json::to_value(&update) else { return };
+    payload["conversation"] = conversation.into();
+    payload["kind"] = "wake".into();
+    let _ = app.emit("claude", payload);
 }
 
 /// Asks the page to narrow the view the person is looking at.
@@ -142,6 +152,10 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     tauri::async_runtime::spawn(async move {
         loop {
             let polled = service.poll().await;
+            // The poll has let go of the launch lock by now, which each start takes again.
+            if let Err(e) = service.launch_waiting().await {
+                eprintln!("couldn't start the runs waiting in workstreams: {e}");
+            }
             let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
             let wait = if polled.busy && focused { runs::tracker::POLL_BUSY } else { runs::tracker::POLL_IDLE };
             tokio::select! {
@@ -444,8 +458,12 @@ async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String) 
 
 /// Applies the draft. A failed attempt still returns it, back to pending with `error` set.
 #[tauri::command]
-async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, supervisor: State<'_, SupervisorState>, id: String) -> Result<Proposal> {
     let result = core.approve_proposal(&id).await;
+    // Approving a draft can be what a rule waits on, as a plan's is for its build.
+    if let Some(p) = result.as_ref().ok().filter(|p| p.state == domain::ProposalState::Applied) {
+        supervisor.on_proposal_applied(p.workstream());
+    }
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
         cache_changed(&app, &connection);
@@ -571,8 +589,9 @@ async fn workstreams_list(core: State<'_, CoreState>, include_closed: Option<boo
 }
 
 #[tauri::command]
-async fn workstreams_close(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
+async fn workstreams_close(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String) -> Result<Workstream> {
     let ws = core.close_workstream(&core.scope().await?, &id).await?;
+    agent.cancel_workstream_turns(&id).await;
     workstreams_changed(&app, &ws.connection_id);
     Ok(ws)
 }
@@ -583,6 +602,63 @@ async fn workstreams_set_notes(app: AppHandle, core: State<'_, CoreState>, id: S
     let ws = core.set_workstream_notes(&core.scope().await?, &id, &notes, domain::Actor::Person).await?;
     workstreams_changed(&app, &ws.connection_id);
     Ok(ws)
+}
+
+/// The person sets how much Pip may do on its own in a workstream: `advise` or `manage`.
+#[tauri::command]
+async fn workstreams_set_mode(app: AppHandle, core: State<'_, CoreState>, id: String, mode: domain::workstream::Mode) -> Result<Workstream> {
+    let ws = core.set_workstream_mode(&core.scope().await?, &id, mode, domain::Actor::Person).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
+/// The person holds a workstream: nothing wakes Pip or starts on its own in it; its runs carry on.
+#[tauri::command]
+async fn workstreams_hold(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String) -> Result<Workstream> {
+    let ws = core.hold_workstream(&core.scope().await?, &id, domain::workstream::HELD_PERSON, domain::Actor::Person).await?;
+    agent.cancel_workstream_turns(&id).await;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
+/// The person lifts a workstream's hold, whatever held it.
+#[tauri::command]
+async fn workstreams_resume(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
+    let ws = core.resume_workstream(&core.scope().await?, &id).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
+/// The person's switch for one auto-start rule in a workstream; `on: null` follows the global switch again.
+#[tauri::command]
+async fn workstreams_set_rule(app: AppHandle, core: State<'_, CoreState>, id: String, rule: String, on: Option<bool>) -> Result<Workstream> {
+    let rule = domain::workstream::Rule::parse(&rule).ok_or_else(|| Error::Proposal(format!("there is no auto-start rule {rule:?}")))?;
+    let ws = core.set_workstream_rule(&core.scope().await?, &id, rule, on).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
+/// The person's Hold all: holds every open workstream and stops every Pip turn in one, waiting or running. Returns
+/// those it held.
+#[tauri::command]
+async fn workstreams_hold_all(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>) -> Result<Vec<Workstream>> {
+    let scope = core.scope().await?;
+    let held = core.hold_all_workstreams(&scope).await?;
+    agent.cancel_all_workstream_turns().await;
+    workstreams_changed(&app, &Connection::jira_id(&scope));
+    Ok(held)
+}
+
+/// The person stops a workstream: holds it, then stops each of its runs that can be stopped.
+#[tauri::command]
+async fn workstreams_stop(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, agent: State<'_, AgentState>, id: String) -> Result<runs::control::StopAll> {
+    let scope = core.scope().await?;
+    let result = runs.stop_workstream(&scope, &id).await;
+    agent.cancel_workstream_turns(&id).await;
+    let connection_id = Connection::jira_id(&scope);
+    workstreams_changed(&app, &connection_id);
+    runs_changed(&app, &connection_id);
+    result
 }
 
 /// A workstream's audit, oldest first.
@@ -937,7 +1013,7 @@ async fn cancel_claude(agent: State<'_, AgentState>, request_id: String) -> Resu
     Ok(())
 }
 
-fn spawn_sync_loop(app: AppHandle, core: CoreState) {
+fn spawn_sync_loop(app: AppHandle, core: CoreState, supervisor: SupervisorState) {
     tauri::async_runtime::spawn(async move {
         // Launch catches up straight away, from the cursor the last run left in the cache.
         let mut trigger = Trigger::Now;
@@ -977,6 +1053,8 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                             if let Ok(scope) = core.scope().await {
                                 workstreams_changed(&app, &Connection::jira_id(&scope));
                             }
+                            // ...and start the review the rules have waiting on it.
+                            supervisor.nudge();
                         }
                     }
                     Err(_) => {
@@ -1091,6 +1169,18 @@ pub fn run() {
                     None
                 }
             };
+            // The supervisor hears about runs from the run service and wakes Pip through the agent service, which is
+            // built after both; until it is bound it does nothing.
+            let runs_slot: Arc<std::sync::OnceLock<std::sync::Weak<runs::service::RunService>>> = Arc::default();
+            let (settings_slot, emit_handle, changed_handle) = (runs_slot.clone(), app.handle().clone(), app.handle().clone());
+            let facade = agent::supervisor::CoreFacade::new(core.clone());
+            let supervisor = agent::supervisor::Supervisor::new(
+                facade.clone(),
+                Arc::new(move || settings_slot.get().and_then(std::sync::Weak::upgrade).map(|s| s.settings()).unwrap_or_default()),
+                Arc::new(move |conversation, update| wake_update(&emit_handle, conversation, update)),
+                Arc::new(move |connection_id| workstreams_changed(&changed_handle, connection_id)),
+            );
+            let notices: Arc<dyn runs::tracker::RunNotifier> = Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus });
             let mut service = runs::service::RunService::new(
                     core.clone(),
                     Arc::new(runs::toolchain::SystemToolchain::default()),
@@ -1098,7 +1188,7 @@ pub fn run() {
                     runs::service::RunService::default_roots(),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
-                .with_notifier(Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus }))
+                .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
                 .with_drafted(Arc::new(move |connection_id| proposals_changed(&drafted_handle, connection_id)))
                 .with_settings(config.agents)
                 .enabled(config.agents_enabled);
@@ -1106,6 +1196,8 @@ pub fn run() {
                 service = service.with_report(channel);
             }
             let service = Arc::new(service);
+            let _ = runs_slot.set(Arc::downgrade(&service));
+            facade.bind_runs(&service);
             let handle = app.handle().clone();
             let view_handle = handle.clone();
             let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(
@@ -1124,9 +1216,13 @@ pub fn run() {
                     service.recover().await;
                 });
             }
-            app.manage::<AgentState>(Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config)));
+            let agent = Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config));
+            supervisor.bind(&agent);
+            tauri::async_runtime::spawn(supervisor.clone().run_sweeps());
+            app.manage::<AgentState>(agent);
+            app.manage::<SupervisorState>(supervisor.clone());
 
-            spawn_sync_loop(app.handle().clone(), core);
+            spawn_sync_loop(app.handle().clone(), core, supervisor);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1222,6 +1318,12 @@ pub fn run() {
             workstreams_close,
             workstreams_set_notes,
             workstreams_events,
+            workstreams_set_mode,
+            workstreams_hold,
+            workstreams_resume,
+            workstreams_set_rule,
+            workstreams_hold_all,
+            workstreams_stop,
             sync_now,
             mark_seen,
             set_unread,

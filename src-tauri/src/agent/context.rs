@@ -113,7 +113,13 @@ pub const MANAGER: &str = "This conversation belongs to a workstream, and you ma
      draft). Draft a review only once the build's pull request was found: while the [Workstream] block says a build's pull \
      request hasn't been found yet ('waiting for PR'), wait and say so rather than drafting the review. Builds in a workstream \
      always push their branch and open a draft pull request, never a ready one, and never merge. Each step is a draft the \
-     person reads and approves; never say a run started until list_runs shows it Working. You cannot start, stop or answer a run.";
+     person reads and approves; never say a run started until list_runs shows it Working. You cannot start, stop or answer a run. \
+     Some steps start automatically by rules the person switched on (triage after an investigation, a plan a triage \
+     recommends, the build once the person approved the plan, the review once the build's pull request is found, and at \
+     most two fix rounds when a review blocks): an [Event] line says when Gossamr started one, so don't draft that step \
+     again, and still never say it started until list_runs shows it Working. When an [Event] says a review still blocks \
+     after the fix rounds, bring it to the person. A turn that opens with [Event] lines is a wake: Gossamr, not the person, \
+     asked you because a run changed; reply in at most about three lines.";
 
 pub fn system_prompt(role: Role, reads_code: bool, edits_text: bool) -> String {
     let assistant = assistant_prompt(reads_code, edits_text);
@@ -285,6 +291,9 @@ pub fn compose(
     }
     let (header, drafts) = match workstream {
         Some(ws) => {
+            if let Some(event) = ws.event.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
+                out.push_str(&format!("\n{event}\n"));
+            }
             out.push('\n');
             out.push_str(&ws.block());
             ("[Open drafts in this workstream]", ws.drafts.as_slice())
@@ -729,6 +738,8 @@ mod tests {
             closed_at: None,
             budget: Default::default(),
             spent: Default::default(),
+            rules: Default::default(),
+            basis: None,
         };
         WorkstreamContext {
             workstream,
@@ -737,7 +748,22 @@ mod tests {
             drafts,
             recent_person_actions: vec![WorkstreamEvent::new("w1", Actor::Person, "run_stopped", now()).run("r1")],
             waiting_for_pr: None,
+            event: None,
         }
+    }
+
+    #[test]
+    fn a_wake_s_event_block_comes_before_the_workstream_s_and_only_in_a_wake() {
+        let ctx = ScreenContext::default();
+        let mut ws = in_workstream(vec![]);
+        let asked = compose(&ctx, None, &[], &[], &[], Some(&ws), "next?");
+        assert!(!asked.contains("[Event]"), "{asked}");
+        ws.event = Some("[Event] run r2 (triage) Done; plan recommended: yes".into());
+        let p = compose(&ctx, None, &[], &[], &[], Some(&ws), super::super::supervisor::WAKE_REQUEST);
+        let event = p.find("\n[Event] run r2 (triage) Done; plan recommended: yes\n").expect("an event block");
+        assert!(event < p.find("[Workstream").unwrap(), "{p}");
+        assert!(p.find("[Screen]").unwrap() < event);
+        assert!(system_prompt(Role::Manager, false, true).contains("at most about three lines"));
     }
 
     #[test]
@@ -800,6 +826,9 @@ mod tests {
             "('waiting for PR'), wait",
             "always push their branch and open a draft pull request",
             "never say a run started until list_runs shows it Working",
+            "Some steps start automatically by rules the person switched on",
+            "still never say it started until list_runs shows it Working",
+            "review still blocks after the fix rounds, bring it to the person",
         ] {
             assert!(p.contains(needed), "{needed}");
         }

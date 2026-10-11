@@ -197,6 +197,7 @@ export function appActions(): CommandActions {
       const open = ticket ? useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) : null;
       if (open) useWorkstreams.getState().askClose(open.workstream.id);
     },
+    holdAllWorkstreams: () => void useWorkstreams.getState().holdAll(),
     jumpToItem,
     askPip,
   };

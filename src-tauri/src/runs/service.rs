@@ -206,6 +206,12 @@ impl RunService {
         self
     }
 
+    /// The launch lock, for a test that holds it while something else runs.
+    #[cfg(test)]
+    pub(crate) fn launching_lock(&self) -> &tokio::sync::Mutex<()> {
+        &self.launching
+    }
+
     pub fn with_notifier(mut self, notifier: Arc<dyn RunNotifier>) -> Self {
         self.notifier = notifier;
         self
@@ -452,6 +458,61 @@ impl RunService {
             (run, true) => Ok(run),
             (run, false) => Err(Error::Proposal(format!("This run is {}, so it can't be started.", run.state.as_str()))),
         }
+    }
+
+    /// Starts the runs waiting in a workstream that is open and not held, oldest first, while fewer than the cap are live:
+    /// ones the supervisor auto-started, and ones a person approved that are still queued. The rest stay queued, never
+    /// failed for the cap, and a held workstream's are skipped. Each start takes the launch lock itself, so this is only
+    /// ever called with no lock held: from the supervisor's own task and after the tracker's poll returns. Returns the
+    /// ids it started.
+    pub async fn launch_waiting(&self) -> Result<Vec<String>> {
+        if !self.is_enabled() {
+            return Ok(Vec::new());
+        }
+        let mut queued = self.core.runs_list(&RunQuery { states: Some(vec![RunState::Queued]), ..RunQuery::default() }).await?;
+        queued.retain(|r| r.spec.workstream.is_some());
+        queued.sort_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)));
+        let mut started = Vec::new();
+        for run in queued {
+            if self.index.live().len() >= self.cap() {
+                break;
+            }
+            match self.start_waiting(&run.id).await {
+                Ok(true) => started.push(run.id),
+                Ok(false) => {}
+                Err(e) => eprintln!("couldn't start waiting run {}: {e}", run.id),
+            }
+        }
+        Ok(started)
+    }
+
+    /// Whether the workstream `run` belongs to is open and not held, as the signed-in account has it. A run an auto-start
+    /// rule started also needs the workstream still starting steps on its own with that rule on: one the person switched
+    /// to Advise, or whose rule they switched off, keeps it waiting for them.
+    async fn workstream_runs(&self, run: &Run) -> bool {
+        let Some(ws) = run.spec.workstream.as_deref() else { return false };
+        let Ok(scope) = self.core.scope().await else { return false };
+        let Ok(Some(v)) = self.core.workstream(&scope, ws).await else { return false };
+        let ws = v.workstream;
+        match &run.auto_start {
+            Some(auto) => ws.closed_at.is_none() && ws.held_reason.is_none() && ws.mode == crate::domain::workstream::Mode::Manage && crate::config::rule_on(&self.settings(), &ws, auto.rule),
+            None => ws.closed_at.is_none() && ws.held_reason.is_none(),
+        }
+    }
+
+    /// `start` for a waiting run: under the launch lock it is checked again that it is still queued, that its workstream
+    /// isn't held and that there is room under the cap; otherwise it is left as it is. Returns whether it launched.
+    async fn start_waiting(&self, run_id: &str) -> Result<bool> {
+        let _turn = self.launching.lock().await;
+        if !self.is_enabled() {
+            return Ok(false);
+        }
+        let mut run = self.load(run_id).await?;
+        if run.state != RunState::Queued || self.live_elsewhere(&run) >= self.cap() || !self.workstream_runs(&run).await {
+            return Ok(false);
+        }
+        self.spawn(&mut run).await?;
+        Ok(true)
     }
 
     /// Looks for the session of a failed launch and adopts it; only when there is none does it launch again.

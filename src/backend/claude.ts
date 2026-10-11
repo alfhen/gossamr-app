@@ -23,6 +23,17 @@ export type ClaudeEvent =
   /** The turn left the queue and Pip is starting on it. */
   | { type: "running" };
 
+/**
+ * Where a `claude` event belongs besides its request id. The app sends it with every event of a turn the person didn't
+ * start: a wake, `kind: wake`, in its workstream's `conversation`. `prompt` is the wake's event lines when the backend
+ * says them; without it the page reads them from the stored turn.
+ */
+export interface EventMeta {
+  conversation?: string;
+  kind?: "user" | "wake";
+  prompt?: string;
+}
+
 /** What became of a question when it was sent: started straight away, or queued behind `ahead` turns. */
 export interface AskOutcome {
   queued: boolean;
@@ -63,6 +74,8 @@ export interface StoredTurn {
   sessionId: string | null;
   usage: TurnUsage | null;
   createdAt: string;
+  /** `wake` for a turn the supervisor started, with its event lines as `prompt`; a person's question otherwise. */
+  kind?: "user" | "wake";
 }
 
 export interface AskRequest {
@@ -75,6 +88,8 @@ export interface AskRequest {
   /** Where the turn is kept: the Pip pane's `general` or a workstream's `ws:<id>`, or a ticket key for the classic drawer. */
   conversation?: string;
   meta?: TurnMeta;
+  /** `wake` for a turn the supervisor started; the sample backend's own wake turns are asked this way. */
+  kind?: "user" | "wake";
 }
 
 /** Emitted as the `pip-view` event when Pip narrows the view the person is looking at. */
@@ -110,11 +125,13 @@ export const claude = {
     const p = listen<PipView>("pip-view", ({ payload }) => cb(payload));
     return () => void p.then((un) => un());
   },
-  onEvent(cb: (requestId: string, e: ClaudeEvent) => void) {
+  /** Every event of every turn, with where it belongs when the turn is one the page didn't ask (a wake). */
+  onEvent(cb: (requestId: string, e: ClaudeEvent, meta?: EventMeta) => void) {
     if (scripted) return mockPipEvents.on(cb);
-    const p = listen<{ requestId: string } & ClaudeEvent>("claude", ({ payload }) => {
-      const { requestId, ...event } = payload;
-      cb(requestId, event as ClaudeEvent);
+    const p = listen<{ requestId: string } & EventMeta & ClaudeEvent>("claude", ({ payload }) => {
+      const { requestId, conversation, kind, prompt, ...event } = payload;
+      const meta: EventMeta = { ...(conversation ? { conversation } : {}), ...(kind ? { kind } : {}), ...(prompt ? { prompt } : {}) };
+      cb(requestId, event as ClaudeEvent, Object.keys(meta).length ? meta : undefined);
     });
     return () => void p.then((un) => un());
   },

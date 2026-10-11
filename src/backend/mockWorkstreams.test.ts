@@ -351,3 +351,163 @@ describe("a workstream's build waiting for its pull request", () => {
     expect(waitingForPr([pushed, run("b2", "build", "done", 3, { allowPush: true })], (id) => (id === "b1" ? null : 301))).toBeNull();
   });
 });
+
+describe("holding and managing a mock workstream", () => {
+  beforeEach(() => saved.clear());
+
+  const last = (backend: MockBackend, id: string) => backend.workstreamsEvents(id).then((events) => events.slice(-1)[0]);
+
+  it("sets the mode, holds, resumes and switches a rule with one line each by the person, as the backend does", async () => {
+    const backend = new MockBackend();
+    const ws = await backend.workstreamsOpen(CA401);
+    expect(ws).toMatchObject({ rules: {}, heldReason: null });
+    expect(ws.basis).toMatchObject({ statusId: expect.any(String), descriptionDigest: expect.stringMatching(/^mock-/) });
+    expect((await backend.workstreamsOpen(null, "Loose")).basis).toBeNull();
+
+    expect((await backend.workstreamsSetMode(ws.id, "manage")).mode).toBe("manage");
+    expect(await last(backend, ws.id)).toMatchObject({ actor: "person", action: "mode_set", detail: "manage" });
+    await backend.workstreamsSetMode(ws.id, "manage");
+    expect(await backend.workstreamsEvents(ws.id)).toHaveLength(2);
+
+    expect((await backend.workstreamsHold(ws.id)).heldReason).toBe("person");
+    expect(await last(backend, ws.id)).toMatchObject({ actor: "person", action: "held", detail: "person" });
+    await backend.workstreamsHold(ws.id);
+    expect(await backend.workstreamsEvents(ws.id)).toHaveLength(3);
+    expect((await backend.workstreamsResume(ws.id)).heldReason).toBeNull();
+    expect(await last(backend, ws.id)).toMatchObject({ actor: "person", action: "resumed", detail: "person" });
+    await backend.workstreamsResume(ws.id);
+    expect(await backend.workstreamsEvents(ws.id)).toHaveLength(4);
+
+    expect((await backend.workstreamsSetRule(ws.id, "triage_plan", false)).rules).toEqual({ triage_plan: false });
+    expect(await last(backend, ws.id)).toMatchObject({ actor: "person", action: "rule_set", detail: "triage_plan=off" });
+    await backend.workstreamsSetRule(ws.id, "triage_plan", false);
+    expect(await backend.workstreamsEvents(ws.id)).toHaveLength(5);
+    expect((await backend.workstreamsSetRule(ws.id, "triage_plan", null)).rules).toEqual({});
+    expect(await last(backend, ws.id)).toMatchObject({ detail: "triage_plan=inherit" });
+    await expect(backend.workstreamsSetRule(ws.id, "nope" as never, true)).rejects.toThrow("no auto-start rule");
+
+    const view = await backend.workstreamsGet(ws.id);
+    expect(view?.workstream).toEqual({ ...ws, mode: "manage" });
+    expect(view?.budget).toEqual({ autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" });
+
+    await backend.workstreamsClose(ws.id);
+    await expect(backend.workstreamsHold(ws.id)).rejects.toThrow("is closed");
+    await expect(backend.workstreamsSetMode(ws.id, "advise")).rejects.toThrow("is closed");
+    await expect(backend.workstreamsSetRule(ws.id, "fix_round", true)).rejects.toThrow("is closed");
+  });
+
+  it("keeps an existing hold unless the person's replaces a restart, budget or quota one, and resuming from budget resets the spend", () => {
+    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    for (const reason of ["restart", "budget", "quota", "tripwire:marker", "hold_all"]) {
+      const ws = store.open(null, reason);
+      store.hold(ws.id, reason, "supervisor");
+      const after = store.hold(ws.id, "person", "person");
+      const replaced = ["restart", "budget", "quota"].includes(reason);
+      expect(after.heldReason).toBe(replaced ? "person" : reason);
+      expect(store.events(ws.id).filter((e) => e.action === "held")).toHaveLength(replaced ? 2 : 1);
+    }
+    expect(() => store.hold(store.open(null, "x").id, "because")).toThrow("isn't a reason");
+
+    const spent = store.open(null, "spent");
+    store.hold(spent.id, "budget", "supervisor");
+    // Spend as the supervisor will count it, straight in the store.
+    (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === spent.id)!.spent = { autoTurns: 6, wakes: 9, tokens: 5 };
+    expect(store.get(spent.id)?.budget).toEqual({ autoTurns: { used: 6, limit: 6 }, wakes: { used: 9, limit: 12 }, level: "spent" });
+    const resumed = store.resume(spent.id);
+    expect(resumed.spent).toEqual({ autoTurns: 0, wakes: 0, tokens: 5 });
+    expect(store.events(spent.id).map((e) => [e.actor, e.action])).toEqual([
+      ["person", "opened"],
+      ["supervisor", "held"],
+      ["person", "resumed"],
+      ["person", "budget_reset"],
+    ]);
+    expect(store.get(spent.id)?.budget.level).toBe("ok");
+  });
+
+  it("keeps a budget hold when the person writes while the wakes still use the budget up, and lifts it otherwise", () => {
+    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    const ws = store.open(null, "spent");
+    store.hold(ws.id, "budget", "supervisor");
+    const spend = (s: object) => {
+      (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === ws.id)!.spent = s;
+    };
+    spend({ autoTurns: 3, wakes: 12, tokens: 0 });
+    store.personWrote(ws.id);
+    expect(store.get(ws.id)?.workstream).toMatchObject({ heldReason: "budget", spent: { autoTurns: 0, wakes: 12 } });
+    expect(store.events(ws.id).map((e) => e.action)).toEqual(["opened", "held", "budget_reset"]);
+    spend({ autoTurns: 6, wakes: 9, tokens: 0 });
+    store.personWrote(ws.id);
+    expect(store.get(ws.id)?.workstream.heldReason).toBeNull();
+    expect(store.events(ws.id).map((e) => e.action)).toEqual(["opened", "held", "budget_reset", "resumed", "budget_reset"]);
+  });
+
+  it("holds every open workstream on Hold all, once", async () => {
+    const backend = new MockBackend();
+    const a = await backend.workstreamsOpen(CA401);
+    const b = await backend.workstreamsOpen(null, "B");
+    const c = await backend.workstreamsOpen(null, "C");
+    await backend.workstreamsClose(c.id);
+    backend.workstreams.hold(b.id, "budget", "supervisor");
+    expect((await backend.workstreamsHoldAll()).map((w) => w.id)).toEqual([a.id]);
+    expect((await backend.workstreamsGet(a.id))?.workstream.heldReason).toBe("hold_all");
+    expect((await backend.workstreamsGet(b.id))?.workstream.heldReason).toBe("budget");
+    expect((await backend.workstreamsGet(c.id))?.workstream.heldReason).toBeNull();
+    expect(await last(backend, a.id)).toMatchObject({ actor: "person", action: "held", detail: "hold_all" });
+    expect(await backend.workstreamsHoldAll()).toEqual([]);
+  });
+
+  it("stops a workstream: holds it and stops only its runs that can be stopped", async () => {
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    const ws = await backend.workstreamsOpen(CA401);
+    const approve = async (workstream: string | null) => {
+      const draft = await backend.runsDraft(spec(workstream ? { workstream } : {}), CA401);
+      return backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    };
+    const working = await approve(ws.id);
+    const outside = await approve(null);
+    for (const r of [working, outside]) {
+      backend.runs.advance(r.id);
+      backend.runs.advance(r.id);
+    }
+    const queued = await approve(ws.id);
+    expect(await backend.workstreamsStop(ws.id)).toEqual({ stopped: 1, failed: 0 });
+    expect((await backend.runsGet(working.id))?.state).toBe("stopped");
+    expect((await backend.runsGet(outside.id))?.state).toBe("working");
+    expect((await backend.runsGet(queued.id))?.state).toBe("queued");
+    expect((await backend.workstreamsGet(ws.id))?.workstream.heldReason).toBe("person");
+    expect((await backend.workstreamsEvents(ws.id)).map((e) => [e.action, e.runId]).slice(-2)).toEqual([
+      ["held", null],
+      ["run_stopped", working.id],
+    ]);
+  });
+
+  it("comes back after a restart with every open workstream held, and after a reload as it was", () => {
+    const first = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    const open = first.open(null, "Open");
+    const mine = first.open(null, "Mine");
+    first.hold(mine.id, "person");
+    const closed = first.open(null, "Closed");
+    first.close(closed.id);
+
+    const reloaded = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    expect(reloaded.get(open.id)?.workstream.heldReason).toBeNull();
+    expect(reloaded.events(open.id)).toHaveLength(1);
+
+    const restarted = new MockWorkstreams(() => [], () => "title", undefined, undefined, true);
+    expect(restarted.get(open.id)?.workstream.heldReason).toBe("restart");
+    expect(restarted.events(open.id).slice(-1)[0]).toMatchObject({ actor: "supervisor", action: "held", detail: "restart" });
+    expect(restarted.get(mine.id)?.workstream.heldReason).toBe("person");
+    expect(restarted.get(closed.id)?.workstream.heldReason).toBeNull();
+
+    const again = new MockWorkstreams(() => [], () => "title", undefined, undefined, true);
+    expect(again.events(open.id).filter((e) => e.action === "held")).toHaveLength(1);
+  });
+
+  it("reads a workstream stored before rules and basis were kept with their defaults", () => {
+    const old = { id: "ws-1", connectionId: "mock", itemKey: null, repo: null, title: "Old", pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 } };
+    saved.set(MOCK_WORKSTREAMS_KEY, JSON.stringify({ workstreams: [old], events: [] }));
+    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    expect(store.get("ws-1")?.workstream).toEqual({ ...old, rules: {}, basis: null });
+    expect(store.setRule("ws-1", "fix_round", false).rules).toEqual({ fix_round: false });
+  });
+});

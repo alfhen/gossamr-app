@@ -1,3 +1,4 @@
+import { AUTOSTART_DEFAULTS } from "../types";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
@@ -15,7 +16,7 @@ import { offsetText } from "./RunTimeline";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
-const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false };
+const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 };
 const seeded = () => new MockBackend().runs.list();
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 212_000, result: null, error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
@@ -195,6 +196,16 @@ describe("the run sheet, by state", () => {
     expect(buttons(html)).toContain("Start now");
     expect(buttons(html)).not.toContain("Stop");
     expect(html).toContain("Waiting to start");
+    expect(html).toContain("Nothing runs until you start it.");
+  });
+
+  it("says a queued run in a workstream launches on its own, and one a rule started only while Manage and its step allow", () => {
+    const inWs = run("queued", { shortId: null, spec: { ...run("queued").spec, workstream: "ws-1" } });
+    const own = sheet(inWs);
+    expect(own).toContain("launches on its own once a slot is free and its workstream isn&#x27;t held");
+    expect(own).not.toContain("Nothing runs until you start it.");
+    const auto = sheet({ ...inWs, autoStart: { rule: "triage_plan", afterRun: "run-1" } });
+    expect(auto).toContain("while the workstream is in Manage, not held and has that step on");
   });
 });
 
@@ -613,10 +624,11 @@ describe("the Agent menu on a ticket", () => {
   });
 
   const workstream = (over: Partial<WorkstreamView> = {}): WorkstreamView => ({
-    workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(60), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 } },
+    workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(60), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null },
     stage: "intake",
     runs: [],
     labels: [],
+    budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
     ...over,
   });
 

@@ -59,6 +59,9 @@ export class MockProposals {
   /** Where drafts that outlive a reload are written, and which ones; set by `keep`. */
   private kept: { key: string; which: (p: Proposal) => boolean } | null = null;
 
+  /** Every write the sample tracker made, oldest first, each with the draft the person approved for it: the only way anything reaches it. */
+  readonly writes: { proposalId: string; intent: Intent }[] = [];
+
   /** Called with each draft that was applied, for a backend that has to tell its own listeners. */
   onApplied: (p: Proposal) => void = () => {};
 
@@ -332,6 +335,7 @@ export class MockProposals {
     this.set(id, { state: { type: "applying" } });
     try {
       const created = await this.apply(p.intent, p.created);
+      this.writes.push({ proposalId: id, intent: p.intent });
       const applied = this.set(id, { state: { type: "applied" }, created: [...p.created, ...created], error: null });
       this.onApplied(applied);
       this.audit(applied, "person", "draft_approved");

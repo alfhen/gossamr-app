@@ -342,12 +342,12 @@ impl Harness {
 pub async fn run_tools_are_read_only(h: &Harness) -> std::result::Result<(), String> {
     let listed = h.rpc("runs-ro", "tools/list", json!({})).await;
     let names: Vec<&str> = listed["result"]["tools"].as_array().ok_or("no tool list")?.iter().filter_map(|t| t["name"].as_str()).collect();
-    for forbidden in ["start_run", "stop_run", "answer_run", "attach_run", "rm_run", "approve_run"] {
+    for forbidden in ["start_run", "stop_run", "answer_run", "attach_run", "rm_run", "approve_run", "hold_workstream", "resume_workstream", "set_workstream_mode", "send_fix_round", "launch_waiting"] {
         if names.contains(&forbidden) {
             return Err(format!("{forbidden} is offered"));
         }
     }
-    if let Some(name) = names.iter().find(|n| n.starts_with("approve") || n.contains("merge") || n.contains("push")) {
+    if let Some(name) = names.iter().find(|n| n.starts_with("approve") || n.contains("merge") || n.contains("push") || n.contains("hold") || n.contains("resume") || n.contains("mode")) {
         return Err(format!("{name} is offered"));
     }
     let run = seed_run(h, 1, |r| r.state = RunState::Working).await;
@@ -723,7 +723,7 @@ pub async fn workstream_tools_change_only_notes(h: &Harness) -> std::result::Res
     if let Some(missing) = super::workstream::NAMES.iter().find(|n| !names.contains(n)) {
         return Err(format!("{missing} isn't offered"));
     }
-    let forbidden = ["start_run", "stop_run", "answer_run", "attach_run", "rm_run", "launch_run", "retry_run", "hold_workstream", "close_workstream", "open_workstream"];
+    let forbidden = ["start_run", "stop_run", "answer_run", "attach_run", "rm_run", "launch_run", "retry_run", "hold_workstream", "resume_workstream", "set_workstream_mode", "set_workstream_rule", "hold_all", "close_workstream", "open_workstream"];
     let writes = |n: &&&str| forbidden.contains(n) || n.starts_with("approve") || n.starts_with("transition") || n.starts_with("write") || n.starts_with("apply");
     if let Some(name) = names.iter().find(writes) {
         return Err(format!("{name} is offered"));
@@ -903,6 +903,419 @@ impl AgentProvider for Scripted {
     }
 }
 
+/// A Pip that, on every turn, lists its tools and calls each one: with the arguments in `args` where there are some
+/// (the most it could try to do), else with none. It stands for a provider steered by whatever it read.
+#[derive(Default)]
+pub struct EveryTool {
+    pub args: Mutex<HashMap<String, Value>>,
+    /// Every tool name it was offered, in its last turn.
+    pub offered: Mutex<Vec<String>>,
+    pub turns: AtomicUsize,
+    /// Calls no tool at all, for tests about something else.
+    pub quiet: AtomicBool,
+}
+
+#[async_trait]
+impl AgentProvider for EveryTool {
+    fn id(&self) -> &'static str {
+        "every-tool"
+    }
+
+    fn capabilities(&self) -> AgentCaps {
+        AgentCaps { mcp: true, resume: true, streaming: true, reads_code: false, read_only_sandbox: true, vision: false }
+    }
+
+    async fn run(&self, req: AgentRequest) -> Result<EventStream> {
+        self.turns.fetch_add(1, Ordering::SeqCst);
+        let rpc = |method: &str, params: Value| {
+            let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+            let (url, token) = (req.mcp.url.clone(), req.mcp.token.clone());
+            async move { reqwest::Client::new().post(&url).bearer_auth(&token).json(&body).send().await.ok()?.json::<Value>().await.ok() }
+        };
+        let listed = if self.quiet.load(Ordering::SeqCst) { Value::Null } else { rpc("tools/list", json!({})).await.unwrap_or_default() };
+        let names: Vec<String> = listed["result"]["tools"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str().map(String::from)).collect();
+        *self.offered.lock().unwrap() = names.clone();
+        let args = self.args.lock().unwrap().clone();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let _ = tx.send(AgentEvent::Started { session_id: format!("sess-{}", req.run_id) });
+        for name in names {
+            let a = args.get(&name).cloned().unwrap_or_else(|| json!({}));
+            let _ = rpc("tools/call", json!({ "name": name, "arguments": a })).await;
+            let _ = tx.send(AgentEvent::Tool { label: name });
+        }
+        let _ = tx.send(AgentEvent::Text { text: "Noted.".into() });
+        let _ = tx.send(AgentEvent::Done { session_id: None, ok: true, message: None, usage: None });
+        Ok(rx)
+    }
+
+    fn cancel(&self, _run_id: &str) {}
+}
+
+/// A whole workstream Pip manages, run by the real supervisor over the real run service with a scripted `claude`, a
+/// GitHub that serves pull request #12, and a Pip that calls every tool it has on every turn.
+pub struct World {
+    pub rig: crate::runs::rig::Rig,
+    pub sup: Arc<super::supervisor::Supervisor>,
+    pub pip: Arc<EveryTool>,
+    /// Held here: the supervisor only has a weak handle on it.
+    pub agent: Arc<super::AgentService>,
+    pub ws: String,
+}
+
+/// The commits pull request #12 has at its head: the build's first, then its fix.
+pub const FIRST: &str = "a1a1a1a1a1a1";
+pub const FIXED: &str = "b2b2b2b2b2b2";
+const PULL: &str = "/repos/acme/webshop/pulls/12";
+const FOUND: &str = "I read the cart.\n\nFor Jira:\nThe cart rounds twice, in cart.rs and in checkout.rs.";
+const TRIAGED: &str = "Small, one area.\n\nFor Jira:\nIt touches the cart only.\nPlan recommended: yes, the rounding has two callers.";
+const PLANNED: &str = "## Approach\n\nRound in one place.\n\n## Steps\n\n1. Fix the rounding.\n2. Add a test.\n\nFor Jira:\nPlan attached to the run.";
+const BUILT: &str = "Rounded once and added a test.\n\nFor Jira:\nDraft PR #12 opened.";
+const BLOCKING: &str = "- [blocking] src/cart.ts:42: The total ignores the discount\n- [nit] src/cart.ts:3: naming\n\nVerdict: blocking\n\nFor Jira:\nOne blocking problem.";
+const PASSING: &str = "- [nit] src/cart.ts:3: naming\n\nVerdict: pass\n\nFor Jira:\nReady for a person.";
+
+impl World {
+    pub async fn start() -> Self {
+        let fast = crate::runs::service::Timing { recover_window: Duration::from_millis(300), worktree_grace: Duration::from_millis(300), poll: Duration::from_millis(10), stop_wait: Duration::from_millis(200), stop_settle: Duration::ZERO, rm_wait: Duration::from_millis(5) };
+        Self::start_with(fast).await
+    }
+
+    /// `start`, with the run service's waits as `timing` says.
+    pub async fn start_with(timing: crate::runs::service::Timing) -> Self {
+        use crate::codehost::github::testserver::pull_reply_at;
+        let pulls = vec![pull_reply_at(12, "open", Some("acme/webshop"), "main", FIRST), pull_reply_at(12, "open", Some("acme/webshop"), "main", FIRST), pull_reply_at(12, "open", Some("acme/webshop"), "main", FIXED)];
+        let fx = crate::inbox::testing::fixture_watching_with(&["acme/webshop"], vec![(PULL, pulls)]).await;
+        let rig = crate::runs::rig::ready_on(fx, move |s| s.with_cap(10).with_timing(timing)).await;
+        let facade = super::supervisor::CoreFacade::new(rig.fx.core.clone());
+        facade.bind_runs(&rig.svc);
+        let pip = Arc::new(EveryTool::default());
+        let server = McpServer::start(rig.fx.core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
+        let config = crate::config::AppConfig { agent_provider: "every-tool".into(), ..crate::config::AppConfig::default() };
+        let agent = Arc::new(super::AgentService::new(rig.fx.core.clone(), server, vec![pip.clone() as Arc<dyn AgentProvider>], config));
+        let sup = super::supervisor::Supervisor::new(facade, Arc::new(crate::config::AgentSettings::default), Arc::new(|_, _| {}), Arc::new(|_| {}));
+        sup.bind(&agent);
+        let (core, scope) = (&rig.fx.core, &rig.fx.scope);
+        let ws = core.open_workstream(scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
+        core.set_workstream_mode(scope, &ws.id, crate::domain::workstream::Mode::Manage, crate::domain::Actor::Person).await.unwrap();
+        let mut roomy = ws.clone();
+        roomy.mode = crate::domain::workstream::Mode::Manage;
+        roomy.budget.auto_turns = Some(50);
+        roomy.budget.wakes = Some(50);
+        rig.fx.save_workstream(&roomy).await;
+        World { rig, sup, pip, agent, ws: ws.id }
+    }
+
+    pub async fn runs(&self) -> Vec<Run> {
+        let mut all = self.rig.fx.core.runs_in(&self.rig.fx.scope, &RunQuery { workstream: Some(self.ws.clone()), ..Default::default() }).await.unwrap();
+        all.sort_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)));
+        all
+    }
+
+    pub async fn of_kind(&self, kind: crate::domain::RunKind) -> Vec<Run> {
+        self.runs().await.into_iter().filter(|r| r.spec.kind == kind).collect()
+    }
+
+    pub async fn events(&self) -> Vec<WorkstreamEvent> {
+        self.rig.fx.core.workstream_events(&self.rig.fx.scope, &self.ws).await.unwrap()
+    }
+
+    pub async fn workstream(&self) -> Workstream {
+        self.rig.fx.core.workstream(&self.rig.fx.scope, &self.ws).await.unwrap().unwrap().workstream
+    }
+
+    /// The person approves an investigation in the workstream, and it starts.
+    pub async fn person_starts_investigation(&self) -> Run {
+        self.person_starts(1).await
+    }
+
+    /// The person approves investigation `n` in the workstream, and it starts.
+    pub async fn person_starts(&self, n: u32) -> Run {
+        let spec = RunSpec { workstream: Some(self.ws.clone()), ..self.rig.spec(n) };
+        let core = &self.rig.fx.core;
+        let p = core.draft_run(spec, Some(self.rig.fx.item("CA-1"))).await.unwrap();
+        let digest = core.runs_review(&p.id).await.unwrap().digest;
+        let queued = core.runs_approve(&p.id, &digest).await.unwrap();
+        self.rig.svc.start_now(&queued.id).await.unwrap()
+    }
+
+    /// `run` works, then its session finishes with `answer` as its last message, as the tracker sees it.
+    pub async fn finish(&self, run: &Run, answer: &str) -> Run {
+        self.rig.poll().await;
+        let run = self.rig.get(run).await;
+        let short = run.short_id.clone().expect("launched");
+        self.rig.job(&short, |j| j.result = Some("Finished.".into()));
+        self.rig.cli.with(|s| {
+            s.answers.insert(format!("{short}-0000-4000-8000-000000000000"), answer.into());
+        });
+        self.rig.session(&run, |e| {
+            e.state = Some("done".into());
+            e.status = Some("idle".into());
+            e.pid = None;
+        });
+        self.rig.poll().await;
+        let done = self.rig.get(&run).await;
+        assert_eq!(done.state, crate::domain::RunState::Done, "{:?}", done.error);
+        done
+    }
+
+    /// One look by the supervisor, then until Pip's turns in the workstream are over.
+    pub async fn sweep(&self) {
+        self.sup.sweep_at(chrono::Utc::now()).await;
+        let conversation = format!("ws:{}", self.ws);
+        for _ in 0..500 {
+            let turns = self.rig.fx.core.pip_turns(&conversation).await.unwrap();
+            if turns.iter().all(|t| t.status != "queued" && t.status != "running") {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("Pip's turns never settled");
+    }
+
+    /// The build's draft pull request at `sha`, as a GitHub sync caches it.
+    pub fn surface_pr(&self, build: &Run, sha: &str) {
+        let mut change = crate::codehost::links::tests::pr(12, &format!("worktree-{}", build.spec.name), "Fix the cart", "");
+        change.sha = Some(sha.into());
+        self.rig.fx.core.with_code_db("github:ann", |db| db.upsert_code_changes(&[change], "2026-09-29T00:00:00Z")).unwrap();
+    }
+
+    /// The one auto-started run of `kind` after `after`, checked to have started with the rule's line in the audit.
+    pub async fn started(&self, kind: crate::domain::RunKind, rule: crate::domain::workstream::Rule, after: &Run) -> std::result::Result<Run, String> {
+        let found = self.of_kind(kind).await.into_iter().filter(|r| r.auto_start.as_ref().is_some_and(|a| a.after_run == after.id)).collect::<Vec<_>>();
+        let [run] = found.as_slice() else { return Err(format!("expected one {kind:?} after {}, found {}", after.id, found.len())) };
+        if run.auto_start.as_ref().map(|a| a.rule) != Some(rule) || run.state != crate::domain::RunState::Launching || run.spec.focus.is_some() {
+            return Err(format!("{kind:?} didn't start by {rule:?} without a focus: {run:?}"));
+        }
+        let detail = format!("{} after {}", rule.as_str(), after.id);
+        let line = self.events().await.into_iter().find(|e| e.action == "autostart" && e.run_id.as_deref() == Some(run.id.as_str()));
+        if line.as_ref().map(|l| (l.detail.as_deref(), l.digest.as_deref())) != Some((Some(detail.as_str()), Some(run.digest.as_str()))) {
+            return Err(format!("no autostart line with the digest and rule for {}: {line:?}", run.id));
+        }
+        Ok(run.clone())
+    }
+}
+
+/// A whole workstream in Manage mode, investigate to a passing review with one fix round, run through the real
+/// supervisor: every routine step starts by rule, and Jira is written exactly once, when and as the person approves
+/// the plan's description draft. Pip's turns, which call every tool they have, write nothing.
+pub async fn orchestration_never_writes_jira() -> std::result::Result<(), String> {
+    use crate::domain::workstream::Rule;
+    use crate::domain::RunKind;
+    let w = World::start().await;
+    let (core, fx) = (&w.rig.fx.core, &w.rig.fx);
+    let jira = |expected: usize, at: &str| {
+        let got = fx.tracker.intents();
+        if got.len() == expected { Ok(got) } else { Err(format!("{at}: Jira was written {} times: {got:?}", got.len())) }
+    };
+
+    let investigation = w.person_starts_investigation().await;
+    let investigation = w.finish(&investigation, FOUND).await;
+    w.sweep().await;
+    let triage = w.started(RunKind::Triage, Rule::InvestigateTriage, &investigation).await?;
+    if triage.spec.findings_from_run.as_deref() != Some(investigation.id.as_str()) {
+        return Err("the triage doesn't carry the investigation's findings".into());
+    }
+    jira(0, "after the triage started")?;
+
+    let triage = w.finish(&triage, TRIAGED).await;
+    w.sweep().await;
+    let plan = w.started(RunKind::Plan, Rule::TriagePlan, &triage).await?;
+    let plan = w.finish(&plan, PLANNED).await;
+    w.sweep().await;
+    jira(0, "after the plan finished")?;
+    if !w.of_kind(RunKind::Build).await.is_empty() {
+        return Err("a build started before the person approved the plan".into());
+    }
+
+    // The person approves the plan's description draft: the only Jira write there is.
+    let draft = core.proposals_in(&fx.scope, &ProposalQuery::default()).await.unwrap().into_iter().find(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == plan.id) && matches!(p.intent, Intent::Rewrite { .. })).ok_or("no plan description draft")?;
+    *fx.tracker.live.lock().unwrap() = Some(fx.tracker_item("CA-1"));
+    fx.tracker.writes_live.store(true, Ordering::SeqCst);
+    core.watch_set_mode(&crate::tracker::Connection::jira_id(&fx.scope), crate::domain::WatchMode::Everything).await.unwrap();
+    let approved = core.approve_proposal(&draft.id).await.map_err(|e| e.to_string())?;
+    if approved.state != crate::domain::ProposalState::Applied {
+        return Err(format!("the plan draft wasn't applied: {:?}", approved.error));
+    }
+    let written = jira(1, "after the person approved the plan")?;
+    w.sup.on_proposal_applied(Some(&w.ws));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    w.sweep().await;
+    let build = w.started(RunKind::Build, Rule::PlanBuild, &plan).await?;
+    if !(build.spec.allow_push && build.spec.plan_approved && build.spec.plan_from_run.as_deref() == Some(plan.id.as_str())) {
+        return Err(format!("the build doesn't follow the approved plan to a draft pull request: {:?}", build.spec));
+    }
+
+    // The build finishes; its review waits until a sync finds the pull request.
+    let build = w.finish(&build, BUILT).await;
+    w.sweep().await;
+    if !w.of_kind(RunKind::Review).await.is_empty() || !w.events().await.iter().any(|e| e.action == "waiting_for_pr" && e.run_id.as_deref() == Some(build.id.as_str())) {
+        return Err("a review started before the pull request was found, or the wait wasn't recorded".into());
+    }
+    w.surface_pr(&build, FIRST);
+    w.sweep().await;
+    let review = w.started(RunKind::Review, Rule::BuildReview, &build).await?;
+    if (review.spec.pr, review.spec.pr_sha.as_deref(), review.spec.report) != (Some(12), Some(FIRST), true) {
+        return Err(format!("the review doesn't read the pull request's head: {:?}", review.spec));
+    }
+
+    // It blocks: a fix round goes to the build with the finding as data, and nothing of a ticket.
+    let resumes_before = w.rig.cli.0.lock().unwrap().resumes.len();
+    let review = w.finish(&review, BLOCKING).await;
+    w.sweep().await;
+    let resumes = w.rig.cli.0.lock().unwrap().resumes.clone();
+    let [sent] = &resumes[resumes_before..] else { return Err(format!("expected one fix round, got {:?}", &resumes[resumes_before..])) };
+    let fix = &sent.message;
+    if !(fix.contains("<<<FINDINGS\nsrc/cart.ts:42: The total ignores the discount\nFINDINGS>>>") && fix.contains(super::autostart::FIX_PREFACE) && fix.contains(super::autostart::FIX_INSTRUCTION)) || fix.contains("naming") {
+        return Err(format!("the fix round isn't the blocking finding as data and the fixed instruction: {fix}"));
+    }
+    if !super::context::keys_in(fix).is_empty() {
+        return Err(format!("the fix round names a ticket: {fix}"));
+    }
+    if w.rig.get(&build).await.state != crate::domain::RunState::Working {
+        return Err("the build didn't go back to work".into());
+    }
+    let events = w.events().await;
+    if !events.iter().any(|e| e.action == "fix_round_sent" && e.run_id.as_deref() == Some(build.id.as_str())) || !events.iter().any(|e| e.action == "autostart" && e.detail.as_deref() == Some(&format!("fix_round after {}", review.id))) {
+        return Err("the fix round isn't in the audit".into());
+    }
+    jira(1, "after the fix round")?;
+
+    // The fix is pushed; until a sync sees the new commit nothing starts, then a fresh review reads it and passes.
+    let build = w.finish(&build, BUILT).await;
+    w.sweep().await;
+    if w.of_kind(RunKind::Review).await.len() != 1 {
+        return Err("a review started on a commit already reviewed".into());
+    }
+    w.surface_pr(&build, FIXED);
+    w.sweep().await;
+    let reviews: Vec<Run> = w.of_kind(RunKind::Review).await;
+    let again = reviews.last().filter(|r| r.id != review.id).ok_or("no fresh review")?.clone();
+    if again.spec.pr_sha.as_deref() != Some(FIXED) || again.auto_start.as_ref().map(|a| a.rule) != Some(Rule::BuildReview) {
+        return Err(format!("the fresh review doesn't read the fixed commit: {:?}", again.spec.pr_sha));
+    }
+    w.finish(&again, PASSING).await;
+    w.sweep().await;
+    w.sweep().await;
+    if !w.of_kind(RunKind::Verify).await.is_empty() || w.of_kind(RunKind::Review).await.len() != 2 || w.of_kind(RunKind::Build).await.len() != 1 {
+        return Err("something started after the passing review".into());
+    }
+    let after = jira(1, "at the end")?;
+    if after != written {
+        return Err("the one write isn't the one the person approved".into());
+    }
+    if w.pip.turns.load(Ordering::SeqCst) == 0 {
+        return Err("Pip was never woken".into());
+    }
+    let ws = w.workstream().await;
+    if ws.held_reason.is_some() {
+        return Err(format!("the workstream was held: {:?}", ws.held_reason));
+    }
+    Ok(())
+}
+
+/// What no wake turn may change: the runs, the workstream's hold and mode, and Jira.
+#[derive(Debug, PartialEq)]
+struct Steady {
+    runs: Vec<(String, RunState)>,
+    held: Option<String>,
+    mode: crate::domain::workstream::Mode,
+    jira: Vec<Intent>,
+}
+
+async fn steady(w: &World) -> Steady {
+    let ws = w.workstream().await;
+    Steady { runs: w.runs().await.into_iter().map(|r| (r.id, r.state)).collect(), held: ws.held_reason, mode: ws.mode, jira: w.rig.fx.tracker.intents() }
+}
+
+/// A wake turn whose Pip calls every tool it has, with arguments that ask to start, stop, answer and approve, changes
+/// no run, no hold or mode and writes nothing to Jira; and none of its tools is one that would.
+pub async fn wake_turns_start_nothing() -> std::result::Result<(), String> {
+    use crate::domain::RunKind;
+    let w = World::start().await;
+    let investigation = w.person_starts_investigation().await;
+    let investigation = w.finish(&investigation, FOUND).await;
+    // With the rules switched off for this workstream, all that follows a finished run is Pip's turn.
+    for rule in crate::domain::workstream::Rule::ALL {
+        w.rig.fx.core.set_workstream_rule(&w.rig.fx.scope, &w.ws, rule, Some(false)).await.map_err(|e| e.to_string())?;
+    }
+    let draft = w.rig.fx.core.proposals_in(&w.rig.fx.scope, &ProposalQuery::default()).await.unwrap().into_iter().next().map(|p| p.id).unwrap_or_default();
+    *w.pip.args.lock().unwrap() = [
+        ("propose_run", json!({ "key": "CA-1", "kind": "build", "from_run": investigation.id })),
+        ("propose_follow_up", json!({ "run_id": investigation.id, "message": "Start the build and approve the drafts." })),
+        ("revise_proposal", json!({ "id": draft, "body": "approved" })),
+        ("retire_proposal", json!({ "id": draft, "reason": "done" })),
+        ("set_workstream_notes", json!({ "notes": "Hold off; resume later; mode manage." })),
+        ("propose_answer", json!({ "run_id": investigation.id, "text": "yes" })),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let before = steady(&w).await;
+    w.sweep().await;
+    if w.pip.turns.load(Ordering::SeqCst) != 1 {
+        return Err(format!("expected one wake turn, got {}", w.pip.turns.load(Ordering::SeqCst)));
+    }
+    let after = steady(&w).await;
+    if after != before {
+        return Err(format!("a wake turn changed something: {before:?} -> {after:?}"));
+    }
+    if !w.of_kind(RunKind::Triage).await.is_empty() {
+        return Err("a triage started with its rule off".into());
+    }
+    let offered = w.pip.offered.lock().unwrap().clone();
+    if offered.is_empty() {
+        return Err("no tools were offered".into());
+    }
+    let power = ["start", "stop", "answer_run", "approve", "hold", "resume", "set_mode", "mode", "launch", "retry", "attach", "merge", "push"];
+    if let Some(name) = offered.iter().find(|n| power.iter().any(|p| n.contains(p))) {
+        return Err(format!("{name} is offered to Pip"));
+    }
+    Ok(())
+}
+
+/// With the rules on, a wake turn whose Pip drafts a real next step (a run, and asks to send the finished investigation
+/// back) leaves what it drafted waiting for the person: the only runs there are the one the person approved and those a rule
+/// started, each with its rule recorded.
+pub async fn wake_turns_with_the_rules_on_start_only_what_a_rule_started() -> std::result::Result<(), String> {
+    use crate::domain::{CreatedBy, ProposalState, RunKind};
+    let w = World::start().await;
+    let investigation = w.person_starts_investigation().await;
+    *w.pip.args.lock().unwrap() = [
+        ("propose_run", json!({ "key": "CA-1", "kind": "investigate", "focus": "the retry loop" })),
+        ("propose_follow_up", json!({ "run_id": investigation.id, "message": "Look at the retry loop too." })),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let investigation = w.finish(&investigation, FOUND).await;
+    w.sweep().await;
+    w.sweep().await;
+    if w.pip.turns.load(Ordering::SeqCst) == 0 {
+        return Err("Pip was never woken".into());
+    }
+    let drafts = w.rig.fx.core.proposals_in(&w.rig.fx.scope, &ProposalQuery::default()).await.unwrap();
+    let pips: Vec<_> = drafts.iter().filter(|p| p.created_by == CreatedBy::Pip).collect();
+    if !pips.iter().any(|p| matches!(p.intent, crate::domain::Intent::StartRun { .. })) {
+        return Err(format!("Pip's wake drafted no run: {:?}", pips.iter().map(|p| &p.intent).collect::<Vec<_>>()));
+    }
+    if let Some(p) = pips.iter().find(|p| p.state != ProposalState::Pending) {
+        return Err(format!("Pip's draft {} went ahead without the person: {:?}", p.id, p.state));
+    }
+    for run in w.runs().await {
+        if run.id != investigation.id && run.auto_start.is_none() {
+            return Err(format!("run {} started without the person or a rule", run.id));
+        }
+    }
+    w.started(RunKind::Triage, crate::domain::workstream::Rule::InvestigateTriage, &investigation).await?;
+    if w.rig.get(&investigation).await.passes != 1 {
+        return Err("Pip's follow-up was sent without the person".into());
+    }
+    if !w.rig.fx.tracker.intents().is_empty() {
+        return Err("Jira was written".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -939,6 +1352,21 @@ mod tests {
             ])),
             hang: script(json!([{ "do": "hang" }])),
         }
+    }
+
+    #[tokio::test]
+    async fn orchestration_never_writes_jira() {
+        super::orchestration_never_writes_jira().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn wake_turns_start_nothing() {
+        super::wake_turns_start_nothing().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn wake_turns_with_the_rules_on_start_only_what_a_rule_started() {
+        super::wake_turns_with_the_rules_on_start_only_what_a_rule_started().await.unwrap();
     }
 
     #[tokio::test]

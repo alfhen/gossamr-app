@@ -4,7 +4,8 @@ import { draftsForTurn } from "../lib/proposals";
 import { REMOVED_TURN } from "../backend/claude";
 import { useClaude, type Turn } from "../claudeStore";
 import { filesIn } from "../lib/attachments";
-import { runComposerVerb, type VerbOutcome } from "../lib/composerVerbs";
+import { runComposerVerb, runRef, type VerbOutcome } from "../lib/composerVerbs";
+import { labelsByRun } from "../lib/workstreamStage";
 import { workstreamOfConversation } from "../lib/conversations";
 import { MAX_IMAGES, defaultQuestion } from "../lib/pipImages";
 import type { Proposal } from "../types";
@@ -59,12 +60,77 @@ function LiveApplied({ requestId }: { requestId: string }) {
   return <AppliedCard note={applied.note} state={state} onAct={() => (state === "applied" ? usePip.getState().undoApplied(requestId) : usePip.getState().redoApplied(requestId))} />;
 }
 
-/** One question and Pip's answer to it, with the drafts the answer made. `afterQueued` says a queued turn waits behind another queued one. */
+const WAKE_LINE = /^\[Event\] (?:run (\S+)|a run) \(\w+\) ([^;]+)/;
+const WAKE_STATE: Record<string, string> = { Done: "finished", Failed: "failed", Stopped: "stopped", "Stopped at a limit": "stopped at a limit" };
+
+/**
+ * The muted line a wake turn opens with in place of a question: "Pip picked this up: run R2 finished", the run named by
+ * its label in its workstream (`labels`), else its short id, from the turn's event lines.
+ */
+export function wakeHeader(prompt: string, labels: ReadonlyMap<string, string>): string {
+  const events = prompt
+    .split("\n")
+    .map((l) => WAKE_LINE.exec(l.trim()))
+    .filter((m): m is RegExpExecArray => m !== null);
+  if (!events.length) return "Pip picked this up";
+  const state = (s: string) => WAKE_STATE[s.trim()] ?? "needs you";
+  const [, id, first] = events[0];
+  const who = id ? `run ${labels.get(id) ?? runRef({ id })}` : "a run";
+  const more = events.length > 1 ? ` and ${events.length - 1} more` : "";
+  return `Pip picked this up: ${who} ${state(first)}${more}`;
+}
+
+function WakeHeader({ turn }: { turn: Turn }) {
+  const runs = useRuns((s) => s.runs);
+  return (
+    <p data-wake-header className="m-0 flex items-center gap-1.5 text-sm text-ws-ink3">
+      <span aria-hidden className="size-1.5 rounded-full bg-ws-pip" />
+      {wakeHeader(turn.prompt, labelsByRun(runs))}
+    </p>
+  );
+}
+
+/** Why a wake turn ended without an answer, said quietly: the person wrote first, or held it. */
+const setAside = (turn: Turn) => turn.kind === "wake" && turn.status === "failed" && (turn.error === REMOVED_TURN || turn.error === "Stopped");
+
+/** One question and Pip's answer to it, with the drafts the answer made. `afterQueued` says a queued turn waits behind another queued one. A wake has no question: a muted line says what woke Pip. */
 export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn; proposals: Proposal[]; afterQueued?: boolean }) {
   const drafts = draftsForTurn(proposals, turn.requestId);
   const working = turn.status === "running" && !turn.text;
+  if (turn.kind === "wake") {
+    return (
+      <div data-turn-kind="wake" className="grid gap-1.5">
+        <WakeHeader turn={turn} />
+        {(turn.steps.length > 0 || working) && (
+          <ul className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
+            {turn.steps.map((s, i) => (
+              <li key={i} className="flex items-center gap-1.5">
+                <span className="size-1.5 rounded-full bg-ws-done" />
+                {s}
+              </li>
+            ))}
+            {working && <li className="animate-pulse text-ws-ink3">Reading what happened…</li>}
+          </ul>
+        )}
+        {turn.text && (
+          <div className="ws-legacy">
+            <Markdown text={turn.text} />
+          </div>
+        )}
+        {drafts.map((p) => (
+          <LiveDraftPreview key={p.id} proposal={p} />
+        ))}
+        {setAside(turn) && <p className="m-0 text-sm text-ws-ink3">Set aside</p>}
+        {turn.status === "failed" && !setAside(turn) && (
+          <p role="alert" className="m-0 rounded-md bg-ws-blocked-soft px-3 py-2 text-ws-blocked">
+            {turn.error ?? "Pip stopped"}
+          </p>
+        )}
+      </div>
+    );
+  }
   return (
-    <div className="grid gap-2">
+    <div data-turn-kind="user" className="grid gap-2">
       {turn.images && <TurnImages images={turn.images} />}
       {!turn.images && !!turn.imageCount && (
         <p className="m-0 justify-self-end text-xs text-ws-ink3">
@@ -168,7 +234,10 @@ export function PipConversation({ conversation, proposals, bodyRef }: { conversa
       {turns.length === 0 &&
         (workstreamId ? (
           <p data-empty-workstream className="m-0 text-ws-ink2">
-            This is the workstream on {workstream?.itemKey ?? workstream?.title ?? "this ticket"}: its agents, drafts and our conversation stay together here. Ask me to investigate, triage or plan it. To act on one of its runs yourself, type /stop R1, /retry R1 or /answer R1 and your answer. Nothing changes until you approve.
+            This is the workstream on {workstream?.itemKey ?? workstream?.title ?? "this ticket"}: its agents, drafts and our conversation stay together here. Ask me to investigate, triage or plan it. To act on one of its runs yourself, type /stop R1, /retry R1 or /answer R1 and your answer.{" "}
+            {workstream?.mode === "manage"
+              ? "It is in Manage: the routine next steps start on their own by fixed rules (see Automatic steps), I start nothing myself, and every change to Jira still waits for you."
+              : "Nothing changes until you approve."}
           </p>
         ) : (
           <p className="m-0 text-ws-ink2">I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing changes until you approve.</p>
@@ -181,15 +250,19 @@ export function PipConversation({ conversation, proposals, bodyRef }: { conversa
 }
 
 /**
- * A command typed in the composer (`/stop R1`, `/retry R1`, `/answer R1 text`), carried out with the person's own run
- * commands; what it came to is told under the input. Null for anything else, which is a question for Pip, and for
+ * A command typed in the composer (`/stop R1`, `/retry R1`, `/answer R1 text`, and `/hold`, `/resume` in a workstream),
+ * carried out with the person's own commands; what it came to is told under the input. Null for anything else, which is a question for Pip, and for
  * everything while Agents are off, when the composer is what it was before agents. A command never reaches Pip and adds
  * no turn. `R1` is looked up among the runs of the conversation's workstream.
  */
 export function composerVerb(text: string, conversation: string, agentsOn: boolean): Promise<VerbOutcome> | null {
   if (!agentsOn) return null;
   const runs = useRuns.getState();
-  return runComposerVerb(text, { runs: runs.runs, workstream: workstreamOfConversation(conversation), backend: runs.backend ?? useWorkspace.getState().backend });
+  const workstream = workstreamOfConversation(conversation);
+  const heldReason = workstream ? (useWorkstreams.getState().list.find((v) => v.workstream.id === workstream)?.workstream.heldReason ?? null) : null;
+  const done = runComposerVerb(text, { runs: runs.runs, workstream, backend: runs.backend ?? useWorkspace.getState().backend, heldReason });
+  // /hold and /resume change the workstream's header at once, not on the next change event.
+  return done && workstream ? done.then((outcome) => (outcome.ok && void useWorkstreams.getState().refresh(), outcome)) : done;
 }
 
 /**

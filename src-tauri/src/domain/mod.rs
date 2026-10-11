@@ -32,7 +32,7 @@ pub use proposal::{
     Revised, Revision, StateKind, Verdict,
 };
 pub use run::{
-    allowed_kinds, default_instruction, has_markers, pip_chain_kinds, pip_kinds, render_prompt, valid_repo, without_markers, ClonePlan, Continuation, EarlierSession, ReportOffer, Run, RunEvent, RunFailure, RunKind, RunQuery, RunReview, RunSpec, RunState, FOCUS_LIMIT, LIMIT_STOP, PIP_PROMPT_LIMIT, GUARD, GUARD_VERSION, INVESTIGATE_INSTRUCTION, REPORT_GUARD, REPORT_SERVER, REPORT_TOOL, REPORT_TOOL_VERSION,
+    allowed_kinds, default_instruction, has_markers, AutoStarted, pip_chain_kinds, pip_kinds, render_prompt, valid_repo, without_markers, ClonePlan, Continuation, EarlierSession, ReportOffer, Run, RunEvent, RunFailure, RunKind, RunQuery, RunReview, RunSpec, RunState, FOCUS_LIMIT, LIMIT_STOP, PIP_PROMPT_LIMIT, GUARD, GUARD_VERSION, INVESTIGATE_INSTRUCTION, REPORT_GUARD, REPORT_SERVER, REPORT_TOOL, REPORT_TOOL_VERSION,
     NEW_TICKET_TAIL, PLAN_LIMIT, BUILD_ACCOUNT_LIMIT, FINDINGS_LIMIT, plan_label, build_account_label, findings_label, TICKET_BLOCK_LIMIT, TICKETLESS_STARTER, TITLE_LIMIT,
 };
 pub use snapshot::{ticket_snapshot, SnapComment, TicketFacts};

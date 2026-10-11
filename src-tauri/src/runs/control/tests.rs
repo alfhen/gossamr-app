@@ -2,7 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use super::*;
-use crate::domain::RunFailure;
+use crate::domain::{RunFailure, RunSpec};
 use crate::runs::index::Entry;
 use crate::runs::rig::{ready, Rig};
 use crate::runs::testing::FakeCli;
@@ -56,6 +56,40 @@ async fn stopping_a_workstream_run_is_recorded_in_its_audit_and_a_refused_stop_i
     rig.poll().await;
     rig.svc.stop(&run.id).await.unwrap();
     assert_eq!(rig.run_actions(&ws).await, [("run_stopped".to_string(), Some(run.id.clone()), None)]);
+}
+
+#[tokio::test]
+async fn stopping_a_workstream_holds_it_and_stops_only_its_stoppable_runs() {
+    let rig = ready().await;
+    let (first, ws) = rig.launched_in_workstream(1).await;
+    let (second, same) = rig.launched_in_workstream(2).await;
+    assert_eq!(ws, same);
+    let outside = rig.launched(3).await;
+    rig.poll().await;
+    let draft = rig.fx.core.draft_run(RunSpec { workstream: Some(ws.clone()), ..rig.spec(4) }, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let digest = rig.fx.core.runs_review(&draft.id).await.unwrap().digest;
+    let queued = rig.fx.core.runs_approve(&draft.id, &digest).await.unwrap();
+    assert_eq!(rig.get(&queued).await.state, RunState::Queued);
+
+    let tally = rig.svc.stop_workstream(&rig.fx.scope, &ws).await.unwrap();
+    assert_eq!(tally, StopAll { stopped: 2, failed: 0 });
+    let mut stops = rig.cli.0.lock().unwrap().stops.clone();
+    stops.sort();
+    let mut expected = [first.short_id.clone().unwrap().to_string(), second.short_id.clone().unwrap().to_string()];
+    expected.sort();
+    assert_eq!(stops, expected);
+    assert_eq!((rig.get(&first).await.state, rig.get(&second).await.state), (RunState::Stopped, RunState::Stopped));
+    assert_eq!(rig.get(&outside).await.state, RunState::Working, "a run outside the workstream goes on");
+    assert_eq!(rig.get(&queued).await.state, RunState::Queued, "a queued one is left for the hold to keep");
+    let view = rig.fx.core.workstream(&rig.fx.scope, &ws).await.unwrap().unwrap();
+    assert_eq!(view.workstream.held_reason.as_deref(), Some("person"));
+    let events = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
+    let held: Vec<_> = events.iter().filter(|e| e.action == "held").map(|e| (e.actor, e.detail.as_deref())).collect();
+    assert_eq!(held, [(Actor::Person, Some("person"))]);
+    assert_eq!(rig.run_actions(&ws).await.iter().filter(|(a, _, _)| a == "run_stopped").count(), 2);
+
+    assert_eq!(rig.svc.stop_workstream(&rig.fx.scope, &ws).await.unwrap(), StopAll::default(), "nothing is left to stop");
+    assert!(rig.svc.stop_workstream(&rig.fx.scope, "nope").await.is_err());
 }
 
 #[tokio::test]

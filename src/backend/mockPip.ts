@@ -6,9 +6,10 @@ import type { Intent, ItemRef, Proposal, Run, RunKind, ScreenContext, WorkFilter
 import { needsPerson, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
-import type { AskRequest, ClaudeEvent } from "./claude";
+import type { AskRequest, ClaudeEvent, EventMeta } from "./claude";
 import { mockPipTurns, mockUsage } from "./mockPipTurns";
 import { GENERAL_CONVERSATION, workstreamOfConversation } from "../lib/conversations";
+import { labelsByRun } from "../lib/workstreamStage";
 
 /** What the scripted Pip does for one question. */
 export interface PipScript {
@@ -136,6 +137,48 @@ function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[],
   };
 }
 
+/** How a wake's prompt starts: the supervisor's event lines (`eventLine` in mockSupervisor.ts). */
+const EVENT = "[Event] ";
+const EVENT_LINE = /^\[Event\] (?:run (\S+)|a run) \((\w+)\) ([^;]+)(.*)$/;
+
+const KIND_WORD: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
+
+/**
+ * What Pip says when the supervisor wakes it: one short line for each event, at most three, from the event lines
+ * alone. A run a rule started is "queued to start" until it shows Working, and nothing Pip says starts anything.
+ */
+function wakeScript(prompt: string, runs: readonly Run[]): PipScript {
+  const labels = labelsByRun(runs);
+  const name = (id: string | undefined) => (id ? (labels.get(id) ?? (id.length <= 12 ? id : id.slice(0, 8))) : "A run");
+  const startedState = (kind: string, label: string) => {
+    const ws = runs.find((r) => labels.get(r.id) === label && r.spec.kind === kind);
+    return ws?.state === "working" ? "is working on it" : "is queued to start automatically";
+  };
+  const lines = prompt
+    .split("\n")
+    .map((l) => EVENT_LINE.exec(l.trim()))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .slice(0, 3)
+    .map(([, id, kind, state, rest]) => {
+      const who = `${KIND_WORD[kind as RunKind] ?? "The run"} ${name(id)}`;
+      const started = /; started (\w+) (\S+) automatically/.exec(rest);
+      if (started) return `${name(id)} finished. ${KIND_WORD[started[1] as RunKind] ?? started[1]} ${started[2]} ${startedState(started[1], started[2])}.`;
+      const fix = /; sent fix round (\d+) to build (\S+)/.exec(rest);
+      if (fix) return `${who} still blocks, so fix round ${fix[1]} went to build ${fix[2]}. A fresh review follows its new commit.`;
+      if (rest.includes("; review still blocking after")) return "The review still blocks after 2 fix rounds. Over to you.";
+      if (rest.includes("; waiting for its pull request")) return `${who} finished. Its review starts once its pull request shows up.`;
+      if (rest.includes("; plan recommended: no")) return `${who} finished and doesn't recommend a plan, so nothing starts on its own. Tell me if you want one.`;
+      if (rest.includes("; verdict: pass")) return `${who} passed. Nothing else starts on its own; the pull request is yours to mark ready.`;
+      if (state.trim() === "Done") {
+        const drafts = /; (\d+) drafts?/.exec(rest)?.[1];
+        return `${who} finished.${drafts ? ` It left ${drafts === "1" ? "a draft" : `${drafts} drafts`} for you.` : ""}`;
+      }
+      if (/^Needs|^Blocked/.test(state.trim())) return `${who} ${state.trim().toLowerCase()}. Open it to see what it asks.`;
+      return `${who} ${state.trim().toLowerCase()}. Nothing starts after it; tell me what you want to do.`;
+    });
+  return { steps: [], text: lines.join("\n\n") || "Something changed in this workstream; nothing needs you yet.", filter: null, draft: null };
+}
+
 /** What Pip does when asked to send a finished run back: only a run that left open questions gets a follow-up, and only one at a time. */
 function sendBack(context: ScreenContext, runs: readonly Run[], drafts: readonly Proposal[], discussed: string | null): PipScript {
   const none = (text: string): PipScript => ({ steps: [], text, filter: null, draft: null });
@@ -247,6 +290,7 @@ function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
 
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
+  if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs);
   const q = prompt.toLowerCase();
   if (asksToSendBack.test(prompt)) return sendBack(context, runs, drafts, discussed);
   const step = workstream ? chainStep(prompt, context, runs, workstream) : null;
@@ -521,7 +565,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   };
 }
 
-type Listener = (requestId: string, e: ClaudeEvent) => void;
+type Listener = (requestId: string, e: ClaudeEvent, meta?: EventMeta) => void;
 type ViewListener = (requestId: string, filter: WorkFilter, note: string) => void;
 
 /** The parts of a backend the scripted Pip writes to; only the sample backend has them. */
@@ -545,6 +589,8 @@ export interface PipDrafter {
   pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string): Promise<unknown>;
   /** Whether a draft from the question `requestId` is kept already. */
   pipDrafted(requestId: string): boolean;
+  /** The person wrote in workstream `id`'s conversation, which counts its automatic turns from zero again. */
+  pipPersonWrote(id: string): void;
 }
 
 const listeners = new Set<Listener>();
@@ -554,9 +600,9 @@ const running = new Map<string, () => void>();
 const discussing = new Map<string, string>();
 
 export const mockPipEvents = {
-  /** Tells every listener about `e`, as the app's `claude` event does. */
-  emit(requestId: string, e: ClaudeEvent) {
-    listeners.forEach((l) => l(requestId, e));
+  /** Tells every listener about `e`, as the app's `claude` event does; a wake's events say where they belong (`meta`). */
+  emit(requestId: string, e: ClaudeEvent, meta?: EventMeta) {
+    listeners.forEach((l) => l(requestId, e, meta));
   },
   on(cb: Listener) {
     listeners.add(cb);
@@ -568,16 +614,35 @@ export const mockPipEvents = {
   },
 };
 
-const emit = (id: string, e: ClaudeEvent) => mockPipEvents.emit(id, e);
+/** Where the events of `req` belong: a wake's carry its conversation and event lines, as the app's do; a question's nothing. */
+export const metaOf = (req: Pick<AskRequest, "kind" | "conversation" | "prompt">): EventMeta | undefined =>
+  req.kind === "wake" ? { conversation: req.conversation ?? GENERAL_CONVERSATION, kind: "wake", prompt: req.prompt } : undefined;
 const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** While set, every scripted turn waits after it starts, so a test can act while one is running (`__gossamrMock.holdPip`). */
+let gate: { promise: Promise<void>; open(): void } | null = null;
+
+/** Makes the scripted Pip wait after starting each turn (`on`), or lets the waiting turns go on. */
+export function holdMockPip(on: boolean) {
+  if (on && !gate) {
+    let open = () => {};
+    const promise = new Promise<void>((resolve) => (open = resolve));
+    gate = { promise, open };
+  } else if (!on && gate) {
+    gate.open();
+    gate = null;
+  }
+}
 
 /** Streams the scripted answer for `req` and resolves with the session it used. `drafter` receives the draft the script proposes. */
 export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | null, pace = 25): Promise<string> {
   let stopped = false;
   running.set(req.requestId, () => (stopped = true));
   const session = req.sessionId ?? `mock-session-${req.requestId}`;
+  const meta = metaOf(req);
+  const emit = (id: string, e: ClaudeEvent) => mockPipEvents.emit(id, e, meta);
   // Kept the way the app keeps a turn: the question now, steps as they come, the answer and its usage at the end.
-  mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 });
+  mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "running", new Date(), undefined, req.kind ?? "user");
   const wsId = workstreamOfConversation(req.conversation);
   const workstream = wsId ? { id: wsId, item: drafter?.pipWorkstreamItem?.(wsId) ?? null } : null;
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
@@ -585,6 +650,8 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   emit(req.requestId, { type: "started", sessionId: session });
   let said = "";
   try {
+    // Held by a test: wait, still answering, until let go or stopped.
+    while (gate && !stopped) await Promise.race([gate.promise, pause(pace)]);
     for (const label of script.steps) {
       await pause(pace * 6);
       if (stopped) break;

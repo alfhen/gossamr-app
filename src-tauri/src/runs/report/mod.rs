@@ -38,6 +38,10 @@ pub struct Report {
     pub subtasks: Vec<String>,
     #[serde(default)]
     pub plan: Option<String>,
+    /// For a Triage on a ticket: whether it recommends a written plan before anyone builds. A report stored before
+    /// triages gave one reads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_recommended: Option<bool>,
     /// For a Review: whether it found the change ready. A report stored before reviews gave one reads as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<ReviewVerdict>,

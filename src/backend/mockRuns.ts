@@ -1,14 +1,14 @@
-import { SUMMARY_ONLY, type AgentSettings, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal } from "../types";
+import { AUTOSTART_DEFAULTS, SUMMARY_ONLY, type AgentSettings, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal, WorkstreamRule } from "../types";
 import { containerRef, itemRef } from "./mockConnector";
 import { approvedPlanText, assemblePlan, planSectionOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
-import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow } from "./mockRunResult";
+import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, scriptedFinish, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
 import { followUpBlocker, followUpProblem } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import { makerName } from "../lib/proposals";
 import { revisedByPipUnedited, type MockProposals } from "./mockProposals";
-import type { MockWorkstreams } from "./mockWorkstreams";
+import { textDigest, type MockWorkstreams } from "./mockWorkstreams";
 import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, BUILD_NEEDS_PLAN, PIP_CHAIN_KINDS, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT, FINDINGS_LIMIT, FINDINGS_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, findingsLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
 
 const CONNECTION = "mock";
@@ -19,7 +19,7 @@ const EPOCH = Date.parse("2026-09-30T12:00:00Z");
 const MINUTE = 60_000;
 
 /** The states a run may be stopped from, as in the real controller. */
-const STOPPABLE: RunState[] = ["working", "needsAnswer", "needsPermission", "systemBlocked"];
+export const STOPPABLE: RunState[] = ["working", "needsAnswer", "needsPermission", "systemBlocked"];
 const TERMINAL: RunState[] = ["done", "failed", "stopped"];
 /** Where `advance` takes a run next; states that wait on the person or have ended are absent from the walk's end. */
 const NEXT: Partial<Record<RunState, RunState>> = {
@@ -238,7 +238,7 @@ export const SCRIPTED_RESULT: Record<RunKind, string> = {
   investigate: "The lag comes from one consumer that retries without backoff.\n\nFor Jira:\nThe consumer retries failed messages immediately, which is what builds the lag. It needs a backoff. I am fairly sure; I did not run it against production traffic.",
   plan: SCRIPTED_PLAN_RESULT,
   triage:
-    "About three days. It touches the estimate module, the checkout summary and the carrier lookup.\n\nSubtasks:\n- Cache the carrier rates the estimate asks for\n- Show the estimate in the checkout summary\n- Fall back to a flat rate when the carrier is slow\n- Cover the estimate with tests\n\nFor Jira:\nSize 8, too big for one piece, so a breakdown into four subtasks is proposed. The checkout team owns the estimate module and the summary. No duplicates found.",
+    "About three days. It touches the estimate module, the checkout summary and the carrier lookup.\n\nSubtasks:\n- Cache the carrier rates the estimate asks for\n- Show the estimate in the checkout summary\n- Fall back to a flat rate when the carrier is slow\n- Cover the estimate with tests\n\nPlan recommended: yes\n\nFor Jira:\nSize 8, too big for one piece, so a breakdown into four subtasks is proposed. The checkout team owns the estimate module and the summary. No duplicates found.",
   verify: "The fix works for percentage coupons.\n\nFor Jira:\nChecked percentage coupons: the totals are right and the tests pass. Fixed-amount coupons were not checked because they need the payment sandbox.",
   build: "Cached the category tree and committed it on the run's branch.\n\nFor Jira:\nThe category tree is now cached and the change is committed on the run's branch. It is not pushed. A person needs to review it and open the pull request.",
   review:
@@ -503,6 +503,8 @@ export class MockRuns {
   onPullRequest: (change: CodeChange) => void = () => {};
   /** The workstreams a run may be linked to, and whose audit records what the person does to one; set by the backend that keeps them. */
   workstreams: MockWorkstreams | null = null;
+  /** What the next finishing runs of each kind write instead of their usual answer, oldest first (`scriptNext`). */
+  private scripts = new Map<RunKind, ScriptedFinish[]>();
 
   constructor(
     private readonly proposals: MockProposals,
@@ -621,8 +623,9 @@ export class MockRuns {
    */
   private freshId(): string {
     const named = (id: string) => this.runs.some((r) => r.id === id) || !!this.workstreams?.namesRun(id) || this.proposals.list().some((p) => p.origin.type === "run" && p.origin.runId === id);
-    let id = `run-${++this.seq}`;
-    while (named(id)) id = `run-${++this.seq}`;
+    // Never `run-1`: that reads as a ticket key, which a wake's prompt may not carry, so the event line couldn't name it.
+    let id = `mock-run-${++this.seq}`;
+    while (named(id)) id = `mock-run-${++this.seq}`;
     return id;
   }
 
@@ -636,6 +639,15 @@ export class MockRuns {
       if (refusal) throw new Error(refusal);
     }
     if (mockDigest(spec) !== digest) throw new Error("This draft changed after you read it. Review it again.");
+    const run = this.queueRun(proposalId, connectionId, item, spec, digest);
+    this.workstreams?.record(spec.workstream, "person", "run_approved", { runId: run.id, proposalId, digest });
+    this.changed();
+    if (this.untrustedClones && !this.trusted.has(spec.clonePath)) setTimeout(() => this.refuse(run.id, spec.clonePath), REFUSAL_DELAY_MS);
+    return run;
+  }
+
+  /** A run waiting to launch for the run draft `proposalId`, which is marked applied; `autoStart` says a rule started it. */
+  private queueRun(proposalId: string, connectionId: string, item: ItemRef | null, spec: RunSpec, digest: string, autoStart: Run["autoStart"] = null): Run {
     const expectedWorktree = worktreeOf(spec);
     if (this.runs.some((r) => r.expectedWorktree === expectedWorktree)) throw new Error("a run already uses that worktree");
     const at = this.now();
@@ -663,13 +675,11 @@ export class MockRuns {
       launchedAt: null,
       lastProgressAt: at,
       endedAt: null,
+      ...(autoStart ? { autoStart } : {}),
     };
     this.proposals.applyRun(proposalId, run.id);
-    this.workstreams?.record(spec.workstream, "person", "run_approved", { runId: run.id, proposalId, digest });
     if (spec.report && this.limits.reportResult) this.reports.set(run.id, { offered: true, report: null, revision: 0, calls: 0, rejections: 0, stale: false });
     this.runs = [run, ...this.runs];
-    this.changed();
-    if (this.untrustedClones && !this.trusted.has(spec.clonePath)) setTimeout(() => this.refuse(run.id, spec.clonePath), REFUSAL_DELAY_MS);
     return run;
   }
 
@@ -731,6 +741,9 @@ export class MockRuns {
   private step(run: Run): Run {
     const to = NEXT[run.state];
     if (!to) return run;
+    // A held workstream's runs carry on, and one the person just approved starts, as `runs_approve` launches it; one a
+    // rule started waits on until the workstream is set going.
+    if (run.state === "queued" && run.autoStart && this.held(run)) return run;
     const at = this.now();
     const patch: Partial<Run> = { state: to, lastProgressAt: at, needs: null };
     if (to === "launching") patch.launchedAt = at;
@@ -740,10 +753,12 @@ export class MockRuns {
       patch.lastDetail = "Reading the code";
       patch.tokens = (run.tokens ?? 0) + 12_000;
     }
-    const opened = to === "done" && run.spec.kind === "build" && run.spec.allowPush ? this.draftPullRequest(run) : null;
+    const opened = to === "done" && run.spec.kind === "build" && run.spec.allowPush ? (this.newCommit(run) ?? this.draftPullRequest(run)) : null;
     if (to === "done") {
       const answered = (run.passes ?? 1) > 1 && run.spec.kind === "plan";
       patch.result = !run.item && run.spec.project ? SCRIPTED_TICKET_RESULT : answered ? SCRIPTED_PLAN_ANSWERED : opened ? pushedResult(opened.url) : SCRIPTED_RESULT[run.spec.kind];
+      const script = this.scripts.get(run.spec.kind)?.shift();
+      if (script) patch.result = scriptedFinish(run.spec.kind, patch.result, script);
       if (opened) patch.branch = opened.headRef;
       patch.summary = answered ? PLAN_ANSWERED_SUMMARY : opened ? PUSHED_SUMMARY : SCRIPTED_SUMMARY[run.spec.kind];
       patch.resultComplete = true;
@@ -754,6 +769,22 @@ export class MockRuns {
     if (to === "done") this.autoDraft(next);
     if (opened) this.schedulePullRequest(run.id, opened);
     return next;
+  }
+
+  /** Whether `run`'s workstream is held, so nothing in it launches on its own. */
+  private held(run: Run): boolean {
+    const ws = run.spec.workstream;
+    return !!ws && !!this.workstreams?.get(ws)?.workstream.heldReason;
+  }
+
+  /** A build sent back to the pull request it opened pushes a new commit to it: the same pull request with a new head, shown once a sync finds it. */
+  private newCommit(run: Run): CodeChange | null {
+    const before = this.unsurfaced.get(run.id) ?? this.changes.get(run.id);
+    if (before?.kind !== "pullRequest" || !this.opened.has(before.externalId)) return null;
+    const sha = [...`${run.id}:${before.number}:${run.passes ?? 1}`].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 0x01000193) >>> 0, 0x811c9dc5).toString(16).padStart(8, "0").repeat(5);
+    const change: CodeChange = { ...before, sha, updatedAt: this.now() };
+    this.opened.set(change.externalId, change);
+    return change;
   }
 
   /** The draft pull request a pushing build opens on its own branch, with the next free number from 300. */
@@ -805,6 +836,77 @@ export class MockRuns {
   pullRequestOf(runId: string): number | null {
     const change = this.changes.get(runId);
     return change?.kind === "pullRequest" ? change.number : null;
+  }
+
+  /** The pull request a run produced and the head commit a sync last saw, as `pull_head_of` reads the cache. */
+  pullHeadOf(runId: string): { number: number; sha: string | null } | null {
+    const change = this.changes.get(runId);
+    return change?.kind === "pullRequest" && change.number != null ? { number: change.number, sha: change.sha ?? null } : null;
+  }
+
+  /** Has the next run of `kind` to finish write what `script` says, for tests and for trying the supervisor. */
+  scriptNext(kind: RunKind, script: ScriptedFinish) {
+    this.scripts.set(kind, [...(this.scripts.get(kind) ?? []), script]);
+  }
+
+  /** What a run's result comes to, as the supervisor reads it: its note, verdict and findings. */
+  resolvedOf(runId: string): Resolved | null {
+    const run = this.get(runId);
+    return run ? this.resolved(run) : null;
+  }
+
+  /** Whether the person approved the Gossamr Plan draft of plan run `runId`, as `plan_approved_of` reads it. */
+  planApprovedOf(runId: string): boolean {
+    return this.approvedPlanOf(runId) !== null;
+  }
+
+  /** How many drafts run `runId` left that still wait for the person. */
+  draftsWaitingFrom(runId: string): number {
+    return this.proposals.list({ states: ["pending"] }).filter((p) => p.origin.type === "run" && p.origin.runId === runId).length;
+  }
+
+  /**
+   * The run an auto-start `rule` starts after the finished run `fromRun`, as `Core::autostart_run` does: the spec comes
+   * from its kind's template with every handoff filled in here and no focus, it is drafted by the agent side and approved
+   * with its own digest at once, and it waits to launch with `autoStart` set. The audit gets the rule and the digest.
+   */
+  autoStart(kind: RunKind, fromRun: string, rule: WorkstreamRule): Run {
+    const source = this.get(fromRun);
+    if (!source?.item) throw new Error(`there is no finished run ${fromRun} on a ticket`);
+    const workstream = source.spec.workstream ?? null;
+    // A triage or plan carries only the investigation the rule names, never the workstream's newest: the supervisor checked that one.
+    const carried = kind === "triage" && source.spec.kind === "investigate" ? source.id : kind === "plan" ? (source.spec.findingsFromRun ?? null) : null;
+    const made = kind === "build" || kind === "review" ? this.chainSpec(source.item, kind, fromRun, null, workstream).spec : this.plainSpec(source.item, kind, fromRun, null, workstream, carried);
+    let spec: RunSpec = { ...made, focus: null, focusFromRun: null };
+    if (spec.kind === "build" && workstream) spec = { ...spec, allowPush: true };
+    const problem = specProblem(spec, true);
+    if (problem) throw new Error(problem);
+    const proposal = this.proposals.fromRun({ type: "startRun", connectionId: CONNECTION, item: source.item, spec }, null, this.fromRun(source));
+    const digest = mockDigest(spec);
+    const run = this.queueRun(proposal.id, CONNECTION, source.item, spec, digest, { rule, afterRun: fromRun });
+    this.workstreams?.record(workstream, "supervisor", "autostart", { runId: run.id, proposalId: proposal.id, digest, detail: `${rule} after ${fromRun}` });
+    this.changed();
+    return run;
+  }
+
+  /**
+   * Sends the workstream's finished build `id` back with a fix round's `message`, as `RunService::send_fix_round` does:
+   * only a build that pushes, Working again for one more pass, and a supervisor line with the message's digest and length.
+   */
+  sendFixRound(id: string, message: string): Run {
+    const run = this.get(id);
+    if (!run) throw new Error("that run no longer exists");
+    if (run.spec.kind !== "build" || !run.spec.allowPush || !run.spec.workstream) throw new Error("only a workstream's build that pushes gets a fix round");
+    const blocker = followUpBlocker(run);
+    if (blocker) throw new Error(`This run can't be sent back: ${blocker}.`);
+    const passes = (run.passes ?? 1) + 1;
+    this.followUps.set(run.id, [...(this.followUps.get(run.id) ?? []), { text: "Gossamr sent the review's blocking findings back to fix", detail: `Pass ${passes}. Started by the fix-round rule.` }]);
+    const at = this.now();
+    const next = this.update(run.id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: at, lastProgressAt: at, lastDetail: "Reading the review's findings" });
+    this.markStale(run.id);
+    this.workstreams?.record(run.spec.workstream, "supervisor", "fix_round_sent", { runId: run.id, digest: textDigest(message), detail: String([...message].length) });
+    this.changed();
+    return next;
   }
 
   /** The pull request as GitHub has it, or one this backend's own builds opened once it shows. */
@@ -1316,9 +1418,19 @@ export class MockRuns {
     } catch (e) {
       return Promise.reject(e);
     }
+    try {
+      const spec = this.plainSpec(item, kind, fromRun, focus, workstream);
+      return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item, spec }, null, requestId, workstream));
+    } catch (e) {
+      return Promise.reject(e);
+    }
+  }
+
+  /** The spec of an investigate, triage, plan or verify on `item` from its kind's template, with the clone, name, ticket text and an investigation's findings filled in here. */
+  private plainSpec(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, workstream: string | null, carried?: string | null): RunSpec {
     const repo = [...this.runs.map((r) => r.spec.repo), "acme/storefront"].find((r) => (CLONES[r] ?? []).length > 0) ?? "acme/storefront";
     const clone = (CLONES[repo] ?? [])[0];
-    if (!clone) return Promise.reject(new Error(`There is no local clone of ${repo}`));
+    if (!clone) throw new Error(`There is no local clone of ${repo}`);
     let spec: RunSpec = {
       kind,
       repo,
@@ -1332,15 +1444,18 @@ export class MockRuns {
       ...(workstream ? { workstream } : {}),
     };
     const unlinkable = this.linkProblem(spec, item);
-    if (unlinkable) return Promise.reject(new Error(unlinkable));
-    if (kind === "triage" || kind === "plan") {
-      try {
-        spec = { ...spec, ...this.pipFindings(item, fromRun, spec, workstream) };
-      } catch (e) {
-        return Promise.reject(e);
-      }
-    }
-    return Promise.resolve(this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item, spec }, null, requestId, workstream));
+    if (unlinkable) throw new Error(unlinkable);
+    if (kind === "triage" || kind === "plan") spec = { ...spec, ...(carried === undefined ? this.pipFindings(item, fromRun, spec, workstream) : this.namedFindings(item, carried, spec, workstream)) };
+    return spec;
+  }
+
+  /** What a run a rule starts carries, as `attach_pip_findings` with `newest` false: only the investigation `runId` names, refused when it isn't a finished one of this ticket in the workstream, and none when none is named. */
+  private namedFindings(item: ItemRef, runId: string | null, spec: RunSpec, workstream: string | null): Pick<RunSpec, "findings" | "findingsFromRun"> {
+    if (!runId) return { findings: null, findingsFromRun: null };
+    const named = this.get(runId);
+    const ofTicket = named?.spec.kind === "investigate" && named.state === "done" && named.item?.connectionId === item.connectionId && named.item.externalId === item.externalId;
+    if (!named || !ofTicket || (named.spec.workstream ?? null) !== workstream) throw new Error(`run ${runId} isn't a finished investigation of this ticket in this workstream`);
+    return this.findingsOf(named.id, item, spec);
   }
 
   /** What an investigation found, for a triage or plan Pip drafts, as `attach_pip_findings` does: the run `fromRun` names when it is a finished investigation on this ticket in the same workstream, else the workstream's newest one when it can be read; none outside a workstream. */
@@ -1382,6 +1497,16 @@ export class MockRuns {
 
   /** A build or review Pip drafts as the successor of the finished run `fromRun`, as `draft_chain_run_as_pip` does: everything it carries is read from that run here, never from Pip, and a workstream's build publishes a draft pull request. */
   private pipChainDraft(item: ItemRef, kind: RunKind, fromRun: string, focus: string | null, requestId: string, workstream: string | null): Proposal {
+    const { spec, source } = this.chainSpec(item, kind, fromRun, focus, workstream);
+    const same = this.proposals
+      .list({ states: ["pending", "applying"] })
+      .find((p) => p.intent.type === "startRun" && p.intent.spec.kind === kind && (kind === "build" ? p.intent.spec.planFromRun === source.id : p.intent.spec.buildFromRun === source.id));
+    if (same) throw new Error(`An identical draft is already open (proposal ${same.id}). Don't propose it again; see list_proposals.`);
+    return this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item, spec }, null, requestId, workstream);
+  }
+
+  /** The spec of a build or review following the finished run `fromRun`, everything it carries read from that run here. */
+  private chainSpec(item: ItemRef, kind: RunKind, fromRun: string, focus: string | null, workstream: string | null): { spec: RunSpec; source: Run } {
     if (kind === "review" && focus) throw new Error(REVIEW_NO_FOCUS);
     const source = this.pipChainSource(item, kind, fromRun, workstream);
     const repo = source.spec.repo;
@@ -1416,11 +1541,7 @@ export class MockRuns {
     if (unlinkable) throw new Error(unlinkable);
     const problem = specProblem(spec, true);
     if (problem) throw new Error(problem);
-    const same = this.proposals
-      .list({ states: ["pending", "applying"] })
-      .find((p) => p.intent.type === "startRun" && p.intent.spec.kind === kind && (kind === "build" ? p.intent.spec.planFromRun === source.id : p.intent.spec.buildFromRun === source.id));
-    if (same) throw new Error(`An identical draft is already open (proposal ${same.id}). Don't propose it again; see list_proposals.`);
-    return this.proposals.draft({ type: "startRun", connectionId: CONNECTION, item, spec }, null, requestId, workstream);
+    return { spec, source };
   }
 
   /** An investigation with no ticket that Pip proposes: only a watched repository and the question are Pip's; the clone, name and project are filled in here, as the backend does. */
@@ -1596,7 +1717,7 @@ export class MockRuns {
     return this.proposals.fromRun({ type: "link", from: itemRef(key), to: item, kind: "blocks" }, `Blocked by ${key}`, this.fromRun(run));
   }
 
-  private limits: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false };
+  private limits: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 };
   /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
   readonly unpushed = new Set<string>();
 
@@ -1606,7 +1727,16 @@ export class MockRuns {
 
   setSettings(settings: AgentSettings): AgentSettings {
     const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(n) || 0));
-    this.limits = { ...settings, reportResult: !!settings.reportResult, maxRuns: clamp(settings.maxRuns, 1, 6), wallClockMinutes: clamp(settings.wallClockMinutes, 0, 10_080), tokenCap: clamp(settings.tokenCap, 0, 1_000_000_000) };
+    this.limits = {
+      ...settings,
+      reportResult: !!settings.reportResult,
+      maxRuns: clamp(settings.maxRuns, 1, 6),
+      wallClockMinutes: clamp(settings.wallClockMinutes, 0, 10_080),
+      tokenCap: clamp(settings.tokenCap, 0, 1_000_000_000),
+      // A settings sheet from before these existed sends none; the defaults fill in, as the backend's serde does.
+      autostart: { ...AUTOSTART_DEFAULTS, ...settings.autostart },
+      managerTurnsPerDay: clamp(settings.managerTurnsPerDay ?? 40, 0, 500),
+    };
     return this.limits;
   }
 

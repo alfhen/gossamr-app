@@ -59,6 +59,8 @@ import type {
   Workflow,
   Workstream,
   WorkstreamEvent,
+  WorkstreamMode,
+  WorkstreamRule,
   WorkstreamView,
   WorkstreamsChanged,
 } from "../types";
@@ -267,6 +269,18 @@ export interface Backend {
   workstreamsSetNotes(id: string, notes: string): Promise<Workstream>;
   /** A workstream's append-only audit, oldest first. */
   workstreamsEvents(id: string): Promise<WorkstreamEvent[]>;
+  /** The person sets how much Pip may do on its own in an open workstream. */
+  workstreamsSetMode(id: string, mode: WorkstreamMode): Promise<Workstream>;
+  /** The person holds an open workstream: nothing wakes Pip or starts on its own in it; its runs carry on. */
+  workstreamsHold(id: string): Promise<Workstream>;
+  /** The person lifts a workstream's hold; lifting a budget hold starts its budget again from zero. */
+  workstreamsResume(id: string): Promise<Workstream>;
+  /** The person's switch for one auto-start rule in a workstream; null follows the global switch again. */
+  workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null): Promise<Workstream>;
+  /** The person's Hold all: holds every open workstream. Returns those it held. */
+  workstreamsHoldAll(): Promise<Workstream[]>;
+  /** The person stops a workstream: holds it, then stops each of its runs that can be stopped. */
+  workstreamsStop(id: string): Promise<{ stopped: number; failed: number }>;
   /** Called when a workstream was opened, closed or changed. Returns an unsubscribe function. */
   onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void): () => void;
   /** What each signed-in connection follows. */

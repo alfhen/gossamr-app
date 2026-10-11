@@ -265,7 +265,7 @@ describe("WorkDocView", () => {
 
 describe("the workstream control", () => {
   const item = { connectionId: "mock", externalId: "CA-401", key: "CA-401" };
-  const view = { workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry", pipSession: null, mode: "advise" as const, heldReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 } }, stage: "intake" as const, runs: [], labels: [] };
+  const view = { workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry", pipSession: null, mode: "advise" as const, heldReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null }, stage: "intake" as const, runs: [], labels: [], budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" as const } };
   const noop = () => {};
 
   it("offers Close behind a confirm that says the agents and drafts are kept", () => {

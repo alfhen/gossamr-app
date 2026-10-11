@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { claude, type ClaudeEvent, type StoredTurn, type TurnUsage } from "./backend/claude";
+import { claude, type ClaudeEvent, type EventMeta, type StoredTurn, type TurnUsage } from "./backend/claude";
 import type { Backend } from "./backend/types";
 import type { PipImage, ShownImage } from "./lib/pipImages";
 import type { Proposal, ScreenContext } from "./types";
@@ -22,6 +22,8 @@ export interface Turn {
   images?: ShownImage[];
   /** How many pictures were sent, for a turn restored without them. */
   imageCount?: number;
+  /** `wake` for a turn the supervisor started, whose prompt is its event lines; a question the person asked otherwise. */
+  kind?: "user" | "wake";
 }
 
 export interface Conversation {
@@ -112,6 +114,7 @@ export function turnFromStored(t: StoredTurn): Turn {
     ...(t.quote ? { quote: t.quote } : {}),
     ...(t.imageCount ? { imageCount: t.imageCount } : {}),
     ...(t.usage ? { usage: t.usage } : {}),
+    ...(t.kind === "wake" ? { kind: "wake" as const } : {}),
   };
 }
 
@@ -277,13 +280,51 @@ function settle(requestId: string) {
     });
 }
 
-/** Routes one Claude event into the store. One for a turn the store lacks is held while a load may still bring it in. */
-export function onClaudeEvent(requestId: string, e: ClaudeEvent) {
+/**
+ * A wake turn the page hears of for the first time, in its conversation: a turn of its own with the event lines as its
+ * prompt, when the event says them; otherwise they are read from the stored turn.
+ */
+function registerWake(requestId: string, e: ClaudeEvent, conversation: string, prompt: string | undefined) {
+  const turn: Turn = { requestId, kind: "wake", prompt: prompt ?? "", steps: [], text: "", status: e.type === "queued" ? "queued" : "running", error: null };
+  const { byTicket } = useClaude.getState();
+  const conv = byTicket[conversation] ?? empty;
+  useClaude.setState({ byTicket: { ...byTicket, [conversation]: { ...conv, turns: [...conv.turns, turn] } } });
+  if (prompt === undefined) readWakePrompt(requestId, conversation);
+}
+
+/** Shows wake turn `requestId`'s event lines as its stored turn has them now. */
+function readWakePrompt(requestId: string, conversation: string) {
+  const mine = generation;
+  void claude
+    .turns(conversation)
+    .catch(() => [] as StoredTurn[])
+    .then((stored) => {
+      const kept = stored.find((t) => t.requestId === requestId);
+      if (!kept || mine !== generation) return;
+      updateByRequest(requestId, (c) => ({ ...c, turns: c.turns.map((t) => (t.requestId === requestId && t.kind === "wake" ? { ...t, prompt: kept.prompt } : t)) }));
+    });
+}
+
+/**
+ * Routes one Claude event into the store. One for a turn the store lacks is held while a load may still bring it in,
+ * unless it is a wake's (`meta.kind`), which the page didn't ask and so registers as a new turn in its conversation.
+ */
+export function onClaudeEvent(requestId: string, e: ClaudeEvent, meta?: EventMeta) {
   if (e.type === "done") begun.delete(requestId);
   else if (e.type !== "queued") begun.add(requestId);
+  const wake = meta?.kind === "wake" && !!meta.conversation;
   if (!conversationOf(requestId)) {
-    if (loading) held.set(requestId, [...(held.get(requestId) ?? []), e]);
-    return;
+    if (wake) registerWake(requestId, e, meta.conversation!, meta.prompt);
+    else {
+      if (loading) held.set(requestId, [...(held.get(requestId) ?? []), e]);
+      return;
+    }
+  } else if (wake && meta.prompt) {
+    // More wakes were merged into this one while it waited.
+    updateByRequest(requestId, (c) => ({ ...c, turns: c.turns.map((t) => (t.requestId === requestId && t.kind === "wake" ? { ...t, prompt: meta.prompt! } : t)) }));
+  } else if (wake && e.type === "queued") {
+    // The app says it waits again when more wakes were merged into it, and keeps the merged lines with the turn.
+    readWakePrompt(requestId, meta.conversation!);
   }
   updateByRequest(requestId, (c) => applyEvent(c, requestId, e));
   if (e.type === "done" && restoredLive.has(requestId)) settle(requestId);

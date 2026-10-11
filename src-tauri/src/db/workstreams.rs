@@ -100,6 +100,26 @@ impl Db {
         Ok(n > 0)
     }
 
+    /// Holds every open workstream that isn't held already with `reason`, each with one `held` line by the supervisor:
+    /// after a restart nothing wakes Pip or starts on its own until the person resumes. One already held keeps its
+    /// reason, so a second call changes nothing. Returns how many it held.
+    pub fn hold_open_workstreams(&self, reason: &str, at: DateTime<Utc>) -> Result<usize> {
+        let mut stmt = self.conn.prepare("SELECT data FROM workstreams WHERE closed_at IS NULL AND held_reason IS NULL ORDER BY created_at, id")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut held = 0;
+        for row in rows {
+            let mut ws: Workstream = serde_json::from_str(&row)?;
+            if ws.held_reason.is_some() {
+                continue;
+            }
+            ws.held_reason = Some(reason.to_string());
+            self.save_workstream(&ws)?;
+            self.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "held", at).detail(reason))?;
+            held += 1;
+        }
+        Ok(held)
+    }
+
     /// Appends one line to a workstream's audit after its last, numbering it itself, and returns it as stored. `detail`
     /// is cut to 2 KB. There is no way to change or remove a line once written.
     pub fn append_workstream_event(&self, event: &WorkstreamEvent) -> Result<WorkstreamEvent> {
@@ -174,6 +194,8 @@ mod tests {
             closed_at: None,
             budget: Default::default(),
             spent: Default::default(),
+            rules: Default::default(),
+            basis: None,
         }
     }
 
@@ -215,6 +237,32 @@ mod tests {
         assert!(db.open_workstream_for_item("c", "CA-1").unwrap().is_none());
         db.insert_workstream(&ws("b", "c", Some("CA-1"), 1)).unwrap();
         assert_eq!(db.open_workstream_for_item("c", "CA-1").unwrap().unwrap().id, "b");
+    }
+
+    #[test]
+    fn a_restart_holds_every_open_workstream_once_and_keeps_an_existing_reason() {
+        let db = Db::in_memory().unwrap();
+        db.insert_workstream(&ws("a", "c", Some("CA-1"), 0)).unwrap();
+        db.insert_workstream(&ws("b", "other", None, 1)).unwrap();
+        let mut held = ws("h", "c", None, 2);
+        held.held_reason = Some("budget".into());
+        db.insert_workstream(&held).unwrap();
+        let mut closed = ws("z", "c", Some("CA-2"), 3);
+        closed.closed_at = Some(now());
+        db.insert_workstream(&closed).unwrap();
+
+        assert_eq!(db.hold_open_workstreams("restart", now()).unwrap(), 2);
+        assert_eq!(db.workstream("a").unwrap().unwrap().held_reason.as_deref(), Some("restart"));
+        assert_eq!(db.workstream("b").unwrap().unwrap().held_reason.as_deref(), Some("restart"), "every connection's");
+        assert_eq!(db.workstream("h").unwrap().unwrap().held_reason.as_deref(), Some("budget"), "an existing reason is kept");
+        assert_eq!(db.workstream("z").unwrap().unwrap().held_reason, None, "a closed one is left alone");
+        let lines = |id: &str| db.workstream_events(id).unwrap().into_iter().map(|e| (e.actor, e.action, e.detail)).collect::<Vec<_>>();
+        assert_eq!(lines("a"), [(Actor::Supervisor, "held".to_string(), Some("restart".to_string()))]);
+        assert!(lines("h").is_empty() && lines("z").is_empty());
+
+        assert_eq!(db.hold_open_workstreams("restart", now()).unwrap(), 0);
+        assert_eq!(lines("a").len(), 1, "a second call adds no line");
+        assert_eq!(lines("b").len(), 1);
     }
 
     #[test]

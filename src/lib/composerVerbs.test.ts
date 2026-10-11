@@ -13,15 +13,30 @@ const runs = [
   run("cccc4444-run", "needsAnswer", null, "2026-09-30T08:00:00Z"),
 ];
 
-const backend = () => ({ runsStop: vi.fn(async (id: string) => ({ ...base, id })), runsRetryLaunch: vi.fn(async (id: string) => ({ ...base, id })), runsAnswer: vi.fn(async (id: string) => ({ ...base, id })) });
+const sampleWorkstream = await new MockBackend().workstreamsOpen(null, "Sample");
+const backend = () => ({
+  runsStop: vi.fn(async (id: string) => ({ ...base, id })),
+  runsRetryLaunch: vi.fn(async (id: string) => ({ ...base, id })),
+  runsAnswer: vi.fn(async (id: string) => ({ ...base, id })),
+  workstreamsHold: vi.fn(async (id: string) => ({ ...sampleWorkstream, id, heldReason: "person" })),
+  workstreamsResume: vi.fn(async (id: string) => ({ ...sampleWorkstream, id, heldReason: null })),
+});
 
 describe("parsing", () => {
-  it("knows the three verbs, with the run and, for answer, the text", () => {
-    expect(COMPOSER_VERBS).toEqual(["stop", "retry", "answer"]);
+  it("knows the five verbs, with the run and, for answer, the text", () => {
+    expect(COMPOSER_VERBS).toEqual(["stop", "retry", "answer", "hold", "resume"]);
     expect(parseVerb("/stop R1")).toEqual({ type: "verb", verb: "stop", ref: "R1", text: "" });
     expect(parseVerb("  /retry r2 ")).toEqual({ type: "verb", verb: "retry", ref: "r2", text: "" });
     expect(parseVerb("/answer R1 use the staging\n  database")).toEqual({ type: "verb", verb: "answer", ref: "R1", text: "use the staging\n  database" });
     expect(parseVerb("/STOP R1")).toMatchObject({ type: "verb", verb: "stop" });
+  });
+
+  it("takes /hold and /resume with nothing after them, as the conversation's workstream's", () => {
+    expect(parseVerb("/hold")).toEqual({ type: "workstream", verb: "hold" });
+    expect(parseVerb("  /Resume ")).toEqual({ type: "workstream", verb: "resume" });
+    expect(parseVerb("/hold R1")).toEqual({ type: "problem", message: "/hold takes no run; it holds this workstream" });
+    expect(parseVerb("/resume everything")).toEqual({ type: "problem", message: "/resume takes no run; it resumes this workstream" });
+    expect(VERB_HINT).toContain("in a workstream /hold and /resume");
   });
 
   it("asks for the run, and for what to answer", () => {
@@ -97,6 +112,41 @@ describe("carrying it out", () => {
     expect(b.runsStop).not.toHaveBeenCalled();
     expect(b.runsRetryLaunch).not.toHaveBeenCalled();
     expect(b.runsAnswer).not.toHaveBeenCalled();
+  });
+
+  it("holds and resumes the conversation's workstream through the person's own commands", async () => {
+    const b = backend();
+    expect(await runComposerVerb("/hold", { runs, workstream: "ws-1", backend: b })).toEqual({ ok: true, message: "Held this workstream. Its agents carry on; nothing starts on its own until you resume" });
+    expect(await runComposerVerb("/hold", { runs, workstream: "ws-1", backend: b, heldReason: "person" })).toEqual({ ok: true, message: "This workstream is held already" });
+    expect(b.workstreamsHold).toHaveBeenCalledWith("ws-1");
+    expect(b.workstreamsHold).toHaveBeenCalledTimes(1);
+    expect(await runComposerVerb("/resume", { runs, workstream: "ws-1", backend: b })).toEqual({ ok: true, message: "Resumed this workstream" });
+    expect(b.workstreamsResume).toHaveBeenCalledWith("ws-1");
+    expect(b.runsStop).not.toHaveBeenCalled();
+  });
+
+  it("refuses /hold and /resume outside a workstream, calling nothing", async () => {
+    const b = backend();
+    expect(await runComposerVerb("/hold", { runs, workstream: null, backend: b })).toEqual({ ok: false, message: "/hold works in a workstream's conversation; open the workstream on its ticket first" });
+    expect(await runComposerVerb("/resume", { runs, workstream: null, backend: b })).toMatchObject({ ok: false, message: expect.stringMatching(/^\/resume works in a workstream's conversation/) });
+    expect(await runComposerVerb("/hold R1", { runs, workstream: "ws-1", backend: b })).toMatchObject({ ok: false });
+    expect(b.workstreamsHold).not.toHaveBeenCalled();
+    expect(b.workstreamsResume).not.toHaveBeenCalled();
+  });
+
+  it("tells the backend's refusal of a hold", async () => {
+    const b = { ...backend(), workstreamsResume: vi.fn(() => Promise.reject(new Error("this workstream is closed"))) };
+    expect(await runComposerVerb("/resume", { runs, workstream: "ws-1", backend: b })).toEqual({ ok: false, message: "Couldn't resume this workstream. this workstream is closed" });
+  });
+
+  it("holds a workstream in the sample backend, as a person", async () => {
+    const mock = new MockBackend();
+    const ws = await mock.workstreamsOpen(null, "Sample");
+    expect(await runComposerVerb("/hold", { runs: [], workstream: ws.id, backend: mock })).toMatchObject({ ok: true });
+    expect((await mock.workstreamsGet(ws.id))?.workstream.heldReason).toBe("person");
+    expect((await mock.workstreamsEvents(ws.id)).map((e) => [e.actor, e.action, e.detail])).toContainEqual(["person", "held", "person"]);
+    expect(await runComposerVerb("/resume", { runs: [], workstream: ws.id, backend: mock })).toMatchObject({ ok: true });
+    expect((await mock.workstreamsGet(ws.id))?.workstream.heldReason).toBeNull();
   });
 
   it("passes a question through untouched", () => {

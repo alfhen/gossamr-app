@@ -15,6 +15,23 @@ impl Core {
         self.with_db_for(scope, |db| db.begin_pip_turn(&conversation, request_id, prompt, meta, status, &at).map(|_| ())).await
     }
 
+    /// Records a wake turn in `conversation`: its event lines in place of a question.
+    pub async fn pip_wake_begin(&self, scope: &Scope, conversation: &str, request_id: &str, lines: &str, status: &str) -> Result<()> {
+        let at = now_millis();
+        let conversation = conversation_id(conversation);
+        self.with_db_for(scope, |db| db.begin_pip_turn_as(&conversation, request_id, crate::db::ROLE_WAKE, lines, &TurnMeta::default(), status, &at).map(|_| ())).await
+    }
+
+    /// Rewrites a waiting wake turn's event lines after more facts were merged into it.
+    pub async fn pip_wake_lines(&self, scope: &Scope, request_id: &str, lines: &str) -> Result<()> {
+        self.with_db_for(scope, |db| db.set_pip_wake_prompt(request_id, lines)).await
+    }
+
+    /// Forgets a turn recorded but never queued.
+    pub async fn pip_turn_forget(&self, scope: &Scope, request_id: &str) -> Result<()> {
+        self.with_db_for(scope, |db| db.delete_pip_turn(request_id)).await
+    }
+
     pub async fn pip_turn_status(&self, scope: &Scope, request_id: &str, status: &str) -> Result<()> {
         self.with_db_for(scope, |db| db.set_pip_turn_status(request_id, status)).await
     }

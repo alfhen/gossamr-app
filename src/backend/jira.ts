@@ -61,6 +61,8 @@ import type {
   Workflow,
   Workstream,
   WorkstreamEvent,
+  WorkstreamMode,
+  WorkstreamRule,
   WorkstreamView,
   WorkstreamsChanged,
 } from "../types";
@@ -498,6 +500,30 @@ export class JiraBackend implements Backend {
 
   workstreamsEvents(id: string) {
     return invoke<WorkstreamEvent[]>("workstreams_events", { id });
+  }
+
+  workstreamsSetMode(id: string, mode: WorkstreamMode) {
+    return invoke<Workstream>("workstreams_set_mode", { id, mode });
+  }
+
+  workstreamsHold(id: string) {
+    return invoke<Workstream>("workstreams_hold", { id });
+  }
+
+  workstreamsResume(id: string) {
+    return invoke<Workstream>("workstreams_resume", { id });
+  }
+
+  workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null) {
+    return invoke<Workstream>("workstreams_set_rule", { id, rule, on });
+  }
+
+  workstreamsHoldAll() {
+    return invoke<Workstream[]>("workstreams_hold_all");
+  }
+
+  workstreamsStop(id: string) {
+    return invoke<{ stopped: number; failed: number }>("workstreams_stop", { id });
   }
 
   onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void) {

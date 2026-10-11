@@ -56,7 +56,11 @@ pub async fn ready() -> Rig {
 
 /// `ready`, with the service tuned before it is shared.
 pub async fn ready_with(tune: impl FnOnce(RunService) -> RunService) -> Rig {
-    let fx = fixture_watching(&["acme/webshop"]).await;
+    ready_on(fixture_watching(&["acme/webshop"]).await, tune).await
+}
+
+/// `ready_with` on a fixture of the caller's, such as one with GitHub routes scripted.
+pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) -> Rig {
     let clone = fx.home.join("webshop");
     clone_with_origin(&clone, "https://github.com/acme/webshop.git");
     let clone = clone.canonicalize().unwrap();

@@ -1,4 +1,4 @@
-import type { Run } from "../types";
+import type { Run, WorkstreamView } from "../types";
 import { needsPerson, runTitle, stateView } from "./agentsLogic";
 import type { Nudge } from "./nudges";
 import type { AgentsSuggestionScene } from "./suggestions";
@@ -17,11 +17,12 @@ export const runStatesNow = (runs: readonly Run[]): string[] => runs.filter((r) 
 
 /**
  * One suggestion for each run that entered a state the person should hear about and isn't in `announced`, newest first.
- * `titleOf` gives a ticket's own title when it is cached.
+ * `titleOf` gives a ticket's own title when it is cached; `nudged` leaves out runs someone else tells the person about,
+ * such as those of a workstream Pip manages, whose wake turns say it.
  */
-export function runNudges(runs: readonly Run[], announced: ReadonlySet<string>, titleOf: (run: Run) => string | null | undefined = () => null): Nudge[] {
+export function runNudges(runs: readonly Run[], announced: ReadonlySet<string>, titleOf: (run: Run) => string | null | undefined = () => null, nudged: (run: Run) => boolean = () => true): Nudge[] {
   return [...runs]
-    .filter((r) => NUDGED.has(r.state) && !announced.has(runNudgeId(r)))
+    .filter((r) => NUDGED.has(r.state) && !announced.has(runNudgeId(r)) && nudged(r))
     .sort((a, b) => (b.endedAt ?? b.lastProgressAt).localeCompare(a.endedAt ?? a.lastProgressAt))
     .map((run): Nudge => {
       const id = runNudgeId(run);
@@ -53,3 +54,9 @@ export function agentsSuggestionScene(runs: readonly Run[], openRun: string | nu
   const stage = !run ? null : needsPerson(run) ? "needs" : run.state === "failed" ? "failed" : run.state === "done" ? "done" : GOING.has(run.state) ? "going" : "ended";
   return { runs: runs.length, waiting: runs.filter(needsPerson).length, done: runs.filter((r) => r.state === "done").length, open: run && stage ? { stage, ticket: !!run.item } : null };
 }
+
+/** Whether a run is one the page nudges about itself: not one of a workstream in Manage mode, whose wake turns tell the person instead. */
+export const nudgedOutside = (workstreams: readonly WorkstreamView[]) => {
+  const managed = new Set(workstreams.filter((v) => v.workstream.mode === "manage").map((v) => v.workstream.id));
+  return (run: Run) => !run.spec.workstream || !managed.has(run.spec.workstream);
+};

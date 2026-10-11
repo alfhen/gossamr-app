@@ -333,3 +333,57 @@ describe("a reload while Pip answers", () => {
     expect(useClaude.getState().byTicket.general.turns[0].text).toBe("");
   });
 });
+
+describe("wake turns", () => {
+  beforeEach(() => useClaude.setState({ byTicket: {} }));
+  afterEach(() => {
+    vi.restoreAllMocks();
+    forgetConversations();
+  });
+  const wake = { conversation: "ws:w1", kind: "wake" as const, prompt: "[Event] run r9 (triage) Done" };
+
+  it("registers a wake from a request id it hasn't seen as a turn of its own in its conversation", () => {
+    onClaudeEvent("wake-1", { type: "running" }, wake);
+    onClaudeEvent("wake-1", { type: "text", text: "R1 finished." }, wake);
+    expect(useClaude.getState().byTicket["ws:w1"].turns).toEqual([{ requestId: "wake-1", kind: "wake", prompt: wake.prompt, steps: [], text: "R1 finished.", status: "running", error: null }]);
+    onClaudeEvent("wake-1", { type: "done", sessionId: "s1", ok: true, message: null }, wake);
+    expect(useClaude.getState().byTicket["ws:w1"]).toMatchObject({ sessionId: "s1", turns: [{ kind: "wake", status: "done" }] });
+    expect(useClaude.getState().byTicket["ws:w1"].turns).toHaveLength(1);
+  });
+
+  it("starts a queued wake as queued, and takes the merged event lines when more wakes join it", () => {
+    onClaudeEvent("wake-2", { type: "queued", ahead: 1 }, wake);
+    expect(useClaude.getState().byTicket["ws:w1"].turns[0]).toMatchObject({ status: "queued", prompt: wake.prompt });
+    onClaudeEvent("wake-2", { type: "queued", ahead: 1 }, { ...wake, prompt: `${wake.prompt}\n[Event] run r10 (plan) Done` });
+    expect(useClaude.getState().byTicket["ws:w1"].turns[0].prompt).toBe(`${wake.prompt}\n[Event] run r10 (plan) Done`);
+  });
+
+  it("reads a wake's event lines from the stored turn when its events don't say them, as the app's don't", async () => {
+    vi.spyOn(claude, "turns").mockResolvedValueOnce([stored("wake-3", { conversation: "ws:w1", prompt: wake.prompt, kind: "wake", status: "running" })]);
+    onClaudeEvent("wake-3", { type: "started", sessionId: "s1" }, { conversation: "ws:w1", kind: "wake" });
+    expect(useClaude.getState().byTicket["ws:w1"].turns[0]).toMatchObject({ kind: "wake", prompt: "" });
+    await vi.waitFor(() => expect(useClaude.getState().byTicket["ws:w1"].turns[0].prompt).toBe(wake.prompt));
+  });
+
+  it("reads the merged event lines from the stored turn when the app says a known wake waits again", async () => {
+    const meta = { conversation: "ws:w1", kind: "wake" as const };
+    const merged = `${wake.prompt}\n[Event] run r10 (plan) Done`;
+    vi.spyOn(claude, "turns")
+      .mockResolvedValueOnce([stored("wake-5", { conversation: "ws:w1", prompt: wake.prompt, kind: "wake", status: "queued" })])
+      .mockResolvedValueOnce([stored("wake-5", { conversation: "ws:w1", prompt: merged, kind: "wake", status: "queued" })]);
+    onClaudeEvent("wake-5", { type: "queued", ahead: 1 }, meta);
+    await vi.waitFor(() => expect(useClaude.getState().byTicket["ws:w1"].turns[0].prompt).toBe(wake.prompt));
+    onClaudeEvent("wake-5", { type: "queued", ahead: 1 }, meta);
+    await vi.waitFor(() => expect(useClaude.getState().byTicket["ws:w1"].turns[0].prompt).toBe(merged));
+    expect(useClaude.getState().byTicket["ws:w1"].turns).toHaveLength(1);
+  });
+
+  it("still drops events of a person's turn it doesn't know, and keeps a stored wake's kind", async () => {
+    onClaudeEvent("stranger", { type: "text", text: "lost" });
+    onClaudeEvent("stranger", { type: "text", text: "lost" }, { conversation: "ws:w1", kind: "user" });
+    expect(useClaude.getState().byTicket).toEqual({});
+    vi.spyOn(claude, "turns").mockResolvedValueOnce([stored("wake-4", { conversation: "ws:w1", prompt: wake.prompt, kind: "wake", status: "done" })]);
+    await useClaude.getState().load("ws:w1");
+    expect(useClaude.getState().byTicket["ws:w1"].turns[0]).toMatchObject({ requestId: "wake-4", kind: "wake", prompt: wake.prompt });
+  });
+});

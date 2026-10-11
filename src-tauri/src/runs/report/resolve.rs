@@ -3,7 +3,7 @@
 
 use super::{Finding, Report, ReportStatus, ResultSource, ReviewVerdict, StoredReport};
 use crate::domain::{Run, RunKind};
-use crate::runs::result::{jira_note, review_verdict, subtask_proposals, ticket_keys, ticket_proposal, JiraNote, TicketProposal};
+use crate::runs::result::{jira_note, plan_recommended, review_verdict, subtask_proposals, ticket_keys, ticket_proposal, JiraNote, TicketProposal};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolved {
@@ -24,6 +24,9 @@ pub struct Resolved {
     pub findings: Vec<Finding>,
     /// Whether `verdict` came from the report rather than the written answer.
     pub verdict_structured: bool,
+    /// For a Triage on a ticket: whether it recommends a plan, from the report when that gave it, else from the
+    /// `Plan recommended:` lines of its whole written answer (`plan_recommended`). Never from a one-line summary.
+    pub plan_recommended: Option<bool>,
 }
 
 impl Resolved {
@@ -53,6 +56,11 @@ pub fn resolve(run: &Run, stored: Option<&StoredReport>) -> Resolved {
             (resolved.verdict, resolved.findings) = (Some(verdict), findings);
         }
     }
+    if run.spec.kind == RunKind::Triage && run.item.is_some() {
+        let reported = stored.and_then(StoredReport::current).and_then(|r| r.plan_recommended);
+        let written = || run.result.as_deref().filter(|_| run.result_complete).and_then(plan_recommended);
+        resolved.plan_recommended = reported.or_else(written);
+    }
     resolved
 }
 
@@ -78,6 +86,7 @@ fn read(run: &Run, stored: Option<&StoredReport>) -> Resolved {
         verdict: None,
         findings: Vec::new(),
         verdict_structured: false,
+        plan_recommended: None,
     }
 }
 
@@ -96,5 +105,6 @@ fn structured(run: &Run, report: &Report, result: Option<&str>, own: Option<&str
         verdict: None,
         findings: Vec::new(),
         verdict_structured: false,
+        plan_recommended: None,
     }
 }

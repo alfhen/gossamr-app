@@ -3,12 +3,17 @@ import type { Run } from "../types";
 import { labelsByRun, runLabels } from "./workstreamStage";
 
 /**
- * Commands typed into Pip's composer that act on a run without going to Pip: `/stop R1`, `/retry R1`, `/answer R1 text`.
- * They call the same user-only commands as the run's own buttons; Pip has no tool for any of them and never sees them.
+ * Commands typed into Pip's composer that act without going to Pip: `/stop R1`, `/retry R1`, `/answer R1 text` on a run,
+ * and `/hold`, `/resume` on the conversation's workstream. They call the same user-only commands as the run's own
+ * buttons and the workstream's header; Pip has no tool for any of them and never sees them.
  */
 
-export const COMPOSER_VERBS = ["stop", "retry", "answer"] as const;
+export const COMPOSER_VERBS = ["stop", "retry", "answer", "hold", "resume"] as const;
 export type ComposerVerb = (typeof COMPOSER_VERBS)[number];
+/** The verbs that act on the conversation's workstream and take no run. */
+export const WORKSTREAM_VERBS = ["hold", "resume"] as const satisfies readonly ComposerVerb[];
+type WorkstreamVerb = (typeof WORKSTREAM_VERBS)[number];
+type RunVerb = Exclude<ComposerVerb, WorkstreamVerb>;
 
 /** Fewest characters of a run's id that name it outside a workstream. */
 export const MIN_ID_PREFIX = 4;
@@ -16,11 +21,13 @@ export const MIN_ID_PREFIX = 4;
 /** The part of a run's id the screen shows on its card, row and sheet, and that the commands take anywhere: its first 8 characters, or all of a short one. */
 export const runRef = (run: Pick<Run, "id">) => (run.id.length <= 12 ? run.id : run.id.slice(0, 8));
 
-export const VERB_HINT = "Commands are /stop R1, /retry R1 and /answer R1 your answer. R1 is a run in this workstream; a run's id works anywhere.";
+export const VERB_HINT =
+  "Commands are /stop R1, /retry R1 and /answer R1 your answer, and in a workstream /hold and /resume. R1 is a run in this workstream; a run's id works anywhere.";
 
-export type ParsedVerb = { type: "verb"; verb: ComposerVerb; ref: string; text: string } | { type: "problem"; message: string };
+export type ParsedVerb = { type: "verb"; verb: RunVerb; ref: string; text: string } | { type: "workstream"; verb: WorkstreamVerb } | { type: "problem"; message: string };
 
 const isVerb = (word: string): word is ComposerVerb => (COMPOSER_VERBS as readonly string[]).includes(word);
+const isWorkstreamVerb = (word: ComposerVerb): word is WorkstreamVerb => (WORKSTREAM_VERBS as readonly string[]).includes(word);
 
 /** What the composer was given: a command, a command it can't take (with why), or null for a question that goes to Pip. */
 export function parseVerb(input: string): ParsedVerb | null {
@@ -28,6 +35,7 @@ export function parseVerb(input: string): ParsedVerb | null {
   if (!m) return null;
   const word = m[1].toLowerCase();
   if (!isVerb(word)) return { type: "problem", message: `/${m[1]} isn't a command. ${VERB_HINT}` };
+  if (isWorkstreamVerb(word)) return (m[2] ?? "").trim() ? { type: "problem", message: `/${word} takes no run; it ${word}s this workstream` } : { type: "workstream", verb: word };
   const [, ref = "", rest = ""] = /^(\S*)\s*([\s\S]*)$/.exec((m[2] ?? "").trim()) ?? [];
   if (!ref) return { type: "problem", message: `Say which run to ${word}, such as /${word} R1` };
   const text = rest.trim();
@@ -72,7 +80,11 @@ export interface VerbOutcome {
   message: string;
 }
 
-const DONE: Record<ComposerVerb, string> = { stop: "Stopped", retry: "Retrying", answer: "Answered" };
+const DONE: Record<RunVerb, string> = { stop: "Stopped", retry: "Retrying", answer: "Answered" };
+const WORKSTREAM_DONE: Record<WorkstreamVerb, string> = {
+  hold: "Held this workstream. Its agents carry on; nothing starts on its own until you resume",
+  resume: "Resumed this workstream",
+};
 
 /**
  * Carries out what the composer was given, or returns null when it is a question for Pip. The outcome is what to tell the
@@ -80,11 +92,33 @@ const DONE: Record<ComposerVerb, string> = { stop: "Stopped", retry: "Retrying",
  */
 export function runComposerVerb(
   input: string,
-  { runs, workstream, backend }: { runs: readonly Run[]; workstream: string | null; backend: Pick<Backend, "runsStop" | "runsRetryLaunch" | "runsAnswer"> | null },
+  {
+    runs,
+    workstream,
+    backend,
+    heldReason = null,
+  }: {
+    runs: readonly Run[];
+    workstream: string | null;
+    backend: Pick<Backend, "runsStop" | "runsRetryLaunch" | "runsAnswer" | "workstreamsHold" | "workstreamsResume"> | null;
+    /** Why the workstream is held now, if it is: a second /hold changes nothing and says so. */
+    heldReason?: string | null;
+  },
 ): Promise<VerbOutcome> | null {
   const parsed = parseVerb(input);
   if (!parsed) return null;
   if (parsed.type === "problem") return Promise.resolve({ ok: false, message: parsed.message });
+  if (parsed.type === "workstream") {
+    const { verb } = parsed;
+    if (!workstream) return Promise.resolve({ ok: false, message: `/${verb} works in a workstream's conversation; open the workstream on its ticket first` });
+    if (!backend) return Promise.resolve({ ok: false, message: "Not connected yet." });
+    if (verb === "hold" && heldReason) return Promise.resolve({ ok: true, message: "This workstream is held already" });
+    const call = async () => (verb === "hold" ? backend.workstreamsHold(workstream) : backend.workstreamsResume(workstream));
+    return call().then(
+      () => ({ ok: true, message: WORKSTREAM_DONE[verb] }),
+      (e: unknown) => ({ ok: false, message: `Couldn't ${verb} this workstream. ${e instanceof Error ? e.message : String(e)}` }),
+    );
+  }
   const found = resolveRun(parsed.ref, runs, workstream);
   if ("error" in found) return Promise.resolve({ ok: false, message: found.error });
   if (!backend) return Promise.resolve({ ok: false, message: "Not connected yet." });

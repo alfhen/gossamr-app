@@ -1,6 +1,7 @@
 //! Pip's assistant runs. An `AgentProvider` drives one agent (a CLI, an API) against Pip's local MCP tools and reports
 //! neutral events; `AgentService` prepares each run's prompt and screen context and routes events to the page.
 
+pub mod autostart;
 pub mod context;
 mod drafts;
 mod github;
@@ -9,6 +10,7 @@ pub mod mcp;
 pub mod queue;
 mod runs;
 pub mod sandbox;
+pub mod supervisor;
 pub mod workstream;
 
 #[cfg(test)]
@@ -32,6 +34,7 @@ use images::ImageInput;
 use mcp::McpServer;
 use queue::{Enqueued, QueueItem, Removed, TurnQueue};
 use sandbox::Sandbox;
+use supervisor::{event_line, WakeFacts, WAKE_REQUEST};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -191,6 +194,9 @@ pub struct AskRequest {
     /// How the page showed the question, kept with it so the conversation reads the same after a restart.
     #[serde(default)]
     pub meta: Option<TurnMeta>,
+    /// For a wake turn only: the `[Event]` lines Rust wrote. Never taken from the page.
+    #[serde(skip)]
+    pub event: Option<String>,
 }
 
 /// What the page showed with a question besides its words. Images are counted, not kept.
@@ -220,6 +226,13 @@ pub struct AskOutcome {
 /// Why a turn that was taken out of the queue never ran.
 pub const REMOVED: &str = "Removed before it started";
 
+/// Why a wake never ran: its workstream was held, advised or closed before it started. Its facts count as not woken,
+/// so the supervisor wakes Pip for them once the workstream is set going again.
+pub const WAKE_HELD: &str = "Held before it started";
+
+/// How a wake that couldn't be started ends: Pip never saw its facts, so they count as not woken.
+pub const WAKE_NOT_STARTED: &str = "Couldn't start";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Update {
@@ -239,6 +252,20 @@ fn check_images(images: &[ImageInput], caps: AgentCaps) -> Result<()> {
 
 pub type UpdateSink = Arc<dyn Fn(Update) + Send + Sync>;
 
+/// A wake turn that is running, kept so a person's message in its conversation can stop it and queue it again.
+struct WakeInFlight {
+    conversation: String,
+    scope: Scope,
+    facts: WakeFacts,
+    sink: UpdateSink,
+}
+
+/// What became of a wake queued in a conversation that already had one waiting.
+enum WakeEntered {
+    Merged(String),
+    Entered(Enqueued<QueueItem>),
+}
+
 pub struct AgentService {
     core: Arc<Core>,
     mcp: McpServer,
@@ -251,6 +278,8 @@ pub struct AgentService {
     stop_early: Mutex<HashSet<String>>,
     /// Request ids `ask` is recording and queueing, so the same id sent twice at once is taken only once.
     sending: Mutex<HashSet<String>>,
+    /// Wake turns running now, by request id.
+    wakes: Mutex<HashMap<String, WakeInFlight>>,
 }
 
 /// A request id reserved in `AgentService::sending` until `ask` is done with it.
@@ -286,12 +315,19 @@ impl AgentService {
             queue: Mutex::new(TurnQueue::default()),
             stop_early: Mutex::new(HashSet::new()),
             sending: Mutex::new(HashSet::new()),
+            wakes: Mutex::new(HashMap::new()),
         }
     }
 
     /// Stops a turn. One still waiting is taken out of the queue and ends failed without starting; the running one is
     /// stopped by its provider, and the next waiting turn of its conversation then starts.
     pub async fn cancel(&self, request_id: &str) {
+        self.cancel_with(request_id, REMOVED).await;
+    }
+
+    /// `cancel`, saying `why` for a turn that never started. A running wake is forgotten at once, so a person's message
+    /// in its conversation can't queue it again.
+    async fn cancel_with(&self, request_id: &str, why: &str) {
         let removed = {
             let mut queue = self.queue.lock().expect("lock poisoned");
             let removed = queue.remove(request_id);
@@ -303,11 +339,12 @@ impl AgentService {
             removed
         };
         match removed {
-            Removed::Waiting(QueueItem::User { scope, req, sink }) => {
-                recorded(self.core.pip_turn_finish(&scope, &req.request_id, "", false, Some(REMOVED), None, None).await);
-                sink(Update { request_id: req.request_id, event: AgentEvent::Done { session_id: None, ok: false, message: Some(REMOVED.into()), usage: None } });
+            Removed::Waiting(QueueItem::User { scope, sink, .. } | QueueItem::Wake { scope, sink, .. }) => {
+                recorded(self.core.pip_turn_finish(&scope, request_id, "", false, Some(why), None, None).await);
+                sink(Update { request_id: request_id.to_string(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(why.into()), usage: None } });
             }
             Removed::InFlight => {
+                self.wakes.lock().expect("lock poisoned").remove(request_id);
                 let provider = self.running.lock().expect("lock poisoned").get(request_id).cloned();
                 if let Some(p) = provider {
                     p.cancel(request_id);
@@ -331,9 +368,12 @@ impl AgentService {
     }
 
     /// Queues a question. It starts now when its conversation has nothing running and there is room, and otherwise
-    /// once the turns ahead of it have ended; either way its events go to `sink`.
+    /// once the turns ahead of it have ended; either way its events go to `sink`. In a workstream's conversation a
+    /// person's message also takes out a wake still waiting, stops a wake running (whose facts are queued again behind
+    /// the message), and starts Pip's automatic turns counting from zero.
     pub async fn ask(self: &Arc<Self>, mut req: AskRequest, sink: UpdateSink) -> Result<AskOutcome> {
         req.conversation = conversation_id(&req.conversation);
+        req.event = None;
         // Checked and reserved under the queue's lock, and held until the turn is queued, so a second send of the same id
         // can't pass the check while the first is still being recorded.
         let _sending = {
@@ -348,11 +388,34 @@ impl AgentService {
         let meta = req.meta.clone().unwrap_or_else(|| TurnMeta { image_count: req.images.len() as u32, ..Default::default() });
         // Kept as waiting until its provider has started, so a reload shows it either way.
         recorded(self.core.pip_turn_begin(&scope, &req.conversation, &req.request_id, &req.prompt, &meta, "queued").await);
+        let workstream = workstream_of_conversation(&req.conversation).map(str::to_string);
+        if let Some(ws) = &workstream {
+            let waiting = self.queue.lock().expect("lock poisoned").waiting_wakes(&req.conversation);
+            for id in waiting {
+                self.cancel(&id).await;
+            }
+            recorded(self.core.person_wrote_in_workstream(&scope, ws).await);
+        }
         let (conversation, run_id) = (req.conversation.clone(), req.request_id.clone());
-        let item = QueueItem::User { scope, req, sink: sink.clone() };
+        let item = QueueItem::User { scope: scope.clone(), req: Box::new(req), sink: sink.clone() };
         let entered = self.queue.lock().expect("lock poisoned").enqueue(&conversation, &run_id, item);
+        if workstream.is_some() {
+            let running = {
+                let mut wakes = self.wakes.lock().expect("lock poisoned");
+                let id = wakes.iter().find(|(_, w)| w.conversation == conversation).map(|(id, _)| id.clone());
+                id.and_then(|id| wakes.remove(&id).map(|w| (id, w)))
+            };
+            if let Some((id, wake)) = running {
+                self.cancel(&id).await;
+                // It was counted when it was first let through, so it may merge into one waiting.
+                if let Err(e) = self.queue_wake(wake.scope, wake.conversation, wake.facts, wake.sink, true).await {
+                    eprintln!("couldn't queue Pip's wake again after the person's message: {e}");
+                }
+            }
+        }
         match entered {
-            Enqueued::Start(QueueItem::User { scope, req, sink }) => match self.start(scope.clone(), req, sink).await {
+            Enqueued::Start(QueueItem::Wake { .. }) => unreachable!("a person's question was queued"),
+            Enqueued::Start(QueueItem::User { scope, req, sink }) => match self.start(scope.clone(), *req, sink).await {
                 Ok(()) => Ok(AskOutcome { queued: false, ahead: 0 }),
                 Err(e) => {
                     recorded(self.core.pip_turn_finish(&scope, &run_id, "", false, Some(&e.to_string()), None, None).await);
@@ -367,6 +430,139 @@ impl AgentService {
         }
     }
 
+    /// Wakes Pip in workstream `ws_id` with `facts`: a turn of its conversation that gives way to the person's messages.
+    /// While another wake waits there and `may_merge` allows, the facts are merged into that one instead. The turn is
+    /// kept with its event lines as its prompt and kind `wake`, and asked like any other, with the manager's role and
+    /// tools. Whether the facts were merged: decided here alone, under the queue's lock, so the budget the supervisor
+    /// charges is for the turns there really are.
+    pub async fn wake(self: &Arc<Self>, ws_id: &str, facts: WakeFacts, sink: UpdateSink, may_merge: bool) -> Result<bool> {
+        let scope = self.core.scope().await?;
+        self.queue_wake(scope, format!("{WORKSTREAM_PREFIX}{ws_id}"), facts, sink, may_merge).await
+    }
+
+    async fn queue_wake(self: &Arc<Self>, scope: Scope, conversation: String, facts: WakeFacts, sink: UpdateSink, may_merge: bool) -> Result<bool> {
+        let request_id = format!("wake-{}", crate::proposals::new_id()?);
+        recorded(self.core.pip_wake_begin(&scope, &conversation, &request_id, &event_line(&facts), "queued").await);
+        let entered = {
+            let mut queue = self.queue.lock().expect("lock poisoned");
+            let merged = if may_merge { queue.merge_wake(&conversation, &facts) } else { None };
+            match merged {
+                Some(id) => WakeEntered::Merged(id),
+                None => WakeEntered::Entered(queue.enqueue(&conversation, &request_id, QueueItem::Wake { scope: scope.clone(), facts, sink: sink.clone() })),
+            }
+        };
+        match entered {
+            WakeEntered::Merged(id) => {
+                recorded(self.core.pip_turn_forget(&scope, &request_id).await);
+                let waiting = {
+                    let queue = self.queue.lock().expect("lock poisoned");
+                    match queue.waiting(&id) {
+                        Some(QueueItem::Wake { facts, sink, .. }) => Some((event_line(facts), sink.clone(), queue.position(&id).unwrap_or(0))),
+                        _ => None,
+                    }
+                };
+                if let Some((lines, sink, ahead)) = waiting {
+                    recorded(self.core.pip_wake_lines(&scope, &id, &lines).await);
+                    // The page reads the merged lines from the stored turn when it hears of the wake again.
+                    sink(Update { request_id: id, event: AgentEvent::Queued { ahead } });
+                }
+                Ok(true)
+            }
+            WakeEntered::Entered(Enqueued::Start(QueueItem::Wake { scope, facts, sink })) => {
+                self.start_wake(request_id, scope, facts, sink).await?;
+                Ok(false)
+            }
+            WakeEntered::Entered(Enqueued::Start(QueueItem::User { .. })) => unreachable!("a wake was queued"),
+            WakeEntered::Entered(Enqueued::Waiting { ahead }) => {
+                sink(Update { request_id, event: AgentEvent::Queued { ahead } });
+                Ok(false)
+            }
+        }
+    }
+
+    /// Starts wake turn `request_id`. When it cannot start it ends failed through its own sink, and the queue moves on.
+    /// A wake whose workstream was held, advised or closed after it was queued never starts: it ends with `WAKE_HELD`,
+    /// however it got here (queued behind a turn, queued again behind the person's message, or just admitted). Only the
+    /// budget's own hold lets it run, since the wake that uses up the budget is the one it holds the workstream after.
+    async fn start_wake(self: &Arc<Self>, request_id: String, scope: Scope, facts: WakeFacts, sink: UpdateSink) -> Result<()> {
+        let conversation = format!("{WORKSTREAM_PREFIX}{}", facts.workstream);
+        if !self.wakes_allowed(&scope, &facts.workstream).await {
+            recorded(self.core.pip_turn_finish(&scope, &request_id, "", false, Some(WAKE_HELD), None, None).await);
+            sink(Update { request_id: request_id.clone(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(WAKE_HELD.into()), usage: None } });
+            self.release(&request_id, None);
+            return Ok(());
+        }
+        let req = AskRequest {
+            request_id: request_id.clone(),
+            prompt: WAKE_REQUEST.into(),
+            session_id: self.queue.lock().expect("lock poisoned").session(&conversation),
+            context: ScreenContext::default(),
+            images: Vec::new(),
+            conversation: conversation.clone(),
+            meta: None,
+            event: Some(event_line(&facts)),
+        };
+        self.wakes.lock().expect("lock poisoned").insert(request_id.clone(), WakeInFlight { conversation, scope: scope.clone(), facts, sink: sink.clone() });
+        if let Err(e) = self.start(scope.clone(), req, sink.clone()).await {
+            self.wakes.lock().expect("lock poisoned").remove(&request_id);
+            let message = format!("{WAKE_NOT_STARTED}: {e}");
+            recorded(self.core.pip_turn_finish(&scope, &request_id, "", false, Some(&message), None, None).await);
+            sink(Update { request_id: request_id.clone(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(message.clone()), usage: None } });
+            self.release(&request_id, None);
+            // Its sink was told, which the caller can tell from the error.
+            return Err(Error::Claude(message));
+        }
+        Ok(())
+    }
+
+    /// Whether workstream `ws_id` may have Pip woken in it now: open, in Manage mode, and held for nothing but its budget.
+    async fn wakes_allowed(&self, scope: &Scope, ws_id: &str) -> bool {
+        let Ok(Some(view)) = self.core.workstream(scope, ws_id).await else { return false };
+        let ws = view.workstream;
+        ws.closed_at.is_none() && ws.mode == crate::domain::workstream::Mode::Manage && ws.held_reason.as_deref().is_none_or(|r| r == crate::domain::workstream::HELD_BUDGET)
+    }
+
+    /// Whether a wake waits in `conversation`, so a new one would merge into it rather than be a turn of its own.
+    pub fn has_waiting_wake(&self, conversation: &str) -> bool {
+        !self.queue.lock().expect("lock poisoned").waiting_wakes(conversation).is_empty()
+    }
+
+    /// Stops every turn of workstream `ws_id`'s conversation, those waiting first so none starts in between, as
+    /// closing or holding it does. A wake that never started ends with `WAKE_HELD`.
+    pub async fn cancel_workstream_turns(&self, ws_id: &str) {
+        let conversation = format!("{WORKSTREAM_PREFIX}{ws_id}");
+        let turns = self.queue.lock().expect("lock poisoned").turns_of(&conversation);
+        for id in turns.iter().rev() {
+            let why = if self.is_wake(id) { WAKE_HELD } else { REMOVED };
+            self.cancel_with(id, why).await;
+        }
+    }
+
+    /// Stops the wakes of workstream `ws_id`, waiting or running, and leaves the person's turns be: what a tripwire or a
+    /// hold of the supervisor's own does.
+    pub async fn cancel_workstream_wakes(&self, ws_id: &str) {
+        let conversation = format!("{WORKSTREAM_PREFIX}{ws_id}");
+        let turns = self.queue.lock().expect("lock poisoned").turns_of(&conversation);
+        for id in turns.iter().rev().filter(|id| self.is_wake(id)) {
+            self.cancel_with(id, WAKE_HELD).await;
+        }
+    }
+
+    /// Whether `request_id` is a wake, waiting or running.
+    fn is_wake(&self, request_id: &str) -> bool {
+        self.wakes.lock().expect("lock poisoned").contains_key(request_id) || matches!(self.queue.lock().expect("lock poisoned").waiting(request_id), Some(QueueItem::Wake { .. }))
+    }
+
+    /// Stops every turn in every workstream's conversation, waiting or running: the person's Hold all.
+    pub async fn cancel_all_workstream_turns(&self) {
+        let conversations = self.queue.lock().expect("lock poisoned").conversations();
+        for c in conversations {
+            if let Some(ws) = workstream_of_conversation(&c) {
+                self.cancel_workstream_turns(ws).await;
+            }
+        }
+    }
+
     /// Ends `run_id`'s place in the queue and starts what may run now.
     fn release(self: &Arc<Self>, run_id: &str, session: Option<String>) {
         let next = {
@@ -374,16 +570,23 @@ impl AgentService {
             self.stop_early.lock().expect("lock poisoned").remove(run_id);
             queue.finished(run_id, session)
         };
-        for (_, item) in next {
+        for (id, item) in next {
             let this = self.clone();
-            tokio::spawn(async move { this.start_queued(item).await });
+            tokio::spawn(async move { this.start_queued(id, item).await });
         }
     }
 
     /// Starts a turn that waited. A turn sent without a session continues the one its conversation's last turn ended
     /// with. When it cannot start it ends failed through its own sink, and the queue moves on.
-    async fn start_queued(self: Arc<Self>, item: QueueItem) {
-        let QueueItem::User { scope, mut req, sink } = item;
+    async fn start_queued(self: Arc<Self>, id: String, item: QueueItem) {
+        let (scope, mut req, sink) = match item {
+            QueueItem::User { scope, req, sink } => (scope, *req, sink),
+            QueueItem::Wake { scope, facts, sink } => {
+                // A failure was already told through its sink.
+                let _ = self.start_wake(id, scope, facts, sink).await;
+                return;
+            }
+        };
         if req.session_id.is_none() {
             req.session_id = self.queue.lock().expect("lock poisoned").session(&req.conversation);
         }
@@ -404,10 +607,13 @@ impl AgentService {
             .ok_or_else(|| Error::Claude(format!("The assistant provider “{id}” isn't available.")))?;
         check_images(&req.images, provider.capabilities())?;
         // A turn in a workstream's conversation works in that workstream, which must be an open one of this account.
-        let workstream = match workstream_of_conversation(&req.conversation) {
+        let mut workstream = match workstream_of_conversation(&req.conversation) {
             Some(id) => Some(workstream::for_turn(&self.core, &scope, id).await?),
             None => None,
         };
+        if let Some(ws) = workstream.as_mut() {
+            ws.event = req.event.clone();
+        }
 
         let mut context = req.context.in_connection(&crate::tracker::Connection::jira_id(&scope));
         let mut handed: std::collections::HashSet<String> = context::keys_in(&req.prompt).into_iter().collect();
@@ -531,6 +737,7 @@ impl AgentService {
     }
 
     fn finish(&self, run_id: &str) {
+        self.wakes.lock().expect("lock poisoned").remove(run_id);
         self.live.lock().expect("lock poisoned").remove(run_id);
         self.running.lock().expect("lock poisoned").remove(run_id);
         self.mcp.runs.lock().expect("lock poisoned").remove(run_id);
@@ -662,6 +869,7 @@ mod tests {
                 images: Vec::new(),
                 conversation: GENERAL_CONVERSATION.into(),
                 meta: Some(TurnMeta { quote: None, looking: Some("the board".into()), image_count: 0 }),
+                event: None,
             }
         }
 
@@ -877,6 +1085,7 @@ mod tests {
                 images: Vec::new(),
                 conversation: conversation.into(),
                 meta: None,
+                event: None,
             }
         }
 

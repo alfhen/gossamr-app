@@ -11,6 +11,7 @@ import { useActivity } from "./activityStore";
 import { CANVASES } from "./canvases";
 import { useStepKeys } from "./browse";
 import { itemKey, usesCode, withoutCode } from "../lib/filter";
+import { isTypingTarget } from "../lib/keyboard";
 import { workspaceTicketLinks } from "./jump";
 import { workConnections } from "./domains";
 import { FilterBar } from "./FilterBar";
@@ -25,6 +26,7 @@ import { applyTheme, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { Rail } from "./Rail";
+import { isHoldAllKey } from "./commands";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
 import { ConnectGithubDialog } from "./ConnectGithub";
@@ -61,9 +63,15 @@ function Canvas() {
   return <View tab={tab} items={items} />;
 }
 
-function useGlobalKeys() {
+function useGlobalKeys(agentsEnabled: boolean) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
+      // Not while typing: the shortcut must never fire from Pip's input or any other field.
+      if (agentsEnabled && isHoldAllKey(ev) && !isTypingTarget(document.activeElement)) {
+        ev.preventDefault();
+        void useWorkstreams.getState().holdAll();
+        return;
+      }
       if (!(ev.metaKey || ev.ctrlKey) || ev.altKey || ev.shiftKey) return;
       const prefs = usePrefs.getState();
       if (ev.key === "k") {
@@ -76,7 +84,7 @@ function useGlobalKeys() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [agentsEnabled]);
 }
 
 export function Workspace({ backend }: { backend: Backend }) {
@@ -92,7 +100,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   const choiceConnection = useWorkspace((s) => s.connections.find((c) => c.id === choice?.connectionId));
   const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const agentsEnabled = useAgentsEnabled();
-  useGlobalKeys();
+  useGlobalKeys(agentsEnabled);
   usePipView();
 
   useEffect(() => listenToClaude(), []);

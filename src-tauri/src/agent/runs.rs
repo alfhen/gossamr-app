@@ -567,7 +567,19 @@ async fn propose_chained(st: &McpState, pip: &PipRun, request_id: &str, key: &st
     if kind == RunKind::Review && focus.is_some() {
         return Err(REVIEW_NO_FOCUS.into());
     }
-    let (source, title) = st.core.pip_chain_source(scope, pip.workstream.as_deref(), key, kind, from_run.as_deref()).await.map_err(|e| e.to_string())?;
+    let (source, title) = match st.core.pip_chain_source(scope, pip.workstream.as_deref(), key, kind, from_run.as_deref()).await {
+        Ok(found) => found,
+        Err(e) => {
+            // Counted by the supervisor: Pip asking again and again for a step Gossamr refuses trips the workstream.
+            if let Some(ws) = pip.workstream.as_deref() {
+                let event = crate::domain::WorkstreamEvent::new(ws, crate::domain::Actor::Pip, "chain_refused", Utc::now()).detail(kind.as_str());
+                if let Err(e) = st.core.record_workstream_event(scope, event).await {
+                    eprintln!("couldn't record a refused chain step in workstream {ws}: {e}");
+                }
+            }
+            return Err(e.to_string());
+        }
+    };
     let repo = source.spec.repo.clone();
     let plan = st.planner.plan(&repo, key, &title).await?;
     let made = st
@@ -1740,6 +1752,22 @@ mod tests {
                 self.fx.core.edit_proposal(&made.id, &crate::inbox::Edit::Rewrite { title: None, body: Some(body) }).await.unwrap();
                 assert_eq!(self.fx.core.approve_proposal(&made.id).await.unwrap().state, ProposalState::Applied);
             }
+        }
+
+        #[tokio::test]
+        async fn a_chain_step_refused_in_a_workstream_is_recorded_as_pip_s_without_its_text() {
+            let r = chain_rig().await;
+            let ws = r.workstream().await;
+            r.join("q1", &ws);
+            let triage = r.finished(1, "CA-1", RunKind::Triage, Some(&ws), FOUND).await;
+            r.ask_err("q1", json!({ "key": "CA-1", "kind": "build", "from_run": triage.id })).await;
+            r.ask_err("q1", json!({ "key": "CA-1", "kind": "review", "from_run": triage.id })).await;
+            let events = r.fx.core.workstream_events(&r.fx.scope, &ws).await.unwrap();
+            let refused: Vec<(crate::domain::Actor, Option<&str>)> = events.iter().filter(|e| e.action == "chain_refused").map(|e| (e.actor, e.detail.as_deref())).collect();
+            assert_eq!(refused, [(crate::domain::Actor::Pip, Some("build")), (crate::domain::Actor::Pip, Some("review"))]);
+            // Outside a workstream nothing is recorded anywhere.
+            r.ask_err("run-1", json!({ "key": "CA-1", "kind": "build", "from_run": triage.id })).await;
+            assert_eq!(r.fx.core.workstream_events(&r.fx.scope, &ws).await.unwrap().iter().filter(|e| e.action == "chain_refused").count(), 2);
         }
 
         #[tokio::test]

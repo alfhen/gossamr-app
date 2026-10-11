@@ -28,8 +28,8 @@ mod report;
 mod rewrites;
 mod ticket_context;
 mod workstreams;
-pub use pip_runs::PipRunAsk;
-pub use workstreams::{WorkstreamView, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
+pub use pip_runs::{PipRunAsk, NOT_ON_ITS_OWN, PR_MOVED};
+pub use workstreams::{Admitted, WakeAdmission, WorkstreamView, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 pub use rewrites::TextSeen;
 mod watch;
 
@@ -296,6 +296,8 @@ impl Core {
             backfill_cache(&db, &connection)?;
             db.release_interrupted(Utc::now())?;
             db.fail_interrupted_pip_turns()?;
+            // Nothing wakes Pip or starts on its own after a restart until the person resumes the workstream.
+            db.hold_open_workstreams(crate::domain::workstream::HELD_RESTART, Utc::now())?;
             *guard = Some((connection.id.clone(), db));
         }
         f(&guard.as_ref().expect("opened above").1)
@@ -1036,6 +1038,14 @@ pub(crate) mod testing {
             item.container.external_id = container.into();
             item.title = format!("Ticket {key}");
             self.core.with_db_for(&self.scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
+        }
+
+        /// The item `key` as the tracker gives it (a copy of the sample ticket), payload and all.
+        pub fn tracker_item(&self, key: &str) -> WorkItem {
+            let connection = self.core.connection(&self.scope).unwrap();
+            let mut item = tracker::item_from_ticket(&connection, &sample_ticket());
+            item.item = connection.item(key);
+            item
         }
 
         /// Changes the cached item `key`, as a sync of an edited ticket would.

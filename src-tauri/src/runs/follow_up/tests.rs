@@ -188,3 +188,79 @@ async fn a_copy_started_instead_is_remembered_on_a_finished_run() {
     let after = rig.get(&run).await;
     assert_eq!((after.state, after.earlier_sessions.len()), (RunState::Done, 1));
 }
+
+mod fix_round {
+    use super::*;
+    use crate::domain::{RunKind, RunSpec};
+
+    /// A finished run of `kind`, in a workstream when `in_ws`, that may push when `push`.
+    async fn finished_as(kind: RunKind, in_ws: bool, push: bool) -> (Rig, Run) {
+        let (rig, run) = finished().await;
+        let ws = if in_ws { Some(rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id) } else { None };
+        if let Some(ws) = &ws {
+            rig.fx.core.set_workstream_mode(&rig.fx.scope, ws, crate::domain::workstream::Mode::Manage, crate::domain::Actor::Person).await.unwrap();
+        }
+        let run = rig.set(&run, |r| r.spec = RunSpec { kind, allow_push: push, workstream: ws, ..r.spec.clone() }).await;
+        (rig, run)
+    }
+
+    #[tokio::test]
+    async fn a_fix_round_goes_only_to_a_finished_workstream_build_that_pushes() {
+        for (kind, in_ws, push) in [(RunKind::Review, true, false), (RunKind::Build, true, false), (RunKind::Build, false, true), (RunKind::Investigate, true, true)] {
+            let (rig, run) = finished_as(kind, in_ws, push).await;
+            let err = rig.svc.send_fix_round(&run.id, "rev1", "Fix it.").await.unwrap_err().to_string();
+            assert!(err.contains("fix round goes only"), "{kind:?} {in_ws} {push}: {err}");
+            assert!(calls(&rig).is_empty(), "nothing was resumed");
+        }
+        let (rig, run) = finished_as(RunKind::Build, true, true).await;
+        let working = rig.set(&run, |r| r.state = RunState::Working).await;
+        assert!(rig.svc.send_fix_round(&working.id, "rev1", "Fix it.").await.is_err());
+        assert!(calls(&rig).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_fix_round_resumes_the_build_and_records_only_the_message_s_digest_and_length() {
+        let (rig, run) = finished_as(RunKind::Build, true, true).await;
+        std::fs::create_dir_all(&run.expected_worktree).unwrap();
+        let sent = rig.svc.send_fix_round(&run.id, "rev1", "Fix these findings.").await.unwrap();
+        assert_eq!((sent.state, sent.passes), (RunState::Working, 2));
+        let resumes = rig.cli.0.lock().unwrap().resumes.clone();
+        assert_eq!(resumes.len(), 1);
+        assert_eq!(resumes[0].message, format!("{REMINDER}\n\nFix these findings."));
+        let ws = run.spec.workstream.clone().unwrap();
+        let events = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
+        let line = events.iter().find(|e| e.action == "fix_round_sent").expect("a fix_round_sent line");
+        assert_eq!((line.actor, line.run_id.as_deref(), line.detail.as_deref()), (crate::domain::Actor::Supervisor, Some(run.id.as_str()), Some("19")));
+        assert_eq!(line.digest.as_ref().map(String::len), Some(64));
+        assert!(!format!("{events:?}").contains("Fix these findings"));
+        let last = rig.fx.core.run_events(&run.id).await.unwrap().pop().unwrap();
+        assert_eq!(last.detail.as_deref(), Some("Pass 2. Started automatically."));
+        // Counted before the resume, under the same lock, by the line the rules count.
+        let counted: Vec<_> = events.iter().filter(|e| e.action == "autostart").collect();
+        assert_eq!(counted.len(), 1);
+        assert_eq!((counted[0].run_id.as_deref(), counted[0].detail.as_deref()), (Some(run.id.as_str()), Some("fix_round after rev1")));
+        assert!(counted[0].seq < line.seq);
+    }
+
+    #[tokio::test]
+    async fn a_fix_round_is_refused_once_the_person_held_advised_or_switched_it_off_and_nothing_is_counted() {
+        use crate::domain::workstream::{Mode, Rule, HELD_ALL, HELD_PERSON};
+        use crate::domain::Actor;
+        for what in ["hold", "hold all", "advise", "rule off"] {
+            let (rig, run) = finished_as(RunKind::Build, true, true).await;
+            let ws = run.spec.workstream.clone().unwrap();
+            let (core, scope) = (&rig.fx.core, &rig.fx.scope);
+            match what {
+                "hold" => drop(core.hold_workstream(scope, &ws, HELD_PERSON, Actor::Person).await.unwrap()),
+                "hold all" => drop(core.hold_workstream(scope, &ws, HELD_ALL, Actor::Person).await.unwrap()),
+                "advise" => drop(core.set_workstream_mode(scope, &ws, Mode::Advise, Actor::Person).await.unwrap()),
+                _ => drop(core.set_workstream_rule(scope, &ws, Rule::FixRound, Some(false)).await.unwrap()),
+            }
+            let err = rig.svc.send_fix_round(&run.id, "rev1", "Fix it.").await.unwrap_err();
+            assert!(matches!(&err, crate::error::Error::Proposal(why) if why == crate::inbox::NOT_ON_ITS_OWN), "{what}: {err}");
+            assert!(calls(&rig).is_empty(), "{what}: nothing was resumed");
+            let events = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
+            assert!(events.iter().all(|e| e.action != "autostart" && e.action != "fix_round_sent"), "{what}: nothing counted");
+        }
+    }
+}

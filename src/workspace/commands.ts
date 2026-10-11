@@ -52,6 +52,8 @@ export interface CommandActions {
   startWorkstream(): void;
   /** Asks, in the peek, to confirm closing the workstream on the ticket the peek shows. */
   closeWorkstream(): void;
+  /** Holds every open workstream and stops Pip's turns in them, as the rail's Hold all does. */
+  holdAllWorkstreams(): void;
   jumpToItem(item: WorkItem): void;
   askPip(query: string): void;
 }
@@ -70,6 +72,16 @@ export interface CommandContext {
   /** The synced ticket the peek shows, and whether it has an open workstream already. */
   ticket?: { key: string; workstream: boolean } | null;
 }
+
+/** The shortcut for Hold all workstreams, as the rail and the palette show it. */
+export const HOLD_ALL_HINT = "⌘⇧.";
+
+/**
+ * Whether a key press is Hold all (Cmd/Ctrl+Shift+Period). `code` is read first since Shift turns the key into `>` on
+ * most layouts; nothing else in Gossamr takes Cmd/Ctrl+Shift.
+ */
+export const isHoldAllKey = (ev: Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">) =>
+  (ev.metaKey || ev.ctrlKey) && ev.shiftKey && !ev.altKey && (ev.code === "Period" || ev.key === "." || ev.key === ">");
 
 const NO_CONTEXT: CommandContext = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
 
@@ -125,6 +137,15 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
           { id: "agents:needs", group: "Agents" as const, icon: "✋", label: "Show agents that need me", hint: ctx.agentsNeedingMe ? `${ctx.agentsNeedingMe} waiting` : undefined, keywords: "agents waiting permission question blocked", run: a.showAgentsNeedingMe },
           { id: "agents:stop", group: "Agents" as const, icon: "■", label: "Stop all agents…", keywords: "agents halt kill end everything", run: a.openAgentSafety },
           { id: "agents:safety", group: "Agents" as const, icon: "⛨", label: "Agent safety and settings", keywords: "agents touch permissions", run: a.openAgentSafety },
+          {
+            id: "workstream:hold-all",
+            group: "Agents" as const,
+            icon: "⏸",
+            label: "Hold all workstreams",
+            hint: HOLD_ALL_HINT,
+            keywords: "pause supervisor manage automatic wake pip stop everything",
+            run: a.holdAllWorkstreams,
+          },
           ...(ctx.ticket
             ? [
                 {

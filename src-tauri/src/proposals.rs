@@ -48,11 +48,43 @@ pub fn actor_of(by: CreatedBy) -> Actor {
 pub fn record(db: &Db, p: &Proposal, actor: Actor, action: &str, at: DateTime<Utc>) {
     let Some(id) = p.workstream() else { return };
     let appended = db.workstream(id).and_then(|ws| match ws {
-        Some(_) => db.append_workstream_event(&WorkstreamEvent::new(id, actor, action, at).proposal(&p.id)).map(|_| ()),
+        Some(mut ws) => {
+            db.append_workstream_event(&WorkstreamEvent::new(id, actor, action, at).proposal(&p.id))?;
+            // The person changed the ticket through the workstream's own draft: what it wrote isn't drift. Only the
+            // fields it wrote are taken again from the ticket once the write is in the cache; a change anyone else made
+            // to the others still trips the workstream.
+            let on_ticket = p.target().is_some_and(|t| ws.item_key.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(&t.key)));
+            if action == "draft_approved" && actor == Actor::Person && on_ticket {
+                if let Some(basis) = ws.basis.as_mut() {
+                    let before = basis.changing.len();
+                    for field in basis_fields(&p.intent) {
+                        if !basis.changing.iter().any(|f| f == field) {
+                            basis.changing.push(field.to_string());
+                        }
+                    }
+                    if basis.changing.len() != before {
+                        db.save_workstream(&ws)?;
+                    }
+                }
+            }
+            Ok(())
+        }
         None => Ok(()),
     });
     if let Err(e) = appended {
         eprintln!("couldn't record {action} of draft {} in workstream {id}: {e}", p.id);
+    }
+}
+
+/// The fields of a workstream's basis that writing `intent` changes: a move its status, an assignee change its
+/// assignee, a rewrite of the description its description. A comment, subtasks or a link change none of them.
+pub fn basis_fields(intent: &Intent) -> Vec<&'static str> {
+    use crate::domain::workstream::{BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS};
+    match intent {
+        Intent::Transition { .. } => vec![BASIS_STATUS],
+        Intent::Update { patch, .. } if patch.assignee.is_some() => vec![BASIS_ASSIGNEE],
+        Intent::Rewrite { body: Some(_), .. } => vec![BASIS_DESCRIPTION],
+        _ => Vec::new(),
     }
 }
 
@@ -976,6 +1008,8 @@ mod tests {
             closed_at: None,
             budget: Default::default(),
             spent: Default::default(),
+            rules: Default::default(),
+            basis: None,
         };
         db.insert_workstream(&ws).unwrap();
     }
