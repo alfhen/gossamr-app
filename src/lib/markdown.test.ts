@@ -155,4 +155,13 @@ describe("plainMarkdown", () => {
     expect(plainMarkdown("See [the docs](https://x.test/a) or https://y.test.")).toBe("See the docs (https://x.test/a) or https://y.test.");
     expect(plainMarkdown("```ts\n- **a**\n```\n- **b**")).toBe("```ts\n- **a**\n```\n• b");
   });
+
+  it("drops heading markers and quote markers, including nested ones", () => {
+    expect(plainMarkdown("## Findings\n> Check this")).toBe("Findings\nCheck this");
+    expect(plainMarkdown("> > - **item**")).toBe("• item");
+  });
+
+  it("leaves a # inside a fenced block as it is", () => {
+    expect(plainMarkdown("```md\n# Title\n> quote\n```\n# After")).toBe("```md\n# Title\n> quote\n```\nAfter");
+  });
 });
