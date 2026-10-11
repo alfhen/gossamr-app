@@ -188,7 +188,8 @@ export function progressText(run: Pick<Run, "state" | "lastDetail"> & Partial<Pi
   if (run.lastDetail?.trim()) return run.lastDetail.trim();
   if (run.state === "queued") return "Waiting to start";
   if (run.state === "launching") return "Starting up";
-  return "Working";
+  // Said after the state's own "Working", so it adds what is known rather than the same word again ("Working · Working").
+  return "No update from it yet";
 }
 
 export interface AgentFilters {
@@ -316,10 +317,26 @@ export function stepRun(order: readonly string[], current: string | null, delta:
 /** A run that needs the person, or a failed one they haven't looked at yet: what the rail badge and the Needs you tray count. */
 export const needsAttention = (run: Pick<Run, "id" | "state">, seenFailed: ReadonlySet<string>) => needsPerson(run) || (run.state === "failed" && !seenFailed.has(run.id));
 
+/**
+ * The agent part of "needs you", the one set every screen counts it by: runs asking a question, asking permission or
+ * blocked, and failed runs the person hasn't looked at yet (a folder to trust among them). Each is one of the Needs you
+ * tray's run items; the Agents rail badge and the Agents header ("2 waiting on you") count exactly these.
+ */
+export const agentsWaitingOnYou = (runs: readonly Run[], seenFailed: ReadonlySet<string>): Run[] => runs.filter((r) => needsAttention(r, seenFailed));
+
 /** Runs that need the person, plus failed ones they haven't looked at yet. Quiet runs never count. */
 export function attentionCount(runs: readonly Run[], seenFailed: ReadonlySet<string>): number {
-  return runs.filter((r) => needsAttention(r, seenFailed)).length;
+  return agentsWaitingOnYou(runs, seenFailed).length;
 }
+
+const AT_WORK: readonly RunState[] = ["queued", "launching", "working"];
+
+/**
+ * The one meaning of "your agents", wherever agents are counted as a whole ("Your agents 3 of 6"): runs at work (queued,
+ * launching or working, quiet ones too) and runs waiting on the person (`agentsWaitingOnYou`). Finished, stopped and
+ * failed runs already looked at are not agents any more, only history.
+ */
+export const yourAgents = (runs: readonly Run[], seenFailed: ReadonlySet<string>): Run[] => runs.filter((r) => AT_WORK.includes(r.state) || needsAttention(r, seenFailed));
 
 /**
  * The runs at work, counted one way for the Agents view's summary and Pip home's composer footer so the two agree:
@@ -344,15 +361,19 @@ export const liveWords = (c: ReturnType<typeof liveCounts>) => [c.running && `${
  */
 export const laneCount = (lane: LaneId, runs: readonly Run[], now: number): string => (lane === "running" ? liveWords(liveCounts(runs, now)).join(" · ") || "0" : String(runs.length));
 
-export function summaryLine(runs: readonly Run[], now: number): string {
+/**
+ * The Agents view's summary: "2 waiting on you · 2 running · 2 ready to review · 3 failed or stuck (1 quiet)". Waiting on
+ * you is `agentsWaitingOnYou`, as the Agents rail badge counts; running, queued and waiting for a slot are `liveCounts`, as
+ * Pip home's footer counts; ready to review and failed or stuck are the lanes of those names, card for card.
+ */
+export function summaryLine(runs: readonly Run[], now: number, seenFailed: ReadonlySet<string> = new Set()): string {
   if (!runs.length) return "Nothing running";
   const count = (lane: LaneId) => runs.filter((r) => laneOf(r, now) === lane).length;
-  const needs = count("needs");
+  const waiting = agentsWaitingOnYou(runs, seenFailed).length;
   const live = liveCounts(runs, now);
-  const failed = runs.filter((r) => r.state === "failed").length;
-  const unclear = runs.filter((r) => r.state === "unknown").length;
   const done = count("done");
-  return [needs && `${needs} ${needs === 1 ? "needs" : "need"} you`, ...liveWords(live), done && `${done} ready to review`, live.quiet && `${live.quiet} quiet`, failed && `${failed} failed`, unclear && `${unclear} unclear`]
+  const bad = count("bad");
+  return [waiting && `${waiting} waiting on you`, ...liveWords(live), done && `${done} ready to review`, bad && `${bad} failed or stuck${live.quiet ? ` (${live.quiet} quiet)` : ""}`]
     .filter(Boolean)
     .join(" · ") || "Nothing running";
 }
@@ -363,9 +384,33 @@ export const stoppable = (runs: readonly Run[]): Run[] => runs.filter((r) => r.s
 /** Approved runs Stop all stops before they start, so none takes a slot it frees. */
 export const slotWaiters = (runs: readonly Run[]): Run[] => runs.filter(waitsForSlot);
 
+/** Stop all's button, which counts what it can stop (`stoppable` and `slotWaiters`), a set apart from your agents, so it says so: "Stop all (5 stoppable)". */
+export const stopAllLabel = (reach: number) => (reach ? `Stop all (${reach} stoppable)` : "Stop all");
+
 /** What Stop all would stop, in words: "3 agents", "3 agents and 2 waiting to start", "1 waiting to start". */
 export function stopAllText(agents: number, waiting: number): string {
   const live = agents ? `${agents} ${agents === 1 ? "agent" : "agents"}` : "";
   const queued = waiting ? `${waiting} waiting to start` : "";
   return [live, queued].filter(Boolean).join(" and ") || "0 agents";
+}
+
+/** What approving a plan is, said where the plan's description update waits: the Plan step and Pip's word when a plan finishes (N6). */
+export const APPROVE_PLAN = "Approve the description update to let Build start.";
+
+/**
+ * The questions a plan run left for a person, from its answer's "Open questions" section, as bullets or numbered lines,
+ * at most five; none when it has no such section. They are shown beside the plan's description update, never written
+ * anywhere by this.
+ */
+export function planOpenQuestions(result: string | null | undefined): string[] {
+  const lines = (result ?? "").split("\n");
+  const at = lines.findIndex((l) => /^#{1,6}\s*open questions\b/i.test(l.trim()));
+  if (at < 0) return [];
+  const out: string[] = [];
+  for (const line of lines.slice(at + 1)) {
+    if (/^#{1,6}\s/.test(line.trim())) break;
+    const item = /^\s*(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line)?.[1]?.trim();
+    if (item) out.push(item);
+  }
+  return out.slice(0, 5);
 }

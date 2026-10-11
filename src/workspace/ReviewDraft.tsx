@@ -5,7 +5,7 @@ import { hunkLinesAround } from "../lib/diffHunks";
 import { REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
 import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } from "../types";
 import type { DraftCardProps } from "./DraftCard";
-import { peekFocusAfterLeaving } from "./peekDrafts";
+import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
 import { openPullView, sameCommit, usePullDiff, type PullDiffState } from "./pullViewStore";
 import { takesBackendText } from "./RewriteDiff";
 import { FromRun } from "./RunProvenance";
@@ -95,6 +95,16 @@ export function postsWhat(comments: number): string {
   return `Posts ${inline}the summary as a comment review (not Approve or Request changes), at the reviewed commit.`;
 }
 
+/**
+ * The end of a decided review's provenance line, in place of the before-you-post advice: where and at which commit it went
+ * once posted ("Posted to acme/webshop#218 at a1b2c3d4."), or that it was discarded or replaced.
+ */
+export function postedLine(state: Proposal["state"]["type"], r: Pick<Review, "repo" | "number" | "commitSha">): string {
+  if (state === "applied") return `. Posted to ${r.repo}#${r.number} at ${r.commitSha.slice(0, 8)}, as a comment review.`;
+  if (state === "skipped") return ". Discarded: nothing went to GitHub.";
+  return ".";
+}
+
 /** Under the review's text boxes: what GitHub does with their words. */
 export const MARKDOWN_HINT = "Markdown, formatted on GitHub";
 
@@ -105,9 +115,12 @@ function GrowingText(props: TextareaHTMLAttributes<HTMLTextAreaElement> & { valu
   return <textarea ref={ref} {...props} />;
 }
 
-/** The lines of the diff around a comment, as a unified hunk with the comment's line marked. */
-export function ReviewHunk({ file, line, side }: { file: ChangedFile | null | undefined; line: number; side: DiffSide }) {
-  const around = file?.patch ? hunkLinesAround(file.patch, line, side) : null;
+/**
+ * The lines of the diff around a comment, as a unified hunk with the comment's line marked: two either side, so the first
+ * comment's box is in view under the summary in the peek's default width, above the action bar.
+ */
+export function ReviewHunk({ file, line, side, context = 2 }: { file: ChangedFile | null | undefined; line: number; side: DiffSide; context?: number }) {
+  const around = file?.patch ? hunkLinesAround(file.patch, line, side, context) : null;
   if (!around) return <p className="m-0 text-xs text-ws-ink3">{file ? "The pull request's diff doesn't show this line now." : "This file isn't in the pull request's diff now."}</p>;
   return (
     <div data-review-hunk className="rounded border border-ws-sep bg-ws-bar py-0.5 font-mono text-xs leading-5">
@@ -232,7 +245,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
       onBlur={(ev) => {
         if (ev.relatedTarget && !ev.currentTarget.contains(ev.relatedTarget as Node)) hadFocus.current = false;
       }}
-      className={`ws-legacy overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
+      className={`ws-legacy ${PEEK_DRAFT_MARGIN} overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
         <span aria-hidden>✦</span>
@@ -261,7 +274,7 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
         {p.origin.type === "run" && (
           <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
             <FromRun proposal={p} onOpen={onOpenRun ? () => onOpenRun((p.origin as { runId: string }).runId) : undefined} />
-            . Gossamr made it from the review&apos;s findings; read and edit it before you post.
+            {open ? ". Gossamr made it from the review's findings; read and edit it before you post." : postedLine(state, review)}
           </p>
         )}
         {moved && (
@@ -338,9 +351,11 @@ export function ReviewDraft({ proposal: p, working, error, onApprove, onSkip, on
             {MARKDOWN_HINT}
           </p>
         )}
-        <p data-review-posts className="m-0 text-sm text-ws-ink3">
-          {postsWhat(open ? kept.length : review.comments.length)} Nothing goes to GitHub until you post it here.
-        </p>
+        {open && (
+          <p data-review-posts className="m-0 text-sm text-ws-ink3">
+            {postsWhat(kept.length)} Nothing goes to GitHub until you post it here.
+          </p>
+        )}
         {open && p.maybePosted && (
           <p data-review-maybe-posted role="note" className="m-0 rounded-md border border-ws-sep2 bg-ws-bar px-2 py-1 text-sm text-ws-ink2">
             This review may already be on GitHub: Gossamr sent it at {p.maybePosted.commitSha.slice(0, 8)} and got no answer. Post review looks for it on the pull request first and sends nothing while it can&apos;t be sure.

@@ -9,6 +9,7 @@ import { useWorkspace } from "../workspaceStore";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
 import { AskPipButton, askPlacement, fireNudge, Launcher, Nudge } from "./PipExtras";
 import { AppliedCard, ContextChip, escapeClosesPane, SeeingPanel } from "./PipPane";
+import { typingIn } from "./PeekSheet";
 import { PipAvatar } from "./PipAvatar";
 import { pupilOffset } from "./pipGaze";
 import { itemScene, STALE_DAYS } from "./pipScene";
@@ -280,5 +281,23 @@ describe("eyes, the Ask Pip button and Esc", () => {
     expect(escapeClosesPane({ ...calm, handled: true })).toBe(false);
     expect(escapeClosesPane({ ...calm, editing: true })).toBe(false);
     expect(escapeClosesPane({ ...calm, editing: true, inPipInput: true })).toBe(true);
+  });
+
+  it("lets Esc from Pip's input reach the peek over it, so the peek closes first and the next Esc closes Pip (N4)", () => {
+    class FakeHTMLElement {
+      constructor(readonly tagName: string, readonly id = "", readonly isContentEditable = false) {}
+    }
+    vi.stubGlobal("HTMLElement", FakeHTMLElement);
+    try {
+      expect(typingIn(new FakeHTMLElement("TEXTAREA", "pip-input") as unknown as Element)).toBe(false);
+      expect(typingIn(new FakeHTMLElement("TEXTAREA", "comment-box") as unknown as Element)).toBe(true);
+      expect(typingIn(new FakeHTMLElement("DIV", "", true) as unknown as Element)).toBe(true);
+      expect(typingIn(new FakeHTMLElement("BUTTON") as unknown as Element)).toBe(false);
+      expect(typingIn(null)).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    // With the peek open the pane leaves Esc to it, from Pip's input too.
+    expect(escapeClosesPane({ peekOpen: true, ticked: false, editing: true, inPipInput: true, handled: false })).toBe(false);
   });
 });

@@ -171,6 +171,10 @@ describe("the strip of live runs", () => {
     expect(working).toContain("Working");
     expect(working).toContain("Reading the cart code");
     expect(html(run("needsPermission", { needs: "approve Bash: git push" }))).toContain("git push");
+    // Just answered, with nothing reported since: a detail of its own, never "Working · Working" (N9).
+    const answered = html(run("working", { lastDetail: null }));
+    expect(answered).toContain("No update from it yet");
+    expect(answered).not.toMatch(/Working<\/span> · Working/);
   });
 });
 

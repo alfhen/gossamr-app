@@ -283,7 +283,7 @@ describe("PipConversation", () => {
     const general = renderToStaticMarkup(<CommandsList workstream={false} manage={false} />);
     for (const usage of ["/stop &lt;run id&gt;", "/retry &lt;run id&gt;", "/answer &lt;run id&gt; your answer"]) expect(general).toContain(`>${usage}</dt>`);
     expect(general).not.toMatch(/>\/\w+ R1/);
-    expect(general).toContain("A run&#x27;s id is on its card. R1, R2… are the names a workstream gives its runs, and work in its conversation.");
+    expect(general).toContain("A run&#x27;s id is on its card in Agents, and at the top of its sheet (Open on a card under Your agents). R1, R2… are the names a workstream gives its runs, and work in its conversation.");
     expect(general).not.toContain("R1 is a run in this workstream");
     expect(general).not.toContain('data-command="hold"');
     expect(general).not.toContain('data-command="resume"');
@@ -700,7 +700,8 @@ describe("the commands help outside a workstream", () => {
     expect(general.map((c) => c.verb)).toEqual(["stop", "retry", "answer"]);
     expect(general.map((c) => c.usage)).toEqual(["/stop <run id>", "/retry <run id>", "/answer <run id> your answer"]);
     for (const c of general) expect(c.usage).not.toMatch(/\bR1\b/);
-    expect(GENERAL_RUN_REF_NOTE).toContain("A run's id is on its card");
+    // Pip home's cards show no id, so the note says where one is (N12).
+    expect(GENERAL_RUN_REF_NOTE).toContain("A run's id is on its card in Agents");
     expect(GENERAL_RUN_REF_NOTE).toContain("R1, R2… are the names a workstream gives its runs");
   });
 });

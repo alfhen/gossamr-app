@@ -23,10 +23,15 @@ async fn working() -> (Rig, Run) {
 }
 
 #[tokio::test]
-async fn stop_is_refused_until_the_run_is_working() {
+async fn stop_cancels_a_queued_run_and_is_refused_while_one_launches() {
     let rig = ready().await;
     let queued = rig.queued(1).await;
-    assert!(rig.svc.stop(&queued.id).await.unwrap_err().to_string().contains("once it is working"));
+    let cancelled = rig.svc.stop(&queued.id).await.unwrap();
+    assert_eq!((cancelled.state, cancelled.error.as_deref(), cancelled.short_id.is_none()), (RunState::Stopped, Some(NOT_STARTED), true));
+    assert!(cancelled.ended_at.is_some());
+    assert_eq!(rig.get(&queued).await.state, RunState::Stopped);
+    assert!(rig.svc.start_now(&queued.id).await.is_err(), "a cancelled run never starts");
+    assert!(rig.svc.launch_waiting().await.unwrap().is_empty());
     let launching = rig.launched(2).await;
     assert_eq!(launching.state, RunState::Launching);
     assert!(rig.svc.stop(&launching.id).await.unwrap_err().to_string().contains("once it is working"));
@@ -53,7 +58,9 @@ async fn stopping_a_run_waiting_for_a_slot_marks_it_stopped_without_asking_claud
     assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "a stopped run never starts");
 
     let plain = rig.queued(3).await;
-    assert!(rig.svc.stop(&plain.id).await.unwrap_err().to_string().contains("once it is working"), "a queued run not waiting for a slot is refused as before");
+    let cancelled = rig.svc.stop(&plain.id).await.unwrap();
+    assert_eq!((cancelled.state, cancelled.error.as_deref()), (RunState::Stopped, Some(NOT_STARTED)), "a queued run not waiting for a slot is cancelled the same way");
+    assert!(rig.cli.0.lock().unwrap().stops.is_empty(), "and no CLI stop for it either");
 }
 
 #[tokio::test]

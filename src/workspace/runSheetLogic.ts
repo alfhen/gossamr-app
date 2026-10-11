@@ -249,13 +249,23 @@ export interface StopControl {
   enabled: boolean;
   label: string;
   title?: string;
+  /** What its confirmation asks, and its yes: "Stop this agent? Its work is kept." and "Yes, stop", unless said here. */
+  ask?: string;
+  yes?: string;
 }
 
-/** Stop only works once the session is there to stop; a launching run says so instead of failing. A run waiting for a slot has no session yet and is stopped before it starts. */
-export function stopControl(run: Pick<Run, "state"> & Partial<Pick<Run, "slotWaitSince">>): StopControl {
+/** A queued run's Cancel: it withdraws the run before it launches, as Stop does one waiting for a slot. */
+export const CANCEL_QUEUED: StopControl = { shown: true, enabled: true, label: "Cancel", title: "Withdraw this run before it starts", ask: "Cancel this run? It hasn't started, so nothing is lost.", yes: "Yes, cancel" };
+
+/**
+ * Stop only works once the session is there to stop; a launching run says so instead of failing. A queued run has no
+ * session yet: one waiting for a slot is stopped before it starts, and any other is cancelled, withdrawn before it launches.
+ */
+export function stopControl(run: Pick<Run, "state"> & Partial<Pick<Run, "slotWaitSince" | "shortId">>): StopControl {
   switch (run.state) {
     case "queued":
-      return run.slotWaitSince ? { shown: true, enabled: true, label: "Stop" } : { shown: false, enabled: false, label: "Stop" };
+      if (run.shortId) return { shown: false, enabled: false, label: "Stop" };
+      return run.slotWaitSince ? { shown: true, enabled: true, label: "Stop" } : CANCEL_QUEUED;
     case "working":
     case "needsAnswer":
     case "needsPermission":

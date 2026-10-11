@@ -29,6 +29,7 @@ import { togglePip, useWorkstreams } from "./workstreamsStore";
 import { PipHome } from "./PipHome";
 import { Rail } from "./Rail";
 import { isHoldAllKey, isPipHomeKey } from "./commands";
+import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./pipHomeKeys";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
 import { ConnectGithubDialog } from "./ConnectGithub";
@@ -99,6 +100,53 @@ function useStartOnPipHome(ready: boolean) {
 /** Whether the keyboard is in a field other than Pip's composer. */
 const typingElsewhere = (el: Element | null) => isTypingTarget(el) && el?.id !== PIP_INPUT_ID;
 
+/** The region of the workspace layout `el` is in: the peek, Pip's pane, or the main area around them. */
+function regionOf(el: Element | null): WorkspaceRegion {
+  if (el?.closest("#peek-sheet")) return "peek";
+  if (el?.closest("aside[data-pip-root]")) return "pip";
+  return "main";
+}
+
+/** Puts the keyboard in `region`: the peek's title, Pip's input, or the main area, from where Tab goes on into it. */
+function enterRegion(region: WorkspaceRegion) {
+  const el =
+    region === "peek" ? document.querySelector<HTMLElement>("#peek-sheet h2") : region === "pip" ? document.getElementById(PIP_INPUT_ID) : document.getElementById(MAIN_ID);
+  if (!el) return;
+  if (!el.hasAttribute("tabindex") && region === "peek") el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: region !== "peek" });
+}
+
+/** The page's Tab stops in order: enabled, shown and not taken out of the order. */
+const tabStops = () =>
+  Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && !el.closest("[hidden], [inert]") && el.getClientRects().length > 0);
+
+/**
+ * The workspace layout's regions by keyboard, as Pip home has its columns (D29): F6 and Shift+F6 step between the main
+ * area, the peek and Pip's pane, from Pip's composer too; and Tab from the page's last stop (the pane's last button)
+ * goes on to the next region rather than to the page itself. Pip home keeps its own.
+ */
+function useRegionKeys() {
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.defaultPrevented || useTabs.getState().route === "pip" || usePrefs.getState().paletteOpen || document.querySelector('[aria-modal="true"]')) return;
+      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const present: WorkspaceRegion[] = ["main", ...(document.getElementById("peek-sheet") ? (["peek"] as const) : []), ...(document.querySelector("aside[data-pip-root]") ? (["pip"] as const) : [])];
+      // A KeyboardEvent's fields are getters on its prototype, so they are named, not spread.
+      const by = regionStep({ key: ev.key, metaKey: ev.metaKey, ctrlKey: ev.ctrlKey, altKey: ev.altKey, shiftKey: ev.shiftKey, target: active });
+      if (by) {
+        ev.preventDefault();
+        return enterRegion(nextRegion(present, regionOf(active), by));
+      }
+      if (wrapTab(ev, tabStops(), active, true)) {
+        ev.preventDefault();
+        enterRegion(nextRegion(present, regionOf(active), 1));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+}
+
 function useGlobalKeys(agentsEnabled: boolean) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
@@ -146,6 +194,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const agentsEnabled = useAgentsEnabled();
   useGlobalKeys(agentsEnabled);
+  useRegionKeys();
   usePipView();
   const screen = mainScreen(route, agentsEnabled);
   const paneShown = showsPipPane(route, agentsEnabled, pipOpen);

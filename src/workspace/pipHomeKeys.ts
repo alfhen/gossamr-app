@@ -104,3 +104,25 @@ export function wrapTab<T>(ev: Pick<PipHomeKeyEvent, "key" | "metaKey" | "ctrlKe
   if (ev.key !== "Tab" || ev.shiftKey || ev.metaKey || ev.ctrlKey || ev.altKey || !onPipHome || stops.length < 2) return null;
   return active !== null && stops[stops.length - 1] === active ? stops[0] : null;
 }
+
+/** The regions F6 steps through in the workspace layout, in the order they sit on screen: the main area, the peek over it, Pip's pane. */
+export type WorkspaceRegion = "main" | "peek" | "pip";
+
+const REGION_ORDER: readonly WorkspaceRegion[] = ["main", "peek", "pip"];
+
+/**
+ * Where F6 (`by` 1) or Shift+F6 (-1) goes from `current` among the regions `present` on screen, wrapping round, as Pip
+ * home's columns do. Outside Pip home it works from Pip's composer too, which is how the keyboard leaves it.
+ */
+export function nextRegion(present: readonly WorkspaceRegion[], current: WorkspaceRegion, by: 1 | -1): WorkspaceRegion {
+  const shown = REGION_ORDER.filter((r) => r === current || present.includes(r));
+  const at = shown.indexOf(current);
+  return shown[(at + by + shown.length) % shown.length];
+}
+
+/** F6 forward, Shift+F6 back, and nothing for any other key, in the workspace layout. */
+export function regionStep(ev: Pick<PipHomeKeyEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "target">): 1 | -1 | 0 {
+  if (ev.key !== "F6" || ev.metaKey || ev.ctrlKey || ev.altKey) return 0;
+  if (isTypingTarget(ev.target) && (ev.target as { id?: unknown }).id !== PIP_INPUT_ID) return 0;
+  return ev.shiftKey ? -1 : 1;
+}
