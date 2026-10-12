@@ -275,6 +275,12 @@ test("a review that still blocks after two fix rounds comes to the person with t
   await expect(draft.getByRole("button", { name: "Post review" })).toBeFocused();
   expect(await githubWrites(page)).toEqual([]);
   await expect(escalationItem(page)).toHaveCount(1);
+  // As on the rail's card, the choices wait while the draft is open and say why; discarding it brings them back.
+  await expect(card.locator("[data-escalation-draft-open]")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Run another fix round" })).toBeDisabled();
+  await draft.getByRole("button", { name: "Discard" }).click();
+  await expect(card.locator("[data-escalation-draft-open]")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Run another fix round" })).toBeEnabled();
 
   // Run another fix round: the person's, past the cap, recorded as theirs; the item goes.
   const passes = (await mockRuns(page)).find((r) => r.id === build)!.passes;

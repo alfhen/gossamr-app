@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, githubWrites, mockRuns, needsYouTray, openApp, openPipHome, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipHome, pipPane, reviewDrafts, setBudget, startWorkstream, surfacePullRequests, workstreamEvents } from "./support/app";
+import { advanceRuns, askPip, expandAllNeeds, needOfKind, needsPane, githubWrites, mockRuns, openApp, openPipHome, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipPane, reviewDrafts, setBudget, startWorkstream, surfacePullRequests, workstreamEvents } from "./support/app";
 
 // Post the review as is, on an escalation (a review that still blocks after the automatic fix rounds): while its draft is
 // open the card says why its choices wait; posting the draft resolves the escalation; discarding it brings the choices back.
@@ -86,8 +86,8 @@ async function buildAndReview(page: Page, build: string, after: string | null) {
 }
 
 const lines = async (page: Page, action: string) => (await workstreamEvents(page)).filter((e) => e.action === action);
-const escalationItem = (page: Page) => needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · review still blocks after 2 fix rounds/ });
-const escalationCard = (page: Page) => pipHome(page).getByRole("group", { name: "Review still blocks" });
+const escalationItem = (page: Page) => needOfKind(page, "escalation");
+const escalationCard = (page: Page) => needsPane(page).getByRole("group", { name: "Review still blocks" });
 const REASON = "Review draft open: post it from the draft";
 
 /** A review that still blocks after two fix rounds: its card on Pip home, and the review draft it offers. */
@@ -101,6 +101,7 @@ async function escalated(page: Page) {
   }
   await expect.poll(async () => (await lines(page, "fix_rounds_exhausted")).map((e) => e.runId)).toEqual([review]);
   await openPipHome(page);
+  await expandAllNeeds(page);
   await expect(escalationItem(page)).toHaveCount(1);
   await escalationItem(page).click();
   const [draft] = await pendingReviewDrafts(page);
@@ -114,7 +115,7 @@ test("Post the review as is says why it waits while the draft is open, and the c
   await expect(card.getByText(REASON)).toHaveCount(0);
 
   await card.getByRole("button", { name: "Post the review as is" }).click();
-  const open = peekSheet(page).locator(`article[data-draft="${draft.id}"]`);
+  const open = needsPane(page).locator(`article[data-draft="${draft.id}"]`);
   await expect(open).toBeVisible();
   // Nothing is posted by choosing it, and the card says why its buttons wait, in words a screen reader gets too.
   expect(await githubWrites(page)).toEqual([]);
@@ -139,7 +140,7 @@ test("Post the review as is says why it waits while the draft is open, and the c
 test("discarding the open review draft brings the card's choices back", async ({ page }) => {
   const { review, draft, card } = await escalated(page);
   await card.getByRole("button", { name: "Post the review as is" }).click();
-  const open = peekSheet(page).locator(`article[data-draft="${draft.id}"]`);
+  const open = needsPane(page).locator(`article[data-draft="${draft.id}"]`);
   await expect(open).toBeVisible();
   await expect(card.locator("[data-escalation-draft-open]")).toContainText(REASON);
   await expect(card.getByRole("button", { name: "Run another fix round" })).toBeDisabled();

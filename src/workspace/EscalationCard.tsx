@@ -41,6 +41,9 @@ export function draftOpen(escalation: Escalation, opened: Readonly<Record<string
   return selected !== null && selected === (target ? itemKey(target) : draftKey(id)) ? id : null;
 }
 
+/** Whether the choices wait on Pip home's decision pane: Post the review as is was pressed and its draft is still pending. */
+export const postingReview = (posted: boolean, draft: Pick<Proposal, "state"> | undefined) => posted && draft?.state.type === "pending";
+
 /** The confirmation once the person chose, in the words the card shows. */
 export const fixRoundSent = (build: string) => `Fix round sent to ${build || "the build"}.`;
 export const TAKEN_OVER = "Over to you: this workstream is on Advise now.";

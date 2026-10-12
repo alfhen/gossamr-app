@@ -13,9 +13,9 @@ import { useToasts } from "./toasts";
 import { NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
 import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
-import { DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent } from "./EscalationCard";
+import { DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
 import { ESCALATION_GONE } from "../backend/mockWorkstreams";
-import type { Escalation } from "../types";
+import type { Escalation, Proposal } from "../types";
 import type { WatchState } from "../types";
 import type { StepChip } from "./pipHomeLogic";
 import { NO_PULL_VIEW, autoNote, pullViewOrGithub } from "./StepRail";
@@ -201,6 +201,19 @@ describe("a review that still blocks after the fix rounds", () => {
   it("can't post a review that has no draft waiting, and waits while a choice is on its way", () => {
     expect(buttons(card({ ...escalation, reviewDraft: null }))[2]).toEqual({ text: "Post the review as is", disabled: true, title: NO_REVIEW_DRAFT });
     expect(buttons(card(escalation, true)).every((b) => b.disabled)).toBe(true);
+  });
+
+  it("on Pip home's decision pane, holds the choices once Post the review as is was pressed, until the draft is posted or goes", () => {
+    const pending = { state: { type: "pending" } } as Proposal;
+    expect(postingReview(false, pending)).toBe(false);
+    expect(postingReview(true, pending)).toBe(true);
+    expect(postingReview(true, { state: { type: "applied" } } as Proposal)).toBe(false);
+    expect(postingReview(true, { state: { type: "skipped" } } as Proposal)).toBe(false);
+    expect(postingReview(true, undefined)).toBe(false);
+    // Held, the card shows the marker and 'Run another fix round' is disabled.
+    const html = renderToStaticMarkup(<EscalationCardView escalation={escalation} busy={false} drafting={postingReview(true, pending)} onFixRound={vi.fn()} onTakeOver={vi.fn()} onPost={vi.fn()} />);
+    expect(html).toContain("data-escalation-draft-open");
+    expect(buttons(html).find((b) => b.text === "Run another fix round")?.disabled).toBe(true);
   });
 
   it("says why the choices wait while the review draft is open, and describes it to a screen reader", () => {
