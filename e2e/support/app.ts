@@ -405,6 +405,18 @@ export async function homeSettled(page: Page) {
   await expect(pipHome(page).getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
 }
 
+/**
+ * Waits until Pip has finished answering in the workspace's Pip pane: the sample Pip has nothing running or waiting
+ * anywhere, a wake a run's finish queued included, and the pane shows every turn ended. The Stop button alone is not
+ * the condition: it is gone between turns that follow one another, and it stays while a wake that a person's message
+ * set aside is answered again behind that message, which takes a turn after a turn.
+ */
+export async function paneSettled(page: Page) {
+  await expect.poll(() => pipIdle(page), { message: "the sample Pip has no turn running or waiting" }).toBe(true);
+  await expect(pipPane(page).locator('[data-turn-status="running"], [data-turn-status="queued"]')).toHaveCount(0);
+  await expect(pipPane(page).getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+}
+
 /** Pip's wake turns in Pip home's conversation, the ones nobody asked. */
 export const homeWakes = (page: Page) => pipHome(page).getByRole("region", { name: "Conversation" }).locator('[data-turn-kind="wake"]');
 
