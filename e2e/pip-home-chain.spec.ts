@@ -72,7 +72,7 @@ test("an investigation is reviewed and started in place on Pip home: the exact p
   await expect(runCards(page)).toHaveCount(1);
   const waiting = needOfKind(page, "runStart");
   await expect(waiting).toHaveCount(1);
-  await expect(waiting).toContainText("drafted a Investigate agent for CA-401");
+  await expect(waiting).toContainText("drafted an Investigate agent for CA-401");
   // The step rail has it under Investigate too.
   await expect(stepChip(page, "investigate").locator("[data-step-needs-you]")).toHaveText("1 needs you");
 

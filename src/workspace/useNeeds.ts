@@ -10,6 +10,12 @@ import { useWorkstreams } from "./workstreamsStore";
  * When each held open workstream was last held, read from its audit once per hold, so a hold ranks in the list by when it
  * happened rather than by when the workstream opened. Only reads.
  */
+let lastRead: Record<string, string> = {};
+
+/** The hold times last read, shared so Pip is told the same order and top need as the list shows. */
+export const lastReadHeldTimes = () => lastRead;
+export const setLastReadHeldTimes = (times: Record<string, string>) => void (lastRead = times);
+
 function useHeldTimes(): Record<string, string> {
   const backend = useWorkstreams((s) => s.backend);
   const holds = useWorkstreams((s) =>
@@ -24,7 +30,10 @@ function useHeldTimes(): Record<string, string> {
     let live = true;
     const ids = holds.split("\t").map((h) => h.split("\n")[0]);
     void Promise.all(ids.map((id) => backend.workstreamsEvents(id).then((events) => [id, lastHeldAt(events)] as const, () => [id, null] as const))).then((read) => {
-      if (live) setTimes(Object.fromEntries(read.filter((r): r is readonly [string, string] => r[1] !== null)));
+      if (!live) return;
+      const next = Object.fromEntries(read.filter((r): r is readonly [string, string] => r[1] !== null));
+      setLastReadHeldTimes(next);
+      setTimes(next);
     });
     return () => {
       live = false;
@@ -60,7 +69,7 @@ function titlesOf(items: ReturnType<typeof useWorkspace.getState>["items"], peek
 export function currentNeeds(): Need[] {
   const ws = useWorkspace.getState();
   const runs = useRuns.getState();
-  return buildNeeds({ workstreams: useWorkstreams.getState().list, runs: runs.runs, proposals: Object.values(ws.proposals), dismissed: runs.dismissed, titleOf: titlesOf(ws.items, ws.peeked), now: Date.now() });
+  return buildNeeds({ workstreams: useWorkstreams.getState().list, runs: runs.runs, proposals: Object.values(ws.proposals), dismissed: runs.dismissed, heldAt: lastRead, titleOf: titlesOf(ws.items, ws.peeked), now: Date.now() });
 }
 
 /** "1 thing needs you", "3 things need you": the one count, in the words the rail badge and the launcher say it. */

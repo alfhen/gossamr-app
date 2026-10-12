@@ -494,3 +494,22 @@ describe("needAfter", () => {
     expect(needAfter(before, "a", [])).toBeNull();
   });
 });
+
+describe("review nits", () => {
+  const why = (kind: RunKind) => needs(input({ workstreams: [view("ws-1", "CA-401")], proposals: [draft("d", startRun("CA-401", kind, "ws-1"), 5)] })).find((n) => n.kind === "runStart")?.why;
+
+  it("says \"an\" before a kind that starts with a vowel", () => {
+    expect(why("investigate")).toContain("drafted an Investigate agent for CA-401");
+    expect(why("build")).toContain("drafted a Build agent for CA-401");
+  });
+
+  it("ranks a failed run by when it ended, not by its last progress", () => {
+    const list = needs(
+      input({
+        workstreams: [view("ws-1", "CA-401")],
+        runs: [run("r-a", "build", "failed", { lastProgressAt: iso(1), endedAt: iso(50) }), run("r-b", "build", "failed", { lastProgressAt: iso(60), endedAt: iso(10) })],
+      }),
+    );
+    expect(list.map((n) => n.key)).toEqual(["run:r-a", "run:r-b"]);
+  });
+});

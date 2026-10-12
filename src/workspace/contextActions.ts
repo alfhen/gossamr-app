@@ -6,7 +6,7 @@ import { useWorkspace } from "../workspaceStore";
 import { contextCommands, batchCommands, type ContextDeps, type Subject } from "./contextCommands";
 import type { Command } from "./commands";
 import { draftDecisions, openLiveDraft } from "./DraftPreview";
-import { keyPlan, openInWorkstream, openNeed, setPaneIntent } from "./needsActions";
+import { keyPlan, openInWorkstream, openNeed } from "./needsActions";
 import { usePipHome } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -55,8 +55,7 @@ export const contextDeps: ContextDeps = {
       case "dismiss":
         return go(plan("dismiss"));
       case "edit":
-        setPaneIntent("edit");
-        return openNeed(need);
+        return openNeed(need, { edit: true });
       case "answer":
       case "open":
         return openNeed(need);

@@ -279,7 +279,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
         group: "approve",
         kind: "runStart",
         title: `Start ${kind}`,
-        why: `${maker} drafted a ${kind} agent${key ? ` for ${key}` : ""}; it starts only when you approve it.`,
+        why: `${maker} drafted ${/^[aeiou]/i.test(kind) ? "an" : "a"} ${kind} agent${key ? ` for ${key}` : ""}; it starts only when you approve it.`,
         ifYouWait: "Nothing starts until you approve it.",
         primary: action("open", "Review and start"),
         secondary: [action("dismiss", "Skip")],
@@ -329,7 +329,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
   for (const run of runs) {
     const ws = runWorkstream(open, run);
     const name = runName(run, ws);
-    const at = run.lastProgressAt ?? run.endedAt ?? run.queuedAt;
+    const at = run.endedAt ?? run.lastProgressAt;
     const key = run.item?.key;
     const base = { key: `run:${run.id}`, runId: run.id, at, target: { type: "run", id: run.id } as const, ...where(ws?.workstream.id ?? null, key) };
     const stays = base.ticketKey ? `nothing else in ${base.ticketKey} moves` : "nothing else it blocks moves";

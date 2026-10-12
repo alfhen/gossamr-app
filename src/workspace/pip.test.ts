@@ -398,10 +398,10 @@ describe("askPip", () => {
 });
 
 describe("Esc on Pip home", () => {
-  const none = { sheetOpen: false, peekOpen: false, paletteOpen: false, popoverOpen: false, lightbox: false, handled: false, running: true };
+  const none = { sheetOpen: false, peekOpen: false, paletteOpen: false, popoverOpen: false, lightbox: false, paneOpen: false, handled: false, running: true };
 
   it("leaves Esc to an open sheet, the peek, the palette, a popover, the lightbox or a confirmation first", () => {
-    for (const open of ["sheetOpen", "peekOpen", "paletteOpen", "popoverOpen", "lightbox", "handled"] as const) expect(escapeCancelsTurn({ ...none, [open]: true })).toBe(false);
+    for (const open of ["sheetOpen", "peekOpen", "paletteOpen", "popoverOpen", "lightbox", "paneOpen", "handled"] as const) expect(escapeCancelsTurn({ ...none, [open]: true })).toBe(false);
   });
 
   it("then cancels Pip's turn, and does nothing with no turn to cancel", () => {
