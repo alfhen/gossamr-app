@@ -7,7 +7,7 @@ import { pipHomeHints } from "./footerHints";
 import { HINTS, keyHint } from "./keyMap";
 import { TimelineFilterBar } from "./TimelineFilterBar";
 import { timelineDrafts, timelineRuns } from "./Timeline";
-import { stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
+import { followsEnd, nearBottom, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
 
 const press = (key: string, mods: { shiftKey?: boolean; metaKey?: boolean } = {}) => ({ key, ...mods });
 
@@ -118,5 +118,23 @@ describe("what a conversation's timeline holds", () => {
     expect(timelineDrafts(all, true, new Set())).toEqual(all);
     expect(timelineDrafts(all, false, new Set(["q1"])).map((x) => x.id)).toEqual(["loose", "mine", "waiting"]);
     expect(timelineDrafts(all, false, new Set()).map((x) => x.id)).toEqual(["loose", "waiting"]);
+  });
+});
+
+describe("following the timeline's end", () => {
+  const el = (scrollTop: number) => ({ scrollTop, scrollHeight: 1000, clientHeight: 400 });
+  it("counts within 24px of the end as at it", () => {
+    expect(nearBottom(el(600))).toBe(true);
+    expect(nearBottom(el(580))).toBe(true);
+    expect(nearBottom(el(500))).toBe(false);
+  });
+  it("follows while at the end, keeps a reader's place, and follows the person's own send", () => {
+    const user = { kind: "user" as const };
+    const wake = { kind: "wake" as const };
+    expect(followsEnd(true, 2, [user, user])).toBe(true);
+    expect(followsEnd(false, 2, [user, user])).toBe(false);
+    expect(followsEnd(false, 2, [user, user, wake])).toBe(false);
+    expect(followsEnd(false, 2, [user, user, {}])).toBe(true);
+    expect(followsEnd(false, 0, [user])).toBe(true);
   });
 });

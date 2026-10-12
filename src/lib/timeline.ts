@@ -296,7 +296,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   // The audit: worded as the Activity feed words it, less what a run's or a draft's own entry already tells.
   const byDraft = new Map(drafts.map((p) => [p.id, p]));
   const label = (id: string | null) => (id ? (labels.get(id) ?? `run ${id.length <= 12 ? id : id.slice(0, 8)}`) : "a run");
-  const lastHeld = [...events].reverse().find((e) => e.action === "held" || e.action === "resumed");
+  const lastHeld = [...events].reverse().find((e) => e.action === "held" || e.action === "resumed" || (e.action === "undone" && e.detail === "held"));
   const holdNeed = needs.find((n) => n.kind === "hold");
   const escalationNeed = needs.find((n) => n.kind === "escalation");
   let rounds = 0;
@@ -308,7 +308,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     const text = (e.proposalId ? draftLine(e, who(e.actor), draft) : null) ?? eventText(e, label, rounds);
     if (!text) continue;
     // A line about something still waiting on the person opens its need: the hold that still holds, the escalation still open.
-    const need = e.action === "held" && e === lastHeld && holdNeed ? holdNeed : e.action === "fix_rounds_exhausted" && escalationNeed ? escalationNeed : e.runId ? needOfRun.get(e.runId) : undefined;
+    const need = (e.action === "held" || (e.action === "undone" && e.detail === "held")) && e === lastHeld && holdNeed ? holdNeed : e.action === "fix_rounds_exhausted" && escalationNeed ? escalationNeed : e.runId ? needOfRun.get(e.runId) : undefined;
     const target: TimelineTarget = need ? { type: "need", key: need.key } : e.proposalId && draft ? { type: "draft", id: e.proposalId } : e.runId && runs.some((r) => r.id === e.runId) ? { type: "run", id: e.runId } : null;
     // The same line again and again (a rule switched back and forth) is one entry that says how many.
     if (previous && previous.text.replace(/ \(\d+ times\)$/, "") === text && previous.actor === e.actor && previous.action === e.action && !need) {

@@ -188,3 +188,22 @@ test("a run waiting on you is a timeline entry that opens its need in Needs you,
   await entry.locator("[data-timeline-need]").click();
   await expect(needsPane(page)).toContainText("git push");
 });
+
+test("a new turn keeps the place of someone reading older entries, and follows someone at the end", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 520 });
+  const r1 = await investigating(page);
+  const body = timeline(page);
+  const metrics = () => body.evaluate((el) => ({ top: el.scrollTop, max: el.scrollHeight - el.clientHeight }));
+  await expect.poll(async () => (await metrics()).max).toBeGreaterThan(40);
+  // At the end, the wake that run's finish brings follows the person down.
+  await expect.poll(async () => { const m = await metrics(); return m.max - m.top; }).toBeLessThanOrEqual(24);
+  // Scrolled up to older entries, it doesn't.
+  await body.evaluate((el) => el.scrollTo({ top: 0 }));
+  await expect.poll(async () => (await metrics()).top).toBe(0);
+  await finishOnHome(page, r1.id);
+  expect((await metrics()).top).toBe(0);
+  // Asking Pip lands at the end, wherever they were reading.
+  await askPip(page, "what next?");
+  await homeSettled(page);
+  await expect.poll(async () => { const m = await metrics(); return m.max - m.top; }).toBeLessThanOrEqual(24);
+});
