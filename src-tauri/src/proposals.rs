@@ -482,11 +482,12 @@ fn comment_run_id(p: &Proposal) -> Option<&str> {
 /// of the same kind (`kind_of` says the kind of a run by its id; a run it can't find supersedes nothing). A Review's
 /// comment never retires an Investigate's, whose findings the person has not read yet. The person's edit keeps it;
 /// anything else is replaced. `None` when it is another ticket, workstream or kind, a plan's comment, or not pending
-/// (one being posted, or posted, is never touched).
+/// (one being posted, or posted, is never touched), or when its last post failed (`error` is set): it is back in
+/// Pending for the person to retry, and a newer comment doesn't take it away.
 pub fn run_comment_supersession(older: &Proposal, newer: &Proposal, kind_of: impl Fn(&str) -> Option<crate::domain::RunKind>) -> Option<std::result::Result<(), &'static str>> {
     let ws = newer.workstream()?;
     let same = is_run_comment(older) && is_run_comment(newer) && older.workstream() == Some(ws) && older.target() == newer.target();
-    if !same || older.id == newer.id || older.state != ProposalState::Pending {
+    if !same || older.id == newer.id || older.state != ProposalState::Pending || older.error.is_some() {
         return None;
     }
     let (on, to) = (kind_of(comment_run_id(older)?)?, kind_of(comment_run_id(newer)?)?);
@@ -924,6 +925,23 @@ mod tests {
         assert_eq!(verdict(&[("run-a", Investigate), ("run-b", Review)]), None, "another kind");
         assert_eq!(verdict(&[("run-b", Review)]), None, "the older run is gone");
         assert_eq!(verdict(&[("run-a", Review)]), None, "the newer run is gone");
+    }
+
+    #[test]
+    fn a_run_comment_whose_post_failed_is_kept() {
+        let db = Db::in_memory().unwrap();
+        let comment = |id: &str, run: &str| {
+            let mut p = made(&db, comment_draft("1"));
+            p.id = id.into();
+            p.created_by = CreatedBy::Agent;
+            p.origin = Origin::Run { run_id: run.into(), short_id: None, workstream: Some("w".into()) };
+            p
+        };
+        let (mut older, newer) = (comment("a", "run-a"), comment("b", "run-b"));
+        let kind_of = |_: &str| Some(crate::domain::RunKind::Review);
+        assert_eq!(run_comment_supersession(&older, &newer, kind_of), Some(Ok(())));
+        older.error = Some("Jira is down".into());
+        assert_eq!(run_comment_supersession(&older, &newer, kind_of), None);
     }
 
     fn subtasks_draft(summaries: &[&str]) -> Draft {
