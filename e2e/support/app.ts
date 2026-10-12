@@ -119,6 +119,9 @@ interface Handle {
   scriptNext(kind: string, script: Script): void;
   askRun(id: string, question: string): void;
   askPermission(id: string, needs: string): void;
+  blockRun(id: string): void;
+  loseRun(id: string): void;
+  stopRunAtLimit(id: string): void;
   attached(): string[];
   jiraWrites(): { proposalId: string; type: string; key: string | null }[];
   reviewDrafts(): ReviewDraftRow[];
@@ -203,6 +206,39 @@ export const askPermission = (page: Page, id: string, needs: string) =>
       mock.askPermission(id, needs);
     },
     { id, needs, missing: NO_MOCK },
+  );
+
+/** Has working run `id` be blocked on Claude's sign-in, as a run is when Claude reports it (`MockRuns.block`). */
+export const blockRun = (page: Page, id: string) =>
+  page.evaluate(
+    ({ id, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.blockRun(id);
+    },
+    { id, missing: NO_MOCK },
+  );
+
+/** Has run `id` go unclear, as a run does when Claude reports a state Gossamr can't read (`MockRuns.lose`). */
+export const loseRun = (page: Page, id: string) =>
+  page.evaluate(
+    ({ id, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.loseRun(id);
+    },
+    { id, missing: NO_MOCK },
+  );
+
+/** Has Gossamr stop run `id` at its limit, as it does a run that passes its time limit (`MockRuns.stopAtLimit`). */
+export const stopRunAtLimit = (page: Page, id: string) =>
+  page.evaluate(
+    ({ id, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.stopRunAtLimit(id);
+    },
+    { id, missing: NO_MOCK },
   );
 
 /** The run ids Terminal was opened on, oldest first. */
@@ -369,8 +405,44 @@ export const workstreamRow = (page: Page, key: string) =>
     .getByRole("listbox", { name: "Workstreams" })
     .getByRole("option", { name: key === "General" ? /^General/ : new RegExp(`^${key}\\b`) });
 
-/** Pip home's Needs you tray, at the bottom of its workstream list. */
+/** Pip home's Needs you list, at the bottom of its workstream list. */
 export const needsYouTray = (page: Page) => pipHome(page).getByRole("navigation", { name: "Workstreams" }).getByRole("region", { name: "Needs you" });
+
+/** The Needs you list's one count, as its pill says it. */
+export const needsYouCount = (page: Page) => needsYouTray(page).locator("[data-needs-you-count]");
+
+/** The row of the workstream on ticket `key` in the Needs you list, or General's (`key` "General"). */
+export const needsYouRow = (page: Page, key: string) =>
+  key === "General" ? needsYouTray(page).locator('[data-needs-you-row="general"]') : needsYouTray(page).locator("[data-needs-you-row]").filter({ has: page.locator("[data-needs-you-key]", { hasText: key }) });
+
+/** A need's own row in the Needs you list, by the words it reads; its group has to be expanded first (`expandNeedsYou`). */
+export const needRow = (page: Page, name: string | RegExp) => needsYouTray(page).locator("[data-needs-you-need]").filter({ hasText: name });
+
+/**
+ * The Needs you row whose need is of `kind` ("permission", "question", "failure", "escalation", "hold", "draft", ...): a
+ * group's row when it leads the group, else its own row once the group is expanded (`expandAllNeeds`). The first, when
+ * both show it.
+ */
+export const needOfKind = (page: Page, kind: string) =>
+  needsYouTray(page)
+    .locator(`[data-needs-you-group][data-kind="${kind}"], [data-needs-you-need][data-kind="${kind}"]`)
+    .first();
+
+/** Expands every group in the Needs you list, so each need in it is a row of its own. */
+export async function expandAllNeeds(page: Page) {
+  const folded = needsYouTray(page).locator('[data-needs-you-more][aria-expanded="false"]');
+  while (await folded.count()) await folded.first().click();
+}
+
+/** Expands the group of workstream `key` (or General) in the Needs you list, so each need in it is a row of its own. */
+export async function expandNeedsYou(page: Page, key = "General") {
+  const more = needsYouRow(page, key).locator("[data-needs-you-more]");
+  if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+  await expect(more).toHaveAttribute("aria-expanded", "true");
+}
+
+/** The decision open in Pip home's middle column. */
+export const needsPane = (page: Page) => pipHome(page).getByRole("region", { name: "Decision" });
 
 /** Pip home's conversation column, where its cards are. */
 export const homeConversationRegion = (page: Page) => pipHome(page).getByRole("region", { name: "Conversation" });

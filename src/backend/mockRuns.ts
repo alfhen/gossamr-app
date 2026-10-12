@@ -816,6 +816,24 @@ export class MockRuns {
     return next;
   }
 
+  /** Has a working run be blocked on Claude's sign-in, as `track` does when Claude reports it, for tests. */
+  block(id: string): Run {
+    if (this.get(id)?.state !== "working") throw new Error("only a working run can be blocked on a sign-in");
+    const next = this.update(id, { state: "systemBlocked", needs: null, lastDetail: "Claude needs you to sign in", lastProgressAt: this.now() });
+    this.changed();
+    return next;
+  }
+
+  /** Has Gossamr stop a working run for passing its time limit, as the limit watcher does: it can be resumed, for tests. */
+  stopAtLimit(id: string): Run {
+    const run = this.get(id);
+    if (!run || !STOPPABLE.includes(run.state)) throw new Error("only a run at work can be stopped at its limit");
+    const next = this.update(id, { state: "stopped", stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit", endedAt: this.now() });
+    this.launchWaiting();
+    this.changed();
+    return next;
+  }
+
   /** Has an unclear run show as working again, for tests. */
   regain(id: string): Run {
     if (this.get(id)?.state !== "unknown") throw new Error("only an unclear run can be found again");

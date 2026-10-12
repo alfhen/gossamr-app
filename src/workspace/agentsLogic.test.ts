@@ -6,10 +6,12 @@ import {
   planOpenQuestions,
   ALL,
   NO_FILTERS,
+  LANE_IDS,
   QUIET_MINUTES,
   applyFilters,
-  agentsWaitingOnYou,
-  attentionCount,
+  needsAttention,
+  stoppedAtLimit,
+  yourAgents,
   filterOptions,
   formatTokens,
   groupRuns,
@@ -53,9 +55,10 @@ describe("lanes", () => {
     queued: "running",
     launching: "running",
     working: "running",
-    needsAnswer: "needs",
-    needsPermission: "needs",
-    systemBlocked: "needs",
+    // Waiting on the person is stuck; there is no Needs you lane any more, the list on Pip home is where it is decided.
+    needsAnswer: "bad",
+    needsPermission: "bad",
+    systemBlocked: "bad",
     done: "done",
     failed: "bad",
     unknown: "bad",
@@ -78,7 +81,7 @@ describe("lanes", () => {
     for (const state of ["queued", "launching", "needsAnswer", "needsPermission", "done", "failed", "stopped"] as const) {
       expect(quietMinutes(run(state, { lastProgressAt: iso(600) }), NOW)).toBeNull();
     }
-    expect(laneOf(run("needsAnswer", { lastProgressAt: iso(600) }), NOW)).toBe("needs");
+    expect(laneOf(run("needsAnswer", { lastProgressAt: iso(600) }), NOW)).toBe("bad");
   });
 
   it("says quiet in minutes, then in hours, then in days, and never stuck", () => {
@@ -91,12 +94,12 @@ describe("lanes", () => {
   it("puts the eight scripted runs in the lanes the prototype shows", () => {
     const groups = groupRuns(sample(), NO_FILTERS, NOW);
     expect(groups.map((g) => [g.lane, g.runs.length])).toEqual([
-      ["needs", 2],
       ["running", 2],
       ["done", 2],
-      ["bad", 2],
+      ["bad", 4],
     ]);
-    expect(groups.find((g) => g.lane === "bad")!.runs.map((r) => r.state).sort()).toEqual(["failed", "working"]);
+    expect(groups.find((g) => g.lane === "bad")!.runs.map((r) => r.state).sort()).toEqual(["failed", "needsAnswer", "needsPermission", "working"]);
+    expect(LANE_IDS).not.toContain("needs");
   });
 });
 
@@ -120,48 +123,35 @@ describe("how a state looks", () => {
   });
 });
 
-describe("the badge", () => {
-  const seen = new Set<string>();
+describe("the runs that wait on the person", () => {
+  const none = new Set<string>();
 
-  it("counts what needs the person and failed runs not yet seen", () => {
-    const runs = [run("needsAnswer", { id: "a" }), run("needsPermission", { id: "b" }), run("systemBlocked", { id: "c" }), run("failed", { id: "d" })];
-    expect(attentionCount(runs, seen)).toBe(4);
-    expect(attentionCount(runs, new Set(["d"]))).toBe(3);
+  it("are the runs asking, blocked or failed and not dismissed, which is how Your agents counts them", () => {
+    const runs = [run("needsAnswer", { id: "a" }), run("needsPermission", { id: "b" }), run("systemBlocked", { id: "c" }), run("failed", { id: "d" }), run("working", { id: "e" })];
+    expect(runs.filter((r) => needsAttention(r, none)).map((r) => r.id)).toEqual(["a", "b", "c", "d"]);
+    expect(runs.filter((r) => needsAttention(r, new Set(["d"]))).map((r) => r.id)).toEqual(["a", "b", "c"]);
+    expect(yourAgents(runs, none).map((r) => r.id)).toEqual(["a", "b", "c", "d", "e"]);
+    expect(yourAgents(runs, new Set(["d"])).map((r) => r.id)).toEqual(["a", "b", "c", "e"]);
+  });
+
+  it("leave out queued, done and stopped runs", () => {
+    const runs = [run("queued", { id: "c" }), run("done", { id: "e" }), run("stopped", { id: "f" }), run("unknown", { id: "g" })];
+    expect(runs.filter((r) => needsAttention(r, none))).toEqual([]);
   });
 
   it("counts a run stopped at its limit, which only the person resumes, and nothing else that stopped", () => {
     const limit = run("stopped", { id: "l", stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" });
-    expect(laneOf(limit, NOW)).toBe("needs");
+    expect(stoppedAtLimit(limit)).toBe(true);
+    expect(stoppedAtLimit(run("stopped", { id: "s" }))).toBe(false);
+    expect(laneOf(limit, NOW)).toBe("bad");
     expect(laneOf(run("stopped", { id: "s" }), NOW)).toBe("earlier");
     expect(laneOf(run("stopped", { id: "s", stoppedByLimit: false }), NOW)).toBe("earlier");
-    expect(attentionCount([limit], seen)).toBe(1);
-    expect(attentionCount([limit, run("stopped", { id: "s" })], seen)).toBe(1);
-    expect(agentsWaitingOnYou([limit], seen)).toEqual([limit]);
-    // Looking at it doesn't clear it, as it does for a failed run: it waits until it is resumed.
-    expect(attentionCount([limit], new Set(["l"]))).toBe(1);
-    expect(attentionCount([{ ...limit, state: "working", stoppedByLimit: false }], seen)).toBe(0);
-    const lane = groupRuns([limit, run("failed", { id: "f" })], NO_FILTERS, NOW).find((g) => g.lane === "needs");
-    expect(lane?.runs.map((r) => r.id)).toEqual(["l"]);
-  });
-
-  it("leaves out working, quiet, queued, done, stopped and unknown runs", () => {
-    const runs = [
-      run("working", { id: "a" }),
-      run("working", { id: "b", lastProgressAt: iso(120) }),
-      run("queued", { id: "c" }),
-      run("launching", { id: "d" }),
-      run("done", { id: "e" }),
-      run("stopped", { id: "f" }),
-      run("unknown", { id: "g" }),
-    ];
-    expect(attentionCount(runs, seen)).toBe(0);
-  });
-
-  it("is two for the scripted runs once the failed one has been seen", () => {
-    const runs = sample();
-    const failed = runs.find((r) => r.state === "failed")!;
-    expect(attentionCount(runs, seen)).toBe(3);
-    expect(attentionCount(runs, new Set([failed.id]))).toBe(2);
+    expect(needsAttention(limit, none)).toBe(true);
+    expect(needsAttention(run("stopped", { id: "s" }), none)).toBe(false);
+    // Dismissing doesn't change what Your agents counts: it waits until it is resumed.
+    expect(needsAttention(limit, new Set(["l"]))).toBe(true);
+    expect(needsAttention({ ...limit, state: "working", stoppedByLimit: false }, none)).toBe(false);
+    expect(yourAgents([limit], none)).toEqual([limit]);
   });
 });
 
@@ -198,10 +188,10 @@ describe("sorting", () => {
 describe("filters", () => {
   it("narrows by lane, repo and ticket, all of which must match", () => {
     const runs = sample();
-    expect(applyFilters(runs, { ...NO_FILTERS, lane: "needs" }, NOW)).toHaveLength(2);
+    expect(applyFilters(runs, { ...NO_FILTERS, lane: "bad" }, NOW)).toHaveLength(4);
     expect(applyFilters(runs, { ...NO_FILTERS, repo: "acme/payments" }, NOW).map((r) => r.item?.key)).toEqual(["SUP-12"]);
     expect(applyFilters(runs, { ...NO_FILTERS, ticket: "WEB-108" }, NOW)).toHaveLength(1);
-    expect(applyFilters(runs, { lane: "needs", repo: "acme/payments", ticket: ALL }, NOW)).toHaveLength(0);
+    expect(applyFilters(runs, { lane: "bad", repo: "acme/payments", ticket: ALL }, NOW)).toHaveLength(0);
   });
 
   it("filters by the lane a run is in now, so a quiet one is under Failed or stuck", () => {
@@ -223,13 +213,13 @@ describe("folding and walking", () => {
     expect(laneIsFolded("earlier", false, NO_FILTERS)).toBe(true);
     expect(laneIsFolded("earlier", true, NO_FILTERS)).toBe(false);
     expect(laneIsFolded("earlier", false, { ...NO_FILTERS, lane: "earlier" })).toBe(false);
-    expect(laneIsFolded("needs", false, NO_FILTERS)).toBe(false);
+    expect(laneIsFolded("bad", false, NO_FILTERS)).toBe(false);
   });
 
   it("walks the lanes in order and skips a folded one", () => {
     const groups = groupRuns(stopped, NO_FILTERS, NOW);
-    expect(navOrder(groups, false, NO_FILTERS)).toEqual(["n1", "w1"]);
-    expect(navOrder(groups, true, NO_FILTERS)).toEqual(["n1", "w1", "s1"]);
+    expect(navOrder(groups, false, NO_FILTERS)).toEqual(["w1", "n1"]);
+    expect(navOrder(groups, true, NO_FILTERS)).toEqual(["w1", "n1", "s1"]);
   });
 
   it("moves with j and k, stays at the ends, and starts at either end from nothing", () => {
@@ -279,14 +269,14 @@ describe("words on a card", () => {
 
 describe("the header", () => {
   it("sums up the runs", () => {
-    // Waiting on you counts the failed run not yet looked at too, as the Agents rail badge does; failed or stuck is the
-    // lane of that name card for card, the quiet run among them (N3).
-    expect(summaryLine(sample(), NOW)).toBe("3 waiting on you · 2 running · 2 ready to review · 2 failed or stuck (1 quiet)");
-    const failed = sample().find((r) => r.state === "failed")!;
-    expect(summaryLine(sample(), NOW, new Set([failed.id]))).toBe("2 waiting on you · 2 running · 2 ready to review · 2 failed or stuck (1 quiet)");
+    // "Need you" is Needs you's one count, the same the rail badge and the composer give; failed or stuck is the lane of
+    // that name card for card, the quiet run and the runs waiting on the person among them (N3).
+    expect(summaryLine(sample(), NOW)).toBe("2 running · 2 ready to review · 4 failed or stuck (1 quiet)");
+    expect(summaryLine(sample(), NOW, 5)).toBe("5 need you · 2 running · 2 ready to review · 4 failed or stuck (1 quiet)");
+    expect(summaryLine(sample(), NOW, 1)).toMatch(/^1 needs you · /);
     expect(summaryLine([], NOW)).toBe("Nothing running");
     expect(summaryLine([run("stopped")], NOW)).toBe("Nothing running");
-    expect(summaryLine([run("needsAnswer"), run("unknown")], NOW)).toBe("1 waiting on you · 1 failed or stuck");
+    expect(summaryLine([run("needsAnswer"), run("unknown")], NOW, 2)).toBe("2 need you · 2 failed or stuck");
   });
 
   it("offers Stop all only for runs it could stop", () => {
@@ -348,7 +338,7 @@ describe("grouping by workstream", () => {
   });
 
   it("leaves out a group the filters empty, and has no No workstream group when every run is in one", () => {
-    expect(groupRunsByWorkstream(runs, workstreams, { ...NO_FILTERS, lane: "needs" }, NOW).map((g) => g.id)).toEqual([null]);
+    expect(groupRunsByWorkstream(runs, workstreams, { ...NO_FILTERS, lane: "bad" }, NOW).map((g) => g.id)).toEqual([null]);
     expect(groupRunsByWorkstream(runs.slice(0, 3), workstreams, NO_FILTERS, NOW).map((g) => g.id)).toEqual(["ws-b", "ws-a"]);
     expect(groupRunsByWorkstream([], workstreams, NO_FILTERS, NOW)).toEqual([]);
   });
@@ -363,8 +353,8 @@ describe("grouping by workstream", () => {
     const stoppedInWs = inWs("stopped", "s2", "ws-b", 3);
     const all = [...runs, stoppedLoose, stoppedInWs];
     expect(navOrder(groupRunsByWorkstream(all, workstreams, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["s2", "b1", "a2", "a1", "loose2", "s1", "loose1"]);
-    expect(navOrder(groupRuns(all, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["loose1", "b1", "a2", "loose2", "a1"]);
-    expect(navOrder(groupRuns(all, NO_FILTERS, NOW), true, NO_FILTERS)).toEqual(["loose1", "b1", "a2", "loose2", "a1", "s1", "s2"]);
+    expect(navOrder(groupRuns(all, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["b1", "a2", "loose2", "a1", "loose1"]);
+    expect(navOrder(groupRuns(all, NO_FILTERS, NOW), true, NO_FILTERS)).toEqual(["b1", "a2", "loose2", "a1", "loose1", "s1", "s2"]);
   });
 });
 

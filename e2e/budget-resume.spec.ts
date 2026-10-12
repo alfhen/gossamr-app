@@ -3,7 +3,9 @@ import {
   advanceRuns,
   askPip,
   expectToast,
+  expandAllNeeds,
   mockRuns,
+  needsYouCount,
   needsYouTray,
   openApp,
   openPipHome,
@@ -22,7 +24,7 @@ const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" 
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 const railButton = (page: Page, name: RegExp) => page.getByRole("button", { name }).first();
-const limitItems = (page: Page) => needsYouTray(page).locator('[data-needs-you-item][data-kind="limit"]');
+const limitItems = (page: Page) => needsYouTray(page).locator('[data-needs-you-need][data-kind="stoppedAtLimit"]');
 
 /** Waits until Pip has finished answering in the pane. */
 async function settled(page: Page) {
@@ -70,7 +72,7 @@ test("a managed workstream says how many automatic steps are left up front, from
   await expect(left).toHaveText("5 of 6 automatic steps left");
 });
 
-test("a run stopped at its limit is in Needs you, on Pip home and in the Agents lane, and only Resume carries it on", async ({ page }) => {
+test("a run stopped at its limit is in Needs you, with its pill in the Agents lane, and only Resume carries it on", async ({ page }) => {
   await openApp(page, "runs=stuck");
   const stopped = (await mockRuns(page)).find((r) => r.state === "stopped" && r.key === "CA-277");
   expect(stopped, "the stuck sample has a plan run stopped at its limit").toBeTruthy();
@@ -78,22 +80,21 @@ test("a run stopped at its limit is in Needs you, on Pip home and in the Agents 
 
   // Pip home's Needs you counts it, as an item of its own.
   await openPipHome(page);
-  const tray = needsYouTray(page);
+  await expandAllNeeds(page);
   await expect(limitItems(page)).toHaveCount(1);
   await expect(limitItems(page)).toContainText("stopped at its limit");
-  await expect(tray.locator("[data-needs-you-count]")).toHaveText(String(await tray.locator("[data-needs-you-item]").count()));
+  const count = await needsYouCount(page).innerText();
 
-  // The Agents view counts it in its Needs you lane and header, which the rail badge agrees with.
+  // The Agents view lists it under Failed or stuck with an "In Needs you" pill, and its header says the same one count.
   await railButton(page, /^Agents/).click();
-  const lane = page.locator('[data-lane="needs"]');
+  const lane = page.locator('[data-lane="bad"]');
   const card = lane.locator(`article[data-run-id="${id}"]`);
   await expect(card).toBeVisible();
   await expect(card).toContainText("Stopped at limit");
+  await expect(card.locator("[data-in-needs-you]")).toBeVisible();
   const header = page.locator("main header").filter({ has: page.getByRole("heading", { name: "Agents" }) });
-  const waiting = await lane.locator("article[data-run-id]").count();
-  await expect(railButton(page, /^Agents/)).toHaveAccessibleName(new RegExp(`^Agents, \\d+ agent runs? waits? on you`));
-  await expect(header).toContainText("waiting on you");
-  expect(waiting).toBeGreaterThan(0);
+  await expect(railButton(page, /^Agents/)).toHaveAccessibleName("Agents");
+  await expect(header).toContainText(`${count} need you`);
 
   // Nothing resumes it by itself: still stopped after the sample's supervisor and Pip have had their turns.
   await advanceRuns(page, 3);
@@ -110,8 +111,11 @@ test("a run stopped at its limit is in Needs you, on Pip home and in the Agents 
 
   // It no longer waits on the person, on Pip home either.
   await openPipHome(page);
+  await expandAllNeeds(page);
   await expect(limitItems(page)).toHaveCount(0);
-  await expect(tray.locator("[data-needs-you-count]")).toHaveText(String(await tray.locator("[data-needs-you-item]").count()));
+  // The sample's other runs moved meanwhile, so the count is not compared to before: the one count is the rail's.
+  const after = await needsYouCount(page).innerText();
+  await expect(railButton(page, /^Pip home/)).toHaveAccessibleName(`Pip home, ${after} ${after === "1" ? "thing needs" : "things need"} you`);
 });
 
 test("the sheet of a run stopped at its limit has Resume too, and resuming from it does the same", async ({ page }) => {

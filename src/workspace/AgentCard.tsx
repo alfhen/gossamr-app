@@ -43,6 +43,24 @@ export interface AgentItemProps {
   /** A finished review's verdict; null when it gave none, absent while unread or for any other run. */
   review?: ReviewView | null;
   failure: FailureState;
+  /** Present while the run is one of the things in Needs you: pressing it opens that need on Pip home. */
+  onOpenNeed?(): void;
+}
+
+/** The pill on a run that is in Needs you; pressing it opens the need rather than the run. */
+export function InNeedsYou({ onOpen }: { onOpen(): void }) {
+  return (
+    <button
+      type="button"
+      data-in-needs-you
+      onClick={(ev) => (ev.stopPropagation(), onOpen())}
+      onKeyDown={(ev) => ev.key === "Enter" && ev.stopPropagation()}
+      title="This run is in Needs you on Pip home. Open it there."
+      className="inline-flex shrink-0 items-center rounded-full border border-ws-pip/50 bg-ws-pip-soft px-2 text-xs leading-[1.6] font-semibold whitespace-nowrap text-ws-pip hover:bg-ws-pip hover:text-ws-on-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+    >
+      In Needs you
+    </button>
+  );
 }
 
 /** A finished review's verdict in a chip: "Blocking · 2" or "Pass". */
@@ -135,7 +153,7 @@ export function ReadOnlyBadge({ run, compact = false }: { run: Run; compact?: bo
   );
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onResume, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onResume, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -166,6 +184,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
         {ticketLabel(run) && <span className="font-mono text-sm font-semibold text-ws-ink2">{ticketLabel(run)}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {review && <VerdictChip review={review} />}
+          {onOpenNeed && <InNeedsYou onOpen={onOpenNeed} />}
           <StateChip run={run} now={now} />
         </span>
       </div>

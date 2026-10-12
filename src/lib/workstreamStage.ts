@@ -1,4 +1,4 @@
-import type { ReviewVerdict, Run, RunKind, RunState, WorkstreamStage } from "../types";
+import type { ReviewVerdict, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 
 /** Mirrors `stage` and `run_labels` in src-tauri/src/domain/workstream.rs; src/lib/workstreamStage.fixtures.json holds cases both sides run. */
 
@@ -97,3 +97,14 @@ export const STAGE_LABEL: Record<WorkstreamStage, string> = {
   verify: "Verify",
   done: "Done",
 };
+
+/** The open workstream on ticket `key` (in connection `connectionId` when it is given). */
+export const ofItem = (list: readonly WorkstreamView[], key: string, connectionId?: string) =>
+  list.find((v) => v.workstream.itemKey === key && v.workstream.closedAt === null && (!connectionId || v.workstream.connectionId === connectionId)) ?? null;
+
+/** The open workstream `run` belongs to, or else the one open on its ticket. */
+export function runWorkstream(list: readonly WorkstreamView[], run: Run | null | undefined): WorkstreamView | null {
+  if (!run) return null;
+  const own = run.spec.workstream ? list.find((v) => v.workstream.id === run.spec.workstream && v.workstream.closedAt === null) : undefined;
+  return own ?? (run.item ? ofItem(list, run.item.key, run.item.connectionId) : null);
+}

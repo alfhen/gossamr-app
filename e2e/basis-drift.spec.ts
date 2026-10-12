@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, editTicket, finishOnHome, homeConversation, homeRunCards, homeSettled, homeWakes, inlineStart, jiraWrites, mockRuns, needsYouTray, openApp, openPipHome, pipHome, startWorkstream, stepRail, workstreamEvents, workstreamRow } from "./support/app";
+import { askPip, editTicket, finishOnHome, homeConversation, homeRunCards, homeSettled, homeWakes, inlineStart, jiraWrites, mockRuns, needOfKind, needsYouRow, openApp, openPipHome, pipHome, startWorkstream, stepRail, workstreamEvents, workstreamRow } from "./support/app";
 
 // New workstreams open in Manage, where the supervisor checks the ticket against the basis the workstream recorded.
 const MANAGED = "runs=empty&wsManage=1";
@@ -26,7 +26,7 @@ test("a description edited in Jira holds the managed workstream and says why; Re
   await editTicket(page, "CA-401", { description: "Someone rewrote the welcome flow: three emails, not two." });
   // The row, the Needs you tray and the rail all say why, and the rail says to read the ticket first.
   await expect(row.locator("[data-status]")).toHaveText(`· ${DESCRIPTION_HELD}`);
-  await expect(needsYouTray(page).getByRole("button", { name: new RegExp(`^CA-401 · .+ · ${DESCRIPTION_HELD}`) })).toHaveCount(1);
+  await expect(needOfKind(page, "hold")).toContainText(DESCRIPTION_HELD);
   await expect(banner(page)).toHaveAttribute("data-held-banner", "tripwire:basis_drift");
   await expect(banner(page)).toContainText("Held: the ticket's description changed in Jira");
   await expect(banner(page).locator("[data-drift-hint]")).toContainText("Read CA-401 as it is now before you resume");
@@ -78,7 +78,7 @@ test("moving a workstream's ticket to another status leaves it be; moving it to 
 
   await editTicket(page, "CA-402", { statusId: "Sent" });
   await expect(row.locator("[data-status]")).toHaveText("· Held: the ticket was moved to Done");
-  await expect(needsYouTray(page).getByRole("button", { name: /^CA-402 · .+ · Held: the ticket was moved to Done/ })).toHaveCount(1);
+  await expect(needsYouRow(page, "CA-402")).toContainText("Held: the ticket was moved to Done");
   await expect(banner(page)).toContainText("Held: the ticket was moved to Done");
   await noTripwireText(page);
   expect(await driftedLines(page)).toEqual(["status"]);

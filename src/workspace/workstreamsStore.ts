@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
-import { stageText } from "../lib/workstreamStage";
+import { ofItem, runWorkstream, stageText } from "../lib/workstreamStage";
 import { budgetView } from "../lib/workstreamHold";
 import type { AutoStartSwitches, ItemRef, Run, ScreenContext, Workstream, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -67,9 +67,6 @@ let closedSeq = 0;
 /** The same for reads of each workstream's audit: the newest read of each id, from one counter, so a read from before a dispose never matches. */
 const eventsSeq = new Map<string, number>();
 let eventsCounter = 0;
-
-const ofItem = (list: readonly WorkstreamView[], key: string, connectionId?: string) =>
-  list.find((v) => v.workstream.itemKey === key && v.workstream.closedAt === null && (!connectionId || v.workstream.connectionId === connectionId)) ?? null;
 
 /** "1 workstream", "2 workstreams". */
 const workstreams = (n: number) => `${n} ${n === 1 ? "workstream" : "workstreams"}`;
@@ -315,12 +312,7 @@ function focusedRunId(route: string, sheet: RunSheetTarget | null, selectedId: s
   return route === "agents" ? selectedId : null;
 }
 
-/** The open workstream `run` belongs to, or else the one open on its ticket. */
-export function runWorkstream(list: readonly WorkstreamView[], run: Run | null | undefined): WorkstreamView | null {
-  if (!run) return null;
-  const own = run.spec.workstream ? list.find((v) => v.workstream.id === run.spec.workstream && v.workstream.closedAt === null) : undefined;
-  return own ?? (run.item ? ofItem(list, run.item.key, run.item.connectionId) : null);
-}
+export { runWorkstream };
 
 /**
  * The workstream in focus for the Pip pane: the open one on the ticket the peek shows; otherwise the one of the run in

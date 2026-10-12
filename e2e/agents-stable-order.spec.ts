@@ -19,7 +19,7 @@ test("a card whose run changes state stays put while the pointer is over the lis
   const before = await shownIds(page);
   await card(page, "run-seed-4").hover();
   await expect(page.locator("[data-agents-list]")).toHaveAttribute("data-frozen", "true");
-  // A running run asks a question: it belongs under Needs you now, which would take it from where it is.
+  // A running run asks a question: it is stuck on the person now, under Failed or stuck, which would take it from where it is.
   await askRun(page, "run-seed-3", "Which branch?");
   await expect(card(page, "run-seed-3")).toHaveAttribute("data-state", "needsAnswer");
   expect(await shownIds(page)).toEqual(before);
@@ -28,7 +28,8 @@ test("a card whose run changes state stays put while the pointer is over the lis
   const after = await shownIds(page);
   expect(after).not.toEqual(before);
   expect([...after].sort()).toEqual([...before].sort());
-  expect(after.indexOf("run-seed-3")).toBeLessThan(before.indexOf("run-seed-3"));
+  // Out of Running and down to Failed or stuck.
+  expect(after.indexOf("run-seed-3")).toBeGreaterThan(before.indexOf("run-seed-3"));
 });
 
 test("focus in the list holds the order as well, until focus leaves it", async ({ page }) => {

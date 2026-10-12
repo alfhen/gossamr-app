@@ -68,8 +68,8 @@ interface StripProps {
   enabled: boolean;
   now: number;
   workstream?: string | null;
-  /** Failed runs the person has looked at, which leave the strip as they leave the Needs you tray. */
-  seenFailed?: ReadonlySet<string>;
+  /** Failed runs the person dismissed, which leave the strip as they leave Needs you. */
+  dismissed?: ReadonlySet<string>;
   titleOf(run: Run): string | null;
   onOpen(run: Run): void;
   /** Opens the Agents view, offered when there are more runs than the strip shows. */
@@ -81,11 +81,11 @@ interface StripProps {
  * working. In a workstream's conversation (`workstream`), only that workstream's runs. When it lists more such runs than
  * it shows, the header says how many of them it shows and links to the Agents view; never when nothing was cut. Absent while agents are off or nothing is going.
  */
-export function PipRunStripView({ runs, enabled, now, workstream = null, seenFailed, titleOf, onOpen, onSeeAll }: StripProps) {
+export function PipRunStripView({ runs, enabled, now, workstream = null, dismissed, titleOf, onOpen, onSeeAll }: StripProps) {
   const labels = labelsByRun(runs);
   const scope = workstream ? runs.filter((r) => r.spec.workstream === workstream) : runs;
   // Out of the runs it would list, not every run there is: one finished or seen is not left out, only not listed.
-  const listed = stripRuns(scope, seenFailed);
+  const listed = stripRuns(scope, dismissed);
   const shown = listed.slice(0, STRIP_SHOWN);
   if (!enabled || !shown.length) return null;
   const more = shown.length < listed.length;
@@ -109,7 +109,7 @@ export function PipRunStripView({ runs, enabled, now, workstream = null, seenFai
 export function PipRunStrip({ workstream = null }: { workstream?: string | null }) {
   const enabled = useAgentsEnabled();
   const runs = useRuns((s) => s.runs);
-  const seenFailed = useRuns((s) => s.seenFailed);
+  const dismissed = useRuns((s) => s.dismissed);
   const items = useWorkspace((s) => s.items);
   return (
     <PipRunStripView
@@ -117,7 +117,7 @@ export function PipRunStrip({ workstream = null }: { workstream?: string | null 
       enabled={enabled}
       now={Date.now()}
       workstream={workstream}
-      seenFailed={seenFailed}
+      dismissed={dismissed}
       onSeeAll={() => useTabs.getState().setRoute("agents")}
       titleOf={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
       onOpen={(run) => useRuns.getState().openRun(run.id, { stay: true })}

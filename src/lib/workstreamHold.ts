@@ -145,3 +145,15 @@ export function budgetNote(budget: BudgetView): { level: "amber" | "spent"; text
   const text = turns ? `${autoTurns.used} of ${autoTurns.limit} automatic turns used` : `${wakes.used} of ${wakes.limit} wakes used`;
   return { level: budget.level, text };
 }
+
+/**
+ * What a workstream's held banner says, shortened for a row or the list: "Held: budget", "Held by you", "Held: the
+ * ticket's description changed in Jira". A safety hold reads as the banner does, in plain words.
+ */
+export function shortHeld(reason: string | null | undefined, drifted?: readonly BasisField[] | null): string | null {
+  const text = heldText(reason, drifted);
+  if (!text || !reason) return null;
+  if (reason === HELD_BUDGET) return "Held: budget";
+  if (reason === HELD_DAILY) return "Held: daily turns";
+  return text;
+}

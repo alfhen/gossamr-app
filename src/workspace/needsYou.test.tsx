@@ -1,0 +1,416 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MockBackend } from "../backend/mock";
+import { docFromText } from "../lib/docs";
+import { needGroups, needs, type Need, type NeedsInput } from "../lib/needs";
+import { HELD_PERSON } from "../types";
+import type { Intent, Proposal, Run, WorkstreamView } from "../types";
+import { useWorkspace } from "../workspaceStore";
+import { Launcher } from "./PipExtras";
+import { NeedsPane } from "./NeedsPane";
+import { NeedsYouList, groupText } from "./NeedsYou";
+import { NO_FILTERS, groupRuns, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
+import { arm, confirmArmed, disarm, keyPlan, openInWorkstream, openNeed } from "./needsActions";
+import { composerFooter } from "./pipHomeLogic";
+import { usePipHome } from "./pipHomeStore";
+import { PipRunStripView } from "./PipRunCard";
+import { railBadgeText } from "./Rail";
+import { useRuns } from "./runsStore";
+import { loadTabs, useTabs } from "./tabsStore";
+import { needsYouText } from "./useNeeds";
+import { useWorkstreams } from "./workstreamsStore";
+
+const memory = () => {
+  const data = new Map<string, string>();
+  return { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => void data.set(k, v), removeItem: (k: string) => void data.delete(k) };
+};
+
+const NOW = Date.parse("2026-09-30T12:00:00Z");
+const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
+const ref = (key: string) => ({ connectionId: "mock", externalId: key, key });
+
+const backend = new MockBackend();
+const sample = backend.runs.list();
+const base = sample[0];
+const run = (id: string, state: Run["state"], over: Partial<Run> = {}): Run => ({ ...base, id, state, item: ref("CA-401"), spec: { ...base.spec, kind: "build", workstream: "ws-1" }, failure: null, needs: null, lastProgressAt: ago(5), queuedAt: ago(60), endedAt: null, ...over });
+
+const view = (id: string, key: string | null, title: string, over: { heldReason?: string | null; runs?: string[] } = {}): WorkstreamView => ({
+  workstream: {
+    id,
+    connectionId: "mock",
+    itemKey: key,
+    repo: null,
+    title,
+    pipSession: null,
+    mode: "manage",
+    heldReason: over.heldReason ?? null,
+    notes: null,
+    createdAt: ago(600),
+    closedAt: null,
+    budget: { autoTurns: null, wakes: null, tokens: null },
+    spent: { autoTurns: 0, wakes: 0, tokens: 0 },
+    rules: {},
+    basis: null,
+  },
+  stage: "build",
+  runs: over.runs ?? [],
+  labels: (over.runs ?? []).map((r, n) => [r, `R${n + 1}`]),
+  budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
+});
+
+const draft = (id: string, intent: Intent, minutes: number, workstream: string | null = null): Proposal =>
+  ({ id, createdAt: ago(minutes), updatedAt: ago(minutes), origin: { type: "chat", requestId: `q-${id}`, workstream }, createdBy: "pip", intent, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error: null, run: null }) as unknown as Proposal;
+
+const comment = (key: string, text = "Checking in."): Intent => ({ type: "comment", item: ref(key), body: docFromText(text), mentions: [] }) as unknown as Intent;
+const transition = (key: string): Intent => ({ type: "transition", item: ref(key), to: "done" }) as unknown as Intent;
+const rewrite = (key: string): Intent => ({ type: "rewrite", item: ref(key), title: null, body: { from: docFromText("a"), to: docFromText("b"), fromText: "a", toText: "b" }, flattened: [] }) as unknown as Intent;
+const startRun = (key: string): Intent => ({ type: "startRun", connectionId: "mock", item: ref(key), spec: { ...base.spec, kind: "investigate", workstream: "ws-1" } }) as unknown as Intent;
+
+const ws1 = view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-perm", "r-q", "r-fail"] });
+const ws2 = view("ws-2", "CA-402", "CA-402 Cart merge", { heldReason: HELD_PERSON });
+
+const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({
+  workstreams: [ws1, ws2],
+  runs: [
+    run("r-perm", "needsPermission", { needs: "approve Bash: git push origin ca-401", lastProgressAt: ago(14) }),
+    run("r-q", "needsAnswer", { needs: "Which cache should it keep?", lastProgressAt: ago(9) }),
+    run("r-fail", "failed", { error: "Launch was interrupted", lastProgressAt: ago(8), endedAt: ago(8) }),
+  ],
+  proposals: [draft("c1", comment("CA-401"), 30, "ws-1"), draft("c2", transition("CA-401"), 25, "ws-1"), draft("c3", comment("CA-401", "Another"), 24, "ws-1"), draft("g1", comment("CA-500"), 10)],
+  dismissed: new Set(),
+  titleOf: (key) => (key === "CA-500" ? "Loose ticket" : null),
+  now: NOW,
+  ...over,
+});
+
+/**
+ * Static markup reads a store's initial state, not its current one, so what a render should see is put into both, and put
+ * back after.
+ */
+const seeded = new Map<{ getInitialState(): object; setState(patch: never): void }, object>();
+function seed<S extends object>(store: { getInitialState(): S; setState(patch: Partial<S>): void }, patch: Partial<S>) {
+  const initial = store.getInitialState();
+  if (!seeded.has(store as never)) seeded.set(store as never, { ...initial });
+  Object.assign(initial, patch);
+  store.setState(patch);
+}
+function unseed() {
+  for (const [store, was] of seeded) {
+    Object.assign(store.getInitialState(), was);
+    store.setState(was as never);
+  }
+  seeded.clear();
+}
+
+beforeEach(() => {
+  vi.stubGlobal("localStorage", memory());
+  useTabs.setState(loadTabs());
+  useWorkspace.setState({ proposals: {} });
+});
+
+afterEach(() => {
+  unseed();
+  usePipHome.getState().reset();
+  disarm();
+  useRuns.setState({ sheet: null, selectedId: null, runs: [], dismissed: new Set() });
+  useWorkstreams.setState({ list: [] });
+  useTabs.getState().setRoute("workspace");
+  vi.unstubAllGlobals();
+});
+
+describe("the Needs you list", () => {
+  const list = needs(input());
+
+  it("shows the one count, then one row per workstream and General, each with its top need's ticket, title, kind, why and age", () => {
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html).toContain('<section aria-label="Needs you"');
+    expect(html).toMatch(/data-needs-you-count[^>]*>8</);
+    expect(html).toContain('aria-label="8 things need you"');
+    // The hold is the oldest of what is stuck, so its workstream's row leads.
+    const rows = [...html.matchAll(/data-needs-you-row="([^"]+)"/g)].map((m) => m[1]);
+    expect(rows).toEqual(["ws-2", "ws-1", "general"]);
+    expect([...html.matchAll(/data-needs-you-key[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["CA-402", "CA-401"]);
+    expect([...html.matchAll(/data-needs-you-head[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["Cart merge", "Welcome flow refresh", "General"]);
+    expect([...html.matchAll(/data-needs-you-chip="(\w+)"/g)].map((m) => m[1])).toEqual(["unblock", "unblock", "approve"]);
+    expect(html).toContain("R1 wants to run `git push origin ca-401`.");
+    expect(html).toContain("Held by you.");
+    // The age of each top need.
+    expect([...html.matchAll(/data-needs-you-age[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["10h", "14m", "10m"]);
+  });
+
+  it("says '+N more' for a group with more than one need, and nothing for one with a single need", () => {
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect([...html.matchAll(/data-needs-you-more[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["+5 more"]);
+    expect(html.match(/data-needs-you-more/g)).toHaveLength(1);
+  });
+
+  it("gives a row its whole line as its tooltip, and its text as its name", () => {
+    const g = needGroups(list).find((x) => x.workstreamId === "ws-1")!;
+    expect(groupText(g, NOW)).toBe("CA-401 · Welcome flow refresh · Unblock · R1 wants to run `git push origin ca-401`. · 14m · +5 more");
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html).toContain(`title="${groupText(g, NOW)}"`);
+    expect(html).not.toContain(`aria-label="${groupText(g, NOW)}"`);
+  });
+
+  it("keeps a group folded until it is expanded, then lists every need in it, the top one first", () => {
+    const folded = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(folded).toContain('aria-expanded="false"');
+    expect(folded).not.toContain("data-needs-you-need=");
+    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html).toContain('aria-expanded="true"');
+    expect([...html.matchAll(/data-needs-you-need="([^"]+)"/g)].map((m) => m[1])).toEqual(["run:r-perm", "run:r-q", "run:r-fail", "draft:c1", "draft:c2", "draft:c3"]);
+    expect(html).toContain("Show less");
+  });
+
+  it("offers 'Approve N safe drafts' under an expanded group with two or more, with none for a lone draft", () => {
+    seed(useWorkspace, { proposals: Object.fromEntries(input().proposals.map((p) => [p.id, p])) });
+    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html).toContain("Approve 3 safe drafts");
+    expect(html.match(/Approve \d+ safe drafts/g)).toHaveLength(1);
+    // A group with a single batchable draft has no batch to offer.
+    const lone = needs(input({ proposals: [draft("c1", comment("CA-401"), 30, "ws-1")] }));
+    expect(renderToStaticMarkup(<NeedsYouList needs={lone} now={NOW} />)).not.toContain("safe drafts");
+  });
+
+  it("says so when nothing waits", () => {
+    const html = renderToStaticMarkup(<NeedsYouList needs={[]} now={NOW} />);
+    expect(html).toMatch(/data-needs-you-count[^>]*>0</);
+    expect(html).toContain("Nothing needs you.");
+    expect(html).not.toContain("data-needs-you-group");
+  });
+
+  it("marks the need whose decision is open, and says what a key is waiting for on its row", () => {
+    seed(usePipHome, { expanded: new Set(["ws-1"]), deciding: "run:r-q", asking: { key: "run:r-perm", text: "↵ deny it; Claude carries on without it · any other key cancels" } });
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html.match(/aria-current="true"/g)).toHaveLength(1);
+    expect(html).toMatch(/data-need-key="run:r-q"[^>]*aria-current="true"|aria-current="true"[^>]*data-need-key="run:r-q"/);
+    expect(html).toContain("data-needs-asking");
+    expect(html).toContain("↵ deny it; Claude carries on without it · any other key cancels");
+  });
+});
+
+describe("opening a need", () => {
+  const list = needs(input());
+  const need = (key: string) => list.find((n) => n.key === key)!;
+
+  it("on Pip home selects its workstream and opens its decision in the middle column", () => {
+    useTabs.getState().setRoute("pip");
+    openNeed(need("run:r-perm"));
+    expect(useTabs.getState().route).toBe("pip");
+    expect(usePipHome.getState()).toMatchObject({ selected: "ws-1", deciding: "run:r-perm", asking: null });
+  });
+
+  it("from another route goes to Pip home first", () => {
+    useTabs.getState().setRoute("workspace");
+    openNeed(need("held:ws-2"));
+    expect(useTabs.getState().route).toBe("pip");
+    expect(usePipHome.getState()).toMatchObject({ selected: "ws-2", deciding: "held:ws-2" });
+  });
+
+  it("goes to General for a need in no workstream", () => {
+    usePipHome.getState().openWorkstream("ws-1");
+    openNeed(need("draft:g1"));
+    expect(usePipHome.getState().selected).toBeNull();
+    expect(usePipHome.getState().deciding).toBe("draft:g1");
+  });
+
+  it("'Open in workstream' closes the decision and asks for the card, where the card is; a run's sheet opens over it", () => {
+    useTabs.getState().setRoute("pip");
+    openNeed(need("draft:c1"));
+    openInWorkstream(need("draft:c1"));
+    expect(usePipHome.getState()).toMatchObject({ selected: "ws-1", deciding: null, focusTarget: { type: "draft", id: "c1" } });
+    expect(useRuns.getState().sheet).toBeNull();
+    openInWorkstream(need("held:ws-2"));
+    expect(usePipHome.getState()).toMatchObject({ selected: "ws-2", focusTarget: { type: "workstream" } });
+    openInWorkstream(need("run:r-q"));
+    expect(usePipHome.getState().focusTarget).toEqual({ type: "run", id: "r-q" });
+    expect(useRuns.getState().sheet).toEqual({ type: "run", id: "r-q" });
+    openInWorkstream(need("draft:g1"));
+    expect(usePipHome.getState().selected).toBeNull();
+  });
+});
+
+describe("what the list's keys do", () => {
+  const proposals = [...input().proposals, draft("rw", rewrite("CA-401"), 40, "ws-1"), draft("st", startRun("CA-401"), 35, "ws-1")];
+  const list = needs(input({ proposals }));
+  const need = (key: string) => list.find((n) => n.key === key)!;
+
+  beforeEach(() => {
+    useWorkspace.setState({ proposals: Object.fromEntries(proposals.map((p) => [p.id, p])) });
+    useRuns.setState({ runs: [...input().runs] });
+  });
+
+  it("asks for Enter before it approves a comment, a move, a deny or a dismissal, and only then does it", () => {
+    const plan = keyPlan(need("draft:c1"), "approve");
+    expect(plan).toMatchObject({ type: "ask", text: "approve this draft" });
+    expect(keyPlan(need("draft:c2"), "approve")).toMatchObject({ type: "ask" });
+    expect(keyPlan(need("run:r-perm"), "deny")).toMatchObject({ type: "ask", text: "deny it; Claude carries on without it" });
+    expect(keyPlan(need("draft:c1"), "deny")).toMatchObject({ type: "ask", text: "skip this draft" });
+    const dismiss = keyPlan(need("run:r-fail"), "deny");
+    expect(dismiss).toMatchObject({ type: "ask", text: "dismiss this" });
+    if (dismiss?.type !== "ask") throw new Error("a dismissal asks first");
+    // Nothing happens until Enter confirms what was asked.
+    arm(need("run:r-fail"), dismiss);
+    expect(usePipHome.getState().asking).toEqual({ key: "run:r-fail", text: "↵ dismiss this · any other key cancels" });
+    expect(useRuns.getState().dismissed.has("r-fail")).toBe(false);
+    confirmArmed();
+    expect(useRuns.getState().dismissed.has("r-fail")).toBe(true);
+    expect(usePipHome.getState().asking).toBeNull();
+    // Confirming again does nothing more.
+    confirmArmed();
+  });
+
+  it("drops what was asked when any other key comes first", () => {
+    const plan = keyPlan(need("run:r-fail"), "deny");
+    if (plan?.type !== "ask") throw new Error("a dismissal asks first");
+    arm(need("run:r-fail"), plan);
+    disarm();
+    expect(usePipHome.getState().asking).toBeNull();
+    confirmArmed();
+    expect(useRuns.getState().dismissed.has("r-fail")).toBe(false);
+  });
+
+  it("opens the decision where there is something to read first: a rewrite's diff, a question, a run to start", () => {
+    expect(keyPlan(need("draft:rw"), "approve")).toEqual({ type: "open", edit: false });
+    expect(keyPlan(need("run:r-q"), "approve")).toEqual({ type: "open", edit: false });
+    expect(keyPlan(need("draft:st"), "approve")).toEqual({ type: "open", edit: false });
+    expect(keyPlan(need("held:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
+  });
+
+  it("opens an edit where the draft has one, and means nothing where it has none", () => {
+    expect(keyPlan(need("draft:c1"), "edit")).toEqual({ type: "open", edit: true });
+    expect(keyPlan(need("run:r-q"), "edit")).toEqual({ type: "open", edit: true });
+    expect(keyPlan(need("run:r-perm"), "edit")).toBeNull();
+    expect(keyPlan(need("held:ws-2"), "edit")).toBeNull();
+    expect(keyPlan(need("held:ws-2"), "deny")).toBeNull();
+  });
+});
+
+describe("the decision pane", () => {
+  const set = (over: Partial<NeedsInput> = {}) => {
+    const given = input(over);
+    seed(useRuns, { runs: given.runs as Run[] });
+    seed(useWorkstreams, { list: [...given.workstreams] });
+    seed(useWorkspace, { proposals: Object.fromEntries(given.proposals.map((p) => [p.id, p])) });
+    return needs(given);
+  };
+  const pane = (list: Need[], key: string) => {
+    seed(usePipHome, { deciding: key });
+    return renderToStaticMarkup(<NeedsPane needs={list} />);
+  };
+
+  it("opens nothing until a need is chosen, and nothing for a need that is gone", () => {
+    const list = set();
+    expect(renderToStaticMarkup(<NeedsPane needs={list} />)).toBe("");
+    seed(usePipHome, { deciding: "run:gone" });
+    expect(renderToStaticMarkup(<NeedsPane needs={list} />)).toBe("");
+  });
+
+  it("heads the decision with why and what waiting does, and a link to the workstream", () => {
+    const list = set();
+    const html = pane(list, "run:r-perm");
+    expect(html).toContain('aria-label="Decision"');
+    expect(html).toContain("R1 wants to run `git push origin ca-401`.");
+    expect(html).toContain("If you wait:");
+    expect(html).toContain("The run stays paused; nothing else in CA-401 moves.");
+    expect(html).toContain("Open in workstream");
+    expect(html).toContain('data-needs-pane="run:r-perm"');
+    expect(html).toContain('data-needs-you-chip="unblock"');
+  });
+
+  it("decides a permission with the permission ask, a question with the answer box, a failure with its next step and Dismiss", () => {
+    const list = set();
+    expect(pane(list, "run:r-perm")).toContain("data-permission-ask");
+    expect(pane(list, "run:r-q")).toContain('aria-label="Your answer"');
+    const failure = pane(list, "run:r-fail");
+    // It ran before it failed, so there is no launch to retry: Terminal, and Dismiss.
+    expect(failure).toContain("Open in Terminal");
+    expect(failure).toContain("Dismiss");
+    const launch = set({ runs: [run("r-x", "failed", { shortId: null, failure: { type: "other" }, error: "Launch was interrupted" })], workstreams: [ws1], proposals: [] });
+    expect(pane(launch, "run:r-x")).toContain("Retry launch");
+  });
+
+  it("decides a sign-in with the sign-in box and a limit stop with the resume box", () => {
+    const list = set({ runs: [run("r-s", "systemBlocked"), run("r-l", "stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" })], proposals: [], workstreams: [view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-s", "r-l"] })] });
+    expect(pane(list, "run:r-s")).toContain("Claude needs you to sign in");
+    expect(pane(list, "run:r-s")).toContain("R1 needs you to sign in to Claude.");
+    const limit = pane(list, "run:r-l");
+    expect(limit).toContain('aria-label="What to tell it"');
+    expect(limit).toContain("Resume");
+  });
+
+  it("decides a hold with the held banner's Resume, and a draft with its card", () => {
+    const list = set();
+    const held = pane(list, "held:ws-2");
+    expect(held).toContain("data-held-banner");
+    expect(held).toContain("Resume");
+    const card = pane(list, "draft:c1");
+    expect(card).toContain('data-draft="c1"');
+    expect(card).toContain("Nothing is written to Jira until you approve it.");
+  });
+
+  it("decides an escalation with its three choices and the review draft that folded into it, and a plan with its approval note", () => {
+    const escalated: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-b", "r-rev"] }), escalation: { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R2", buildLabel: "R1", rounds: 2, reviewDraft: "rd", at: ago(3) } };
+    const review = draft("rd", { type: "githubReview", item: ref("CA-401"), connectionId: "github", repo: "acme/shop", number: 7, runId: "r-rev", summary: "Blocking", comments: [], commitSha: "abc" } as unknown as Intent, 5, "ws-1");
+    const planRun = run("r-plan", "done", { spec: { ...base.spec, kind: "plan", workstream: "ws-1" } });
+    const list = set({ workstreams: [escalated], runs: [planRun], proposals: [review, { ...draft("plan", rewrite("CA-401"), 4, "ws-1"), origin: { type: "run", runId: "r-plan", shortId: null, workstream: "ws-1" } } as Proposal], dismissed: new Set() });
+    const escalation = pane(list, "escalation:r-rev");
+    expect(escalation).toContain("data-escalation");
+    expect(escalation).toContain("Run another fix round");
+    expect(escalation).toContain('data-draft="rd"');
+    expect(escalation).toContain("The review still blocks after 2 fix rounds.");
+    const plan = pane(list, "draft:plan");
+    expect(plan).toContain("data-plan-approve");
+    expect(list.map((n) => n.key)).not.toContain("draft:rd");
+  });
+});
+
+describe("every count of needs you and of agents, from one fixture (D4, D5, N3)", () => {
+  const runs = sample;
+  const at = NOW;
+  const ticket = ref("CA-401");
+  const proposals = [draft("p1", comment("CA-401"), 3), { ...draft("p2", { type: "startRun", connectionId: "mock", item: ticket, spec: { ...runs[0].spec, kind: "investigate" } } as unknown as Intent, 3) }];
+  const failed = runs.find((r) => r.state === "failed")!;
+
+  for (const dismissed of [new Set<string>(), new Set([failed.id])]) {
+    it(`agrees on the list, the rail badge, the composer, the launcher, the Agents header, Your agents and Stop all${dismissed.size ? ", once the failed run was dismissed" : ""}`, () => {
+      const list = needs({ workstreams: [], runs, proposals, dismissed, now: at + 5 * 60_000 });
+      const n = list.length;
+      // The sample clock stands at 12:00; five minutes on, the run that was quiet at 11:20 is 45 minutes quiet.
+      expect(n).toBe(3 + (dismissed.size ? 0 : 1) + proposals.length);
+      // One number: the list's pill, the rail badge, the composer footer, the launcher and the Agents header.
+      expect(renderToStaticMarkup(<NeedsYouList needs={list} now={at} />)).toMatch(new RegExp(`data-needs-you-count[^>]*>${n}<`));
+      expect(railBadgeText.pipHome(n)).toBe(needsYouText(n));
+      expect(Number(/(\d+) needs? you/.exec(composerFooter(runs, n, at))?.[1])).toBe(n);
+      expect(renderToStaticMarkup(<Launcher needs={n} onOpen={() => {}} nudge={null} />)).toContain(`Ask Pip, ${needsYouText(n)}`);
+      expect(summaryLine(runs, at, n)).toMatch(new RegExp(`^${n} need you · `));
+      // Its agent part: the run needs among them, and Agents has no badge of its own.
+      const waiting = list.filter((x) => x.runId);
+      expect(n).toBe(waiting.length + proposals.length);
+      // Your agents: the strip's "3 of M" is every agent, the waiting ones among them.
+      const mine = yourAgents(runs, dismissed);
+      const strip = renderToStaticMarkup(<PipRunStripView runs={runs} enabled now={at} dismissed={dismissed} titleOf={() => null} onOpen={() => {}} onSeeAll={() => {}} />);
+      expect(Number(/data-strip-count[^>]*>\d+ of (\d+)</.exec(strip)?.[1])).toBe(mine.length);
+      // Failed or stuck in the header is the lane of that name, card for card (N3).
+      const bad = groupRuns(runs, NO_FILTERS, at).find((g) => g.lane === "bad")?.runs.length ?? 0;
+      expect(Number(/(\d+) failed or stuck/.exec(summaryLine(runs, at, n))?.[1])).toBe(bad);
+      // Stop all counts a set of its own, and says so.
+      expect(stopAllLabel(stoppable(runs).length + slotWaiters(runs).length)).toMatch(/^Stop all \(\d+ stoppable\)$/);
+    });
+  }
+
+  it("keeps a folder to trust, and every other failure, in the count until it is dismissed (R5)", () => {
+    const trust = runs.find((r) => r.failure?.type === "untrustedFolder")!;
+    const other = { ...trust, id: "r-other", failure: { type: "other" } } as unknown as typeof trust;
+    const all = [...runs, other];
+    useRuns.setState({ runs: all, dismissed: new Set() });
+    // Opening Agents once marked every failure but the folder as seen; nothing does that now.
+    const listed = (dismissed: ReadonlySet<string>) => needs({ workstreams: [], runs: all, proposals: [], dismissed, now: at }).filter((x) => x.kind === "failure").map((x) => x.runId);
+    expect(listed(new Set())).toEqual(expect.arrayContaining([trust.id, other.id]));
+    useRuns.getState().dismiss(other.id);
+    expect(listed(useRuns.getState().dismissed)).toEqual(expect.arrayContaining([trust.id]));
+    expect(listed(useRuns.getState().dismissed)).not.toContain(other.id);
+  });
+});

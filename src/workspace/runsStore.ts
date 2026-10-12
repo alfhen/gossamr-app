@@ -5,7 +5,7 @@ import type { CleanupResult, ItemRef, PlanComment, Proposal, Run, RunKind, RunsE
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { copyText } from "./AgentSheet";
-import { KIND_LABEL, NO_FILTERS, agentGroups, attentionCount, stepRun, stopAllText, type AgentFilters } from "./agentsLogic";
+import { KIND_LABEL, NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters } from "./agentsLogic";
 import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
 import { planCommentMessage } from "./runSheetLogic";
@@ -15,13 +15,13 @@ import { usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
 
-const SEEN_KEY = "gossamr-runs-seen";
+const DISMISSED_KEY = "gossamr-runs-dismissed";
 /** How long the list is waited for before the view says so and offers Retry, rather than showing a spinner for good. */
 export const LOAD_LIMIT_MS = 15_000;
-const SEEN_KEPT = 500;
+const DISMISSED_KEPT = 500;
 
-const loadSeen = (): ReadonlySet<string> => {
-  const raw = readStored(SEEN_KEY);
+const loadDismissed = (): ReadonlySet<string> => {
+  const raw = readStored(DISMISSED_KEY);
   return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : []);
 };
 
@@ -48,8 +48,11 @@ interface RunsState {
   environment: RunsEnvironment | null;
   filters: AgentFilters;
   selectedId: string | null;
-  /** Ids of failed runs the person has had on screen; the rail badge counts the others. */
-  seenFailed: ReadonlySet<string>;
+  /**
+   * Ids of runs whose failure, stop or unclear state the person dismissed, so they leave Needs you. Looking at a run never
+   * adds one: a failure leaves only when it is dealt with (a retry or a fix) or dismissed.
+   */
+  dismissed: ReadonlySet<string>;
   /** Ids of failed runs the person has taken the step in Terminal for, or copied its command; Retry waits for this. */
   terminalOpened: ReadonlySet<string>;
   /** Null until the person opens or closes the explainer, when it shows for a first visit with no runs. */
@@ -124,7 +127,8 @@ interface RunsState {
   fix(id: string, act: Extract<FailureAct, "terminal" | "install">): Promise<void>;
   /** Notes that the person copied the command to run it themselves, which is as good as opening Terminal. */
   noteCopied(id: string): void;
-  markSeen(): void;
+  /** Takes run `id` out of Needs you: the person's explicit Dismiss of its failure, limit stop, unclear state or possible continuation. */
+  dismiss(id: string): void;
   attach(id: string): Promise<void>;
   /** Drafts a comment from the run's result and takes the person to it. Nothing is posted. */
   draftComment(id: string): Promise<void>;
@@ -165,12 +169,14 @@ const idle = { runs: [] as Run[], launching: new Set<string>() as ReadonlySet<st
 /** The order the Agents view lists runs in right now, grouped as it is. */
 const liveOrder = (s: Pick<RunsState, "runs" | "filters" | "earlierOpen">) => agentGroups(usePrefs.getState().agentsGroup, s.runs, useWorkstreams.getState().list, s.filters, s.earlierOpen, Date.now()).order;
 
-/** A run that was failed and is not any more starts over: if it fails again, the rail badge counts it again. */
-function forgetRecovered(seen: ReadonlySet<string>, runs: readonly Run[]): ReadonlySet<string> {
-  const recovered = runs.filter((r) => r.state !== "failed" && seen.has(r.id));
-  if (!recovered.length) return seen;
-  const kept = new Set([...seen].filter((id) => !recovered.some((r) => r.id === id)));
-  writeStored(SEEN_KEY, [...kept]);
+/** A run that was dismissed and has moved on (it retried, was resumed, carried on) starts over: if it fails or stops again, Needs you has it again. */
+const DISMISSABLE: readonly Run["state"][] = ["failed", "stopped", "unknown"];
+
+function forgetRecovered(dismissed: ReadonlySet<string>, runs: readonly Run[]): ReadonlySet<string> {
+  const recovered = runs.filter((r) => !DISMISSABLE.includes(r.state) && dismissed.has(r.id));
+  if (!recovered.length) return dismissed;
+  const kept = new Set([...dismissed].filter((id) => !recovered.some((r) => r.id === id)));
+  writeStored(DISMISSED_KEY, [...kept]);
   return kept;
 }
 
@@ -256,7 +262,7 @@ export function startWhat(p: Proposal | null | undefined, kind?: RunKind, item?:
 export const useRuns = create<RunsState>((set, get) => ({
   backend: null,
   filters: NO_FILTERS,
-  seenFailed: loadSeen(),
+  dismissed: loadDismissed(),
   terminalOpened: new Set<string>(),
   introOpen: null,
   earlierOpen: false,
@@ -296,7 +302,7 @@ export const useRuns = create<RunsState>((set, get) => ({
       const runs = await backend.runsList();
       clearTimeout(watchdog);
       if (mine === seq) {
-        set({ runs, status: "ready", error: null, seenFailed: forgetRecovered(get().seenFailed, runs) });
+        set({ runs, status: "ready", error: null, dismissed: forgetRecovered(get().dismissed, runs) });
         announceFailedLaunches(get, set);
       }
     } catch (e) {
@@ -474,14 +480,11 @@ export const useRuns = create<RunsState>((set, get) => ({
     if (!get().terminalOpened.has(id)) set({ terminalOpened: new Set([...get().terminalOpened, id]) });
   },
 
-  markSeen() {
-    // A folder to trust needs an action, not just a look: it stays waiting on the person until retried or stopped.
-    const fresh = get().runs.filter((r) => r.state === "failed" && r.failure?.type !== "untrustedFolder" && !get().seenFailed.has(r.id));
-    if (!fresh.length) return;
-    const seen = new Set([...get().seenFailed, ...fresh.map((r) => r.id)]);
-    const kept = new Set([...seen].slice(-SEEN_KEPT));
-    writeStored(SEEN_KEY, [...kept]);
-    set({ seenFailed: kept });
+  dismiss(id) {
+    if (get().dismissed.has(id)) return;
+    const kept = new Set([...get().dismissed, id].slice(-DISMISSED_KEPT));
+    writeStored(DISMISSED_KEY, [...kept]);
+    set({ dismissed: kept });
   },
 
   async attach(id) {
@@ -581,6 +584,3 @@ export const useRuns = create<RunsState>((set, get) => ({
   setEarlierOpen: (earlierOpen) => set({ earlierOpen }),
   setIntroOpen: (introOpen) => set({ introOpen }),
 }));
-
-/** The count on the rail's Agents button. */
-export const useAttention = () => useRuns((s) => attentionCount(s.runs, s.seenFailed));

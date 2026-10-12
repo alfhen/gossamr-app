@@ -19,7 +19,7 @@ describe("a run Gossamr stopped at its limit", () => {
   it("is called that, sits where the person looks, and says why", () => {
     expect(stateView(limit, NOW)).toMatchObject({ label: "Stopped at limit", tone: "warn" });
     expect(stateView(stopped(), NOW).label).toBe("Stopped");
-    expect(laneOf(limit, NOW)).toBe("needs");
+    expect(laneOf(limit, NOW)).toBe("bad");
     expect(laneOf(stopped(), NOW)).toBe("earlier");
     expect(stoppedText(limit)).toBe("Stopped by Gossamr: it passed the 60 minute limit");
   });
