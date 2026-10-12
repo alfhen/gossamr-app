@@ -989,7 +989,15 @@ export interface AgentSettings {
   autostart: AutoStartSwitches;
   /** Pip turns the supervisor may start in a day across every workstream. Zero turns the cap off. */
   managerTurnsPerDay: number;
+  /** Which system notifications about runs to show; a backend that sent none has "workstream". */
+  notifications?: NoticeMode;
+  /** Minutes between digest notifications. */
+  digestMinutes?: number;
 }
+
+/** One notification when a workstream starts waiting on you, one summary every so often, or none. */
+export type NoticeMode = "workstream" | "digest" | "off";
+export const DIGEST_MINUTES = 30;
 
 /** The global switches for the auto-start rules; each workstream can override them. */
 export interface AutoStartSwitches {

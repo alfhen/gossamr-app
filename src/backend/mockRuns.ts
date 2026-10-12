@@ -1,4 +1,4 @@
-import { AUTOSTART_DEFAULTS, SUMMARY_ONLY, type AgentSettings, type ChangedFile, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, type ReadOnly, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal, WorkstreamRule } from "../types";
+import { AUTOSTART_DEFAULTS, DIGEST_MINUTES, SUMMARY_ONLY, type AgentSettings, type ChangedFile, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, type ReadOnly, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal, WorkstreamRule } from "../types";
 import { containerRef, itemRef } from "./mockConnector";
 import { approvedPlanText, assemblePlan, planSectionOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
@@ -2126,7 +2126,7 @@ export class MockRuns {
     return this.proposals.fromRun({ type: "link", from: itemRef(key), to: item, kind: "blocks" }, `Blocked by ${key}`, this.fromRun(run));
   }
 
-  private limits: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 };
+  private limits: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40, notifications: "workstream", digestMinutes: DIGEST_MINUTES };
   /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
   readonly unpushed = new Set<string>();
 
@@ -2145,6 +2145,8 @@ export class MockRuns {
       // A settings sheet from before these existed sends none; the defaults fill in, as the backend's serde does.
       autostart: { ...AUTOSTART_DEFAULTS, ...settings.autostart },
       managerTurnsPerDay: clamp(settings.managerTurnsPerDay ?? 40, 0, 500),
+      notifications: settings.notifications ?? "workstream",
+      digestMinutes: clamp(settings.digestMinutes ?? DIGEST_MINUTES, 1, 1_440),
     };
     return this.limits;
   }

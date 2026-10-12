@@ -19,6 +19,7 @@ pub mod fresh;
 pub mod index;
 pub mod launcher;
 pub mod limits;
+pub mod notices;
 pub mod pr;
 pub mod preflight;
 pub mod redact;

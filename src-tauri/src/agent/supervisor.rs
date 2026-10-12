@@ -715,6 +715,16 @@ impl RunNotifier for FanoutNotifier {
             n.notify(run, why);
         }
     }
+
+    fn announce(&self, notice: &crate::runs::notices::Outgoing) {
+        for n in &self.0 {
+            n.announce(notice);
+        }
+    }
+
+    fn watching(&self) -> bool {
+        self.0.iter().any(|n| n.watching())
+    }
 }
 
 /// Sends a wake turn's events to the page, with the conversation they belong to.

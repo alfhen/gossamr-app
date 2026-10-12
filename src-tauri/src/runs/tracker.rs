@@ -4,7 +4,7 @@
 //! The public listing decides each run's state; a job's `state.json` and timeline only supply words, and everything
 //! taken from them is redacted and capped before it is stored. Sessions that match no run are ignored.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -12,12 +12,13 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Timelike, Utc};
 
 use super::limits;
+use super::notices::{Group, Key, Need, Outgoing, Settings as NoticeSettings, Waiting, GENERAL};
 use super::cli::{AgentEntry, JobInfo, ShortId};
 use super::redact::redact;
 use super::service::{belongs_to, RunService};
 use super::state::{self, map_state, parse_at, progress_at};
 use super::toolchain::Toolchain;
-use crate::domain::{Run, RunEvent, RunKind, RunQuery, RunState};
+use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, Run, RunEvent, RunKind, RunQuery, RunState, StateKind};
 use crate::notify::Notice;
 
 pub const POLL_BUSY: Duration = Duration::from_secs(4);
@@ -57,7 +58,17 @@ pub enum Attention {
 }
 
 pub trait RunNotifier: Send + Sync {
+    /// A run's news, one call per event. Whatever listens for it (the supervisor) hears everything; the system
+    /// notifications are chosen apart (`announce`).
     fn notify(&self, run: &Run, why: Attention);
+
+    /// A system notification the person should get (`notices::Board`).
+    fn announce(&self, _notice: &Outgoing) {}
+
+    /// Whether the person is looking at the app, so a notification would only repeat what they can see.
+    fn watching(&self) -> bool {
+        false
+    }
 }
 
 pub struct NoNotices;
@@ -198,12 +209,16 @@ pub struct Polled {
 
 impl RunService {
     pub async fn poll(&self) -> Polled {
-        self.poll_with(Utc::now).await
+        let polled = self.poll_with(Utc::now).await;
+        self.announce_notices(Utc::now()).await;
+        polled
     }
 
     /// One look at `claude agents` for every unfinished run of the signed-in account, at the time `now`.
     pub async fn poll_at(&self, now: DateTime<Utc>) -> Polled {
-        self.poll_with(|| now).await
+        let polled = self.poll_with(|| now).await;
+        self.announce_notices(now).await;
+        polled
     }
 
     /// The listing is read and applied while holding the launch lock, with the time taken after the lock was won. A
@@ -262,6 +277,104 @@ impl RunService {
             self.draft_review(run).await;
         }
         Polled { busy }
+    }
+
+    /// Tells the notifier a run's news. A run that ended is also counted for its workstream's finished notice, which
+    /// `announce_notices` sends; a need is found there from what waits, not from this call.
+    pub(super) fn notify_run(&self, run: &Run, why: Attention) {
+        self.notifier.notify(run, why);
+        if matches!(why, Attention::Done | Attention::Failed | Attention::Limit) {
+            let at = run.ended_at.unwrap_or_else(Utc::now);
+            self.notices.lock().expect("notices lock poisoned").finished(&run.spec.workstream, &run.id, why != Attention::Done, at);
+        }
+    }
+
+    /// Looks at everything that waits on the person and sends the system notifications that are due (`notices`).
+    pub(super) async fn announce_notices(&self, now: DateTime<Utc>) {
+        if !self.is_enabled() {
+            return;
+        }
+        let settings = self.settings();
+        let settings = NoticeSettings { mode: settings.notifications, digest_every: chrono::Duration::minutes(i64::from(settings.digest_minutes)) };
+        let asking = [RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked];
+        let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(asking.to_vec()), ..RunQuery::default() }).await else { return };
+        let Ok(drafts) = self.core.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..ProposalQuery::default() }).await else { return };
+        let drafts: Vec<_> = drafts.into_iter().filter(|p| p.state == ProposalState::Pending).collect();
+        // The workstreams give names, run labels, escalations and holds.
+        let views = match self.core.scope().await {
+            Ok(scope) => self.core.workstreams(&scope, true).await.unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        let view_of = |id: &str| views.iter().find(|v| v.workstream.id == id);
+        let closed = |id: &Option<String>| id.as_deref().and_then(view_of).is_some_and(|v| v.workstream.closed_at.is_some());
+        let label_of = |id: &str, ws: &Option<String>| ws.as_deref().and_then(view_of).and_then(|v| v.labels.iter().find(|(run, _)| run == id)).map(|(_, l)| l.clone());
+        let mut needs: BTreeMap<Key, Vec<Need>> = BTreeMap::new();
+        // A run's question, permission or sign-in is something to unblock.
+        for run in &runs {
+            let ws = run.spec.workstream.clone();
+            if closed(&ws) {
+                continue;
+            }
+            let name = label_of(&run.id, &ws).unwrap_or_else(|| topic(run).to_owned());
+            let what = match run.state {
+                RunState::NeedsPermission => format!("{name} wants to run a command"),
+                RunState::SystemBlocked => format!("{name} needs you to sign in"),
+                _ => match run.needs.as_deref().map(|n| cut(&n.split_whitespace().collect::<Vec<_>>().join(" "), 100)).filter(|n| !n.is_empty()) {
+                    Some(question) => format!("{name} asks: {question}"),
+                    None => format!("{name} has a question"),
+                },
+            };
+            needs.entry(ws).or_default().push(Need { group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.last_progress_at });
+        }
+        // A review that still blocks after the fix rounds is a decision, and a hold waits to be resumed. The escalation's
+        // review draft is part of the escalation, so it isn't a need of its own.
+        let mut folded = HashSet::new();
+        for v in views.iter().filter(|v| v.workstream.closed_at.is_none()) {
+            let key = Some(v.workstream.id.clone());
+            if let Some(e) = &v.escalation {
+                folded.extend(e.review_draft.clone());
+                let what = format!("The review still blocks after {} fix {}", e.rounds, if e.rounds == 1 { "round" } else { "rounds" });
+                needs.entry(key.clone()).or_default().push(Need { group: Group::Decide, run_id: Some(e.review_run.clone()), what, since: e.at });
+            }
+            if v.workstream.held_reason.is_some() {
+                needs.entry(key).or_default().push(Need { group: Group::Unblock, run_id: None, what: "It is on hold until you resume it".to_owned(), since: v.workstream.created_at });
+            }
+        }
+        // Every pending draft waits for approval, a plan or description rewrite as a decision. A reply drafted to a run's
+        // question is part of that question.
+        for draft in &drafts {
+            let workstream = draft.workstream().map(str::to_owned);
+            if closed(&workstream) || folded.contains(&draft.id) || matches!(draft.intent, Intent::RunAnswer { .. }) {
+                continue;
+            }
+            let from = match &draft.origin {
+                Origin::Run { run_id, .. } => Some(run_id.clone()),
+                _ => None,
+            };
+            let (group, what) = match &draft.intent {
+                Intent::Rewrite { .. } => (Group::Decide, "A description update waits for your approval".to_owned()),
+                Intent::StartRun { .. } => (Group::Approve, "A run waits for you to start it".to_owned()),
+                _ => match from.as_deref().and_then(|id| label_of(id, &workstream)) {
+                    Some(name) => (Group::Approve, format!("{name} left a draft for you")),
+                    None => (Group::Approve, "A draft waits for your approval".to_owned()),
+                },
+            };
+            needs.entry(workstream).or_default().push(Need { group, run_id: from, what, since: draft.created_at });
+        }
+        let waiting: Vec<Waiting> = needs.into_iter().map(|(key, needs)| Waiting { key, needs }).collect();
+        let name_of = |key: &Key| match key.as_deref() {
+            None => GENERAL.to_owned(),
+            Some(id) => view_of(id).map(|v| v.workstream.item_key.clone().unwrap_or_else(|| v.workstream.title.clone())).unwrap_or_else(|| "A workstream".to_owned()),
+        };
+        let out = self.notices.lock().expect("notices lock poisoned").tick(now, &settings, self.notifier.watching(), &waiting, &name_of);
+        for notice in &out {
+            self.notifier.announce(notice);
+        }
+    }
+
+    /// The person looked at the app: finished runs are seen, so the next one gets a notice again.
+    pub fn looked(&self) {
+        self.notices.lock().expect("notices lock poisoned").looked();
     }
 
     /// Runs that finished or were stopped lately and still have a worktree: their session may be open at its prompt, or
@@ -435,13 +548,13 @@ impl RunService {
             }
         }
         if overrun.is_some() {
-            self.notifier.notify(&run, Attention::Limit);
+            self.notify_run(&run, Attention::Limit);
         } else if run.state != before.state {
             match run.state {
-                RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => self.notifier.notify(&run, Attention::Needs),
+                RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => self.notify_run(&run, Attention::Needs),
                 // Finishing again after the person carried on is only worth a notice when it makes a draft.
-                RunState::Done if before.continued_at.is_none() || drafted.is_some() => self.notifier.notify(&run, drafted.unwrap_or(Attention::Done)),
-                RunState::Failed => self.notifier.notify(&run, Attention::Failed),
+                RunState::Done if before.continued_at.is_none() || drafted.is_some() => self.notify_run(&run, drafted.unwrap_or(Attention::Done)),
+                RunState::Failed => self.notify_run(&run, Attention::Failed),
                 _ => {}
             }
         }
