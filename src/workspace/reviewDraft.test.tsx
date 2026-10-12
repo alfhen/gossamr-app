@@ -11,7 +11,7 @@ import { usePullView, type PullDiffState } from "./pullViewStore";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
 import type { ScreenContext } from "../types";
-import { editThenPost, editThenPullView, settlesEdit, followDraft, keptOlderNote, SUMMARY, MARKDOWN_HINT, postedLine, postedWith, postLabel, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+import { editThenPost, editThenPullView, settlesEdit, followDraft, hasMarkdown, keptOlderNote, SUMMARY, MARKDOWN_HINT, postedLine, postedWith, postLabel, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
 
 vi.mock("../components/autoHeight", async (original) => ({ ...(await original<typeof import("../components/autoHeight")>()), useAutoHeight: vi.fn() }));
 
@@ -356,5 +356,30 @@ describe("an older review of the same pull request left standing", () => {
     expect(postedWith(2)).toBe("Posted with 2 comments");
     expect(render(draft(), canPost)).not.toContain("data-review-posted-with");
     expect(render(draft({ state: { type: "applied" } }), canPost)).toMatch(/data-review-posted-with[^>]*>Posted with 2 comments</);
+  });
+});
+
+describe("the Markdown preview under the review's text boxes", () => {
+  it("is shown for words with Markdown in them and left out for plain words", () => {
+    expect(hasMarkdown("**Nit:** name it MAX_ATTEMPTS.")).toBe(true);
+    expect(hasMarkdown("- one\n- two")).toBe(true);
+    expect(hasMarkdown("Gossamr review of #218 at a1b2c3d4: blocking.")).toBe(false);
+  });
+
+  it("renders each comment's Markdown read-only beneath its textarea, which still holds the raw words", () => {
+    const html = render(draft(), canPost);
+    expect(html.match(/data-review-preview/g)).toHaveLength(2);
+    expect(html).toContain('aria-label="Preview of the comment on src/consumer/retry.ts:42"');
+    expect(html).toContain('<b class="font-semibold">Blocking:</b> the retry loop never backs off.');
+    expect(html).toContain("**Blocking:** the retry loop never backs off.</textarea>");
+  });
+
+  it("previews an edited summary, and renders the words of a draft that is no longer open", () => {
+    const edited = render(draft(), canPost, sample(), { summary: "Needs a **back-off**.", comments: [] });
+    expect(edited).toContain('aria-label="Preview of the review summary"');
+    const posted = render(draft({ state: { type: "applied" } }), null);
+    expect(posted).not.toContain("data-review-preview");
+    expect(posted).toContain('<b class="font-semibold">Blocking:</b>');
+    expect(posted).not.toContain("**Blocking:**");
   });
 });

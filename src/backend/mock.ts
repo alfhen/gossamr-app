@@ -411,6 +411,7 @@ export class MockBackend implements Backend {
     );
     this.runs.workstreams = this.workstreams;
     // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
+    this.proposals.runKind = (id) => this.runs.get(id)?.spec.kind ?? null;
     this.proposals.audit = (p, actor, action, detail, workstream) => void this.workstreams.record(workstream ?? workstreamOf(p), actor, action, { proposalId: p.id, ...(detail ? { detail } : {}) });
     this.workstreams.pendingDrafts = () => this.proposals.list({ states: ["pending"] });
     // A run that moved on may have moved its workstream's stage on.

@@ -8,7 +8,7 @@ import { DENIED_MESSAGE, permissionOffer, readAs } from "../lib/permission";
 import { reviewText } from "./mockReviewDraft";
 import { followUpBlocker, followUpProblem } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
-import { makerName } from "../lib/proposals";
+import { makerName, PLAN_COMMENT_LABEL } from "../lib/proposals";
 import { revisedByPipUnedited, runAnswerProblem, type MockProposals } from "./mockProposals";
 import { ESCALATION_GONE, textDigest, type MockWorkstreams } from "./mockWorkstreams";
 import { fixRoundMessage, marked, type ReviewFinding } from "./mockSupervisor";
@@ -303,7 +303,7 @@ export const SCRIPTED_TICKET_RESULT =
 /** The watched project of the newest ticket linked to a repository's pull requests, for the sample data. */
 const REPO_PROJECTS: Record<string, string> = { "acme/storefront": "CA", "acme/payments": "SUP", "acme/webshop": "WEB", "acme/gateway": "DEVOPS" };
 
-const PLAN_LABEL = "Plan from agent run";
+const PLAN_LABEL = PLAN_COMMENT_LABEL;
 const NO_EDIT = "This tracker can't change a ticket's description, so the plan can only go to the ticket as a comment.";
 
 const FAILED_TEXT = {

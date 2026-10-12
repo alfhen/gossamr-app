@@ -346,6 +346,45 @@ describe("mock runs of every kind", () => {
     expect(comments()).toHaveLength(1);
   });
 
+  it("replaces a pending comment draft a reworded one from a later round of the same kind supersedes, never an edited one, another ticket's or another kind's", async () => {
+    const backend = new MockBackend({ githubRepos: 14 });
+    await backend.watchSetMode("github:ada", "everything");
+    let n = 0;
+    const finish = async (key: string, ws: string, kind: "investigate" | "review", reworded = false) => {
+      const over = kind === "review" ? { ...webshop, pr: 218 } : storefront;
+      const made = await backend.runsDraft({ ...spec, ...over, kind, instruction: "", workstream: ws, name: `${key.toLowerCase()}-${kind}-${++n}` }, itemRef(key));
+      const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+      if (reworded) backend.runs.scriptNext("review", { verdict: "pass" });
+      for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
+      expect(backend.runs.get(run.id)?.state).toBe("done");
+      return run;
+    };
+    const comment = (runId: string) => backend.proposals.list().find((p) => p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === runId)!;
+    const stateOf = (id: string) => backend.proposals.get(id)?.state.type;
+    const ws = backend.workstreams.open(itemRef("CA-402")).id;
+    const elsewhere = backend.workstreams.open(itemRef("CA-403")).id;
+    const investigation = comment((await finish("CA-402", ws, "investigate")).id);
+    const first = comment((await finish("CA-402", ws, "review")).id);
+    const other = comment((await finish("CA-403", elsewhere, "review")).id);
+    // Another kind's comment on the same ticket is something else the person has not read: both wait.
+    expect([stateOf(investigation.id), stateOf(first.id), stateOf(other.id)]).toEqual(["pending", "pending", "pending"]);
+    // The same words are not drafted again.
+    await finish("CA-402", ws, "review");
+    expect(backend.proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "comment" && p.intent.item.key === "CA-402").map((p) => p.id)).toEqual([first.id, investigation.id]);
+    // A reworded comment of the same kind replaces the older, which is retired in favour of the newer.
+    const second = comment((await finish("CA-402", ws, "review", true)).id);
+    expect(second.id).not.toBe(first.id);
+    expect(backend.proposals.get(first.id)).toMatchObject({ state: { type: "retired", reason: "Replaced by a newer draft" }, supersededBy: second.id });
+    expect([stateOf(investigation.id), stateOf(other.id), stateOf(second.id)]).toEqual(["pending", "pending", "pending"]);
+    expect(backend.workstreams.events(ws).map((e) => e.action)).toContain("draft_superseded");
+    // The person's edit is theirs; the newer draft waits beside it.
+    await backend.proposalsEdit(second.id, { type: "comment", body: "My own words.", mentions: [] });
+    const third = comment((await finish("CA-402", ws, "review")).id);
+    expect(third.id).not.toBe(second.id);
+    expect([stateOf(second.id), stateOf(third.id)]).toEqual(["pending", "pending"]);
+    expect(backend.workstreams.events(ws).map((e) => e.action)).toContain("draft_kept_edited");
+  });
+
   it("leaves the GitHub review draft of a finished review with drafting on finish off, and no Jira draft", async () => {
     const backend = new MockBackend({ githubRepos: 14 });
     await backend.watchSetMode("github:ada", "everything");

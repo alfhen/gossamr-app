@@ -181,27 +181,32 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await expect(stepChip(page, "review").locator("[data-step-verdict]")).toHaveText("· Pass");
   await homeSettled(page);
 
-  // Back to the rail, k or j to Review, Enter, Tab to 'Approve these 2', Enter, and Enter on the confirm.
+  // Back to the rail, k or j to Review, Enter. The second review's comment replaced the first's, so one comment draft is
+  // left (no 'Approve these' batch): j to it, Enter opens the peek, Tab to 'Post comment', Enter.
   await page.keyboard.press("ControlOrMeta+j");
   await expect(homeComposer(page)).toBeFocused();
   await press(page, "F6");
   await pressUntil(page, "j", chipButton(page, "review"));
   await press(page, "Enter");
   await expect(chipButton(page, "review")).toHaveAttribute("aria-expanded", "true");
-  const together = stepChip(page, "review").getByRole("button", { name: "Approve these 2" });
-  await pressUntil(page, "Tab", together, 20);
+  await expect(stepChip(page, "review").getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
+  const comment = stepChip(page, "review").locator('article[data-draft][data-state="pending"]:not([aria-label^="GitHub review of "])');
+  await expect(comment).toHaveCount(1);
+  const id = (await comment.getAttribute("data-draft"))!;
+  await pressUntil(page, "j", comment, 10);
   await press(page, "Enter");
-  const yes = stepChip(page, "review").getByRole("button", { name: "Yes, approve 2" });
-  await expect(yes).toBeFocused();
-  await expectVisibleFocus(page);
-  // Esc cancels and goes back to the button, with nothing written.
-  await press(page, "Escape");
-  await expect(together).toBeFocused();
+  await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
+  // The comments the earlier runs left (the investigation's, the triage's and the build's among them) wait in the peek
+  // too, none retired by the review's comment: five to post, and only the review's is.
+  const waiting = peekSheet(page).getByRole("article", { name: "Comment on CA-401" }).getByRole("button", { name: "Post comment" });
+  await expect(waiting).toHaveCount(5);
+  const post = peekSheet(page).locator(`article[data-draft="${id}"]`).getByRole("button", { name: "Post comment" });
+  await pressUntil(page, "Tab", post, 10);
   expect((await jiraWrites(page)).length).toBe(1);
   await press(page, "Enter");
-  await press(page, "Enter");
-  await expect(stepChip(page, "review").locator("[data-batch-outcome]")).toHaveText("Approved 2.");
-  await expect.poll(async () => (await jiraWrites(page)).filter((w) => w.type === "comment").length).toBe(2);
+  await expect.poll(async () => (await jiraWrites(page)).filter((w) => w.type === "comment").map((w) => w.proposalId)).toEqual([id]);
+  await expect(waiting).toHaveCount(4);
+  await expect(peekSheet(page).locator(`article[data-draft="${id}"]`).getByRole("button", { name: "Post comment" })).toHaveCount(0);
 });
 
 test("j and k move through the list and the tray and stop at the ends; Enter on a tray item goes to its card", async ({ page }) => {

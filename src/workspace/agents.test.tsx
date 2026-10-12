@@ -548,3 +548,13 @@ describe("controls inside a card", () => {
     expect(failure.on.retry).toHaveBeenCalledOnce();
   });
 });
+
+describe("publishing the shown order", () => {
+  // The suite renders to static markup, so no effect runs here; this guards the source instead.
+  const source = readFileSync(new URL("./AgentsView.tsx", import.meta.url), "utf8");
+
+  it("publishes it in a layout effect, which the native j and k listener cannot outrun", () => {
+    expect(source).toMatch(/useLayoutEffect\(\(\) => onOrder\?\.\(order\)/);
+    expect(source).not.toMatch(/useEffect\(\(\) => onOrder\?\.\(order\)/);
+  });
+});

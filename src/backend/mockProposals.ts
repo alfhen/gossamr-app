@@ -1,6 +1,6 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
-import { capRefusal, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reviewSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
+import { capRefusal, isRunComment, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
 import { commentable } from "../lib/diffHunks";
 import { followUpProblem } from "../workspace/followUp";
 import { answerProblem } from "../lib/answer";
@@ -8,7 +8,7 @@ import { bodyChange, markdownOf } from "./mockMarkdown";
 import { planSectionOf } from "./mockPlanSection";
 import { readStored, writeStored } from "../workspace/storage";
 import { AnswerLostError, ReviewOutdatedError } from "./mockGithub";
-import type { ChangedFile, Intent, ItemRef, MaybePosted, PostedReview, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, ReviewComment, WorkItemKind, WorkstreamActor } from "../types";
+import type { ChangedFile, Intent, ItemRef, MaybePosted, PostedReview, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, ReviewComment, RunKind, WorkItemKind, WorkstreamActor } from "../types";
 
 /** A description update carrying a `Gossamr Plan` section that an agent run left: the plan a build follows once the person approves it. As `is_run_plan_rewrite` in `proposals.rs`. */
 export const isRunPlanRewrite = (p: Proposal) => p.origin.type === "run" && p.intent.type === "rewrite" && !!p.intent.body && !!planSectionOf(p.intent.body.to);
@@ -80,6 +80,9 @@ export class MockProposals {
   /** Called when a draft was made, approved, skipped or retired, for the audit of its workstream (or of `workstream` when given); set by the backend that keeps them. */
   audit: (p: Proposal, actor: WorkstreamActor, action: string, detail?: string, workstream?: string | null) => void = () => {};
 
+  /** The kind of a run by its id, null when there is no such run; set by the backend that keeps the runs. */
+  runKind: (runId: string) => RunKind | null = () => null;
+
   constructor(private readonly apply: (intent: Intent, already: ItemRef[]) => Promise<ItemRef[]>) {}
 
   /** Stores a draft the way the assistant would; `workstream` is the conversation's when it was asked in one. */
@@ -141,14 +144,15 @@ export class MockProposals {
   /**
    * The older drafts `p` replaces in its workstream, and the ones it leaves standing with why; throws when it would
    * replace one the person owns, or when Pip already has the workstream's share waiting. A review an agent run left is
-   * tidied by its pull request instead, in any workstream or none (`tidy_reviews`). As `tidy` in `proposals.rs`.
+   * tidied by its pull request instead, in any workstream or none (`tidy_reviews`), and a comment one left by its ticket in its workstream (`tidy_run_comments`). As `tidy` in `proposals.rs`.
    */
   private tidy(p: Proposal): { replaced: Proposal[]; kept: { proposal: Proposal; why: string }[] } {
-    if (isRunReview(p)) {
+    const byTicket = p.createdBy === "agent" && isRunComment(p);
+    if (isRunReview(p) || byTicket) {
       const replaced: Proposal[] = [];
       const kept: { proposal: Proposal; why: string }[] = [];
       for (const older of this.drafts.filter((d) => d.state.type === "pending")) {
-        const verdict = reviewSupersession(older, p);
+        const verdict = byTicket ? runCommentSupersession(older, p, this.runKind) : reviewSupersession(older, p);
         if (verdict === "supersede") replaced.push(older);
         else if (verdict) kept.push({ proposal: older, why: verdict });
       }

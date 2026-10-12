@@ -36,6 +36,20 @@ test.describe("the GitHub review card says what it posts (R13, R4)", () => {
     expect(await preview.innerText()).not.toMatch(/\*\*/);
   });
 
+  test("the text boxes keep their Markdown and a rendered preview shows what GitHub will, in the card and the pull request view", async ({ page }) => {
+    const review = await reviewedDraft(page);
+    const comment = review.getByRole("textbox", { name: /^Comment on / }).first();
+    await expect(comment).toHaveValue(/\*\*/);
+    const preview = review.locator("[data-review-preview]").first();
+    await expect(preview).toBeVisible();
+    expect(await preview.innerText()).not.toMatch(/\*\*/);
+    await expect(preview.locator("b").first()).toBeVisible();
+    await review.getByRole("button", { name: "Open PR view" }).click();
+    const banner = page.locator("[data-pull-summary]");
+    await expect(banner).toBeVisible();
+    expect(await banner.innerText()).not.toMatch(/\*\*|`|^#/m);
+  });
+
   test("once posted, the card says how many comments it went with", async ({ page }) => {
     const review = await reviewedDraft(page);
     await review.getByRole("button", { name: /^Post review/ }).click();

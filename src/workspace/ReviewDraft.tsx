@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type TextareaHTMLAttributes } from "react";
 import { Link } from "../components/Adf";
+import { Markdown } from "../components/Markdown";
 import { useAutoHeight } from "../components/autoHeight";
+import { parseBlocks, plainMarkdown } from "../lib/markdown";
 import { hunkLinesAround } from "../lib/diffHunks";
 import { KEPT_EDITED, keptOlderReviews, REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
 import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } from "../types";
@@ -132,6 +134,22 @@ export function keptOlderNote(p: Proposal, all: readonly Proposal[]): string | n
   return kept.some((k) => k.why === KEPT_EDITED)
     ? `An older review of #${number} that you edited is still waiting; this one didn't replace it.`
     : `An older review of #${number} that may already be on GitHub is still waiting; this one didn't replace it.`;
+}
+
+/** Whether `text` has anything Markdown would change on GitHub: a marker, a list, a heading, code, a table or a break. */
+export const hasMarkdown = (text: string): boolean => {
+  const blocks = parseBlocks(text);
+  return blocks.length > 1 || blocks.some((b) => b.type !== "paragraph") || plainMarkdown(text) !== text;
+};
+
+/** What GitHub will show for a text box's words, read-only under it. Nothing for words that have no Markdown in them. */
+export function ReviewPreview({ text, label }: { text: string; label: string }) {
+  if (!hasMarkdown(text)) return null;
+  return (
+    <div role="group" aria-label={`Preview of ${label}`} data-review-preview className="rounded-md border border-ws-sep2 bg-ws-bar px-2 py-1.5 text-sm font-normal">
+      <Markdown text={text} />
+    </div>
+  );
 }
 
 /** A review's text box, as tall as its words, so a long comment never hides behind a scroll of its own. */
@@ -376,11 +394,12 @@ export function ReviewDraft({
               className="w-full scroll-mb-16 resize-none rounded-md border border-ws-sep2 bg-ws-win px-2 py-1.5 text-base font-normal [overflow-wrap:anywhere]"
             />
           ) : (
-            <span data-review-summary className="font-normal whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {review.summary}
-            </span>
+            <div data-review-summary className="font-normal [overflow-wrap:anywhere]">
+              <Markdown text={review.summary} />
+            </div>
           )}
         </label>
+        {open && <ReviewPreview text={summary} label="the review summary" />}
         {comments.length > 0 && (
           <ul className="m-0 grid list-none gap-2 p-0">
             {comments.map((c, i) => {
@@ -414,8 +433,11 @@ export function ReviewDraft({
                           className="w-full scroll-mb-16 resize-none rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-base [overflow-wrap:anywhere]"
                         />
                       ) : (
-                        <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{c.body}</span>
+                        <div className="[overflow-wrap:anywhere]">
+                          <Markdown text={c.body} />
+                        </div>
                       )}
+                      {open && <ReviewPreview text={c.body} label={`the comment on ${place}`} />}
                     </>
                   )}
                 </li>
