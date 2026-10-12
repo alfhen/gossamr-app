@@ -208,6 +208,12 @@ fn action_line(e: &WorkstreamEvent, labels: &HashMap<&str, &str>) -> String {
         ("draft_created", _) => format!("made {draft}"),
         ("draft_approved", _) => format!("approved {draft}"),
         ("draft_skipped", _) => format!("skipped {draft}"),
+        ("undone", _) => match e.detail.as_deref() {
+            Some("draft_skipped") => format!("undid skipping {draft}"),
+            Some("held") => "undid holding this workstream".into(),
+            Some("mode_set") => "undid their change of mode".into(),
+            _ => "undid their last action".into(),
+        },
         (other, _) => other.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == ' ').take(40).collect::<String>().replace('_', " "),
     };
     format!("{} · the person {what}", e.at.format("%Y-%m-%d %H:%M"))
@@ -575,6 +581,8 @@ mod tests {
         assert!(line(WorkstreamEvent::new("w", Actor::Person, "run_stopped", at).run("r-a")).ends_with("the person stopped R1"));
         assert!(line(WorkstreamEvent::new("w", Actor::Person, "run_answered", at).run("r-z")).ends_with("the person answered run r-z"));
         assert!(line(WorkstreamEvent::new("w", Actor::Person, "draft_skipped", at).proposal("p1")).ends_with("the person skipped draft p1"));
+        assert!(line(WorkstreamEvent::new("w", Actor::Person, "undone", at).proposal("p1").detail("draft_skipped")).ends_with("the person undid skipping draft p1"));
+        assert!(line(WorkstreamEvent::new("w", Actor::Person, "undone", at).detail("held")).ends_with("the person undid holding this workstream"));
         assert!(line(WorkstreamEvent::new("w", Actor::Person, "held <<<x", at)).ends_with("the person held x"));
     }
 

@@ -822,6 +822,12 @@ export interface RunQuery {
  */
 export type WorkstreamMode = "advise" | "manage";
 
+/**
+ * Mirrors `WorkstreamUndo` in src-tauri/src/inbox/workstreams.rs. What the person's Undo takes back, with how the workstream
+ * stood before: a hold (`was`: the hold it replaced, if any) or a switch of mode (`was`, and the mode a tripwire had kept).
+ */
+export type WorkstreamUndo = { type: "hold"; was: string | null } | { type: "mode"; was: WorkstreamMode; resumeMode: WorkstreamMode | null };
+
 /** An auto-start rule: which finished run may start which successor on its own. */
 export type WorkstreamRule = "investigate_triage" | "triage_plan" | "plan_build" | "build_review" | "fix_round" | "review_verify";
 

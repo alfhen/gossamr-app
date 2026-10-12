@@ -45,6 +45,7 @@ import type {
   WorkFilter,
   WorkItem,
   WorkstreamMode,
+  WorkstreamUndo,
   WorkstreamRule,
   WorkstreamsChanged,
 } from "../types";
@@ -550,6 +551,10 @@ export class MockBackend implements Backend {
     return this.workstreams.resume(id);
   }
 
+  async workstreamsUndo(id: string, undo: WorkstreamUndo) {
+    return this.workstreams.undo(id, undo);
+  }
+
   async workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null) {
     return this.workstreams.setRule(id, rule, on);
   }
@@ -904,6 +909,10 @@ export class MockBackend implements Backend {
 
   proposalsSkip(id: string) {
     return this.proposals.skip(id);
+  }
+
+  proposalsUnskip(id: string) {
+    return this.proposals.unskip(id);
   }
 
   /**

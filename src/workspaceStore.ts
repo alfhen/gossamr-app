@@ -10,6 +10,7 @@ import type { CodeSummary } from "./lib/devLinks";
 import { newStrays, strayText } from "./workspace/watchLogic";
 import { useTabs } from "./workspace/tabsStore";
 import { messageOf, useToasts } from "./workspace/toasts";
+import { offerUndo } from "./workspace/undo";
 import type {
   ConnectionInfo,
   ContainerRef,
@@ -96,7 +97,10 @@ interface WorkspaceState {
   sendFollowUp(id: string, message: string): Promise<void>;
   /** Sends an answer draft to the run that asked. Rejects with the reason when it can't be sent; the draft stays pending. */
   sendAnswerDraft(id: string, message: string): Promise<void>;
+  /** Skips a pending draft, and offers Undo for a few seconds: nothing was written anywhere, so it can be put back. */
   skip(id: string): Promise<Proposal>;
+  /** Brings a draft skipped a moment ago back to pending, as Undo does. */
+  unskip(id: string): Promise<Proposal>;
   /** Drafts moving an item to a status, replacing any transition draft still pending for it. Nothing is written until approval. */
   draftTransition(item: ItemRef, to: StatusDef): Promise<Proposal>;
   dispose(): void;
@@ -431,7 +435,22 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   async skip(id) {
     const backend = get().backend!;
     const mine = generation;
+    const was = get().proposals[id]?.state.type;
     const p = await backend.proposalsSkip(id);
+    if (backend !== get().backend || mine !== generation) return p;
+    set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));
+    // A skip changes nothing outside the draft, so it is the one decision that can be taken back.
+    if (was === "pending" && p.state.type === "skipped") {
+      const on = targetOf(p.intent)?.key;
+      offerUndo({ text: `Skipped the draft${on ? ` on ${on}` : ""}.`, undone: "The draft is back.", undo: async () => void (await get().unskip(id)) });
+    }
+    return p;
+  },
+
+  async unskip(id) {
+    const backend = get().backend!;
+    const mine = generation;
+    const p = await backend.proposalsUnskip(id);
     if (backend !== get().backend || mine !== generation) return p;
     set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));
     return p;

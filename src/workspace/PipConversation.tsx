@@ -12,6 +12,7 @@ import type { ItemRef, Proposal, Workstream } from "../types";
 import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
 import { PIP_INPUT_ID, PIP_ROOT, stepDraftCards, upToNewestDraft } from "./draftKeys";
 import { PipRunStrip } from "./PipRunCard";
+import { upToTimeline } from "./timelineKeys";
 import { AttachButton, AttachedThumbs, TurnImages, type useAttachments } from "./PipImages";
 import { currentContext } from "./pipHooks";
 import { appliedState, usePip, type AppliedState } from "./pipStore";
@@ -333,7 +334,7 @@ export function workstreamIntro(workstream: Pick<Workstream, "itemKey" | "title"
 }
 
 /** The workstream intro's one button: the conversation's first suggestion, asked through the composer as its chip would be. */
-function IntroAction({ conversation, text }: { conversation: string; text: string }) {
+export function IntroAction({ conversation, text }: { conversation: string; text: string }) {
   return (
     <button
       type="button"
@@ -345,6 +346,9 @@ function IntroAction({ conversation, text }: { conversation: string; text: strin
     </button>
   );
 }
+
+/** What General's empty conversation opens with. */
+export const GENERAL_INTRO = "I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing is posted to Jira or GitHub until you approve.";
 
 /**
  * The conversation itself: running agents, drafts left from before, then each question with its answer. Up and down move
@@ -375,7 +379,7 @@ export function PipConversation({ conversation, proposals, bodyRef, primary = nu
             {primary && <IntroAction conversation={conversation} text={primary} />}
           </div>
         ) : (
-          <p className="m-0 text-ws-ink2">I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing is posted to Jira or GitHub until you approve.</p>
+          <p className="m-0 text-ws-ink2">{GENERAL_INTRO}</p>
         ))}
       {turns.map((t) => (
         <TurnView key={t.requestId} turn={t} proposals={proposals} afterQueued={t.status === "queued" && t.requestId !== firstQueued} />
@@ -638,7 +642,7 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
           id={PIP_INPUT_ID}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => upToNewestDraft(e, input, e.currentTarget.closest(PIP_ROOT) ?? document)}
+          onKeyDown={(e) => upToNewestDraft(e, input, e.currentTarget.closest(PIP_ROOT) ?? document) || upToTimeline(e, input, e.currentTarget.closest(PIP_ROOT) ?? document)}
           onPaste={(e) => {
             const files = filesIn(e.clipboardData).filter((f) => f.type === "" || f.type.startsWith("image/"));
             if (!files.length) return;

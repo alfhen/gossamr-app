@@ -7,6 +7,7 @@ import { hunkLinesAround } from "../lib/diffHunks";
 import { KEPT_EDITED, keptOlderReviews, REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
 import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } from "../types";
 import type { DraftCardProps } from "./DraftCard";
+import { useCardKeys } from "./draftCardKeys";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
 import { openPullView, sameCommit, usePullDiff, type PullDiffState } from "./pullViewStore";
 import { takesBackendText } from "./RewriteDiff";
@@ -315,6 +316,15 @@ export function ReviewDraft({
       });
   };
   const hint = `review-markdown-${p.id}`;
+  const approvable = open && !working && state !== "applying" && !problem;
+  const keys = useCardKeys(p, {
+    // Posting by key is the Post review button's step, asked for Enter first, and only where the token can post.
+    approve: canPost && approvable ? () => onApprove(edit) : undefined,
+    skip: open && !working ? onSkip : undefined,
+    edit: open ? () => requestAnimationFrame(() => card.current?.querySelector<HTMLElement>("textarea")?.focus()) : undefined,
+    open: pullView,
+    canApprove: canPost,
+  });
   const change = (i: number, next: Partial<Held>) => {
     markEdited(keyOf(comments[i]));
     setComments((was) => was.map((c, j) => (j === i ? { ...c, ...next } : c)));
@@ -326,11 +336,16 @@ export function ReviewDraft({
       aria-label={title}
       data-draft={p.id}
       data-github-review
-      onFocus={() => (hadFocus.current = true)}
+      {...keys.props}
+      onFocus={(ev) => {
+        hadFocus.current = true;
+        keys.props.onFocus(ev);
+      }}
       onBlur={(ev) => {
         if (ev.relatedTarget && !ev.currentTarget.contains(ev.relatedTarget as Node)) hadFocus.current = false;
+        keys.props.onBlur(ev);
       }}
-      className={`ws-legacy ${PEEK_DRAFT_MARGIN} overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
+      className={`ws-legacy ${PEEK_DRAFT_MARGIN} overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
         <span aria-hidden>✦</span>
@@ -518,6 +533,11 @@ export function ReviewDraft({
           )}
         </div>
       </div>
+      {keys.hint && (
+        <p role="status" data-key-hint className={`m-0 border-t border-ws-sep px-3 py-1 text-xs ${keys.asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-bar text-ws-ink3"}`}>
+          {keys.hint}
+        </p>
+      )}
     </article>
   );
 }

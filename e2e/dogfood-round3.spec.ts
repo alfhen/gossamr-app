@@ -60,11 +60,11 @@ test.describe("the GitHub review card says what it posts (R13, R4)", () => {
 });
 
 test.describe("keyboard, copy and focus fixes (R6, R10, R12, R14)", () => {
-  test("Pip home's footer says a and s need Enter, and no longer lists a twice", async ({ page }) => {
+  test("Pip home's footer names a, e, d and s, says a needs Enter and skips undo, and no longer lists a twice", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
     const hints = page.locator("[data-pip-home-hints]");
-    await expect(hints).toContainText("then ↵: approve or skip a draft");
+    await expect(hints).toContainText("on a draft: approve (then ↵), edit, skip; skips undo");
     await expect(hints).not.toContainText("a opens a run draft");
   });
 });

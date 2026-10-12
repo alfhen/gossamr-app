@@ -43,8 +43,12 @@ import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { stableGroups } from "./stableOrder";
 import { useNow } from "./useNow";
-import { openNeed } from "./needsActions";
-import { useNeedsYou } from "./useNeeds";
+import { agentKey } from "./agentKeys";
+import { arm, confirmArmed, disarm, keyPlan, openNeed } from "./needsActions";
+import { usePipHome } from "./pipHomeStore";
+import { currentNeeds, useNeedsYou } from "./useNeeds";
+import type { TimelineFilter, TimelineScope } from "../lib/timeline";
+import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
@@ -149,6 +153,11 @@ export interface AgentsActions {
   openSafety(): void;
   /** Opens a need on Pip home, from a run's "In Needs you" pill. */
   openNeed?(need: Need): void;
+  /**
+   * Another of the timeline's filters or scopes: All, Drafts or Decisions in every workstream, or Runs in the selected
+   * workstream, on Pip home.
+   */
+  showTimeline?(filter: TimelineFilter, scope: TimelineScope): void;
 }
 
 function Toolbar({ runs, filters, view, group, introShown, on }: { runs: readonly Run[]; filters: AgentFilters; view: AgentsViewMode; group: AgentsGroup; introShown: boolean; on: AgentsActions }) {
@@ -266,6 +275,8 @@ export interface AgentsScreenProps {
   needsYou?: number;
   /** The runs that are one of those things, by run id, with the need's key; each shows an "In Needs you" pill that opens it. */
   inNeeds?: ReadonlyMap<string, Need>;
+  /** The key press in Needs you's list or here that waits for Enter, shown on its run's card. */
+  asking?: { key: string; text: string } | null;
   now: number;
   ticketTitle(run: Run): string | null;
   /** Whether a finished run has a comment draft waiting. */
@@ -283,7 +294,7 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, needsYou, inNeeds, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
@@ -331,6 +342,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     review: reviewOf?.(run),
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
     onOpenNeed: inNeeds?.has(run.id) ? () => on.openNeed?.(inNeeds.get(run.id)!) : undefined,
+    asking: asking && inNeeds?.get(run.id)?.key === asking.key ? asking.text : undefined,
     failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
   });
 
@@ -371,6 +383,16 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
         </button>
         <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
       </header>
+      {/* Agents is the timeline's Runs filter across every workstream; the other filters and This workstream are timelines on Pip home. */}
+      {on.showTimeline && (
+        <div data-agents-scope className="border-b border-ws-sep px-6 py-1.5">
+          <TimelineFilterBar
+            value="runs"
+            onChange={(f) => f !== "runs" && on.showTimeline?.(f, "every")}
+            after={<TimelineScopeToggle value="every" filter="runs" onChange={(s) => s !== "every" && on.showTimeline?.("runs", s)} />}
+          />
+        </div>
+      )}
       <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} on={on} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-[max(80px,var(--ws-launcher-clear,0px))]">
         <div
@@ -461,6 +483,7 @@ const actions: AgentsActions = {
   startAgent: () => useRuns.getState().setPicking(true),
   openSafety: () => useRuns.getState().openSafety(),
   openNeed,
+  showTimeline,
 };
 
 export function AgentsView() {
@@ -475,6 +498,7 @@ export function AgentsView() {
   const stopping = useRuns((s) => s.stopping);
   const opened = useRuns((s) => s.terminalOpened);
   const needs = useNeedsYou();
+  const asking = usePipHome((s) => s.asking);
   const inNeeds = useMemo(() => new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : []))), [needs]);
   const view = usePrefs((s) => s.agentsView);
   const group = usePrefs((s) => s.agentsGroup);
@@ -505,6 +529,24 @@ export function AgentsView() {
         ev.preventDefault();
         useRuns.getState().setPicking(true);
         return;
+      }
+      // The one key model on a run's card: o opens it, a, d, s and e act as on its row in Needs you.
+      const card = target.matches?.("[data-run-id]") ? target : null;
+      const runId = card?.getAttribute("data-run-id") ?? null;
+      const need = runId ? currentNeeds().find((n) => n.runId === runId) : undefined;
+      const asked = usePipHome.getState().asking;
+      const listed = agentKey(ev, !!card, !!asked && asked.key === need?.key);
+      if (listed) {
+        if (listed.type === "confirm") return void (ev.preventDefault(), confirmArmed());
+        if (listed.type === "cancel") return void (ev.preventDefault(), disarm());
+        if (listed.type === "open") return void (ev.preventDefault(), runId && useRuns.getState().openRun(runId));
+        const plan = need ? keyPlan(need, listed.act) : null;
+        if (need && plan) {
+          ev.preventDefault();
+          if (plan.type === "ask") return arm(need, plan);
+          if (plan.type === "do") return plan.run();
+          return openNeed(need, { edit: plan.edit });
+        }
       }
       const { selectedId: current, select } = useRuns.getState();
       const action = keyAction(ev.key, current, orderRef.current);
@@ -542,6 +584,7 @@ export function AgentsView() {
       opened={opened}
       needsYou={needs.length}
       inNeeds={inNeeds}
+      asking={asking}
       now={now}
       ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
       draftReady={(run) => !!runDraftOf(proposals, run.id) || !!runTicketDraftOf(proposals, run.id)}

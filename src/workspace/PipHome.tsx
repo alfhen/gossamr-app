@@ -3,7 +3,9 @@ import { useClaude } from "../claudeStore";
 import { stageText } from "../lib/workstreamStage";
 import type { Run, WorkstreamView } from "../types";
 import { PipAvatar } from "./PipAvatar";
-import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, PipConversation, useAnswering, workstreamConversation } from "./PipConversation";
+import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, useAnswering, workstreamConversation } from "./PipConversation";
+import { TimelineView } from "./Timeline";
+import { TIMELINE_ENTRY } from "./timelineKeys";
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { ConversationLine, escapeCancelsTurn, useConversationDrafts, usePipChips } from "./PipPane";
 import { popoverOpen } from "./Popover";
@@ -30,6 +32,7 @@ import { PipOrientation } from "./PipOrientation";
 
 const PIP_HOME_HINTS = pipHomeHints();
 const NEEDS_HINTS = pipHomeHints(true);
+const TIMELINE_HINTS = pipHomeHints(false, true);
 
 /** The ticket's key comes first on its own, so the title loses it when it starts with it, as a workstream's title does. */
 export function rowTitle(ws: WorkstreamView["workstream"]): string {
@@ -170,8 +173,11 @@ export function StepsColumn({ workstream }: { workstream: WorkstreamView | null 
   );
 }
 
-/** The conversation column of Pip home: the same conversation and composer the Pip pane has. */
-export function HomeConversation({ workstream, footer = null, pane = null }: { workstream: WorkstreamView | null; footer?: string | null; pane?: ReactNode }) {
+/**
+ * The conversation column of Pip home: the workstream's timeline (its conversation with Pip, its runs, drafts and audit in
+ * one list) over the same composer the Pip pane has.
+ */
+export function HomeConversation({ workstream, footer = null, pane = null, needs = [] }: { workstream: WorkstreamView | null; footer?: string | null; pane?: ReactNode; needs?: readonly Need[] }) {
   const conversation = workstream ? workstreamConversation(workstream.workstream.id) : GENERAL_CONVERSATION;
   const running = useAnswering(conversation);
   const attached = useAttachments();
@@ -195,7 +201,7 @@ export function HomeConversation({ workstream, footer = null, pane = null }: { w
         </div>
       </header>
       {pane}
-      <PipConversation key={conversation} conversation={conversation} proposals={proposals} primary={primary} />
+      <TimelineView key={conversation} conversation={conversation} workstream={workstream} proposals={proposals} needs={needs} primary={primary} />
       <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} footer={footer} />
     </section>
   );
@@ -226,6 +232,10 @@ function useFocusTarget() {
   const target = usePipHome((s) => s.focusTarget);
   useEffect(() => {
     if (!target) return;
+    // What is asked for may be filtered out of the timeline: it shows everything again.
+    if (usePipHome.getState().timelineFilter !== "all") usePipHome.getState().setTimelineFilter("all");
+    // And it is in the selected workstream's own timeline.
+    if (usePipHome.getState().timelineScope !== "workstream") usePipHome.getState().setTimelineScope("workstream");
     let frame = 0;
     let tries = 0;
     const find = () => {
@@ -393,6 +403,8 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           const plan = need ? keyPlan(need, action.act) : null;
           if (!need || !plan) return;
           if (plan.type === "ask") return setPaneIntent(null), arm(need, plan);
+          // Skipping or dismissing acts at once and offers Undo; the row keeps the keyboard, or hands it on as it leaves.
+          if (plan.type === "do") return setPaneIntent(null), plan.run();
           return openNeed(need, { edit: plan.edit });
         }
         case "confirm":
@@ -464,8 +476,13 @@ export function PipHome() {
   const orientationSeen = usePrefs((s) => s.pipOrientationSeen);
   // The footer names the list's own keys while the keyboard is on one of its rows.
   const [onNeed, setOnNeed] = useState(false);
+  // And the timeline's while it is on one of its entries.
+  const [onTimeline, setOnTimeline] = useState(false);
   useEffect(() => {
-    const on = () => setOnNeed(!!document.activeElement?.closest("[data-needs-you-group], [data-needs-you-need]"));
+    const on = () => {
+      setOnNeed(!!document.activeElement?.closest("[data-needs-you-group], [data-needs-you-need]"));
+      setOnTimeline(!!document.activeElement?.closest(TIMELINE_ENTRY));
+    };
     document.addEventListener("focusin", on);
     document.addEventListener("focusout", on);
     return () => {
@@ -503,7 +520,7 @@ export function PipHome() {
         {/* Run drafts that need nothing chosen are read and started in place here, in the conversation and the rail alike. */}
         <InlineStartContext.Provider value={true}>
           <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
-            <HomeConversation workstream={workstream} footer={footer} pane={<NeedsPane needs={needsYou} />} />
+            <HomeConversation workstream={workstream} footer={footer} needs={needsYou} pane={<NeedsPane needs={needsYou} />} />
           </div>
           <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">
             <StepsColumn workstream={workstream} />
@@ -511,7 +528,7 @@ export function PipHome() {
         </InlineStartContext.Provider>
       </div>
       <footer data-pip-home-hints className="@container flex h-8 shrink-0 items-center border-t border-ws-sep bg-ws-bar px-4 text-xs text-ws-ink3">
-        <ShortcutHint view="list" hints={onNeed ? NEEDS_HINTS : PIP_HOME_HINTS} />
+        <ShortcutHint view="list" hints={onNeed ? NEEDS_HINTS : onTimeline ? TIMELINE_HINTS : PIP_HOME_HINTS} />
       </footer>
     </div>
   );

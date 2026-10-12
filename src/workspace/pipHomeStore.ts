@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { TimelineFilter, TimelineScope } from "../lib/timeline";
 
 /** The three columns of Pip home, left to right. */
 export const PIP_HOME_COLUMNS = ["list", "conversation", "rail"] as const;
@@ -35,6 +36,19 @@ interface PipHomeState {
   expanded: ReadonlySet<string>;
   /** The key press in the Needs you list that waits for Enter. */
   asking: NeedAsking | null;
+  /**
+   * The group (its row id, "general" for General) whose "Approve N safe drafts" preview the palette asked to open: the list
+   * opens the group, shows the combined preview and clears this. It confirms nothing.
+   */
+  batchPreview: string | null;
+  /** What the workstream's timeline shows: everything, its runs, its drafts or its decisions. Agents is Runs across every workstream. */
+  timelineFilter: TimelineFilter;
+  setTimelineFilter(filter: TimelineFilter): void;
+  /** Whose timeline that is: the selected workstream's, or every open workstream's and General's merged. */
+  timelineScope: TimelineScope;
+  setTimelineScope(scope: TimelineScope): void;
+  /** Asks the list to open group `gid`'s combined preview of its safe drafts, for the person to confirm. */
+  previewBatch(gid: string): void;
   /** Opens need `key`'s decision in the middle column, for workstream `workstreamId` (null is General). */
   decide(key: string, workstreamId: string | null): void;
   /** Remounts the open decision. */
@@ -52,7 +66,7 @@ interface PipHomeState {
   reset(): void;
 }
 
-const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), asking: null } as const;
+const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), asking: null, batchPreview: null, timelineFilter: "all", timelineScope: "workstream" } as const;
 
 export const usePipHome = create<PipHomeState>((set) => ({
   ...BLANK,
@@ -66,6 +80,9 @@ export const usePipHome = create<PipHomeState>((set) => ({
   closeDecision: () => set({ deciding: null, asking: null }),
   setExpanded: (id, on) => set((s) => (s.expanded.has(id) === on ? s : { expanded: new Set(on ? [...s.expanded, id] : [...s.expanded].filter((x) => x !== id)) })),
   ask: (asking) => set({ asking }),
+  previewBatch: (gid) => set((s) => ({ batchPreview: gid, expanded: new Set([...s.expanded, gid]) })),
+  setTimelineFilter: (timelineFilter) => set({ timelineFilter }),
+  setTimelineScope: (timelineScope) => set({ timelineScope }),
   reset: () => set({ ...BLANK }),
 }));
 

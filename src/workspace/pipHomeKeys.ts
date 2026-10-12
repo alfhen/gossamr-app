@@ -1,4 +1,5 @@
 import { PIP_INPUT_ID } from "./draftKeys";
+import { keyIntent } from "./keyMap";
 import { PIP_HOME_COLUMNS, type PipHomeColumn } from "./pipHomeStore";
 
 /**
@@ -37,8 +38,8 @@ export type PipHomeKeyAction =
   | { type: "decide" }
   /** ← on a Needs you row: folds its group. */
   | { type: "collapse" }
-  /** a (approve or allow), d (deny or dismiss) or e (edit) on a Needs you row. */
-  | { type: "act"; act: "approve" | "deny" | "edit" }
+  /** a (approve or allow), d (dismiss or deny), s (skip) or e (edit) on a Needs you row */
+  | { type: "act"; act: "approve" | "dismiss" | "skip" | "edit" }
   /** Enter on a row that asked for it, or any other key. */
   | { type: "confirm" }
   | { type: "cancel" }
@@ -96,7 +97,8 @@ export function pipHomeKey(ev: PipHomeKeyEvent, state: PipHomeKeyState): PipHome
   const need = state.kind === "group" || state.kind === "need";
   // A key that asked for Enter: Enter does it, anything else only cancels it, as on a draft's card.
   if (need && state.asking) return ev.key === "Enter" ? { type: "confirm" } : { type: "cancel" };
-  const move = ev.key === "j" || ev.key === "ArrowDown" ? 1 : ev.key === "k" || ev.key === "ArrowUp" ? -1 : 0;
+  const intent = keyIntent(ev);
+  const move = intent === "next" ? 1 : intent === "prev" ? -1 : 0;
   if (move) {
     if (!state.count) return null;
     // From nothing focused, j starts at the top and k at the bottom; at either end it stays.
@@ -104,24 +106,25 @@ export function pipHomeKey(ev: PipHomeKeyEvent, state: PipHomeKeyState): PipHome
     return { type: "focus", index };
   }
   if (need) {
-    switch (ev.key) {
-      case "Enter":
-      case " ":
-      case "ArrowRight":
+    // The one model (keyMap.ts): Enter or o opens, a approves, e edits, d dismisses or denies, s skips, Esc goes back.
+    switch (intent) {
+      case "open":
         return { type: "decide" };
-      case "ArrowLeft":
-        return { type: "collapse" };
-      case "a":
+      case "approve":
         return { type: "act", act: "approve" };
-      case "d":
-        return { type: "act", act: "deny" };
-      case "e":
+      case "dismiss":
+        return { type: "act", act: "dismiss" };
+      case "skip":
+        return { type: "act", act: "skip" };
+      case "edit":
         return { type: "act", act: "edit" };
-      case "Escape":
+      case "back":
         return state.pane ? { type: "closePane" } : null;
     }
-    return null;
+    if (ev.key === " " || ev.key === "ArrowRight") return { type: "decide" };
+    return ev.key === "ArrowLeft" ? { type: "collapse" } : null;
   }
+  if (state.kind === "run" && intent === "open") return { type: "open" };
   if (ev.key !== "Enter" && ev.key !== " ") return null;
   switch (state.kind) {
     case "row":
