@@ -82,8 +82,8 @@ export function escapeClosesPane(s: { peekOpen: boolean; ticked: boolean; editin
  * lightbox, or a confirmation or field that handles Esc itself, `handled`), and only then does Esc stop Pip's answer in
  * the focused conversation, if it is answering. Nothing to stop is nothing done.
  */
-export function escapeCancelsTurn(s: { sheetOpen: boolean; peekOpen: boolean; paletteOpen: boolean; popoverOpen: boolean; lightbox: boolean; handled: boolean; running: boolean }): boolean {
-  if (s.sheetOpen || s.peekOpen || s.paletteOpen || s.popoverOpen || s.lightbox || s.handled) return false;
+export function escapeCancelsTurn(s: { sheetOpen: boolean; peekOpen: boolean; paletteOpen: boolean; popoverOpen: boolean; lightbox: boolean; paneOpen: boolean; handled: boolean; running: boolean }): boolean {
+  if (s.sheetOpen || s.peekOpen || s.paletteOpen || s.popoverOpen || s.lightbox || s.paneOpen || s.handled) return false;
   return s.running;
 }
 

@@ -1,16 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import { PIP_INPUT, advanceRuns, askPip, openApp, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream } from "./support/app";
+import { PIP_INPUT, advanceRuns, askPip, openApp, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream } from "./support/app";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const peekAgents = (page: Page) => peekSheet(page).locator("#peek-agents");
 /** The Agents view's runs; Pip's strip of agents shows runs too, and only the view counts. */
 const agentRuns = (page: Page) => page.locator('main [data-run-id]:not(aside[aria-label="Pip"] *)');
-
-/** Waits until Pip has finished answering in the pane. */
-async function settled(page: Page) {
-  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-}
 
 /** What the sample backend's workstreams audit holds, through `__gossamrMock` (exposeMockClock in src/backend/mockWatch.ts). */
 const audit = (page: Page) =>

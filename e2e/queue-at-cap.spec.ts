@@ -128,5 +128,6 @@ test("a run waiting for a slot can be stopped from its sheet, and Stop all stops
   expect((await mockRuns(page)).filter((r) => [...running, ...waiting].includes(r.id)).map((r) => r.state)).toEqual(["stopped", "stopped", "stopped", "stopped", "stopped"]);
   await advanceRuns(page, 2);
   expect(await live(page)).toBe(0);
-  await expect(page.getByText("Stopped 3 agents and 1 waiting to start")).toBeVisible();
+  // Toasts show one at a time and each stays for seconds, so this one queues behind the earlier ones; expectToast clears those.
+  await expectToast(page, "Stopped 3 agents and 1 waiting to start");
 });
