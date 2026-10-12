@@ -26,6 +26,8 @@ export interface AgentItemProps {
   onDraftComment?(): void;
   /** Present on a finished plan run that can be built from. */
   onBuildFromPlan?(): void;
+  /** Present on a run stopped at its limit: wakes it with the standard words, as Resume in its sheet does. Only the person's click does this. */
+  onResume?(): void;
   /** Present on a finished build that opened a pull request that can be reviewed. */
   onReviewThis?(): void;
   /** A comment draft from this run is waiting. */
@@ -151,7 +153,7 @@ export function ReadOnlyBadge({ run, compact = false }: { run: Run; compact?: bo
   );
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onResume, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -219,6 +221,18 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
               Draft comment
             </button>
           )
+        )}
+        {onResume && (
+          <button
+            type="button"
+            data-resume
+            onClick={(ev) => (ev.stopPropagation(), onResume())}
+            onKeyDown={(ev) => ev.stopPropagation()}
+            title="Wakes the agent to carry on from where it stopped. Its conversation and worktree are kept."
+            className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
+          >
+            Resume
+          </button>
         )}
         {onBuildFromPlan && (
           <button

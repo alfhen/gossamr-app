@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Switch } from "../components/Switch";
-import { RULE_SWITCH, TURN_HELP, budgetNote, heldBanner, ruleText } from "../lib/workstreamHold";
+import { RULE_SWITCH, TURN_HELP, budgetNote, heldBanner, ruleText, stepsLeftText } from "../lib/workstreamHold";
 import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { Btn } from "./AgentSheet";
 import { EscalationCard } from "./EscalationCard";
@@ -225,6 +225,11 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
       <HeldBanner view={view} onResume={actions.onResume} />
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
       <EscalationCard key={ws.id} view={view} />
+      {manage && (
+        <p data-steps-left={view.budget.autoTurns.limit - view.budget.autoTurns.used} title={TURN_HELP} className="m-0 text-xs text-ws-ink2">
+          {stepsLeftText(view.budget)}
+        </p>
+      )}
       {note && !(note.level === "spent" && ws.heldReason === HELD_BUDGET) && (
         <div className="grid gap-0.5">
           <p data-budget={note.level} title={TURN_HELP} className={`m-0 text-sm ${note.level === "amber" ? "text-ws-warn" : "text-ws-blocked"}`}>

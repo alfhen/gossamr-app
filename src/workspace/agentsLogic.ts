@@ -21,6 +21,9 @@ const NEEDS: readonly RunState[] = ["needsAnswer", "needsPermission", "systemBlo
 
 export const needsPerson = (run: Pick<Run, "state">) => NEEDS.includes(run.state);
 
+/** A run Gossamr stopped at its time or token limit, with no answer of the person's waiting on it: the person resumes it, nothing else does. */
+export const stoppedAtLimit = (run: Pick<Run, "state" | "stoppedByLimit">) => run.state === "stopped" && !!run.stoppedByLimit;
+
 /** Minutes without progress once a working run has been quiet for `QUIET_MINUTES` or more; null otherwise. */
 export function quietMinutes(run: Pick<Run, "state" | "lastProgressAt">, now: number): number | null {
   if (run.state !== "working") return null;
@@ -48,7 +51,7 @@ export function laneOf(run: Run, now: number): LaneId {
     case "unknown":
       return "bad";
     case "stopped":
-      return run.stoppedByLimit ? "bad" : "earlier";
+      return stoppedAtLimit(run) ? "bad" : "earlier";
   }
 }
 
@@ -314,8 +317,9 @@ export function stepRun(order: readonly string[], current: string | null, delta:
   return order[Math.min(order.length - 1, Math.max(0, at + delta))];
 }
 
-/** A run that needs the person, or a failed one they haven't dismissed: the runs `yourAgents` counts as waiting on the person. */
-export const needsAttention = (run: Pick<Run, "id" | "state">, dismissed: ReadonlySet<string>) => needsPerson(run) || (run.state === "failed" && !dismissed.has(run.id));
+/** A run that needs the person, one stopped at its limit, or a failed one they haven't dismissed: the runs `yourAgents` counts as waiting on the person. */
+export const needsAttention = (run: Pick<Run, "id" | "state"> & Partial<Pick<Run, "stoppedByLimit">>, dismissed: ReadonlySet<string>) =>
+  needsPerson(run) || stoppedAtLimit({ state: run.state, stoppedByLimit: run.stoppedByLimit }) || (run.state === "failed" && !dismissed.has(run.id));
 
 const AT_WORK: readonly RunState[] = ["queued", "launching", "working"];
 

@@ -54,15 +54,15 @@ describe("the workstream's controls", () => {
       expect(html).toContain(">Resume</button>");
       expect(html).not.toContain(">Hold</button>");
     }
-    expect(render(viewOf({ heldReason: HELD_BUDGET }))).toContain("Held: automatic turns used up. Resume, or write to Pip, to give it 6 more");
+    expect(render(viewOf({ heldReason: HELD_BUDGET }))).toContain("Held: automatic turns used up. Resume, or write to Pip, to give it 11 more");
     expect(render(viewOf({ heldReason: HELD_RESTART }))).toContain("Held after a restart");
   });
 
   it("says nothing of a budget with plenty left, warns in amber from 80% and says when it is spent", () => {
-    expect(render(viewOf({ spent: { autoTurns: 4, wakes: 4, tokens: 0 } }))).not.toContain("data-budget");
-    const amber = render(viewOf({ spent: { autoTurns: 5, wakes: 5, tokens: 0 } }));
+    expect(render(viewOf({ spent: { autoTurns: 7, wakes: 7, tokens: 0 } }))).not.toContain("data-budget");
+    const amber = render(viewOf({ spent: { autoTurns: 9, wakes: 9, tokens: 0 } }));
     expect(amber).toContain('data-budget="amber"');
-    expect(amber).toContain("5 of 6 automatic turns used");
+    expect(amber).toContain("9 of 11 automatic turns used");
     expect(render(viewOf({ spent: { autoTurns: 1, wakes: 10, tokens: 0 } }))).toContain("10 of 12 wakes used");
     // A workstream's own limit counts, and its banner says what to do once spent; the line isn't said twice.
     const own = viewOf({ budget: { autoTurns: 2, wakes: null, tokens: null }, spent: { autoTurns: 2, wakes: 2, tokens: 0 }, heldReason: HELD_BUDGET });
@@ -78,8 +78,19 @@ describe("the workstream's controls", () => {
     expect(render({ ...own, workstream: { ...own.workstream, heldReason: HELD_PERSON } })).toContain('data-budget="spent"');
   });
 
+  it("shows the automatic steps left up front in Manage, from the default of 11 or the workstream's own limit", () => {
+    const fresh = render(viewOf({ mode: "manage" }));
+    expect(fresh).toContain("11 of 11 automatic steps left");
+    expect(fresh).toContain('data-steps-left="11"');
+    expect(render(viewOf({ mode: "manage", spent: { autoTurns: 4, wakes: 4, tokens: 0 } }))).toContain("7 of 11 automatic steps left");
+    expect(render(viewOf({ mode: "manage", budget: { autoTurns: 6, wakes: null, tokens: null }, spent: { autoTurns: 1, wakes: 1, tokens: 0 } }))).toContain("5 of 6 automatic steps left");
+    expect(render(viewOf({ mode: "manage", spent: { autoTurns: 11, wakes: 11, tokens: 0 }, heldReason: HELD_BUDGET }))).toContain("0 of 11 automatic steps left");
+    // Advise runs no automatic steps, so there is nothing to count.
+    expect(render(viewOf({ mode: "advise" }))).not.toContain("automatic steps left");
+  });
+
   it("defines an automatic turn wherever the budget is shown", () => {
-    const amber = render(viewOf({ spent: { autoTurns: 5, wakes: 5, tokens: 0 } }));
+    const amber = render(viewOf({ spent: { autoTurns: 9, wakes: 9, tokens: 0 } }));
     const help = TURN_HELP.replace(/'/g, "&#x27;");
     expect(amber).toMatch(new RegExp(`data-budget="amber" title="${help}"`));
     expect(amber).toContain("<summary");

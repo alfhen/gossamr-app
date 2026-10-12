@@ -118,6 +118,12 @@ export function budgetView(ws: Workstream): BudgetView {
   };
 }
 
+/** The budget's automatic turns as the person reads them up front: "11 of 11 automatic steps left". Never below none left. */
+export function stepsLeftText(budget: BudgetView): string {
+  const { used, limit } = budget.autoTurns;
+  return `${Math.max(0, limit - used)} of ${limit} automatic steps left`;
+}
+
 /** The global switch in `AgentSettings.autostart` that each rule follows when a workstream has no switch of its own. */
 export const RULE_SWITCH: Record<WorkstreamRule, keyof AutoStartSwitches> = {
   investigate_triage: "investigateTriage",

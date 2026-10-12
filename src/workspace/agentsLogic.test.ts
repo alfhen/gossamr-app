@@ -10,6 +10,7 @@ import {
   QUIET_MINUTES,
   applyFilters,
   needsAttention,
+  stoppedAtLimit,
   yourAgents,
   filterOptions,
   formatTokens,
@@ -136,6 +137,21 @@ describe("the runs that wait on the person", () => {
   it("leave out queued, done and stopped runs", () => {
     const runs = [run("queued", { id: "c" }), run("done", { id: "e" }), run("stopped", { id: "f" }), run("unknown", { id: "g" })];
     expect(runs.filter((r) => needsAttention(r, none))).toEqual([]);
+  });
+
+  it("counts a run stopped at its limit, which only the person resumes, and nothing else that stopped", () => {
+    const limit = run("stopped", { id: "l", stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" });
+    expect(stoppedAtLimit(limit)).toBe(true);
+    expect(stoppedAtLimit(run("stopped", { id: "s" }))).toBe(false);
+    expect(laneOf(limit, NOW)).toBe("bad");
+    expect(laneOf(run("stopped", { id: "s" }), NOW)).toBe("earlier");
+    expect(laneOf(run("stopped", { id: "s", stoppedByLimit: false }), NOW)).toBe("earlier");
+    expect(needsAttention(limit, none)).toBe(true);
+    expect(needsAttention(run("stopped", { id: "s" }), none)).toBe(false);
+    // Dismissing doesn't change what Your agents counts: it waits until it is resumed.
+    expect(needsAttention(limit, new Set(["l"]))).toBe(true);
+    expect(needsAttention({ ...limit, state: "working", stoppedByLimit: false }, none)).toBe(false);
+    expect(yourAgents([limit], none)).toEqual([limit]);
   });
 });
 

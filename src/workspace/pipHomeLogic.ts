@@ -3,7 +3,7 @@ import { inWorkstreamPane } from "../lib/proposals";
 import { shortHeld } from "../lib/workstreamHold";
 import { byQueue, STAGE_LABEL, stageText } from "../lib/workstreamStage";
 import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
-import { liveCounts, liveWords, needsPerson, stateView, type Tone } from "./agentsLogic";
+import { liveCounts, liveWords, needsPerson, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
 import type { WorkstreamSuggestionScene } from "./suggestions";
 
@@ -33,7 +33,7 @@ export function workstreamStatus(view: WorkstreamView, runs: readonly Run[], wai
   const queued = furthest((r) => r.state === "queued");
   if (queued) return `${STAGE_LABEL[queued.spec.kind]} queued`;
   if (view.reviewBlocking) return stageText(view.stage, null, true);
-  if (waiting > 0 || own.some(needsPerson)) return "Needs you";
+  if (waiting > 0 || own.some((r) => needsPerson(r) || stoppedAtLimit(r))) return "Needs you";
   const last = [...own].sort(byQueue).pop();
   if (last?.state === "failed") return `${STAGE_LABEL[last.spec.kind]} failed`;
   return view.stage === "done" ? "Done" : "Idle";
@@ -188,7 +188,7 @@ export function stepChips(runs: readonly Run[], events: readonly Pick<Workstream
       auto: !!newest?.autoStart,
       verdict: review ? verdictChip(review) : null,
       fixRound: fixRoundChip(sent.length - yours, yours),
-      needsYou: pending + own.filter((r) => needsPerson(r) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
+      needsYou: pending + own.filter((r) => (needsPerson(r) || stoppedAtLimit(r)) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
       pr: kind === "build" ? buildPullRequest(own, changes) : null,
     };
   });

@@ -1,5 +1,5 @@
 import type { Intent, Proposal, Run, WorkstreamView } from "../types";
-import { quietMinutes } from "../workspace/agentsLogic";
+import { quietMinutes, stoppedAtLimit } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { parsePermission, permissionOffer, readAs } from "./permission";
 import { inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
@@ -405,8 +405,8 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
         secondary: [action("dismiss", "Dismiss")],
         batchable: false,
       });
-    } else if (run.state === "stopped" && !dismissed.has(run.id) && (run.stoppedByLimit || run.possibleContinuations?.length)) {
-      if (run.stoppedByLimit) {
+    } else if (run.state === "stopped" && !dismissed.has(run.id) && (stoppedAtLimit(run) || run.possibleContinuations?.length)) {
+      if (stoppedAtLimit(run)) {
         out.push({
           ...base,
           group: "unblock",
