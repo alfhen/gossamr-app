@@ -589,12 +589,13 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await expect(review).toHaveCount(0);
     await finishOnHome(page, (await newest(page, "investigate"))!.id);
     await finishOnHome(page, (await started(page, "triage")).id);
-    // The wakes' drafts wait one under the other, 6px apart.
-    const waiting = homeConversationRegion(page).getByRole("region", { name: "Drafts" }).locator("article[data-draft]");
+    // The wakes' drafts wait on the timeline, one under the other.
+    const waiting = homeConversationRegion(page).locator('[data-timeline] article[data-draft][data-state="pending"]');
     await expect(waiting.nth(1)).toBeVisible();
     const first = waiting.first();
     await page.locator(PIP_INPUT).focus();
-    for (let i = 0; i < 6 && !(await first.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
+    // ArrowUp walks the timeline's entries, the runs and Pip's turns between the cards included.
+    for (let i = 0; i < 16 && !(await first.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
     await expect(first).toBeFocused();
     const hint = first.getByRole("status");
     await expect(hint).toBeVisible();

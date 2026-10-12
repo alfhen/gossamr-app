@@ -81,7 +81,8 @@ test("approving Pip's move from the keyboard retires the person's own move of th
   await openPipHome(page);
   await workstreamRow(page, "CA-401").click();
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 /);
-  const drafts = homeConversationRegion(page).getByRole("region", { name: "Drafts" });
+  // The workstream's timeline holds its drafts, the person's own among them.
+  const drafts = homeConversationRegion(page).locator("[data-timeline]");
   await expect(drafts.getByRole("article", { name: "Move CA-401" })).toContainText("Move CA-401 to Copy");
 
   await ask(page, "move it to QA");

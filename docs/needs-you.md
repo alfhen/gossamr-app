@@ -83,8 +83,42 @@ The same keys mean the same thing in every list that holds actionable items (the
 ## Undo (step 4)
 Reversible actions act at once and offer Undo in a toast for about 8 seconds (`src/workspace/undo.ts`): skipping a draft, dismissing a failed or stuck run, holding a workstream, switching it to Advise. Undo restores the exact previous state; when the action wrote an audit line the undo writes its own (`undone`). The backend allows an undo for 60 seconds, only while that change is the last line of the workstream's audit, so a stale toast can't undo over later changes. Anything that reached Jira, GitHub or an agent (post, approve, apply, Deny, Allow, Stop, Resume, start) keeps its confirm.
 
+## One timeline per workstream (step 3)
+A workstream's story used to be spread over the conversation, the run strip, the step rail, draft cards, the audit and the Agents screen. It is now one chronological list in Pip home's middle column.
+
+### Model: `src/lib/timeline.ts` (pure)
+`timeline(input) -> TimelineEntry[]`, oldest first. Input is the conversation's turns, the runs, the drafts, the workstream's audit (`workstreams_events`), Needs you, run labels and review verdicts. It reads what the stores already hold; there is no Rust change.
+- **An entry** is `{ key, kind, at, updatedAt, ticketKey, text, target, needKey, decision }`.
+  - `kind` is `said` (the person's question), `pip` (a turn Pip took by itself), `run`, `draft` or `audit`.
+  - `key` is stable: `turn:<request id>`, `run:<id>`, `draft:<id>`, `audit:<workstream id>:<seq>`.
+  - `text` is one plain sentence: "Build R2 finished", "Review R3 finished: changes needed", "Plan R1 is waiting on you: it asks a question", "Pip drafted a comment on CA-401: posted", "You held the workstream".
+  - `target` is what opening it shows: a run id (its sheet), a draft id (its card), or a need key. An entry about something in Needs you always targets its need.
+- **A run is one entry**, updated in place: it stands where the audit says it was approved or started by a rule (else when it was queued), and its `phase` (queued, started, waiting, finished, failed, stopped, stopped at limit, unknown) and `lifecycle` change as it moves. A finished review says its verdict.
+- **A draft is one entry**, at when it was made, saying who made what and how it stands (waiting, posting, posted, sent, started, skipped, replaced, no longer needed).
+- **Audit lines** are worded as Activity words them. The lines a run's or a draft's own entry already tells are left out (`run_approved`, `autostart`, `wake`, `draft_created`, `draft_retired`, `notes_set`). The same line repeated in a row collapses into one ("… (3 times)").
+- **Linking to Needs you**: a waiting run, a waiting draft, the hold that still holds and the open escalation carry the need's key.
+- **Ordering**: by time; a tie goes to what was said, then the audit, then runs, then drafts. Turns now carry `at` (the stored turn's `createdAt`, or when it was asked).
+- **Filters**: All, Runs (`kind` run), Drafts (`kind` draft), Decisions (what the person did, what asks them to decide, and whatever waits in Needs you).
+
+### UI
+- **Pip home's middle column** is the timeline (`src/workspace/Timeline.tsx`), under the filter bar with a count per filter.
+  - Turns render with `TurnView`.
+  - Runs render with the Agents screen's `AgentRow`, under their sentence.
+  - Drafts waiting, drafts Pip made in this conversation, and drafts retired while shown render with `LiveDraftPreview`. Other decided drafts are one line that opens the draft.
+  - Audit lines are one line each.
+  - Lines for things in Needs you have an "In Needs you" pill and open their need with the same `openNeed`.
+  - The composer, the Next line, the decision pane and the Needs you list are unchanged. General's timeline holds the runs and drafts in no workstream, plus every draft still waiting, as its old "Drafts waiting" did.
+  - The Pip pane (outside Pip home) keeps its conversation, run strip and "Drafts waiting".
+- **Agents is the Runs filter across every workstream.** The Agents screen has the same filter bar with Runs pressed ("in every workstream"); choosing All, Drafts or Decisions goes to Pip home's timeline with that filter. On Pip home, the Runs filter offers "Runs in every workstream (Agents)". The rail's Agents button still lands on the Agents screen. Its selection, keys (`agentKeys.ts`), settings, banners, lanes and layouts are unchanged.
+- **Keyboard** (`src/workspace/timelineKeys.ts`, the `keyMap.ts` model):
+  - j/k (or the arrows) move from entry to entry. An entry's stop is its draft card, its run row, or the entry itself.
+  - Enter or o opens the target. A draft card keeps its own keys (a, e, d, s, Enter, o), and a run row opens on Enter.
+  - ArrowUp from the empty composer reaches the newest draft waiting, else the newest entry.
+  - The footer says "j k move through the timeline · ↵ o open what it is about" while the keyboard is on an entry.
+  - Asking Pip home to show a card (`focus`) sets the filter back to All.
+
 ## Later steps (separate PRs)
 - **2.** Workstream header shows "Next: …" and "N of M automatic steps left". (The budget PR adds the numbers.)
-- **3.** One timeline per workstream: conversation, runs, drafts and audit merged. Agents becomes a filter view.
+- **3.** Done: one timeline per workstream, with Agents as its Runs filter (see above).
 - **4.** Done: undo for reversible actions, one key model app-wide, and every action in ⌘K (see above).
 - **5.** Notifications per workstream state change ("CA-401 is waiting on you"), not per event, with an optional digest setting.

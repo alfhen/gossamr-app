@@ -26,6 +26,8 @@ export interface Turn {
   imageCount?: number;
   /** `wake` for a turn the supervisor started, whose prompt is its event lines; a question the person asked otherwise. */
   kind?: "user" | "wake";
+  /** When it was asked, or when Pip woke for it, as an ISO time: where it stands on the workstream's timeline. */
+  at?: string;
 }
 
 export interface Conversation {
@@ -118,6 +120,7 @@ export function turnFromStored(t: StoredTurn): Turn {
     ...(t.imageCount ? { imageCount: t.imageCount } : {}),
     ...(t.usage ? { usage: t.usage } : {}),
     ...(t.kind === "wake" ? { kind: "wake" as const } : {}),
+    ...(t.createdAt ? { at: t.createdAt } : {}),
   };
 }
 
@@ -171,6 +174,7 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
       text: "",
       status: "running",
       error: null,
+      at: new Date().toISOString(),
       ...shown,
       ...(images.length ? { images: images.map(({ id, url, width, height }) => ({ id, url, width, height })) } : {}),
     };
@@ -293,7 +297,7 @@ function settle(requestId: string) {
  * prompt, when the event says them; otherwise they are read from the stored turn.
  */
 function registerWake(requestId: string, e: ClaudeEvent, conversation: string, prompt: string | undefined) {
-  const turn: Turn = { requestId, kind: "wake", prompt: prompt ?? "", steps: [], text: "", status: e.type === "queued" ? "queued" : "running", error: null };
+  const turn: Turn = { requestId, kind: "wake", prompt: prompt ?? "", steps: [], text: "", status: e.type === "queued" ? "queued" : "running", error: null, at: new Date().toISOString() };
   const { byTicket } = useClaude.getState();
   const conv = byTicket[conversation] ?? empty;
   useClaude.setState({ byTicket: { ...byTicket, [conversation]: { ...conv, turns: [...conv.turns, turn] } } });
