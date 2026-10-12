@@ -715,6 +715,19 @@ impl RunNotifier for FanoutNotifier {
             n.notify(run, why);
         }
     }
+
+    fn announce(&self, notice: &crate::runs::notices::Outgoing) -> bool {
+        // Every notifier is told; delivered only when none failed, so a failure is retried rather than lost.
+        let mut delivered = true;
+        for n in &self.0 {
+            delivered &= n.announce(notice);
+        }
+        delivered
+    }
+
+    fn watching(&self) -> bool {
+        self.0.iter().any(|n| n.watching())
+    }
 }
 
 /// Sends a wake turn's events to the page, with the conversation they belong to.

@@ -1,4 +1,5 @@
 import { docText } from "../lib/docs";
+import { workstreamOf } from "../lib/proposals";
 import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
@@ -116,7 +117,7 @@ export const ESCALATION_GONE = "This review isn't waiting for your choice any mo
  * The escalation of `ws`, if its newest review still blocks after the automatic fix rounds, as `escalation_of`: the
  * workstream is open and in Manage (a hold doesn't hide it), its newest review is done, blocking and of a build, the
  * supervisor said the rounds ran out for it (`fix_rounds_exhausted`), the person hasn't sent a fix round after it
- * (`fix_round_person`), and the build is done. `drafts` are the pending drafts; only GitHub reviews among them count.
+ * (`fix_round_person`) or taken it over (`escalation_taken`) or posted its review draft as it is (`escalation_posted`), and the build is done. `drafts` are the pending drafts; only GitHub reviews among them count.
  */
 export function escalationOf(ws: Workstream, runs: readonly Run[], verdictOf: (run: Run) => ReviewVerdict | null, events: readonly WorkstreamEvent[], drafts: readonly Proposal[]): Escalation | null {
   if (ws.closedAt !== null || ws.mode !== "manage") return null;
@@ -127,12 +128,13 @@ export function escalationOf(ws: Workstream, runs: readonly Run[], verdictOf: (r
   if (!build || build.state !== "done") return null;
   const exhausted = events.filter((e) => e.action === "fix_rounds_exhausted" && e.runId === review.id).sort((a, b) => a.seq - b.seq).pop();
   if (!exhausted) return null;
-  // The person sent a round after it, or took it over: a later switch back to Manage doesn't bring it back.
-  if (events.some((e) => (e.action === "fix_round_person" && e.detail === `after ${review.id}`) || (e.action === "escalation_taken" && e.runId === review.id))) return null;
+  // The person sent a round after it, took it over, or posted its review draft as it is: a later switch back to Manage doesn't bring it back.
+  if (events.some((e) => (e.action === "fix_round_person" && e.detail === `after ${review.id}`) || ((e.action === "escalation_taken" || e.action === "escalation_posted") && e.runId === review.id))) return null;
   const reviews = drafts.filter((p) => p.state.type === "pending").flatMap((p) => (p.intent.type === "githubReview" ? [{ p, i: p.intent }] : []));
   const own = reviews.find((d) => d.i.runId === review.id)?.p.id;
   const pr = review.spec.pr;
-  const ofPull = pr == null ? undefined : reviews.filter((d) => d.i.number === pr && d.i.repo.toLowerCase() === review.spec.repo.toLowerCase()).sort((a, b) => a.p.createdAt.localeCompare(b.p.createdAt) || a.p.id.localeCompare(b.p.id)).pop()?.p.id;
+  // Only this workstream's own drafts, so a draft is offered by at most one escalation, as in Rust.
+  const ofPull = pr == null ? undefined : reviews.filter((d) => d.i.number === pr && d.i.repo.toLowerCase() === review.spec.repo.toLowerCase() && workstreamOf(d.p) === ws.id).sort((a, b) => a.p.createdAt.localeCompare(b.p.createdAt) || a.p.id.localeCompare(b.p.id)).pop()?.p.id;
   const labels = new Map(runLabels(mine));
   return {
     reviewRun: review.id,
@@ -409,6 +411,17 @@ export class MockWorkstreams {
     }
     if (ws.mode === mode) return ws;
     return this.changedTo({ ...ws, mode }, actor, "mode_set", { detail: mode });
+  }
+
+  /** The workstream and review whose escalation offers draft `draftId` to post as it is, or null: read before the post, while the draft is still pending. */
+  escalationOffering(draftId: string): { workstream: string; reviewRun: string } | null {
+    const found = this.list().find((v) => v.escalation?.reviewDraft === draftId);
+    return found?.escalation ? { workstream: found.workstream.id, reviewRun: found.escalation.reviewRun } : null;
+  }
+
+  /** The person posted the review draft `draftId` its escalation offered, as `escalation_posted`: records it, and the escalation is resolved. */
+  escalationPosted(workstream: string, reviewRun: string, draftId: string) {
+    this.record(workstream, "person", "escalation_posted", { runId: reviewRun, proposalId: draftId });
   }
 
   /**

@@ -84,6 +84,8 @@ pub struct RunService {
     pub(super) roots: Vec<PathBuf>,
     pub(super) changed: Arc<dyn Fn(&str) + Send + Sync>,
     pub(super) notifier: Arc<dyn RunNotifier>,
+    /// Which workstreams already told the person they wait on them, and the finished runs not yet told.
+    pub(super) notices: Mutex<super::notices::Board>,
     /// Told the connection when a finished run left a comment draft, so the page re-reads its drafts.
     pub(super) drafted: Arc<dyn Fn(&str) + Send + Sync>,
     pub(super) terminal: Arc<dyn Terminal>,
@@ -180,6 +182,7 @@ impl RunService {
             roots,
             changed,
             notifier: Arc::new(NoNotices),
+            notices: Mutex::new(Default::default()),
             drafted: Arc::new(|_| {}),
             terminal: Arc::new(MacTerminal),
             home: dirs::home_dir(),
@@ -309,7 +312,7 @@ impl RunService {
             eprintln!("couldn't update the run index: {e}");
         }
         self.store(run).await?;
-        self.notifier.notify(run, Attention::Failed);
+        self.notify_run(run, Attention::Failed);
         Ok(())
     }
 

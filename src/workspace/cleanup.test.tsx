@@ -139,7 +139,7 @@ describe("the mock settings", () => {
   it("clamps like the backend and returns what it kept", async () => {
     const backend = new MockBackend();
     const saved = await backend.runsSetSettings({ maxRuns: 40, wallClockMinutes: -5, tokenCap: 2_500_000, terminal: "iTerm", draftOnFinish: false, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 });
-    expect(saved).toEqual({ maxRuns: 6, wallClockMinutes: 0, tokenCap: 2_500_000, terminal: "iTerm", draftOnFinish: false, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 });
+    expect(saved).toEqual({ maxRuns: 6, wallClockMinutes: 0, tokenCap: 2_500_000, terminal: "iTerm", draftOnFinish: false, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40, notifications: "workstream", digestMinutes: 30 });
     expect(await backend.runsSettings()).toEqual(saved);
   });
 });

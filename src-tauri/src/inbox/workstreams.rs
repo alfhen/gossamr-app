@@ -2,7 +2,7 @@
 //! runs give it, closing it, Pip's notes, its mode, holds and rule switches, and its audit. Nothing here starts, stops
 //! or answers a run or writes to Jira.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -95,7 +95,7 @@ pub struct Escalation {
 /// The escalation of `ws`, if its newest review still blocks after the automatic fix rounds: the workstream is open and
 /// in Manage (a hold doesn't hide it), its newest review is Done, blocking and of a build, the supervisor said the
 /// rounds ran out for it (`fix_rounds_exhausted`), the person hasn't sent a fix round after it (`fix_round_person`) or
-/// taken it over (`escalation_taken`, which a later switch back to Manage doesn't undo), and the build is Done. `drafts` are the account's pending drafts; only GitHub reviews among them count.
+/// taken it over (`escalation_taken`, which a later switch back to Manage doesn't undo) or posted its review draft as it is (`escalation_posted`), and the build is Done. `drafts` are the account's pending drafts; only GitHub reviews among them count.
 pub fn escalation_of(ws: &Workstream, runs: &[Run], verdict_of: impl Fn(&Run) -> Option<ReviewVerdict>, events: &[WorkstreamEvent], drafts: &[Proposal]) -> Option<Escalation> {
     if ws.closed_at.is_some() || ws.mode != Mode::Manage {
         return None;
@@ -114,7 +114,7 @@ pub fn escalation_of(ws: &Workstream, runs: &[Run], verdict_of: impl Fn(&Run) ->
     let after = format!("after {}", review.id);
     let chosen = |e: &WorkstreamEvent| match e.action.as_str() {
         "fix_round_person" => e.detail.as_deref() == Some(after.as_str()),
-        "escalation_taken" => e.run_id.as_deref() == Some(review.id.as_str()),
+        "escalation_taken" | "escalation_posted" => e.run_id.as_deref() == Some(review.id.as_str()),
         _ => false,
     };
     if events.iter().any(chosen) {
@@ -129,9 +129,11 @@ pub fn escalation_of(ws: &Workstream, runs: &[Run], verdict_of: impl Fn(&Run) ->
         })
         .collect();
     let own = reviews.iter().find(|(_, run, ..)| *run == review.id).map(|(p, ..)| p.id.clone());
+    // The fallback is limited to this workstream's own drafts, so a draft is offered by at most one escalation, the one
+    // whose workstream it was made in, which is also the one posting it resolves.
     let of_pull = || {
         let number = review.spec.pr?;
-        reviews.iter().filter(|(_, _, repo, n)| *n == number && repo.eq_ignore_ascii_case(&review.spec.repo)).max_by(|a, b| (a.0.created_at, &a.0.id).cmp(&(b.0.created_at, &b.0.id))).map(|(p, ..)| p.id.clone())
+        reviews.iter().filter(|(p, _, repo, n)| *n == number && repo.eq_ignore_ascii_case(&review.spec.repo) && p.workstream() == Some(ws.id.as_str())).max_by(|a, b| (a.0.created_at, &a.0.id).cmp(&(b.0.created_at, &b.0.id))).map(|(p, ..)| p.id.clone())
     };
     let labels = run_labels(&runs.iter().filter(mine).cloned().collect::<Vec<_>>());
     let label = |id: &str| labels.iter().find(|(r, _)| r == id).map(|(_, l)| l.clone()).unwrap_or_default();
@@ -208,7 +210,21 @@ fn escalation_events(db: &Db, ws: &Workstream) -> Result<Vec<WorkstreamEvent>> {
     if ws.closed_at.is_some() || ws.mode != Mode::Manage {
         return Ok(Vec::new());
     }
-    Ok(db.workstream_events(&ws.id)?.into_iter().filter(|e| matches!(e.action.as_str(), "fix_rounds_exhausted" | "fix_round_person" | "escalation_taken")).collect())
+    Ok(db.workstream_events(&ws.id)?.into_iter().filter(|e| matches!(e.action.as_str(), "fix_rounds_exhausted" | "fix_round_person" | "escalation_taken" | "escalation_posted")).collect())
+}
+
+/// The `escalation_posted` line for workstream `ws_id` when review draft `posted`, just posted to GitHub, is the one its
+/// escalation offered to post as it is: the escalation is resolved, and this is what says so. None when the workstream
+/// has no escalation or the draft was another one. `posted` is read as it was before the claim, pending.
+pub(crate) fn escalation_posted_event(db: &Db, ws_id: &str, posted: &Proposal, at: chrono::DateTime<Utc>) -> Result<Option<WorkstreamEvent>> {
+    let Some(ws) = db.workstream(ws_id)? else { return Ok(None) };
+    let runs = db.runs(&RunQuery { connection_id: Some(ws.connection_id.clone()), workstream: Some(ws.id.clone()), ..Default::default() })?;
+    let verdicts = verdicts_of(db, &runs)?;
+    let events = escalation_events(db, &ws)?;
+    let mut drafts = pending_reviews(db)?;
+    drafts.push(Proposal { state: ProposalState::Pending, ..posted.clone() });
+    let found = escalation_of(&ws, &runs, |r| verdicts.get(&r.id).copied(), &events, &drafts).filter(|e| e.review_draft.as_deref() == Some(posted.id.as_str()));
+    Ok(found.map(|e| WorkstreamEvent::new(ws_id, Actor::Person, "escalation_posted", at).run(&e.review_run).proposal(&posted.id)))
 }
 
 /// The account's pending GitHub review drafts, which an escalation offers to post as they are.
@@ -483,6 +499,12 @@ impl Core {
                 self.view_of(ws, &linked, &verdicts, &events, &drafts)
             })
             .collect()
+    }
+
+    /// The ids of `scope`'s closed workstreams, a cheap way to tell what belongs to one.
+    pub async fn closed_workstream_ids(&self, scope: &Scope) -> Result<HashSet<String>> {
+        let connection_id = Connection::jira_id(scope);
+        self.with_db_for(scope, |db| db.closed_workstream_ids(&connection_id)).await
     }
 
     /// Closes a workstream. Its runs and drafts are left as they are; closing it again changes nothing.
@@ -1056,6 +1078,14 @@ mod tests {
             Proposal { id: id.into(), created_at: at, updated_at: at, origin, created_by: CreatedBy::Agent, intent, label: None, basis: None, state, revisions: vec![], created: vec![], error: None, run: None, superseded_by: None, posted: None, maybe_posted: None }
         }
 
+        /// `p` as made in workstream `ws`.
+        fn in_ws(mut p: Proposal, ws: &str) -> Proposal {
+            if let Origin::Run { workstream, .. } = &mut p.origin {
+                *workstream = Some(ws.into());
+            }
+            p
+        }
+
         /// A workstream in Manage with a finished build `b`, two finished reviews of it (`r1`, then `r2`) and the
         /// supervisor's two automatic rounds on record.
         async fn chain(fx: &Fixture) -> (Workstream, Vec<Run>, Vec<WorkstreamEvent>) {
@@ -1125,14 +1155,42 @@ mod tests {
             let (ws, runs, mut events) = chain(&fx).await;
             events.push(line(&ws.id, 3, "fix_rounds_exhausted", "r2", "2"));
             let draft = |drafts: &[Proposal]| escalation_of(&ws, &runs, blocking, &events, drafts).unwrap().review_draft;
-            let older = review_draft("p-old", "r1", "acme/webshop", 218, 1, ProposalState::Pending);
-            let newer = review_draft("p-new", "r0", "ACME/webshop", 218, 2, ProposalState::Pending);
-            let other_pr = review_draft("p-219", "rx", "acme/webshop", 219, 9, ProposalState::Pending);
-            let posted = review_draft("p-posted", "ry", "acme/webshop", 218, 9, ProposalState::Applied);
+            let older = in_ws(review_draft("p-old", "r1", "acme/webshop", 218, 1, ProposalState::Pending), &ws.id);
+            let newer = in_ws(review_draft("p-new", "r0", "ACME/webshop", 218, 2, ProposalState::Pending), &ws.id);
+            let other_pr = in_ws(review_draft("p-219", "rx", "acme/webshop", 219, 9, ProposalState::Pending), &ws.id);
+            let posted = in_ws(review_draft("p-posted", "ry", "acme/webshop", 218, 9, ProposalState::Applied), &ws.id);
             assert_eq!(draft(&[older.clone(), newer.clone(), other_pr.clone(), posted.clone()]).as_deref(), Some("p-new"), "the newest pending one of the pull request");
             let own = review_draft("p-own", "r2", "acme/webshop", 218, 0, ProposalState::Pending);
             assert_eq!(draft(&[older, newer, own, other_pr.clone()]).as_deref(), Some("p-own"), "the review's own comes first");
             assert_eq!(draft(&[other_pr, posted]), None);
+        }
+
+        #[tokio::test]
+        async fn a_pending_draft_is_offered_by_the_escalation_of_its_own_workstream_only() {
+            let fx = fixture().await;
+            let (ws, runs, mut events) = chain(&fx).await;
+            events.push(line(&ws.id, 3, "fix_rounds_exhausted", "r2", "2"));
+            // A second workstream whose escalation is about the same pull request.
+            let ws2 = Workstream { id: "ws-2".into(), ..ws.clone() };
+            let runs2: Vec<Run> = runs
+                .iter()
+                .map(|r| {
+                    let mut r = r.clone();
+                    r.id = format!("{}-2", r.id);
+                    r.spec.workstream = Some(ws2.id.clone());
+                    r.spec.build_from_run = r.spec.build_from_run.map(|b| format!("{b}-2"));
+                    r
+                })
+                .collect();
+            let events2 = vec![line(&ws2.id, 3, "fix_rounds_exhausted", "r2-2", "2")];
+            let draft_of = |ws: &Workstream, runs: &[Run], events: &[WorkstreamEvent], drafts: &[Proposal]| escalation_of(ws, runs, blocking, events, drafts).unwrap().review_draft;
+            let theirs = in_ws(review_draft("p-theirs", "rx", "acme/webshop", 218, 5, ProposalState::Pending), &ws.id);
+            let drafts = [theirs.clone()];
+            assert_eq!(draft_of(&ws, &runs, &events, &drafts).as_deref(), Some("p-theirs"));
+            assert_eq!(draft_of(&ws2, &runs2, &events2, &drafts), None, "another workstream's draft is not offered, even when newer");
+            // A draft made in no workstream is nobody's fallback: posting it records nothing, so offering it would never resolve.
+            let loose = review_draft("p-loose", "ry", "acme/webshop", 218, 9, ProposalState::Pending);
+            assert_eq!(draft_of(&ws, &runs, &events, &[theirs, loose]).as_deref(), Some("p-theirs"));
         }
 
         #[tokio::test]
@@ -1175,6 +1233,44 @@ mod tests {
             assert_eq!(view(&fx).await.escalation, None, "taken over, then Manage again");
             let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
             assert_eq!(listed.escalation, None);
+        }
+
+        #[tokio::test]
+        async fn posting_the_review_draft_it_offered_resolves_it_and_is_audited_and_another_draft_does_not() {
+            let fx = fixture().await;
+            let (ws, _, _) = chain(&fx).await;
+            let blocked = "- [blocking] src/cart.ts:42: wrong\n\nVerdict: blocking\n\nFor Jira:\nNo.";
+            for id in ["r1", "r2"] {
+                let mut run = fx.core.with_db_for(&fx.scope, |db| db.run(id)).await.unwrap().unwrap();
+                (run.result, run.result_complete) = (Some(blocked.into()), true);
+                fx.core.with_db_for(&fx.scope, |db| db.save_run(&run)).await.unwrap();
+            }
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Supervisor, "fix_rounds_exhausted", Utc::now()).run("r2").detail("2")).await.unwrap();
+            let offered = review_draft("p-own", "r2", "acme/webshop", 218, 5, ProposalState::Pending);
+            let other = review_draft("p-219", "rx", "acme/webshop", 219, 6, ProposalState::Pending);
+            fx.core.with_db_for(&fx.scope, |db| db.insert_proposal(&offered).and_then(|_| db.insert_proposal(&other))).await.unwrap();
+            let view = || async { fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap() };
+            assert_eq!(view().await.escalation.and_then(|e| e.review_draft).as_deref(), Some("p-own"), "the draft is offered");
+
+            // Posting a draft the escalation didn't offer leaves it, and records nothing.
+            let line = |p: Proposal| {
+                let (core, scope, id) = (fx.core.clone(), fx.scope.clone(), ws.id.clone());
+                async move { core.with_db_for(&scope, |db| escalation_posted_event(db, &id, &p, Utc::now())).await.unwrap() }
+            };
+            assert_eq!(line(other.clone()).await, None);
+            assert!(view().await.escalation.is_some());
+
+            // Posting the one it offered (as post_review_draft does: Applied by then, and no longer pending) resolves it.
+            let mut done = offered.clone();
+            done.state = ProposalState::Applied;
+            fx.core.with_db_for(&fx.scope, |db| db.save_proposal(&done)).await.unwrap();
+            let event = line(done.clone()).await.expect("the escalation is audited as resolved");
+            assert_eq!((event.actor, event.action.as_str(), event.run_id.as_deref(), event.proposal_id.as_deref()), (Actor::Person, "escalation_posted", Some("r2"), Some("p-own")));
+            fx.core.record_workstream_event(&fx.scope, event).await.unwrap();
+            assert_eq!(view().await.escalation, None, "posted: the card leaves Needs you");
+            let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
+            assert_eq!(listed.escalation, None, "the list agrees");
+            assert!(fx.tracker.intents().is_empty());
         }
     }
 
