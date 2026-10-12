@@ -316,6 +316,12 @@ export interface Backend {
   workstreamsFixRound(reviewRun: string): Promise<Run>;
   /** The person's "I'll take it from here" on review `reviewRun`: the workstream goes to Advise and nothing else changes. */
   workstreamsTakeOver(id: string, reviewRun: string): Promise<Workstream>;
+  /** The person's "Ask the reporter" on Triage `triageRun`, which found its ticket not ready to plan: a Jira comment to the reporter with its open questions, as a draft the person approves like any other. Refused when the stop isn't about that Triage any more. */
+  workstreamsReadinessAsk(id: string, triageRun: string): Promise<Proposal>;
+  /** The person's "I'll answer" on Triage `triageRun`: it settles the question and starts nothing. */
+  workstreamsReadinessAnswer(id: string, triageRun: string): Promise<Workstream>;
+  /** The person's "Plan anyway" on Triage `triageRun`: records the override and lets the Triage-to-Plan rule start the Plan under its own checks (Manage, not held, within budget). */
+  workstreamsReadinessOverride(id: string, triageRun: string): Promise<Workstream>;
   /** The person holds an open workstream: nothing wakes Pip or starts on its own in it; its runs carry on. */
   workstreamsHold(id: string): Promise<Workstream>;
   /** The person lifts a workstream's hold; lifting a budget hold starts its budget again from zero. */

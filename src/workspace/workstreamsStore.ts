@@ -1,12 +1,14 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
+import { readinessPrompt } from "../lib/needs";
 import { ofItem, runWorkstream, stageText } from "../lib/workstreamStage";
 import { budgetView } from "../lib/workstreamHold";
 import { HELD_PERSON, type AutoStartSwitches, type ItemRef, type Run, type ScreenContext, type Workstream, type WorkstreamEvent, type WorkstreamMode, type WorkstreamRule, type WorkstreamUndo, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { PIP_INPUT_ID } from "./draftKeys";
 import { keepSelectionOpen, usePipHome } from "./pipHomeStore";
+import { usePip } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns, type RunSheetTarget } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -54,6 +56,12 @@ interface WorkstreamsState {
   resume(id: string): Promise<boolean>;
   /** The person's "Allow 5 more" on workstream `id`, held for its automatic steps: its allowance goes up by 5 and it resumes. False when it couldn't. */
   allowMore(id: string): Promise<boolean>;
+  /** The person's "Ask the reporter" on workstream `id`, whose triage found its ticket not ready to plan: a Jira comment to the reporter with its open questions is drafted, for them to approve like any other. False when it couldn't. */
+  askReporter(id: string): Promise<boolean>;
+  /** The person's "I'll answer": settles the question and opens the workstream's conversation with the open questions quoted in the composer. False when it couldn't. */
+  answerSelf(id: string): Promise<boolean>;
+  /** The person's "Plan anyway": records the override; the Triage-to-Plan step starts the Plan under its own checks (Manage, not held, within budget). False when it couldn't. */
+  planAnyway(id: string): Promise<boolean>;
   /** The workstream's own switch for one automatic step; null follows Settings again. False when it couldn't. */
   setRule(id: string, rule: WorkstreamRule, on: boolean | null): Promise<boolean>;
   /** Holds every open workstream and stops Pip's turns in them, and says how many it held. Null when it couldn't. */
@@ -70,6 +78,9 @@ let closedSeq = 0;
 /** The same for reads of each workstream's audit: the newest read of each id, from one counter, so a read from before a dispose never matches. */
 const eventsSeq = new Map<string, number>();
 let eventsCounter = 0;
+
+/** The readiness stop workstream `id` waits on, if it does. */
+const readinessOf = (list: readonly WorkstreamView[], id: string) => list.find((v) => v.workstream.id === id)?.readiness ?? null;
 
 /** "1 workstream", "2 workstreams". */
 const workstreams = (n: number) => `${n} ${n === 1 ? "workstream" : "workstreams"}`;
@@ -92,6 +103,11 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     }
   }
   const ok = async (failed: string, call: (backend: Backend) => Promise<Workstream>) => (await act(failed, call)).ok;
+  /** What a choice about a triage's open questions says when the workstream no longer waits for it. */
+  const stale = () => {
+    useToasts.getState().push("The workstream isn't waiting for that choice any more.", "info");
+    return false;
+  };
 
   /** Takes a change back through the backend, which allows it only while that change is the last thing in the audit. A refusal rejects, for the Undo to tell. */
   async function undoChange(id: string, undo: WorkstreamUndo): Promise<void> {
@@ -257,6 +273,35 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     resume: (id) => ok("Couldn't resume the workstream", (b) => b.workstreamsResume(id)),
 
     allowMore: (id) => ok("Couldn't allow more steps", (b) => b.workstreamsAllowMore(id)),
+
+    async askReporter(id) {
+      const stop = readinessOf(get().list, id);
+      if (!stop) return stale();
+      const done = await act("Couldn't draft the comment to the reporter", (b) => b.workstreamsReadinessAsk(id, stop.triageRun));
+      if (done.ok) useToasts.getState().push("Drafted a comment to the reporter with the open questions. It is posted only when you approve it.", "info");
+      return done.ok;
+    },
+
+    async answerSelf(id) {
+      const view = get().list.find((v) => v.workstream.id === id);
+      const stop = view?.readiness;
+      if (!view || !stop) return stale();
+      const done = await act("Couldn't settle the open questions", (b) => b.workstreamsReadinessAnswer(id, stop.triageRun));
+      if (!done.ok) return false;
+      // Pip's conversation in the workstream, with the questions quoted for the person to answer under.
+      openOnPipHome(id);
+      usePip.getState().openWith(readinessPrompt(stop, view.workstream.itemKey));
+      focusComposer();
+      return true;
+    },
+
+    async planAnyway(id) {
+      const stop = readinessOf(get().list, id);
+      if (!stop) return stale();
+      const done = await act("Couldn't plan anyway", (b) => b.workstreamsReadinessOverride(id, stop.triageRun));
+      if (done.ok) useToasts.getState().push("Planning anyway. The plan starts as soon as the workstream's checks allow.", "info");
+      return done.ok;
+    },
 
     setRule: (id, rule, on) => ok("Couldn't change the automatic step", (b) => b.workstreamsSetRule(id, rule, on)),
 

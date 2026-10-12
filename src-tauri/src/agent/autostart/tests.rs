@@ -6,7 +6,7 @@ use crate::agent::context::keys_in;
 use crate::config::AutoStartSwitches;
 use crate::domain::fixtures::run_spec;
 use crate::domain::workstream::Spend;
-use crate::domain::{has_markers, ItemRef};
+use crate::domain::{has_markers, Actor, ItemRef, WorkstreamEvent};
 
 fn fixtures() -> Value {
     serde_json::from_str(include_str!("../../../../src/backend/supervisor.fixtures.json")).unwrap()
@@ -72,6 +72,7 @@ fn the_shared_rule_table_passes() {
         let r = &case["report"];
         let report = ReportFacts {
             plan_recommended: r["planRecommended"].as_bool(),
+            readiness: r["ready"].as_bool().map(|ready| Readiness { ready, questions: Vec::new() }),
             verdict: serde_json::from_value(r["verdict"].clone()).unwrap(),
             findings: r["findings"].as_array().map(|f| f.iter().map(finding_of).collect()).unwrap_or_default(),
         };
@@ -86,6 +87,7 @@ fn the_shared_rule_table_passes() {
             settings: &settings,
             fix_rounds: case["fixRounds"].as_u64().unwrap_or(0) as u32,
             plan_approved: case["planApproved"].as_bool().unwrap_or(false),
+            readiness_overridden: case["readinessOverridden"].as_bool().unwrap_or(false),
             pr,
             reviewed,
             already: case["already"].as_bool().unwrap_or(false),
@@ -195,4 +197,31 @@ fn the_default_turn_budget_fits_a_whole_chain_with_two_to_spare() {
     assert_eq!(chain, 9);
     assert_eq!(AUTO_TURNS_DEFAULT, chain + 2);
     assert_eq!(AUTO_TURNS_DEFAULT, 11);
+}
+
+fn line(actor: Actor, action: &str, run: &str) -> WorkstreamEvent {
+    WorkstreamEvent::new("w1", actor, action, Utc::now()).run(run)
+}
+
+#[test]
+fn only_the_persons_own_line_naming_that_triage_is_an_override() {
+    let mine = [line(Actor::Person, "readiness_overridden", "t1")];
+    assert!(readiness_overridden(&mine, "t1"));
+    assert!(!readiness_overridden(&mine, "t2"), "another triage's");
+    for actor in [Actor::Pip, Actor::Supervisor, Actor::Run] {
+        assert!(!readiness_overridden(&[line(actor, "readiness_overridden", "t1")], "t1"), "{actor:?} can't override");
+    }
+    assert!(!readiness_overridden(&[line(Actor::Person, "readiness_answered", "t1"), line(Actor::Person, "readiness_asked", "t1")], "t1"), "answering or asking is not planning anyway");
+}
+
+#[test]
+fn a_report_is_ready_unless_its_triage_said_no_and_only_a_triage_has_a_verdict() {
+    let said = |ready: bool| ReportFacts { readiness: Some(Readiness { ready, questions: vec![] }), ..ReportFacts::default() };
+    assert!(ReportFacts::default().ready(), "no verdict reads as ready");
+    assert!(said(true).ready() && !said(false).ready());
+    let mut resolved = crate::runs::report::resolve(&Run::queued("t1".into(), "p".into(), "c".into(), None, run_spec(), "f".into(), Utc::now()), None);
+    resolved.readiness = Some(Readiness { ready: false, questions: vec!["Who asked?".into()] });
+    let with = |kind| Run::queued("r".into(), "p".into(), "c".into(), None, RunSpec { kind, ..run_spec() }, "f".into(), Utc::now());
+    assert_eq!(ReportFacts::of(&with(RunKind::Triage), &resolved).readiness, resolved.readiness);
+    assert_eq!(ReportFacts::of(&with(RunKind::Review), &resolved).readiness, None, "a review has no readiness");
 }

@@ -550,6 +550,18 @@ export class JiraBackend implements Backend {
     return invoke<Workstream>("workstreams_take_over", { id, reviewRun });
   }
 
+  workstreamsReadinessAsk(id: string, triageRun: string) {
+    return invoke<Proposal>("workstreams_readiness_ask", { id, triageRun });
+  }
+
+  workstreamsReadinessAnswer(id: string, triageRun: string) {
+    return invoke<Workstream>("workstreams_readiness_answer", { id, triageRun });
+  }
+
+  workstreamsReadinessOverride(id: string, triageRun: string) {
+    return invoke<Workstream>("workstreams_readiness_override", { id, triageRun });
+  }
+
   workstreamsHold(id: string) {
     return invoke<Workstream>("workstreams_hold", { id });
   }

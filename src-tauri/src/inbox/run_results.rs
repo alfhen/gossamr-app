@@ -527,7 +527,7 @@ impl Core {
     }
 
     /// Stores a draft the person made from a run's result, after checking the ticket is on the signed-in connection.
-    async fn draft_from_run(&self, run: &Run, intent: Intent, label: String) -> Result<Proposal> {
+    pub(super) async fn draft_from_run(&self, run: &Run, intent: Intent, label: String) -> Result<Proposal> {
         let scope = self.scope().await?;
         if intent.target().is_none_or(|t| t.connection_id != Connection::jira_id(&scope)) {
             return Err(refuse("that item belongs to another connection"));

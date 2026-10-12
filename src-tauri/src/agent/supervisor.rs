@@ -128,6 +128,9 @@ pub struct WakeFact {
     pub mark: String,
     #[serde(default)]
     pub plan_recommended: Option<bool>,
+    /// A Triage that found its ticket not ready to plan: how many open questions it listed. `None` is ready, or no verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_questions: Option<u32>,
     #[serde(default)]
     pub verdict: Option<ReviewVerdict>,
     #[serde(default)]
@@ -174,6 +177,7 @@ impl WakeFact {
             state,
             mark: mark(run, state),
             plan_recommended: None,
+            open_questions: None,
             verdict: None,
             blocking: 0,
             drafts: 0,
@@ -268,7 +272,7 @@ fn plural(n: u32, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// `[Event] run abc12345 (triage) Done; plan recommended: yes; 2 drafts`
+/// `[Event] run abc12345 (triage) Done; plan recommended: yes; not ready to plan, 2 open questions; 2 drafts`
 fn fact_line(f: &WakeFact) -> String {
     let run = match shown_id(&f.run) {
         Some(id) => format!("run {id}"),
@@ -277,6 +281,11 @@ fn fact_line(f: &WakeFact) -> String {
     let mut line = format!("[Event] {run} ({}) {}", f.kind.as_str(), f.state.words());
     if let Some(yes) = f.plan_recommended {
         line.push_str(if yes { "; plan recommended: yes" } else { "; plan recommended: no" });
+    }
+    match f.open_questions {
+        Some(0) => line.push_str("; not ready to plan"),
+        Some(n) => line.push_str(&format!("; not ready to plan, {}", plural(n, "open question", "open questions"))),
+        None => {}
     }
     if let Some(verdict) = f.verdict {
         line.push_str(match verdict {
@@ -842,6 +851,7 @@ impl Supervisor {
         if let Ok(resolved) = self.core.resolved_of(run).await {
             let report = ReportFacts::of(run, &resolved);
             fact.plan_recommended = report.plan_recommended;
+            fact.open_questions = report.readiness.as_ref().filter(|r| !r.ready).map(|r| r.questions.len() as u32);
             if run.spec.kind == RunKind::Review {
                 fact.verdict = report.verdict;
                 fact.blocking = report.findings.iter().filter(|f| f.severity == crate::runs::report::Severity::Blocking).count() as u32;
@@ -1068,6 +1078,7 @@ impl Supervisor {
                 settings: &settings,
                 fix_rounds,
                 plan_approved,
+                readiness_overridden: src.spec.kind == RunKind::Triage && autostart::readiness_overridden(events, &src.id),
                 pr: pr.clone(),
                 reviewed,
                 already: already(src, &report, runs, events, pr.as_ref()),

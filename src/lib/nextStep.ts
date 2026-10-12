@@ -176,7 +176,7 @@ function afterRunning(src: Run, view: WorkstreamView, globals: Partial<AutoStart
     case "triage":
       // A plan follows only if the finished triage recommends one.
       result = probe(src, view, globals, { report: { planRecommended: true } });
-      unknown = `${shortOf(src, view)}'s triage: a plan starts automatically only if it recommends one`;
+      unknown = `${shortOf(src, view)}'s triage: a plan starts automatically only if it recommends one and finds the ticket ready to plan`;
       break;
     case "plan":
       // A build follows only once the person approves the plan.

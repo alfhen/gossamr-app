@@ -327,6 +327,13 @@ describe("timeline: drafts", () => {
     expect(timeline({ drafts: [draft("d2", comment("CA-401"), 5)] })[0].turnId).toBeUndefined();
   });
 
+  it("says Gossamr drafted the comment to a reporter, and still an agent for the triage's own note", () => {
+    const asked = { ...draft("d1", comment("CA-401"), 5), label: "Questions for the reporter" } as Proposal;
+    expect(timeline({ drafts: [asked] })[0].text).toBe("Gossamr drafted a comment on CA-401");
+    expect(timeline({ drafts: [{ ...asked, state: { type: "applied" } } as Proposal] })[0].text).toBe("You approved a comment on CA-401, drafted by Gossamr: posted");
+    expect(timeline({ drafts: [draft("d2", comment("CA-401"), 5)] })[0].text).toBe("An agent drafted a comment on CA-401");
+  });
+
   it("opens the draft's card, or its need while it waits", () => {
     const pending = draft("d1", comment("CA-401"), 5);
     const need = needs({ workstreams: [view()], runs: [], proposals: [pending], dismissed: new Set(), now: NOW }).find((n) => n.key === "draft:d1")!;
@@ -433,6 +440,35 @@ describe("timeline: the audit", () => {
   it("words the person's Allow 5 more and counts it among their decisions", () => {
     const [allowed] = timeline({ events: [line("steps_allowed", 5, { detail: "5" })] });
     expect(allowed).toMatchObject({ text: "You allowed 5 more automatic steps", decision: true });
+  });
+
+  it("words the person's three choices on a ticket that isn't clear enough to plan and counts each among their decisions", () => {
+    const list = timeline({
+      events: [line("readiness_asked", 3, { runId: "r1", proposalId: "d1" }), line("readiness_answered", 2, { runId: "r1" }), line("readiness_overridden", 1, { runId: "r1" })],
+      runs: [run("r1", "triage", "done", 30)],
+      labels: new Map([["r1", "R1"]]),
+    });
+    const audit = list.filter((e) => e.kind === "audit");
+    expect(audit.map((e) => [e.text, e.decision])).toEqual([
+      ["You asked the reporter about R1's open questions", true],
+      ["You chose to answer R1's open questions", true],
+      ["You chose to plan anyway after R1 found the ticket not ready", true],
+    ]);
+    expect(audit.every((e) => e.kind === "audit" && e.decision)).toBe(true);
+    // The same line by anyone but the person is still worded, and is not the person's decision.
+    const other = timeline({ events: [line("readiness_overridden", 1, { actor: "pip", runId: "r1" })], runs: [run("r1", "triage", "done", 30)], labels: new Map([["r1", "R1"]]) }).find((e) => e.kind === "audit")!;
+    expect(other.text).toBe("Pip chose to plan anyway after R1 found the ticket not ready");
+    expect(other.decision).toBe(false);
+  });
+
+  it("says a triage's finish with the reason the ticket waits, and opens its need", () => {
+    const stopped: WorkstreamView = { ...view(), readiness: { triageRun: "r1", triageLabel: "R1", questions: ["Who asked?"], at: iso(20) } };
+    const found = needs({ workstreams: [stopped], runs: [], proposals: [], dismissed: new Set(), now: NOW });
+    expect(found.map((n) => n.kind)).toEqual(["readiness"]);
+    const [entry] = timeline({ runs: [run("r1", "triage", "done", 30)], needs: found, labels: new Map([["r1", "R1"]]) });
+    expect(entry).toMatchObject({ text: "Triage R1 finished: the ticket isn't clear enough to plan", target: { type: "need", key: "readiness:r1" }, needKey: "readiness:r1", decision: true });
+    const [after] = timeline({ runs: [run("r1", "triage", "done", 30)], needs: [], labels: new Map([["r1", "R1"]]) });
+    expect(after).toMatchObject({ text: "Triage R1 finished", target: { type: "run", id: "r1" }, decision: false });
   });
 
   it("opens the run or the draft a line names, when it is on the timeline", () => {

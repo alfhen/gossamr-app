@@ -132,7 +132,7 @@ describe("nextStep while a run works", () => {
   });
 
   it("says it depends on the triage's result, since a plan starts only if one is recommended", () => {
-    expect(next([run("t", "triage", "working")])).toMatchObject({ kind: "depends", text: "Next: depends on R1's triage: a plan starts automatically only if it recommends one." });
+    expect(next([run("t", "triage", "working")])).toMatchObject({ kind: "depends", text: "Next: depends on R1's triage: a plan starts automatically only if it recommends one and finds the ticket ready to plan." });
     expect(next([run("t", "triage", "working")], { rules: { triage_plan: false } })?.kind).toBe("manual");
   });
 

@@ -10,7 +10,8 @@ import type { MockProposals } from "./mockProposals";
 
 /**
  * The supervisor's decisions as the sample backend makes them, mirroring src-tauri/src/agent/supervisor.rs:
- * `decideWake`, `eventLine` and `planRecommended` are `decide_wake`, `event_line` and `plan_recommended`, and
+ * `decideWake`, `eventLine`, `planRecommended` and `readiness` are `decide_wake`, `event_line`, `plan_recommended` and
+ * `readiness` (src-tauri/src/runs/result.rs), and
  * `budgetLevel` is `budget_level`; `decideAutostart` and `fixRoundMessage` are `decide` and `fix_round_message` in
  * src-tauri/src/agent/autostart.rs. Both sides run src/backend/supervisor.fixtures.json.
  */
@@ -26,6 +27,8 @@ export interface WakeFact {
   kind: RunKind;
   state: WakeState;
   planRecommended?: boolean | null;
+  /** A Triage that found its ticket not ready to plan: how many open questions it listed. Absent is ready, or no verdict. */
+  openQuestions?: number | null;
   verdict?: "pass" | "blocking" | null;
   blocking?: number;
   drafts?: number;
@@ -96,6 +99,8 @@ function factLine(f: WakeFact): string {
   const id = shownId(f.run);
   let line = `[Event] ${id ? `run ${id}` : "a run"} (${f.kind}) ${STATE_WORDS[f.state]}`;
   if (f.planRecommended != null) line += f.planRecommended ? "; plan recommended: yes" : "; plan recommended: no";
+  if (f.openQuestions === 0) line += "; not ready to plan";
+  else if (f.openQuestions != null) line += `; not ready to plan, ${plural(f.openQuestions, "open question", "open questions")}`;
   if (f.verdict) {
     line += `; verdict: ${f.verdict}`;
     if ((f.blocking ?? 0) > 0) line += `; ${plural(f.blocking ?? 0, "blocking finding", "blocking findings")}`;
@@ -120,7 +125,11 @@ export function eventLine(facts: WakeFact[]): string {
  * disagree count as none.
  */
 export function planRecommended(text: string): boolean | null {
-  const LABEL = "plan recommended";
+  return yesNoLine(text, "plan recommended");
+}
+
+/** The `label: yes|no` lines of `text` as `plan_recommended` reads them: `null` when there is none or two disagree. */
+function yesNoLine(text: string, label: string): boolean | null {
   let fence: { mark: string; len: number } | null = null;
   let said: boolean | null = null;
   for (const line of text.split("\n")) {
@@ -137,8 +146,8 @@ export function planRecommended(text: string): boolean | null {
     }
     if (line.trimStart().startsWith(">")) continue;
     const bare = line.trim().replace(/^[#\-+*_`\s]+/, "");
-    if (bare.slice(0, LABEL.length).toLowerCase() !== LABEL) continue;
-    const rest = bare.slice(LABEL.length).replace(/^[*_`\s]+/, "");
+    if (bare.slice(0, label.length).toLowerCase() !== label) continue;
+    const rest = bare.slice(label.length).replace(/^[*_`\s]+/, "");
     if (!rest.startsWith(":")) continue;
     const word = (/^[A-Za-z]*/.exec(rest.slice(1).replace(/^[*_`\s]+/, ""))?.[0] ?? "").toLowerCase();
     if (word !== "yes" && word !== "no") continue;
@@ -149,9 +158,105 @@ export function planRecommended(text: string): boolean | null {
   return said;
 }
 
+/** A Triage's verdict on whether its ticket is clear enough to plan, as `Readiness` in runs/result.rs. */
+export interface Readiness {
+  ready: boolean;
+  /** Empty when ready; a verdict of not ready may have none when the answer listed none. */
+  questions: string[];
+}
+
+/** At most this many open questions are kept, each at most `QUESTION_LIMIT` characters (`QUESTIONS_MAX`, `QUESTION_LIMIT`). */
+export const QUESTIONS_MAX = 8;
+export const QUESTION_LIMIT = 300;
+
+/** The text after a bullet or number on a list line, or null for any other line, as `list_marker`. */
+function listMarker(line: string): string | null {
+  const t = line.trimStart();
+  const bullet = /^[-*+•][ \t]+/.exec(t);
+  if (bullet) return t.slice(bullet[0].length);
+  const numbered = /^\d{1,3}[.)][ \t]+/.exec(t);
+  return numbered ? t.slice(numbered[0].length) : null;
+}
+
+/** What follows `open questions` on a line that is that heading, in any of the usual dressings, as `heading_rest`; null for any other line. */
+function openQuestionsRest(line: string): string | null {
+  const trimmed = line.trim();
+  const bare = trimmed.replace(/^[#>]+/, "").replace(/^[*_`\s]+/, "");
+  if (bare.slice(0, "open questions".length).toLowerCase() !== "open questions") return null;
+  const rest = bare.slice("open questions".length).replace(/^[*_`\s]+/, "");
+  if (rest.startsWith(":")) return rest.slice(1).replace(/^[*_`\s]+/, "");
+  return trimmed.startsWith("#") && rest.trim() === "" ? "" : null;
+}
+
+/**
+ * A Triage's `Ready to plan: yes|no` line in its written answer, as `readiness` in runs/result.rs: read as the plan
+ * recommendation is, and with a `no`, the list under its `Open questions:` heading (or the text after it on the same
+ * line). Quoted lines, code fences and disagreeing lines count for nothing. The questions are one line each, cut, at most
+ * `QUESTIONS_MAX`. Null without a verdict, which reads as ready.
+ */
+export function readiness(result: string): Readiness | null {
+  const clean = scrubbed(result);
+  const ready = yesNoLine(clean, "ready to plan");
+  if (ready === null) return null;
+  if (ready) return { ready, questions: [] };
+  // A quoted heading is somebody else's words, as for the verdict line.
+  const lines = clean.split("\n").map((l) => (l.trimStart().startsWith(">") ? "" : l));
+  const questions: string[] = [];
+  let fence: { mark: string; len: number } | null = null;
+  let start = -1;
+  const fenced = (line: string): boolean => {
+    const indent = line.length - line.replace(/^ +/, "").length;
+    const opener = indent <= 3 ? /^(`{3,}|~{3,})(.*)$/.exec(line.slice(indent)) : null;
+    if (fence) {
+      if (opener && opener[1][0] === fence.mark && opener[1].length >= fence.len && opener[2].trim() === "") fence = null;
+      return true;
+    }
+    if (opener && !(opener[1][0] === "`" && opener[2].includes("`"))) {
+      fence = { mark: opener[1][0], len: opener[1].length };
+      return true;
+    }
+    return false;
+  };
+  for (let i = 0; i < lines.length && start < 0; i++) {
+    if (fenced(lines[i])) continue;
+    const rest = openQuestionsRest(listMarker(lines[i]) ?? lines[i]);
+    if (rest === null) continue;
+    start = i;
+    if (rest.trim()) questions.push(rest);
+  }
+  if (start >= 0) {
+    fence = null;
+    for (const line of lines.slice(start + 1)) {
+      if (fenced(line) || !line.trim()) continue;
+      const item = listMarker(line);
+      if (item === null) break;
+      questions.push(item);
+    }
+  }
+  const flat = (q: string) =>
+    q
+      .replace(/^(\[[ xX]\])/, "")
+      .replace(/\*\*([^*\s](?:[^*]*[^*\s])?)\*\*/g, "$1")
+      .split(/\s+/)
+      .filter(Boolean)
+      .join(" ")
+      .replace(/^[*_`\s]+|[*_`\s]+$/g, "");
+  return { ready, questions: questions.map(flat).filter((q) => q !== "").slice(0, QUESTIONS_MAX).map((q) => cut(q, QUESTION_LIMIT)) };
+}
+
 /** What a finished Triage on a ticket says about a plan, from its whole written answer, as `Resolved.plan_recommended`. */
 function triagePlanRecommended(run: Run): boolean | null {
   return run.item && run.resultComplete !== false && run.result ? planRecommended(run.result) : null;
+}
+
+/** What a finished Triage on a ticket says about its ticket being ready to plan, from its whole written answer, as `Resolved.readiness`. */
+export function triageReadiness(run: Run): Readiness | null {
+  return run.spec.kind === "triage" && run.item && run.resultComplete !== false && run.result ? readiness(run.result) : null;
+}
+
+/** Whether the person chose "Plan anyway" on Triage `run`: a `readiness_overridden` line of theirs naming it, as `readiness_overridden`. */
+export function readinessOverridden(events: readonly Pick<WorkstreamEvent, "actor" | "action" | "runId">[], run: string): boolean {
+  return events.some((e) => e.actor === "person" && e.action === "readiness_overridden" && e.runId === run);
 }
 
 // The auto-start rules, as src-tauri/src/agent/autostart.rs has them.
@@ -187,12 +292,14 @@ export interface AutostartSource {
 /** Everything a rule looks at about one finished run, as `RuleInput` has it. */
 export interface AutostartInput {
   source: AutostartSource;
-  report: { planRecommended?: boolean | null; verdict?: "pass" | "blocking" | null; findings?: ReviewFinding[] };
+  report: { planRecommended?: boolean | null; /** A Triage's verdict on its ticket; absent is ready. */ ready?: boolean | null; verdict?: "pass" | "blocking" | null; findings?: ReviewFinding[] };
   workstream: { mode: string; held: string | null; closed: boolean; spent: { autoTurns: number; wakes: number }; rules: WorkstreamRules; budget?: Workstream["budget"] };
   /** The global switches, over the defaults. */
   global?: Partial<AutoStartSwitches>;
   fixRounds?: number;
   planApproved?: boolean;
+  /** The person chose "Plan anyway" after this Triage found the ticket not ready. */
+  readinessOverridden?: boolean;
   pr?: { number: number; sha: string | null } | null;
   /** The commit each review of a build read. */
   reviewed?: (string | null)[];
@@ -233,7 +340,10 @@ export function decideAutostart(input: AutostartInput): AutostartDecision | null
     case "investigate":
       return on("investigate_triage") ? start("investigate_triage", "triage") : null;
     case "triage":
-      return input.report.planRecommended === true && on("triage_plan") ? start("triage_plan", "plan") : null;
+      // A Triage that found the ticket not ready starts nothing; the person's own "Plan anyway" starts the Plan it was
+      // going to, even when the Triage didn't recommend one or the rule is off: they chose it.
+      if (input.readinessOverridden) return start("triage_plan", "plan");
+      return input.report.planRecommended === true && input.report.ready !== false && on("triage_plan") ? start("triage_plan", "plan") : null;
     case "plan":
       return input.planApproved && on("plan_build") ? start("plan_build", "build") : null;
     case "build": {
@@ -446,7 +556,11 @@ export class MockSupervisor {
     const fact: KeyedFact = { run: run.id, kind: run.spec.kind, state, key: factKey(run, state) };
     if (state !== "done") return fact;
     const resolved = this.parts.runs.resolvedOf(run.id);
-    if (run.spec.kind === "triage") fact.planRecommended = triagePlanRecommended(run);
+    if (run.spec.kind === "triage") {
+      fact.planRecommended = triagePlanRecommended(run);
+      const found = triageReadiness(run);
+      if (found && !found.ready) fact.openQuestions = found.questions.length;
+    }
     if (run.spec.kind === "review" && resolved) {
       fact.verdict = resolved.verdict;
       fact.blocking = resolved.findings.filter((f) => f.severity === "blocking").length;
@@ -537,6 +651,7 @@ export class MockSupervisor {
       const resolved = runs.resolvedOf(src.id);
       const report = {
         planRecommended: src.spec.kind === "triage" ? triagePlanRecommended(src) : null,
+        ready: triageReadiness(src)?.ready ?? null,
         verdict: resolved?.verdict ?? null,
         findings: (resolved?.findings ?? []) as ReviewFinding[],
       };
@@ -551,6 +666,7 @@ export class MockSupervisor {
         global: settings.autostart,
         fixRounds,
         planApproved: src.spec.kind === "plan" && runs.planApprovedOf(src.id),
+        readinessOverridden: src.spec.kind === "triage" && readinessOverridden(events, src.id),
         pr,
         reviewed: linked.filter((r) => r.spec.kind === "review" && r.spec.buildFromRun === src.id).map((r) => r.spec.prSha ?? null),
         already: already(src, report.verdict, linked, events, pr),

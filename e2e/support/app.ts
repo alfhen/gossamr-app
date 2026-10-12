@@ -107,7 +107,7 @@ export async function surfacePullRequests(page: Page) {
 }
 
 /** What the sample backend's handle offers the tests (MockHandle in src/backend/mockWatch.ts). */
-type Script = { planRecommended?: boolean; verdict?: "pass" | "blocking"; marker?: boolean };
+type Script = { planRecommended?: boolean; ready?: boolean; questions?: string[]; verdict?: "pass" | "blocking"; marker?: boolean };
 /** The restriction a read-only run is launched with (`ReadOnly` in src/types.ts). */
 export type ReadOnly = { mode: string; allow: string[]; deny: string[]; guard: string };
 /** One launch as the mock launcher made it (`MockLaunch` in src/backend/mockRuns.ts). */
@@ -126,6 +126,8 @@ interface Handle {
   jiraWrites(): { proposalId: string; type: string; key: string | null }[];
   reviewDrafts(): ReviewDraftRow[];
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
+  seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;
+  backdateWorkstream(key: string, days: number): void;
   holdWorkstream(key: string, reason: string): void;
   holdPip(on: boolean): void;
   pipIdle(): boolean;
@@ -318,6 +320,31 @@ export const setBudget = (page: Page, id: string, budget: { autoTurns?: number |
     { id, budget, missing: NO_MOCK },
   );
 
+/**
+ * Adds an audit line to the open workstream on ticket `key` as of `at` (an ISO time), the way to age what depends on the time
+ * since: the sample backend's clock is the browser's, which a test can't move.
+ */
+export const seedWorkstreamEvent = (page: Page, key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }) =>
+  page.evaluate(
+    ({ key, event, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.seedWorkstreamEvent(key, event);
+    },
+    { key, event, missing: NO_MOCK },
+  );
+
+/** Makes the open workstream on ticket `key` `days` days older: it opened that much earlier. */
+export const backdateWorkstream = (page: Page, key: string, days: number) =>
+  page.evaluate(
+    ({ key, days, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.backdateWorkstream(key, days);
+    },
+    { key, days, missing: NO_MOCK },
+  );
+
 /** Changes sample ticket `key` as someone editing it in Jira would: its summary, description or status (an id or a name). */
 export const editTicket = (page: Page, key: string, change: TicketEdit) =>
   page.evaluate(
@@ -410,6 +437,10 @@ export async function expectPeekInPlace(page: Page) {
 
 /** Pip home's composer input, the only Pip input on screen there. */
 export const homeComposer = (page: Page) => pipHome(page).locator(PIP_INPUT);
+
+/** The cobweb on a workstream's row in Pip home's list: its drawing and its words for a screen reader (`data-workstream-wither`). */
+export const workstreamWeb = (page: Page, key: string) => workstreamRow(page, key).locator("svg.cobweb");
+export const workstreamWebText = (page: Page, key: string) => workstreamRow(page, key).locator("[data-workstream-wither]");
 
 /** The row of the open workstream on ticket `key` in Pip home's list; `workstreamRow(page, "General")` is General's. */
 export const workstreamRow = (page: Page, key: string) =>

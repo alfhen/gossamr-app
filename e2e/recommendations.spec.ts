@@ -2,10 +2,15 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   advanceRuns,
   askPip,
+  backdateWorkstream,
   expandNeedsYou,
   heldBanner,
   holdAll,
   holdBySystem,
+  homeComposer,
+  homeRunCards,
+  homeSettled,
+  inlineStart,
   jiraWrites,
   mockRuns,
   needOfKind,
@@ -22,16 +27,22 @@ import {
   paneSettled as settled,
   pipHome,
   pipPane,
+  scriptNextRun,
+  seedWorkstreamEvent,
   setBudget,
   startWorkstream,
   surfacePullRequests,
   wakes,
   workstreamEvents,
   workstreamRow,
+  workstreamWeb,
+  workstreamWebText,
 } from "./support/app";
 
 // Two product decisions (docs/needs-you.md): a hold the person chose is not a need, and the automatic budget is one unit,
 // "automatic steps", whose running out is a Decide question in Needs you with "Allow 5 more" and "Switch to Advise".
+// Then two more: Pip speaks up when a ticket is unclear (at intake, and as a hard stop after the triage), and a workstream
+// where work is happening but Jira hasn't heard grows a cobweb.
 
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
 
@@ -53,12 +64,12 @@ async function workstreamOnHome(page: Page) {
 }
 
 /** Asks Pip for an investigation of CA-401, opens its draft past the one-time safety sheet and starts it, as the person does. */
-async function startInvestigation(page: Page) {
+async function startInvestigation(page: Page, key = "CA-401") {
   await settled(page);
   await askPip(page, "investigate this");
   await settled(page);
   for (let attempt = 0; attempt < 2; attempt++) {
-    await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
+    await runCards(page, key).last().getByRole("button", { name: "Review and start →" }).click();
     await expect(setup(page).or(safety(page))).toBeVisible();
     if (!(await safety(page).isVisible())) break;
     await safety(page).getByRole("button", { name: "Close" }).click();
@@ -286,5 +297,230 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
     await expect(pipHome(page).locator("[data-held-banner]")).toContainText("Held: automatic steps used up");
     expect(await actions(page, "steps_allowed")).toEqual([]);
     await expect(toast(page)).toContainText("CA-401 to Advise");
+  });
+});
+
+// Pip speaks up when a ticket is unclear.
+
+const VAGUE = "CA-408";
+const VAGUE_WORDS = "CA-408 doesn't say what done looks like, what's in or out of scope, or who is waiting on it.";
+
+/** A managed workstream on the sample's vague ticket, its investigation and the triage a rule started after it finished: the triage says it is not ready to plan. Left on Pip home, on its row. */
+async function unclear(page: Page) {
+  await openApp(page, MANAGED);
+  await startWorkstream(page, VAGUE);
+  await startInvestigation(page, VAGUE);
+  await finish(page, (await newest(page, "investigate"))!.id);
+  await finish(page, (await started(page, "triage")).id);
+  await openPipHome(page);
+  await workstreamRow(page, VAGUE).click();
+  await expect(needOfKind(page, "readiness")).toBeVisible();
+}
+
+test.describe("D1: Pip speaks up when a ticket is unclear", () => {
+  test("its first turn in a workstream on a vague ticket says plainly what is missing, and a clear ticket gets no such line", async ({ page }) => {
+    await openApp(page, MANAGED);
+    await startWorkstream(page, VAGUE);
+    await settled(page);
+    await askPip(page, "where do we stand?");
+    await settled(page);
+    await expect(pipPane(page)).toContainText(VAGUE_WORDS);
+    // Only its first turn does: the second doesn't say it again.
+    await askPip(page, "where do we stand now?");
+    await settled(page);
+    expect(((await pipPane(page).innerText()).match(/doesn't say what done looks like/g) ?? []).length).toBe(1);
+
+    // A ticket with a real description is not remarked on.
+    await startWorkstream(page, "DEVOPS-471");
+    await settled(page);
+    await askPip(page, "where do we stand?");
+    await settled(page);
+    await expect(pipPane(page)).not.toContainText("doesn't say what done looks like");
+  });
+
+  test("a triage that says the ticket isn't ready stops the plan: a Decide need lists the questions, with the three choices", async ({ page }) => {
+    await unclear(page);
+    // Nothing planned, though the triage recommended a plan: the rule is gated on the verdict.
+    expect(await newest(page, "plan")).toBeNull();
+    expect((await actions(page, "autostart")).map((e) => e.detail)).toEqual([expect.stringMatching(/^investigate_triage after /)]);
+
+    const need = needOfKind(page, "readiness");
+    await expect(need).toContainText("R2 left these questions open: What does done look like for CA-408?");
+    await expect(need).toHaveAttribute("data-group", "decide");
+    await expect(needsYouRow(page, VAGUE).locator("[data-needs-you-chip]").first()).toHaveText("Decide");
+    await need.click();
+    const pane = needsPane(page);
+    await expect(pane).toHaveAttribute("data-kind", "readiness");
+    await expect(pane).toContainText("CA-408 isn't clear enough to plan");
+    const questions = pane.locator("[data-readiness-questions] li");
+    await expect(questions).toHaveCount(3);
+    await expect(questions.nth(0)).toContainText("What does done look like for CA-408?");
+    await expect(pane).toContainText("No plan starts until you choose.");
+    for (const name of ["Ask the reporter", "I'll answer", "Plan anyway"]) await expect(pane.getByRole("button", { name })).toBeVisible();
+    // The Next line says what the workstream waits on.
+    await expect(pipHome(page).locator("[data-next-step]")).toContainText("waiting on you.");
+    await expect(pipHome(page).locator("[data-next-step]")).toContainText("What does done look like for CA-408?");
+    expect(await jiraWrites(page)).toEqual([]);
+  });
+
+  test("Ask the reporter drafts a comment to the reporter for approval: nothing is posted before it, and the need is answered", async ({ page }) => {
+    await unclear(page);
+    await needOfKind(page, "readiness").click();
+    await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
+    await expect(toast(page)).toContainText("Drafted a comment to the reporter with the open questions. It is posted only when you approve it.");
+    await expect(needOfKind(page, "readiness")).toHaveCount(0);
+    expect(await jiraWrites(page)).toEqual([]);
+    expect(await newest(page, "plan")).toBeNull();
+    const asked = (await actions(page, "readiness_asked"))[0];
+    expect([asked.actor, asked.runId]).toEqual(["person", (await newest(page, "triage"))!.id]);
+
+    // The draft is an ordinary one: Gossamr's, addressed to the reporter, listing the questions, waiting in Needs you.
+    await expandNeedsYou(page, VAGUE);
+    const row = needRow(page, "Questions for the reporter");
+    await expect(row).toHaveCount(1);
+    await expect(row).toHaveAttribute("data-group", "approve");
+    await row.click();
+    await expect(needsPane(page)).toContainText("Gossamr drafted a comment to the reporter of CA-408 from R2's open questions; it is posted only when you approve it.");
+    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+    await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
+    await expect(draft).toContainText("@Mette Lund");
+    await expect(draft).toContainText("Before CA-408 can be planned");
+    await expect(draft).toContainText("What does done look like for CA-408?");
+    await expect(draft).toContainText("Who asked for this, and who is waiting on it?");
+    expect(await jiraWrites(page)).toEqual([]);
+    // Approving it is the one thing that posts, and it goes to the ticket whole.
+    await draft.getByRole("button", { name: "Post comment" }).click();
+    await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", VAGUE]]);
+  });
+
+  test("I'll answer opens the workstream's conversation with the questions quoted in the composer, and starts nothing", async ({ page }) => {
+    await unclear(page);
+    await needOfKind(page, "readiness").click();
+    await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
+    await expect(needOfKind(page, "readiness")).toHaveCount(0);
+    await expect(homeComposer(page)).toHaveValue(/^R2's open questions about CA-408: “What does done look like for CA-408\?/);
+    await expect(homeComposer(page)).toHaveValue(/“What is in scope and what is out\?” · “Who asked for this, and who is waiting on it\?”\. My answers: $/);
+    await expect(homeComposer(page)).toBeFocused();
+    expect((await actions(page, "readiness_answered")).map((e) => e.actor)).toEqual(["person"]);
+    expect(await newest(page, "plan")).toBeNull();
+    expect(await jiraWrites(page)).toEqual([]);
+  });
+
+  test("Plan anyway records the person's override and the plan starts as the rule would have; under a hold it waits for Resume", async ({ page }) => {
+    await unclear(page);
+    // A hold is respected: the override is on record, and the plan starts only once the workstream is set going.
+    await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+    await expect(pipHome(page).locator("[data-held-banner]")).toContainText("Held by you");
+    await needOfKind(page, "readiness").click();
+    await needsPane(page).getByRole("button", { name: "Plan anyway" }).click();
+    await expect(needOfKind(page, "readiness")).toHaveCount(0);
+    const line = (await actions(page, "readiness_overridden"))[0];
+    expect([line.actor, line.runId]).toEqual(["person", (await newest(page, "triage"))!.id]);
+    await expect.poll(async () => await newest(page, "plan")).toBeNull();
+
+    await pipHome(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
+    const plan = await started(page, "plan");
+    const triage = (await newest(page, "triage"))!;
+    expect((await actions(page, "autostart")).map((e) => e.detail)).toContain(`triage_plan after ${triage.id}`);
+    expect(plan.id).toBeTruthy();
+    expect(await jiraWrites(page)).toEqual([]);
+  });
+
+  test("a later triage that says ready resolves the need, and the plan starts as it always did", async ({ page }) => {
+    await unclear(page);
+    const first = (await newest(page, "triage"))!;
+    // The person asks for another triage (Pip drafts it from the investigation); it finishes saying the ticket is ready.
+    await scriptNextRun(page, "triage", { ready: true });
+    await homeComposer(page).fill("triage it");
+    await homeComposer(page).press("Enter");
+    await homeSettled(page);
+    const review = await inlineStart(page, homeRunCards(page, VAGUE).last());
+    await review.getByRole("button", { name: "Start agent" }).click();
+    const again = await started(page, "triage", first.id);
+    await finish(page, again.id);
+    await expect(needOfKind(page, "readiness")).toHaveCount(0);
+    const plan = await started(page, "plan");
+    expect(plan.id).toBeTruthy();
+  });
+});
+
+
+// A workstream where work is happening but Jira hasn't heard grows a cobweb.
+
+const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+
+test.describe("D2: a workstream where work is happening but Jira hasn't heard", () => {
+  test("grows a cobweb on its row only once agents or Pip worked since the person's last post, says so in words, and is never a need", async ({ page }) => {
+    test.setTimeout(90_000);
+    await openApp(page, MANAGED);
+    // CA-403: quiet and nothing happens. CA-402: an agent starts. CA-401: Pip will take a turn.
+    await startWorkstream(page, "CA-403");
+    await startWorkstream(page, "CA-402");
+    await startInvestigation(page, "CA-402");
+    // The agent started working: a run queued is not one that started.
+    await advanceRuns(page, 2, (await newest(page, "investigate"))!.id);
+    await startWorkstream(page, "CA-401");
+    // The last post to Jira was 6 days ago in two of them; CA-403 never posted and opened 6 days ago.
+    await seedWorkstreamEvent(page, "CA-402", { actor: "person", action: "review_posted", at: ago(6) });
+    await seedWorkstreamEvent(page, "CA-401", { actor: "person", action: "review_posted", at: ago(6) });
+    await backdateWorkstream(page, "CA-403", 6);
+    await openPipHome(page);
+
+    // Six days without a word to Jira, but nothing happened in CA-403 or CA-401 since: no cobweb. The ticket list's own covers a ticket nobody touches.
+    for (const key of ["CA-403", "CA-401"]) {
+      await expect(workstreamRow(page, key)).toBeVisible();
+      await expect(workstreamWeb(page, key)).toHaveCount(0);
+      await expect(workstreamRow(page, key)).not.toHaveAttribute("data-wither", /.+/);
+    }
+    // An agent started in CA-402 (and Pip answered the request): work since the post, so its row has the web.
+    const row = workstreamRow(page, "CA-402");
+    const words = /^No Jira update for 6 days \(1 run and 1 Pip turn since\)$/;
+    await expect(workstreamWeb(page, "CA-402")).toHaveCount(1);
+    await expect(row).toHaveAttribute("data-wither", "3");
+    await expect(row).toHaveAttribute("title", words);
+    await expect(workstreamWebText(page, "CA-402")).toHaveText(words);
+    // A screen reader gets the same words with the row; the drawing is hidden from it.
+    await expect(row).toHaveAccessibleName(/No Jira update for 6 days \(1 run and 1 Pip turn since\)$/);
+    await expect(workstreamWeb(page, "CA-402")).toHaveAttribute("aria-hidden", "true");
+    await expect(row).toHaveClass(/\bws-wither ws-wither-3\b/);
+
+    // Pip taking a turn in CA-401 is work too: its row grows one, counting that turn.
+    await workstreamRow(page, "CA-401").click();
+    await homeComposer(page).fill("where do we stand?");
+    await homeComposer(page).press("Enter");
+    await homeSettled(page);
+    await expect(workstreamWeb(page, "CA-401")).toHaveCount(1);
+    await expect(workstreamWebText(page, "CA-401")).toHaveText("No Jira update for 6 days (1 Pip turn since)");
+    await expect(workstreamWeb(page, "CA-403")).toHaveCount(0);
+
+    // It is a look, not a duty: no need, no count anywhere.
+    await expect(needsYouCount(page)).toHaveText("0");
+    await expect(needsYouTray(page)).toContainText("Nothing needs you.");
+    await expect(homeButton(page)).toHaveAccessibleName("Pip home");
+    await expect(needOfKind(page, "readiness")).toHaveCount(0);
+  });
+
+  test("starts from when the workstream opened until the person posts, and a post to Jira clears it", async ({ page }) => {
+    test.setTimeout(90_000);
+    await openApp(page, MANAGED);
+    await startWorkstream(page, "CA-402");
+    await backdateWorkstream(page, "CA-402", 8);
+    await startInvestigation(page, "CA-402");
+    await finish(page, (await newest(page, "investigate"))!.id);
+    await openPipHome(page);
+    const web = workstreamWeb(page, "CA-402");
+    // No post yet: the clock runs from when it opened, 8 days ago.
+    await expect(web).toHaveCount(1);
+    await expect(workstreamRow(page, "CA-402")).toHaveAttribute("data-wither", "4");
+    await expect(workstreamWebText(page, "CA-402")).toHaveText(/^No Jira update for 8 days \(\d+ runs? and \d+ Pip turns? since\)$/);
+
+    // The person approves the comment the investigation drafted: that is a post, and the clock starts again.
+    await workstreamRow(page, "CA-402").click();
+    await needOfKind(page, "draft").click();
+    await needsPane(page).getByRole("button", { name: "Post comment" }).click();
+    await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", "CA-402"]]);
+    await expect(web).toHaveCount(0);
+    await expect(workstreamRow(page, "CA-402")).not.toHaveAttribute("data-wither", /.+/);
+    await expect(workstreamWebText(page, "CA-402")).toHaveCount(0);
   });
 });

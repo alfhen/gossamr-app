@@ -403,6 +403,40 @@ describe("the decision pane", () => {
     }
   });
 
+  it("decides a ticket the triage found not clear enough to plan with its questions and the three choices", () => {
+    const unclear: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh"), readiness: { triageRun: "r-t", triageLabel: "R2", questions: ["What does done look like?", "Who is waiting on it?"], at: ago(4) } };
+    const list = set({ workstreams: [unclear], runs: [], proposals: [] });
+    const html = pane(list, "readiness:r-t");
+    expect(html).toContain("CA-401 isn&#x27;t clear enough to plan");
+    expect(html).toContain('data-needs-you-chip="decide"');
+    expect(html).toContain("<li>What does done look like?</li><li>Who is waiting on it?</li>");
+    expect(html).toContain("No plan starts until you choose.");
+    for (const label of ["Ask the reporter", "I&#x27;ll answer", "Plan anyway"]) expect(html).toContain(`>${label}<`);
+    // Nothing is posted by the pane itself: it only offers the choices.
+    expect(html).not.toContain("Post review");
+    // With no questions listed, it says so rather than show an empty list.
+    const none = set({ workstreams: [{ ...unclear, readiness: { ...unclear.readiness!, questions: [] } }], runs: [], proposals: [] });
+    const quiet = pane(none, "readiness:r-t");
+    expect(quiet).toContain("unclear but listed no questions");
+    expect(quiet).not.toContain("data-readiness-questions");
+  });
+
+  it("calls the store for each of the three choices", () => {
+    const unclear: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh"), readiness: { triageRun: "r-t", triageLabel: "R2", questions: ["Who asked?"], at: ago(4) } };
+    const list = set({ workstreams: [unclear], runs: [], proposals: [] });
+    const was = useWorkstreams.getState();
+    const calls = { askReporter: vi.fn(async () => true), answerSelf: vi.fn(async () => true), planAnyway: vi.fn(async () => true) };
+    useWorkstreams.setState(calls);
+    const [primary, ...rest] = [list[0].primary, ...list[0].secondary];
+    expect([primary.id, ...rest.map((a) => a.id)]).toEqual(["askReporter", "answerSelf", "planAnyway"]);
+    // The keyboard's plan for the primary asks for Enter and then calls the store; the others are the pane's buttons.
+    const plan = keyPlan(list[0], "approve");
+    if (plan?.type !== "ask") throw new Error("it asks for Enter first");
+    plan.run();
+    expect(calls.askReporter).toHaveBeenCalledWith("ws-1");
+    useWorkstreams.setState({ askReporter: was.askReporter, answerSelf: was.answerSelf, planAnyway: was.planAnyway });
+  });
+
   it("decides an escalation with its three choices and the review draft that folded into it, and a plan with its approval note", () => {
     const escalated: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-b", "r-rev"] }), escalation: { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R2", buildLabel: "R1", rounds: 2, reviewDraft: "rd", at: ago(3) } };
     const review = draft("rd", { type: "githubReview", item: ref("CA-401"), connectionId: "github", repo: "acme/shop", number: 7, runId: "r-rev", summary: "Blocking", comments: [], commitSha: "abc" } as unknown as Intent, 5, "ws-1");

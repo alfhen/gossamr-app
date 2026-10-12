@@ -74,6 +74,32 @@ describe("the workstream list on Pip home", () => {
     expect(html).toContain('data-workstream-row="general" role="option" aria-selected="false" tabindex="-1"');
   });
 
+  it("gives a row the cobweb of a workstream gone quiet in Jira while work went on, with its words for hover and a screen reader", () => {
+    const [first, second] = open;
+    const text = (days: number) => `No Jira update for ${days} days (3 runs since)`;
+    const web = (level: 1 | 3, days: number) => ({ level, days, since: "2026-10-07T12:00:00Z", runs: 3, turns: 0, text: text(days) });
+    const html = list({ wither: { [first.workstream.id]: web(3, 5), [second.workstream.id]: web(1, 2) } });
+    const row = (id: string) => html.slice(html.indexOf(`data-workstream-row="${id}"`)).split("</li>")[0];
+    const quiet = row(first.workstream.id);
+    expect(quiet).toContain('data-wither="3"');
+    expect(quiet).toContain(`title="${text(5)}"`);
+    expect(quiet).toMatch(/class="[^"]*\bws-wither ws-wither-3\b/);
+    expect(quiet).toContain('<svg aria-hidden="true"');
+    expect(quiet).toContain("cobweb");
+    // The words are in the row for a screen reader, and the web is not.
+    expect(quiet).toContain(`<span data-workstream-wither="true" class="sr-only">${text(5)}</span>`);
+    // A first stage only dries the row out, as a ticket's does; the web comes with the second.
+    const dry = row(second.workstream.id);
+    expect(dry).toMatch(/\bws-wither ws-wither-1\b/);
+    expect(dry).not.toContain("<svg");
+    // General, and the rows with no web, are as before.
+    const clear = html.slice(html.indexOf('data-workstream-row="general"')).split("</li>")[0];
+    expect(clear).not.toMatch(/wither|<svg/);
+    const only = list({ wither: { [first.workstream.id]: web(3, 5) } });
+    expect(only.slice(only.indexOf(`data-workstream-row="${second.workstream.id}"`)).split("</li>")[0]).not.toMatch(/ws-wither|data-wither|<svg/);
+    expect(list()).not.toMatch(/ws-wither|data-wither|<svg|sr-only/);
+  });
+
   it("lists the closed workstreams behind the toggle, read-only", () => {
     expect(list()).not.toContain("Closed workstreams");
     expect(list()).toMatch(/aria-pressed="false"[^>]*>Show closed/);

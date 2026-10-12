@@ -1,8 +1,8 @@
-import { ALLOW_MORE_STEPS, HELD_BUDGET, type Intent, type Proposal, type Run, type WorkstreamView } from "../types";
+import { ALLOW_MORE_STEPS, HELD_BUDGET, type Intent, type Proposal, type ReadinessStop, type Run, type WorkstreamView } from "../types";
 import { quietMinutes, stoppedAtLimit } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { parsePermission, permissionOffer, readAs } from "./permission";
-import { inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
+import { inWorkstreamPane, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
 import { humanDuration } from "./runNames";
 import { isHeldByYou, shortHeld, stepsOf } from "./workstreamHold";
 import { STAGE_LABEL, runWorkstream } from "./workstreamStage";
@@ -30,12 +30,13 @@ export type NeedKind =
   | "continuation"
   | "hold"
   | "budget"
+  | "readiness"
   | "draft"
   | "review"
   | "runStart";
 
 /** What the person can do about a need, as the keys and the pane's buttons name it. */
-export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "allowMore" | "advise" | "answer" | "open";
+export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "allowMore" | "advise" | "askReporter" | "answerSelf" | "planAnyway" | "answer" | "open";
 
 export interface ActionSpec {
   id: NeedActionId;
@@ -129,6 +130,23 @@ export const BATCHABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "trans
 
 /** What the list says of a review that still blocks after the automatic fix rounds. */
 export const escalationReason = (rounds: number) => `Review still blocks after ${rounds} fix ${rounds === 1 ? "round" : "rounds"}`;
+
+/** What a readiness need says of the open questions: which triage left them and what they are, in one sentence. */
+export function readinessWhy(r: Pick<ReadinessStop, "triageLabel" | "questions">): string {
+  const triage = r.triageLabel || "The triage";
+  if (r.questions.length === 0) return `${triage} found the ticket unclear but listed no questions.`;
+  return clip(`${triage} left ${r.questions.length === 1 ? "this question" : "these questions"} open: ${r.questions.join(" · ")}`, 240);
+}
+
+/**
+ * What "I'll answer" puts in the composer, which is one line: the open questions quoted, then where to answer. A question
+ * is the triage's own words, so each is quoted as data and the person writes after "My answers:".
+ */
+export function readinessPrompt(r: Pick<ReadinessStop, "triageLabel" | "questions">, key: string | null | undefined): string {
+  const triage = r.triageLabel || "The triage";
+  const quoted = r.questions.length ? r.questions.map((q) => `“${q}”`).join(" · ") : "“(it listed no questions)”";
+  return `${triage}'s open questions about ${key ?? "this ticket"}: ${quoted}. My answers: `;
+}
 
 /** What a sign-in need reads: the run, then this. */
 export const SIGN_IN_TEXT = "needs you to sign in to Claude";
@@ -238,7 +256,7 @@ const EDITABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "rewrite", "cr
 
 /**
  * Everything waiting on the person across the open workstreams and General, highest rank first: a decision (an escalation,
- * a plan or description to approve, a workstream that used its automatic steps), then what is stuck (a permission, a question, a sign-in, a failure, a run stopped at
+ * a plan or description to approve, a workstream that used its automatic steps, a ticket the triage found not clear enough to plan), then what is stuck (a permission, a question, a sign-in, a failure, a run stopped at
  * its limit, gone quiet for 30 minutes, unclear or that may have carried on elsewhere, a hold the system made), then drafts to approve (a
  * Jira draft, a GitHub review, a run to start). Within a group, oldest first.
  *
@@ -300,9 +318,11 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
     const label = from && ws?.labels.find(([id]) => id === from)?.[1];
     const step = from ? runs.find((r) => r.id === from)?.spec.kind : undefined;
     const what = DRAFT_TEXT[p.intent.type].replace(/^Draft /, "");
-    const title = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : DRAFT_TEXT[p.intent.type];
+    const title = isReporterQuestions(p) ? "Questions for the reporter" : label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : DRAFT_TEXT[p.intent.type];
     const by = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "autopilot" ? "The autopilot" : p.createdBy === "agent" ? "An agent" : "You";
-    const drafted = `${by} drafted ${DRAFT_WHAT[p.intent.type](key)}.`;
+    // The questions to a reporter are Gossamr's words around the triage's own, and the person's choice: say so.
+    const asked = isReporterQuestions(p);
+    const drafted = asked ? `Gossamr drafted a comment to the reporter${key ? ` of ${key}` : ""}${label ? ` from ${label}'s open questions` : ""}; it is posted only when you approve it.` : `${by} drafted ${DRAFT_WHAT[p.intent.type](key)}.`;
     const edit = EDITABLE.has(p.intent.type) ? [action("edit", "Edit")] : [];
     if (p.intent.type === "rewrite") {
       // A plan run's description update is how the plan is approved; any other rewrite is read in its diff first.
@@ -523,6 +543,26 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
       primary: action("open", "Choose what next"),
       secondary: [],
       target: { type: "escalation" },
+      batchable: false,
+    });
+  }
+
+  for (const v of open) {
+    const r = v.readiness;
+    if (!r) continue;
+    const key = v.workstream.itemKey;
+    out.push({
+      key: `readiness:${r.triageRun}`,
+      group: "decide",
+      kind: "readiness",
+      ...where(v.workstream.id, key),
+      title: `${key ?? "This ticket"} isn't clear enough to plan`,
+      why: readinessWhy(r),
+      ifYouWait: "No plan starts until you choose; nothing is posted to Jira.",
+      at: r.at,
+      primary: action("askReporter", "Ask the reporter"),
+      secondary: [action("answerSelf", "I'll answer"), action("planAnyway", "Plan anyway")],
+      target: { type: "workstream" },
       batchable: false,
     });
   }

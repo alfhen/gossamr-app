@@ -3,7 +3,7 @@
 
 use super::{Finding, Report, ReportStatus, ResultSource, ReviewVerdict, StoredReport};
 use crate::domain::{Run, RunKind};
-use crate::runs::result::{jira_note, plan_recommended, review_verdict, subtask_proposals, ticket_keys, ticket_proposal, JiraNote, TicketProposal};
+use crate::runs::result::{jira_note, plan_recommended, readiness, review_verdict, subtask_proposals, ticket_keys, ticket_proposal, JiraNote, Readiness, TicketProposal};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolved {
@@ -27,6 +27,10 @@ pub struct Resolved {
     /// For a Triage on a ticket: whether it recommends a plan, from the report when that gave it, else from the
     /// `Plan recommended:` lines of its whole written answer (`plan_recommended`). Never from a one-line summary.
     pub plan_recommended: Option<bool>,
+    /// For a Triage on a ticket: whether the ticket is clear enough to plan, with the open questions when it is not, from
+    /// the `Ready to plan:` line of its whole written answer (`readiness`), never from a one-line summary. `None` when it
+    /// gave no verdict, which every reader treats as ready.
+    pub readiness: Option<Readiness>,
 }
 
 impl Resolved {
@@ -60,6 +64,7 @@ pub fn resolve(run: &Run, stored: Option<&StoredReport>) -> Resolved {
         let reported = stored.and_then(StoredReport::current).and_then(|r| r.plan_recommended);
         let written = || run.result.as_deref().filter(|_| run.result_complete).and_then(plan_recommended);
         resolved.plan_recommended = reported.or_else(written);
+        resolved.readiness = run.result.as_deref().filter(|_| run.result_complete).and_then(readiness);
     }
     resolved
 }
@@ -87,6 +92,7 @@ fn read(run: &Run, stored: Option<&StoredReport>) -> Resolved {
         findings: Vec::new(),
         verdict_structured: false,
         plan_recommended: None,
+        readiness: None,
     }
 }
 
@@ -106,5 +112,6 @@ fn structured(run: &Run, report: &Report, result: Option<&str>, own: Option<&str
         findings: Vec::new(),
         verdict_structured: false,
         plan_recommended: None,
+        readiness: None,
     }
 }

@@ -78,19 +78,23 @@
   mix-blend-mode: screen;
   opacity: calc(var(--grain) * 0.6);
 }
-/* Hovering or selecting a card lifts the effect and sweeps its web away. */
+/* Hovering or selecting a card or a workstream's row lifts the effect and sweeps its web away. */
 .ws-wither:hover,
-.ws-wither.ws-card-pick {
+.ws-wither.ws-card-pick,
+.ws-wither[aria-selected="true"] {
   border-radius: 10px;
 }
 :root .ws-wither:hover::before,
 :root .ws-wither.ws-card-pick::before,
+:root .ws-wither[aria-selected="true"]::before,
 :root .ws-wither:hover::after,
-:root .ws-wither.ws-card-pick::after {
+:root .ws-wither.ws-card-pick::after,
+:root .ws-wither[aria-selected="true"]::after {
   opacity: 0;
 }
 .ws-wither:hover .cobweb,
-.ws-wither.ws-card-pick .cobweb {
+.ws-wither.ws-card-pick .cobweb,
+.ws-wither[aria-selected="true"] .cobweb {
   opacity: 0;
   transform: scale(0.4) rotate(-10deg);
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { age, describeActions, INBOX_TABS, WITHER_DAYS, witherLevel, type WitherLevel, isInboxView, relativeTime, standupNotes, viewCounts, VIEWS, WORK_RANGES, type ListItem, type Waiting } from "../lib/views";
+import { age, describeActions, INBOX_TABS, WITHER_DAYS, witherClass, witherLevel, type WitherLevel, isInboxView, relativeTime, standupNotes, viewCounts, VIEWS, WORK_RANGES, type ListItem, type Waiting } from "../lib/views";
 import { currentItems, useStore } from "../store";
 import type { InboxEvent, Snapshot } from "../types";
 import { EVENT_ICON, Icon } from "./icons";
@@ -477,8 +477,6 @@ function WorkRow({
     </>
   );
 }
-
-const witherClass = (level: WitherLevel) => (level ? `wither wither-${Math.min(level, 3)}` : "");
 
 /** How long something has waited, with a dried leaf once it has started to wither. */
 function Age({ level, selected, title, children }: { level: WitherLevel; selected: boolean; title: string; children: ReactNode }) {

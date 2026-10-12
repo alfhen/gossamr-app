@@ -2,7 +2,7 @@ import type { Intent, Proposal, ProposalMaker, Run, RunKind, WorkstreamActor, Wo
 import { eventText } from "../workspace/activityLogic";
 import { GENERAL_CONVERSATION, workstreamConversation } from "./conversations";
 import type { Need } from "./needs";
-import { inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
+import { inWorkstreamPane, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
 
 /**
  * One timeline per workstream (docs/needs-you.md, step 3): what Pip said, what the person said, each run from start to end
@@ -142,7 +142,7 @@ const TOLD_ELSEWHERE = new Set(["run_approved", "autostart", "wake", "draft_crea
 const ASKS = new Set(["fix_rounds_exhausted", "held"]);
 
 /** What the person did that counts as deciding something. Opening or closing a workstream and the notes are bookkeeping, not decisions. */
-const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "taken_over", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset", "steps_allowed"]);
+const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "taken_over", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset", "steps_allowed", "readiness_asked", "readiness_answered", "readiness_overridden"]);
 
 const time = (iso: string | undefined) => {
   const t = iso ? Date.parse(iso) : NaN;
@@ -209,7 +209,7 @@ export function runSentence(run: Run, label: string | undefined, verdict: Review
 }
 
 /** Whose draft it was, for a sentence about the person's decision on it: "Pip", "an agent", "you". */
-const makerWord = (p: Proposal) => (p.createdBy === "agent" ? "an agent" : p.createdBy === "user" ? "you" : MAKER[p.createdBy]);
+const makerWord = (p: Proposal) => (isReporterQuestions(p) ? "Gossamr" : p.createdBy === "agent" ? "an agent" : p.createdBy === "user" ? "you" : MAKER[p.createdBy]);
 
 /** What an applied draft says: the person's decision, and for a review or a run what it came to. */
 function appliedSentence(p: Proposal, on: string): string {
@@ -226,7 +226,7 @@ function appliedSentence(p: Proposal, on: string): string {
 export function draftSentence(p: Proposal): string {
   const target = targetOf(p.intent);
   const on = target ? ` on ${target.key}` : "";
-  const made = `${MAKER[p.createdBy]} drafted ${DRAFT_WORDS[p.intent.type]}${on}`;
+  const made = `${isReporterQuestions(p) ? "Gossamr" : MAKER[p.createdBy]} drafted ${DRAFT_WORDS[p.intent.type]}${on}`;
   switch (p.state.type) {
     case "pending":
       return made;
@@ -270,6 +270,8 @@ const SOURCE_RANK: Record<TimelineKind, number> = { said: 0, pip: 0, audit: 1, r
 export function timeline(input: TimelineInput): TimelineEntry[] {
   const { turns = [], runs = [], drafts = [], events = [], needs = [], labels = new Map(), verdicts = {}, ticketKey = null } = input;
   const needOfRun = new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : [])));
+  // A triage that found its ticket not clear enough to plan is what the readiness need (`readiness:<run>`) asks about.
+  for (const n of needs) if (n.kind === "readiness") needOfRun.set(n.key.slice("readiness:".length), n);
   const needOfDraft = new Map(needs.flatMap((n) => (n.key.startsWith("draft:") ? [[n.key.slice("draft:".length), n] as const] : [])));
   const out: (TimelineEntry & { order: number })[] = [];
   let order = 0;
@@ -297,7 +299,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       at: approvedAt.get(run.id) ?? run.queuedAt,
       updatedAt: lifecycle[lifecycle.length - 1].at,
       ticketKey: run.item?.key ?? ticketKey,
-      text: runSentence(run, labels.get(run.id), verdicts[run.id]),
+      text: runSentence(run, labels.get(run.id), verdicts[run.id]) + (need?.kind === "readiness" && runPhase(run) === "finished" ? ": the ticket isn't clear enough to plan" : ""),
       target: need ? { type: "need", key: need.key } : { type: "run", id: run.id },
       needKey: need?.key ?? null,
       decision: !!need,

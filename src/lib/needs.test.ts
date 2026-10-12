@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
-import { BATCHABLE, GROUP_RANK, byRank, escalationReason, needAfter, needGroups, needs, needsIn, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
+import { BATCHABLE, GROUP_RANK, byRank, escalationReason, needAfter, needGroups, needs, needsIn, readinessPrompt, readinessWhy, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -304,6 +304,80 @@ describe("needs: holds", () => {
   it("ranks the question with the decisions, ahead of what is stuck", () => {
     const list = needs(input({ workstreams: [held(HELD_BUDGET)], runs: [run("r1", "investigate", "failed")] }));
     expect(kinds(list)).toEqual(["budget", "failure"]);
+  });
+});
+
+describe("needs: a ticket the triage found not clear enough to plan", () => {
+  const unclear = (questions: string[] = ["What does done look like?", "Who is waiting on it?"], over: Partial<WorkstreamView> = {}): WorkstreamView => ({
+    ...view("ws-1", "CA-401", { runs: ["r-t"] }),
+    readiness: { triageRun: "r-t", triageLabel: "R1", questions, at: iso(9) },
+    ...over,
+  });
+
+  it("is a Decide question with the open questions as its reason and the three choices", () => {
+    const list = needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")] }));
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      key: "readiness:r-t",
+      group: "decide",
+      kind: "readiness",
+      workstreamId: "ws-1",
+      ticketKey: "CA-401",
+      title: "CA-401 isn't clear enough to plan",
+      why: "R1 left these questions open: What does done look like? · Who is waiting on it?",
+      at: iso(9),
+      primary: { id: "askReporter", label: "Ask the reporter" },
+      secondary: [
+        { id: "answerSelf", label: "I'll answer" },
+        { id: "planAnyway", label: "Plan anyway" },
+      ],
+      target: { type: "workstream" },
+      batchable: false,
+    });
+    expect(list[0].ifYouWait).toMatch(/^No plan starts until you choose.*\.$/);
+  });
+
+  it("is counted once, ranks with the decisions ahead of what is stuck, and is not a run's need", () => {
+    const list = needs(input({ workstreams: [unclear()], runs: [run("r-f", "build", "failed")] }));
+    expect(kinds(list)).toEqual(["readiness", "failure"]);
+    expect(list.every((n) => n.kind !== "readiness" || n.runId === undefined)).toBe(true);
+  });
+
+  it("is gone once the workstream no longer reports it: chosen, or a later triage says ready", () => {
+    expect(needs(input({ workstreams: [unclear([], { readiness: null })] }))).toEqual([]);
+    expect(needs(input({ workstreams: [{ ...view("ws-1", "CA-401") }] }))).toEqual([]);
+  });
+
+  it("says plainly when the triage listed no questions, says one question in the singular, and clips a long list", () => {
+    expect(readinessWhy({ triageLabel: "R2", questions: [] })).toBe("R2 found the ticket unclear but listed no questions.");
+    expect(readinessWhy({ triageLabel: "", questions: ["Who asked?"] })).toBe("The triage left this question open: Who asked?");
+    const long = readinessWhy({ triageLabel: "R2", questions: Array.from({ length: 8 }, (_, n) => `Question number ${n + 1} is quite a long one to ask?`) });
+    expect(long.length).toBeLessThanOrEqual(240);
+    expect(long.endsWith("…")).toBe(true);
+  });
+
+  it("quotes the questions for the composer on one line, with where to answer", () => {
+    expect(readinessPrompt({ triageLabel: "R1", questions: ["What does done look like?", "Who asked?"] }, "CA-401")).toBe("R1's open questions about CA-401: “What does done look like?” · “Who asked?”. My answers: ");
+    expect(readinessPrompt({ triageLabel: "", questions: [] }, null)).toBe("The triage's open questions about this ticket: “(it listed no questions)”. My answers: ");
+  });
+});
+
+describe("needs: the comment to a reporter", () => {
+  it("is Gossamr's draft to approve, said so, and not an agent's or a run's note", () => {
+    const asked = draft("d-ask", comment("CA-401"), 3, { origin: { type: "run", runId: "r-t", shortId: null, workstream: "ws-1" } });
+    const [need] = needs(input({ workstreams: [view("ws-1", "CA-401", { runs: ["r-t"] })], runs: [run("r-t", "triage", "done")], proposals: [{ ...asked, createdBy: "agent", label: "Questions for the reporter" }] }));
+    expect(need).toMatchObject({
+      key: "draft:d-ask",
+      group: "approve",
+      kind: "draft",
+      title: "Questions for the reporter",
+      why: "Gossamr drafted a comment to the reporter of CA-401 from R1's open questions; it is posted only when you approve it.",
+      primary: { id: "approve" },
+      batchable: true,
+    });
+    // The triage's own note is the agent's, as before.
+    const note = needs(input({ workstreams: [view("ws-1", "CA-401", { runs: ["r-t"] })], runs: [run("r-t", "triage", "done")], proposals: [{ ...asked, createdBy: "agent" }] }));
+    expect(note[0]).toMatchObject({ title: "R1 triage · comment", why: "R1 triage drafted a comment on CA-401." });
   });
 });
 

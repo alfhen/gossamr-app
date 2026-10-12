@@ -705,6 +705,36 @@ async fn workstreams_take_over(app: AppHandle, runs: State<'_, RunsState>, id: S
     Ok(ws)
 }
 
+/// The person's "Ask the reporter" on a Triage that found its ticket not ready to plan: a Jira comment to the reporter
+/// with its open questions, as a draft the person approves like any other. Pip has no way to call this.
+#[tauri::command]
+async fn workstreams_readiness_ask(app: AppHandle, core: State<'_, CoreState>, id: String, triage_run: String) -> Result<Proposal> {
+    let scope = core.scope().await?;
+    let made = core.ask_reporter(&scope, &id, &triage_run).await?;
+    proposals_changed(&app, &Connection::jira_id(&scope));
+    workstreams_changed(&app, &Connection::jira_id(&scope));
+    Ok(made)
+}
+
+/// The person's "I'll answer" on a Triage that found its ticket not ready to plan: it settles the question and starts
+/// nothing; the page opens the conversation with the questions quoted.
+#[tauri::command]
+async fn workstreams_readiness_answer(app: AppHandle, core: State<'_, CoreState>, id: String, triage_run: String) -> Result<Workstream> {
+    let ws = core.answer_readiness(&core.scope().await?, &id, &triage_run).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
+/// The person's "Plan anyway" on a Triage that found its ticket not ready to plan: records the override and lets the
+/// Triage-to-Plan rule start the Plan now, under the rule's own checks (Manage, not held, within budget). Pip has no way to call this.
+#[tauri::command]
+async fn workstreams_readiness_override(app: AppHandle, core: State<'_, CoreState>, supervisor: State<'_, SupervisorState>, id: String, triage_run: String) -> Result<Workstream> {
+    let ws = core.override_readiness(&core.scope().await?, &id, &triage_run).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    supervisor.on_proposal_applied(Some(&id));
+    Ok(ws)
+}
+
 /// The person holds a workstream: nothing wakes Pip or starts on its own in it; its runs carry on.
 #[tauri::command]
 async fn workstreams_hold(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String) -> Result<Workstream> {
@@ -1476,6 +1506,9 @@ pub fn run() {
             workstreams_set_mode,
             workstreams_fix_round,
             workstreams_take_over,
+            workstreams_readiness_ask,
+            workstreams_readiness_answer,
+            workstreams_readiness_override,
             workstreams_hold,
             workstreams_resume,
             workstreams_allow_more,

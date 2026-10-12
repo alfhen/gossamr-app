@@ -220,6 +220,48 @@ function BudgetBody({ view }: { view: WorkstreamView }) {
   );
 }
 
+/** The three choices on a ticket its triage found not clear enough to plan: ask the reporter, answer the questions, or plan anyway. */
+function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
+  const r = view.readiness;
+  const id = view.workstream.id;
+  const [busy, setBusy] = useState(false);
+  if (!r) return null;
+  const key = view.workstream.itemKey ?? "the ticket";
+  const choose = (call: () => Promise<boolean>) => {
+    setBusy(true);
+    void call().finally(() => setBusy(false));
+  };
+  const store = useWorkstreams.getState();
+  return (
+    <Box tone="warn" label="Not ready to plan">
+      <BoxTitle icon="alert" tone="warn">
+        {need.title}
+      </BoxTitle>
+      {r.questions.length > 0 ? (
+        <ul data-readiness-questions className="m-0 grid gap-1 pl-5 text-ws-ink2">
+          {r.questions.map((q, i) => (
+            <li key={i}>{q}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="m-0 text-ws-ink2">The triage found {key} unclear but listed no questions.</p>
+      )}
+      <p className="m-0 text-ws-ink2">No plan starts until you choose. Asking the reporter drafts a Jira comment for you to approve; nothing is posted before that.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.askReporter(id))}>
+          Ask the reporter
+        </Btn>
+        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.answerSelf(id))}>
+          I'll answer
+        </Btn>
+        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
+          Plan anyway
+        </Btn>
+      </div>
+    </Box>
+  );
+}
+
 /** The three choices on a review that still blocks, and the review draft that folded into it, ready to post as it is. */
 function EscalationBody({ view }: { view: WorkstreamView }) {
   const e = view.escalation;
@@ -323,6 +365,8 @@ function Decision({ need }: { need: Need }) {
       return view ? <BudgetBody view={view} /> : null;
     case "hold":
       return view ? <HeldBanner view={view} onResume={() => controlActions(view.workstream.id).onResume()} /> : null;
+    case "readiness":
+      return view ? <ReadinessBody view={view} need={need} /> : null;
     case "escalation":
       return view ? <EscalationBody view={view} /> : null;
     case "runStart":

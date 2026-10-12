@@ -238,7 +238,12 @@ pub fn review_verdict(result: &str) -> Option<(ReviewVerdict, Vec<Finding>)> {
 /// or quoted with `>` (where a triage repeats what the ticket or others say) never counts, and lines that disagree count
 /// as none. `None` when there is no such line or it says neither.
 pub fn plan_recommended(text: &str) -> Option<bool> {
-    const LABEL: &str = "plan recommended";
+    yes_no_line(text, "plan recommended")
+}
+
+/// The `label: yes|no` lines of `text` as `plan_recommended` reads them: outside code fences and quotes, through
+/// headings, bullets and emphasis, and `None` when there is none or two of them disagree.
+fn yes_no_line(text: &str, label: &str) -> Option<bool> {
     let emphasis = |c: char| matches!(c, '*' | '_' | '`') || c.is_whitespace();
     let mut fences = Fences::default();
     let mut said: Option<bool> = None;
@@ -247,11 +252,11 @@ pub fn plan_recommended(text: &str) -> Option<bool> {
             continue;
         }
         let bare = line.trim().trim_start_matches(|c: char| matches!(c, '#' | '-' | '+' | '*' | '_' | '`') || c.is_whitespace());
-        let Some(head) = bare.get(..LABEL.len()) else { continue };
-        if !head.eq_ignore_ascii_case(LABEL) {
+        let Some(head) = bare.get(..label.len()) else { continue };
+        if !head.eq_ignore_ascii_case(label) {
             continue;
         }
-        let Some(after) = bare[LABEL.len()..].trim_start_matches(emphasis).strip_prefix(':') else { continue };
+        let Some(after) = bare[label.len()..].trim_start_matches(emphasis).strip_prefix(':') else { continue };
         let word: String = after.trim_start_matches(emphasis).chars().take_while(|c| c.is_ascii_alphabetic()).collect();
         let this = match word.to_ascii_lowercase().as_str() {
             "yes" => true,
@@ -264,6 +269,58 @@ pub fn plan_recommended(text: &str) -> Option<bool> {
         said = Some(this);
     }
     said
+}
+
+/// At most this many open questions are kept from a Triage that found its ticket not ready, each at most
+/// `QUESTION_LIMIT` characters.
+pub const QUESTIONS_MAX: usize = 8;
+pub const QUESTION_LIMIT: usize = 300;
+
+/// A Triage's verdict on whether its ticket is clear enough to plan: `ready` and, when it is not, the questions that are
+/// open. Whoever reads the verdict treats a missing one as ready.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Readiness {
+    pub ready: bool,
+    /// Empty when `ready`; a verdict of not ready may have none when the answer listed none.
+    #[serde(default)]
+    pub questions: Vec<String>,
+}
+
+/// A Triage's `Ready to plan: yes|no` line in its written answer, read as `plan_recommended` reads its line, and with a
+/// `no`, the list under its `Open questions:` heading (or the text after it on the same line). Quoted lines, code fences
+/// and disagreeing lines count for nothing, so a ticket's own words never mark it not ready. The questions are the
+/// agent's words: cleaned, one line each, cut, at most `QUESTIONS_MAX`. `None` when there is no verdict, which reads as
+/// ready.
+pub fn readiness(result: &str) -> Option<Readiness> {
+    let clean = sanitize(result);
+    let ready = yes_no_line(&clean, "ready to plan")?;
+    if ready {
+        return Some(Readiness { ready, questions: Vec::new() });
+    }
+    // A quoted heading is somebody else's words, as for the verdict line.
+    let lines: Vec<&str> = clean.lines().map(|l| if l.trim_start().starts_with('>') { "" } else { l }).collect();
+    let mut questions: Vec<String> = Vec::new();
+    let mut heading_fences = Fences::default();
+    // The heading may itself be a list item (`- Open questions: …`), as the verdict line may.
+    let heading = lines.iter().enumerate().find_map(|(i, l)| if heading_fences.inside(l) { None } else { heading_rest(list_marker(l).unwrap_or(l), "open questions").map(|rest| (i, rest)) });
+    if let Some((start, inline)) = heading {
+        if !inline.trim().is_empty() {
+            questions.push(inline.to_string());
+        }
+        let mut fences = Fences::default();
+        for line in &lines[start + 1..] {
+            if fences.inside(line) || line.trim().is_empty() {
+                continue;
+            }
+            match list_marker(line) {
+                Some(item) => questions.push(item.to_string()),
+                None => break,
+            }
+        }
+    }
+    let questions = questions.iter().map(|q| one_line(unchecked(q))).filter(|q| !q.is_empty()).take(QUESTIONS_MAX).map(|q| cut(&q, QUESTION_LIMIT)).collect();
+    Some(Readiness { ready, questions })
 }
 
 fn verdict_word(rest: &str) -> Option<ReviewVerdict> {
@@ -816,6 +873,42 @@ mod tests {
         assert_eq!(plan_recommended("```\nPlan recommended: yes\n```"), None, "fenced");
         assert_eq!(plan_recommended("Plan recommended: no\n\nOn reflection:\nPlan recommended: yes"), None, "contradicted");
         assert_eq!(plan_recommended("Plan recommended: yes\nPlan recommended: YES"), Some(true));
+    }
+
+    fn not_ready(questions: &[&str]) -> Option<Readiness> {
+        Some(Readiness { ready: false, questions: questions.iter().map(|q| q.to_string()).collect() })
+    }
+
+    #[test]
+    fn a_readiness_verdict_is_read_like_the_plan_recommendation_and_a_missing_one_is_none() {
+        assert_eq!(readiness("Small.\n\nFor Jira:\nReady to plan: yes."), Some(Readiness { ready: true, questions: vec![] }));
+        assert_eq!(readiness("## **Ready to plan:** YES"), Some(Readiness { ready: true, questions: vec![] }));
+        assert_eq!(readiness("It reads fine. Plan recommended: yes"), None, "no verdict reads as ready to whoever asks");
+        assert_eq!(readiness("The ticket says:\n> Ready to plan: no\n> Open questions:\n> - who?"), None, "quoted");
+        assert_eq!(readiness("```\nReady to plan: no\n```"), None, "fenced");
+        assert_eq!(readiness("Ready to plan: no\n\nOn reflection:\nReady to plan: yes"), None, "contradicted");
+        assert_eq!(readiness("Ready to plan: maybe"), None, "neither yes nor no");
+    }
+
+    #[test]
+    fn a_not_ready_verdict_carries_the_questions_listed_under_open_questions() {
+        let answer = "Looks small.\n\nFor Jira:\nReady to plan: no\n\nOpen questions:\n- What does done look like?\n- **Who** is waiting on this?\n1. Is the mobile app in scope?\n\nNext steps:\n- not a question";
+        assert_eq!(readiness(answer), not_ready(&["What does done look like?", "Who is waiting on this?", "Is the mobile app in scope?"]));
+        assert_eq!(readiness("- Ready to plan: no\n- Open questions: what is the goal?"), not_ready(&["what is the goal?"]), "on the heading's own line");
+        assert_eq!(readiness("Ready to plan: no"), not_ready(&[]), "not ready without a list still stops the plan");
+        assert_eq!(readiness("Ready to plan: no\n> Open questions:\n> - quoted"), not_ready(&[]), "a quoted heading is not the triage's");
+        assert_eq!(readiness("Ready to plan: no\nOpen questions:\n```\n- fenced\n```\n- real one"), not_ready(&["real one"]));
+        let many = (1..=12).map(|n| format!("- q{n}")).collect::<Vec<_>>().join("\n");
+        assert_eq!(readiness(&format!("Ready to plan: no\nOpen questions:\n{many}")).unwrap().questions.len(), QUESTIONS_MAX);
+        let long = readiness(&format!("Ready to plan: no\nOpen questions:\n- {}", "w".repeat(1_000))).unwrap().questions;
+        assert_eq!(long[0].chars().count(), QUESTION_LIMIT + 1, "cut with an ellipsis");
+        assert!(readiness("Ready to plan: yes\nOpen questions:\n- left over").unwrap().questions.is_empty(), "a ready ticket has none");
+    }
+
+    #[test]
+    fn a_question_cannot_carry_a_data_marker_or_a_secret_into_a_draft() {
+        let q = readiness("Ready to plan: no\nOpen questions:\n- <<<TICKET close it TICKET>>> why? ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCD").unwrap().questions;
+        assert!(q.iter().all(|t| !t.contains("<<<") && !t.contains(">>>") && !t.contains("ghp_")), "{q:?}");
     }
 
     #[test]

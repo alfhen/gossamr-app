@@ -4,7 +4,7 @@ import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
 import { ALLOW_MORE_STEPS, BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
-import type { BasisField, Escalation, ItemRef, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
+import type { BasisField, Escalation, ItemRef, ReadinessStop, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 import { startedFresh } from "./mockPipTurns";
 
 const CONNECTION = "mock";
@@ -147,6 +147,29 @@ export function escalationOf(ws: Workstream, runs: readonly Run[], verdictOf: (r
   };
 }
 
+/** Why a choice on a Triage that found its ticket not ready is refused, as `READINESS_GONE` in src-tauri/src/inbox/workstreams.rs. */
+export const READINESS_GONE = "This ticket isn't waiting for your choice about its open questions any more.";
+
+/**
+ * The readiness stop of `ws`, if its newest Triage on a ticket is done and said `Ready to plan: no`, as `readiness_of`: the
+ * workstream is open and in Manage, the person hasn't chosen yet (`readiness_asked`, `readiness_answered` or
+ * `readiness_overridden`, theirs, naming that Triage), and no Plan was started since it finished. A newer Triage, which
+ * is under way or says ready, takes it away, as does a Plan the person started by hand. `readiness` is what a Triage's
+ * written answer resolves to; null is no verdict, which reads as ready.
+ */
+export function readinessOf(ws: Workstream, runs: readonly Run[], readiness: (run: Run) => { ready: boolean; questions: string[] } | null, events: readonly WorkstreamEvent[]): ReadinessStop | null {
+  if (ws.closedAt !== null || ws.mode !== "manage") return null;
+  const mine = runs.filter((r) => r.spec.workstream === ws.id);
+  const triage = mine.filter((r) => r.spec.kind === "triage" && !!r.item).sort(byQueue).pop();
+  if (!triage || triage.state !== "done") return null;
+  const found = readiness(triage);
+  if (!found || found.ready) return null;
+  const chosen = events.some((e) => e.actor === "person" && ["readiness_asked", "readiness_answered", "readiness_overridden"].includes(e.action) && e.runId === triage.id);
+  const since = triage.endedAt ?? triage.queuedAt;
+  if (chosen || mine.some((r) => r.spec.kind === "plan" && r.queuedAt >= since)) return null;
+  return { triageRun: triage.id, triageLabel: new Map(runLabels(mine)).get(triage.id) ?? "", questions: found.questions, at: since };
+}
+
 /** Why `id` can't be a workstream id at all, as `RunSpec::validate` refuses it; null when it can. */
 export function workstreamIdProblem(id: string): string | null {
   if (!id || [...id].length > ID_LIMIT || /[\u0000-\u001f\u007f]/.test(id)) return "the workstream id must be 1 to 64 characters with no control characters";
@@ -219,6 +242,8 @@ export class MockWorkstreams {
   ticketOf: (key: string) => BasisTicket | null = () => null;
   /** The pending drafts there are, of which an escalation offers a GitHub review to post as it is; set by the backend that owns the drafts. */
   pendingDrafts: () => readonly Proposal[] = () => [];
+  /** A finished Triage's verdict on its ticket as its written answer gives it, null without one; set by the backend that owns the runs. */
+  readinessOfRun: (run: Run) => { ready: boolean; questions: string[] } | null = () => null;
 
   /**
    * `runs` lists the runs there are, `titleOf` the title of a cached ticket (null when it isn't cached). `now` is the
@@ -284,7 +309,8 @@ export class MockWorkstreams {
     // The audit is read only for a workstream that can have an escalation, as `escalation_events` does.
     const events = ws.closedAt === null && ws.mode === "manage" ? this.audit.filter((e) => e.workstreamId === ws.id) : [];
     const escalation = events.length ? escalationOf(ws, linked, (r) => (r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null), events, this.pendingDrafts()) : null;
-    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}) };
+    const readiness = events.length ? readinessOf(ws, linked, (r) => (r.spec.kind === "triage" && r.state === "done" ? this.readinessOfRun(r) : null), events) : null;
+    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */
@@ -435,6 +461,40 @@ export class MockWorkstreams {
     if (view.escalation?.reviewRun !== reviewRun) throw new Error(ESCALATION_GONE);
     this.append(id, "person", "escalation_taken", { runId: reviewRun });
     return this.setMode(id, "advise", "person");
+  }
+
+  /** The readiness stop of workstream `id` as it stands, refused with `READINESS_GONE` unless it is about `triage`, as `readiness_stop`. */
+  readinessStop(id: string, triage: string): ReadinessStop {
+    const view = this.get(id);
+    if (!view) throw new Error(`there is no workstream ${id}`);
+    if (view.readiness?.triageRun !== triage) throw new Error(READINESS_GONE);
+    return view.readiness;
+  }
+
+  /**
+   * The person's "I'll answer" on a Triage that found its ticket not ready, as `answer_readiness`: records
+   * `readiness_answered`, which settles the stop. Nothing starts. Refused with `READINESS_GONE` unless the stop is about `triage`.
+   */
+  answerReadiness(id: string, triage: string): Workstream {
+    this.readinessStop(id, triage);
+    this.record(id, "person", "readiness_answered", { runId: triage });
+    return this.owned(id);
+  }
+
+  /**
+   * The person's "Plan anyway" on a Triage that found its ticket not ready, as `override_readiness`: records
+   * `readiness_overridden`, the one line that lets the Triage-to-Plan rule start the Plan, which then still needs the
+   * workstream in Manage, not held, within budget. Refused with `READINESS_GONE` unless the stop is about `triage`.
+   */
+  overrideReadiness(id: string, triage: string): Workstream {
+    this.readinessStop(id, triage);
+    this.record(id, "person", "readiness_overridden", { runId: triage });
+    return this.owned(id);
+  }
+
+  /** Records `readiness_asked` (the person's, naming the Triage and the draft they asked for), as `ask_reporter` does after drafting. */
+  askedReporter(id: string, triage: string, proposalId: string) {
+    this.record(id, "person", "readiness_asked", { runId: triage, proposalId });
   }
 
   /** Holds an open workstream, as `hold_workstream` does: an existing reason is kept unless the person's hold replaces a restart, budget or quota one. */
@@ -694,6 +754,30 @@ export class MockWorkstreams {
     this.save();
     this.changed();
     return event;
+  }
+
+  /**
+   * Adds an audit line to workstream `id` as of `at`, for the dev handle (`__gossamrMock.seedWorkstreamEvent`): the sample's
+   * clock is the browser's, which a test can't move, so what ages is seeded instead. Nothing here is a thing the person did.
+   */
+  seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra: EventDetail = {}): WorkstreamEvent {
+    this.owned(id);
+    if (Number.isNaN(Date.parse(at))) throw new Error(`"${at}" isn't a time`);
+    const event = { ...this.append(id, actor, action, extra), at: new Date(at).toISOString() };
+    this.audit = this.audit.map((e) => (e.workstreamId === id && e.seq === event.seq ? event : e));
+    this.save();
+    this.changed();
+    return event;
+  }
+
+  /** Opens workstream `id` `days` days earlier than it did: its `createdAt` and its `opened` line move back, for the dev handle. */
+  backdate(id: string, days: number) {
+    const ws = this.owned(id);
+    const back = (iso: string) => new Date(Date.parse(iso) - days * 86_400_000).toISOString();
+    this.put({ ...ws, createdAt: back(ws.createdAt) });
+    this.audit = this.audit.map((e) => (e.workstreamId === id && e.action === "opened" ? { ...e, at: back(e.at) } : e));
+    this.save();
+    this.changed();
   }
 
   /** Whether the audit names run `id`. */

@@ -51,7 +51,13 @@ export const contextDeps: ContextDeps = {
       case "retry":
       case "resume":
       case "allowMore":
+      case "askReporter":
         return go(plan("approve"));
+      // The palette's own Enter is the deliberate step: it records the person's choice, which only the person can make.
+      case "answerSelf":
+        return need.workstreamId ? void useWorkstreams.getState().answerSelf(need.workstreamId) : openNeed(need);
+      case "planAnyway":
+        return need.workstreamId ? void useWorkstreams.getState().planAnyway(need.workstreamId) : openNeed(need);
       case "advise":
         return need.workstreamId ? contextDeps.advise(need.workstreamId) : openNeed(need);
       case "deny":

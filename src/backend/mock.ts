@@ -56,12 +56,13 @@ import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
 import { basisFieldsOf, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
-import { MockSupervisor } from "./mockSupervisor";
+import { MockSupervisor, triageReadiness } from "./mockSupervisor";
+import { READINESS_LABEL, reporterComment, reporterDoc } from "./mockReadiness";
 import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
 import { mockPipTurns } from "./mockPipTurns";
-import { MockWorkstreams, lastTripOf, type LastTrip } from "./mockWorkstreams";
+import { MockWorkstreams, READINESS_GONE, lastTripOf, type LastTrip } from "./mockWorkstreams";
 
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
@@ -430,6 +431,7 @@ export class MockBackend implements Backend {
     this.runs.onPullRequest = (change) => this.github.code.addPullRequest(change);
     this.workstreams.prOf = (runId) => this.runs.pullRequestOf(runId);
     this.workstreams.verdictOf = (run) => this.runs.resolvedOf(run.id)?.verdict ?? null;
+    this.workstreams.readinessOfRun = (run) => triageReadiness(run);
     this.workstreams.ticketOf = (key) => this.connector.item(itemRef(key));
     // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for drift.
     this.proposals.onWritten = (p) => {
@@ -549,6 +551,34 @@ export class MockBackend implements Backend {
 
   async workstreamsResume(id: string) {
     return this.workstreams.resume(id);
+  }
+
+  /**
+   * The person's "Ask the reporter", as `workstreams_readiness_ask`: a Jira comment to the ticket's reporter with the
+   * Triage's open questions, drafted from the questions and a fixed frame in this workstream, as a draft the person
+   * approves like any other. Records `readiness_asked`. Refused unless the workstream's stop is about `triageRun`.
+   */
+  async workstreamsReadinessAsk(id: string, triageRun: string) {
+    const stop = this.workstreams.readinessStop(id, triageRun);
+    const run = this.runs.get(triageRun);
+    if (!run?.item) throw new Error(READINESS_GONE);
+    const item = run.item;
+    const reporter = this.connector.item(item)?.reporter ?? null;
+    const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
+    const body = reporterDoc(reporterComment(item.key, name, stop.questions), reporter && name ? { person: reporter, name } : null);
+    const proposal = this.proposals.fromRun({ type: "comment", item, body }, READINESS_LABEL, { type: "run", runId: run.id, shortId: run.shortId, workstream: run.spec.workstream ?? null });
+    this.workstreams.askedReporter(id, triageRun, proposal.id);
+    return proposal;
+  }
+
+  /** The person's "I'll answer", as `workstreams_readiness_answer`: settles the question and starts nothing. */
+  async workstreamsReadinessAnswer(id: string, triageRun: string) {
+    return this.workstreams.answerReadiness(id, triageRun);
+  }
+
+  /** The person's "Plan anyway", as `workstreams_readiness_override`: records the override; the supervisor's Triage-to-Plan rule then starts the Plan under its own checks. */
+  async workstreamsReadinessOverride(id: string, triageRun: string) {
+    return this.workstreams.overrideReadiness(id, triageRun);
   }
 
   /** The person's "Allow 5 more", as `workstreams_allow_more`: the allowance goes up by 5 and the workstream resumes. */
@@ -862,6 +892,12 @@ export class MockBackend implements Backend {
   pipWorkstreamItem(id: string): ItemRef | null {
     const key = this.workstreams.get(id)?.workstream.itemKey;
     return key ? itemRef(key) : null;
+  }
+
+  /** The description of `item` as text, for Pip's readiness check in a workstream's first turn. */
+  pipTicketText(item: ItemRef): string | null {
+    const body = this.connector.item(item)?.body;
+    return body ? docText(body) : null;
   }
 
   pipWorkstreamHeld(id: string): string | null {

@@ -173,7 +173,8 @@ const ROWS: Row[] = [
   row("CA-405", "bug", "Duplicate back-in-stock emails", "Backlog", undefined, 2, { labels: ["bug"], body: "Two customers got the same email once per address." }),
   row("CA-406", "task", "Translate footer", "Scheduled", "byron", 1, { parent: "CA-400" }),
   row("CA-407", "task", "Send-time test", "Sent", "maya", 11),
-  row("CA-408", "story", "Winback flow", "Backlog", undefined, 14),
+  // The sample's deliberately vague ticket: a one-line description that says nothing of what done looks like, what is in scope or who is waiting (`thinDescription`).
+  row("CA-408", "story", "Winback flow", "Backlog", undefined, 14, { body: "Make the winback flow better." }),
   row("CA-409", "task", "Unsubscribe page copy", "Copy", "me", 8, { labels: ["copy"] }),
   row("CA-208", "task", "Route checkout through the gateway", "QA", "me", 1, { labels: ["payments"], body: "Moves the checkout calls onto the gateway; the rollout is tracked in DEVOPS-471." }),
   row("CA-209", "task", "Warm the category cache", "Backlog", "me", 2),

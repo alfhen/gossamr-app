@@ -4,9 +4,9 @@ import { MockBackend } from "./mock";
 import type { MockOptions } from "./mockWatch";
 import { itemRef } from "./mockConnector";
 import { ESCALATION_GONE, MockWorkstreams, basisOfItem, driftOf, type BasisTicket } from "./mockWorkstreams";
-import { docFromText } from "../lib/docs";
+import { docFromText, docText } from "../lib/docs";
 import fixtures from "./supervisor.fixtures.json";
-import { FIX_FINDING_LIMIT, FIX_INSTRUCTION, FIX_PREFACE, MockSupervisor, budgetLevel, decideAutostart, decideWake, eventLine, fixRoundMessage, keysIn, planRecommended, tripwireOf } from "./mockSupervisor";
+import { FIX_FINDING_LIMIT, FIX_INSTRUCTION, FIX_PREFACE, MockSupervisor, budgetLevel, decideAutostart, decideWake, eventLine, fixRoundMessage, keysIn, planRecommended, readiness, readinessOverridden, tripwireOf } from "./mockSupervisor";
 import type { AutostartInput, ReviewFinding, WakeFact } from "./mockSupervisor";
 
 interface Shape {
@@ -49,6 +49,10 @@ describe("the supervisor fixtures the Rust side runs too", () => {
 
   it.each(fixtures.planRecommended.map((c) => [c.note, c.expect] as const))("plan recommended in %j", (note, expected) => {
     expect(planRecommended(note)).toBe(expected);
+  });
+
+  it.each(fixtures.readiness.map((c) => [c.note, c.expect] as const))("readiness in %j", (note, expected) => {
+    expect(readiness(note)).toEqual(expected);
   });
 
   it.each(fixtures.budget.map((c) => [JSON.stringify(c), c] as const))("budget %s", (_, c) => {
@@ -128,6 +132,8 @@ vi.stubGlobal("localStorage", {
 afterAll(() => vi.unstubAllGlobals());
 
 const CA401 = itemRef("CA-401");
+/** The sample's deliberately vague ticket: one line of description. */
+const CA408 = itemRef("CA-408");
 
 /**
  * A sample backend whose new workstreams open in Manage, with its supervisor waking a recorder instead of the scripted
@@ -143,9 +149,9 @@ function world(options: MockOptions = { githubRepos: 12 }) {
 }
 
 /** The person starts an investigation of CA-401 in workstream `ws`, as the setup sheet does. */
-async function investigate(b: MockBackend, ws: string): Promise<Run> {
-  const spec: RunSpec = { kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `ca-401-${Math.random().toString(16).slice(2, 8)}`, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws };
-  const draft = await b.runsDraft(spec, CA401);
+async function investigate(b: MockBackend, ws: string, item = CA401): Promise<Run> {
+  const spec: RunSpec = { kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `${item.key.toLowerCase()}-${Math.random().toString(16).slice(2, 8)}`, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws };
+  const draft = await b.runsDraft(spec, item);
   const { digest } = await b.runsReview(draft.id);
   return b.runsApprove(draft.id, digest);
 }
@@ -190,6 +196,135 @@ describe("the sample supervisor", () => {
     await expect(b.codePullDiff("github:ada", "acme/storefront", pr)).rejects.toThrow("acme/storefront isn't one of the repositories you watch");
     await expect(b.codePullFiles("github:ada", "acme/storefront", pr)).rejects.toThrow("isn't one of the repositories you watch");
     await expect(b.codeReviewAccess("github:ada", "acme/storefront")).rejects.toThrow("isn't one of the repositories you watch");
+  });
+
+  describe("a triage that finds the ticket not ready to plan", () => {
+    /** A workstream on the vague CA-408, its investigation and the triage the rule started after it, finished: not ready, though it recommends a plan. */
+    async function triaged() {
+      const w = world();
+      const ws = w.b.workstreams.open(CA408).id;
+      w.b.workstreams.setBudget(ws, { autoTurns: 12 });
+      finish(w.b, (await investigate(w.b, ws, CA408)).id);
+      const triage = newest(w.b, ws, "triage")!;
+      finish(w.b, triage.id);
+      return { ...w, ws, triage };
+    }
+
+    it("says Ready to plan: no with its open questions, starts no plan, and tells Pip how many are open", async () => {
+      const { b, ws, triage, wakes } = await triaged();
+      expect(b.runs.get(triage.id)?.result).toContain("Ready to plan: no\nOpen questions:");
+      expect(newest(b, ws, "plan")).toBeUndefined();
+      expect(supervisorLines(b, ws).filter((l) => l.startsWith("autostart") && l.includes("triage_plan"))).toEqual([]);
+      expect(b.workstreams.get(ws)?.readiness).toMatchObject({ triageRun: triage.id, triageLabel: "R2" });
+      expect(b.workstreams.get(ws)?.readiness?.questions).toHaveLength(3);
+      expect(last(wakes).facts[0]).toMatchObject({ run: triage.id, planRecommended: true, openQuestions: 3 });
+      expect(eventLine(last(wakes).facts)).toBe(`[Event] run ${triage.id} (triage) Done; plan recommended: yes; not ready to plan, 3 open questions; 1 draft`);
+    });
+
+    it("is not what the usual sample tickets do: their triage says nothing of readiness, which reads as ready, and the plan starts", async () => {
+      const { b } = world();
+      const ws = b.workstreams.open(CA401).id;
+      finish(b, (await investigate(b, ws)).id);
+      finish(b, newest(b, ws, "triage")!.id);
+      expect(b.runs.get(newest(b, ws, "triage")!.id)?.result).not.toContain("Ready to plan");
+      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+      expect(newest(b, ws, "plan")?.autoStart?.rule).toBe("triage_plan");
+    });
+
+    it("starts the plan after Plan anyway, as the rule would have, and audits it as the person's", async () => {
+      const { b, ws, triage } = await triaged();
+      await b.workstreamsReadinessOverride(ws, triage.id);
+      expect(newest(b, ws, "plan")).toMatchObject({ autoStart: { rule: "triage_plan", afterRun: triage.id }, spec: { focus: null, findingsFromRun: triage.spec.findingsFromRun } });
+      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+      expect(b.workstreams.events(ws).find((e) => e.action === "readiness_overridden")).toMatchObject({ actor: "person", runId: triage.id });
+      expect(b.runs.list({ workstream: ws }).filter((r) => r.spec.kind === "plan")).toHaveLength(1);
+      await expect(b.workstreamsReadinessOverride(ws, triage.id)).rejects.toThrow("isn't waiting for your choice");
+    });
+
+    it("lets only the person's line for that triage start it: not Pip's, the supervisor's, or one for another run", async () => {
+      const { b, ws, triage, supervisor } = await triaged();
+      for (const actor of ["pip", "supervisor", "run"] as const) b.workstreams.record(ws, actor, "readiness_overridden", { runId: triage.id });
+      b.workstreams.record(ws, "person", "readiness_overridden", { runId: "some-other-run" });
+      supervisor.check();
+      expect(newest(b, ws, "plan")).toBeUndefined();
+      expect(b.workstreams.get(ws)?.readiness).toBeTruthy();
+    });
+
+    it("keeps Plan anyway under the workstream's holds and its budget", async () => {
+      const held = await triaged();
+      held.b.workstreams.hold(held.ws);
+      held.b.workstreams.record(held.ws, "person", "readiness_overridden", { runId: held.triage.id });
+      expect(newest(held.b, held.ws, "plan")).toBeUndefined();
+      held.b.workstreams.resume(held.ws);
+      expect(newest(held.b, held.ws, "plan")?.autoStart?.rule).toBe("triage_plan");
+
+      saved.clear();
+      const spent = await triaged();
+      spent.b.workstreams.setBudget(spent.ws, { autoTurns: 1, wakes: 1 });
+      expect(spent.b.workstreams.get(spent.ws)?.budget.level).toBe("spent");
+      spent.b.workstreams.record(spent.ws, "person", "readiness_overridden", { runId: spent.triage.id });
+      expect(newest(spent.b, spent.ws, "plan")).toBeUndefined();
+      // Allowing more steps is its own choice; the override on record then starts the plan.
+      spent.b.workstreams.hold(spent.ws, "budget", "supervisor");
+      spent.b.workstreams.allowMore(spent.ws);
+      expect(newest(spent.b, spent.ws, "plan")?.autoStart?.rule).toBe("triage_plan");
+    });
+
+    it("settles with I'll answer and starts nothing", async () => {
+      const { b, ws, triage } = await triaged();
+      await b.workstreamsReadinessAnswer(ws, triage.id);
+      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+      expect(newest(b, ws, "plan")).toBeUndefined();
+      expect(b.workstreams.events(ws).find((e) => e.action === "readiness_answered")).toMatchObject({ actor: "person", runId: triage.id });
+      await expect(b.workstreamsReadinessAnswer(ws, "nope")).rejects.toThrow("isn't waiting for your choice");
+    });
+
+    it("drafts a comment to the reporter with Ask the reporter, posts nothing, and settles", async () => {
+      const { b, ws, triage } = await triaged();
+      const before = b.proposals.list({ states: ["pending"] }).length;
+      const draft = await b.workstreamsReadinessAsk(ws, triage.id);
+      expect(b.proposals.list({ states: ["pending"] })).toHaveLength(before + 1);
+      expect(draft).toMatchObject({ state: { type: "pending" }, createdBy: "agent", label: "Questions for the reporter", origin: { type: "run", runId: triage.id, workstream: ws } });
+      if (draft.intent.type !== "comment") throw new Error("a comment");
+      expect(draft.intent.item.key).toBe("CA-408");
+      const text = docText(draft.intent.body);
+      for (const part of ["Hi @Mette Lund,", "Before CA-408 can be planned", "- What does done look like for CA-408?", "- Who asked for this, and who is waiting on it?"]) expect(text).toContain(part);
+      expect(JSON.stringify(draft.intent.body)).toContain('"type":"mention"');
+      expect(b.proposals.writes).toEqual([]);
+      expect(b.workstreams.events(ws).find((e) => e.action === "readiness_asked")).toMatchObject({ actor: "person", runId: triage.id, proposalId: draft.id });
+      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+      expect(newest(b, ws, "plan")).toBeUndefined();
+      await expect(b.workstreamsReadinessAsk(ws, triage.id)).rejects.toThrow("isn't waiting for your choice");
+    });
+
+    it("is resolved by a later triage that says ready, and a later one that says not ready replaces it", async () => {
+      const { b, ws, triage, supervisor } = await triaged();
+      const rerun = async (): Promise<Run> => {
+        const spec: RunSpec = { kind: "triage", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `ca-408-again-${Math.random().toString(16).slice(2, 6)}`, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws };
+        const draft = await b.runsDraft(spec, CA408);
+        return b.runsApprove(draft.id, (await b.runsReview(draft.id)).digest);
+      };
+      const again = await rerun();
+      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+      b.runs.scriptNext("triage", { ready: false, questions: ["Which segment?"] });
+      finish(b, again.id);
+      expect(b.workstreams.get(ws)?.readiness).toMatchObject({ triageRun: again.id, questions: ["Which segment?"] });
+      const third = await rerun();
+      b.runs.scriptNext("triage", { ready: true });
+      finish(b, third.id);
+      supervisor.check();
+      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+      expect(b.runs.get(third.id)?.result).toContain("Ready to plan: yes");
+      expect(b.runs.get(third.id)?.result).not.toContain("Ready to plan: no");
+      expect(newest(b, ws, "plan")?.autoStart).toEqual({ rule: "triage_plan", afterRun: third.id });
+      expect(triage.id).not.toBe(third.id);
+    });
+
+    it("is for Manage only: in Advise nothing is stopped and nothing is asked", async () => {
+      const { b, ws } = await triaged();
+      b.workstreams.setMode(ws, "advise");
+      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+    });
   });
 
   it("walks a workstream from investigate to a passing review, with one wake per finished run and no Jira write before the person approves", async () => {
@@ -687,3 +822,13 @@ async function toBuild(b: MockBackend, ws: string): Promise<Run> {
   await b.proposalsApprove(draft.id);
   return newest(b, ws, "build")!;
 }
+
+describe("the person's override is the person's line alone", () => {
+  const at = (actor: "person" | "pip" | "supervisor" | "run", run: string) => ({ actor, action: "readiness_overridden", runId: run });
+  it("is read from the person's own readiness_overridden line naming that triage", () => {
+    expect(readinessOverridden([at("person", "t1")], "t1")).toBe(true);
+    expect(readinessOverridden([at("person", "t1")], "t2")).toBe(false);
+    for (const actor of ["pip", "supervisor", "run"] as const) expect(readinessOverridden([at(actor, "t1")], "t1")).toBe(false);
+    expect(readinessOverridden([{ actor: "person", action: "readiness_answered", runId: "t1" }], "t1")).toBe(false);
+  });
+});
