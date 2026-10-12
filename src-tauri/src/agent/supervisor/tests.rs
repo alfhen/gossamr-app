@@ -556,28 +556,28 @@ async fn holding_or_holding_all_cancels_the_workstream_s_turns() {
 // Budgets, the daily cap and the quota.
 
 #[tokio::test]
-async fn the_sixth_automatic_turn_holds_for_the_budget_and_the_person_s_message_resets_it() {
+async fn the_last_automatic_turn_holds_for_the_budget_and_the_person_s_message_resets_it() {
     let t = setup().await;
-    for n in 1..=6 {
+    for n in 1..=11 {
         let run = t.run(&format!("r{n}"), RunKind::Investigate, RunState::Done, |_| {}).await;
         t.noticed(&run, Attention::Done).await;
     }
     let ws = t.workstream().await;
-    assert_eq!((ws.held_reason.as_deref(), ws.spent.auto_turns, ws.spent.wakes), (Some(HELD_BUDGET), 6, 6));
-    assert_eq!(t.wake_turns().await.len(), 6, "the sixth still ran");
+    assert_eq!((ws.held_reason.as_deref(), ws.spent.auto_turns, ws.spent.wakes), (Some(HELD_BUDGET), 11, 11));
+    assert_eq!(t.wake_turns().await.len(), 11, "the eleventh still ran");
     let budget: Vec<String> = t.actions().await.into_iter().filter(|(_, a, _)| a == "budget").filter_map(|(_, _, d)| d).collect();
-    assert_eq!(budget, ["amber 5/6 turns 5/12 wakes", "spent 6/6 turns 6/12 wakes"]);
-    let seventh = t.run("r7", RunKind::Triage, RunState::Done, |_| {}).await;
+    assert_eq!(budget, ["amber 9/11 turns 9/12 wakes", "spent 11/11 turns 11/12 wakes"]);
+    let seventh = t.run("r12", RunKind::Triage, RunState::Done, |_| {}).await;
     t.noticed(&seventh, Attention::Done).await;
-    assert_eq!(t.wake_turns().await.len(), 6);
+    assert_eq!(t.wake_turns().await.len(), 11);
 
     // Only the person's message carries on: the count starts again, and the hold is lifted.
     t.svc.ask(ask("q1", &t.conversation()), Arc::new(|_| {})).await.unwrap();
     t.idle().await;
     let ws = t.workstream().await;
-    assert_eq!((ws.held_reason, ws.spent.auto_turns, ws.spent.wakes), (None, 0, 6));
+    assert_eq!((ws.held_reason, ws.spent.auto_turns, ws.spent.wakes), (None, 0, 11));
     t.noticed(&seventh, Attention::Done).await;
-    assert_eq!(t.wake_turns().await.len(), 7, "the fact that waited is picked up");
+    assert_eq!(t.wake_turns().await.len(), 12, "the fact that waited is picked up");
 }
 
 /// A wake queue that says whether a wake waits as told, then merges or not as told: the queue moving on between the

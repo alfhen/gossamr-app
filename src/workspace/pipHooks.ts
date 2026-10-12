@@ -4,8 +4,9 @@ import { itemsByFilter, useItemsByFilter, useWorkspace } from "../workspaceStore
 import type { WorkItem } from "../types";
 import { useActivity } from "./activityStore";
 import { useAgentsFlag } from "./agentsFlag";
-import { attentionCount } from "./agentsLogic";
+import type { Need } from "../lib/needs";
 import { useRuns } from "./runsStore";
+import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { useActiveTab } from "./hooks";
 import { itemScene, type ItemScene } from "./pipScene";
 import { usePipHome } from "./pipHomeStore";
@@ -17,9 +18,9 @@ const peekedItems = (p: ReturnType<typeof useWorkspace.getState>["peeked"]) => O
 
 type RunsState = ReturnType<typeof useRuns.getState>;
 
-// Waiting on you is the one count every screen gives (`attentionCount`), as the Agents rail badge and header count it.
-const agentsIn = (on: boolean, { sheet, runs, filters, earlierOpen, seenFailed }: Pick<RunsState, "sheet" | "runs" | "filters" | "earlierOpen" | "seenFailed">): Screen["agents"] =>
-  on ? { openRun: sheet?.type === "run" ? sheet.id : null, waiting: attentionCount(runs, seenFailed), runs, filters, earlierOpen, seenFailed, now: Date.now() } : undefined;
+// What needs the person is Needs you's one list: the agents waiting on them are its run needs, and its length is the count the Agents header gives.
+const agentsIn = (on: boolean, { sheet, runs, filters, earlierOpen }: Pick<RunsState, "sheet" | "runs" | "filters" | "earlierOpen">, needs: readonly Need[]): Screen["agents"] =>
+  on ? { openRun: sheet?.type === "run" ? sheet.id : null, waiting: needs.filter((n) => n.runId).length, needsYou: needs.length, runs, filters, earlierOpen, now: Date.now() } : undefined;
 
 /** The screen as it is right now, read when a question is asked so it is about what is on screen then. */
 export function readScreen(): Screen {
@@ -37,7 +38,7 @@ export function readScreen(): Screen {
     selected: tabs.selected,
     marked: tabs.marked,
     activity: { chip, container },
-    agents: agentsIn(useAgentsFlag.getState().enabled, useRuns.getState()),
+    agents: agentsIn(useAgentsFlag.getState().enabled, useRuns.getState(), currentNeeds()),
     home: homeConversationLine(usePipHome.getState().selected, useWorkstreams.getState().list),
   };
 }
@@ -62,8 +63,8 @@ export function useScreen(): Screen {
   const runs = useRuns((s) => s.runs);
   const filters = useRuns((s) => s.filters);
   const earlierOpen = useRuns((s) => s.earlierOpen);
-  const seenFailed = useRuns((s) => s.seenFailed);
-  const agents = useMemo(() => agentsIn(enabled, { sheet, runs, filters, earlierOpen, seenFailed }), [enabled, sheet, runs, filters, earlierOpen, seenFailed]);
+  const needs = useNeedsYou();
+  const agents = useMemo(() => agentsIn(enabled, { sheet, runs, filters, earlierOpen }, needs), [enabled, sheet, runs, filters, earlierOpen, needs]);
   const homeSelected = usePipHome((s) => s.selected);
   const home = useWorkstreams((s) => homeConversationLine(homeSelected, s.list));
   return useMemo(

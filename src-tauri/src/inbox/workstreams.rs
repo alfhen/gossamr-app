@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::Core;
@@ -33,6 +33,21 @@ pub const ESCALATION_GONE: &str = "This review isn't waiting for your choice any
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
+}
+
+/// How long after a hold or a switch to Advise the person may take it back. The page's Undo toast lasts about 8 seconds;
+/// this leaves room for a slow click, and no more.
+pub const UNDO_WINDOW_SECS: i64 = 60;
+
+/// What the person's Undo asks for, with how the workstream stood before the change it takes back, as the page saw it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum WorkstreamUndo {
+    /// Takes back a hold: the workstream is held for `was` again (a restart, budget or quota hold the person's replaced), or free.
+    Hold { was: Option<String> },
+    /// Takes back a switch of mode: `was` again, with the mode a tripwire had taken away (`resume_mode`) still kept for resuming.
+    #[serde(rename_all = "camelCase")]
+    Mode { was: Mode, resume_mode: Option<Mode> },
 }
 
 /// A workstream as the page and Pip read it: with the stage its runs give it, their ids (newest first) and their
@@ -634,6 +649,49 @@ impl Core {
             if rebase && ws.basis.is_some() {
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_captured", at))?;
             }
+            Ok(ws)
+        })
+        .await
+    }
+
+    /// The person's Undo of a hold or a switch of mode, a moment after it. It is allowed only while that change is the
+    /// last line of the workstream's audit, made by the person within `UNDO_WINDOW_SECS`, and the workstream still stands
+    /// as it left it: anything else that happened since (a run, a wake, another choice) means the page's picture of "before"
+    /// may be stale, and the change stands. The undo is its own line (`undone`, naming what it took back); the line it
+    /// follows stays.
+    pub async fn undo_workstream(&self, scope: &Scope, id: &str, undo: &WorkstreamUndo) -> Result<Workstream> {
+        self.undo_workstream_at(scope, id, undo, Utc::now()).await
+    }
+
+    async fn undo_workstream_at(&self, scope: &Scope, id: &str, undo: &WorkstreamUndo, at: chrono::DateTime<Utc>) -> Result<Workstream> {
+        let connection_id = Connection::jira_id(scope);
+        self.with_db_for(scope, |db| {
+            let mut ws = open(db, &connection_id, id)?;
+            let events = db.workstream_events(&ws.id)?;
+            let last = events.last().filter(|e| e.actor == Actor::Person);
+            let fresh = |e: &WorkstreamEvent| at.signed_duration_since(e.at).num_seconds() <= UNDO_WINDOW_SECS;
+            let gone = || refuse("That change can't be undone any more: something else happened since, or it was a while ago.");
+            let (action, detail) = match undo {
+                WorkstreamUndo::Hold { was } => {
+                    last.filter(|e| e.action == "held" && fresh(e) && e.detail.is_some() && e.detail == ws.held_reason).ok_or_else(gone)?;
+                    if was.as_deref().is_some_and(|w| !valid_hold_reason(w)) || was == &ws.held_reason {
+                        return Err(refuse("That isn't a hold to go back to."));
+                    }
+                    ws.held_reason = was.clone();
+                    ("undone", "held")
+                }
+                WorkstreamUndo::Mode { was, resume_mode } => {
+                    last.filter(|e| e.action == "mode_set" && fresh(e) && e.detail.as_deref() == Some(ws.mode.as_str())).ok_or_else(gone)?;
+                    if *was == ws.mode {
+                        return Err(refuse("The workstream is in that mode already."));
+                    }
+                    ws.mode = *was;
+                    ws.resume_mode = *resume_mode;
+                    ("undone", "mode_set")
+                }
+            };
+            db.save_workstream(&ws)?;
+            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, action, at).detail(detail))?;
             Ok(ws)
         })
         .await
@@ -1277,6 +1335,105 @@ mod tests {
         (e.actor, e.action.as_str(), e.detail.as_deref())
     }
 
+    fn undo_hold(was: Option<&str>) -> WorkstreamUndo {
+        WorkstreamUndo::Hold { was: was.map(Into::into) }
+    }
+
+    #[tokio::test]
+    async fn undoing_a_hold_frees_the_workstream_and_says_so_in_its_own_line() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
+        let back = fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(None)).await.unwrap();
+        assert_eq!(back.held_reason, None);
+        assert_eq!(held_reason(&fx, &ws.id).await, None, "stored");
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        let lines: Vec<_> = events.iter().map(|e| (e.actor, e.action.as_str(), e.detail.as_deref())).collect();
+        assert_eq!(lines, [(Actor::Person, "opened", None), (Actor::Person, "held", Some("person")), (Actor::Person, "undone", Some("held"))], "the hold's line stays and the undo adds its own");
+        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream, Workstream { ..back }, "nothing else moved");
+        // Undone, it is not the last line a hold, so a second Undo is refused rather than freeing a hold made later.
+        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(None)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn undoing_a_hold_that_replaced_another_puts_the_other_back() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
+        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
+        assert_eq!(held_reason(&fx, &ws.id).await.as_deref(), Some("person"));
+        fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(Some("budget"))).await.unwrap();
+        assert_eq!(held_reason(&fx, &ws.id).await.as_deref(), Some("budget"), "back to the hold the person's replaced, not to free");
+        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(Some("because"))).await.is_err(), "and never to a reason that isn't one");
+    }
+
+    #[tokio::test]
+    async fn a_hold_is_not_undone_after_anything_else_or_after_the_window() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
+        let at = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap().last().unwrap().at;
+        let late = at + chrono::Duration::seconds(UNDO_WINDOW_SECS + 1);
+        let err = fx.core.undo_workstream_at(&fx.scope, &ws.id, &undo_hold(None), late).await.unwrap_err().to_string();
+        assert!(err.contains("can't be undone"), "{err}");
+        assert_eq!(held_reason(&fx, &ws.id).await.as_deref(), Some("person"), "a late undo changes nothing");
+
+        // Another line after the hold (here the person's rule) means the picture of "before" may be stale.
+        fx.core.set_workstream_rule(&fx.scope, &ws.id, Rule::TriagePlan, Some(false)).await.unwrap();
+        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(None)).await.is_err());
+        assert_eq!(held_reason(&fx, &ws.id).await.as_deref(), Some("person"));
+
+        // Nor a hold that was never the person's: the supervisor's line is not the person's to take back.
+        let other = fx.core.open_workstream(&fx.scope, None, Some("Elsewhere".into())).await.unwrap();
+        fx.core.hold_workstream(&fx.scope, &other.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
+        assert!(fx.core.undo_workstream(&fx.scope, &other.id, &undo_hold(None)).await.is_err());
+        // A closed workstream is not changed.
+        fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(None)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn undoing_a_switch_to_advise_restores_the_mode_and_the_mode_a_tripwire_kept() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
+        // The page saw Manage, with a tripwire's resume mode kept, before the person chose Advise.
+        fx.core.with_db_for(&fx.scope, |db| {
+            let mut w = db.workstream(&ws.id)?.unwrap();
+            w.resume_mode = Some(Mode::Manage);
+            db.save_workstream(&w)
+        }).await.unwrap();
+        let advised = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Advise, Actor::Person).await.unwrap();
+        assert_eq!((advised.mode, advised.resume_mode), (Mode::Advise, None), "choosing a mode forgets the one a tripwire took away");
+        let back = fx.core.undo_workstream(&fx.scope, &ws.id, &WorkstreamUndo::Mode { was: Mode::Manage, resume_mode: Some(Mode::Manage) }).await.unwrap();
+        assert_eq!((back.mode, back.resume_mode), (Mode::Manage, Some(Mode::Manage)));
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(last(&events), (Actor::Person, "undone", Some("mode_set")));
+        assert_eq!(events.iter().filter(|e| e.action == "mode_set").count(), 2, "the person's two choices stay in the audit");
+        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &WorkstreamUndo::Mode { was: Mode::Advise, resume_mode: None }).await.is_err(), "the undo is not itself undone by a stale toast");
+    }
+
+    #[tokio::test]
+    async fn skipping_then_undoing_a_draft_in_a_workstream_leaves_both_lines_in_its_audit() {
+        use crate::domain::{Doc, Intent};
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let intent = Intent::Comment { item: fx.item("CA-1"), body: Doc::paragraph("hello") };
+        let p = fx.core.propose(&fx.scope, proposals::Draft::from_pip("q1", Some(&ws.id), intent, None)).await.unwrap();
+        fx.core.skip_proposal(&p.id).await.unwrap();
+        let back = fx.core.unskip_proposal(&p.id).await.unwrap();
+        assert_eq!(back.state, ProposalState::Pending);
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        let lines: Vec<_> = events.iter().map(|e| (e.actor, e.action.as_str(), e.detail.as_deref(), e.proposal_id.as_deref())).collect();
+        assert_eq!(
+            lines[2..],
+            [(Actor::Person, "draft_skipped", None, Some(p.id.as_str())), (Actor::Person, "undone", Some("draft_skipped"), Some(p.id.as_str()))]
+        );
+        // Undoing what isn't skipped adds nothing.
+        fx.core.unskip_proposal(&p.id).await.unwrap();
+        assert_eq!(fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap().len(), events.len());
+    }
+
     #[tokio::test]
     async fn mode_hold_resume_and_rule_each_append_one_line_by_whoever_did_it() {
         let fx = fixture().await;
@@ -1340,14 +1497,14 @@ mod tests {
         let fx = fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, None, Some("Budgeted".into())).await.unwrap();
         let mut spent = ws.clone();
-        spent.spent.auto_turns = 6;
+        spent.spent.auto_turns = 11;
         spent.spent.wakes = 9;
         spent.spent.tokens = 1_234;
         fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&spent)).await.unwrap();
         let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
-        assert_eq!(view.budget, BudgetView { auto_turns: BudgetCount { used: 6, limit: 6 }, wakes: BudgetCount { used: 9, limit: 12 }, level: BudgetLevel::Spent });
+        assert_eq!(view.budget, BudgetView { auto_turns: BudgetCount { used: 11, limit: 11 }, wakes: BudgetCount { used: 9, limit: 12 }, level: BudgetLevel::Spent });
         let json = serde_json::to_value(&view).unwrap();
-        assert_eq!(json["budget"], serde_json::json!({ "autoTurns": { "used": 6, "limit": 6 }, "wakes": { "used": 9, "limit": 12 }, "level": "spent" }));
+        assert_eq!(json["budget"], serde_json::json!({ "autoTurns": { "used": 11, "limit": 11 }, "wakes": { "used": 9, "limit": 12 }, "level": "spent" }));
 
         fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
         let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
@@ -1381,7 +1538,7 @@ mod tests {
         assert_eq!(actions(&events)[1..], [(Actor::Supervisor, "held"), (Actor::Person, "budget_reset")], "never resumed");
         // With the wakes within the budget, the hold is lifted.
         let mut within = after.workstream.clone();
-        within.spent.auto_turns = 6;
+        within.spent.auto_turns = 11;
         within.spent.wakes = 9;
         fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&within)).await.unwrap();
         fx.core.person_wrote_in_workstream(&fx.scope, &ws.id).await.unwrap();

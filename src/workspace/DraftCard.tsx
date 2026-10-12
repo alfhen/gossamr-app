@@ -16,6 +16,7 @@ import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
+import { useCardKeys } from "./draftCardKeys";
 import { itemKey } from "../lib/filter";
 import { FOLLOW_UP_LIMIT, followUpProblem, followUpTitle, nextPass } from "./followUp";
 import { RetiredDraft } from "./RetiredDraft";
@@ -230,6 +231,43 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     if (!reply || working || state !== "pending" || replyBlock) return;
     if (onSendAnswer) onSendAnswer(edit(), message.trim());
   };
+  /** The field of the card the keyboard goes to for e: a text box, or the first choice. */
+  const focusField = (selector: string) => requestAnimationFrame(() => card.current?.querySelector<HTMLElement>(selector)?.focus());
+  const approvable = open && !working && state !== "applying";
+  const keys = useCardKeys(p, {
+    // Approving by key is the same step the button takes, asked for Enter first; what needs reading first has no key.
+    approve: !approvable
+      ? undefined
+      : reply
+        ? replyBlock
+          ? undefined
+          : sendAnswer
+        : intent.type === "comment"
+          ? body.trim()
+            ? () => onApprove(edit())
+            : undefined
+          : intent.type === "subtasks"
+            ? remaining > 0
+              ? () => onApprove(edit())
+              : undefined
+            : () => onApprove(edit()),
+    skip: open && !working ? onSkip : undefined,
+    edit: !open
+      ? undefined
+      : intent.type === "comment" || rewrite
+        ? () => (setEditing(true), focusField("textarea, input[type=text]"))
+        : followUp
+          ? () => focusField(`#follow-up-${p.id}`)
+          : reply
+            ? () => focusField(`#run-answer-${p.id}`)
+            : intent.type === "subtasks"
+              ? () => focusField("input[type=checkbox]")
+              : runDraft && onReview
+                ? onReview
+                : undefined,
+    open: onShow,
+    primary: () => focusField("[data-draft-actions] button:not(:disabled):last-of-type"),
+  });
   const action =
     intent.type === "comment"
       ? "Post comment"
@@ -250,11 +288,16 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
       ref={card}
       aria-label={draftTitle(p, answer?.label)}
       data-draft={p.id}
-      onFocus={() => (hadFocus.current = true)}
+      {...keys.props}
+      onFocus={(ev) => {
+        hadFocus.current = true;
+        keys.props.onFocus(ev);
+      }}
       onBlur={(ev) => {
         if (ev.relatedTarget && !ev.currentTarget.contains(ev.relatedTarget as Node)) hadFocus.current = false;
+        keys.props.onBlur(ev);
       }}
-      className={`ws-legacy ${PEEK_DRAFT_MARGIN} overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
+      className={`ws-legacy ${PEEK_DRAFT_MARGIN} overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
         <span aria-hidden>✦</span>
@@ -524,6 +567,11 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           </div>
         )}
       </div>
+      {keys.hint && (
+        <p role="status" data-key-hint className={`m-0 border-t border-ws-sep px-3 py-1 text-xs ${keys.asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-bar text-ws-ink3"}`}>
+          {keys.hint}
+        </p>
+      )}
     </article>
   );
 }

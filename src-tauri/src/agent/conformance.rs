@@ -1776,6 +1776,59 @@ pub async fn autostart_and_pip_never_answer_a_permission_prompt() -> std::result
     Ok(())
 }
 
+/// A Manage workstream with a run Gossamr stopped at its limit, which needs the person: the supervisor's passes (the
+/// rules on) and a wake turn whose Pip calls every tool it has, with arguments naming that run, never resume it. No
+/// session is resumed or woken, Terminal stays shut, the run is still stopped at its limit, and the audit has no line
+/// for a resume. Only the person resumes it, from its card or its sheet.
+pub async fn pip_and_autostart_never_resume_a_run_stopped_at_its_limit() -> std::result::Result<(), String> {
+    use crate::domain::RunKind;
+    let w = World::start().await;
+    let run = w.person_starts_investigation().await;
+    w.rig.poll().await;
+    let limit = "Stopped by Gossamr: it passed the 60 minute limit";
+    let run = w.rig.set(&run, |r| (r.state, r.stopped_by_limit, r.error, r.ended_at) = (RunState::Stopped, true, Some(limit.into()), Some(chrono::Utc::now()))).await;
+    let resumes = w.rig.cli.0.lock().unwrap().resumes.len();
+    let calls_before = w.rig.cli.0.lock().unwrap().calls.len();
+    *w.pip.args.lock().unwrap() = [
+        ("propose_answer", json!({ "run_id": run.id, "text": "Please carry on from where you stopped." })),
+        ("propose_follow_up", json!({ "run_id": run.id, "message": "Carry on." })),
+        ("get_run", json!({ "id": run.id })),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    w.sweep().await;
+    w.sweep().await;
+    if w.pip.turns.load(Ordering::SeqCst) == 0 {
+        return Err("Pip was never woken for the limit, so its tools weren't tried".into());
+    }
+    let offered = w.pip.offered.lock().unwrap().clone();
+    if let Some(name) = offered.iter().find(|n| n.contains("resume") || n.contains("answer_run") || n.contains("continue")) {
+        return Err(format!("{name} is offered to Pip"));
+    }
+    let resumed = {
+        let after = w.rig.cli.0.lock().unwrap();
+        after.resumes.len() != resumes || after.calls[calls_before..].iter().any(|c| c.starts_with("resume:"))
+    };
+    if resumed {
+        return Err("the run's session was resumed without the person".into());
+    }
+    if !w.rig.opened.0.lock().unwrap().is_empty() {
+        return Err("Terminal was opened without the person".into());
+    }
+    let now = w.rig.get(&run).await;
+    if now.state != RunState::Stopped || !now.stopped_by_limit || now.continued_at != run.continued_at {
+        return Err(format!("the run was resumed without the person: {:?}, stopped at its limit {}", now.state, now.stopped_by_limit));
+    }
+    if let Some(started) = w.of_kind(RunKind::Investigate).await.into_iter().find(|r| r.id != run.id) {
+        return Err(format!("a rule started a run after it: {}", started.id));
+    }
+    if let Some(line) = w.events().await.into_iter().find(|e| e.action.contains("resume") && e.actor != crate::domain::Actor::Person) {
+        return Err(format!("a resume was recorded without the person: {line:?}"));
+    }
+    Ok(())
+}
+
 /// A Manage workstream whose build was sent its two automatic fix rounds and whose newest review still blocks: the
 /// supervisor gives it to the person (one `fix_rounds_exhausted` line), and more passes and a wake turn whose Pip calls
 /// every tool it has, with arguments naming the build and the review, choose none of the person's options. No
@@ -1948,6 +2001,11 @@ mod tests {
     #[tokio::test]
     async fn autostart_and_pip_never_answer_a_permission_prompt() {
         super::autostart_and_pip_never_answer_a_permission_prompt().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pip_and_autostart_never_resume_a_run_stopped_at_its_limit() {
+        super::pip_and_autostart_never_resume_a_run_stopped_at_its_limit().await.unwrap();
     }
 
     #[tokio::test]

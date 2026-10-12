@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaude } from "../claudeStore";
 import { stageText } from "../lib/workstreamStage";
 import type { Run, WorkstreamView } from "../types";
 import { PipAvatar } from "./PipAvatar";
-import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, PipConversation, useAnswering, workstreamConversation } from "./PipConversation";
+import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, useAnswering, workstreamConversation } from "./PipConversation";
+import { TimelineView } from "./Timeline";
+import { TIMELINE_ENTRY } from "./timelineKeys";
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { ConversationLine, escapeCancelsTurn, useConversationDrafts, usePipChips } from "./PipPane";
 import { popoverOpen } from "./Popover";
@@ -11,8 +13,12 @@ import { START_WORKSTREAM } from "./commands";
 import { usePrefs } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
-import { NeedsYouTray, useNeedsYou } from "./NeedsYouTray";
-import { composerFooter, needsYouCount, workstreamStatus, type NeedsYouItem } from "./pipHomeLogic";
+import { needsIn, type Need } from "../lib/needs";
+import { NeedsYouList } from "./NeedsYou";
+import { useNeedsYou } from "./useNeeds";
+import { NeedsPane } from "./NeedsPane";
+import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
+import { composerFooter, workstreamStatus } from "./pipHomeLogic";
 import { usePipHome, type PipHomeColumn, type PipHomeFocus } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { focusComposer, focusedConversation, useHomeWorkstream, useWorkstreams } from "./workstreamsStore";
@@ -25,6 +31,8 @@ import { ShortcutHint } from "./ShortcutHint";
 import { PipOrientation } from "./PipOrientation";
 
 const PIP_HOME_HINTS = pipHomeHints();
+const NEEDS_HINTS = pipHomeHints(true);
+const TIMELINE_HINTS = pipHomeHints(false, true);
 
 /** The ticket's key comes first on its own, so the title loses it when it starts with it, as a workstream's title does. */
 export function rowTitle(ws: WorkstreamView["workstream"]): string {
@@ -63,15 +71,15 @@ export interface WorkstreamListProps {
   /** Every run, for each row's status. */
   runs?: readonly Run[];
   /** What waits on the person, for each row's count. */
-  needsYou?: readonly NeedsYouItem[];
-  /** The Needs you tray, at the bottom of the column. */
+  needsYou?: readonly Need[];
+  /** The Needs you list, at the bottom of the column. */
   tray?: ReactNode;
 }
 
 /** What the list says before there is any workstream: what one is, in a line. */
 export const NO_WORKSTREAMS = "No workstreams yet. A workstream follows one ticket from investigation to a reviewed pull request, with Pip keeping track.";
 
-/** "1 needs you", "3 need you"; nothing when nothing does. Its row's share of Needs you (`total`), and its tooltip says so. */
+/** "1 needs you", "3 need you"; nothing when nothing does. Its row's share of the one count in Needs you (`total`), and its tooltip says so. */
 function NeedsBadge({ count, total }: { count: number; total: number }) {
   if (!count) return null;
   return (
@@ -98,7 +106,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
         <li data-workstream-row="general" {...option(null)}>
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="font-semibold text-ws-ink">General</span>
-            <NeedsBadge count={needsYouCount(needsYou, null)} total={needsYou.length} />
+            <NeedsBadge count={needsIn(needsYou, null)} total={needsYou.length} />
           </span>
           <span className="text-xs text-ws-ink3">Everything not in a workstream</span>
         </li>
@@ -107,9 +115,9 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
             <span className="flex min-w-0 items-center gap-1.5">
               {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
               <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
-              <NeedsBadge count={needsYouCount(needsYou, v.workstream.id)} total={needsYou.length} />
+              <NeedsBadge count={needsIn(needsYou, v.workstream.id)} total={needsYou.length} />
             </span>
-            <RowStatus view={v} runs={runs} waiting={needsYouCount(needsYou, v.workstream.id)} />
+            <RowStatus view={v} runs={runs} waiting={needsIn(needsYou, v.workstream.id)} />
           </li>
         ))}
       </ul>
@@ -165,8 +173,11 @@ export function StepsColumn({ workstream }: { workstream: WorkstreamView | null 
   );
 }
 
-/** The conversation column of Pip home: the same conversation and composer the Pip pane has. */
-export function HomeConversation({ workstream, footer = null }: { workstream: WorkstreamView | null; footer?: string | null }) {
+/**
+ * The conversation column of Pip home: the workstream's timeline (its conversation with Pip, its runs, drafts and audit in
+ * one list) over the same composer the Pip pane has.
+ */
+export function HomeConversation({ workstream, footer = null, pane = null, needs = [] }: { workstream: WorkstreamView | null; footer?: string | null; pane?: ReactNode; needs?: readonly Need[] }) {
   const conversation = workstream ? workstreamConversation(workstream.workstream.id) : GENERAL_CONVERSATION;
   const running = useAnswering(conversation);
   const attached = useAttachments();
@@ -189,7 +200,8 @@ export function HomeConversation({ workstream, footer = null }: { workstream: Wo
           <ConversationLine conversation={conversation} workstream={workstream} />
         </div>
       </header>
-      <PipConversation key={conversation} conversation={conversation} proposals={proposals} primary={primary} />
+      {pane}
+      <TimelineView key={conversation} conversation={conversation} workstream={workstream} proposals={proposals} needs={needs} primary={primary} />
       <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} footer={footer} />
     </section>
   );
@@ -220,6 +232,8 @@ function useFocusTarget() {
   const target = usePipHome((s) => s.focusTarget);
   useEffect(() => {
     if (!target) return;
+    // What is asked for may be filtered out of the timeline: it shows everything again.
+    if (usePipHome.getState().timelineFilter !== "all") usePipHome.getState().setTimelineFilter("all");
     let frame = 0;
     let tries = 0;
     const find = () => {
@@ -260,6 +274,8 @@ function useTurnEscape() {
         paletteOpen: usePrefs.getState().paletteOpen,
         popoverOpen: popoverOpen(),
         lightbox: lightboxOpen(),
+        // An open Needs you decision closes first: the next Esc stops Pip.
+        paneOpen: usePipHome.getState().deciding !== null,
         // A confirmation that takes Esc itself, or a field being edited other than Pip's own input.
         handled: ev.defaultPrevented || (field instanceof HTMLElement && !!field.closest("[data-esc-local]")) || (editable && field?.id !== PIP_INPUT_ID),
         running: (useClaude.getState().byTicket[conversation]?.turns ?? []).some((t) => t.status === "running"),
@@ -273,16 +289,17 @@ function useTurnEscape() {
   }, []);
 }
 
-/** The items j and k step through in the workstream list (its rows, then the Needs you tray) and in the step rail (its chips, and the cards under the open ones). */
+/** The items j and k step through in the workstream list (its rows, then the Needs you list's rows) and in the step rail (its chips, and the cards under the open ones). */
 const COLUMN_ITEMS: Record<Exclude<PipHomeColumn, "conversation">, string> = {
-  list: '[data-pip-home-column="list"] [role="option"], [data-pip-home-column="list"] [data-needs-you-item]',
+  list: '[data-pip-home-column="list"] [role="option"], [data-pip-home-column="list"] [data-needs-you-group], [data-pip-home-column="list"] [data-needs-you-need]',
   rail: '[data-pip-home-column="rail"] [data-step-chip], [data-pip-home-column="rail"] article[data-run-id], [data-pip-home-column="rail"] article[data-draft]',
 };
 
 function itemKind(el: Element | undefined): PipHomeItemKind | null {
   if (!el) return null;
   if (el.matches('[role="option"]')) return "row";
-  if (el.matches("[data-needs-you-item]")) return "tray";
+  if (el.matches("[data-needs-you-group]")) return "group";
+  if (el.matches("[data-needs-you-need]")) return "need";
   if (el.matches("[data-step-chip]")) return "chip";
   if (el.matches("article[data-run-id]")) return "run";
   return el.matches("article[data-draft]") ? "draft" : null;
@@ -319,7 +336,9 @@ const show = (el: HTMLElement | null | undefined) => {
  * and the rail j and k (or the arrows) step and Enter or Space opens or toggles. It listens after everything nearer the
  * key, so a card, a confirmation or a sheet that took the key keeps it.
  */
-function usePipHomeKeys() {
+function usePipHomeKeys(needsYou: readonly Need[]) {
+  const needsRef = useRef(needsYou);
+  needsRef.current = needsYou;
   /** The rail item focused last, so coming back to the rail lands where the person left it. */
   const lastRail = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -327,6 +346,9 @@ function usePipHomeKeys() {
     let lastStep: string | null = null;
     const items = (column: PipHomeColumn) => (column === "conversation" ? [] : Array.from(document.querySelectorAll<HTMLElement>(COLUMN_ITEMS[column])));
     const onFocus = (ev: FocusEvent) => {
+      // A key of the Needs you list that asked for Enter is dropped once the keyboard goes anywhere else.
+      const asking = usePipHome.getState().asking;
+      if (asking && !(ev.target instanceof HTMLElement && ev.target.getAttribute("data-need-key") === asking.key)) disarm();
       if (!(ev.target instanceof HTMLElement) || !ev.target.closest('[data-pip-home-column="rail"]') || !ev.target.matches(COLUMN_ITEMS.rail)) return;
       lastRail.current = ev.target;
       lastStep = ev.target.closest("[data-step]")?.getAttribute("data-step") ?? null;
@@ -356,11 +378,39 @@ function usePipHomeKeys() {
       const list = items(column);
       const at = list.indexOf(document.activeElement as HTMLElement);
       const steps = document.querySelector('[data-pip-home-column="rail"] [data-step-rail]') !== null;
-      const action = pipHomeKey(ev, { column, overlay: overlayOpen(), count: list.length, at, kind: itemKind(list[at]), steps });
+      const home = usePipHome.getState();
+      const el = list[at];
+      const needKey = el?.getAttribute("data-need-key") ?? null;
+      const need = needKey ? needsRef.current.find((n) => n.key === needKey) : undefined;
+      const action = pipHomeKey(ev, { column, overlay: overlayOpen(), count: list.length, at, kind: itemKind(el), steps, asking: !!home.asking && home.asking.key === needKey, pane: home.deciding !== null });
       if (!action) return;
       ev.preventDefault();
-      const el = list[at];
       switch (action.type) {
+        case "decide":
+          if (!need) return;
+          // A group opens with everything it holds listed, and its highest-ranked need decided.
+          if (itemKind(el) === "group" && Number(el.getAttribute("data-needs-count")) > 1) home.setExpanded(groupId(need.workstreamId), true);
+          return openNeed(need);
+        case "collapse": {
+          if (!need) return;
+          const gid = groupId(need.workstreamId);
+          home.setExpanded(gid, false);
+          return void requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-pip-home-column="list"] [data-needs-you-group="${CSS.escape(gid)}"]`)?.focus());
+        }
+        case "act": {
+          const plan = need ? keyPlan(need, action.act) : null;
+          if (!need || !plan) return;
+          if (plan.type === "ask") return setPaneIntent(null), arm(need, plan);
+          // Skipping or dismissing acts at once and offers Undo; the row keeps the keyboard, or hands it on as it leaves.
+          if (plan.type === "do") return setPaneIntent(null), plan.run();
+          return openNeed(need, { edit: plan.edit });
+        }
+        case "confirm":
+          return confirmArmed();
+        case "cancel":
+          return disarm();
+        case "closePane":
+          return home.closeDecision();
         case "column":
           return enter(action.to);
         case "focus":
@@ -420,11 +470,27 @@ export function PipHome() {
   const needsYou = useNeedsYou();
   // The same clock as the Agents view's, so a run gone quiet leaves "running" here when it does there.
   const now = useNow();
-  const footer = useMemo(() => composerFooter(runs, needsYou, now), [runs, needsYou, now]);
+  const footer = useMemo(() => composerFooter(runs, needsYou.length, now), [runs, needsYou.length, now]);
   const orientationSeen = usePrefs((s) => s.pipOrientationSeen);
+  // The footer names the list's own keys while the keyboard is on one of its rows.
+  const [onNeed, setOnNeed] = useState(false);
+  // And the timeline's while it is on one of its entries.
+  const [onTimeline, setOnTimeline] = useState(false);
+  useEffect(() => {
+    const on = () => {
+      setOnNeed(!!document.activeElement?.closest("[data-needs-you-group], [data-needs-you-need]"));
+      setOnTimeline(!!document.activeElement?.closest(TIMELINE_ENTRY));
+    };
+    document.addEventListener("focusin", on);
+    document.addEventListener("focusout", on);
+    return () => {
+      document.removeEventListener("focusin", on);
+      document.removeEventListener("focusout", on);
+    };
+  }, []);
   useTurnEscape();
   useFocusTarget();
-  usePipHomeKeys();
+  usePipHomeKeys(needsYou);
   // The column the keyboard is in follows focus, however it got there.
   const enter = (column: PipHomeColumn) => () => {
     if (usePipHome.getState().column !== column) usePipHome.getState().setColumn(column);
@@ -446,13 +512,13 @@ export function PipHome() {
             }}
             runs={runs}
             needsYou={needsYou}
-            tray={<NeedsYouTray items={needsYou} />}
+            tray={<NeedsYouList needs={needsYou} now={now} />}
           />
         </div>
         {/* Run drafts that need nothing chosen are read and started in place here, in the conversation and the rail alike. */}
         <InlineStartContext.Provider value={true}>
           <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
-            <HomeConversation workstream={workstream} footer={footer} />
+            <HomeConversation workstream={workstream} footer={footer} needs={needsYou} pane={<NeedsPane needs={needsYou} />} />
           </div>
           <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">
             <StepsColumn workstream={workstream} />
@@ -460,7 +526,7 @@ export function PipHome() {
         </InlineStartContext.Provider>
       </div>
       <footer data-pip-home-hints className="@container flex h-8 shrink-0 items-center border-t border-ws-sep bg-ws-bar px-4 text-xs text-ws-ink3">
-        <ShortcutHint view="list" hints={PIP_HOME_HINTS} />
+        <ShortcutHint view="list" hints={onNeed ? NEEDS_HINTS : onTimeline ? TIMELINE_HINTS : PIP_HOME_HINTS} />
       </footer>
     </div>
   );

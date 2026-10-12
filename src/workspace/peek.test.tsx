@@ -248,10 +248,10 @@ describe("Pip pane parts", () => {
   });
 
   it("shows the nudge beside the launcher with a way to dismiss it", () => {
-    const out = renderToStaticMarkup(<Launcher drafts={2} onOpen={vi.fn()} nudge={<Nudge text="I can help you filter tasks in this view." onOpen={vi.fn()} onDismiss={vi.fn()} />} />);
+    const out = renderToStaticMarkup(<Launcher needs={2} onOpen={vi.fn()} nudge={<Nudge text="I can help you filter tasks in this view." onOpen={vi.fn()} onDismiss={vi.fn()} />} />);
     expect(out).toContain("I can help you filter tasks in this view.");
     expect(out).toContain("Dismiss suggestion");
-    expect(out).toContain("2 drafts waiting");
+    expect(out).toContain("Ask Pip, 2 things need you");
   });
 });
 

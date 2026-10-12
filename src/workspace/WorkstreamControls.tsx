@@ -1,10 +1,16 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Switch } from "../components/Switch";
-import { RULE_SWITCH, TURN_HELP, budgetNote, heldBanner, ruleText } from "../lib/workstreamHold";
-import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
+import type { Need } from "../lib/needs";
+import { nextStep, type NextStep } from "../lib/nextStep";
+import { RULE_SWITCH, TURN_HELP, budgetNote, heldBanner, ruleText, stepsLeftText } from "../lib/workstreamHold";
+import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
+import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
 import { EscalationCard } from "./EscalationCard";
+import { openNeed } from "./needsActions";
 import { usePopover } from "./Popover";
+import { useRuns } from "./runsStore";
+import { useNeedsYou } from "./useNeeds";
 import { useWorkstreams } from "./workstreamsStore";
 
 /** Where one automatic step stands for a workstream: its own switch on or off, or following Settings. */
@@ -151,6 +157,30 @@ function TurnHelp() {
   );
 }
 
+/** Why the workstream is held, with its Resume; nothing while it isn't held. The Needs you decision for a hold shows the same banner. */
+export function HeldBanner({ view, onResume }: { view: WorkstreamView; onResume(): void }) {
+  const ws = view.workstream;
+  const held = heldBanner(ws, view.budget);
+  if (!held) return null;
+  const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
+  return (
+    <div role="status" data-held-banner={ws.heldReason} className="flex flex-wrap items-center gap-2 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1 text-sm text-ws-ink">
+      <span className="min-w-0 flex-1">
+        {held}
+        {drift && (
+          <span data-drift-hint className="block text-xs text-ws-ink2">
+            Read {ws.itemKey ?? "the ticket"} as it is now before you resume: what Pip planned may no longer fit. Resuming takes it as the new starting point.
+          </span>
+        )}
+        {ws.heldReason === HELD_BUDGET && <TurnHelp />}
+      </span>
+      <Btn tone="plain" onClick={onResume} className="px-2 py-0.5">
+        Resume
+      </Btn>
+    </div>
+  );
+}
+
 export interface ControlsViewProps {
   view: WorkstreamView;
   globals: AutoStartSwitches | null;
@@ -158,16 +188,32 @@ export interface ControlsViewProps {
   /** Stop was pressed and waits for the person to confirm. */
   confirmingStop: boolean;
   onConfirmStop(on: boolean): void;
+  /** What comes next, from `nextStep`; absent where it isn't known (the line is left out). */
+  next?: NextStep | null;
+}
+
+/** The one line that says what happens next. When it is waiting on the person, the line opens the top need in the Needs-you pane. */
+export function NextStepLine({ next }: { next: NextStep }) {
+  const { need } = next;
+  return (
+    <p data-next-step={next.kind} className="m-0 text-sm text-ws-ink">
+      {need ? (
+        <button type="button" data-next-step-need={need.key} onClick={() => openNeed(need)} className="text-left underline decoration-ws-sep2 underline-offset-2 hover:bg-ws-hover">
+          {next.text}
+        </button>
+      ) : (
+        next.text
+      )}
+    </p>
+  );
 }
 
 /**
  * Under the workstream's line in the Pip pane: the Manage switch, why it is held with Resume, a review that still blocks
  * after the fix rounds with the person's choices, the budget once it runs low, Hold and Stop, and the automatic steps. Everything comes from the workstream's view, the same in the app and the sample.
  */
-export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop }: ControlsViewProps) {
+export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop, next }: ControlsViewProps) {
   const ws = view.workstream;
-  const held = heldBanner(ws, view.budget);
-  const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
   const note = budgetNote(view.budget);
   const manage = ws.mode === "manage";
   const pausedId = useId();
@@ -200,24 +246,15 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         </span>
         {confirmingStop && <StopConfirm onStop={() => (closeConfirm(), actions.onStop())} onKeep={closeConfirm} />}
       </div>
-      {held && (
-        <div role="status" data-held-banner={ws.heldReason} className="flex flex-wrap items-center gap-2 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1 text-sm text-ws-ink">
-          <span className="min-w-0 flex-1">
-            {held}
-            {drift && (
-              <span data-drift-hint className="block text-xs text-ws-ink2">
-                Read {ws.itemKey ?? "the ticket"} as it is now before you resume: what Pip planned may no longer fit. Resuming takes it as the new starting point.
-              </span>
-            )}
-            {ws.heldReason === HELD_BUDGET && <TurnHelp />}
-          </span>
-          <Btn tone="plain" onClick={actions.onResume} className="px-2 py-0.5">
-            Resume
-          </Btn>
-        </div>
-      )}
+      <HeldBanner view={view} onResume={actions.onResume} />
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
       <EscalationCard key={ws.id} view={view} />
+      {next && <NextStepLine next={next} />}
+      {manage && (
+        <p data-steps-left={view.budget.autoTurns.limit - view.budget.autoTurns.used} title={TURN_HELP} className="m-0 text-xs text-ws-ink2">
+          {stepsLeftText(view.budget)}
+        </p>
+      )}
       {note && !(note.level === "spent" && ws.heldReason === HELD_BUDGET) && (
         <div className="grid gap-0.5">
           <p data-budget={note.level} title={TURN_HELP} className={`m-0 text-sm ${note.level === "amber" ? "text-ws-warn" : "text-ws-blocked"}`}>
@@ -230,11 +267,23 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
   );
 }
 
+/**
+ * The Next line's step, or null (the line stays hidden) while Settings' switches are unread: guessing from the defaults could
+ * promise a step the person's saved settings switched off.
+ */
+export function nextStepOnceKnown(view: WorkstreamView, runs: Run[], proposals: Proposal[], needs: Need[], globals: AutoStartSwitches | null): NextStep | null {
+  return globals ? nextStep(view, runs, proposals, needs, globals) : null;
+}
+
 /** `WorkstreamControlsView` for workstream `view`, wired to workstreamsStore. */
 export function WorkstreamControls({ view }: { view: WorkstreamView }) {
   const globals = useWorkstreams((s) => s.globals);
   const [confirmingStop, setConfirmingStop] = useState(false);
   const id = view.workstream.id;
   const actions = useMemo(() => controlActions(id), [id]);
-  return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} />;
+  const runs = useRuns((s) => s.runs);
+  const proposals = useWorkspace((s) => s.proposals);
+  const needs = useNeedsYou();
+  const next = useMemo(() => nextStepOnceKnown(view, runs, Object.values(proposals), needs, globals), [view, runs, proposals, needs, globals]);
+  return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} next={next} />;
 }

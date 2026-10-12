@@ -12,6 +12,7 @@ import {
   inlineStart,
   jiraWrites,
   mockRuns,
+  needsPane,
   needsYouTray,
   openApp,
   peekSheet,
@@ -209,7 +210,7 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await expect(peekSheet(page).locator(`article[data-draft="${id}"]`).getByRole("button", { name: "Post comment" })).toHaveCount(0);
 });
 
-test("j and k move through the list and the tray and stop at the ends; Enter on a tray item goes to its card", async ({ page }) => {
+test("j and k move through the list and the Needs you rows and stop at the ends; Enter on a Needs you row opens its decision", async ({ page }) => {
   await openApp(page, MANAGED);
   await agentsSettled(page);
   await palette(page, "CA-401", /CA-401/);
@@ -218,17 +219,17 @@ test("j and k move through the list and the tray and stop at the ends; Enter on 
   await page.keyboard.press("ControlOrMeta+0");
   await expect(homeConversation(page)).toHaveText("General");
 
-  // Into the workstream from the list, and Pip drafts an investigation there; it waits in the tray.
+  // Into the workstream from the list, and Pip drafts an investigation there; it waits in Needs you.
   await press(page, "Shift+F6");
   await press(page, "j");
   await press(page, "Enter");
   await page.keyboard.type("Investigate CA-401");
   await page.keyboard.press("Enter");
   await homeSettled(page);
-  const item = needsYouTray(page).locator("[data-needs-you-item]").first();
+  const item = needsYouTray(page).locator("[data-needs-you-group]").first();
   await expect(item).toBeVisible();
 
-  // From the list: k stops at General, j runs on into the tray and stops at its last item.
+  // From the list: k stops at General, j runs on into Needs you and stops at its last row.
   await press(page, "Shift+F6");
   await expect(workstreamRow(page, "CA-401")).toBeFocused();
   await press(page, "k");
@@ -239,9 +240,10 @@ test("j and k move through the list and the tray and stop at the ends; Enter on 
   await expect(item).toBeFocused();
   await press(page, "j");
   await expect(item).toBeFocused();
-  // Enter goes to the draft's card in the conversation.
+  // Enter opens the need's decision in the middle column, and the keyboard goes into it.
   await page.keyboard.press("Enter");
-  await expect(homeRunCards(page, "CA-401").last()).toBeFocused();
+  await expect(needsPane(page)).toBeVisible();
+  await expect(needsPane(page).getByRole("button", { name: "Review and start" })).toBeFocused();
   await expectVisibleFocus(page);
 
   // The rail with Cmd/Ctrl+], wrapping round with Cmd/Ctrl+[ and ], and nothing moves while the palette is open.

@@ -8,6 +8,7 @@ import { MockSupervisor } from "./mockSupervisor";
 import { ESCALATION_GONE, MockWorkstreams } from "./mockWorkstreams";
 import { heldText } from "../lib/workstreamHold";
 import { DENIED_MESSAGE } from "../lib/permission";
+import { RESUME_TEXT } from "../workspace/runSheetLogic";
 import { mockAsk } from "./mockPip";
 import { GUARD as GUARD_TEXT, MOVED_ON, VERIFY_UNPINNED, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
@@ -1149,8 +1150,8 @@ describe("the sample's workstreams, held and reviewed", () => {
     store.personWrote(ws.id);
     expect(store.get(ws.id)?.workstream.heldReason).toBe("budget");
     // The turns ran out: the banner offers a message too, and a message lifts it.
-    spend({ autoTurns: 6, wakes: 9, tokens: 0 });
-    expect(banner()).toBe("Held: automatic turns used up. Resume, or write to Pip, to give it 6 more");
+    spend({ autoTurns: 11, wakes: 9, tokens: 0 });
+    expect(banner()).toBe("Held: automatic turns used up. Resume, or write to Pip, to give it 11 more");
     store.personWrote(ws.id);
     expect(store.get(ws.id)?.workstream.heldReason).toBeNull();
   });
@@ -1246,6 +1247,20 @@ describe("answering a permission prompt, as runs/permission.rs", () => {
     expect(b.runs.get(run.id)).toEqual(asking);
     expect(b.runs.attached).toEqual([]);
     expect(b.workstreams.events(ws).filter((e) => e.action.startsWith("permission"))).toEqual([]);
+  });
+
+  it("the supervisor's passes never resume a run stopped at its limit; only the person's Resume does", async () => {
+    const { b, ws, run } = await working("build", true);
+    (b.runs as unknown as { update(id: string, patch: Partial<Run>): Run }).update(run.id, { state: "stopped", stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit", endedAt: new Date().toISOString() });
+    const stopped = b.runs.get(run.id);
+    expect(stopped).toMatchObject({ state: "stopped", stoppedByLimit: true });
+    b.supervisor.check();
+    new MockSupervisor({ runs: b.runs, workstreams: b.workstreams, proposals: b.proposals, wake: () => {}, hasWaitingWake: () => false }).check();
+    expect(b.runs.get(run.id)).toEqual(stopped);
+    expect(b.runs.attached).toEqual([]);
+    expect(b.workstreams.events(ws).filter((e) => e.action.includes("resume"))).toEqual([]);
+    // The person's Resume is the runs' own answer path, with the words Resume sends.
+    expect(await b.runsAnswer(run.id, RESUME_TEXT)).toMatchObject({ state: "working", stoppedByLimit: false, error: null });
   });
 });
 

@@ -3,10 +3,14 @@ import {
   advanceRuns,
   askPermission,
   askPip,
+  expandAllNeeds,
+  expectToast,
   githubWrites,
   jiraWrites,
   mockAttached,
   mockRuns,
+  needOfKind,
+  needsPane,
   needsYouTray,
   openApp,
   openPipHome,
@@ -30,8 +34,8 @@ const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
-const runSheet = (page: Page) => page.getByRole("dialog", { name: "Agent run" });
-const asking = (page: Page) => runSheet(page).getByRole("group", { name: "Permission request" });
+/** A permission's decision, in the pane beside the conversation. */
+const asking = (page: Page) => needsPane(page).locator("[data-permission-ask]");
 const count = (page: Page) => needsYouTray(page).locator("[data-needs-you-count]");
 
 /** Waits until Pip has finished answering in the pane. */
@@ -101,9 +105,11 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
   await askPermission(page, build.id, `approve Bash: ${push}`);
 
   await openPipHome(page);
-  const item = needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · R4 asks to run a command/ });
-  await expect(item).toHaveCount(1);
+  await expandAllNeeds(page);
+  const item = needOfKind(page, "permission");
+  await expect(item).toContainText("R4 wants to run `git push -u origin");
   await item.click();
+  await expect(needsPane(page)).toContainText("The run stays paused; nothing else in CA-401 moves.");
   await expect(asking(page)).toBeVisible();
   await expect(asking(page)).toContainText("R4 wants to run this command:");
   await expect(asking(page).locator("code")).toHaveText(push);
@@ -125,9 +131,9 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(push);
   expect(await mockAttached(page)).toEqual([build.id]);
   expect(await audited(page, "permission_allowed_in_terminal")).toEqual([{ actor: "person", runId: build.id, detail: push }]);
-  // The person answers in Terminal now: the item says so until it is answered, and nothing about what was approved changed.
-  await expect(item).toHaveCount(0);
-  await expect(needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · R4 waits for your Yes in Terminal/ })).toHaveCount(1);
+  // The person answers in Terminal now: the need says so until it is answered, and nothing about what was approved changed.
+  await expect(needsPane(page)).toContainText("R4 waits for your Yes in Terminal for `git push -u origin");
+  await expect(needsPane(page)).toHaveAttribute("data-needs-pane", `run:${build.id}`);
   const after = (await mockRuns(page)).find((r) => r.id === build.id)!;
   expect(after).toMatchObject({ state: "needsPermission", digest: build.digest });
 
@@ -137,13 +143,11 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
   await expect(asking(page)).toContainText(`A Build pushes only its own branch, worktree-${build.name}, to origin: Gossamr doesn't allow this.`);
   await expect(asking(page).getByRole("button", { name: /Allow/ })).toHaveCount(0);
   await expect(asking(page).getByRole("button", { name: "Deny" })).toBeVisible();
-  await expect(needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · R4 asks to run a command/ })).toHaveCount(1);
+  await expect(needsPane(page)).toContainText("R4 wants to run `git push origin main`.");
   expect(await mockAttached(page)).toEqual([build.id]);
   expect(await jiraWrites(page)).toEqual(written);
 
   // On its card in Agents, Stop asks first, as the sheet does: one click beside Deny doesn't abandon the run.
-  await page.keyboard.press("Escape");
-  await expect(runSheet(page)).toHaveCount(0);
   await page.getByRole("button", { name: /^Agents/ }).click();
   const onCard = page.locator(`main article[data-run-id="${build.id}"]`);
   await onCard.getByRole("button", { name: "Stop the run (abandons it)" }).click();
@@ -167,8 +171,9 @@ test("Deny on a read-only run, which is never offered Allow: Claude carries on w
   await askPermission(page, run.id, "approve Bash: rm -rf node_modules");
 
   await openPipHome(page);
-  const item = needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · R1 asks to run a command/ });
-  await expect(item).toHaveCount(1);
+  await expandAllNeeds(page);
+  const item = needOfKind(page, "permission");
+  await expect(item).toContainText("R1 wants to run `rm -rf node_modules`.");
   const before = Number(await count(page).textContent());
   await item.click();
   await expect(asking(page)).toContainText("R1 wants to run this command:");
@@ -178,13 +183,10 @@ test("Deny on a read-only run, which is never offered Allow: Claude carries on w
   await expect(asking(page).getByRole("button")).toHaveText(["Copy", "Deny", "Stop the run (abandons it)"]);
 
   await asking(page).getByRole("button", { name: "Deny" }).click();
-  const sent = runSheet(page).getByRole("status").filter({ hasText: "Denied." });
-  await expect(sent).toHaveText("Denied. Claude is carrying on without it.");
-  await expect(sent).toBeFocused();
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === run.id)?.state).toBe("working");
-  await expect(runSheet(page).getByText("You denied this request")).toBeVisible();
   expect(await audited(page, "permission_denied")).toEqual([{ actor: "person", runId: run.id, detail: "rm -rf node_modules" }]);
-  await expect(item).toHaveCount(0);
+  // Dealt with, it leaves Needs you, and the pane has moved on from it.
+  await expect(needOfKind(page, "permission")).toHaveCount(0);
   await expect(count(page)).toHaveText(String(before - 1));
   expect(await mockAttached(page)).toEqual([]);
   expect(await jiraWrites(page)).toEqual([]);
@@ -237,8 +239,9 @@ async function buildAndReview(page: Page, build: string, after: string | null) {
 }
 
 const lines = async (page: Page, action: string) => (await workstreamEvents(page)).filter((e) => e.action === action);
-const escalationItem = (page: Page) => needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · review still blocks after 2 fix rounds/ });
-const escalationCard = (page: Page) => pipHome(page).getByRole("group", { name: "Review still blocks" });
+const escalationItem = (page: Page) => needOfKind(page, "escalation");
+/** The review's three choices in the pane; the conversation's own card is the same one. */
+const escalationCard = (page: Page) => needsPane(page).getByRole("group", { name: "Review still blocks" });
 
 test("a review that still blocks after two fix rounds comes to the person with three choices, each theirs alone", async ({ page }) => {
   test.setTimeout(240_000);
@@ -253,30 +256,31 @@ test("a review that still blocks after two fix rounds comes to the person with t
   expect(await lines(page, "fix_round_sent")).toHaveLength(2);
 
   await openPipHome(page);
+  await expandAllNeeds(page);
   await expect(escalationItem(page)).toHaveCount(1);
+  await expect(escalationItem(page)).toContainText("The review still blocks after 2 fix rounds.");
   await escalationItem(page).click();
   const card = escalationCard(page);
   await expect(card).toContainText(/R\d+ still blocks after 2 fix rounds\. What next\?/);
   await expect(card.getByRole("button")).toHaveText(["Run another fix round", "I'll take it from here", "Post the review as is"]);
   await expect(card.getByRole("button", { name: "Run another fix round" })).toBeFocused();
 
-  // Post the review as is: the draft's own card, where nothing goes to GitHub until its Post review.
+  // The review draft folded into this need is under the choices, not a second need in the list.
   const [waiting] = await pendingReviewDrafts(page);
-  await card.getByRole("button", { name: "Post the review as is" }).click();
-  const draft = peekSheet(page).locator(`article[data-draft="${waiting.id}"]`);
+  const draft = needsPane(page).locator(`article[data-draft="${waiting.id}"]`);
   await expect(draft).toBeVisible();
-  await expect(draft.getByRole("button", { name: "Post review" })).toBeVisible();
+  await expect(needsYouTray(page).locator("[data-needs-you-need][data-kind=\"review\"], [data-needs-you-group][data-kind=\"review\"]")).toHaveCount(0);
+  // Post the review as is: nothing goes to GitHub until the draft's own Post review.
+  await card.getByRole("button", { name: "Post the review as is" }).click();
+  await expect(draft.getByRole("button", { name: "Post review" })).toBeFocused();
   expect(await githubWrites(page)).toEqual([]);
-  await page.keyboard.press("Escape");
-  await expect(peekSheet(page)).toHaveCount(0);
   await expect(escalationItem(page)).toHaveCount(1);
 
   // Run another fix round: the person's, past the cap, recorded as theirs; the item goes.
   const passes = (await mockRuns(page)).find((r) => r.id === build)!.passes;
   await card.getByRole("button", { name: "Run another fix round" }).click();
-  const sent = pipHome(page).getByRole("status").filter({ hasText: "Fix round sent to" });
-  await expect(sent).toHaveText(/^Fix round sent to R\d+\.$/);
-  await expect(sent).toBeFocused();
+  // The toast also holds its Dismiss button's text, so the line is matched without an end anchor.
+  await expectToast(page, /^Fix round sent to R\d+\./);
   expect((await lines(page, "fix_round_person")).map((e) => ({ actor: e.actor, runId: e.runId, detail: e.detail }))).toEqual([{ actor: "person", runId: build, detail: `after ${review}` }]);
   const rounds = await lines(page, "fix_round_sent");
   expect(rounds.map((e) => e.actor)).toEqual(["supervisor", "supervisor", "person"]);
@@ -284,9 +288,11 @@ test("a review that still blocks after two fix rounds comes to the person with t
   await expect(escalationItem(page)).toHaveCount(0);
   await expect(card).toHaveCount(0);
 
-  // The next review blocks too: the item is back and needs a fresh click; the rule sent no third round of its own.
+  // The next review blocks too: the need is back and needs a fresh click; the rule sent no third round of its own.
   review = await buildAndReview(page, build, review);
+  await expandAllNeeds(page);
   await expect(escalationItem(page)).toHaveCount(1);
+  await escalationItem(page).click();
   expect(await lines(page, "fix_round_sent")).toHaveLength(3);
   await expect(card.getByRole("button")).toHaveText(["Run another fix round", "I'll take it from here", "Post the review as is"]);
 
@@ -294,8 +300,7 @@ test("a review that still blocks after two fix rounds comes to the person with t
   const before = { runs: await mockRuns(page), drafts: await pendingReviewDrafts(page), jira: await jiraWrites(page) };
   await card.getByRole("button", { name: "I'll take it from here" }).click();
   const over = pipHome(page).getByRole("status").filter({ hasText: "Over to you" });
-  await expect(over).toHaveText("Over to you: this workstream is on Advise now.");
-  await expect(over).toBeFocused();
+  await expectToast(page, "Over to you: this workstream is on Advise now.");
   await expect(pipHome(page).getByRole("switch", { name: "Manage this workstream" })).toHaveAttribute("aria-checked", "false");
   expect((await lines(page, "escalation_taken")).map((e) => ({ actor: e.actor, runId: e.runId }))).toEqual([{ actor: "person", runId: review }]);
   await expect(escalationItem(page)).toHaveCount(0);

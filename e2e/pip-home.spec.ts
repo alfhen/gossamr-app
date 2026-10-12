@@ -11,6 +11,9 @@ import {
   homeConversation,
   homeConversationRegion,
   mockRuns,
+  needOfKind,
+  needsPane,
+  needsYouCount,
   needsYouTray,
   openApp,
   openPipHome,
@@ -202,7 +205,7 @@ async function homeWorkstream(page: Page, key = "CA-401") {
   await expect(homeConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} `));
 }
 
-test("Needs you: Pip's investigation draft waits in the tray and on its row, goes to its card, and leaves once skipped", async ({ page }) => {
+test("Needs you: Pip's investigation draft waits in the list and on its row, opens its decision, and leaves once skipped", async ({ page }) => {
   await openApp(page, MANAGED);
   await agentsSettled(page, true);
   await homeWorkstream(page);
@@ -211,67 +214,74 @@ test("Needs you: Pip's investigation draft waits in the tray and on its row, goe
 
   await askPip(page, "investigate this");
   await settled(page);
-  const item = needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · Start Investigate · / });
+  const item = needOfKind(page, "runStart");
   await expect(item).toHaveCount(1);
+  await expect(item).toContainText("drafted an Investigate agent for CA-401");
+  await expect(item.locator("[data-needs-you-chip]")).toHaveText("Approve");
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
 
-  // From General, the item selects the workstream again and focuses the draft's card.
+  // From General, the need selects the workstream again and opens its decision, with the draft's own Skip.
   await workstreamRow(page, "General").click();
   await expect(homeConversation(page)).toHaveText("General");
   await item.click();
   await expect(row).toHaveAttribute("aria-selected", "true");
-  const card = pipHome(page).getByRole("region", { name: "Conversation" }).getByRole("article", { name: "Start an agent: CA-401" }).last();
-  await expect(card).toBeFocused();
+  await expect(needsPane(page)).toContainText("it starts only when you approve it.");
+  await expect(needsPane(page)).toContainText("If you wait: Nothing starts until you approve it.");
 
-  // Skipped from its card's keys, it leaves the tray and the badge.
-  await page.keyboard.press("s");
-  await page.keyboard.press("Enter");
+  // Skipped there, it leaves the list and the badge, and the pane has nothing left to open.
+  await needsPane(page).getByRole("button", { name: "Skip" }).click();
   await expect(item).toHaveCount(0);
   await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);
+  await expect(needsPane(page)).toHaveCount(0);
+  await expect(needsYouTray(page)).toContainText("Nothing needs you.");
 });
 
-test("Needs you: holding the workstream adds 'Held by you', its item goes to Resume, and Resume clears it", async ({ page }) => {
+test("Needs you: holding the workstream adds 'Held by you', its need opens Resume, and Resume clears it", async ({ page }) => {
   await openApp(page, MANAGED);
   await agentsSettled(page, true);
   await homeWorkstream(page);
   const row = workstreamRow(page, "CA-401");
-  const held = needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · Held by you$/ });
+  const held = needOfKind(page, "hold");
   await expect(held).toHaveCount(0);
 
   await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
   await expect(held).toHaveCount(1);
+  await expect(held).toContainText("Held by you");
   await expect(row.locator("[data-status]")).toHaveText("· Held by you");
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
 
   await workstreamRow(page, "General").click();
   await held.click();
-  const resume = pipHome(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
+  const resume = needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
   await expect(resume).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(held).toHaveCount(0);
   await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);
 });
 
-test("Needs you from the board: the rail's Pip home popover lists the same items and jumps to them on Pip home", async ({ page }) => {
+test("Needs you from the board: the rail's Pip home popover lists the same rows and opens their decisions on Pip home", async ({ page }) => {
   await openApp(page, MANAGED);
   await agentsSettled(page, true);
   await homeWorkstream(page);
   await askPip(page, "investigate this");
   await settled(page);
   await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-  const onHome = await needsYouTray(page).locator("[data-needs-you-item]").allTextContents();
-  expect(onHome.some((t) => t.startsWith("CA-401 · Welcome flow refresh · Start Investigate"))).toBe(true);
-  expect(onHome).toContain("CA-401 · Welcome flow refresh · Held by you");
+  const onHome = await needsYouTray(page).locator("[data-needs-you-group]").allTextContents();
+  expect(onHome).toHaveLength(1);
+  expect(onHome[0]).toContain("Held by you");
+  const total = Number(await needsYouCount(page).innerText());
+  expect(total).toBe(2);
 
   // Back on the board, the Pip home button counts them, and its menu shows the same list.
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await expect(pipHome(page)).toHaveCount(0);
   const button = homeButton(page);
-  await expect(button).toHaveAccessibleName(`Pip home, ${onHome.length} ${onHome.length === 1 ? "item waits" : "items wait"} in Needs you`);
+  await expect(button).toHaveAccessibleName(`Pip home, ${total} things need you`);
   await button.click({ button: "right" });
   const popover = page.getByRole("dialog", { name: "Needs you" });
-  await expect(popover.locator("[data-needs-you-item]")).toHaveCount(onHome.length);
-  expect((await popover.locator("[data-needs-you-item]").allTextContents()).map(withoutAge)).toEqual(onHome.map(withoutAge));
+  await expect(popover.locator("[data-needs-you-count]")).toHaveText(String(total));
+  await expect(popover.locator("[data-needs-you-group]")).toHaveCount(1);
+  expect((await popover.locator("[data-needs-you-group]").allTextContents()).map(withoutAge)).toEqual(onHome.map(withoutAge));
 
   // Esc closes it and leaves the board as it was.
   await page.keyboard.press("Escape");
@@ -283,16 +293,17 @@ test("Needs you from the board: the rail's Pip home popover lists the same items
   await expect(button).toHaveAttribute("aria-description", /Shift\+F10/);
   await expect(button).not.toHaveAttribute("aria-haspopup");
   await page.keyboard.press("Shift+F10");
-  await expect(popover.locator("[data-needs-you-item]")).toHaveCount(onHome.length);
+  await expect(popover.locator("[data-needs-you-group]")).toHaveCount(1);
   await page.keyboard.press("Escape");
   await expect(popover).toHaveCount(0);
 
   await button.click({ button: "right" });
-  await popover.getByRole("button", { name: /^CA-401 · .+ · Start Investigate/ }).click();
+  await popover.locator("[data-needs-you-group]").click();
   await expect(popover).toHaveCount(0);
   await expect(pipHome(page)).toBeVisible();
   await expect(workstreamRow(page, "CA-401")).toHaveAttribute("aria-selected", "true");
-  await expect(pipHome(page).getByRole("region", { name: "Conversation" }).getByRole("article", { name: "Start an agent: CA-401" }).last()).toBeFocused();
+  await expect(needsPane(page)).toBeVisible();
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
 });
 
 /** Runs a palette command: opens the palette, types `query` and picks the entry named `name`. */
@@ -368,9 +379,9 @@ test("Esc on a draft card asking for Enter cancels the ask and leaves Pip answer
   await openApp(page, MANAGED);
   await agentsSettled(page, true);
   await homeWorkstream(page);
-  await askPip(page, "investigate this");
+  await askPip(page, "Draft a comment");
   await settled(page);
-  const card = homeConversationRegion(page).getByRole("article", { name: "Start an agent: CA-401" }).last();
+  const card = homeConversationRegion(page).getByRole("article", { name: "Comment on CA-401" }).last();
   await expect(card).toHaveCount(1);
 
   await holdPip(page, true);
@@ -379,10 +390,10 @@ test("Esc on a draft card asking for Enter cancels the ask and leaves Pip answer
   await expect(stop).toBeVisible();
   await homeComposer(page).press("ArrowUp");
   await expect(card).toBeFocused();
-  await page.keyboard.press("s");
-  await expect(card.getByRole("status")).toHaveText(/^↵ skip/);
+  await page.keyboard.press("a");
+  await expect(card.getByRole("status")).toHaveText(/^↵ approve/);
   await page.keyboard.press("Escape");
-  await expect(card.getByRole("status")).not.toHaveText(/^↵ skip/);
+  await expect(card.getByRole("status")).not.toHaveText(/^↵ approve/);
   await expect(card).toHaveAttribute("data-state", "pending");
   await expect(stop).toBeVisible();
 

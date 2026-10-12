@@ -67,7 +67,7 @@ test("a token that can't post says why, offers the PR view with the review's com
 
   // From its preview card, a can't post it: it only opens the draft, so Enter then confirms nothing.
   const card = await previewCard(page);
-  await expect(card.getByRole("status")).toHaveText("s skip · ↵ open");
+  await expect(card.getByRole("status")).toHaveText("e edit · d s skip · ↵ open");
   await expect(card.getByRole("button", { name: "Open PR view →" })).toBeVisible();
   await page.keyboard.press("a");
   await page.keyboard.press("Enter");
@@ -109,7 +109,7 @@ test("the review's preview card warns that the pull request moved on before a po
 test("a then Enter on the review's preview card posts it, once", async ({ page }) => {
   await reviewedDraft(page);
   const card = await previewCard(page);
-  await expect(card.getByRole("status")).toHaveText("a post · s skip · ↵ open");
+  await expect(card.getByRole("status")).toHaveText("a post · e edit · d s skip · ↵ open");
   await page.keyboard.press("a");
   await expect(card.getByRole("status")).toHaveText("↵ post this review · any other key cancels");
   await page.keyboard.press("Enter");

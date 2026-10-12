@@ -475,6 +475,14 @@ async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String) 
     Ok(skipped)
 }
 
+/// The person's Undo of a skip: a draft skipped a moment ago is pending again. Refused for a skip that old, or a draft in any other state.
+#[tauri::command]
+async fn proposals_unskip(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+    let back = core.unskip_proposal(&id).await?;
+    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    Ok(back)
+}
+
 /// Applies the draft. A failed attempt still returns it, back to pending with `error` set.
 #[tauri::command]
 async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, supervisor: State<'_, SupervisorState>, id: String) -> Result<Proposal> {
@@ -708,6 +716,14 @@ async fn workstreams_hold(app: AppHandle, core: State<'_, CoreState>, agent: Sta
 #[tauri::command]
 async fn workstreams_resume(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
     let ws = core.resume_workstream(&core.scope().await?, &id).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
+/// The person's Undo of a hold or of a switch to Advise, a moment after it: the workstream goes back to how it stood. Refused once anything else happened in it, or after a minute.
+#[tauri::command]
+async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String, undo: inbox::WorkstreamUndo) -> Result<Workstream> {
+    let ws = core.undo_workstream(&core.scope().await?, &id, &undo).await?;
     workstreams_changed(&app, &ws.connection_id);
     Ok(ws)
 }
@@ -1395,6 +1411,7 @@ pub fn run() {
             proposals_create,
             proposals_edit,
             proposals_skip,
+            proposals_unskip,
             proposals_approve,
             proposals_post_review,
             runs_enabled,
@@ -1451,6 +1468,7 @@ pub fn run() {
             workstreams_take_over,
             workstreams_hold,
             workstreams_resume,
+            workstreams_undo,
             workstreams_set_rule,
             workstreams_hold_all,
             workstreams_stop,

@@ -13,6 +13,7 @@ import {
   peekSheet,
   peekTicket,
   pipConversation,
+  paneSettled as settled,
   pipPane,
   scriptNextRun,
   setBudget,
@@ -26,19 +27,20 @@ import {
 
 // A workstream in Manage mode (`wsManage=1` opens new ones so): the sample supervisor wakes Pip once for each finished
 // run and starts the routine next steps by the fixed rules, with no click. Pull requests show only when a test says.
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
+// `pipPace=1` makes the sample Pip answer at once: nothing here is about how fast an answer streams, and at its usual pace
+// the answers a finish and a question queue up take longer than the 5 seconds a wait has on a machine that is busy. The
+// tests that need a turn in flight hold it (`holdPip`) rather than count on it being slow.
+const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 
-/** Waits until Pip has finished answering in the pane. */
-async function settled(page: Page) {
-  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-}
-
 /** Asks Pip for an investigation of `key`, opens its draft past the one-time safety sheet and starts it, as the person does. */
 async function startInvestigation(page: Page, key = "CA-401") {
+  // The wake the last finish queued is answered first: asked while it runs, the question sets it aside and it is answered
+  // again behind the question, two turns instead of one.
+  await settled(page);
   await askPip(page, "investigate this");
   await settled(page);
   for (let attempt = 0; attempt < 2; attempt++) {

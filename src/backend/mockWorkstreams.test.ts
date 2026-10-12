@@ -403,7 +403,7 @@ describe("holding and managing a mock workstream", () => {
 
     const view = await backend.workstreamsGet(ws.id);
     expect(view?.workstream).toEqual({ ...ws, mode: "manage" });
-    expect(view?.budget).toEqual({ autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" });
+    expect(view?.budget).toEqual({ autoTurns: { used: 0, limit: 11 }, wakes: { used: 0, limit: 12 }, level: "ok" });
 
     await backend.workstreamsClose(ws.id);
     await expect(backend.workstreamsHold(ws.id)).rejects.toThrow("is closed");
@@ -426,8 +426,8 @@ describe("holding and managing a mock workstream", () => {
     const spent = store.open(null, "spent");
     store.hold(spent.id, "budget", "supervisor");
     // Spend as the supervisor will count it, straight in the store.
-    (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === spent.id)!.spent = { autoTurns: 6, wakes: 9, tokens: 5 };
-    expect(store.get(spent.id)?.budget).toEqual({ autoTurns: { used: 6, limit: 6 }, wakes: { used: 9, limit: 12 }, level: "spent" });
+    (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === spent.id)!.spent = { autoTurns: 11, wakes: 9, tokens: 5 };
+    expect(store.get(spent.id)?.budget).toEqual({ autoTurns: { used: 11, limit: 11 }, wakes: { used: 9, limit: 12 }, level: "spent" });
     const resumed = store.resume(spent.id);
     expect(resumed.spent).toEqual({ autoTurns: 0, wakes: 0, tokens: 5 });
     expect(store.events(spent.id).map((e) => [e.actor, e.action])).toEqual([
@@ -450,7 +450,7 @@ describe("holding and managing a mock workstream", () => {
     store.personWrote(ws.id);
     expect(store.get(ws.id)?.workstream).toMatchObject({ heldReason: "budget", spent: { autoTurns: 0, wakes: 12 } });
     expect(store.events(ws.id).map((e) => e.action)).toEqual(["opened", "held", "budget_reset"]);
-    spend({ autoTurns: 6, wakes: 9, tokens: 0 });
+    spend({ autoTurns: 11, wakes: 9, tokens: 0 });
     store.personWrote(ws.id);
     expect(store.get(ws.id)?.workstream.heldReason).toBeNull();
     expect(store.events(ws.id).map((e) => e.action)).toEqual(["opened", "held", "budget_reset", "resumed", "budget_reset"]);

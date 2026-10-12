@@ -7,20 +7,22 @@ import type { Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "..
 export const QUIET_MINUTES = 30;
 const MINUTE = 60_000;
 
-export const LANE_IDS = ["needs", "running", "done", "bad", "earlier"] as const;
+export const LANE_IDS = ["running", "done", "bad", "earlier"] as const;
 export type LaneId = (typeof LANE_IDS)[number];
 
 export const LANES: Record<LaneId, { title: string; why: string }> = {
-  needs: { title: "Needs you", why: "Waiting on an answer or a permission" },
   running: { title: "Running", why: "Working in the background" },
   done: { title: "Done, ready to review", why: "Look over what it found" },
-  bad: { title: "Failed or stuck", why: "Not going anywhere without you" },
+  bad: { title: "Failed or stuck", why: "Not going anywhere without you. What needs you is also in Needs you." },
   earlier: { title: "Earlier", why: "Stopped by you or from Terminal" },
 };
 
 const NEEDS: readonly RunState[] = ["needsAnswer", "needsPermission", "systemBlocked"];
 
 export const needsPerson = (run: Pick<Run, "state">) => NEEDS.includes(run.state);
+
+/** A run Gossamr stopped at its time or token limit, with no answer of the person's waiting on it: the person resumes it, nothing else does. */
+export const stoppedAtLimit = (run: Pick<Run, "state" | "stoppedByLimit">) => run.state === "stopped" && !!run.stoppedByLimit;
 
 /** Minutes without progress once a working run has been quiet for `QUIET_MINUTES` or more; null otherwise. */
 export function quietMinutes(run: Pick<Run, "state" | "lastProgressAt">, now: number): number | null {
@@ -33,10 +35,11 @@ export function quietMinutes(run: Pick<Run, "state" | "lastProgressAt">, now: nu
 
 export function laneOf(run: Run, now: number): LaneId {
   switch (run.state) {
+    // A run waiting on the person is stuck until they answer; Needs you (the list on Pip home) is where it is decided.
     case "needsAnswer":
     case "needsPermission":
     case "systemBlocked":
-      return "needs";
+      return "bad";
     case "queued":
     case "launching":
       return "running";
@@ -48,7 +51,7 @@ export function laneOf(run: Run, now: number): LaneId {
     case "unknown":
       return "bad";
     case "stopped":
-      return run.stoppedByLimit ? "bad" : "earlier";
+      return stoppedAtLimit(run) ? "bad" : "earlier";
   }
 }
 
@@ -314,29 +317,18 @@ export function stepRun(order: readonly string[], current: string | null, delta:
   return order[Math.min(order.length - 1, Math.max(0, at + delta))];
 }
 
-/** A run that needs the person, or a failed one they haven't looked at yet: what the rail badge and the Needs you tray count. */
-export const needsAttention = (run: Pick<Run, "id" | "state">, seenFailed: ReadonlySet<string>) => needsPerson(run) || (run.state === "failed" && !seenFailed.has(run.id));
-
-/**
- * The agent part of "needs you", the one set every screen counts it by: runs asking a question, asking permission or
- * blocked, and failed runs the person hasn't looked at yet (a folder to trust among them). Each is one of the Needs you
- * tray's run items; the Agents rail badge and the Agents header ("2 waiting on you") count exactly these.
- */
-export const agentsWaitingOnYou = (runs: readonly Run[], seenFailed: ReadonlySet<string>): Run[] => runs.filter((r) => needsAttention(r, seenFailed));
-
-/** Runs that need the person, plus failed ones they haven't looked at yet. Quiet runs never count. */
-export function attentionCount(runs: readonly Run[], seenFailed: ReadonlySet<string>): number {
-  return agentsWaitingOnYou(runs, seenFailed).length;
-}
+/** A run that needs the person, one stopped at its limit, or a failed one they haven't dismissed: the runs `yourAgents` counts as waiting on the person. */
+export const needsAttention = (run: Pick<Run, "id" | "state"> & Partial<Pick<Run, "stoppedByLimit">>, dismissed: ReadonlySet<string>) =>
+  needsPerson(run) || stoppedAtLimit({ state: run.state, stoppedByLimit: run.stoppedByLimit }) || (run.state === "failed" && !dismissed.has(run.id));
 
 const AT_WORK: readonly RunState[] = ["queued", "launching", "working"];
 
 /**
  * The one meaning of "your agents", wherever agents are counted as a whole ("Your agents 3 of 6"): runs at work (queued,
- * launching or working, quiet ones too) and runs waiting on the person (`agentsWaitingOnYou`). Finished, stopped and
- * failed runs already looked at are not agents any more, only history.
+ * launching or working, quiet ones too) and runs waiting on the person (`needsAttention`). Finished, stopped and
+ * failed runs already dismissed are not agents any more, only history.
  */
-export const yourAgents = (runs: readonly Run[], seenFailed: ReadonlySet<string>): Run[] => runs.filter((r) => AT_WORK.includes(r.state) || needsAttention(r, seenFailed));
+export const yourAgents = (runs: readonly Run[], dismissed: ReadonlySet<string>): Run[] => runs.filter((r) => AT_WORK.includes(r.state) || needsAttention(r, dismissed));
 
 /**
  * The runs at work, counted one way for the Agents view's summary and Pip home's composer footer so the two agree:
@@ -362,18 +354,17 @@ export const liveWords = (c: ReturnType<typeof liveCounts>) => [c.running && `${
 export const laneCount = (lane: LaneId, runs: readonly Run[], now: number): string => (lane === "running" ? liveWords(liveCounts(runs, now)).join(" · ") || "0" : String(runs.length));
 
 /**
- * The Agents view's summary: "2 waiting on you · 2 running · 2 ready to review · 3 failed or stuck (1 quiet)". Waiting on
- * you is `agentsWaitingOnYou`, as the Agents rail badge counts; running, queued and waiting for a slot are `liveCounts`, as
- * Pip home's footer counts; ready to review and failed or stuck are the lanes of those names, card for card.
+ * The Agents view's summary: "2 need you · 2 running · 2 ready to review · 3 failed or stuck (1 quiet)". Need you is
+ * Needs you's one count (`needsYou`, as the rail badge and the composer give it); running, queued and waiting for a slot are
+ * `liveCounts`, as Pip home's footer counts; ready to review and failed or stuck are the lanes of those names, card for card.
  */
-export function summaryLine(runs: readonly Run[], now: number, seenFailed: ReadonlySet<string> = new Set()): string {
+export function summaryLine(runs: readonly Run[], now: number, needsYou = 0): string {
   if (!runs.length) return "Nothing running";
   const count = (lane: LaneId) => runs.filter((r) => laneOf(r, now) === lane).length;
-  const waiting = agentsWaitingOnYou(runs, seenFailed).length;
   const live = liveCounts(runs, now);
   const done = count("done");
   const bad = count("bad");
-  return [waiting && `${waiting} waiting on you`, ...liveWords(live), done && `${done} ready to review`, bad && `${bad} failed or stuck${live.quiet ? ` (${live.quiet} quiet)` : ""}`]
+  return [needsYou && `${needsYou} ${needsYou === 1 ? "needs" : "need"} you`, ...liveWords(live), done && `${done} ready to review`, bad && `${bad} failed or stuck${live.quiet ? ` (${live.quiet} quiet)` : ""}`]
     .filter(Boolean)
     .join(" · ") || "Nothing running";
 }
