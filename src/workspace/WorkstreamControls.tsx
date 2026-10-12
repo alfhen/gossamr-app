@@ -1,10 +1,15 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Switch } from "../components/Switch";
+import { nextStep, type NextStep } from "../lib/nextStep";
 import { RULE_SWITCH, TURN_HELP, budgetNote, heldBanner, ruleText, stepsLeftText } from "../lib/workstreamHold";
 import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
+import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
 import { EscalationCard } from "./EscalationCard";
+import { openNeed } from "./needsActions";
 import { usePopover } from "./Popover";
+import { useRuns } from "./runsStore";
+import { useNeedsYou } from "./useNeeds";
 import { useWorkstreams } from "./workstreamsStore";
 
 /** Where one automatic step stands for a workstream: its own switch on or off, or following Settings. */
@@ -182,13 +187,31 @@ export interface ControlsViewProps {
   /** Stop was pressed and waits for the person to confirm. */
   confirmingStop: boolean;
   onConfirmStop(on: boolean): void;
+  /** What comes next, from `nextStep`; absent where it isn't known (the line is left out). */
+  next?: NextStep | null;
+}
+
+/** The one line that says what happens next. When it is waiting on the person, the line opens the top need in the Needs-you pane. */
+export function NextStepLine({ next }: { next: NextStep }) {
+  const { need } = next;
+  return (
+    <p data-next-step={next.kind} className="m-0 text-sm text-ws-ink">
+      {need ? (
+        <button type="button" data-next-step-need={need.key} onClick={() => openNeed(need)} className="text-left underline decoration-ws-sep2 underline-offset-2 hover:bg-ws-hover">
+          {next.text}
+        </button>
+      ) : (
+        next.text
+      )}
+    </p>
+  );
 }
 
 /**
  * Under the workstream's line in the Pip pane: the Manage switch, why it is held with Resume, a review that still blocks
  * after the fix rounds with the person's choices, the budget once it runs low, Hold and Stop, and the automatic steps. Everything comes from the workstream's view, the same in the app and the sample.
  */
-export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop }: ControlsViewProps) {
+export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop, next }: ControlsViewProps) {
   const ws = view.workstream;
   const note = budgetNote(view.budget);
   const manage = ws.mode === "manage";
@@ -225,6 +248,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
       <HeldBanner view={view} onResume={actions.onResume} />
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
       <EscalationCard key={ws.id} view={view} />
+      {next && <NextStepLine next={next} />}
       {manage && (
         <p data-steps-left={view.budget.autoTurns.limit - view.budget.autoTurns.used} title={TURN_HELP} className="m-0 text-xs text-ws-ink2">
           {stepsLeftText(view.budget)}
@@ -248,5 +272,9 @@ export function WorkstreamControls({ view }: { view: WorkstreamView }) {
   const [confirmingStop, setConfirmingStop] = useState(false);
   const id = view.workstream.id;
   const actions = useMemo(() => controlActions(id), [id]);
-  return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} />;
+  const runs = useRuns((s) => s.runs);
+  const proposals = useWorkspace((s) => s.proposals);
+  const needs = useNeedsYou();
+  const next = useMemo(() => nextStep(view, runs, Object.values(proposals), needs, globals ?? undefined), [view, runs, proposals, needs, globals]);
+  return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} next={next} />;
 }
