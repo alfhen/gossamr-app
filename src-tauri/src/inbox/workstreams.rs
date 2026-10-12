@@ -2,7 +2,7 @@
 //! runs give it, closing it, Pip's notes, its mode, holds and rule switches, and its audit. Nothing here starts, stops
 //! or answers a run or writes to Jira.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use serde::Serialize;
@@ -468,6 +468,12 @@ impl Core {
                 self.view_of(ws, &linked, &verdicts, &events, &drafts)
             })
             .collect()
+    }
+
+    /// The ids of `scope`'s closed workstreams, a cheap way to tell what belongs to one.
+    pub async fn closed_workstream_ids(&self, scope: &Scope) -> Result<HashSet<String>> {
+        let connection_id = Connection::jira_id(scope);
+        self.with_db_for(scope, |db| db.closed_workstream_ids(&connection_id)).await
     }
 
     /// Closes a workstream. Its runs and drafts are left as they are; closing it again changes nothing.
