@@ -10,7 +10,7 @@ import { AgentsBanners } from "./AgentsBanners";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
-import { StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
+import { DENY_QUESTION, DenyConfirm, StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
 import { Rail, railBadgeText } from "./Rail";
 import { useRuns } from "./runsStore";
 
@@ -229,6 +229,14 @@ describe("cards", () => {
     expect(html).toContain(stopRunQuestion("R4"));
     expect(stopRunQuestion("R4")).toBe("Stop R4? It abandons the run.");
     expect(buttonsOf(html)).toEqual(["Yes, stop", "Keep going"]);
+  });
+
+  it("asks before a card's Deny tells the agent no: Escape and Keep waiting leave it asking", () => {
+    const html = renderToStaticMarkup(<DenyConfirm onDeny={vi.fn()} onKeep={vi.fn()} />);
+    expect(html).toContain('role="group" aria-label="Deny this request"');
+    expect(html).toContain(DENY_QUESTION);
+    expect(DENY_QUESTION).toBe("Tell Claude no? It carries on without it.");
+    expect(buttonsOf(html)).toEqual(["Yes, deny", "Keep waiting"]);
   });
 
   it("offers Resume on a run stopped at its limit, only when the person can act on it, and says it stopped at its limit", () => {
@@ -605,6 +613,20 @@ describe("controls inside a card", () => {
     for (const b of bs) expect(click(b)).toHaveBeenCalledOnce();
     expect(failure.on.act).toHaveBeenCalledOnce();
     expect(failure.on.retry).toHaveBeenCalledOnce();
+  });
+});
+
+describe("a disabled Retry says why in view", () => {
+  it("shows the reason as text linked to the button, not only a title, and nothing once Retry is ready", () => {
+    const waiting = renderToStaticMarkup(<FailureNext run={failed("untrustedFolder")} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    const id = /aria-describedby="([^"]+)"/.exec(waiting)?.[1];
+    expect(id).toBeTruthy();
+    expect(waiting).toContain(`id="${id}"`);
+    expect(waiting).toContain("Do the step above first, then retry</span>");
+    expect(waiting).not.toContain("title=");
+    const ready = renderToStaticMarkup(<FailureNext run={failed("untrustedFolder")} failure={{ opened: true, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    expect(ready).not.toContain("Do the step above first");
+    expect(ready).not.toContain("aria-describedby");
   });
 });
 

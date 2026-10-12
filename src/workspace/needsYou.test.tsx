@@ -162,6 +162,16 @@ describe("the Needs you list", () => {
     expect(html).toContain('aria-expanded="true"');
     expect([...html.matchAll(/data-needs-you-need="([^"]+)"/g)].map((m) => m[1])).toEqual(["run:r-perm", "run:r-q", "run:r-fail", "draft:c1", "draft:c2", "draft:c3"]);
     expect(html).toContain("Show less");
+    // A long title wraps to two lines, whole in its tooltip, so stuck runs that differ at the end still read apart.
+    const titles = [...html.matchAll(/<span data-needs-you-need-title([^>]*)>/g)].map((m) => m[1]);
+    expect(titles).toHaveLength(6);
+    for (const t of titles) expect(t).toContain("line-clamp-2");
+    expect(titles.join(" ")).not.toContain("truncate");
+  });
+
+  it("keeps the NEEDS YOU header in view while the list scrolls", () => {
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html).toMatch(/<h3 data-needs-you-title[^>]*class="sticky top-0 /);
   });
 
   it("offers 'Approve N safe drafts' under an expanded group with two or more, with none for a lone draft", () => {

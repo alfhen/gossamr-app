@@ -13,6 +13,7 @@ import { failureHelp } from "./failureHelp";
 import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
 import { GroupChip } from "./NeedsYou";
 import { groupId, openInWorkstream, takePaneIntent } from "./needsActions";
+import { openInWorkstreamLabel } from "../lib/needs";
 import { PermissionAsk, StopRunConfirm } from "./PermissionAsk";
 import { usePipHome } from "./pipHomeStore";
 import { RunAnswer } from "./RunAnswer";
@@ -390,7 +391,7 @@ function NeedDecision({ need }: { need: Need }) {
             onClick={(ev) => (ev.preventDefault(), openInWorkstream(need))}
             className="rounded font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
           >
-            Open in workstream
+            {openInWorkstreamLabel(need)}
           </a>
           <button
             type="button"

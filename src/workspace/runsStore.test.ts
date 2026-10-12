@@ -522,6 +522,18 @@ describe("the run sheet", () => {
       expect(s().permissionAnswered[run.id]).toEqual({ kind: "denied", command: "git push origin HEAD", at: after.lastProgressAt, copied: false });
     });
 
+    it("says in a toast, with no Undo, that a deny went through, because it reached the agent", async () => {
+      await settle();
+      const run = s().runs.find((r) => r.state === "needsPermission")!;
+      useToasts.getState().clear();
+      await s().denyPermission(run.id, "git push origin HEAD");
+      const [toast, ...rest] = useToasts.getState().toasts;
+      expect(rest).toEqual([]);
+      expect(toast.tone).toBe("info");
+      expect(toast.text).toMatch(/^Denied\. .+ carries on without it\.$/);
+      expect(toast.action).toBeUndefined();
+    });
+
     it("copies the command after Allow once opens Terminal, and says so only when the clipboard took it", async () => {
       await settle();
       const run = s().runs.find((r) => r.state === "needsPermission")!;
@@ -546,5 +558,17 @@ describe("the run sheet", () => {
       expect(useToasts.getState().toasts[0].text).toMatch(/asking permission: answer it with Allow once or Deny/);
       expect(s().runs.find((r) => r.id === run.id)?.state).toBe("needsPermission");
     });
+  });
+});
+
+describe("adopting a session", () => {
+  it("says so on success, and only the error on failure", async () => {
+    vi.spyOn(backend, "runsAdoptSession").mockResolvedValueOnce(undefined as never);
+    await s().adoptSession("r1", "abcdef1234567890");
+    expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toEqual([["Adopted session abcdef12. Gossamr follows that session from here.", "info"]]);
+    useToasts.getState().clear();
+    vi.spyOn(backend, "runsAdoptSession").mockRejectedValueOnce(new Error("nope"));
+    await s().adoptSession("r1", "abcdef1234567890");
+    expect(useToasts.getState().toasts.map((t) => t.tone)).toEqual(["error"]);
   });
 });

@@ -26,6 +26,8 @@ export interface PipHomeKeyState {
   asking?: boolean;
   /** A decision is open in the middle column. */
   pane?: boolean;
+  /** Focus is inside that open decision (on its button, not in its answer box): a, e, d and s act on the need it shows. */
+  inPane?: boolean;
 }
 
 /** What a key on Pip home does: go to a column, focus the item at `index` in this one, or act on the item with focus. */
@@ -38,7 +40,7 @@ export type PipHomeKeyAction =
   | { type: "decide" }
   /** ← on a Needs you row: folds its group. */
   | { type: "collapse" }
-  /** a (approve or allow), d (dismiss or deny), s (skip) or e (edit) on a Needs you row */
+  /** a (approve or allow), d (dismiss or deny), s (skip) or e (edit) on a Needs you row, or inside its open decision */
   | { type: "act"; act: "approve" | "dismiss" | "skip" | "edit" }
   /** Enter on a row that asked for it, or any other key. */
   | { type: "confirm" }
@@ -93,7 +95,24 @@ export function pipHomeKey(ev: PipHomeKeyEvent, state: PipHomeKeyState): PipHome
   const by = columnStep(ev);
   if (by) return state.overlay || (isTypingTarget(ev.target) && (ev.target as { id?: unknown }).id !== PIP_INPUT_ID) ? null : { type: "column", to: step(state.column, by, state.steps ?? true) };
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return null;
-  if (state.overlay || isTypingTarget(ev.target) || state.column === "conversation") return null;
+  if (state.overlay || isTypingTarget(ev.target)) return null;
+  // Inside the open decision the same keys act on the need it shows; the pane is in the conversation column, so this comes first.
+  if (state.inPane && state.pane) {
+    switch (keyIntent(ev)) {
+      case "approve":
+        return { type: "act", act: "approve" };
+      case "dismiss":
+        return { type: "act", act: "dismiss" };
+      case "skip":
+        return { type: "act", act: "skip" };
+      case "edit":
+        return { type: "act", act: "edit" };
+      case "back":
+        return { type: "closePane" };
+    }
+    return null;
+  }
+  if (state.column === "conversation") return null;
   const need = state.kind === "group" || state.kind === "need";
   // A key that asked for Enter: Enter does it, anything else only cancels it, as on a draft's card.
   if (need && state.asking) return ev.key === "Enter" ? { type: "confirm" } : { type: "cancel" };

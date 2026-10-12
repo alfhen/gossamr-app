@@ -354,7 +354,7 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     // The decision's own link opens the run, with its sheet over Pip home.
     await expandNeedsYou(page);
     await needRow(page, /CA-409.*asks a question/).click();
-    await needsPane(page).getByRole("link", { name: "Open in workstream" }).click();
+    await needsPane(page).getByRole("link", { name: "Open the run" }).click();
     await expect(runSheet(page)).toBeVisible();
     await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "needsAnswer");
     const place = (await sheetHint(page).textContent())?.match(/(\d+) of (\d+)$/)?.slice(1);
@@ -402,7 +402,7 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     // The sheet is where a failed run's command is shown to copy; the decision's link opens it.
     await expandNeedsYou(page);
     await needRow(page, /SUP-9.*needs its folder trusted/).click();
-    await needsPane(page).getByRole("link", { name: "Open in workstream" }).click();
+    await needsPane(page).getByRole("link", { name: "Open the run" }).click();
     const retry = runSheet(page).getByRole("button", { name: "Retry", exact: true });
     await expect(retry).toBeDisabled();
     // Select the command's text and copy it with the keyboard; the Copy button is never pressed.

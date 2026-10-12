@@ -1,4 +1,4 @@
-import type { Need, NeedActionId, NeedGroup } from "../lib/needs";
+import { openInWorkstreamLabel, type Need, type NeedActionId, type NeedGroup } from "../lib/needs";
 import type { Proposal, Run, WorkstreamView } from "../types";
 import { draftKeyAction } from "./draftKeys";
 import type { Command } from "./commands";
@@ -89,8 +89,9 @@ export function contextCommands(subject: Subject | null, data: ContextData, deps
     const view = need.workstreamId ? data.workstreams.find((v) => v.workstream.id === need.workstreamId) : undefined;
     return [
       ...own,
-      entry(`need:${need.key}:workstream`, "Open in workstream", () => deps.openInWorkstream(need), { icon: "→", keywords: "open workstream show where it lives" }),
-      ...(view ? workstreamEntries(view, deps, view.workstream.itemKey ?? view.workstream.title).filter((c) => !(need.kind === "hold" && c.id.startsWith("context:resume:"))) : []),
+      entry(`need:${need.key}:workstream`, openInWorkstreamLabel(need), () => deps.openInWorkstream(need), { icon: "→", keywords: "open workstream show where it lives" }),
+      // "Open in workstream" above is already the way there; a second "Open the workstream on KEY" would be the same thing.
+      ...(view ? workstreamEntries(view, deps, view.workstream.itemKey ?? view.workstream.title).filter((c) => !c.id.startsWith("context:open:") && !(need.kind === "hold" && c.id.startsWith("context:resume:"))) : []),
     ];
   }
   if (subject.type === "draft") {

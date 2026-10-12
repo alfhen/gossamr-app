@@ -115,16 +115,25 @@ export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: 
   const step = (kind: NextStepKind, text: string, need: Need | null = null): NextStep => ({ kind, text: `Next: ${text}`, need });
   const mine = runs.filter((r) => view.runs.includes(r.id)).sort(byQueue);
   const going = mine.filter(inProgress);
-  const working = going.filter((r) => r.state === "working" || r.state === "launching");
 
   const held = shortHeld(ws.heldReason, ws.drifted) ?? (ws.heldReason ? "Held" : null);
   if (held) return step("held", `${lower(held)}. Resume to continue.`);
 
   const own = needs.filter((n) => n.workstreamId === ws.id && n.kind !== "hold").sort(byRank);
-  // A draft to approve doesn't stop a run that works; anything that decides or unblocks does.
-  const blocking = own.find((n) => n.group !== "approve" || working.length === 0);
+  // Anything that decides or unblocks stops the line at once. A draft to approve does not: a step in hand or about to
+  // start (queued, or one a rule is about to start) comes first, and the draft is what the person waits on only once
+  // nothing is going to happen on its own.
+  const blocking = own.find((n) => n.group !== "approve");
   if (blocking) return step("waiting", `waiting on you. ${blocking.why}`, blocking);
+  const approve = own[0];
+  const line = chain(view, runs, proposals, globals, mine, going, step);
+  if (approve && line.kind !== "slot" && line.kind !== "auto" && line.kind !== "depends") return step("waiting", `waiting on you. ${approve.why}`, approve);
+  return line;
+}
 
+/** The line once nothing is waiting on the person: a slot, the chain finished, Advise, the budget, then what the rules start. */
+function chain(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[], globals: Partial<AutoStartSwitches>, mine: readonly Run[], going: readonly Run[], step: Step): NextStep {
+  const ws = view.workstream;
   const queue = slotQueue(runs, [view]);
   const waiter = going.find((r) => r.state === "queued" && r.slotWaitSince);
   if (waiter) {

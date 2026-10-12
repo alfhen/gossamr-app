@@ -333,6 +333,13 @@ const show = (el: HTMLElement | null | undefined) => {
   return true;
 };
 
+/** Puts focus on the Needs you row of `need` (its group's while that is folded): where a decision's keys return to. */
+function backToRow(need: Need) {
+  const list = '[data-pip-home-column="list"]';
+  const row = document.querySelector<HTMLElement>(`${list} [data-need-key="${CSS.escape(need.key)}"]`) ?? document.querySelector<HTMLElement>(`${list} [data-needs-you-group="${CSS.escape(groupId(need.workstreamId))}"]`);
+  row?.focus();
+}
+
 /**
  * Pip home's keyboard, as `pipHomeKey` decides: F6 or Cmd/Ctrl+] and [ move between the columns, wrapping; in the list
  * and the rail j and k (or the arrows) step and Enter or Space opens or toggles. It listens after everything nearer the
@@ -383,8 +390,10 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
       const home = usePipHome.getState();
       const el = list[at];
       const needKey = el?.getAttribute("data-need-key") ?? null;
-      const need = needKey ? needsRef.current.find((n) => n.key === needKey) : undefined;
-      const action = pipHomeKey(ev, { column, overlay: overlayOpen(), count: list.length, at, kind: itemKind(el), steps, asking: !!home.asking && home.asking.key === needKey, pane: home.deciding !== null });
+      // Focus inside the open decision: its keys act on the need it shows, not on a row.
+      const inPane = document.activeElement instanceof HTMLElement && document.activeElement.closest("[data-needs-pane]") !== null;
+      const need = needKey ? needsRef.current.find((n) => n.key === needKey) : inPane && home.deciding ? needsRef.current.find((n) => n.key === home.deciding) : undefined;
+      const action = pipHomeKey(ev, { column, overlay: overlayOpen(), count: list.length, at, kind: itemKind(el), steps, asking: !!home.asking && home.asking.key === needKey, pane: home.deciding !== null, inPane });
       if (!action) return;
       ev.preventDefault();
       switch (action.type) {
@@ -402,7 +411,8 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
         case "act": {
           const plan = need ? keyPlan(need, action.act) : null;
           if (!need || !plan) return;
-          if (plan.type === "ask") return setPaneIntent(null), arm(need, plan);
+          // From inside the decision the row is where Enter confirms, so the keyboard goes back to it first.
+          if (plan.type === "ask") return setPaneIntent(null), inPane && backToRow(need), arm(need, plan);
           // Skipping or dismissing acts at once and offers Undo; the row keeps the keyboard, or hands it on as it leaves.
           if (plan.type === "do") return setPaneIntent(null), plan.run();
           return openNeed(need, { edit: plan.edit });
@@ -411,8 +421,11 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           return confirmArmed();
         case "cancel":
           return disarm();
-        case "closePane":
-          return home.closeDecision();
+        case "closePane": {
+          const back = inPane ? need : undefined;
+          home.closeDecision();
+          return void (back && backToRow(back));
+        }
         case "column":
           return enter(action.to);
         case "focus":

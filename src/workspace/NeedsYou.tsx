@@ -153,7 +153,7 @@ function NeedRow({ need, gid, now, onPick, showTicket }: { need: Need; gid: stri
           </span>
         )}
         <span className="flex min-w-0 items-center gap-1.5">
-          <span data-needs-you-need-title className="min-w-0 flex-1 truncate text-ws-ink">
+          <span data-needs-you-need-title title={need.title} className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] text-ws-ink">
             {need.title}
           </span>
           <GroupChip group={need.group} />
@@ -251,8 +251,8 @@ export interface NeedsYouListProps {
 export function NeedsYouList({ needs, compact = false, onPick, now = Date.now() }: NeedsYouListProps) {
   const groups = useMemo(() => needGroups(needs), [needs]);
   return (
-    <section aria-label="Needs you" data-needs-you className={`grid min-h-0 gap-1 ${compact ? "p-2" : "border-t border-ws-sep pt-2"}`}>
-      <h3 data-needs-you-title tabIndex={-1} className="m-0 flex items-center gap-1.5 px-1 outline-none text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+    <section aria-label="Needs you" data-needs-you className={`grid min-h-0 gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
+      <h3 data-needs-you-title tabIndex={-1} className="sticky top-0 z-10 m-0 flex items-center gap-1.5 bg-ws-win px-1 outline-none text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
         Needs you
         <span data-needs-you-count aria-label={needsYouText(needs.length)} className={`rounded-full px-1.5 text-[10px] ${needs.length ? "bg-ws-pip text-ws-on-pip" : "bg-ws-hover text-ws-ink3"}`}>
           {needs.length}
@@ -263,7 +263,7 @@ export function NeedsYouList({ needs, compact = false, onPick, now = Date.now() 
           Nothing needs you.
         </p>
       ) : (
-        <ul className={`m-0 grid list-none gap-1 overflow-y-auto p-0 ${compact ? "max-h-[min(360px,55vh)]" : "max-h-[34vh]"}`}>
+        <ul className="m-0 grid list-none gap-1 p-0">
           {groups.map((g) => (
             <GroupRow key={groupId(g.workstreamId)} group={g} now={now} onPick={onPick} />
           ))}

@@ -77,6 +77,13 @@ export interface Need {
   batchable: boolean;
 }
 
+/**
+ * What the pane's link and the palette call `openInWorkstream`, named for where it goes: a need in General has no workstream to
+ * open, so a run's need opens the run and any other shows the General timeline.
+ */
+export const openInWorkstreamLabel = (need: Pick<Need, "workstreamId" | "target">) =>
+  need.workstreamId ? "Open in workstream" : need.target.type === "run" ? "Open the run" : "Show in General timeline";
+
 export interface NeedsInput {
   /** The open workstreams; a closed one's waits go to General. */
   workstreams: readonly WorkstreamView[];

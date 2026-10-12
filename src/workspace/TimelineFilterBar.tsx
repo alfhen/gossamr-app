@@ -6,6 +6,9 @@ import { useTabs } from "./tabsStore";
 const SEGMENT = "inline-flex gap-0.5 rounded-[7px] border border-ws-sep2 p-0.5";
 const segment = (on: boolean) => `rounded-[5px] px-2 py-px text-sm focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ws-pip ${on ? "bg-ws-sel font-semibold text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"}`;
 
+/** What the Drafts and Decisions counts are: history, not the live Needs-you count. */
+const countTitle = (n: number | undefined) => (n === undefined ? undefined : `${n} in this timeline, decided or waiting. What needs you now is in Needs you.`);
+
 /**
  * The timeline's filters: All, Runs, Drafts, Decisions. The same bar heads a workstream's timeline on Pip home, the Pip
  * pane's and the Agents screen, which is the Runs filter across every workstream. `counts` adds how many each shows;
@@ -17,7 +20,7 @@ export function TimelineFilterBar({ value, onChange, counts, after, label = "Tim
     <div data-timeline-filter={value} className="flex flex-wrap items-center gap-2">
       <div role="group" aria-label={label} className={SEGMENT}>
         {TIMELINE_FILTERS.map((f) => (
-          <button key={f} type="button" aria-pressed={value === f} data-filter={f} onClick={() => onChange(f)} className={segment(value === f)}>
+          <button key={f} type="button" aria-pressed={value === f} data-filter={f} title={f === "drafts" || f === "decisions" ? countTitle(counts?.[f]) : undefined} onClick={() => onChange(f)} className={segment(value === f)}>
             {FILTER_LABEL[f]}
             {counts?.[f] !== undefined && (
               <>

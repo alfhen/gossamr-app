@@ -11,6 +11,15 @@ function setup(valid = UNDO_VALID_MS) {
 }
 
 describe("the undo state machine", () => {
+  it("settles an offer once, however many times it is asked to undo", async () => {
+    const settled = vi.fn();
+    const log = new UndoLog(() => 1_000, () => {}, UNDO_VALID_MS, settled);
+    const id = log.offer({ text: "Skipped the draft.", undo: async () => {} });
+    expect(await log.run(id)).toBe("undone");
+    expect(await log.run(id)).toBe("spent");
+    expect(settled.mock.calls).toEqual([[id]]);
+  });
+
   it("offers, undoes once, and says so", async () => {
     const { log, told } = setup();
     const undo = vi.fn(async () => {});
@@ -124,6 +133,22 @@ describe("the Undo toast", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(undo).toHaveBeenCalledTimes(1);
     expect(useToasts.getState().toasts.map((t) => t.text)).toContain("CA-401 is free again.");
+  });
+
+  it("takes the toast down when the offer is undone from the palette's path, and when it failed", async () => {
+    const id = offerUndo({ text: "Held CA-401.", undone: "CA-401 is free again.", undo: async () => {} });
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Held CA-401."]);
+    expect(await undoLog.run(id)).toBe("undone");
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["CA-401 is free again."]);
+    const bad = offerUndo({ text: "Skipped it.", undo: async () => false });
+    expect(await undoLog.run(bad)).toBe("failed");
+    expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain("Skipped it.");
+  });
+
+  it("push returns the toast's id", () => {
+    const id = useToasts.getState().push("Hello", "info");
+    expect(useToasts.getState().toasts[0].id).toBe(id);
+    expect(useToasts.getState().push("Hello", "info")).toBeNull();
   });
 
   it("comes to the front over a note, is never dropped for waiting, and waits behind an error", () => {

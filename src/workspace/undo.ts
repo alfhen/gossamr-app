@@ -44,6 +44,8 @@ export class UndoLog {
     private readonly now: () => number = Date.now,
     private readonly tell: (text: string, tone: "info" | "error") => void = () => {},
     private readonly valid: number = UNDO_VALID_MS,
+    /** Called once when offer `id` is no longer on offer (being undone, or too late), so what showed it can go. */
+    private readonly settled: (id: number) => void = () => {},
   ) {}
 
   /** Records an offer, newest last; returns its id. */
@@ -77,11 +79,13 @@ export class UndoLog {
     const entry = this.entries.find((x) => x.id === id);
     if (!entry || !state) return "spent";
     if (state === "expired") {
+      this.settled(id);
       this.tell("Too late to undo that.", "info");
       return "expired";
     }
     if (state !== "offered") return "spent";
     entry.state = "undoing";
+    this.settled(id);
     try {
       const done = await entry.offer.undo();
       if (done === false) throw new Error("it has changed since");
@@ -101,7 +105,20 @@ export class UndoLog {
   }
 }
 
-export const undoLog = new UndoLog(Date.now, (text, tone) => useToasts.getState().push(text, tone));
+/** The toast offering each undo, so running the undo from the palette takes the toast down too. */
+const toastOf = new Map<number, number>();
+
+export const undoLog = new UndoLog(
+  Date.now,
+  (text, tone) => void useToasts.getState().push(text, tone),
+  UNDO_VALID_MS,
+  (id) => {
+    const toast = toastOf.get(id);
+    if (toast === undefined) return;
+    toastOf.delete(id);
+    useToasts.getState().dismiss(toast);
+  },
+);
 
 /**
  * Tells the person what they just did, with an Undo button for about 8 seconds. The offer outlives the toast (`UNDO_VALID_MS`)
@@ -109,6 +126,7 @@ export const undoLog = new UndoLog(Date.now, (text, tone) => useToasts.getState(
  */
 export function offerUndo(offer: UndoOffer): number {
   const id = undoLog.offer(offer);
-  useToasts.getState().push(offer.text, "info", { label: "Undo", run: () => void undoLog.run(id) }, { lifetime: UNDO_LIFETIME_MS, keep: true });
+  const toast = useToasts.getState().push(offer.text, "info", { label: "Undo", run: () => void undoLog.run(id) }, { lifetime: UNDO_LIFETIME_MS, keep: true });
+  if (toast !== null) toastOf.set(id, toast);
   return id;
 }

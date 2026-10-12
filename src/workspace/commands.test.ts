@@ -10,7 +10,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "showTimeline"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "showTimeline"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -343,6 +343,17 @@ describe("Pip home in the palette", () => {
     expect(rankCommands(on, "pip home")[0].id).toBe("app:pip-home");
     home.run();
     expect(a.openPipHome).toHaveBeenCalled();
+  });
+
+  it("offers 'Open Agents' first for 'agents', ahead of Stop all, and not while on Agents", () => {
+    const a = actions();
+    const on = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, agents: true });
+    expect(rankCommands(on, "agents")[0].id).toBe("app:agents");
+    expect(on.some((c) => c.id === "app:agents")).toBe(true);
+    rankCommands(on, "agents")[0].run();
+    expect(a.openAgents).toHaveBeenCalled();
+    expect(buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, agents: true, onAgents: true }).some((c) => c.id === "app:agents")).toBe(false);
+    expect(buildCommands(containers, BUILT_IN_VIEWS, a, ctx).some((c) => c.id === "app:agents")).toBe(false);
   });
 
   it("opens an open workstream by its ticket's key, never a closed one", () => {

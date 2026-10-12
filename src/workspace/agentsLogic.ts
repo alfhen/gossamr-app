@@ -51,7 +51,8 @@ export function laneOf(run: Run, now: number): LaneId {
     case "unknown":
       return "bad";
     case "stopped":
-      return stoppedAtLimit(run) ? "bad" : "earlier";
+      // A stopped run that may be continued is an unblock need in Needs you, so it is not folded away with the earlier ones.
+      return stoppedAtLimit(run) || run.possibleContinuations?.length ? "bad" : "earlier";
   }
 }
 

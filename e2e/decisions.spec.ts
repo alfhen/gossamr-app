@@ -183,6 +183,7 @@ test("Deny on a read-only run, which is never offered Allow: Claude carries on w
   await expect(asking(page).getByRole("button")).toHaveText(["Copy", "Deny", "Stop the run (abandons it)"]);
 
   await asking(page).getByRole("button", { name: "Deny" }).click();
+  await asking(page).getByRole("group", { name: "Deny this request" }).getByRole("button", { name: "Yes, deny" }).click();
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === run.id)?.state).toBe("working");
   expect(await audited(page, "permission_denied")).toEqual([{ actor: "person", runId: run.id, detail: "rm -rf node_modules" }]);
   // Dealt with, it leaves Needs you, and the pane has moved on from it.

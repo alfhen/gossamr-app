@@ -104,6 +104,29 @@ describe("pipHomeKey: stepping and opening", () => {
     expect(pipHomeKey(key(" "), at({ column: "rail", kind: "chip" }))).toEqual({ type: "toggle" });
   });
 
+  describe("inside the open decision", () => {
+    const inPane = (over: Partial<PipHomeKeyState> = {}) => at({ column: "conversation", kind: null, at: -1, pane: true, inPane: true, ...over });
+    it("a, e, d and s act and Esc goes back, though the column is the conversation", () => {
+      expect(pipHomeKey(key("s"), inPane())).toEqual({ type: "act", act: "skip" });
+      expect(pipHomeKey(key("a"), inPane())).toEqual({ type: "act", act: "approve" });
+      expect(pipHomeKey(key("e"), inPane())).toEqual({ type: "act", act: "edit" });
+      expect(pipHomeKey(key("d"), inPane())).toEqual({ type: "act", act: "dismiss" });
+      expect(pipHomeKey(key("Escape"), inPane())).toEqual({ type: "closePane" });
+    });
+
+    it("leaves Enter, Space, j and other keys to the focused button", () => {
+      for (const k of ["Enter", " ", "j", "k", "x"]) expect(pipHomeKey(key(k), inPane())).toBeNull();
+    });
+
+    it("ignores keys typed in the answer box, and with the pane not open or a modifier held", () => {
+      for (const k of ["s", "a", "e", "d"]) expect(pipHomeKey(key(k, { target: el("TEXTAREA") }), inPane())).toBeNull();
+      expect(pipHomeKey(key("s"), inPane({ pane: false }))).toBeNull();
+      expect(pipHomeKey(key("s"), inPane({ inPane: false }))).toBeNull();
+      expect(pipHomeKey(key("s", { metaKey: true }), inPane())).toBeNull();
+      expect(pipHomeKey(key("s"), inPane({ overlay: true }))).toBeNull();
+    });
+  });
+
   describe("on the Needs you list", () => {
     for (const kind of ["group", "need"] as const) {
       it(`${kind}: Enter, o, Space and → open the decision, ← folds, and a, e, d and s act on it`, () => {
