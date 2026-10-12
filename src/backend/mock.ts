@@ -920,14 +920,18 @@ export class MockBackend implements Backend {
     return this.proposals.approve(id);
   }
 
-  proposalsPostReview(id: string, revisions: number, postAnyway = false) {
-    return this.proposals.postReview(
+  async proposalsPostReview(id: string, revisions: number, postAnyway = false) {
+    // Read before the post, while the draft is still pending: posting the review an escalation offered resolves it.
+    const offered = this.workstreams.escalationOffering(id);
+    const posted = await this.proposals.postReview(
       id,
       revisions,
       async (p) => this.github.postReview(p.id, p.intent),
       async (p, sent) => this.github.postedReview(p.intent.repo, p.intent.number, sent.commitSha, sent.summary),
       postAnyway,
     );
+    if (offered && posted.state.type === "applied") this.workstreams.escalationPosted(offered.workstream, offered.reviewRun, id);
+    return posted;
   }
 
   /** Someone force-pushes pull request `number` of `repo`: its head is a new commit whose diff lacks the lines it showed, and the old one is gone from it, as `MockCode.movePullHead`. */

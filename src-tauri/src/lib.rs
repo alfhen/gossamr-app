@@ -495,6 +495,8 @@ async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: S
     let result = core.post_review_draft(&id, revisions, post_anyway.unwrap_or(false)).await;
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
+        // A review posted as it is resolves its escalation, and the card leaves Needs you.
+        workstreams_changed(&app, &connection);
     }
     publish(&app, &core).await;
     result
