@@ -7,8 +7,10 @@ import { workstreamConversation } from "../lib/conversations";
 import { TURN_HELP, budgetView, heldText } from "../lib/workstreamHold";
 import { AUTOSTART_DEFAULTS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import type { Run } from "../types";
 import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandActions } from "./commands";
 import { useToasts } from "./toasts";
+import { NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
 import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 import { EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, escalationActions, escalationShown, fixRoundSent } from "./EscalationCard";
@@ -33,6 +35,58 @@ const viewOf = (over: Partial<WorkstreamView["workstream"]> = {}): WorkstreamVie
 const noop = (): ControlActions => ({ onManage: vi.fn(), onHold: vi.fn(), onResume: vi.fn(), onStop: vi.fn(), onRule: vi.fn() });
 const render = (view: WorkstreamView, confirmingStop = false) =>
   renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={confirmingStop} onConfirmStop={vi.fn()} />);
+
+describe("the next-step line", () => {
+  it("shows the sentence with data-next-step, and leaves the line out when nothing is given", () => {
+    const view = viewOf({ mode: "manage" });
+    const withLine = renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={false} onConfirmStop={vi.fn()} next={{ kind: "auto", text: "Next: when R5 (Build) finishes, a review starts automatically.", need: null }} />);
+    expect(withLine).toContain('data-next-step="auto"');
+    expect(withLine).toContain("Next: when R5 (Build) finishes, a review starts automatically.");
+    expect(withLine).not.toContain("data-next-step-need");
+    expect(render(view)).not.toContain("data-next-step");
+  });
+
+  it("is a link to the need while it waits on the person", () => {
+    const need = { key: "run:r1" } as never;
+    const html = renderToStaticMarkup(<NextStepLine next={{ kind: "waiting", text: "Next: waiting on you. R5 wants to run a command.", need }} />);
+    expect(html).toContain('data-next-step="waiting"');
+    expect(html).toMatch(/<button[^>]*data-next-step-need="run:r1"[^>]*>Next: waiting on you\. R5 wants to run a command\.<\/button>/);
+  });
+});
+
+describe("the next-step line before Settings' switches are read", () => {
+  const building = (): { view: WorkstreamView; runs: Run[] } => {
+    const base = new MockBackend().runs.list()[0];
+    const run = { ...base, id: "b1", state: "working", spec: { ...base.spec, kind: "build", workstream: sample.id, allowPush: true }, failure: null, needs: null, slotWaitSince: null, endedAt: null } as Run;
+    return { view: { ...viewOf({ mode: "manage" }), runs: [run.id], labels: [[run.id, "R1"]] }, runs: [run] };
+  };
+
+  it("stays hidden while globals are null, then shows once they load", async () => {
+    const { view, runs } = building();
+    expect(nextStepOnceKnown(view, runs, [], [], null)).toBeNull();
+    const loaded = nextStepOnceKnown(view, runs, [], [], AUTOSTART_DEFAULTS);
+    expect(loaded).toMatchObject({ kind: "auto", text: "Next: when R1 (Build) finishes, a review starts automatically." });
+  });
+
+  it("respects a rule the person's saved settings switched off", () => {
+    const { view, runs } = building();
+    const off = nextStepOnceKnown(view, runs, [], [], { ...AUTOSTART_DEFAULTS, buildReview: false });
+    expect(off?.kind).not.toBe("auto");
+    expect(off?.text).not.toContain("a review starts automatically");
+  });
+
+  it("reads the saved switches when the store starts", async () => {
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    await backend.runsSetSettings({ ...(await backend.runsSettings()), autostart: { ...AUTOSTART_DEFAULTS, buildReview: false } });
+    useWorkstreams.getState().init(backend);
+    expect(useWorkstreams.getState().globals).toBeNull();
+    await vi.waitFor(() => expect(useWorkstreams.getState().globals).toEqual({ ...AUTOSTART_DEFAULTS, buildReview: false }));
+    useWorkstreams.getState().init(backend);
+    await vi.waitFor(() => expect(useWorkstreams.getState().globals).not.toBeNull());
+    useWorkstreams.getState().dispose();
+    expect(useWorkstreams.getState().globals).toBeNull();
+  });
+});
 
 describe("the workstream's controls", () => {
   it("shows the Manage switch as the workstream's mode", () => {
@@ -279,7 +333,9 @@ describe("the controls call the person's own commands", () => {
   });
 
   it("reads what Settings has when the steps are opened", async () => {
-    expect(useWorkstreams.getState().globals).toBeNull();
+    // The store reads them at init; clear them to see the popover read them again.
+    await vi.waitFor(() => expect(useWorkstreams.getState().globals).toEqual(AUTOSTART_DEFAULTS));
+    useWorkstreams.setState({ globals: null });
     controlActions(id).onSteps?.();
     await vi.waitFor(() => expect(useWorkstreams.getState().globals).toEqual(AUTOSTART_DEFAULTS));
   });
