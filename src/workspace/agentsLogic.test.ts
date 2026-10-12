@@ -8,6 +8,7 @@ import {
   NO_FILTERS,
   QUIET_MINUTES,
   applyFilters,
+  agentsWaitingOnYou,
   attentionCount,
   filterOptions,
   formatTokens,
@@ -126,6 +127,21 @@ describe("the badge", () => {
     const runs = [run("needsAnswer", { id: "a" }), run("needsPermission", { id: "b" }), run("systemBlocked", { id: "c" }), run("failed", { id: "d" })];
     expect(attentionCount(runs, seen)).toBe(4);
     expect(attentionCount(runs, new Set(["d"]))).toBe(3);
+  });
+
+  it("counts a run stopped at its limit, which only the person resumes, and nothing else that stopped", () => {
+    const limit = run("stopped", { id: "l", stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" });
+    expect(laneOf(limit, NOW)).toBe("needs");
+    expect(laneOf(run("stopped", { id: "s" }), NOW)).toBe("earlier");
+    expect(laneOf(run("stopped", { id: "s", stoppedByLimit: false }), NOW)).toBe("earlier");
+    expect(attentionCount([limit], seen)).toBe(1);
+    expect(attentionCount([limit, run("stopped", { id: "s" })], seen)).toBe(1);
+    expect(agentsWaitingOnYou([limit], seen)).toEqual([limit]);
+    // Looking at it doesn't clear it, as it does for a failed run: it waits until it is resumed.
+    expect(attentionCount([limit], new Set(["l"]))).toBe(1);
+    expect(attentionCount([{ ...limit, state: "working", stoppedByLimit: false }], seen)).toBe(0);
+    const lane = groupRuns([limit, run("failed", { id: "f" })], NO_FILTERS, NOW).find((g) => g.lane === "needs");
+    expect(lane?.runs.map((r) => r.id)).toEqual(["l"]);
   });
 
   it("leaves out working, quiet, queued, done, stopped and unknown runs", () => {

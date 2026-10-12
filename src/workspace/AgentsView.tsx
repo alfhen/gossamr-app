@@ -37,7 +37,7 @@ import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
-import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
+import { RESUME_TEXT, breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, resumable, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { stableGroups } from "./stableOrder";
@@ -129,6 +129,8 @@ export interface AgentsActions {
   attach(id: string): void;
   draftComment(id: string): void;
   buildFromPlan(run: Run): void;
+  /** Resumes a run stopped at its limit, the one way it carries on. */
+  resume(id: string): void;
   /** Shows the comment draft a finished run left on its ticket. */
   openDraft?(run: Run): void;
   openBreakdown?(run: Run): void;
@@ -325,6 +327,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     descriptionReady: !!descriptionReady?.(run),
     onOpenDescription: on.openDescription ? () => on.openDescription?.(run) : undefined,
     onBuildFromPlan: buildFromPlanControl(run).enabled ? () => on.buildFromPlan(run) : undefined,
+    onResume: resumable(run) ? () => on.resume(run.id) : undefined,
     onReviewThis: reviewThis?.(run),
     review: reviewOf?.(run),
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
@@ -423,6 +426,7 @@ const actions: AgentsActions = {
   open: (id) => useRuns.getState().openRun(id),
   attach: (id) => void useRuns.getState().attach(id),
   draftComment: (id) => void useRuns.getState().draftComment(id),
+  resume: (id) => void useRuns.getState().answer(id, RESUME_TEXT),
   buildFromPlan: (run) => void useRunSetup.getState().begin(buildFromPlanOptions(run)),
   openDraft: (run) => {
     if (run.item) return useRuns.getState().showDraft(run.item);
