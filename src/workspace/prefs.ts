@@ -35,6 +35,8 @@ interface Prefs {
   agentsGroup: AgentsGroup;
   /** The person dismissed the explainer on the Agents view. */
   agentsIntroSeen: boolean;
+  /** The person dismissed the orientation card on Pip home. */
+  pipOrientationSeen: boolean;
   /** Open on Pip home rather than the workspace, while Agents are on. On until the person turns it off. */
   startOnPipHome: boolean;
   setUi(ui: UiMode): void;
@@ -50,12 +52,13 @@ interface Prefs {
   setAgentsView(view: AgentsViewMode): void;
   setAgentsGroup(group: AgentsGroup): void;
   setAgentsIntroSeen(seen: boolean): void;
+  setPipOrientationSeen(seen: boolean): void;
   setStartOnPipHome(on: boolean): void;
 }
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen" | "startOnPipHome"> {
+export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen" | "pipOrientationSeen" | "startOnPipHome"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     // Installs from before the workspace was the default stored "classic" without anyone choosing it.
@@ -69,6 +72,7 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
     agentsView: AGENTS_VIEWS.find((v) => v === raw?.agentsView) ?? "cards",
     agentsGroup: AGENTS_GROUPS.find((g) => g === raw?.agentsGroup) ?? "state",
     agentsIntroSeen: raw?.agentsIntroSeen === true,
+    pipOrientationSeen: raw?.pipOrientationSeen === true,
     // Pip home is where everyone with Agents on lands; only a person who turned it off stays on the workspace.
     startOnPipHome: raw?.startOnPipHome !== false,
   };
@@ -94,11 +98,12 @@ export const usePrefs = create<Prefs>((set) => ({
   setAgentsView: (agentsView) => set({ agentsView }),
   setAgentsGroup: (agentsGroup) => set({ agentsGroup }),
   setAgentsIntroSeen: (agentsIntroSeen) => set({ agentsIntroSeen }),
+  setPipOrientationSeen: (pipOrientationSeen) => set({ pipOrientationSeen }),
   setStartOnPipHome: (startOnPipHome) => set({ startOnPipHome }),
 }));
 
-usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, startOnPipHome }) =>
-  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, startOnPipHome }),
+usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, startOnPipHome }) =>
+  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, startOnPipHome }),
 );
 
 /** The browser build has no classic inbox to fall back to, so it always shows the workspace. */

@@ -5,6 +5,9 @@ import process from "node:process";
 const port = Number(process.env.E2E_PORT ?? 4173);
 const url = `http://localhost:${port}`;
 
+/** Every spec starts with Pip home's orientation card dismissed (`pipOrientationSeen`, src/workspace/prefs.ts), so it takes no room in their locators. e2e/orientation.spec.ts starts without it. */
+export const SEEDED_PREFS = { name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true }) };
+
 export default defineConfig({
   testDir: ".",
   // The mock paces its answers on timers; one worker keeps those timings steady.
@@ -19,6 +22,7 @@ export default defineConfig({
     headless: true,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    storageState: { cookies: [], origins: [{ origin: url, localStorage: [SEEDED_PREFS] }] },
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {

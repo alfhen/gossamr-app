@@ -22,6 +22,7 @@ import { StepRail } from "./StepRail";
 import { useNow } from "./AgentsView";
 import { pipHomeHints } from "./footerHints";
 import { ShortcutHint } from "./ShortcutHint";
+import { PipOrientation } from "./PipOrientation";
 
 const PIP_HOME_HINTS = pipHomeHints();
 
@@ -420,6 +421,7 @@ export function PipHome() {
   // The same clock as the Agents view's, so a run gone quiet leaves "running" here when it does there.
   const now = useNow();
   const footer = useMemo(() => composerFooter(runs, needsYou, now), [runs, needsYou, now]);
+  const orientationSeen = usePrefs((s) => s.pipOrientationSeen);
   useTurnEscape();
   useFocusTarget();
   usePipHomeKeys();
@@ -429,6 +431,7 @@ export function PipHome() {
   };
   return (
     <div data-pip-home className="flex h-full min-h-0 flex-col">
+      {!orientationSeen && <PipOrientation />}
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(180px,250px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1100px]:grid-cols-[minmax(200px,260px)_minmax(0,1fr)_minmax(240px,320px)] min-[1100px]:grid-rows-[minmax(0,1fr)]">
         <div data-pip-home-column="list" onFocusCapture={enter("list")} className="contents">
           <WorkstreamList

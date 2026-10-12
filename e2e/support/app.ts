@@ -8,12 +8,18 @@ const PREFS = "gossamr-prefs";
 
 /**
  * Makes this page's profile one whose person turned 'Start on Pip home' off, so a load lands on the workspace with Agents
- * on too. Only a profile with no preferences yet is changed: whatever the app or the test saves afterwards stands, across
- * reloads as well.
+ * on too. Only a profile that hasn't chosen yet is changed, and its other preferences stay (the config seeds the
+ * orientation card dismissed): whatever the app or the test saves afterwards stands, across reloads as well.
  */
 export async function landOnWorkspace(page: Page) {
   await page.addInitScript((key) => {
-    if (localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify({ startOnPipHome: false }));
+    let prefs: Record<string, unknown> = {};
+    try {
+      prefs = JSON.parse(localStorage.getItem(key) ?? "{}") ?? {};
+    } catch {
+      // Unreadable preferences are the app's to reset.
+    }
+    if (prefs.startOnPipHome === undefined) localStorage.setItem(key, JSON.stringify({ ...prefs, startOnPipHome: false }));
   }, PREFS);
 }
 
