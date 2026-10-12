@@ -90,7 +90,7 @@ export interface NeedsYouTrayProps {
 export function NeedsYouTray({ items, compact = false, onPick, now = new Date() }: NeedsYouTrayProps) {
   return (
     <section aria-label="Needs you" data-needs-you className={`grid min-h-0 gap-1 ${compact ? "p-2" : "border-t border-ws-sep pt-2"}`}>
-      <h3 className="m-0 flex items-center gap-1.5 px-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+      <h3 data-needs-you-title tabIndex={-1} className="m-0 flex items-center gap-1.5 px-1 outline-none text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
         Needs you
         <span data-needs-you-count className={`rounded-full px-1.5 text-[10px] ${items.length ? "bg-ws-pip text-ws-on-pip" : "bg-ws-hover text-ws-ink3"}`}>
           {items.length}

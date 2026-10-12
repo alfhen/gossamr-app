@@ -401,11 +401,13 @@ export const useRuns = create<RunsState>((set, get) => ({
   async answer(id, text) {
     const { backend, answering } = get();
     if (!backend || answering.has(id)) return;
+    const before = get().runs.find((r) => r.id === id);
+    const resuming = before?.state === "stopped" && !!before.stoppedByLimit;
     set({ answering: new Set([...answering, id]) });
     try {
       const run = await backend.runsAnswer(id, text);
       set({ answered: { ...get().answered, [id]: run.lastProgressAt } });
-      useToasts.getState().push("Answer sent. Claude is picking it back up.", "info");
+      useToasts.getState().push(resuming ? "Resumed. Claude is picking it back up." : "Answer sent. Claude is picking it back up.", "info");
     } catch (e) {
       useToasts.getState().push(`Couldn't send the answer: ${messageOf(e)}`);
     } finally {
@@ -473,7 +475,8 @@ export const useRuns = create<RunsState>((set, get) => ({
   },
 
   markSeen() {
-    const fresh = get().runs.filter((r) => r.state === "failed" && !get().seenFailed.has(r.id));
+    // A folder to trust needs an action, not just a look: it stays waiting on the person until retried or stopped.
+    const fresh = get().runs.filter((r) => r.state === "failed" && r.failure?.type !== "untrustedFolder" && !get().seenFailed.has(r.id));
     if (!fresh.length) return;
     const seen = new Set([...get().seenFailed, ...fresh.map((r) => r.id)]);
     const kept = new Set([...seen].slice(-SEEN_KEPT));

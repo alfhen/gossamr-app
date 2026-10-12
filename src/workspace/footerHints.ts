@@ -37,7 +37,7 @@ export function pipHomeHints(): FooterHint[] {
     { id: "columns", rank: 0, keys: ["F6", "⌘]"], text: "next column" },
     { id: "move", rank: 0, keys: ["j", "k"], text: "move" },
     { id: "open", rank: 1, keys: ["↵"], text: "open" },
-    { id: "decide", rank: 2, keys: ["a", "s"], text: "approve or skip a draft · a opens a run draft" },
+    { id: "decide", rank: 2, keys: ["a", "s"], text: "then ↵: approve or skip a draft" },
     { id: "start", rank: 2, keys: ["⌘↵"], text: "start" },
     { id: "close", rank: 1, keys: ["Esc"], text: "close, then stop Pip" },
     { id: "jump", rank: 3, keys: ["⌘K"], text: "jump" },

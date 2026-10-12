@@ -77,7 +77,7 @@ async function workingBuild(page: Page) {
   await moveTo(page, (await newest(page, "investigate"))!.id, "done", 3);
   await moveTo(page, (await started(page, "triage")).id, "done", 3);
   await moveTo(page, (await started(page, "plan")).id, "done", 3);
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
   await draft.getByRole("button", { name: "Update description" }).click();
@@ -205,7 +205,7 @@ async function startedAfter(page: Page, kind: string, after: string | null) {
 
 /** The person approves the Gossamr Plan description draft on CA-401 from its peek, as written. */
 async function approvePlan(page: Page) {
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
   await draft.getByRole("button", { name: "Update description" }).click();

@@ -68,7 +68,7 @@ export const runAsYou = (readOnly: ReadOnly | null | undefined) => (readOnly ? C
 
 export const START_STEPS: readonly string[] = [
   "Gossamr makes the worktree and starts claude --bg in it with the prompt above. It is the same Claude Code you use yourself, with your own settings and permissions.",
-  "It works in the background. If your settings would ask you something, it stops and shows up under Needs you. You answer a question in Gossamr and a permission prompt in Terminal.",
+  "It works in the background. If your settings would ask you something, it stops under Needs you. Answer a question in Gossamr; for a permission prompt, Deny it in Gossamr or Allow it once in Terminal.",
   "When it is done it is under Ready to review. Anything for Jira comes back in its answer; nothing is posted without a draft you approve.",
 ];
 

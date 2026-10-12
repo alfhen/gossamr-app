@@ -199,6 +199,16 @@ describe("what starts", () => {
     expect(useRuns.getState().runs.some((r) => r.id === run!.id)).toBe(true);
   });
 
+  it("started from the sheet over a ticket peek, stays on the board (R12)", async () => {
+    useTabs.getState().setRoute("workspace");
+    useTabs.getState().select("CA-401");
+    const run = await s().start();
+    expect(run).toMatchObject({ state: "queued" });
+    expect(useTabs.getState().route).toBe("workspace");
+    expect(useTabs.getState().selected).toBe("CA-401");
+    useTabs.getState().select(null);
+  });
+
   it("started from the sheet over Pip home, stays on Pip home", async () => {
     useTabs.getState().setRoute("pip");
     const run = await s().start();

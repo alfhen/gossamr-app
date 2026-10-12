@@ -142,4 +142,22 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
       expect(stopAllLabel(stoppable(runs).length + slotWaiters(runs).length)).toMatch(/^Stop all \(\d+ stoppable\)$/);
     });
   }
+
+  it("keeps a folder to trust in every count after Agents was opened and marked its failures seen (R5)", () => {
+    const trust = runs.find((r) => r.failure?.type === "untrustedFolder")!;
+    const other = { ...trust, id: "r-other", failure: { type: "other" } } as unknown as typeof trust;
+    const all = [...runs, other];
+    useRuns.setState({ runs: all, seenFailed: new Set() });
+    useRuns.getState().markSeen();
+    const seen = useRuns.getState().seenFailed;
+    expect(seen.has(trust.id)).toBe(false);
+    expect(seen.has(other.id)).toBe(true);
+    const items = needsYouItems({ workstreams: [], runs: all, proposals: [], seenFailed: seen });
+    const waiting = agentsWaitingOnYou(all, seen);
+    expect(waiting).toContain(trust);
+    expect(items.some((i) => i.key === `run:${trust.id}` && i.kind === "permission")).toBe(true);
+    expect(items).toHaveLength(waiting.length);
+    expect(attentionCount(all, seen)).toBe(waiting.length);
+    expect(summaryLine(all, at, seen)).toMatch(new RegExp(`^${waiting.length} waiting on you · `));
+  });
 });

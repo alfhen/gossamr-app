@@ -160,6 +160,10 @@ describe("the step rail", () => {
     expect(stepOf(fresh, "investigate")).toContain("Not started");
     expect(stepOf(fresh, "investigate")).toContain(">Next<");
     expect(stepOf(fresh, "investigate")).not.toContain("data-step-quiet");
+    // The step whose newest run is still going is where things are now, not next (R14).
+    const going = renderToStaticMarkup(<StepRailView {...props({ runs: [run("r1", "investigate", "working", 5)], view: { ...view, runs: ["r1"], labels: [["r1", "R1"]] } })} />);
+    expect(stepOf(going, "investigate")).toContain(">Now<");
+    expect(stepOf(going, "investigate")).not.toContain(">Next<");
     for (const kind of ["triage", "plan", "build", "review", "verify"] as const) {
       expect(stepOf(fresh, kind)).toContain('data-step-quiet="true"');
       expect(stepOf(fresh, kind)).not.toContain("Not started");

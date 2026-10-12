@@ -306,6 +306,20 @@ describe("focusAfterLeaving", () => {
     expect(input.focus).toHaveBeenCalledTimes(1);
   });
 
+  it("prefers a card still pending over a decided one, forward then back (R9)", () => {
+    const cards = [card("pending"), card("done"), card("pending"), card("done")];
+    focusAfterLeaving(cards[0], rootOf(cards), card());
+    expect(cards[2].focus).toHaveBeenCalled();
+    expect(cards[1].focus).not.toHaveBeenCalled();
+    const back = [card("pending"), card("done"), card("done")];
+    focusAfterLeaving(back[2], rootOf(back), card());
+    expect(back[0].focus).toHaveBeenCalled();
+    // None pending: the neighbour as before.
+    const decided = [card("done"), card("done")];
+    focusAfterLeaving(decided[0], rootOf(decided), card());
+    expect(decided[1].focus).toHaveBeenCalled();
+  });
+
   it("picks the next card at once but hands focus over only when `defer` runs it, after React's commit (N1)", () => {
     const cards = [card(), card()];
     let later: (() => void) | null = null;

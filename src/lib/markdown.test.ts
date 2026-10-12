@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cells, parseBlocks, parseInline } from "./markdown";
+import { cells, parseBlocks, parseInline, plainMarkdown } from "./markdown";
 
 describe("parseBlocks", () => {
   it("reads a table right after a paragraph, with code spans and escaped pipes in cells", () => {
@@ -139,5 +139,29 @@ describe("cells", () => {
     expect(cells("| ``a|b`` | `x` |")).toEqual(["``a|b``", "`x`"]);
     expect(cells("| ``oops | value |")).toEqual(["``oops", "value"]);
     expect(cells("| \\`a | \\`b |")).toEqual(["\\`a", "\\`b"]);
+  });
+});
+
+describe("plainMarkdown", () => {
+  it("drops emphasis and code markers and turns list dashes into bullets", () => {
+    expect(plainMarkdown("**Blocking:** the retry loop has no delay.\n- **Should fix:** name the `MAX` constant\n  * __Nit__: a typo")).toBe("Blocking: the retry loop has no delay.\n• Should fix: name the MAX constant\n  • Nit: a typo");
+  });
+
+  it("keeps a literal star or underscore that is not a marker, and everything in a code span", () => {
+    expect(plainMarkdown("Use `a * b * c` and 2 * 3 and snake_case_name.")).toBe("Use a * b * c and 2 * 3 and snake_case_name.");
+  });
+
+  it("shows a link as its label and address, and leaves a fenced block untouched", () => {
+    expect(plainMarkdown("See [the docs](https://x.test/a) or https://y.test.")).toBe("See the docs (https://x.test/a) or https://y.test.");
+    expect(plainMarkdown("```ts\n- **a**\n```\n- **b**")).toBe("```ts\n- **a**\n```\n• b");
+  });
+
+  it("drops heading markers and quote markers, including nested ones", () => {
+    expect(plainMarkdown("## Findings\n> Check this")).toBe("Findings\nCheck this");
+    expect(plainMarkdown("> > - **item**")).toBe("• item");
+  });
+
+  it("leaves a # inside a fenced block as it is", () => {
+    expect(plainMarkdown("```md\n# Title\n> quote\n```\n# After")).toBe("```md\n# Title\n> quote\n```\nAfter");
   });
 });

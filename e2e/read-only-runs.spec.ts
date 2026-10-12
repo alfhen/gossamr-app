@@ -89,7 +89,7 @@ function restricted(entry: MockLaunch, kind: string) {
 
 /** The person approves the Gossamr Plan description draft on CA-401 from its peek, as written. */
 async function approvePlan(page: Page) {
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
   await draft.getByRole("button", { name: "Update description" }).click();

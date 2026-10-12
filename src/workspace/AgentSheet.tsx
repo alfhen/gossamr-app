@@ -45,6 +45,15 @@ export interface FrameProps {
  */
 export const pickerOpen = () => !!document.querySelector('[role=combobox][aria-expanded="true"]');
 
+/**
+ * Where focus goes as a sheet closes, when it is on the sheet or nowhere: the element that opened it, else (the Needs you
+ * row that opened it is gone once its ask is denied) the tray, rather than the page.
+ */
+export function sheetFocusTarget<T extends { isConnected: boolean }>(opener: T | null, lost: boolean, tray: () => T | null): T | null {
+  if (!lost) return null;
+  return opener?.isConnected ? opener : tray();
+}
+
 /** The frame the agent sheets share with the ticket peek: it slides over the screen from the right. */
 export function SheetFrame({ label, title, hint, wide, min = 520, draft = false, onWide, onClose, children, footer, topOn }: FrameProps) {
   const peek = usePaneWidths().peek;
@@ -59,7 +68,8 @@ export function SheetFrame({ label, title, hint, wide, min = 520, draft = false,
   useEffect(() => {
     if (!frame.current?.contains(document.activeElement)) frame.current?.focus({ preventScroll: true });
     return () => {
-      if (opener?.isConnected && (!document.activeElement || document.activeElement === document.body || frame.current?.contains(document.activeElement))) opener.focus({ preventScroll: true });
+      const lost = !document.activeElement || document.activeElement === document.body || !!frame.current?.contains(document.activeElement);
+      sheetFocusTarget(opener, lost, () => document.querySelector<HTMLElement>("[data-needs-you-item], [data-needs-you-title]"))?.focus({ preventScroll: true });
     };
   }, [opener]);
   return (

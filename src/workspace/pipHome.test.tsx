@@ -235,10 +235,12 @@ describe("Pip home's keys with no workstream, and its footer", () => {
     expect(wrapTab(key("F6"), stops, "commands", true)).toBeNull();
   });
 
-  it("says a opens a run draft rather than approving it, as its card does", () => {
+  it("says a and s need Enter to confirm, and lists a once (R6)", () => {
     const decide = pipHomeHints().find((h) => h.id === "decide")!;
     expect(decide.keys).toEqual(["a", "s"]);
-    expect(decide.text).toBe("approve or skip a draft · a opens a run draft");
-    expect(renderToStaticMarkup(<ShortcutHint view="list" hints={pipHomeHints()} />)).toContain("a opens a run draft");
+    expect(decide.text).toBe("then ↵: approve or skip a draft");
+    const html = renderToStaticMarkup(<ShortcutHint view="list" hints={pipHomeHints()} />);
+    expect(html).toContain("then ↵: approve or skip a draft");
+    expect(html).not.toContain("a opens a run draft");
   });
 });

@@ -11,7 +11,7 @@ import { usePullView, type PullDiffState } from "./pullViewStore";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
 import type { ScreenContext } from "../types";
-import { editThenPost, editThenPullView, settlesEdit, followDraft, keptOlderNote, SUMMARY, MARKDOWN_HINT, postedLine, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+import { editThenPost, editThenPullView, settlesEdit, followDraft, keptOlderNote, SUMMARY, MARKDOWN_HINT, postedLine, postedWith, postLabel, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
 
 vi.mock("../components/autoHeight", async (original) => ({ ...(await original<typeof import("../components/autoHeight")>()), useAutoHeight: vi.fn() }));
 
@@ -98,7 +98,7 @@ describe("a GitHub review draft's card", () => {
     expect(html).toMatch(/data-hunk-target=""[^>]*>(?:(?!<\/div>).)*42<\/span><span class="min-w-0 pr-2 whitespace-pre-wrap \[overflow-wrap:anywhere\]">\+ {4}try \{ return await handle\(message\); \} catch \{ continue; \}<\/span>/);
     expect(html).toMatch(/data-hunk-target=""[^>]*>(?:(?!<\/div>).)*17<\/span><span class="min-w-0 pr-2 whitespace-pre-wrap \[overflow-wrap:anywhere\]">\+const MAX = 5;<\/span>/);
     expect(html).toMatch(/<textarea id="review-summary-r1"[^>]*>Gossamr review of #218 at a1b2c3d4: blocking.<\/textarea>/);
-    expect(html).toMatch(/<button[^>]*>Post review<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Post review \(2 comments\)<\/button>/);
     expect(html).toMatch(/<button[^>]*>Discard<\/button>/);
     expect(html).toMatch(/<button[^>]*>Open PR view<\/button>/);
     expect(html).not.toContain("data-review-moved");
@@ -205,7 +205,7 @@ describe("a GitHub review draft's card", () => {
     const unsure = render(draft({ maybePosted: sent }), canPost);
     expect(unsure).toMatch(/data-review-maybe-posted[^>]*>This review may already be on GitHub: Gossamr sent it at a1b2c3d4/);
     expect(unsure).not.toContain("Post anyway");
-    expect(unsure).toMatch(/<button[^>]*>Post review<\/button>/);
+    expect(unsure).toMatch(/<button[^>]*>Post review \(2 comments\)<\/button>/);
     const checked = render(draft({ maybePosted: { ...sent, checkedAt: "2026-10-01T10:02:00Z" }, error: REVIEW_NOT_FOUND_NOTE }), canPost);
     expect(checked).toMatch(/<button[^>]*data-review-post-anyway[^>]*>Post anyway<\/button>/);
     expect(checked).toContain("If it isn&#x27;t there, Post anyway sends it.");
@@ -257,7 +257,7 @@ describe("a GitHub review draft's card", () => {
     const html = renderToStaticMarkup(<DraftCard proposal={draft()} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} access={canPost} />);
     expect(html).toContain("data-github-review");
     expect(html).toContain("Loading the diff…");
-    expect(html).toMatch(/<button[^>]*>Post review<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Post review \(2 comments\)<\/button>/);
   });
 });
 
@@ -346,5 +346,15 @@ describe("an older review of the same pull request left standing", () => {
   it("says so for one GitHub may have already", () => {
     const unsure = older({ maybePosted: { at: "2026-10-01T09:40:00Z", commitSha: "a1b2c3d4e5f6", summary: "S.", checkedAt: null } });
     expect(keptOlderNote(draft(), [unsure, draft()])).toBe("An older review of #218 that may already be on GitHub is still waiting; this one didn't replace it.");
+  });
+
+  it("says on the Post review button how many inline comments it sends, and on a posted card how many went out (R13)", () => {
+    expect(postLabel(0)).toBe("Post review");
+    expect(postLabel(1)).toBe("Post review (1 comment)");
+    expect(postLabel(3)).toBe("Post review (3 comments)");
+    expect(postedWith(0)).toBeNull();
+    expect(postedWith(2)).toBe("Posted with 2 comments");
+    expect(render(draft(), canPost)).not.toContain("data-review-posted-with");
+    expect(render(draft({ state: { type: "applied" } }), canPost)).toMatch(/data-review-posted-with[^>]*>Posted with 2 comments</);
   });
 });

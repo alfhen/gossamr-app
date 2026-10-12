@@ -264,7 +264,7 @@ test("Needs you from the board: the rail's Pip home popover lists the same items
   expect(onHome).toContain("CA-401 · Welcome flow refresh · Held by you");
 
   // Back on the board, the Pip home button counts them, and its menu shows the same list.
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await expect(pipHome(page)).toHaveCount(0);
   const button = homeButton(page);
   await expect(button).toHaveAccessibleName(`Pip home, ${onHome.length} ${onHome.length === 1 ? "item waits" : "items wait"} in Needs you`);

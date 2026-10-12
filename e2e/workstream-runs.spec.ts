@@ -51,7 +51,7 @@ async function startRunFromPip(page: Page) {
 /** `startRunFromPip`, then back on the board, where CA-401's peek lists the run as R1 in its workstream. */
 async function startInvestigation(page: Page) {
   await startRunFromPip(page);
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   await expect(peekAgents(page).locator('[data-run-label="R1"]')).toBeVisible();
 }
@@ -87,7 +87,7 @@ test("Pip drafts an Investigate run in a workstream; the run and its result draf
   });
   // The Agents view shows it, and the pane stays in the workstream, now at Triage.
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Triage$/);
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   await expect(stageChip).toHaveText("Triage");
   await expect(agents.locator('[data-run-label="R2"]')).toBeVisible();
@@ -100,6 +100,8 @@ test("Pip drafts an Investigate run in a workstream; the run and its result draf
 test("after starting a run from the workstream's conversation, the Agents view keeps that conversation and /stop R1 works there", async ({ page }) => {
   await openApp(page, "runs=empty");
   await startRunFromPip(page);
+  // The start leaves the person on the board; the toast's Open goes to the run in the Agents view.
+  await page.getByRole("button", { name: "Open", exact: true }).click();
 
   // The Agents view, with the new run selected: the pane is still the workstream's, and the run shows R1 and the id to type elsewhere.
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Investigate$/);
@@ -133,7 +135,7 @@ test("after starting a run from the workstream's conversation, the Agents view k
 
   // On the board with nothing peeked and no sheet open, the pane is General: R1 means nothing there, and the refusal names the id on the card.
   await sheet.getByRole("button", { name: "Close" }).click();
-  await page.getByRole("button", { name: "All projects" }).click();
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await expect(pipConversation(page)).toHaveText("General");
   await input.fill("/retry R1");
   await input.press("Enter");

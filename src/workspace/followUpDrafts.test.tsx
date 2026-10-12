@@ -142,3 +142,13 @@ describe("a decided follow-up", () => {
     expect(draftPreviewBody(followUp({ state: { type: "applied" } }), null)).not.toContain("(pass");
   });
 });
+
+describe("a GitHub review's preview", () => {
+  it("reads its summary and comments as plain text, without Markdown markers (R4)", () => {
+    const review = followUp({ intent: { type: "githubReview", connectionId: "c", item: null, runId: "r1", repo: "acme/web", number: 7, commitSha: "abc", summary: "**Blocking:** a retry loop.\n- **Should fix:** a name", comments: [{ path: "a.ts", line: 3, side: "RIGHT", body: "Use `MAX` here, **not** 5" }] } as unknown as Proposal["intent"] });
+    const body = draftPreviewBody(review, null);
+    expect(body).toContain("Blocking: a retry loop.\n• Should fix: a name");
+    expect(body).toContain("a.ts:3: Use MAX here, not 5");
+    expect(body).not.toContain("**");
+  });
+});

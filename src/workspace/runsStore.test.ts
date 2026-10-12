@@ -8,7 +8,7 @@ import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
 import { browseList, introCancelled, startWhat, useRuns } from "./runsStore";
-import { attentionCount } from "./agentsLogic";
+import { agentsWaitingOnYou, attentionCount } from "./agentsLogic";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -147,14 +147,17 @@ describe("the runs store", () => {
     list.mockRestore();
   });
 
-  it("keeps the badge down once the failed run has been seen, and remembers it", async () => {
+  it("keeps the badge down once a failed run has been seen, and remembers it", async () => {
+    s().init(new MockBackend({ runs: { seed: "failures" } }));
     await settle();
     const count = () => attentionCount(s().runs, s().seenFailed);
-    expect(count()).toBe(3);
+    const before = count();
     s().markSeen();
-    expect(count()).toBe(2);
+    // Every failure but the folder to trust, which needs an action rather than a look.
+    expect(count()).toBe(1);
+    expect(before).toBe(6);
     const stored = JSON.parse(localStorage.getItem("gossamr-runs-seen")!);
-    expect(stored).toHaveLength(1);
+    expect(stored).toHaveLength(5);
   });
 
   it("opens a run from a notification: shows the view, selects it and clears the filters", async () => {
@@ -381,8 +384,19 @@ describe("the run sheet", () => {
       expect(open).toHaveBeenCalledWith("https://code.claude.com/docs/en/setup");
     });
 
-    it("counts a run on the rail again if it fails again after a retry that worked", async () => {
+    it("keeps a folder to trust waiting on the person after Agents was looked at, since it needs an action", async () => {
       const run = await failing("untrustedFolder");
+      s().markSeen();
+      expect(s().seenFailed.has(run.id)).toBe(false);
+      expect(attentionCount(s().runs, s().seenFailed)).toBe(1);
+      expect(agentsWaitingOnYou(s().runs, s().seenFailed)).toContain(run);
+      // Other failures are still quieted by a look.
+      const other = s().runs.find((r) => r.failure?.type === "other")!;
+      expect(s().seenFailed.has(other.id)).toBe(true);
+    });
+
+    it("counts a run on the rail again if it fails again after a retry that worked", async () => {
+      const run = await failing("notSignedIn");
       s().markSeen();
       expect(s().seenFailed.has(run.id)).toBe(true);
       await s().fix(run.id, "terminal");
@@ -425,6 +439,15 @@ describe("the run sheet", () => {
       expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toContainEqual(["Answer sent. Claude is picking it back up.", "info"]);
       const now = s().runs.find((r) => r.id === run.id)!;
       expect(s().answered[run.id]).toBe(now.lastProgressAt);
+    });
+
+    it("toasts Resumed, not Answer sent, for a run stopped at its limit (R11)", async () => {
+      const run = await asking();
+      useRuns.setState({ runs: s().runs.map((r) => (r.id === run.id ? { ...r, state: "stopped" as const, stoppedByLimit: true } : r)) });
+      await s().answer(run.id, "Carry on.");
+      const texts = useToasts.getState().toasts.map((t) => t.text);
+      expect(texts).toContain("Resumed. Claude is picking it back up.");
+      expect(texts).not.toContain("Answer sent. Claude is picking it back up.");
     });
 
     it("keeps the run sheet's place in the browse order when the answered run changes lane", async () => {

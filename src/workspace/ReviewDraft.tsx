@@ -112,6 +112,12 @@ export function postedLine(state: Proposal["state"]["type"], r: Pick<Review, "re
   return ".";
 }
 
+/** The Post review button's label: with how many inline comments go out, so the bar says what it sends. */
+export const postLabel = (comments: number): string => (comments > 0 ? `Post review (${comments} comment${comments === 1 ? "" : "s"})` : "Post review");
+
+/** What a posted review went out with, near the top of its card; null when it had no inline comments. */
+export const postedWith = (comments: number): string | null => (comments > 0 ? `Posted with ${comments} comment${comments === 1 ? "" : "s"}` : null);
+
 /** Under the review's text boxes: what GitHub does with their words. */
 export const MARKDOWN_HINT = "Markdown, formatted on GitHub";
 
@@ -326,6 +332,11 @@ export function ReviewDraft({
               Edited
             </span>
           )}
+          {state === "applied" && postedWith(review.comments.length) && (
+            <span data-review-posted-with className="font-semibold text-ws-done">
+              {postedWith(review.comments.length)}
+            </span>
+          )}
           {outdated && (
             <span data-review-outdated className="rounded-full bg-ws-blocked-soft px-2 text-xs font-semibold text-ws-blocked">
               Outdated
@@ -375,7 +386,7 @@ export function ReviewDraft({
             {comments.map((c, i) => {
               const place = placeOf(c);
               return (
-                <li key={keyOf(c)} data-review-comment={c.dropped ? undefined : place} data-review-dropped={c.dropped ? place : undefined} className="grid gap-1 rounded-md border border-ws-sep2 px-2 py-1.5">
+                <li key={keyOf(c)} data-review-comment={c.dropped ? undefined : place} data-review-dropped={c.dropped ? place : undefined} className="grid scroll-mb-16 gap-1 rounded-md border border-ws-sep2 px-2 py-1.5">
                   <span className="flex items-baseline gap-2">
                     <span className="min-w-0 font-mono text-sm font-semibold text-ws-ink2 [overflow-wrap:anywhere]">
                       {place}
@@ -478,7 +489,7 @@ export function ReviewDraft({
               )}
               {canPost && (
                 <button type="button" disabled={working || state === "applying" || !!problem} title={problem ?? undefined} onClick={() => onApprove(edit)} className={primary}>
-                  {working || state === "applying" ? "Posting…" : "Post review"}
+                  {working || state === "applying" ? "Posting…" : postLabel(kept.length)}
                 </button>
               )}
             </>
