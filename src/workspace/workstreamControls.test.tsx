@@ -13,7 +13,7 @@ import { useToasts } from "./toasts";
 import { NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
 import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
-import { EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, escalationActions, escalationShown, fixRoundSent } from "./EscalationCard";
+import { DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent } from "./EscalationCard";
 import { ESCALATION_GONE } from "../backend/mockWorkstreams";
 import type { Escalation } from "../types";
 import type { WatchState } from "../types";
@@ -201,6 +201,32 @@ describe("a review that still blocks after the fix rounds", () => {
   it("can't post a review that has no draft waiting, and waits while a choice is on its way", () => {
     expect(buttons(card({ ...escalation, reviewDraft: null }))[2]).toEqual({ text: "Post the review as is", disabled: true, title: NO_REVIEW_DRAFT });
     expect(buttons(card(escalation, true)).every((b) => b.disabled)).toBe(true);
+  });
+
+  it("says why the choices wait while the review draft is open, and describes it to a screen reader", () => {
+    const html = renderToStaticMarkup(<EscalationCardView escalation={escalation} busy={false} drafting onFixRound={vi.fn()} onTakeOver={vi.fn()} onPost={vi.fn()} />);
+    expect(buttons(html).every((b) => b.disabled && b.title === DRAFT_OPEN.replace(/'/g, "&#x27;"))).toBe(true);
+    expect(html).toMatch(/<p id="escalation-r-rev-draft" role="status" data-escalation-draft-open[^>]*>Review draft open: post it from the draft\./);
+    // Every button is described by what it does and by the reason it waits.
+    expect(html.match(/aria-describedby="escalation-r-rev-\d escalation-r-rev-draft"/g)).toHaveLength(3);
+    // Closed or discarded, the choices are back and the reason is gone.
+    const back = card();
+    expect(back).not.toContain("data-escalation-draft-open");
+    expect(buttons(back).some((b) => b.disabled)).toBe(false);
+  });
+
+  it("holds the draft open only while it waits to be posted and its peek is showing", () => {
+    const proposal = (type: string) => ({ state: { type }, intent: { type: "githubReview", item: null } }) as never;
+    const opened = { "r-rev": "p-review" };
+    const key = "draft:p-review";
+    expect(draftOpen(escalation, {}, { "p-review": proposal("pending") }, key)).toBeNull();
+    expect(draftOpen(escalation, opened, { "p-review": proposal("pending") }, key)).toBe("p-review");
+    expect(draftOpen(escalation, opened, { "p-review": proposal("applying") }, key)).toBe("p-review");
+    expect(draftOpen(escalation, opened, { "p-review": proposal("applied") }, key)).toBeNull();
+    expect(draftOpen(escalation, opened, { "p-review": proposal("skipped") }, key)).toBeNull();
+    expect(draftOpen(escalation, opened, {}, key)).toBeNull();
+    expect(draftOpen(escalation, opened, { "p-review": proposal("pending") }, null)).toBeNull();
+    expect(draftOpen({ ...escalation, reviewRun: "r-newer" }, opened, { "p-review": proposal("pending") }, key)).toBeNull();
   });
 
   it("confirms the choice in a status line that can take the keyboard", () => {
