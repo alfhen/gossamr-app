@@ -397,6 +397,10 @@ describe("timeline: the audit", () => {
     const list = timeline({ events: [line("held", 30), line("resumed", 20), line("held", 5), line("fix_rounds_exhausted", 4, { actor: "supervisor", detail: "2" })], needs: [hold, escalation] });
     expect(list.map((e) => e.target)).toEqual([null, null, { type: "need", key: hold.key }, { type: "need", key: "escalation:r2" }]);
     expect(list[2].needKey).toBe(hold.key);
+    // An undo that restores the supervisor's hold after the person's own holds the need now.
+    const undone = timeline({ events: [line("held", 30, { actor: "supervisor" }), line("held", 20), line("undone", 10, { detail: "held" })], needs: [hold] });
+    expect(undone.map((e) => e.target)).toEqual([null, null, { type: "need", key: hold.key }]);
+    expect(undone[2].needKey).toBe(hold.key);
   });
 
   it("opens the run or the draft a line names, when it is on the timeline", () => {
