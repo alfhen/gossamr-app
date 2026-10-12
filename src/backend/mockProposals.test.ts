@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { docText } from "../lib/docs";
-import type { Intent, Proposal, ScreenContext } from "../types";
+import type { Intent, Proposal, RunKind, ScreenContext } from "../types";
 import type { AskRequest } from "./claude";
 import { mockAsk, mockPipEvents } from "./mockPip";
 import { mockPipTurns } from "./mockPipTurns";
-import { KEPT_EDITED, KEPT_MAYBE_POSTED, keptOlderReviews, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_EDIT_KEEPS_POSITIONS, reviewSupersession, WORKSTREAM_PENDING_CAP } from "../lib/proposals";
+import { KEPT_EDITED, KEPT_MAYBE_POSTED, keptOlderReviews, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_EDIT_KEEPS_POSITIONS, reviewSupersession, runCommentSupersession, WORKSTREAM_PENDING_CAP } from "../lib/proposals";
 import { MockBackend } from "./mock";
 import { MockProposals } from "./mockProposals";
 import { bodyChange } from "./mockMarkdown";
@@ -337,5 +337,16 @@ describe("one review of a pull request waiting at a time, as tidy_reviews in pro
     expect(reviewSupersession(made("pips", { revisions: [{ at: "2026-10-01T10:10:00Z", note: "Revised by Pip", intent: review("pips") }] }), newer)).toBe("supersede");
     expect(reviewSupersession(made("other", { intent: review("other", "acme/webshop", 219) }), newer)).toBeNull();
     expect(keptOlderReviews(newer, [unsure, made("posted", { state: { type: "applied" } }), newer]).map((k) => k.why)).toEqual([KEPT_MAYBE_POSTED]);
+  });
+
+  it("replaces a run comment only with one of a run of the same kind that can be found", () => {
+    const made = (id: string, runId: string): Proposal =>
+      ({ id, createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z", origin: { type: "run", runId, shortId: null, workstream: "ws-1" }, createdBy: "agent", intent: comment, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error: null, run: null, supersededBy: null }) as unknown as Proposal;
+    const [older, newer] = [made("a", "run-a"), made("b", "run-b")];
+    const kinds = (known: Record<string, RunKind>) => (id: string) => known[id] ?? null;
+    expect(runCommentSupersession(older, newer, kinds({ "run-a": "review", "run-b": "review" }))).toBe("supersede");
+    expect(runCommentSupersession(older, newer, kinds({ "run-a": "investigate", "run-b": "review" }))).toBeNull();
+    expect(runCommentSupersession(older, newer, kinds({ "run-b": "review" }))).toBeNull();
+    expect(runCommentSupersession(older, newer, kinds({ "run-a": "review" }))).toBeNull();
   });
 });

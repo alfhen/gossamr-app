@@ -52,7 +52,9 @@ describe("the in-app pull request view", () => {
     expect(html).toContain('data-pull-file-row="src/consumer/index.ts"');
     expect(html).toContain("2 comments");
     // The summary, with its findings that have no line, comes first.
-    expect(html).toMatch(/data-pull-summary[^>]*>Gossamr review of #218.\n\nFindings without a line in the diff:\n- \*\*Should fix:\*\* no test covers the timeout path/);
+    // It is rendered, not shown as raw Markdown.
+    expect(html).toMatch(/data-pull-summary.*Gossamr review of #218\.<\/p>.*<li[^>]*>.*<b class="font-semibold">Should fix:<\/b> no test covers the timeout path/);
+    expect(html.match(/data-pull-summary[^]*?<\/section>/)![0]).not.toContain("**");
     // Each comment sits right under the line it is about.
     expect(html).toMatch(/<span class="pr-2">\+ {4}try \{ return await handle\(message\); \} catch \{ continue; \}<\/span><\/div><div role="note" aria-label="Comment on src\/consumer\/retry.ts:42"/);
     expect(html).toMatch(/<span class="pr-2">\+const MAX = 5;<\/span><\/div><div role="note" aria-label="Comment on src\/consumer\/retry.ts:17"/);

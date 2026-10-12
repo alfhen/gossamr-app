@@ -462,6 +462,56 @@ pub fn review_supersession(older: &Proposal, newer: &Proposal) -> Option<std::re
     Some(Ok(()))
 }
 
+/// The label of a comment draft that carries a plan run's whole plan, which no later comment replaces.
+pub const PLAN_COMMENT_LABEL: &str = "Plan from agent run";
+
+/// Whether `p` is a comment an agent run left for its ticket, other than a plan's: what a finished run drafts on its own.
+fn is_run_comment(p: &Proposal) -> bool {
+    matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. })) && machine_made(p) && !p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_COMMENT_LABEL))
+}
+
+/// The id of the run a run comment was made from.
+fn comment_run_id(p: &Proposal) -> Option<&str> {
+    match &p.origin {
+        Origin::Run { run_id, .. } => Some(run_id),
+        _ => None,
+    }
+}
+
+/// What a new run comment does to an older pending one: the same ticket in the same workstream, made by an agent run
+/// of the same kind (`kind_of` says the kind of a run by its id; a run it can't find supersedes nothing). A Review's
+/// comment never retires an Investigate's, whose findings the person has not read yet. The person's edit keeps it;
+/// anything else is replaced. `None` when it is another ticket, workstream or kind, a plan's comment, or not pending
+/// (one being posted, or posted, is never touched).
+pub fn run_comment_supersession(older: &Proposal, newer: &Proposal, kind_of: impl Fn(&str) -> Option<crate::domain::RunKind>) -> Option<std::result::Result<(), &'static str>> {
+    let ws = newer.workstream()?;
+    let same = is_run_comment(older) && is_run_comment(newer) && older.workstream() == Some(ws) && older.target() == newer.target();
+    if !same || older.id == newer.id || older.state != ProposalState::Pending {
+        return None;
+    }
+    let (on, to) = (kind_of(comment_run_id(older)?)?, kind_of(comment_run_id(newer)?)?);
+    if on != to {
+        return None;
+    }
+    Some(if person_edited(older) { Err(KEPT_EDITED) } else { Ok(()) })
+}
+
+/// A new comment an agent run left replaces the older pending ones of the same ticket and run kind in its workstream, so
+/// a second round's reworded comment doesn't pile up beside the first. Writes nothing.
+fn tidy_run_comments(db: &Db, p: &Proposal) -> Result<Tidied> {
+    let pending = db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })?;
+    let mut tidied = Tidied::default();
+    for older in pending {
+        let kind_of = |run_id: &str| db.run(run_id).ok().flatten().map(|r| r.spec.kind);
+        match run_comment_supersession(&older, p, kind_of) {
+            Some(Ok(())) => tidied.replaced.push(older),
+            Some(Err(why)) => tidied.kept.push((older, why)),
+            None => {}
+        }
+    }
+    Ok(tidied)
+}
+
 /// A new review an agent run left replaces the older pending review drafts of the same pull request, whichever
 /// workstream they are in or none: one pull request has one review waiting for the person. Writes nothing.
 fn tidy_reviews(db: &Db, p: &Proposal) -> Result<Tidied> {
@@ -479,10 +529,13 @@ fn tidy_reviews(db: &Db, p: &Proposal) -> Result<Tidied> {
 
 /// Keeps a workstream's drafts tidy: says which older drafts `p` replaces, or refuses it when it would replace one the
 /// person owns, or when Pip already has the workstream's full share of drafts waiting. A review an agent run left is
-/// tidied by its pull request instead (`tidy_reviews`). Writes nothing.
+/// tidied by its pull request instead (`tidy_reviews`), and a comment one left by its ticket (`tidy_run_comments`). Writes nothing.
 fn tidy(db: &Db, p: &Proposal) -> Result<Tidied> {
     if p.created_by == CreatedBy::Agent && matches!(p.origin, Origin::Run { .. }) && matches!(p.intent, Intent::GithubReview { .. }) {
         return tidy_reviews(db, p);
+    }
+    if p.created_by == CreatedBy::Agent && is_run_comment(p) {
+        return tidy_run_comments(db, p);
     }
     let Some(ws) = p.workstream() else { return Ok(Tidied::default()) };
     if !machine_made(p) {
@@ -850,6 +903,27 @@ mod tests {
 
     fn comment_draft(id: &str) -> Draft {
         Draft::from_pip("run", None, Intent::Comment { item: item_ref(id), body: Doc::paragraph("hello") }, None)
+    }
+
+    #[test]
+    fn a_run_comment_is_replaced_only_by_one_of_a_run_of_the_same_kind_that_can_be_found() {
+        let db = Db::in_memory().unwrap();
+        let comment = |id: &str, run: &str| {
+            let mut p = made(&db, comment_draft("1"));
+            p.id = id.into();
+            p.created_by = CreatedBy::Agent;
+            p.origin = Origin::Run { run_id: run.into(), short_id: None, workstream: Some("w".into()) };
+            p
+        };
+        let (older, newer) = (comment("a", "run-a"), comment("b", "run-b"));
+        let verdict = |known: &'static [(&'static str, crate::domain::RunKind)]| {
+            run_comment_supersession(&older, &newer, move |id| known.iter().find(|(r, _)| *r == id).map(|(_, k)| *k))
+        };
+        use crate::domain::RunKind::{Investigate, Review};
+        assert_eq!(verdict(&[("run-a", Review), ("run-b", Review)]), Some(Ok(())));
+        assert_eq!(verdict(&[("run-a", Investigate), ("run-b", Review)]), None, "another kind");
+        assert_eq!(verdict(&[("run-b", Review)]), None, "the older run is gone");
+        assert_eq!(verdict(&[("run-a", Review)]), None, "the newer run is gone");
     }
 
     fn subtasks_draft(summaries: &[&str]) -> Draft {

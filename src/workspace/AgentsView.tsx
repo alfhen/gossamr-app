@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
 import { labelsByRun, stageText } from "../lib/workstreamStage";
 import type { ReviewView, Run, RunsEnvironment, WorkstreamView } from "../types";
@@ -18,6 +18,7 @@ import {
   isFiltered,
   laneCount,
   laneIsFolded,
+  navOrder,
   stepRun,
   slotWaiters,
   stopAllText,
@@ -39,6 +40,7 @@ import { showDraft as showTicketDraft } from "./draftTicket";
 import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
+import { stableGroups } from "./stableOrder";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
@@ -275,12 +277,28 @@ export interface AgentsScreenProps {
   /** A finished review's verdict, once its outcome is read; null for a review that gave none, absent for any other run. */
   reviewOf?(run: Run): ReviewView | null | undefined;
   on: AgentsActions;
+  /** Told the order j and k walk the runs in, as shown, which a list the person is engaged with keeps from re-sorting. */
+  onOrder?(order: string[]): void;
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, seenFailed, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, seenFailed, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
-  const { lanes, workstreams: wsGroups, order } = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now), [group, runs, workstreams, filters, earlierOpen, now]);
+  // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const frozen = hovered || focused;
+  const sorted = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now), [group, runs, workstreams, filters, earlierOpen, now]);
+  const shownBefore = useRef<{ group: AgentsGroup; lanes: LaneGroup[] | null; workstreams: WorkstreamGroup[] | null } | null>(null);
+  const { lanes, workstreams: wsGroups, order } = useMemo(() => {
+    const before = shownBefore.current?.group === group ? shownBefore.current : null;
+    if (!frozen || !before) return sorted;
+    const lanes = sorted.lanes && stableGroups(before.lanes ?? [], sorted.lanes, true, (g) => g.lane);
+    const workstreams = sorted.workstreams && stableGroups(before.workstreams ?? [], sorted.workstreams, true, (g) => g.id ?? "none");
+    return { lanes, workstreams, order: navOrder((lanes ?? workstreams) as readonly { runs: readonly Run[]; lane?: LaneId }[], earlierOpen, filters) };
+  }, [sorted, frozen, group, earlierOpen, filters]);
+  shownBefore.current = { group, lanes, workstreams: wsGroups };
+  useEffect(() => onOrder?.(order), [order, onOrder]);
   const filtered = isFiltered(filters);
   const shown = (lanes ?? wsGroups ?? []).reduce((n, g) => n + g.runs.length, 0);
   // A run's short name in its workstream shows in the lanes too, as it does in the conversation that uses it.
@@ -348,7 +366,15 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
       </header>
       <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} on={on} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-[max(80px,var(--ws-launcher-clear,0px))]">
-        <div className="grid gap-5.5">
+        <div
+          data-agents-list
+          data-frozen={frozen || undefined}
+          onPointerEnter={() => setHovered(true)}
+          onPointerLeave={() => setHovered(false)}
+          onFocus={() => setFocused(true)}
+          onBlur={(ev) => setFocused(!!ev.relatedTarget && ev.currentTarget.contains(ev.relatedTarget as Node))}
+          className="grid gap-5.5"
+        >
           <AgentsBanners environment={environment} loadError={status === "error" ? error : null} onCheckAgain={on.checkEnvironment} onRetry={on.retry} />
           {introShown && <AgentsIntro onDismiss={on.dismissIntro} />}
           {waiting ? (
@@ -450,9 +476,10 @@ export function AgentsView() {
   const changes = useBuildChanges(runs);
   const verdicts = useReviewVerdicts(runs);
 
-  const order = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now).order, [group, runs, workstreams, filters, earlierOpen, now]);
-  const orderRef = useRef(order);
-  orderRef.current = order;
+  const orderRef = useRef<string[]>([]);
+  const onOrder = useCallback((order: string[]) => {
+    orderRef.current = order;
+  }, []);
 
   useEffect(() => useRuns.getState().markSeen(), [runs]);
 
@@ -491,6 +518,7 @@ export function AgentsView() {
 
   return (
     <AgentsScreen
+      onOrder={onOrder}
       runs={runs}
       status={status}
       error={error}

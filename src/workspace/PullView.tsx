@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Markdown } from "../components/Markdown";
 import { Link } from "../components/Adf";
 import { parsePatch, type DiffLine } from "../lib/diffHunks";
 import { isTypingTarget } from "../lib/keyboard";
@@ -215,9 +216,9 @@ export function PullViewSheet({ target, draft, onClose, diff: given }: { target:
                 Review draft at {review.commitSha.slice(0, 8)}
                 {draft && draft.state.type !== "pending" ? ` (${draft.state.type})` : ", not posted"}
               </b>
-              <p data-pull-summary className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {review.summary}
-              </p>
+              <div data-pull-summary className="[overflow-wrap:anywhere]">
+                <Markdown text={review.summary} />
+              </div>
             </section>
           )}
           {diff.status === "loading" && (

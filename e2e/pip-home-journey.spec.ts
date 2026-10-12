@@ -52,6 +52,12 @@ async function openStep(page: Page, kind: string) {
   await expect(chip).toHaveAttribute("aria-expanded", "true");
 }
 
+/** The Jira comment drafts waiting under step `kind`, opened if it is closed: not its subtasks or the GitHub review draft. */
+async function pendingComments(page: Page, kind: string) {
+  await openStep(page, kind);
+  return stepChip(page, kind).locator('article[data-draft][data-state="pending"][aria-label="Comment on CA-401"]');
+}
+
 /** Starts a workstream on CA-401 from its peek, with room for every automatic turn of the chain, then selects it on Pip home. */
 async function homeWorkstream(page: Page) {
   await startWorkstream(page, "CA-401");
@@ -163,39 +169,42 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await expect(stepChip(page, "review").locator("[data-step-verdict]")).toHaveText("· Pass");
   await homeSettled(page);
 
-  // The two reviews' comment drafts go together, after a confirm: one write each. The second review's GitHub review draft
-  // replaced the first's and waits apart: it is never approved with the others.
+  // A comment draft retires only an older one of the same run kind: the investigation's, the triage's and the build's
+  // comments are different information the person has not read, so each is still waiting under its own step.
+  const earlier: Record<string, string | null> = {};
+  for (const kind of ["investigate", "triage", "build"]) {
+    const waiting = await pendingComments(page, kind);
+    await expect(waiting, `one pending comment draft under ${kind}`).toHaveCount(1);
+    earlier[kind] = await waiting.getAttribute("data-draft");
+  }
+  expect(new Set(Object.values(earlier)).size).toBe(3);
+
+  // The second review's comment draft replaced the first's on the same ticket (the first is out of date, never approved),
+  // and its GitHub review draft replaced the first's and waits apart. One comment draft is left: approved on its own.
   await openStep(page, "review");
   const pending = stepChip(page, "review").locator('article[data-draft][data-state="pending"]');
-  await expect(pending).toHaveCount(3);
+  await expect(pending).toHaveCount(2);
   await expect(pending.and(page.locator('[aria-label^="GitHub review of "]'))).toHaveCount(1);
   const drafts = pending.and(page.locator(':not([aria-label^="GitHub review of "])'));
-  await expect(drafts).toHaveCount(2);
-  const ids = await drafts.evaluateAll((els) => els.map((el) => el.getAttribute("data-draft")));
+  await expect(drafts).toHaveCount(1);
+  await expect(stepChip(page, "review").getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
+  const id = (await drafts.getAttribute("data-draft"))!;
   const inTray = needsYouTray(page).locator("[data-needs-you-item]");
   const trayBefore = await inTray.count();
-  const ask = stepChip(page, "review").getByRole("button", { name: "Approve these 2" });
-  await ask.click();
-  const confirm = stepChip(page, "review").getByRole("group", { name: "Approve 2 drafts" });
-  await expect(confirm.getByRole("button", { name: "Yes, approve 2" })).toBeFocused();
-  // Esc cancels with nothing written.
-  await page.keyboard.press("Escape");
-  await expect(confirm).toHaveCount(0);
-  expect((await jiraWrites(page)).length).toBe(1);
-  await ask.click();
-  await confirm.getByRole("button", { name: "Yes, approve 2" }).click();
-  await expect(stepChip(page, "review").locator("[data-batch-outcome]")).toHaveText("Approved 2.");
+  await drafts.getByRole("button", { name: "Review on CA-401 →" }).click();
+  await peekSheet(page).locator(`article[data-draft="${id}"]`).getByRole("button", { name: "Post comment" }).click();
   await expect
     .poll(async () =>
       (await jiraWrites(page))
         .filter((w) => w.type === "comment")
-        .map((w) => w.proposalId)
-        .sort(),
+        .map((w) => w.proposalId),
     )
-    .toEqual([...ids].sort());
-  await expect(inTray).toHaveCount(trayBefore - 2);
+    .toEqual([id]);
+  await expect(inTray).toHaveCount(trayBefore - 1);
+  await page.keyboard.press("Escape");
+  await expect(peekSheet(page)).toHaveCount(0);
   await expect(pipHome(page)).toBeVisible();
-  // The batch left the GitHub review draft alone: nothing went to GitHub, and it still waits.
+  // Approving the comment left the GitHub review draft alone: nothing went to GitHub, and it still waits.
   const github = stepChip(page, "review").locator('article[data-draft][aria-label^="GitHub review of acme/storefront#"]');
   await expect(github).toHaveCount(1);
   await expect(github).toHaveAttribute("data-state", "pending");
@@ -213,7 +222,13 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   expect(write).toMatchObject({ event: "COMMENT", commitId: pull.prSha });
   await expect(card.locator("[data-review-posted]")).toContainText("Posted to GitHub");
   expect(await githubWrites(page)).toHaveLength(1);
-  expect((await jiraWrites(page)).filter((w) => w.type === "comment")).toHaveLength(2);
+  expect((await jiraWrites(page)).filter((w) => w.type === "comment")).toHaveLength(1);
+  // The comments of the other kinds are still waiting, unwritten and untouched.
+  for (const kind of ["investigate", "triage", "build"]) {
+    const waiting = await pendingComments(page, kind);
+    await expect(waiting).toHaveCount(1);
+    await expect(waiting).toHaveAttribute("data-draft", earlier[kind]!);
+  }
 });
 
 test("the Needs you tray lists a hold before a draft, goes to each, and each leaves once dealt with", async ({ page }) => {

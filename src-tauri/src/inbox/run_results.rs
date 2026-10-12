@@ -129,7 +129,7 @@ pub struct PlanComment {
     pub total: usize,
 }
 
-const PLAN_LABEL: &str = "Plan from agent run";
+const PLAN_LABEL: &str = proposals::PLAN_COMMENT_LABEL;
 
 /// The comment draft made from a run, in whatever state it is now.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -977,6 +977,40 @@ pub(in crate::inbox) mod tests {
         // A different note is a different comment.
         let other = run_with(&fx, |r| r.result = Some("Found it.\n\nFor Jira: a different finding.".into())).await;
         assert!(fx.core.auto_draft_run_comment(&other.id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_reworded_comment_from_a_later_round_of_the_same_kind_replaces_the_pending_one_but_never_an_edited_one_or_another_kinds() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        fx.add_item(2).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        // One round of the workstream: a run of `kind` on `key` whose `For Jira:` says `text`, and the comment drafted from it.
+        async fn round(fx: &Fixture, ws: &str, key: &str, kind: RunKind, text: &str) -> Proposal {
+            let spec = RunSpec { workstream: Some(ws.into()), kind, ..next_spec(fx) };
+            let run = approved(fx, spec, Some(fx.item(key)), &format!("Done.\n\nFor Jira: {text}"), |_| {}).await;
+            fx.core.auto_draft_run_comment(&run.id).await.unwrap().unwrap()
+        }
+        async fn state(fx: &Fixture, id: &str) -> Proposal {
+            fx.core.proposal(id).await.unwrap().unwrap()
+        }
+
+        let first = round(&fx, &ws.id, "CA-1", RunKind::Investigate, "round one").await;
+        let triage = round(&fx, &ws.id, "CA-1", RunKind::Triage, "what the triage found").await;
+        assert_eq!(state(&fx, &first.id).await.state, ProposalState::Pending, "a later Triage does not retire an Investigate's comment");
+        let elsewhere = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-2")), None).await.unwrap();
+        let other_ticket = round(&fx, &elsewhere.id, "CA-2", RunKind::Investigate, "on another ticket").await;
+        let second = round(&fx, &ws.id, "CA-1", RunKind::Investigate, "round two, reworded").await;
+        let old = state(&fx, &first.id).await;
+        assert_eq!((old.state, old.superseded_by.as_deref()), (ProposalState::Retired(proposals::REPLACED_REASON.into()), Some(second.id.as_str())));
+        assert_eq!(state(&fx, &triage.id).await.state, ProposalState::Pending, "a later Investigate does not retire a Triage's comment");
+        assert_eq!(state(&fx, &other_ticket.id).await.state, ProposalState::Pending, "another ticket's comment stays");
+        assert_eq!(state(&fx, &second.id).await.state, ProposalState::Pending);
+
+        let edit = Edit::Comment { body: "My own words.".into(), mentions: vec![], quote: None };
+        fx.core.edit_proposal(&second.id, &edit).await.unwrap();
+        let third = round(&fx, &ws.id, "CA-1", RunKind::Investigate, "round three, reworded again").await;
+        assert_eq!(state(&fx, &second.id).await.state, ProposalState::Pending, "the person's edit is kept");
+        assert_eq!(state(&fx, &third.id).await.state, ProposalState::Pending);
     }
 
     #[tokio::test]
