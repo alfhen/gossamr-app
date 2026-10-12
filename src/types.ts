@@ -854,7 +854,7 @@ export const TRIPWIRES = ["marker", "basis_drift", "repeated_failure", "chain_re
 export type Tripwire = (typeof TRIPWIRES)[number];
 
 /** Automatic Pip turns since the person last wrote, and wakes in all, that a workstream may have unless its budget says otherwise. */
-export const AUTO_TURNS_DEFAULT = 6;
+export const AUTO_TURNS_DEFAULT = 11;
 export const WAKES_DEFAULT = 12;
 
 /** Where a workstream is, derived from its runs and never stored. */

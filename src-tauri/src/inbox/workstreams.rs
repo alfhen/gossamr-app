@@ -1334,14 +1334,14 @@ mod tests {
         let fx = fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, None, Some("Budgeted".into())).await.unwrap();
         let mut spent = ws.clone();
-        spent.spent.auto_turns = 6;
+        spent.spent.auto_turns = 11;
         spent.spent.wakes = 9;
         spent.spent.tokens = 1_234;
         fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&spent)).await.unwrap();
         let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
-        assert_eq!(view.budget, BudgetView { auto_turns: BudgetCount { used: 6, limit: 6 }, wakes: BudgetCount { used: 9, limit: 12 }, level: BudgetLevel::Spent });
+        assert_eq!(view.budget, BudgetView { auto_turns: BudgetCount { used: 11, limit: 11 }, wakes: BudgetCount { used: 9, limit: 12 }, level: BudgetLevel::Spent });
         let json = serde_json::to_value(&view).unwrap();
-        assert_eq!(json["budget"], serde_json::json!({ "autoTurns": { "used": 6, "limit": 6 }, "wakes": { "used": 9, "limit": 12 }, "level": "spent" }));
+        assert_eq!(json["budget"], serde_json::json!({ "autoTurns": { "used": 11, "limit": 11 }, "wakes": { "used": 9, "limit": 12 }, "level": "spent" }));
 
         fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
         let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
@@ -1375,7 +1375,7 @@ mod tests {
         assert_eq!(actions(&events)[1..], [(Actor::Supervisor, "held"), (Actor::Person, "budget_reset")], "never resumed");
         // With the wakes within the budget, the hold is lifted.
         let mut within = after.workstream.clone();
-        within.spent.auto_turns = 6;
+        within.spent.auto_turns = 11;
         within.spent.wakes = 9;
         fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&within)).await.unwrap();
         fx.core.person_wrote_in_workstream(&fx.scope, &ws.id).await.unwrap();

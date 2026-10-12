@@ -11,7 +11,7 @@ export const LANE_IDS = ["needs", "running", "done", "bad", "earlier"] as const;
 export type LaneId = (typeof LANE_IDS)[number];
 
 export const LANES: Record<LaneId, { title: string; why: string }> = {
-  needs: { title: "Needs you", why: "Waiting on an answer or a permission" },
+  needs: { title: "Needs you", why: "Waiting on an answer, a permission or a resume" },
   running: { title: "Running", why: "Working in the background" },
   done: { title: "Done, ready to review", why: "Look over what it found" },
   bad: { title: "Failed or stuck", why: "Not going anywhere without you" },
@@ -21,6 +21,9 @@ export const LANES: Record<LaneId, { title: string; why: string }> = {
 const NEEDS: readonly RunState[] = ["needsAnswer", "needsPermission", "systemBlocked"];
 
 export const needsPerson = (run: Pick<Run, "state">) => NEEDS.includes(run.state);
+
+/** A run Gossamr stopped at its time or token limit, with no answer of the person's waiting on it: the person resumes it, nothing else does. */
+export const stoppedAtLimit = (run: Pick<Run, "state" | "stoppedByLimit">) => run.state === "stopped" && !!run.stoppedByLimit;
 
 /** Minutes without progress once a working run has been quiet for `QUIET_MINUTES` or more; null otherwise. */
 export function quietMinutes(run: Pick<Run, "state" | "lastProgressAt">, now: number): number | null {
@@ -48,7 +51,7 @@ export function laneOf(run: Run, now: number): LaneId {
     case "unknown":
       return "bad";
     case "stopped":
-      return run.stoppedByLimit ? "bad" : "earlier";
+      return run.stoppedByLimit ? "needs" : "earlier";
   }
 }
 
@@ -314,12 +317,13 @@ export function stepRun(order: readonly string[], current: string | null, delta:
   return order[Math.min(order.length - 1, Math.max(0, at + delta))];
 }
 
-/** A run that needs the person, or a failed one they haven't looked at yet: what the rail badge and the Needs you tray count. */
-export const needsAttention = (run: Pick<Run, "id" | "state">, seenFailed: ReadonlySet<string>) => needsPerson(run) || (run.state === "failed" && !seenFailed.has(run.id));
+/** A run that needs the person, one stopped at its limit, or a failed one they haven't looked at yet: what the rail badge and the Needs you tray count. */
+export const needsAttention = (run: Pick<Run, "id" | "state"> & Partial<Pick<Run, "stoppedByLimit">>, seenFailed: ReadonlySet<string>) =>
+  needsPerson(run) || stoppedAtLimit({ state: run.state, stoppedByLimit: run.stoppedByLimit }) || (run.state === "failed" && !seenFailed.has(run.id));
 
 /**
  * The agent part of "needs you", the one set every screen counts it by: runs asking a question, asking permission or
- * blocked, and failed runs the person hasn't looked at yet (a folder to trust among them). Each is one of the Needs you
+ * blocked, runs stopped at their limit (the person resumes them), and failed runs the person hasn't looked at yet (a folder to trust among them). Each is one of the Needs you
  * tray's run items; the Agents rail badge and the Agents header ("2 waiting on you") count exactly these.
  */
 export const agentsWaitingOnYou = (runs: readonly Run[], seenFailed: ReadonlySet<string>): Run[] => runs.filter((r) => needsAttention(r, seenFailed));

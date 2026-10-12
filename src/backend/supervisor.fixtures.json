@@ -180,14 +180,14 @@
       }
     },
     {
-      "name": "the fifth of six automatic turns turns the budget amber",
+      "name": "the ninth of eleven automatic turns turns the budget amber",
       "workstream": {
         "mode": "manage",
         "held": null,
         "closed": false,
         "spent": {
-          "autoTurns": 4,
-          "wakes": 4
+          "autoTurns": 8,
+          "wakes": 8
         },
         "budget": {}
       },
@@ -209,14 +209,14 @@
       }
     },
     {
-      "name": "the sixth automatic turn runs and holds the workstream for its budget",
+      "name": "the eleventh automatic turn runs and holds the workstream for its budget",
       "workstream": {
         "mode": "manage",
         "held": null,
         "closed": false,
         "spent": {
-          "autoTurns": 5,
-          "wakes": 5
+          "autoTurns": 10,
+          "wakes": 10
         },
         "budget": {}
       },
@@ -244,8 +244,8 @@
         "held": null,
         "closed": false,
         "spent": {
-          "autoTurns": 6,
-          "wakes": 6
+          "autoTurns": 11,
+          "wakes": 11
         },
         "budget": {}
       },
@@ -775,7 +775,7 @@
     },
     {
       "spent": {
-        "autoTurns": 4,
+        "autoTurns": 8,
         "wakes": 0
       },
       "budget": {},
@@ -783,7 +783,7 @@
     },
     {
       "spent": {
-        "autoTurns": 5,
+        "autoTurns": 9,
         "wakes": 0
       },
       "budget": {},
@@ -791,7 +791,7 @@
     },
     {
       "spent": {
-        "autoTurns": 6,
+        "autoTurns": 11,
         "wakes": 0
       },
       "budget": {},
@@ -1062,8 +1062,8 @@
         "held": null,
         "closed": false,
         "spent": {
-          "autoTurns": 6,
-          "wakes": 6
+          "autoTurns": 11,
+          "wakes": 11
         },
         "rules": {}
       },
@@ -1084,8 +1084,8 @@
         "held": null,
         "closed": false,
         "spent": {
-          "autoTurns": 5,
-          "wakes": 5
+          "autoTurns": 10,
+          "wakes": 10
         },
         "rules": {}
       },

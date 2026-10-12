@@ -185,3 +185,14 @@ fn a_started_spec_is_the_kind_s_template_and_never_carries_pip_s_focus() {
     let other = Decision::Exhausted { review_run: "r".into(), build_run: "b".into() };
     assert_eq!(spec_for(&other, &source, plan(), &Slots::default()), None);
 }
+
+/// A whole automatic chain's finished runs, each one a Pip turn: investigate, triage, plan, build, review, then up to
+/// `FIX_ROUNDS_MAX` times a fix round and its review. The default budget holds all of it and two turns more.
+#[test]
+fn the_default_turn_budget_fits_a_whole_chain_with_two_to_spare() {
+    use crate::domain::workstream::AUTO_TURNS_DEFAULT;
+    let chain = 5 + 2 * FIX_ROUNDS_MAX;
+    assert_eq!(chain, 9);
+    assert_eq!(AUTO_TURNS_DEFAULT, chain + 2);
+    assert_eq!(AUTO_TURNS_DEFAULT, 11);
+}

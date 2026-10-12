@@ -25,6 +25,7 @@ const on = (): AgentsActions => ({
   attach: vi.fn(),
   draftComment: vi.fn(),
   buildFromPlan: vi.fn(),
+  resume: vi.fn(),
   filter: vi.fn(),
   clearFilters: vi.fn(),
   setView: vi.fn(),
@@ -227,6 +228,20 @@ describe("cards", () => {
     expect(html).toContain(stopRunQuestion("R4"));
     expect(stopRunQuestion("R4")).toBe("Stop R4? It abandons the run.");
     expect(buttonsOf(html)).toEqual(["Yes, stop", "Keep going"]);
+  });
+
+  it("offers Resume on a run stopped at its limit, only when the person can act on it, and says Needs you", () => {
+    const limit = run("stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" });
+    const resume = vi.fn();
+    const withResume = (r: Run, onResume?: () => void) =>
+      renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} onResume={onResume} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    expect(buttonsOf(withResume(limit, resume))).toContain("Resume");
+    expect(buttonsOf(withResume(limit))).not.toContain("Resume");
+    expect(buttonsOf(card(run("stopped")))).not.toContain("Resume");
+    expect(card(limit)).toContain("Stopped at limit");
+    // The lane it sits in is Needs you, with the count its header gives.
+    const html = screen({ runs: [limit, run("failed", { id: "f", failure: null })] });
+    expect(html).toMatch(/data-lane="needs"[\s\S]*Stopped at limit/);
   });
 
   it("shows a question with Open in Terminal and no answer box", () => {

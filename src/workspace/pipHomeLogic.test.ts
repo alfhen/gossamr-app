@@ -106,6 +106,21 @@ describe("needsYouItems", () => {
     expect(items.find((i) => i.kind === "held")?.target).toEqual({ type: "workstream" });
   });
 
+  it("counts a run stopped at its limit as an item of its own that the person resumes, in its workstream, as the rail badge does", () => {
+    const limit = run("r-f", "plan", "stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" });
+    const items = needsYouItems(input({ workstreams: [ws1], runs: [limit] }));
+    expect(items).toMatchObject([{ key: "run:r-f", kind: "limit", workstreamId: "ws-1", label: "CA-401 · R3 stopped at its limit", target: { type: "run", id: "r-f" } }]);
+    expect(needsYouCount(items, "ws-1")).toBe(1);
+    expect(needsYouItems(input({ workstreams: [ws1], runs: [limit] }))).toHaveLength(attentionCount([limit], new Set()));
+    // Looked at or not, it stays until it is resumed; a run the person stopped is not an item.
+    expect(needsYouItems(input({ workstreams: [ws1], runs: [limit], seenFailed: new Set(["r-f"]) }))).toHaveLength(1);
+    expect(needsYouItems(input({ workstreams: [ws1], runs: [{ ...limit, stoppedByLimit: false }] }))).toEqual([]);
+    expect(needsYouItems(input({ workstreams: [ws1], runs: [{ ...limit, state: "working", stoppedByLimit: false }] }))).toEqual([]);
+    // The workstream's row and its step say so too.
+    expect(workstreamStatus(view("ws-1", "CA-401", { runs: ["r-f"] }), [limit])).toBe("Needs you");
+    expect(stepChips([limit], [], {}, [], { now: NOW }).find((c) => c.kind === "plan")?.needsYou).toBe(1);
+  });
+
   it("keeps a permission prompt the person chose Allow once for as waiting in Terminal, and asks again once the run asks something else", () => {
     const asking = run("r-p", "build", "needsPermission", { needs: "approve Bash: git push -u origin worktree-x" });
     const listed = (r: Run) => needsYouItems(input({ workstreams: [ws1], runs: [r] })).map((i) => i.label);

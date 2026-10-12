@@ -4,7 +4,7 @@ import { heldText } from "../lib/workstreamHold";
 import { byQueue, STAGE_LABEL, stageText } from "../lib/workstreamStage";
 import { HELD_BUDGET, HELD_DAILY } from "../types";
 import type { BasisField, CodeChange, Intent, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
-import { liveCounts, liveWords, needsAttention, needsPerson, stateView, type Tone } from "./agentsLogic";
+import { liveCounts, liveWords, needsAttention, needsPerson, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
 import type { WorkstreamSuggestionScene } from "./suggestions";
 import { runWorkstream } from "./workstreamsStore";
@@ -45,14 +45,14 @@ export function workstreamStatus(view: WorkstreamView, runs: readonly Run[], wai
   const queued = furthest((r) => r.state === "queued");
   if (queued) return `${STAGE_LABEL[queued.spec.kind]} queued`;
   if (view.reviewBlocking) return stageText(view.stage, null, true);
-  if (waiting > 0 || own.some(needsPerson)) return "Needs you";
+  if (waiting > 0 || own.some((r) => needsPerson(r) || stoppedAtLimit(r))) return "Needs you";
   const last = [...own].sort(byQueue).pop();
   if (last?.state === "failed") return `${STAGE_LABEL[last.spec.kind]} failed`;
   return view.stage === "done" ? "Done" : "Idle";
 }
 
 /** What kind of wait an item in the tray is. */
-export type NeedsYouKind = "draft" | "runStart" | "question" | "permission" | "failure" | "held" | "escalation";
+export type NeedsYouKind = "draft" | "runStart" | "question" | "permission" | "failure" | "limit" | "held" | "escalation";
 
 /**
  * What activating an item brings into view: a draft card, a run card (and its sheet), the workstream's held banner, or
@@ -171,7 +171,7 @@ function answersByRun(proposals: readonly Proposal[], runs: readonly Run[]): Map
 }
 
 /** Where a kind of wait sorts in the tray, lowest first: a review that still blocks, then a hold, then a run stuck on the person, then drafts. */
-const URGENCY: Record<NeedsYouKind, number> = { escalation: 0, held: 1, permission: 2, question: 2, failure: 2, draft: 3, runStart: 3 };
+const URGENCY: Record<NeedsYouKind, number> = { escalation: 0, held: 1, permission: 2, question: 2, failure: 2, limit: 2, draft: 3, runStart: 3 };
 
 /**
  * Everything waiting on the person across the open workstreams and General: an escalation first, then holds, then runs
@@ -224,6 +224,8 @@ export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt
       const allowed = run.permissionAllowed?.command === readAs(run.needs);
       items.push({ ...base, kind: "permission", ...say(key, allowed ? `${name} waits for your Yes in Terminal` : `${name} asks to run a command`) });
     } else if (run.state === "systemBlocked") items.push({ ...base, kind: "permission", ...say(key, `${name} needs permission`) });
+    // A run Gossamr stopped at its limit waits for the person to resume it: Resume on its card or its sheet.
+    else if (stoppedAtLimit(run)) items.push({ ...base, kind: "limit", ...say(key, `${name} stopped at its limit`) });
     // The predicate the rail badge counts by: by now only a failed run passes it.
     else if (needsAttention(run, seenFailed)) {
       const trust = run.failure?.type === "untrustedFolder";
@@ -401,7 +403,7 @@ export function stepChips(runs: readonly Run[], events: readonly Pick<Workstream
       auto: !!newest?.autoStart,
       verdict: review ? verdictChip(review) : null,
       fixRound: fixRoundChip(sent.length - yours, yours),
-      needsYou: pending + own.filter((r) => needsPerson(r) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
+      needsYou: pending + own.filter((r) => (needsPerson(r) || stoppedAtLimit(r)) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
       pr: kind === "build" ? buildPullRequest(own, changes) : null,
     };
   });
