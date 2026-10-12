@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, openApp, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, surfacePullRequests } from "./support/app";
+import { advanceRuns, askPip, openApp, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, surfacePullRequests } from "./support/app";
 
 // Pip's refusals, as BUILD_NEEDS_PLAN and REVIEW_NEEDS_BUILD in src-tauri/src/agent/runs.rs.
 const BUILD_NEEDS_PLAN = "A build can only follow a finished plan run: pass from_run with the plan run's id from list_runs. Pip can't propose a build or review on its own.";
@@ -12,11 +12,6 @@ const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" 
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 /** Pip's run drafts on CA-401 in the pane. */
 const runCards = (page: Page) => pipPane(page).getByRole("article", { name: "Start an agent: CA-401" });
-
-/** Waits until Pip has finished answering in the pane. */
-async function settled(page: Page) {
-  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-}
 
 /** Asks Pip for `what` and waits for its answer. */
 async function ask(page: Page, what: string) {

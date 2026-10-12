@@ -8,7 +8,7 @@ import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
 import { browseList, introCancelled, startWhat, useRuns } from "./runsStore";
-import { agentsWaitingOnYou, attentionCount } from "./agentsLogic";
+import { laneOf, needsAttention } from "./agentsLogic";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -22,7 +22,7 @@ let backend: MockBackend;
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", memory());
-  useRuns.setState({ seenFailed: new Set(), filters: NO_FILTERS, earlierOpen: false, introOpen: null, stopping: false });
+  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, earlierOpen: false, introOpen: null, stopping: false });
   useToasts.getState().clear();
   useTabs.getState().setRoute("workspace");
   backend = new MockBackend();
@@ -147,17 +147,22 @@ describe("the runs store", () => {
     list.mockRestore();
   });
 
-  it("keeps the badge down once a failed run has been seen, and remembers it", async () => {
+  it("never takes a failed run out of Needs you for being looked at; only a Dismiss does, and it is remembered", async () => {
     s().init(new MockBackend({ runs: { seed: "failures" } }));
     await settle();
-    const count = () => attentionCount(s().runs, s().seenFailed);
-    const before = count();
-    s().markSeen();
-    // Every failure but the folder to trust, which needs an action rather than a look.
-    expect(count()).toBe(1);
-    expect(before).toBe(6);
-    const stored = JSON.parse(localStorage.getItem("gossamr-runs-seen")!);
-    expect(stored).toHaveLength(5);
+    const waiting = () => s().runs.filter((r) => needsAttention(r, s().dismissed)).length;
+    expect(waiting()).toBe(6);
+    // Nothing the store does on its own is a look that clears a failure: reloading leaves all six.
+    await s().reload();
+    expect(waiting()).toBe(6);
+    const [first] = s().runs;
+    s().dismiss(first.id);
+    expect(waiting()).toBe(5);
+    expect(s().dismissed.has(first.id)).toBe(true);
+    expect(JSON.parse(localStorage.getItem("gossamr-runs-dismissed")!)).toEqual([first.id]);
+    // Dismissing twice is one.
+    s().dismiss(first.id);
+    expect(JSON.parse(localStorage.getItem("gossamr-runs-dismissed")!)).toEqual([first.id]);
   });
 
   it("opens a run from a notification: shows the view, selects it and clears the filters", async () => {
@@ -174,9 +179,9 @@ describe("the runs store", () => {
   });
 
   it("combines filters and clears them", () => {
-    s().setFilter({ lane: "needs" });
+    s().setFilter({ lane: "bad" });
     s().setFilter({ repo: "acme/payments" });
-    expect(s().filters).toEqual({ lane: "needs", repo: "acme/payments", ticket: "all" });
+    expect(s().filters).toEqual({ lane: "bad", repo: "acme/payments", ticket: "all" });
     s().clearFilters();
     expect(s().filters).toEqual(NO_FILTERS);
   });
@@ -246,7 +251,8 @@ describe("the run sheet", () => {
 
   it("browses with j and k in the order the view lists the runs, and stops at the ends", async () => {
     await settle();
-    const first = s().runs.find((r) => r.state === "needsPermission")!;
+    // The first run of the view's own order: from there k has nowhere to go.
+    const first = s().runs.find((r) => r.id === agentGroups("state", s().runs, [], NO_FILTERS, false, Date.now()).order[0])!;
     s().openRun(first.id);
     s().browse(-1);
     expect(s().sheet).toEqual({ type: "run", id: first.id });
@@ -262,13 +268,17 @@ describe("the run sheet", () => {
     const ws = await backend.workstreamsOpen(itemRef("CA-401"));
     const draft = await backend.runsDraft({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-browse-1a2b", instruction: "", workstream: ws.id }, itemRef("CA-401"));
     const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    // Finished, it is in the Done lane by state, behind the runs still working, and first by workstream.
+    for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
     useWorkstreams.getState().init(backend);
     await s().reload();
     await vi.waitFor(() => expect(useWorkstreams.getState().list).toHaveLength(1));
     usePrefs.setState({ agentsGroup: "workstream" });
     try {
-      const byWorkstream = agentGroups("workstream", s().runs, useWorkstreams.getState().list, NO_FILTERS, false, Date.now()).order;
-      const byState = agentGroups("state", s().runs, [], NO_FILTERS, false, Date.now()).order;
+      // The sample's clock stands at 12:00 on 30 September 2026.
+      const soon = Date.parse("2026-09-30T12:05:00Z");
+      const byWorkstream = agentGroups("workstream", s().runs, useWorkstreams.getState().list, NO_FILTERS, false, soon).order;
+      const byState = agentGroups("state", s().runs, [], NO_FILTERS, false, soon).order;
       expect(byWorkstream[0]).toBe(run.id);
       expect(byState.indexOf(run.id)).toBeGreaterThan(0);
       s().openRun(run.id);
@@ -384,26 +394,26 @@ describe("the run sheet", () => {
       expect(open).toHaveBeenCalledWith("https://code.claude.com/docs/en/setup");
     });
 
-    it("keeps a folder to trust waiting on the person after Agents was looked at, since it needs an action", async () => {
+    it("keeps every failure, a folder to trust among them, waiting on the person until it is dismissed", async () => {
       const run = await failing("untrustedFolder");
-      s().markSeen();
-      expect(s().seenFailed.has(run.id)).toBe(false);
-      expect(attentionCount(s().runs, s().seenFailed)).toBe(1);
-      expect(agentsWaitingOnYou(s().runs, s().seenFailed)).toContain(run);
-      // Other failures are still quieted by a look.
       const other = s().runs.find((r) => r.failure?.type === "other")!;
-      expect(s().seenFailed.has(other.id)).toBe(true);
+      expect(s().dismissed.has(run.id)).toBe(false);
+      expect(needsAttention(run, s().dismissed)).toBe(true);
+      expect(needsAttention(other, s().dismissed)).toBe(true);
+      s().dismiss(other.id);
+      expect(needsAttention(other, s().dismissed)).toBe(false);
+      expect(needsAttention(run, s().dismissed)).toBe(true);
     });
 
-    it("counts a run on the rail again if it fails again after a retry that worked", async () => {
+    it("lets a dismissed failure back into Needs you if it fails again after a retry that worked", async () => {
       const run = await failing("notSignedIn");
-      s().markSeen();
-      expect(s().seenFailed.has(run.id)).toBe(true);
+      s().dismiss(run.id);
+      expect(s().dismissed.has(run.id)).toBe(true);
       await s().fix(run.id, "terminal");
       await s().retryLaunch(run.id);
       await settle();
-      expect(s().seenFailed.has(run.id)).toBe(false);
-      expect(JSON.parse(localStorage.getItem("gossamr-runs-seen")!)).not.toContain(run.id);
+      expect(s().dismissed.has(run.id)).toBe(false);
+      expect(JSON.parse(localStorage.getItem("gossamr-runs-dismissed")!)).not.toContain(run.id);
     });
   });
 
@@ -458,9 +468,12 @@ describe("the run sheet", () => {
       await s().answer(run.id, "Yes, keep it.");
       await settle();
       expect(s().runs.find((r) => r.id === run.id)?.state).toBe("working");
-      // The live order has moved it to Running; the sheet still walks the order it opened with.
+      // It has moved from Failed or stuck to Running; the sheet still walks the order it opened with.
       const live = agentGroups("state", s().runs, [], NO_FILTERS, false, Date.now()).order;
-      expect(live.indexOf(run.id)).not.toBe(at);
+      // The sample's clock stands at 12:00 on 30 September 2026.
+      const soon = Date.parse("2026-09-30T12:05:00Z");
+      expect(laneOf(run, soon)).toBe("bad");
+      expect(laneOf(s().runs.find((r) => r.id === run.id)!, soon)).toBe("running");
       expect(browseList(s().browseOrder, live).indexOf(run.id)).toBe(at);
       s().browse(1);
       expect(s().sheet).toEqual({ type: "run", id: before[at + 1] });

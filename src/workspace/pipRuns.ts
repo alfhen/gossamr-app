@@ -42,12 +42,12 @@ const GOING = new Set<Run["state"]>(["queued", "launching", "working"]);
  * The runs Pip's pane keeps in view, in order: the ones waiting on the person first, failed ones they haven't looked at
  * among them as the Needs you tray lists them, then the ones still working. The pane shows the first `STRIP_SHOWN`.
  */
-export function stripRuns(runs: readonly Run[], seenFailed: ReadonlySet<string> = new Set()): Run[] {
+export function stripRuns(runs: readonly Run[], dismissed: ReadonlySet<string> = new Set()): Run[] {
   const newest = (a: Run, b: Run) => b.lastProgressAt.localeCompare(a.lastProgressAt) || a.id.localeCompare(b.id);
   // Your agents, every one of them (`yourAgents`), so "3 of 6" counts what every other count of agents counts.
-  const mine = yourAgents(runs, seenFailed);
-  const needs = mine.filter((r) => needsAttention(r, seenFailed)).sort(newest);
-  const going = mine.filter((r) => !needsAttention(r, seenFailed)).sort(newest);
+  const mine = yourAgents(runs, dismissed);
+  const needs = mine.filter((r) => needsAttention(r, dismissed)).sort(newest);
+  const going = mine.filter((r) => !needsAttention(r, dismissed)).sort(newest);
   return [...needs, ...going];
 }
 

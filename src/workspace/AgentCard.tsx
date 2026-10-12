@@ -26,6 +26,8 @@ export interface AgentItemProps {
   onDraftComment?(): void;
   /** Present on a finished plan run that can be built from. */
   onBuildFromPlan?(): void;
+  /** Present on a run stopped at its limit: wakes it with the standard words, as Resume in its sheet does. Only the person's click does this. */
+  onResume?(): void;
   /** Present on a finished build that opened a pull request that can be reviewed. */
   onReviewThis?(): void;
   /** A comment draft from this run is waiting. */
@@ -41,6 +43,36 @@ export interface AgentItemProps {
   /** A finished review's verdict; null when it gave none, absent while unread or for any other run. */
   review?: ReviewView | null;
   failure: FailureState;
+  /** Present while the run is one of the things in Needs you: pressing it opens that need on Pip home. */
+  onOpenNeed?(): void;
+  /** What a key pressed on the card waits for Enter to do ("↵ allow this once in Terminal · any other key cancels"), while one does. */
+  asking?: string;
+}
+
+/** The line a card or row shows while a key waits for Enter. */
+export function KeyAsking({ text }: { text?: string }) {
+  if (!text) return null;
+  return (
+    <span data-needs-asking role="status" className="min-w-0 text-xs font-semibold text-ws-pip [overflow-wrap:anywhere]">
+      {text}
+    </span>
+  );
+}
+
+/** The pill on a run that is in Needs you; pressing it opens the need rather than the run. */
+export function InNeedsYou({ onOpen }: { onOpen(): void }) {
+  return (
+    <button
+      type="button"
+      data-in-needs-you
+      onClick={(ev) => (ev.stopPropagation(), onOpen())}
+      onKeyDown={(ev) => ev.key === "Enter" && ev.stopPropagation()}
+      title="This run is in Needs you on Pip home. Open it there."
+      className="inline-flex shrink-0 items-center rounded-full border border-ws-pip/50 bg-ws-pip-soft px-2 text-xs leading-[1.6] font-semibold whitespace-nowrap text-ws-pip hover:bg-ws-pip hover:text-ws-on-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+    >
+      In Needs you
+    </button>
+  );
 }
 
 /** A finished review's verdict in a chip: "Blocking · 2" or "Pass". */
@@ -133,7 +165,7 @@ export function ReadOnlyBadge({ run, compact = false }: { run: Run; compact?: bo
   );
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onResume, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -150,7 +182,8 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
       aria-setsize={total}
       aria-current={selected ? "true" : undefined}
       onClick={onOpen}
-      onKeyDown={onActivate(onOpen)}
+      // While a key of the Agents list waits for Enter, Enter is that key's (the window's handler does it), not "open".
+      onKeyDown={asking ? undefined : onActivate(onOpen)}
       style={{ ["--c" as string]: tone.color, boxShadow: `inset 3px 0 0 var(--c)${selected ? ", 0 0 0 2px var(--color-ws-accent-soft)" : ""}` }}
       className={`ws-agent-card relative grid cursor-pointer content-start gap-2 rounded-[10px] border py-2.5 pr-3.5 pl-4 outline-offset-2 ${selected ? "border-ws-accent" : needs ? "border-ws-pip/45" : "border-ws-sep"} ${needs ? "bg-ws-pip-soft" : "bg-ws-win"}`}
     >
@@ -164,6 +197,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
         {ticketLabel(run) && <span className="font-mono text-sm font-semibold text-ws-ink2">{ticketLabel(run)}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {review && <VerdictChip review={review} />}
+          {onOpenNeed && <InNeedsYou onOpen={onOpenNeed} />}
           <StateChip run={run} now={now} />
         </span>
       </div>
@@ -176,6 +210,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
         </span>
         <RunRef run={run} className="ml-auto shrink-0" />
       </p>
+      <KeyAsking text={asking} />
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
       <div className="flex flex-wrap items-center gap-2 empty:hidden">
         {draftReady && onOpenDraft ? (
@@ -200,6 +235,18 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
               Draft comment
             </button>
           )
+        )}
+        {onResume && (
+          <button
+            type="button"
+            data-resume
+            onClick={(ev) => (ev.stopPropagation(), onResume())}
+            onKeyDown={(ev) => ev.stopPropagation()}
+            title="Wakes the agent to carry on from where it stopped. Its conversation and worktree are kept."
+            className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
+          >
+            Resume
+          </button>
         )}
         {onBuildFromPlan && (
           <button

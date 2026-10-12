@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
+import type { Need } from "../lib/needs";
 import { labelsByRun, stageText } from "../lib/workstreamStage";
 import type { ReviewView, Run, RunsEnvironment, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -37,25 +38,24 @@ import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
-import { breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
+import { RESUME_TEXT, breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, resumable, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { stableGroups } from "./stableOrder";
+import { useNow } from "./useNow";
+import { agentKey } from "./agentKeys";
+import { arm, confirmArmed, disarm, keyPlan, openNeed } from "./needsActions";
+import { usePipHome } from "./pipHomeStore";
+import { currentNeeds, useNeedsYou } from "./useNeeds";
+import type { TimelineFilter } from "../lib/timeline";
+import { TimelineFilterBar, showTimeline } from "./TimelineFilterBar";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
 const VIEW_LABEL: Record<AgentsViewMode, string> = { cards: "Cards", list: "List" };
 const GROUP_LABEL: Record<AgentsGroup, string> = { state: "State", workstream: "Workstream" };
 
-/** Re-renders now and then so ages and the quiet chip move without a refresh, and counts of quiet runs with them. */
-export function useNow(everyMs = 30_000) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), everyMs);
-    return () => clearInterval(id);
-  }, [everyMs]);
-  return now;
-}
+export { useNow };
 
 const NO_WORKSTREAMS: readonly WorkstreamView[] = [];
 
@@ -129,6 +129,8 @@ export interface AgentsActions {
   attach(id: string): void;
   draftComment(id: string): void;
   buildFromPlan(run: Run): void;
+  /** Resumes a run stopped at its limit, the one way it carries on. */
+  resume(id: string): void;
   /** Shows the comment draft a finished run left on its ticket. */
   openDraft?(run: Run): void;
   openBreakdown?(run: Run): void;
@@ -149,6 +151,10 @@ export interface AgentsActions {
   stopAll(): void;
   startAgent(): void;
   openSafety(): void;
+  /** Opens a need on Pip home, from a run's "In Needs you" pill. */
+  openNeed?(need: Need): void;
+  /** Another of the timeline's filters (All, Drafts, Decisions): the selected workstream's timeline on Pip home. */
+  showTimeline?(filter: TimelineFilter): void;
 }
 
 function Toolbar({ runs, filters, view, group, introShown, on }: { runs: readonly Run[]; filters: AgentFilters; view: AgentsViewMode; group: AgentsGroup; introShown: boolean; on: AgentsActions }) {
@@ -203,11 +209,10 @@ function Toolbar({ runs, filters, view, group, introShown, on }: { runs: readonl
 }
 
 function Lane({ group, now, folded, onToggle, children }: { group: LaneGroup; now: number; folded: boolean; onToggle?: () => void; children: ReactNode }) {
-  const needs = group.lane === "needs";
   return (
     <section aria-label={group.title} data-lane={group.lane} className="grid gap-2.5">
       <div className="flex items-center gap-2">
-        <h3 className={`m-0 text-xs font-semibold tracking-[0.05em] uppercase ${needs ? "text-ws-pip" : "text-ws-ink2"}`}>{group.title}</h3>
+        <h3 className="m-0 text-xs font-semibold tracking-[0.05em] uppercase text-ws-ink2">{group.title}</h3>
         <span data-lane-count className="text-xs text-ws-ink3">
           {laneCount(group.lane, group.runs, now)}
         </span>
@@ -263,8 +268,12 @@ export interface AgentsScreenProps {
   stopping: boolean;
   /** Failed runs the person has taken the Terminal step for. */
   opened: ReadonlySet<string>;
-  /** Failed runs the person has looked at, which no longer wait on them: the summary counts as the Agents rail badge does. */
-  seenFailed?: ReadonlySet<string>;
+  /** How many things need the person, as Needs you counts them (the rail badge and the composer say the same). */
+  needsYou?: number;
+  /** The runs that are one of those things, by run id, with the need's key; each shows an "In Needs you" pill that opens it. */
+  inNeeds?: ReadonlyMap<string, Need>;
+  /** The key press in Needs you's list or here that waits for Enter, shown on its run's card. */
+  asking?: { key: string; text: string } | null;
   now: number;
   ticketTitle(run: Run): string | null;
   /** Whether a finished run has a comment draft waiting. */
@@ -282,7 +291,7 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, seenFailed, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
@@ -325,9 +334,12 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     descriptionReady: !!descriptionReady?.(run),
     onOpenDescription: on.openDescription ? () => on.openDescription?.(run) : undefined,
     onBuildFromPlan: buildFromPlanControl(run).enabled ? () => on.buildFromPlan(run) : undefined,
+    onResume: resumable(run) ? () => on.resume(run.id) : undefined,
     onReviewThis: reviewThis?.(run),
     review: reviewOf?.(run),
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
+    onOpenNeed: inNeeds?.has(run.id) ? () => on.openNeed?.(inNeeds.get(run.id)!) : undefined,
+    asking: asking && inNeeds?.get(run.id)?.key === asking.key ? asking.text : undefined,
     failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
   });
 
@@ -355,7 +367,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ws-sep bg-ws-bar px-6 py-2.5">
         <h2 className="m-0 text-base font-semibold">Agents</h2>
         <span aria-live="polite" className="text-sm text-ws-ink3">
-          {summaryLine(runs, now, seenFailed)}
+          {summaryLine(runs, now, needsYou)}
         </span>
         <span className="flex-1" />
         <button type="button" onClick={on.startAgent} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
@@ -368,6 +380,20 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
         </button>
         <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
       </header>
+      {/* Agents is the timeline's Runs filter across every workstream; the other filters are a workstream's timeline on Pip home. */}
+      {on.showTimeline && (
+        <div className="border-b border-ws-sep px-6 py-1.5">
+          <TimelineFilterBar
+            value="runs"
+            onChange={(f) => f !== "runs" && on.showTimeline?.(f)}
+            after={
+              <span data-agents-scope className="text-sm text-ws-ink3">
+                in every workstream
+              </span>
+            }
+          />
+        </div>
+      )}
       <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} on={on} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-[max(80px,var(--ws-launcher-clear,0px))]">
         <div
@@ -423,6 +449,7 @@ const actions: AgentsActions = {
   open: (id) => useRuns.getState().openRun(id),
   attach: (id) => void useRuns.getState().attach(id),
   draftComment: (id) => void useRuns.getState().draftComment(id),
+  resume: (id) => void useRuns.getState().answer(id, RESUME_TEXT),
   buildFromPlan: (run) => void useRunSetup.getState().begin(buildFromPlanOptions(run)),
   openDraft: (run) => {
     if (run.item) return useRuns.getState().showDraft(run.item);
@@ -456,6 +483,8 @@ const actions: AgentsActions = {
   stopAll: () => void useRuns.getState().stopAll(),
   startAgent: () => useRuns.getState().setPicking(true),
   openSafety: () => useRuns.getState().openSafety(),
+  openNeed,
+  showTimeline,
 };
 
 export function AgentsView() {
@@ -469,7 +498,9 @@ export function AgentsView() {
   const introOpen = useRuns((s) => s.introOpen);
   const stopping = useRuns((s) => s.stopping);
   const opened = useRuns((s) => s.terminalOpened);
-  const seenFailed = useRuns((s) => s.seenFailed);
+  const needs = useNeedsYou();
+  const asking = usePipHome((s) => s.asking);
+  const inNeeds = useMemo(() => new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : []))), [needs]);
   const view = usePrefs((s) => s.agentsView);
   const group = usePrefs((s) => s.agentsGroup);
   const workstreams = useWorkstreams((s) => s.list);
@@ -485,8 +516,6 @@ export function AgentsView() {
     orderRef.current = order;
   }, []);
 
-  useEffect(() => useRuns.getState().markSeen(), [runs]);
-
   // A store that lost its backend (a hot reload resets it) never loads by itself.
   useEffect(() => {
     if (status === "idle") useRuns.getState().recover();
@@ -501,6 +530,24 @@ export function AgentsView() {
         ev.preventDefault();
         useRuns.getState().setPicking(true);
         return;
+      }
+      // The one key model on a run's card: o opens it, a, d, s and e act as on its row in Needs you.
+      const card = target.matches?.("[data-run-id]") ? target : null;
+      const runId = card?.getAttribute("data-run-id") ?? null;
+      const need = runId ? currentNeeds().find((n) => n.runId === runId) : undefined;
+      const asked = usePipHome.getState().asking;
+      const listed = agentKey(ev, !!card, !!asked && asked.key === need?.key);
+      if (listed) {
+        if (listed.type === "confirm") return void (ev.preventDefault(), confirmArmed());
+        if (listed.type === "cancel") return void (ev.preventDefault(), disarm());
+        if (listed.type === "open") return void (ev.preventDefault(), runId && useRuns.getState().openRun(runId));
+        const plan = need ? keyPlan(need, listed.act) : null;
+        if (need && plan) {
+          ev.preventDefault();
+          if (plan.type === "ask") return arm(need, plan);
+          if (plan.type === "do") return plan.run();
+          return openNeed(need, { edit: plan.edit });
+        }
       }
       const { selectedId: current, select } = useRuns.getState();
       const action = keyAction(ev.key, current, orderRef.current);
@@ -536,7 +583,9 @@ export function AgentsView() {
       workstreams={workstreams}
       stopping={stopping}
       opened={opened}
-      seenFailed={seenFailed}
+      needsYou={needs.length}
+      inNeeds={inNeeds}
+      asking={asking}
       now={now}
       ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
       draftReady={(run) => !!runDraftOf(proposals, run.id) || !!runTicketDraftOf(proposals, run.id)}

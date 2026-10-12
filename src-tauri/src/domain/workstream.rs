@@ -31,7 +31,7 @@ impl Mode {
 }
 
 /// Pip turns the supervisor may start in a workstream since the person last wrote in it, unless its budget says otherwise.
-pub const AUTO_TURNS_DEFAULT: u32 = 6;
+pub const AUTO_TURNS_DEFAULT: u32 = 11;
 /// Wakes a workstream may have in all, unless its budget says otherwise.
 pub const WAKES_DEFAULT: u32 = 12;
 
@@ -581,6 +581,16 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_explicit_budget_keeps_its_value_and_only_the_default_changed() {
+        let mut ws = workstream();
+        assert_eq!(budget_limits(&ws), (11, 12), "no stored value is the new default");
+        let mut json = serde_json::to_value(&ws).unwrap();
+        json["budget"] = serde_json::json!({ "autoTurns": 6, "wakes": 8 });
+        ws = serde_json::from_value(json).unwrap();
+        assert_eq!(budget_limits(&ws), (6, 8), "a stored 6 stays 6");
+    }
+
+    #[test]
     fn the_budget_is_amber_from_80_percent_of_either_limit_and_spent_at_100() {
         let mut ws = workstream();
         assert_eq!(budget_limits(&ws), (AUTO_TURNS_DEFAULT, WAKES_DEFAULT));
@@ -601,11 +611,11 @@ mod tests {
         assert_eq!(at(80, 120), BudgetLevel::Spent);
 
         let mut fresh = workstream();
-        fresh.spent.auto_turns = 4;
-        assert_eq!(budget_level(&fresh), BudgetLevel::Ok, "4 of the default 6");
-        fresh.spent.auto_turns = 5;
+        fresh.spent.auto_turns = 8;
+        assert_eq!(budget_level(&fresh), BudgetLevel::Ok, "8 of the default 11");
+        fresh.spent.auto_turns = 9;
         assert_eq!(budget_level(&fresh), BudgetLevel::Amber);
-        fresh.spent.auto_turns = 6;
+        fresh.spent.auto_turns = 11;
         assert_eq!(budget_level(&fresh), BudgetLevel::Spent);
         fresh.spent.auto_turns = 0;
         fresh.spent.wakes = 10;

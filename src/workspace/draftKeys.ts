@@ -1,7 +1,8 @@
 import type { Proposal } from "../types";
+import { keyIntent } from "./keyMap";
 
-/** What a key pressed on a focused draft card in Pip's conversation does. */
-export type DraftKeyAction = "approve" | "skip" | "open";
+/** What a key pressed on a focused draft card does. `edit` opens the card's editing where it has its own (the full card), else what `open` does. */
+export type DraftKeyAction = "approve" | "skip" | "open" | "edit";
 
 /** A draft card in the conversation, as the keyboard finds it. */
 export const DRAFT_CARD = "article[data-draft]";
@@ -12,38 +13,55 @@ export const DRAFT_CARD = "article[data-draft]";
  */
 const INLINE: ReadonlySet<Proposal["intent"]["type"]> = new Set(["comment", "transition", "subtasks", "create", "link", "update", "runAnswer"]);
 
+/** Drafts with something to edit: a transition or a link is only approved or skipped, and says nothing to change. */
+const EDITABLE: ReadonlySet<Proposal["intent"]["type"]> = new Set(["comment", "rewrite", "subtasks", "create", "followUp", "runAnswer", "startRun", "githubReview"]);
+
 /**
- * Enter and o open; a approves where the card can, or opens where approving needs a review first; s skips. A decided draft
- * only opens. A GitHub review is posted in place only when the card knows the token may post it (`canApprove`); otherwise a
- * opens, where the card says why it can't be posted.
+ * The one key model (`keyMap.ts`) on a draft: Enter and o open; a approves where the card can, or opens where approving
+ * needs a review first; e edits (opens the review where editing happens, on a draft that has something to edit); d and s
+ * skip, which acts at once and offers Undo. A decided draft only opens. A GitHub review is posted in place only when the
+ * card knows the token may post it (`canApprove`); otherwise a opens, where the card says why it can't be posted.
  */
 export function draftKeyAction(p: Proposal, key: string, canApprove = false): DraftKeyAction | null {
-  if (key === "Enter" || key === "o") return "open";
+  const intent = keyIntent({ key });
+  if (intent === "open") return "open";
   if (p.state.type !== "pending") return null;
-  if (key === "a") return INLINE.has(p.intent.type) || (p.intent.type === "githubReview" && canApprove) ? "approve" : "open";
-  if (key === "s") return "skip";
-  return null;
+  switch (intent) {
+    case "approve":
+      return INLINE.has(p.intent.type) || (p.intent.type === "githubReview" && canApprove) ? "approve" : "open";
+    case "edit":
+      return EDITABLE.has(p.intent.type) ? "edit" : null;
+    case "dismiss":
+    case "skip":
+      return "skip";
+    default:
+      return null;
+  }
 }
 
-/** A decision a card waits for Enter to confirm. */
-export type Asking = "approve" | "skip";
+/** The one decision a card waits for Enter to confirm: approving, which posts or writes. Skipping acts at once. */
+export type Asking = "approve";
 
 /**
- * The one line a focused card shows about its keys, or what it asks while a decision waits to be confirmed. `canApprove`
+ * The one line a focused card shows about its keys, or what it asks while the approval waits to be confirmed. `canApprove`
  * false leaves a out, for an answer whose run isn't asking any more or a review the token can't post; true lets a review
- * be posted. An answer is sent rather than approved, and a review posted.
+ * be posted. An answer is sent rather than approved, and a review posted. The words are the model's (`keyMap.ts`).
  */
 export function draftKeyHint(p: Proposal, asking: Asking | null = null, canApprove = p.intent.type !== "githubReview"): string {
   const answer = p.intent.type === "runAnswer";
   const review = p.intent.type === "githubReview";
-  if (asking) return `↵ ${asking === "approve" && answer ? "send this reply" : asking === "approve" && review ? "post this review" : asking} · any other key cancels`;
-  if (canApprove && draftKeyAction(p, "a", canApprove) === "approve") return answer ? "a send · s skip · ↵ open" : review ? "a post · s skip · ↵ open" : "a approve · s skip · ↵ open";
-  return draftKeyAction(p, "s") ? "s skip · ↵ open" : "↵ open";
+  if (asking) return `↵ ${answer ? "send this reply" : review ? "post this review" : "approve"} · any other key cancels`;
+  const keys: string[] = [];
+  if (canApprove && draftKeyAction(p, "a", canApprove) === "approve") keys.push(answer ? "a send" : review ? "a post" : "a approve");
+  if (draftKeyAction(p, "e")) keys.push("e edit");
+  if (draftKeyAction(p, "s")) keys.push("d s skip");
+  keys.push("↵ open");
+  return keys.join(" · ");
 }
 
 /** The card's aria-keyshortcuts. */
 export function draftKeyShortcuts(p: Proposal): string {
-  return draftKeyAction(p, "s") ? "a s Enter o" : "Enter o";
+  return draftKeyAction(p, "s") ? `a${draftKeyAction(p, "e") ? " e" : ""} d s Enter o` : "Enter o";
 }
 
 /** The id of Pip's message input, where a card sends typing that isn't one of its keys. */
@@ -91,8 +109,14 @@ const show = (card: Focusable) => {
 /** Marks a card that ArrowUp from the empty input just reached; the card clears it on its first key or when it loses focus. */
 export const FROM_INPUT = "data-from-input";
 
-/** The card's own keys. Pressed while a decision waits for Enter, one of these cancels it and does nothing else. */
+/**
+ * The card's keys that only cancel while an approval waits for Enter: the ones that decide or open (a, s, o, Enter, Esc). d and
+ * e are letters a new question starts with ("add", "explain"), so after a they go back to the input with it, as before.
+ */
 const CARD_KEYS = new Set(["a", "s", "o", "Enter", "Escape"]);
+
+/** The keys that act on a card just reached from the empty input instead of going back to it as typing: approving asks for Enter, skipping can be undone. */
+const ACTS_FROM_INPUT = new Set(["a", "d", "s"]);
 
 /**
  * Whether Esc on a card whose review is open under it, or inside that review, hides the review: a plain Esc while no
@@ -107,9 +131,15 @@ const STEPS = new Set(["j", "k"]);
 
 interface CardActs {
   approve?(): void;
+  /** Skips at once and offers Undo; there is nothing to confirm. */
   skip?(): void;
-  open(): void;
-  /** Sets or clears the decision waiting for Enter. */
+  /** e: the card's own editing; a card with none opens, as Enter does. */
+  edit?(): void;
+  /** Enter and o; a card with nothing to open leaves them alone. */
+  open?(): void;
+  /** a on a draft that needs reading first: the card's main button, where a card has one to go to; else what `open` does. */
+  primary?(): void;
+  /** Sets or clears the approval waiting for Enter. */
   ask(asking: Asking | null): void;
   /** Takes text the person was typing back to the input; false when there is no input to take it. */
   type?(text: string): boolean;
@@ -121,20 +151,20 @@ interface CardActs {
 
 /**
  * A key on the card itself, never one typed into a field or pressed on a button inside it, and never with a modifier.
- * Approving and skipping take two keys, a or s and then Enter, so a person who thinks they are still typing in the input
- * never decides a draft: any other key cancels. One of the card's own keys (a, s, o, Enter, Esc) only cancels; a letter
- * that is not one of them goes back to the input together with the a or s before it. Returns whether it acted.
+ * Approving takes two keys, a and then Enter, so a person who thinks they are still typing in the input never posts or
+ * writes anything: any other key cancels. Skipping (d or s) acts at once, since Undo puts the draft back. One of the card's
+ * own keys only cancels a waiting approval; a letter that is not one of them goes back to the input together with the a
+ * before it. Returns whether it acted.
  */
 export function onDraftCardKey(ev: KeyEventLike, p: Proposal, asking: Asking | null, act: CardActs): boolean {
   if (ev.target !== ev.currentTarget || ev.metaKey || ev.ctrlKey || ev.altKey) return false;
   // Only what the draft still allows: one decided elsewhere meanwhile, or that only opens, confirms nothing.
-  const still = asking && draftKeyAction(p, asking === "approve" ? "a" : "s", act.canApprove) === asking;
-  const confirmed = !still ? undefined : asking === "approve" ? act.approve : act.skip;
+  const still = asking && draftKeyAction(p, "a", act.canApprove) === asking;
+  const confirmed = !still ? undefined : act.approve;
   if (asking) act.ask(null);
   // Just reached from the empty input, a letter is more likely the start of a new question than a card key: it goes back
-  // to the input, j, k and o included. a and s keep their meaning, which never writes on one key: they ask for Enter on a
-  // decision, and the letter after them goes back too; on a run draft a opens its setup, which starts nothing.
-  if (act.fromInput && !asking && ev.key.length === 1 && act.type && ev.key !== "a" && ev.key !== "s") {
+  // to the input, j, k, o and e included. a, s and d keep their meaning: a asks for Enter, and a skip can be undone.
+  if (act.fromInput && !asking && ev.key.length === 1 && act.type && !ACTS_FROM_INPUT.has(ev.key)) {
     if (!act.type(ev.key)) return false;
     ev.preventDefault();
     return true;
@@ -145,27 +175,41 @@ export function onDraftCardKey(ev: KeyEventLike, p: Proposal, asking: Asking | n
       confirmed();
       return true;
     }
-    // Any other of the card's own keys only cancels: it never goes on to ask, open or approve in turn.
+    // Any other of the card's own keys only cancels: it never goes on to ask, open or skip in turn.
     if (asking && CARD_KEYS.has(ev.key)) {
       ev.preventDefault();
       return true;
     }
     const action = draftKeyAction(p, ev.key, act.canApprove);
-    const decide = action === "approve" ? act.approve : action === "skip" ? act.skip : undefined;
-    if (decide && (action === "approve" || action === "skip")) {
+    if (action === "approve" && act.approve) {
       ev.preventDefault();
-      act.ask(action);
+      act.ask("approve");
       return true;
     }
-    if (action === "open") {
+    // While an approval waits, d and e are the next letters of what the person is typing, not decisions.
+    if (!asking && action === "skip" && act.skip) {
       ev.preventDefault();
-      act.open();
+      act.skip();
+      return true;
+    }
+    if (!asking && action === "edit") {
+      const go = act.edit ?? act.open;
+      if (!go) return false;
+      ev.preventDefault();
+      go();
+      return true;
+    }
+    // a on a draft that is approved only after it is read goes to its main button rather than opening it.
+    const go = ev.key === "a" ? (act.primary ?? act.open) : act.open;
+    if (action === "open" && go) {
+      ev.preventDefault();
+      go();
       return true;
     }
     if (STEPS.has(ev.key)) return false;
   }
   if (ev.key.length !== 1 || !act.type) return false;
-  const typed = (asking === "approve" ? "a" : asking === "skip" ? "s" : "") + ev.key;
+  const typed = (asking === "approve" ? "a" : "") + ev.key;
   if (!act.type(typed)) return false;
   ev.preventDefault();
   return true;

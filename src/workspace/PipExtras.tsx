@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { claude, type PipView } from "../backend/claude";
 import { useClaude } from "../claudeStore";
 import { itemKey } from "../lib/filter";
-import { pendingDrafts, useWorkspace } from "../workspaceStore";
+import { useWorkspace } from "../workspaceStore";
 import { useAgentsEnabled } from "./agentsFlag";
+import { needsYouText, useNeedsYou } from "./useNeeds";
 import { askPip } from "./askPip";
 import { useActiveTab } from "./hooks";
 import { nudgeCandidates, nudgeDelay, NUDGE_SHOWN_MS, pickNudge, type Nudge, type NudgeScene } from "./nudges";
@@ -90,7 +91,7 @@ export const LAUNCHER_CLEAR = 112;
 /** Keeps the launcher clear of the footer and, while the ticket peek is open, of the peek. */
 export const launcherStyle = (clearRight = 0) => ({ right: `calc(${clearRight}px + 1.25rem)`, bottom: "calc(var(--ws-footer-h, 2rem) + 0.75rem)" });
 
-export function Launcher({ drafts, onOpen, nudge, thinking = false, clearRight = 0 }: { drafts: number; onOpen(): void; nudge: ReactNode; thinking?: boolean; clearRight?: number }) {
+export function Launcher({ needs, onOpen, nudge, thinking = false, clearRight = 0 }: { needs: number; onOpen(): void; nudge: ReactNode; thinking?: boolean; clearRight?: number }) {
   const bubble = useRef<HTMLDivElement>(null);
   const showing = !!nudge;
   useEffect(() => {
@@ -106,13 +107,13 @@ export function Launcher({ drafts, onOpen, nudge, thinking = false, clearRight =
         <button
           type="button"
           onClick={onOpen}
-          aria-label={drafts ? `Ask Pip, ${drafts} draft${drafts === 1 ? "" : "s"} waiting` : "Ask Pip"}
+          aria-label={needs ? `Ask Pip, ${needsYouText(needs)}` : "Ask Pip"}
           title="Ask Pip (⌘J)"
           className="relative grid size-16 place-items-center [filter:drop-shadow(0_6px_8px_rgb(91_75_209/0.35))] transition-transform duration-200 hover:scale-[1.08] hover:-rotate-3"
         >
           <PipAvatar size={64} dangle thinking={thinking} />
-          {drafts > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 grid h-5 min-w-5 place-items-center rounded-full border-2 border-ws-win bg-ws-accent px-1 text-xs font-bold text-white">{drafts}</span>
+          {needs > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 grid h-5 min-w-5 place-items-center rounded-full border-2 border-ws-win bg-ws-accent px-1 text-xs font-bold text-white">{needs}</span>
           )}
         </button>
       </div>
@@ -203,10 +204,9 @@ function useNudges() {
 
 /** The floating way in while the pane is closed, with a suggestion when something on screen calls for one. */
 export function PipLauncher() {
-  const proposals = useWorkspace((s) => s.proposals);
   const nudge = usePip((s) => s.nudge);
   const thinking = useClaude((s) => Object.entries(s.byTicket).some(([id, c]) => isPaneConversation(id) && c.turns.some((t) => t.status === "running")));
-  const drafts = pendingDrafts({ proposals }).length;
+  const needs = useNeedsYou().length;
   const peekOpen = useTabs((s) => !!s.selected && s.marked.length <= 1);
   const peekWidth = usePaneWidths().peek;
   // An agent sheet's own buttons sit where the launcher does, Start agent among them: it steps aside while one is open.
@@ -214,7 +214,7 @@ export function PipLauncher() {
   const setupOpen = useRunSetup((s) => s.open);
   useNudges();
   if (runSheetOpen || setupOpen) return null;
-  return <Launcher clearRight={peekOpen ? peekWidth : 0} drafts={drafts} thinking={thinking} onOpen={() => usePrefs.getState().setPipOpen(true)} nudge={nudge && <NudgeBubble nudge={nudge} />} />;
+  return <Launcher clearRight={peekOpen ? peekWidth : 0} needs={needs} thinking={thinking} onOpen={() => usePrefs.getState().setPipOpen(true)} nudge={nudge && <NudgeBubble nudge={nudge} />} />;
 }
 
 const MIN_SELECTION = 4;

@@ -7,8 +7,10 @@ import { workstreamConversation } from "../lib/conversations";
 import { TURN_HELP, budgetView, heldText } from "../lib/workstreamHold";
 import { AUTOSTART_DEFAULTS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import type { Run } from "../types";
 import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandActions } from "./commands";
 import { useToasts } from "./toasts";
+import { NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
 import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 import { DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent } from "./EscalationCard";
@@ -34,6 +36,58 @@ const noop = (): ControlActions => ({ onManage: vi.fn(), onHold: vi.fn(), onResu
 const render = (view: WorkstreamView, confirmingStop = false) =>
   renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={confirmingStop} onConfirmStop={vi.fn()} />);
 
+describe("the next-step line", () => {
+  it("shows the sentence with data-next-step, and leaves the line out when nothing is given", () => {
+    const view = viewOf({ mode: "manage" });
+    const withLine = renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={false} onConfirmStop={vi.fn()} next={{ kind: "auto", text: "Next: when R5 (Build) finishes, a review starts automatically.", need: null }} />);
+    expect(withLine).toContain('data-next-step="auto"');
+    expect(withLine).toContain("Next: when R5 (Build) finishes, a review starts automatically.");
+    expect(withLine).not.toContain("data-next-step-need");
+    expect(render(view)).not.toContain("data-next-step");
+  });
+
+  it("is a link to the need while it waits on the person", () => {
+    const need = { key: "run:r1" } as never;
+    const html = renderToStaticMarkup(<NextStepLine next={{ kind: "waiting", text: "Next: waiting on you. R5 wants to run a command.", need }} />);
+    expect(html).toContain('data-next-step="waiting"');
+    expect(html).toMatch(/<button[^>]*data-next-step-need="run:r1"[^>]*>Next: waiting on you\. R5 wants to run a command\.<\/button>/);
+  });
+});
+
+describe("the next-step line before Settings' switches are read", () => {
+  const building = (): { view: WorkstreamView; runs: Run[] } => {
+    const base = new MockBackend().runs.list()[0];
+    const run = { ...base, id: "b1", state: "working", spec: { ...base.spec, kind: "build", workstream: sample.id, allowPush: true }, failure: null, needs: null, slotWaitSince: null, endedAt: null } as Run;
+    return { view: { ...viewOf({ mode: "manage" }), runs: [run.id], labels: [[run.id, "R1"]] }, runs: [run] };
+  };
+
+  it("stays hidden while globals are null, then shows once they load", async () => {
+    const { view, runs } = building();
+    expect(nextStepOnceKnown(view, runs, [], [], null)).toBeNull();
+    const loaded = nextStepOnceKnown(view, runs, [], [], AUTOSTART_DEFAULTS);
+    expect(loaded).toMatchObject({ kind: "auto", text: "Next: when R1 (Build) finishes, a review starts automatically." });
+  });
+
+  it("respects a rule the person's saved settings switched off", () => {
+    const { view, runs } = building();
+    const off = nextStepOnceKnown(view, runs, [], [], { ...AUTOSTART_DEFAULTS, buildReview: false });
+    expect(off?.kind).not.toBe("auto");
+    expect(off?.text).not.toContain("a review starts automatically");
+  });
+
+  it("reads the saved switches when the store starts", async () => {
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    await backend.runsSetSettings({ ...(await backend.runsSettings()), autostart: { ...AUTOSTART_DEFAULTS, buildReview: false } });
+    useWorkstreams.getState().init(backend);
+    expect(useWorkstreams.getState().globals).toBeNull();
+    await vi.waitFor(() => expect(useWorkstreams.getState().globals).toEqual({ ...AUTOSTART_DEFAULTS, buildReview: false }));
+    useWorkstreams.getState().init(backend);
+    await vi.waitFor(() => expect(useWorkstreams.getState().globals).not.toBeNull());
+    useWorkstreams.getState().dispose();
+    expect(useWorkstreams.getState().globals).toBeNull();
+  });
+});
+
 describe("the workstream's controls", () => {
   it("shows the Manage switch as the workstream's mode", () => {
     expect(render(viewOf({ mode: "advise" }))).toMatch(/role="switch" aria-checked="false"[^>]*aria-label="Manage this workstream"/);
@@ -54,15 +108,15 @@ describe("the workstream's controls", () => {
       expect(html).toContain(">Resume</button>");
       expect(html).not.toContain(">Hold</button>");
     }
-    expect(render(viewOf({ heldReason: HELD_BUDGET }))).toContain("Held: automatic turns used up. Resume, or write to Pip, to give it 6 more");
+    expect(render(viewOf({ heldReason: HELD_BUDGET }))).toContain("Held: automatic turns used up. Resume, or write to Pip, to give it 11 more");
     expect(render(viewOf({ heldReason: HELD_RESTART }))).toContain("Held after a restart");
   });
 
   it("says nothing of a budget with plenty left, warns in amber from 80% and says when it is spent", () => {
-    expect(render(viewOf({ spent: { autoTurns: 4, wakes: 4, tokens: 0 } }))).not.toContain("data-budget");
-    const amber = render(viewOf({ spent: { autoTurns: 5, wakes: 5, tokens: 0 } }));
+    expect(render(viewOf({ spent: { autoTurns: 7, wakes: 7, tokens: 0 } }))).not.toContain("data-budget");
+    const amber = render(viewOf({ spent: { autoTurns: 9, wakes: 9, tokens: 0 } }));
     expect(amber).toContain('data-budget="amber"');
-    expect(amber).toContain("5 of 6 automatic turns used");
+    expect(amber).toContain("9 of 11 automatic turns used");
     expect(render(viewOf({ spent: { autoTurns: 1, wakes: 10, tokens: 0 } }))).toContain("10 of 12 wakes used");
     // A workstream's own limit counts, and its banner says what to do once spent; the line isn't said twice.
     const own = viewOf({ budget: { autoTurns: 2, wakes: null, tokens: null }, spent: { autoTurns: 2, wakes: 2, tokens: 0 }, heldReason: HELD_BUDGET });
@@ -78,8 +132,19 @@ describe("the workstream's controls", () => {
     expect(render({ ...own, workstream: { ...own.workstream, heldReason: HELD_PERSON } })).toContain('data-budget="spent"');
   });
 
+  it("shows the automatic steps left up front in Manage, from the default of 11 or the workstream's own limit", () => {
+    const fresh = render(viewOf({ mode: "manage" }));
+    expect(fresh).toContain("11 of 11 automatic steps left");
+    expect(fresh).toContain('data-steps-left="11"');
+    expect(render(viewOf({ mode: "manage", spent: { autoTurns: 4, wakes: 4, tokens: 0 } }))).toContain("7 of 11 automatic steps left");
+    expect(render(viewOf({ mode: "manage", budget: { autoTurns: 6, wakes: null, tokens: null }, spent: { autoTurns: 1, wakes: 1, tokens: 0 } }))).toContain("5 of 6 automatic steps left");
+    expect(render(viewOf({ mode: "manage", spent: { autoTurns: 11, wakes: 11, tokens: 0 }, heldReason: HELD_BUDGET }))).toContain("0 of 11 automatic steps left");
+    // Advise runs no automatic steps, so there is nothing to count.
+    expect(render(viewOf({ mode: "advise" }))).not.toContain("automatic steps left");
+  });
+
   it("defines an automatic turn wherever the budget is shown", () => {
-    const amber = render(viewOf({ spent: { autoTurns: 5, wakes: 5, tokens: 0 } }));
+    const amber = render(viewOf({ spent: { autoTurns: 9, wakes: 9, tokens: 0 } }));
     const help = TURN_HELP.replace(/'/g, "&#x27;");
     expect(amber).toMatch(new RegExp(`data-budget="amber" title="${help}"`));
     expect(amber).toContain("<summary");
@@ -294,7 +359,9 @@ describe("the controls call the person's own commands", () => {
   });
 
   it("reads what Settings has when the steps are opened", async () => {
-    expect(useWorkstreams.getState().globals).toBeNull();
+    // The store reads them at init; clear them to see the popover read them again.
+    await vi.waitFor(() => expect(useWorkstreams.getState().globals).toEqual(AUTOSTART_DEFAULTS));
+    useWorkstreams.setState({ globals: null });
     controlActions(id).onSteps?.();
     await vi.waitFor(() => expect(useWorkstreams.getState().globals).toEqual(AUTOSTART_DEFAULTS));
   });
@@ -303,14 +370,15 @@ describe("the controls call the person's own commands", () => {
     const other = (await backend.workstreamsOpen(itemRef("CA-402"))).id;
     const push = vi.spyOn(useToasts.getState(), "push");
     expect(await useWorkstreams.getState().holdAll()).toBe(2);
-    expect(push).toHaveBeenCalledWith(expect.stringMatching(/^Held 2 workstreams\./), "info");
+    // With an Undo that frees both again.
+    expect(push).toHaveBeenCalledWith(expect.stringMatching(/^Held 2 workstreams\./), "info", expect.objectContaining({ label: "Undo" }), expect.objectContaining({ keep: true }));
     const held = useWorkstreams.getState().list.filter((v) => [id, other].includes(v.workstream.id)).map((v) => v.workstream.heldReason);
     expect(held).toEqual([HELD_ALL, HELD_ALL]);
     expect(await useWorkstreams.getState().holdAll()).toBe(0);
     expect(push).toHaveBeenLastCalledWith("Every open workstream is held already.", "info");
     await useWorkstreams.getState().resume(other);
     expect(await useWorkstreams.getState().holdAll()).toBe(1);
-    expect(push).toHaveBeenLastCalledWith(expect.stringMatching(/^Held 1 workstream\. Its agents carry on/), "info");
+    expect(push).toHaveBeenLastCalledWith(expect.stringMatching(/^Held 1 workstream\. Its agents carry on/), "info", expect.objectContaining({ label: "Undo" }), expect.objectContaining({ keep: true }));
   });
 });
 
@@ -344,7 +412,7 @@ describe("Hold all", () => {
 
   it("is a palette command with its shortcut beside it, while agents are on", () => {
     const actions = new Proxy({}, { get: (t: Record<string, unknown>, k: string) => (t[k] ??= vi.fn()) }) as unknown as CommandActions;
-    const on = buildCommands([], [], actions, { project: null, view: null, unreadActivity: 0, pendingDrafts: 0, agents: true });
+    const on = buildCommands([], [], actions, { project: null, view: null, unreadActivity: 0, agents: true });
     const hold = rankCommands(on, "hold all")[0];
     expect(hold).toMatchObject({ id: "workstream:hold-all", label: "Hold all workstreams", hint: HOLD_ALL_HINT });
     expect(HOLD_ALL_HINT).toBe("⌘⇧.");

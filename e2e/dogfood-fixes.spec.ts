@@ -6,6 +6,9 @@ import {
   githubWrites,
   reviewedDraft,
   homeConversationRegion,
+  expandNeedsYou,
+  needRow,
+  needsPane,
   needsYouTray,
   openPip,
   askPip,
@@ -24,6 +27,7 @@ import {
   peekSheet,
   peekTicket,
   pipConversation,
+  paneSettled as settled,
   pipPane,
   scriptNextRun,
   setBudget,
@@ -43,11 +47,6 @@ const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
-
-/** Waits until Pip has finished answering in the pane. */
-async function settled(page: Page) {
-  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-}
 
 /** The newest run of `kind`, as the sample backend holds it. */
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
@@ -352,7 +351,10 @@ test.describe("answering and retry (D11, D14, D15)", () => {
   test("an answer from the sheet is confirmed, timed in the timeline, and the sheet keeps its place among the runs", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
-    await needsYouTray(page).getByRole("button", { name: /^CA-409 · .* asks a question/ }).click();
+    // The decision's own link opens the run, with its sheet over Pip home.
+    await expandNeedsYou(page);
+    await needRow(page, /CA-409.*asks a question/).click();
+    await needsPane(page).getByRole("link", { name: "Open in workstream" }).click();
     await expect(runSheet(page)).toBeVisible();
     await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "needsAnswer");
     const place = (await sheetHint(page).textContent())?.match(/(\d+) of (\d+)$/)?.slice(1);
@@ -374,19 +376,20 @@ test.describe("answering and retry (D11, D14, D15)", () => {
   test("the answer box starts empty; Claude's suggestion is offered with Use this, and an empty box never sends", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
-    await needsYouTray(page).getByRole("button", { name: /^CA-409 · .* asks a question/ }).click();
-    const box = runSheet(page).getByRole("textbox", { name: "Your answer" });
-    const send = runSheet(page).getByRole("button", { name: "Send answer" });
+    await expandNeedsYou(page);
+    await needRow(page, /CA-409.*asks a question/).click();
+    const box = needsPane(page).getByRole("textbox", { name: "Your answer" });
+    const send = needsPane(page).getByRole("button", { name: "Send answer" });
     await expect(box).toHaveValue("");
     await expect(box).toHaveAttribute("placeholder", /Write your answer/);
     await expect(send).toBeDisabled();
-    await expect(runSheet(page).locator("[data-suggested-answer]")).toContainText("Claude suggests: “Yes, keep the old rounding.”");
-    await runSheet(page).getByRole("button", { name: "Use this" }).click();
+    await expect(needsPane(page).locator("[data-suggested-answer]")).toContainText("Claude suggests: “Yes, keep the old rounding.”");
+    await needsPane(page).getByRole("button", { name: "Use this" }).click();
     await expect(box).toHaveValue("Yes, keep the old rounding.");
     await expect(send).toBeEnabled();
     await box.fill("   ");
     await expect(send).toBeDisabled();
-    const details = runSheet(page).locator("details", { hasText: "What Gossamr adds" });
+    const details = needsPane(page).locator("details", { hasText: "What Gossamr adds" });
     await details.locator("summary").click();
     await expect(details).toContainText("This goes in front of your answer: Reminder:");
     expect((await mockRuns(page)).find((r) => r.state === "needsAnswer")).toBeTruthy();
@@ -396,7 +399,10 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openApp(page);
     await openPipHome(page);
-    await needsYouTray(page).getByRole("button", { name: /^SUP-9 · .* needs its folder trusted/ }).click();
+    // The sheet is where a failed run's command is shown to copy; the decision's link opens it.
+    await expandNeedsYou(page);
+    await needRow(page, /SUP-9.*needs its folder trusted/).click();
+    await needsPane(page).getByRole("link", { name: "Open in workstream" }).click();
     const retry = runSheet(page).getByRole("button", { name: "Retry", exact: true });
     await expect(retry).toBeDisabled();
     // Select the command's text and copy it with the keyboard; the Copy button is never pressed.
@@ -437,16 +443,17 @@ test.describe("agent counts and tray (D4, D27)", () => {
     await expect(setupSheet(page).locator("[data-level]", { hasText: /\d+ of \d+ agent slots in use \(including ones waiting on you\)$/ })).toBeVisible();
   });
 
-  test("Needs you rows put the ticket and its title first and the wait second, with the whole line as a tooltip", async ({ page }) => {
+  test("Needs you rows put the ticket and its title first and the need second, with the whole line as a tooltip", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
-    const row = needsYouTray(page).locator('[data-needs-you-item][data-kind="question"]').first();
+    await expandNeedsYou(page);
+    const row = needsYouTray(page).locator('[data-needs-you-need][data-kind="question"]').first();
     await expect(row.locator("[data-needs-you-head]")).toHaveText(/^CA-409 · \S/);
-    await expect(row.locator("[data-needs-you-reason]")).toHaveText(/asks a question · /);
+    await expect(row.locator("[data-needs-you-need-title]")).toHaveText(/asks a question/);
     const head = await row.locator("[data-needs-you-head]").textContent();
     await expect(row).toHaveAttribute("title", new RegExp(`^${head!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} · .*asks a question · `));
     const top = await row.locator("[data-needs-you-head]").boundingBox();
-    const bottom = await row.locator("[data-needs-you-reason]").boundingBox();
+    const bottom = await row.locator("[data-needs-you-need-title]").boundingBox();
     expect(bottom!.y).toBeGreaterThan(top!.y);
     await expect(homeConversationRegion(page)).toBeVisible();
   });
@@ -498,7 +505,7 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
     await expect(page.getByRole("feed", { name: "Activity" }).locator("[data-your-turn]").first()).toHaveAttribute("title", /^Your turn: /);
   });
 
-  test("each rail badge names what it counts, in its tooltip and in its button's name, and no two read alike", async ({ page }) => {
+  test("the rail's two badges name what they count, in their tooltip and in their button's name, and Agents has none", async ({ page }) => {
     await openApp(page);
     await agentsSettled(page, true);
     const named = async (button: RegExp, badge: RegExp) => {
@@ -508,12 +515,12 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
       await expect(tip).toHaveAttribute("title", badge);
       return (await tip.getAttribute("title"))!;
     };
-    const titles = [
-      await named(/^Activity, \d+ unread updates?$/, /^\d+ unread updates?$/),
-      await named(/^Agents, \d+ agent runs? waits? on you$/, /^\d+ agent runs? waits? on you$/),
-      await named(/^Pip home, \d+ items? waits? in Needs you$/, /^\d+ items? waits? in Needs you$/),
-    ];
-    expect(new Set(titles.map((t) => t.replace(/^\d+ /, ""))).size).toBe(3);
+    const titles = [await named(/^Activity, \d+ unread updates?$/, /^\d+ unread updates?$/), await named(/^Pip home, \d+ things? needs? you$/, /^\d+ things? needs? you$/)];
+    expect(new Set(titles.map((t) => t.replace(/^\d+ /, ""))).size).toBe(2);
+    // What the agents need is in Needs you, counted once.
+    const agents = page.getByRole("button", { name: "Agents", exact: true });
+    await expect(agents).toBeVisible();
+    await expect(agents.locator("[title]")).toHaveCount(0);
   });
 });
 
@@ -552,7 +559,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     const armed = cards.first();
     await expect(armed).toBeFocused();
     const hint = armed.getByRole("status");
-    await expect(hint).toHaveText("a approve · s skip · ↵ open");
+    await expect(hint).toHaveText("a approve · e edit · d s skip · ↵ open");
     // The hint hangs under the card: the card is as tall with it as without it.
     const tall = (await armed.boundingBox())!.height;
     await page.locator(PIP_INPUT).focus();
@@ -578,12 +585,13 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await expect(review).toHaveCount(0);
     await finishOnHome(page, (await newest(page, "investigate"))!.id);
     await finishOnHome(page, (await started(page, "triage")).id);
-    // The wakes' drafts wait one under the other, 6px apart.
-    const waiting = homeConversationRegion(page).getByRole("region", { name: "Drafts" }).locator("article[data-draft]");
+    // The wakes' drafts wait on the timeline, one under the other.
+    const waiting = homeConversationRegion(page).locator('[data-timeline] article[data-draft][data-state="pending"]');
     await expect(waiting.nth(1)).toBeVisible();
     const first = waiting.first();
     await page.locator(PIP_INPUT).focus();
-    for (let i = 0; i < 6 && !(await first.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
+    // ArrowUp walks the timeline's entries, the runs and Pip's turns between the cards included.
+    for (let i = 0; i < 16 && !(await first.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
     await expect(first).toBeFocused();
     const hint = first.getByRole("status");
     await expect(hint).toBeVisible();
@@ -594,7 +602,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
 
   test("a on a run draft opens its review scrolled into view with the keyboard in it; Tab reaches Start, Esc hides it and keeps the card", async ({ page }) => {
     const card = await generalRunDraft(page);
-    await expect(pipHome(page).locator("[data-pip-home-hints]")).toContainText("then ↵: approve or skip a draft");
+    await expect(pipHome(page).locator("[data-pip-home-hints]")).toContainText("on a draft: approve (then ↵), edit, skip; skips undo");
     await page.locator(PIP_INPUT).focus();
     await page.keyboard.press("ArrowUp");
     await expect(card).toBeFocused();
@@ -652,31 +660,28 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await expect.poll(() => focusIn(page, '[aria-label="Review and start"][role="group"]')).toBe(true);
   });
 
-  test("s then a only cancels the skip: no approve ask, no safety sheet, no review", async ({ page }) => {
+  test("a then s only cancels the approve: nothing is skipped, no safety sheet, no review", async ({ page }) => {
     const cards = await twoComments(page);
     const newest = cards.last();
     await page.locator(PIP_INPUT).focus();
     await page.keyboard.press("ArrowUp");
     await expect(newest).toBeFocused();
-    await page.keyboard.press("s");
-    await expect(newest.getByRole("status")).toHaveText("↵ skip · any other key cancels");
     await page.keyboard.press("a");
-    await expect(newest.getByRole("status")).toHaveText("a approve · s skip · ↵ open");
+    await expect(newest.getByRole("status")).toHaveText("↵ approve · any other key cancels");
+    await page.keyboard.press("s");
+    await expect(newest.getByRole("status")).toHaveText("a approve · e edit · d s skip · ↵ open");
     await expect(newest).toBeFocused();
-    await page.keyboard.press("Enter").catch(() => undefined);
-    // Enter now opens the ticket, as it would on a card with nothing asked: nothing was approved or skipped.
+    // The s that cancelled did not skip: the draft is still pending, and nothing was written.
     await expect(newest).toHaveAttribute("data-state", "pending");
+    await expect(page.locator("[data-toast]")).toHaveCount(0);
     expect(await jiraWrites(page)).toEqual([]);
 
+    // On a run draft a opens its review rather than asking, and nothing starts.
     const card = await generalRunDraft(page, "CA-402");
     await page.locator(PIP_INPUT).focus();
     await page.keyboard.press("ArrowUp");
     await expect(card).toBeFocused();
-    await page.keyboard.press("s");
-    await page.keyboard.press("a");
-    await expect(card.getByRole("status")).toHaveText("s skip · ↵ open");
-    await expect(safety(page)).toHaveCount(0);
-    await expect(card.getByRole("group", { name: "Review and start" })).toHaveCount(0);
+    await expect(card.getByRole("status")).toHaveText("e edit · d s skip · ↵ open");
     await expect(card).toHaveAttribute("data-state", "pending");
   });
 });

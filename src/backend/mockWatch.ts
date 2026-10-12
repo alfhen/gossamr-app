@@ -117,6 +117,12 @@ export interface MockHandle {
   askRun(id: string, question: string): void;
   /** Has working run `id` ask permission for `needs` (`approve Bash: git push`), as `MockRuns.askPermission` does. */
   askPermission(id: string, needs: string): void;
+  /** Has working run `id` be blocked on Claude's sign-in, as `MockRuns.block` does. */
+  blockRun(id: string): void;
+  /** Has run `id` go unclear, as `MockRuns.lose` does. */
+  loseRun(id: string): void;
+  /** Has Gossamr stop run `id` at its limit, as `MockRuns.stopAtLimit` does. */
+  stopRunAtLimit(id: string): void;
   /** The run ids Terminal was opened on (`runsAttach`, Allow once among them), oldest first. */
   attached(): string[];
   /** Every write the sample tracker made, oldest first, with the draft the person approved for it. */
@@ -160,7 +166,7 @@ export interface TicketEdit {
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; readonly attached: readonly string[] };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; stopAtLimit(id: string): unknown; readonly attached: readonly string[] };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown };
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
@@ -193,6 +199,9 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     scriptNext: (kind, script) => runs.scriptNext(kind, script),
     askRun: (id, question) => void runs.ask(id, question),
     askPermission: (id, needs) => void runs.askPermission(id, needs),
+    blockRun: (id) => void runs.block(id),
+    loseRun: (id) => void runs.lose(id),
+    stopRunAtLimit: (id) => void runs.stopAtLimit(id),
     attached: () => [...runs.attached],
     jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent) })),
     reviewDrafts: () =>

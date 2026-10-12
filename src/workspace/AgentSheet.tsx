@@ -69,7 +69,7 @@ export function SheetFrame({ label, title, hint, wide, min = 520, draft = false,
     if (!frame.current?.contains(document.activeElement)) frame.current?.focus({ preventScroll: true });
     return () => {
       const lost = !document.activeElement || document.activeElement === document.body || !!frame.current?.contains(document.activeElement);
-      sheetFocusTarget(opener, lost, () => document.querySelector<HTMLElement>("[data-needs-you-item], [data-needs-you-title]"))?.focus({ preventScroll: true });
+      sheetFocusTarget(opener, lost, () => document.querySelector<HTMLElement>("[data-needs-you-group], [data-needs-you-need], [data-needs-you-title]"))?.focus({ preventScroll: true });
     };
   }, [opener]);
   return (

@@ -347,7 +347,7 @@ const HELD_WORDS: Record<WorkstreamActor, string> = { person: "You held the work
  * feed leaves out (a fix round's own auto-start line, which "Fix round n sent" already says, and bookkeeping).
  * `rounds` counts the fix rounds sent so far, this one included.
  */
-function eventText(e: WorkstreamEvent, label: (id: string | null) => string, rounds: number): string | null {
+export function eventText(e: WorkstreamEvent, label: (id: string | null) => string, rounds: number): string | null {
   const who = e.actor === "person" ? "You" : e.actor === "pip" ? "Pip" : e.actor === "supervisor" ? "Gossamr" : "An agent";
   switch (e.action) {
     case "opened":
@@ -390,6 +390,8 @@ function eventText(e: WorkstreamEvent, label: (id: string | null) => string, rou
       return `${who} approved a draft`;
     case "draft_skipped":
       return `${who} skipped a draft`;
+    case "undone":
+      return e.detail === "held" ? `${who} undid holding the workstream` : e.detail === "mode_set" ? `${who} undid a change of mode` : e.detail === "draft_skipped" ? `${who} brought back a skipped draft` : `${who} undid an action`;
     case "notes_set":
       return "Pip updated its notes";
     case "budget_reset":

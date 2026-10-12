@@ -742,6 +742,28 @@ pub fn skip(db: &Db, id: &str, at: DateTime<Utc>) -> Result<Proposal> {
     Ok(p)
 }
 
+/// How long after a skip the person may take it back. The page's Undo toast lasts about 8 seconds; this leaves room for a
+/// slow click and a busy machine, and no more: a skip that old stands.
+pub const UNSKIP_WINDOW_SECS: i64 = 60;
+
+/// The person's Undo of a skip: a draft skipped within `UNSKIP_WINDOW_SECS` goes back to pending, as it was (a skip changes
+/// nothing else). One that is pending already is returned as it is; any other state, or a skip that old, is refused.
+pub fn unskip(db: &Db, id: &str, at: DateTime<Utc>) -> Result<Proposal> {
+    let mut p = load(db, id)?;
+    match p.state {
+        ProposalState::Pending => return Ok(p),
+        ProposalState::Skipped => {}
+        _ => return Err(refuse("only a skipped draft can be brought back")),
+    }
+    if at.signed_duration_since(p.updated_at).num_seconds() > UNSKIP_WINDOW_SECS {
+        return Err(refuse("that draft was skipped too long ago to bring back"));
+    }
+    p.state = ProposalState::Pending;
+    p.updated_at = at;
+    db.save_proposal(&p)?;
+    Ok(p)
+}
+
 pub fn retire(db: &Db, id: &str, reason: &str, at: DateTime<Utc>) -> Result<Proposal> {
     let mut p = load(db, id)?;
     if p.state != ProposalState::Pending {
@@ -1020,6 +1042,43 @@ mod tests {
         assert_eq!(skip(&db, &p.id, now()).unwrap().state, ProposalState::Skipped);
         assert!(edit(&db, &p.id, p.intent.clone(), now()).is_err());
         assert!(begin(&db, &p.id, now()).is_err());
+    }
+
+    #[test]
+    fn a_fresh_skip_is_taken_back_to_pending_exactly_and_only_from_skipped() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, comment_draft("1"));
+        let skipped_at = now();
+        skip(&db, &p.id, skipped_at).unwrap();
+        let back = unskip(&db, &p.id, skipped_at + chrono::Duration::seconds(8)).unwrap();
+        assert_eq!(back.state, ProposalState::Pending);
+        assert_eq!(Proposal { updated_at: p.updated_at, ..back.clone() }, p, "nothing but the state (and when it changed) moved");
+        assert_eq!(load(&db, &p.id).unwrap().state, ProposalState::Pending, "stored, not only returned");
+        assert_eq!(unskip(&db, &p.id, now()).unwrap().state, ProposalState::Pending, "bringing back what is pending is harmless");
+        // Pending again, it can be edited and decided as before.
+        assert!(edit(&db, &p.id, p.intent.clone(), now()).is_ok());
+        assert!(begin(&db, &p.id, now()).is_ok());
+    }
+
+    #[test]
+    fn a_skip_older_than_the_window_stands_and_so_does_any_other_state() {
+        let db = Db::in_memory().unwrap();
+        let old = made(&db, comment_draft("1"));
+        let skipped_at = now();
+        skip(&db, &old.id, skipped_at).unwrap();
+        let late = skipped_at + chrono::Duration::seconds(UNSKIP_WINDOW_SECS + 1);
+        let err = unskip(&db, &old.id, late).unwrap_err().to_string();
+        assert!(err.contains("too long ago"), "{err}");
+        assert_eq!(load(&db, &old.id).unwrap().state, ProposalState::Skipped);
+        assert!(unskip(&db, &old.id, skipped_at + chrono::Duration::seconds(UNSKIP_WINDOW_SECS)).is_ok(), "the window's last second still counts");
+
+        let retired = made(&db, comment_draft("2"));
+        retire(&db, &retired.id, "superseded", now()).unwrap();
+        assert!(unskip(&db, &retired.id, now()).is_err(), "a retired draft is not brought back");
+        let applying = made(&db, comment_draft("3"));
+        begin(&db, &applying.id, now()).unwrap();
+        assert!(unskip(&db, &applying.id, now()).is_err(), "nor one being applied");
+        assert!(unskip(&db, "nope", now()).is_err());
     }
 
     #[tokio::test]

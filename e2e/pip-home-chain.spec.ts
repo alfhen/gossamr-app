@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needsYouTray, openApp, openPipHome, peekSheet, peekTicket, pipHome, startWorkstream, stepChip, stepRail, workstreamRow } from "./support/app";
+import { advanceRuns, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, openApp, openPipHome, peekSheet, peekTicket, pipHome, startWorkstream, stepChip, stepRail, workstreamRow } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
@@ -70,8 +70,9 @@ test("an investigation is reviewed and started in place on Pip home: the exact p
   await homeWorkstream(page);
   await ask(page, "investigate this");
   await expect(runCards(page)).toHaveCount(1);
-  const waiting = needsYouTray(page).getByRole("button", { name: /^CA-401 · .+ · Start Investigate · / });
+  const waiting = needOfKind(page, "runStart");
   await expect(waiting).toHaveCount(1);
+  await expect(waiting).toContainText("drafted an Investigate agent for CA-401");
   // The step rail has it under Investigate too.
   await expect(stepChip(page, "investigate").locator("[data-step-needs-you]")).toHaveText("1 needs you");
 

@@ -216,7 +216,7 @@ describe("PipConversation", () => {
     setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [turn("r1", "Q", "A")] } });
     const run = draft("p-run", { type: "startRun", connectionId: "mock", item: itemRef("CA-412"), spec }, { origin: { type: "chat", requestId: "r1" } });
     const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[comment("p1", "r1"), run]} />);
-    expect(html).toMatch(/<article[^>]*data-draft="p1"[^>]*tabindex="0"[^>]*aria-keyshortcuts="a s Enter o"[^>]*class="[^"]*focus-visible:outline-ws-pip/);
+    expect(html).toMatch(/<article[^>]*data-draft="p1"[^>]*tabindex="0"[^>]*aria-keyshortcuts="a e d s Enter o"[^>]*class="[^"]*focus-visible:outline-ws-pip/);
     expect(html).toMatch(/<article[^>]*data-draft="p-run"[^>]*tabindex="0"/);
     expect(html).not.toContain("a approve");
     // outline-none would stop focus-visible:outline-2 from drawing the ring at all (Tailwind 4 sets the style to none).
@@ -456,7 +456,7 @@ describe("PipConversation", () => {
       return cardsIn(renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={proposals} />));
     };
 
-    it("approves a focused comment card once on a then Enter, and skips one on s then Enter", async () => {
+    it("approves a focused comment card once on a then Enter, and skips one on s at once", async () => {
       const p = comment("p1", "r1");
       const [card] = render([p], [turn("r1", "Q", "A")]);
       const act = { ...draftDecisions(p.id), open: vi.fn(), ask: vi.fn() };
@@ -470,9 +470,8 @@ describe("PipConversation", () => {
       pending.get("p1")!({ ...p, state: { type: "applied" } });
       // The approval settles before the next decision on the same draft is taken.
       await new Promise((done) => setTimeout(done, 0));
+      // Skipping asks nothing: s acts at once (and offers Undo).
       expect(onDraftCardKey(key("s", card), p, null, act)).toBe(true);
-      expect(skip).not.toHaveBeenCalled();
-      expect(onDraftCardKey(key("Enter", card), p, "skip", act)).toBe(true);
       expect(skip).toHaveBeenCalledTimes(1);
       expect(skip).toHaveBeenCalledWith("p1");
       expect(act.open).not.toHaveBeenCalled();
@@ -658,8 +657,8 @@ describe("a decision waiting on a draft card's Enter", () => {
   const card = () => ({ focus: vi.fn(), scrollIntoView: vi.fn(), matches: (sel: string) => sel === DRAFT_CARD, getAttribute: (name: string) => (name === "data-state" ? "pending" : null) });
   /** The card's handlers, with the decision it waits on kept the way the card keeps it. */
   const acts = () => {
-    const a = { approve: vi.fn(), skip: vi.fn(), open: vi.fn(), asking: null as "approve" | "skip" | null, typed: [] as string[], ask: vi.fn(), type: vi.fn() };
-    a.ask.mockImplementation((next: "approve" | "skip" | null) => (a.asking = next));
+    const a = { approve: vi.fn(), skip: vi.fn(), open: vi.fn(), asking: null as "approve" | null, typed: [] as string[], ask: vi.fn(), type: vi.fn() };
+    a.ask.mockImplementation((next: "approve" | null) => (a.asking = next));
     a.type.mockImplementation((text: string) => (a.typed.push(text), true));
     return a;
   };
@@ -668,31 +667,31 @@ describe("a decision waiting on a draft card's Enter", () => {
   const note = comment("p-note", null);
   const runDraft = draft("p-run", { type: "startRun", connectionId: "mock", item: itemRef("CA-412"), spec }, { origin: { type: "chat", requestId: "r1" } });
 
-  it("only cancels on a card key pressed while a decision waits: s then a neither asks to approve nor opens", () => {
-    for (const [first, then] of [["s", "a"], ["a", "s"], ["s", "o"], ["a", "Escape"], ["s", "s"]]) {
+  it("only cancels on a card key pressed while an approval waits: a then another deciding or opening key neither skips nor opens", () => {
+    for (const then of ["a", "s", "o", "Escape"]) {
       const a = acts();
-      press(a, note, [first]);
+      press(a, note, ["a"]);
       const ev = key(then, card());
       expect(onDraftCardKey(ev, note, a.asking, a)).toBe(true);
       expect(ev.preventDefault).toHaveBeenCalled();
       expect(a.asking).toBeNull();
-      expect(a.ask).not.toHaveBeenCalledWith(first === "s" ? "approve" : "skip");
       expect(a.ask).toHaveBeenCalledTimes(2);
       expect(a.open).not.toHaveBeenCalled();
       expect(a.approve).not.toHaveBeenCalled();
       expect(a.skip).not.toHaveBeenCalled();
       expect(a.typed).toEqual([]);
     }
-    // On a run draft, a after s cancels the skip and doesn't open the draft either.
+    // On a run draft, a then a cancels the ask and doesn't open the draft either.
     const run = acts();
-    press(run, runDraft, ["s", "a"]);
-    expect(run.open).not.toHaveBeenCalled();
+    press(run, runDraft, ["a", "a"]);
+    expect(run.open).toHaveBeenCalledTimes(2);
+    expect(run.ask).not.toHaveBeenCalled();
     expect(run.asking).toBeNull();
-    // A letter that is not a card key still goes back to the input with the s before it.
+    // A letter that is not a card key still goes back to the input with the a before it.
     const b = acts();
-    press(b, note, ["s", "x"]);
-    expect(b.typed).toEqual(["sx"]);
-    expect(b.skip).not.toHaveBeenCalled();
+    press(b, note, ["a", "x"]);
+    expect(b.typed).toEqual(["ax"]);
+    expect(b.approve).not.toHaveBeenCalled();
   });
 });
 

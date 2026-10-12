@@ -1,4 +1,5 @@
 import { PIP_HOME_HINT } from "./commands";
+import { HINTS } from "./keyMap";
 import type { ViewMode } from "./tabsStore";
 
 export interface FooterHint {
@@ -31,13 +32,23 @@ export function footerHints(view: ViewMode, pipHome = false): FooterHint[] {
   return [...(lead ? [lead] : []), move, close, pip, ...(pipHome ? [PIP_HOME] : []), jump];
 }
 
-/** Pip home's own footer: its keys, the columns first since they are what the rest of the screen hangs on. */
-export function pipHomeHints(): FooterHint[] {
+/**
+ * Pip home's own footer: its keys, the columns first since they are what the rest of the screen hangs on. The keys are the
+ * one model's (`keyMap.ts`) wherever the keyboard is: a approves or allows (then ↵ confirms), e edits, d dismisses or
+ * denies, s skips; a skip or a dismiss acts at once and offers Undo. On a Needs you row (`onNeed`) the words say what each
+ * does there; on an entry of the timeline (`onTimeline`), that j and k walk it and ↵ or o opens what an entry is about.
+ */
+export function pipHomeHints(onNeed = false, onTimeline = false): FooterHint[] {
+  const decide: FooterHint = onNeed
+    ? { id: "needs", rank: 1, keys: ["a", "e", "d", "s"], text: "approve or allow (then ↵), edit, dismiss or deny, skip" }
+    : { id: "decide", rank: 2, keys: ["a", "e", "d", "s"], text: "on a draft: approve (then ↵), edit, skip; skips undo" };
+  const [walk, open] = HINTS.timeline;
+  const move: FooterHint = onTimeline && !onNeed ? { id: "timeline", rank: 0, keys: walk[0].split(" "), text: walk[1] } : { id: "move", rank: 0, keys: ["j", "k"], text: "move" };
   return [
     { id: "columns", rank: 0, keys: ["F6", "⌘]"], text: "next column" },
-    { id: "move", rank: 0, keys: ["j", "k"], text: "move" },
-    { id: "open", rank: 1, keys: ["↵"], text: "open" },
-    { id: "decide", rank: 2, keys: ["a", "s"], text: "then ↵: approve or skip a draft" },
+    move,
+    { id: "open", rank: 1, keys: open[0].split(" "), text: onTimeline && !onNeed ? "open what it is about" : "open" },
+    decide,
     { id: "start", rank: 2, keys: ["⌘↵"], text: "start" },
     { id: "close", rank: 1, keys: ["Esc"], text: "close, then stop Pip" },
     { id: "jump", rank: 3, keys: ["⌘K"], text: "jump" },

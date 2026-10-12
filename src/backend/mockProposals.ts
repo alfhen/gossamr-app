@@ -16,6 +16,9 @@ export const isRunPlanRewrite = (p: Proposal) => p.origin.type === "run" && p.in
 /** Pip changed the draft's text and the person never edited it after. As `revised_by_pip_unedited` in `proposals.rs`. */
 export const revisedByPipUnedited = (p: Proposal) => p.revisions.some((r) => r.note === "Revised by Pip") && !p.revisions.some((r) => r.note === "Edited");
 
+/** How long after a skip it can be undone, as `UNSKIP_WINDOW_SECS` in `proposals.rs`. */
+export const UNSKIP_WINDOW_MS = 60_000;
+
 const CONNECTION = "mock";
 const SUMMARY_LIMIT = 255;
 const DESCRIPTION_LIMIT = 30_000;
@@ -443,6 +446,22 @@ export class MockProposals {
     const skipped = this.set(id, { state: { type: "skipped" } });
     this.audit(skipped, "person", "draft_skipped");
     return skipped;
+  }
+
+  /**
+   * The person's Undo of a skip, as `unskip` in `proposals.rs`: a draft skipped within `UNSKIP_WINDOW_MS` is pending again,
+   * as it was; a pending one is returned as it is, and any other state or an older skip is refused. Its workstream's audit
+   * gets an `undone` line of its own after the skip's.
+   */
+  async unskip(id: string) {
+    const p = this.get(id);
+    if (!p) throw new Error("that draft no longer exists");
+    if (p.state.type === "pending") return p;
+    if (p.state.type !== "skipped") throw new Error("only a skipped draft can be brought back");
+    if (Date.now() - Date.parse(p.updatedAt) > UNSKIP_WINDOW_MS) throw new Error("that draft was skipped too long ago to bring back");
+    const back = this.set(id, { state: { type: "pending" } });
+    this.audit(back, "person", "undone", "draft_skipped");
+    return back;
   }
 
   /** A pending build draft's plan read again from its run, for `MockRuns.refreshPlan`: the text and whether it was settled, both replaced. */

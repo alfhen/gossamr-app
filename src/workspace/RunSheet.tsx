@@ -116,6 +116,23 @@ function OpenInTerminal({ run, on, filled = true }: { run: Run; on: RunSheetActi
   );
 }
 
+/** A run blocked on Claude's sign-in: what to do, and the way into Terminal to do it. The run sheet and the Needs you decision show the same box. */
+export function SignInBox({ run, onAttach }: { run: Run; onAttach(): void }) {
+  return (
+    <Box tone="needs" label="Sign-in needed">
+      <BoxTitle icon="lock" tone="needs">
+        Claude needs you to sign in
+      </BoxTitle>
+      <p className="m-0 text-sm text-ws-ink2">Sign in in Terminal. The run carries on once Claude is signed in again.</p>
+      <div>
+        <Btn tone="primary" icon="term" disabled={!run.shortId} title={run.shortId ? undefined : "There is no session to open yet"} onClick={onAttach}>
+          Open in Terminal
+        </Btn>
+      </div>
+    </Box>
+  );
+}
+
 function Attention({ run, label, permissionAnswered, opened, answering, slotPlace, on }: { run: Run; label?: string; permissionAnswered: PermissionAnswered | null; opened: boolean; answering: boolean; slotPlace: number | null; on: RunSheetActions }) {
   switch (run.state) {
     case "needsPermission":
@@ -131,17 +148,7 @@ function Attention({ run, label, permissionAnswered, opened, answering, slotPlac
     case "stopped":
       return <RunAnswer key={run.id} run={run} answering={answering} on={on} />;
     case "systemBlocked":
-      return (
-        <Box tone="needs" label="Sign-in needed">
-          <BoxTitle icon="lock" tone="needs">
-            Claude needs you to sign in
-          </BoxTitle>
-          <p className="m-0 text-sm text-ws-ink2">Sign in in Terminal. The run carries on once Claude is signed in again.</p>
-          <div>
-            <OpenInTerminal run={run} on={on} />
-          </div>
-        </Box>
-      );
+      return <SignInBox run={run} onAttach={on.attach} />;
     case "unknown":
       return (
         <Box tone="warn" label="State unclear">

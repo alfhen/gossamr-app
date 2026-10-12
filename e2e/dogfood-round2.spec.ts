@@ -1,9 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
+  expandNeedsYou,
   expectToast,
   homeConversationRegion,
   jiraWrites,
   mockRuns,
+  needRow,
+  needsPane,
+  needsYouCount,
   needsYouTray,
   openApp,
   openPip,
@@ -37,32 +41,28 @@ async function investigateFromPeek(page: Page) {
 }
 
 test.describe("counts that mean one thing (D4, D5, N3)", () => {
-  test("Needs you, the agents waiting on you and Your agents agree on Pip home, the rail and the Agents header", async ({ page }) => {
+  test("Needs you's one count is the same on Pip home, the rail, the composer and the Agents header; the timeline lists every agent once", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
-    const tray = needsYouTray(page);
-    await expect(tray.locator("[data-needs-you-item]").first()).toBeVisible();
-    const items = await tray.locator("[data-needs-you-item]").count();
-    // The tray's pill, the footer and the Pip home badge all count the tray's rows.
-    await expect(tray.locator("[data-needs-you-count]")).toHaveText(String(items));
-    await expect(pipHome(page).locator("[data-composer-footer]")).toContainText(`${items} ${items === 1 ? "needs" : "need"} you`);
-    await expect(railButton(page, /^Pip home/)).toHaveAccessibleName(new RegExp(`^Pip home, ${items} items? waits? in Needs you`));
-    // Its agent rows are what the Agents badge and the Agents header count.
-    const agentRows = await tray.locator('[data-needs-you-item][data-kind="question"], [data-needs-you-item][data-kind="permission"], [data-needs-you-item][data-kind="failure"]').count();
-    expect(agentRows).toBeGreaterThan(0);
-    await expect(railButton(page, /^Agents/)).toHaveAccessibleName(`Agents, ${agentRows} agent ${agentRows === 1 ? "run waits" : "runs wait"} on you`);
-    // Your agents: every run at work or waiting on the person.
+    await expect(needsYouTray(page).locator("[data-needs-you-group]").first()).toBeVisible();
+    const count = await needsYouCount(page).innerText();
+    expect(Number(count)).toBeGreaterThan(0);
+    // The list's pill, the footer and the Pip home badge are one number.
+    await expect(pipHome(page).locator("[data-composer-footer]")).toContainText(`${count} ${count === "1" ? "needs" : "need"} you`);
+    await expect(railButton(page, /^Pip home/)).toHaveAccessibleName(`Pip home, ${count} ${count === "1" ? "thing needs" : "things need"} you`);
+    // Agents has no badge: what its runs need is in that count, once.
+    await expect(railButton(page, /^Agents/)).toHaveAccessibleName("Agents");
+    // The timeline: a row for every run at work or waiting on the person, each once.
     const listed = new Set(["needsAnswer", "needsPermission", "systemBlocked", "failed", "queued", "launching", "working"]);
     const agents = (await mockRuns(page)).filter((r) => listed.has(r.state)).length;
-    await expect(pipHome(page).getByRole("region", { name: "Your agents" }).locator("[data-strip-count]")).toHaveText(`3 of ${agents}`);
-    // On the Agents view, the failed run counts as looked at once it is shown there; the header and the badge go down together.
+    const live = homeConversationRegion(page).locator('[data-kind="run"]:is([data-phase="queued"], [data-phase="started"], [data-phase="waiting"], [data-phase="failed"])');
+    await expect(live).toHaveCount(agents);
+    // The Agents header says the same count, and nothing opening Agents does moves it.
     await railButton(page, /^Agents/).click();
     const header = page.locator("main header").filter({ has: page.getByRole("heading", { name: "Agents" }) });
-    await expect(header).toContainText(/^Agents\d+ waiting on you · /);
-    const waiting = Number(/^Agents(\d+) waiting/.exec((await header.textContent()) ?? "")?.[1]);
-    expect(waiting).toBeGreaterThan(0);
-    expect(waiting).toBeLessThanOrEqual(agentRows);
-    await expect(railButton(page, /^Agents/)).toHaveAccessibleName(`Agents, ${waiting} agent ${waiting === 1 ? "run waits" : "runs wait"} on you`);
+    await expect(header).toContainText(new RegExp(`^Agents${count} ${count === "1" ? "needs" : "need"} you · `));
+    await expect(railButton(page, /^Pip home/)).toHaveAccessibleName(`Pip home, ${count} ${count === "1" ? "thing needs" : "things need"} you`);
+    await expect(railButton(page, /^Agents/)).toHaveAccessibleName("Agents");
     // Failed or stuck in the header is the lane of that name, card for card (N3).
     const bad = await page.locator('[data-lane="bad"] article[data-run-id]').count();
     expect(bad).toBeGreaterThan(1);
@@ -75,7 +75,8 @@ test.describe("counts that mean one thing (D4, D5, N3)", () => {
   test("Needs you rows for tickets outside the watched projects still read KEY · Title (D27)", async ({ page }) => {
     await openApp(page, "runs=failures");
     await openPipHome(page);
-    const heads = needsYouTray(page).locator('[data-needs-you-item][data-kind="failure"], [data-needs-you-item][data-kind="permission"]').locator("[data-needs-you-head]");
+    await expandNeedsYou(page);
+    const heads = needsYouTray(page).locator('[data-needs-you-need][data-kind="failure"], [data-needs-you-need][data-kind="permission"]').locator("[data-needs-you-head]");
     await expect(heads.first()).toBeVisible();
     const texts = await heads.allTextContents();
     expect(texts.length).toBeGreaterThan(3);
@@ -85,19 +86,18 @@ test.describe("counts that mean one thing (D4, D5, N3)", () => {
 });
 
 test.describe("draft keys after a skip (N1)", () => {
-  test("s then Enter skips a draft, and the next one takes its keys at once: a opens it and Enter approves it", async ({ page }) => {
+  test("s skips a draft at once, and the next one takes its keys at once: a opens it and Enter approves it", async ({ page }) => {
     await openApp(page, "pipRun=1");
     await openPipHome(page);
-    const waiting = homeConversationRegion(page).getByRole("region", { name: "Drafts" });
+    // General's timeline holds the drafts waiting, among its other entries.
+    const waiting = homeConversationRegion(page).locator("[data-timeline]");
     const start = waiting.getByRole("article", { name: "Start an agent: CA-402" });
     const rewrite = waiting.getByRole("article", { name: "Update the description of CA-401" });
     await expect(start).toBeVisible();
     await page.locator(PIP_INPUT).focus();
-    for (let i = 0; i < 4 && !(await start.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
+    for (let i = 0; i < 8 && !(await start.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
     await expect(start).toBeFocused();
     await page.keyboard.press("s");
-    await expect(start.getByRole("status")).toHaveText("↵ skip · any other key cancels");
-    await page.keyboard.press("Enter");
     await expect(start).toHaveCount(0);
     // The next draft has the keyboard, armed: its hint shows, and its keys work without a Shift+Tab and Tab first.
     await expect(rewrite).toBeFocused();
@@ -215,12 +215,13 @@ test.describe("agent cards and help (N9, N12)", () => {
   test("a card just answered says something of its own after Working, never Working again", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
-    await needsYouTray(page).getByRole("button", { name: /^CA-409 · .* asks a question/ }).click();
-    await runSheet(page).getByRole("textbox", { name: "Your answer" }).fill("Yes, keep the old rounding for refunds.");
-    await runSheet(page).getByRole("button", { name: "Send answer" }).click();
-    await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "working");
-    await page.keyboard.press("Escape");
-    const card = pipHome(page).getByRole("region", { name: "Your agents" }).locator("article[data-run-id]", { hasText: "CA-409" });
+    await expandNeedsYou(page);
+    const asking = (await mockRuns(page)).find((r) => r.key === "CA-409" && r.state === "needsAnswer")!;
+    await needRow(page, /CA-409.*asks a question/).click();
+    await needsPane(page).getByRole("textbox", { name: "Your answer" }).fill("Yes, keep the old rounding for refunds.");
+    await needsPane(page).getByRole("button", { name: "Send answer" }).click();
+    await expect(needRow(page, /CA-409/)).toHaveCount(0);
+    const card = homeConversationRegion(page).locator(`[data-timeline-entry] article[data-run-id="${asking.id}"]`);
     await expect(card).toContainText("Working");
     await expect(card).not.toContainText(/Working\s*·\s*Working/);
   });

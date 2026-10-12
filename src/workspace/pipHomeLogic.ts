@@ -1,27 +1,15 @@
-import { inWorkstreamPane, targetOf, workstreamOf } from "../lib/proposals";
-import { readAs } from "../lib/permission";
-import { heldText } from "../lib/workstreamHold";
+import { BATCHABLE } from "../lib/needs";
+import { inWorkstreamPane } from "../lib/proposals";
+import { shortHeld } from "../lib/workstreamHold";
 import { byQueue, STAGE_LABEL, stageText } from "../lib/workstreamStage";
-import { HELD_BUDGET, HELD_DAILY } from "../types";
-import type { BasisField, CodeChange, Intent, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
-import { liveCounts, liveWords, needsAttention, needsPerson, stateView, type Tone } from "./agentsLogic";
+import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
+import { liveCounts, liveWords, needsPerson, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
 import type { WorkstreamSuggestionScene } from "./suggestions";
-import { runWorkstream } from "./workstreamsStore";
 
-/** Pure helpers behind Pip home's workstream rows and its Needs you tray. They read the live stores' values and decide nothing. */
+/** Pure helpers behind Pip home's workstream rows and its step rail. They read the live stores' values and decide nothing. */
 
-/**
- * What a workstream's held banner says, shortened for a row or the tray: "Held: budget", "Held by you", "Held: the
- * ticket's description changed in Jira". A safety hold reads as the banner does, in plain words.
- */
-export function shortHeld(reason: string | null | undefined, drifted?: readonly BasisField[] | null): string | null {
-  const text = heldText(reason, drifted);
-  if (!text || !reason) return null;
-  if (reason === HELD_BUDGET) return "Held: budget";
-  if (reason === HELD_DAILY) return "Held: daily turns";
-  return text;
-}
+export { shortHeld };
 
 /** Kinds in the order a workstream goes through them, for the furthest run. */
 const RANK: Record<Run["spec"]["kind"], number> = { investigate: 0, triage: 1, plan: 2, build: 3, review: 4, verify: 5 };
@@ -45,208 +33,10 @@ export function workstreamStatus(view: WorkstreamView, runs: readonly Run[], wai
   const queued = furthest((r) => r.state === "queued");
   if (queued) return `${STAGE_LABEL[queued.spec.kind]} queued`;
   if (view.reviewBlocking) return stageText(view.stage, null, true);
-  if (waiting > 0 || own.some(needsPerson)) return "Needs you";
+  if (waiting > 0 || own.some((r) => needsPerson(r) || stoppedAtLimit(r))) return "Needs you";
   const last = [...own].sort(byQueue).pop();
   if (last?.state === "failed") return `${STAGE_LABEL[last.spec.kind]} failed`;
   return view.stage === "done" ? "Done" : "Idle";
-}
-
-/** What kind of wait an item in the tray is. */
-export type NeedsYouKind = "draft" | "runStart" | "question" | "permission" | "failure" | "held" | "escalation";
-
-/**
- * What activating an item brings into view: a draft card, a run card (and its sheet), the workstream's held banner, or
- * its card for a review that still blocks after the fix rounds.
- */
-export type NeedsYouTarget = { type: "draft"; id: string } | { type: "run"; id: string } | { type: "workstream" } | { type: "escalation" };
-
-/** What the tray says of a review that still blocks after the automatic fix rounds. */
-export const escalationReason = (rounds: number) => `review still blocks after ${rounds} fix rounds`;
-
-/** One thing waiting on the person. `workstreamId` null is General. */
-export interface NeedsYouItem {
-  /** Unique across the list: the kind of thing and its id. */
-  key: string;
-  kind: NeedsYouKind;
-  workstreamId: string | null;
-  /** The whole line: the ticket's key, then `reason`. */
-  label: string;
-  /** The ticket it is about, "KEY · its title" when the title is cached or its workstream kept it; null when it has none. */
-  head: string | null;
-  /** What it waits on: "R1 asks a question", "Draft comment", "Held by you". */
-  reason: string;
-  /** When it started waiting, as an ISO time. */
-  at: string;
-  target: NeedsYouTarget;
-}
-
-export interface NeedsYouInput {
-  /** The open workstreams; a closed one's waits go to General. */
-  workstreams: readonly WorkstreamView[];
-  runs: readonly Run[];
-  proposals: readonly Proposal[];
-  /** Failed runs the person has already looked at. */
-  seenFailed: ReadonlySet<string>;
-  /** When each held workstream was last held, by id, where that is known; otherwise its `createdAt` stands in. */
-  heldAt?: Readonly<Record<string, string>>;
-  /** A ticket's title by its key, when it is cached. */
-  titleOf?(key: string): string | null | undefined;
-}
-
-const DRAFT_TEXT: Record<Exclude<Intent["type"], "startRun">, string> = {
-  comment: "Draft comment",
-  transition: "Draft move",
-  subtasks: "Draft subtasks",
-  create: "Draft ticket",
-  link: "Draft link",
-  update: "Draft change",
-  rewrite: "Draft rewrite",
-  followUp: "Draft follow-up",
-  runAnswer: "Draft answer",
-  githubReview: "Draft review",
-};
-
-/** The open workstream a draft belongs to: the one it was made in, else the first whose conversation shows it; null is General. */
-function draftWorkstream(p: Proposal, open: readonly WorkstreamView[]): string | null {
-  const made = workstreamOf(p);
-  if (made && open.some((v) => v.workstream.id === made)) return made;
-  return open.find((v) => inWorkstreamPane(p, v.workstream))?.workstream.id ?? null;
-}
-
-/** "R2" in its workstream, else the run's kind. */
-function runName(run: Run, ws: WorkstreamView | null): string {
-  return ws?.labels.find(([id]) => id === run.id)?.[1] ?? `${STAGE_LABEL[run.spec.kind]} agent`;
-}
-
-const prefix = (key: string | null | undefined, text: string) => (key ? `${key} · ${text}` : text);
-
-/**
- * The title a workstream gives its ticket, which it took when it opened: "KEY title" less the key. For a ticket that is
- * no longer cached, so its tray line still has a title.
- */
-function workstreamTitles(workstreams: readonly WorkstreamView[]): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const { workstream: w } of workstreams) {
-    const rest = w.itemKey && w.title.startsWith(`${w.itemKey} `) ? w.title.slice(w.itemKey.length).trim() : "";
-    if (w.itemKey && rest && !out.has(w.itemKey)) out.set(w.itemKey, rest);
-  }
-  return out;
-}
-
-/**
- * A ticket's title from the snapshot of it a run or a run draft carries ("KEY: title" on its first line, as the backend
- * writes it), for a ticket outside the watched projects that no cache holds; null when the snapshot doesn't say.
- */
-export function titleFromTicketBlock(block: string | null | undefined, key: string): string | null {
-  const first = block?.trimStart().split("\n", 1)[0] ?? "";
-  return first.startsWith(`${key}: `) ? first.slice(key.length + 2).trim() || null : null;
-}
-
-/** The titles runs and run drafts kept of their tickets, by key: the last resort for a tray line's title. */
-function snapshotTitles(runs: readonly Run[], proposals: readonly Proposal[]): Map<string, string> {
-  const out = new Map<string, string>();
-  const add = (key: string | null | undefined, block: string | null | undefined) => {
-    const title = key && !out.has(key) ? titleFromTicketBlock(block, key) : null;
-    if (key && title) out.set(key, title);
-  };
-  for (const r of runs) add(r.item?.key, r.spec.ticketBlock);
-  for (const p of proposals) if (p.intent.type === "startRun") add(p.intent.item?.key, p.intent.spec.ticketBlock);
-  return out;
-}
-
-/** An item's label, head and reason, from the ticket key it is about and what it waits on. */
-const said = (key: string | null | undefined, reason: string, titleOf: NeedsYouInput["titleOf"]) => {
-  const title = key ? titleOf?.(key)?.trim() : null;
-  return { label: prefix(key, reason), head: key ? (title ? `${key} · ${title}` : key) : null, reason };
-};
-
-/** The pending answer drafts for runs still asking, by run id, the oldest when there are several: each run's question carries its one. */
-function answersByRun(proposals: readonly Proposal[], runs: readonly Run[]): Map<string, Proposal> {
-  const asking = new Set(runs.filter((r) => r.state === "needsAnswer").map((r) => r.id));
-  const out = new Map<string, Proposal>();
-  for (const p of [...proposals].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
-    if (p.state.type === "pending" && p.intent.type === "runAnswer" && asking.has(p.intent.runId) && !out.has(p.intent.runId)) out.set(p.intent.runId, p);
-  }
-  return out;
-}
-
-/** Where a kind of wait sorts in the tray, lowest first: a review that still blocks, then a hold, then a run stuck on the person, then drafts. */
-const URGENCY: Record<NeedsYouKind, number> = { escalation: 0, held: 1, permission: 2, question: 2, failure: 2, draft: 3, runStart: 3 };
-
-/**
- * Everything waiting on the person across the open workstreams and General: an escalation first, then holds, then runs
- * stuck on the person, then drafts, each group oldest first by when it started waiting. They are
- * pending drafts (a draft run start apart), runs asking a question, asking permission or blocked (a folder to trust
- * among them), failed runs not yet looked at, held workstreams, and reviews that still block after the automatic fix
- * rounds (the person chooses what happens next). A run asking a question that Pip suggested a reply
- * to is one item, which goes to the reply. Decided drafts, runs that moved on and lifted holds aren't there, so an item
- * goes as soon as the stores say its wait is over.
- */
-export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt, titleOf }: NeedsYouInput): NeedsYouItem[] {
-  // A ticket not in the cache still has the title its workstream took, or the one its run's snapshot of it says.
-  const kept = workstreamTitles(workstreams);
-  const snapped = snapshotTitles(runs, proposals);
-  const say = (key: string | null | undefined, reason: string) => said(key, reason, (k) => titleOf?.(k)?.trim() || kept.get(k) || snapped.get(k));
-  const open = workstreams.filter((v) => v.workstream.closedAt === null);
-  const items: NeedsYouItem[] = [];
-  const answers = answersByRun(proposals, runs);
-  const carried = new Set([...answers.values()].map((p) => p.id));
-  for (const p of proposals) {
-    if (p.state.type !== "pending" || carried.has(p.id)) continue;
-    const workstreamId = draftWorkstream(p, open);
-    const target = { type: "draft", id: p.id } as const;
-    if (p.intent.type === "startRun") {
-      items.push({ key: `draft:${p.id}`, kind: "runStart", workstreamId, ...say(targetOf(p.intent)?.key, `Start ${STAGE_LABEL[p.intent.spec.kind]}`), at: p.createdAt, target });
-    } else {
-      // A draft a run left says which run, so a review's comments in the tray can be told apart: x.
-      const from = p.origin.type === "run" ? p.origin.runId : null;
-      const ws = workstreamId ? open.find((v) => v.workstream.id === workstreamId) : undefined;
-      const label = from && ws?.labels.find(([id]) => id === from)?.[1];
-      // With the run's step beside it, so "R5" says what it was: "CA-401 · R5 review · comment".
-      const step = from ? runs.find((r) => r.id === from)?.spec.kind : undefined;
-      const what = DRAFT_TEXT[p.intent.type].replace(/^Draft /, "");
-      const text = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : DRAFT_TEXT[p.intent.type];
-      items.push({ key: `draft:${p.id}`, kind: "draft", workstreamId, ...say(targetOf(p.intent)?.key, text), at: p.createdAt, target });
-    }
-  }
-  for (const run of runs) {
-    const ws = runWorkstream(open, run);
-    const name = runName(run, ws);
-    const at = run.lastProgressAt ?? run.endedAt ?? run.queuedAt;
-    const base = { key: `run:${run.id}`, workstreamId: ws?.workstream.id ?? null, at, target: { type: "run", id: run.id } as const };
-    const key = run.item?.key;
-    const answer = answers.get(run.id);
-    if (answer) items.push({ ...base, key: `draft:${answer.id}`, kind: "question", ...say(key, `${name} asks a question · ${answer.createdBy === "pip" ? "Pip suggests a reply" : "a reply is drafted"}`), target: { type: "draft", id: answer.id } });
-    else if (run.state === "needsAnswer") items.push({ ...base, kind: "question", ...say(key, `${name} asks a question`) });
-    // A prompt the person chose Allow once for is theirs to answer in Terminal now, and stays an item until it is answered,
-    // so a run left waiting there isn't forgotten and the tray counts as the rail badge does. One it asks after is asked again.
-    else if (run.state === "needsPermission") {
-      const allowed = run.permissionAllowed?.command === readAs(run.needs);
-      items.push({ ...base, kind: "permission", ...say(key, allowed ? `${name} waits for your Yes in Terminal` : `${name} asks to run a command`) });
-    } else if (run.state === "systemBlocked") items.push({ ...base, kind: "permission", ...say(key, `${name} needs permission`) });
-    // The predicate the rail badge counts by: by now only a failed run passes it.
-    else if (needsAttention(run, seenFailed)) {
-      const trust = run.failure?.type === "untrustedFolder";
-      items.push({ ...base, kind: trust ? "permission" : "failure", ...say(key, trust ? `${name} needs its folder trusted` : `${name} failed`) });
-    }
-  }
-  for (const v of open) {
-    const held = shortHeld(v.workstream.heldReason, v.workstream.drifted);
-    if (!held) continue;
-    const id = v.workstream.id;
-    items.push({ key: `held:${id}`, kind: "held", workstreamId: id, ...say(v.workstream.itemKey, held), at: heldAt?.[id] ?? v.workstream.createdAt, target: { type: "workstream" } });
-  }
-  for (const v of open) {
-    const e = v.escalation;
-    if (!e) continue;
-    items.push({ key: `escalation:${e.reviewRun}`, kind: "escalation", workstreamId: v.workstream.id, ...say(v.workstream.itemKey, escalationReason(e.rounds)), at: e.at, target: { type: "escalation" } });
-  }
-  return items.sort((a, b) => URGENCY[a.kind] - URGENCY[b.kind] || Date.parse(a.at) - Date.parse(b.at) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-}
-
-/** How many of `items` wait in workstream `workstreamId`; null counts General's. */
-export function needsYouCount(items: readonly NeedsYouItem[], workstreamId: string | null): number {
-  return items.filter((i) => i.workstreamId === workstreamId).length;
 }
 
 /** When a workstream was last held, from its audit (`events`, oldest first); null when the audit never says. */
@@ -294,9 +84,6 @@ export function retiredStepDrafts(proposals: readonly Proposal[], runs: readonly
   }
   return groups;
 }
-
-/** Drafts a step's "Approve these" may approve together: pending comments, moves and subtasks. A description rewrite is read in its diff first, and a run or follow-up after its prompt or message, so never. */
-const BATCHABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "transition", "subtasks"]);
 
 /** The drafts of a step that "Approve these N" would approve, in order; it is offered only for two or more. */
 export function batchable(drafts: readonly Proposal[]): Proposal[] {
@@ -401,7 +188,7 @@ export function stepChips(runs: readonly Run[], events: readonly Pick<Workstream
       auto: !!newest?.autoStart,
       verdict: review ? verdictChip(review) : null,
       fixRound: fixRoundChip(sent.length - yours, yours),
-      needsYou: pending + own.filter((r) => needsPerson(r) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
+      needsYou: pending + own.filter((r) => (needsPerson(r) || stoppedAtLimit(r)) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
       pr: kind === "build" ? buildPullRequest(own, changes) : null,
     };
   });
@@ -424,14 +211,14 @@ export function nextStep(chips: readonly Pick<StepChip, "kind" | "newest">[]): R
 
 /**
  * Pip home's composer footer: "2 running · 1 quiet · 1 queued · 2 need you", counting every run in a workstream or not
- * as the Agents view's summary does (`liveCounts`), so the two never disagree on how many are running, then everything
- * waiting on the person (`needsYou`). It is told under the input, never in the conversation.
+ * as the Agents view's summary does (`liveCounts`), so the two never disagree on how many are running, then how many things
+ * need the person (`needsYou`, the one count). It is told under the input, never in the conversation.
  */
-export function composerFooter(runs: readonly Run[], needsYou: readonly NeedsYouItem[], now: number = Date.now()): string {
+export function composerFooter(runs: readonly Run[], needsYou: number, now: number = Date.now()): string {
   const live = liveCounts(runs, now);
   const rest = liveWords({ ...live, running: 0 });
   const agents = [live.running ? `${live.running} running` : "Nothing running", ...(live.quiet ? [`${live.quiet} quiet`] : []), ...rest];
-  const n = needsYou.length;
+  const n = needsYou;
   return [...agents, n === 0 ? "nothing needs you" : `${n} ${n === 1 ? "needs" : "need"} you`].join(" · ");
 }
 

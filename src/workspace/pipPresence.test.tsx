@@ -219,11 +219,11 @@ describe("the avatar and launcher", () => {
     expect(out).toContain("pip-dangle");
   });
 
-  it("hangs the launcher from a thread, with a count of waiting drafts", () => {
-    const out = renderToStaticMarkup(<Launcher drafts={3} onOpen={vi.fn()} nudge={null} />);
+  it("hangs the launcher from a thread, with the one count of what needs the person", () => {
+    const out = renderToStaticMarkup(<Launcher needs={3} onOpen={vi.fn()} nudge={null} />);
     expect(out).toContain("pip-thread");
     expect(out).toContain("pip-dangle");
-    expect(out).toContain("3 drafts waiting");
+    expect(out).toContain("Ask Pip, 3 things need you");
   });
 
   it("shows a suggestion bubble that can be opened or closed", () => {

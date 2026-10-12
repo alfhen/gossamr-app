@@ -1,8 +1,12 @@
 import { PIP_INPUT_ID } from "./draftKeys";
+import { keyIntent } from "./keyMap";
 import { PIP_HOME_COLUMNS, type PipHomeColumn } from "./pipHomeStore";
 
-/** What the item with focus in the workstream list or the step rail is, as the keyboard steps through them. */
-export type PipHomeItemKind = "row" | "tray" | "chip" | "run" | "draft";
+/**
+ * What the item with focus in the workstream list or the step rail is, as the keyboard steps through them: a workstream's
+ * row, a row of the Needs you list (a `group` for a workstream, a `need` inside an expanded one), a step's chip, a run's card or a draft's card.
+ */
+export type PipHomeItemKind = "row" | "group" | "need" | "chip" | "run" | "draft";
 
 /** Where Pip home's keyboard stands when a key is pressed. */
 export interface PipHomeKeyState {
@@ -18,10 +22,29 @@ export interface PipHomeKeyState {
   kind: PipHomeItemKind | null;
   /** Whether the Steps column has steps to show: a workstream is selected. Without one, column moves pass it by. */
   steps?: boolean;
+  /** A key of the Needs you list waits for Enter on the item with focus. */
+  asking?: boolean;
+  /** A decision is open in the middle column. */
+  pane?: boolean;
 }
 
 /** What a key on Pip home does: go to a column, focus the item at `index` in this one, or act on the item with focus. */
-export type PipHomeKeyAction = { type: "column"; to: PipHomeColumn } | { type: "focus"; index: number } | { type: "open" } | { type: "toggle" };
+export type PipHomeKeyAction =
+  | { type: "column"; to: PipHomeColumn }
+  | { type: "focus"; index: number }
+  | { type: "open" }
+  | { type: "toggle" }
+  /** Enter or → on a Needs you row: expands it and opens its decision. */
+  | { type: "decide" }
+  /** ← on a Needs you row: folds its group. */
+  | { type: "collapse" }
+  /** a (approve or allow), d (dismiss or deny), s (skip) or e (edit) on a Needs you row */
+  | { type: "act"; act: "approve" | "dismiss" | "skip" | "edit" }
+  /** Enter on a row that asked for it, or any other key. */
+  | { type: "confirm" }
+  | { type: "cancel" }
+  /** Esc on a Needs you row while a decision is open. */
+  | { type: "closePane" };
 
 export interface PipHomeKeyEvent {
   key: string;
@@ -71,17 +94,40 @@ export function pipHomeKey(ev: PipHomeKeyEvent, state: PipHomeKeyState): PipHome
   if (by) return state.overlay || (isTypingTarget(ev.target) && (ev.target as { id?: unknown }).id !== PIP_INPUT_ID) ? null : { type: "column", to: step(state.column, by, state.steps ?? true) };
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return null;
   if (state.overlay || isTypingTarget(ev.target) || state.column === "conversation") return null;
-  const move = ev.key === "j" || ev.key === "ArrowDown" ? 1 : ev.key === "k" || ev.key === "ArrowUp" ? -1 : 0;
+  const need = state.kind === "group" || state.kind === "need";
+  // A key that asked for Enter: Enter does it, anything else only cancels it, as on a draft's card.
+  if (need && state.asking) return ev.key === "Enter" ? { type: "confirm" } : { type: "cancel" };
+  const intent = keyIntent(ev);
+  const move = intent === "next" ? 1 : intent === "prev" ? -1 : 0;
   if (move) {
     if (!state.count) return null;
     // From nothing focused, j starts at the top and k at the bottom; at either end it stays.
     const index = state.at < 0 ? (move > 0 ? 0 : state.count - 1) : Math.min(state.count - 1, Math.max(0, state.at + move));
     return { type: "focus", index };
   }
+  if (need) {
+    // The one model (keyMap.ts): Enter or o opens, a approves, e edits, d dismisses or denies, s skips, Esc goes back.
+    switch (intent) {
+      case "open":
+        return { type: "decide" };
+      case "approve":
+        return { type: "act", act: "approve" };
+      case "dismiss":
+        return { type: "act", act: "dismiss" };
+      case "skip":
+        return { type: "act", act: "skip" };
+      case "edit":
+        return { type: "act", act: "edit" };
+      case "back":
+        return state.pane ? { type: "closePane" } : null;
+    }
+    if (ev.key === " " || ev.key === "ArrowRight") return { type: "decide" };
+    return ev.key === "ArrowLeft" ? { type: "collapse" } : null;
+  }
+  if (state.kind === "run" && intent === "open") return { type: "open" };
   if (ev.key !== "Enter" && ev.key !== " ") return null;
   switch (state.kind) {
     case "row":
-    case "tray":
       return { type: "open" };
     case "chip":
       return { type: "toggle" };

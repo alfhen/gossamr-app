@@ -1,9 +1,9 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
-import { stageText } from "../lib/workstreamStage";
+import { ofItem, runWorkstream, stageText } from "../lib/workstreamStage";
 import { budgetView } from "../lib/workstreamHold";
-import type { AutoStartSwitches, ItemRef, Run, ScreenContext, Workstream, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamView } from "../types";
+import { HELD_PERSON, type AutoStartSwitches, type ItemRef, type Run, type ScreenContext, type Workstream, type WorkstreamEvent, type WorkstreamMode, type WorkstreamRule, type WorkstreamUndo, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { PIP_INPUT_ID } from "./draftKeys";
 import { keepSelectionOpen, usePipHome } from "./pipHomeStore";
@@ -11,6 +11,7 @@ import { usePrefs } from "./prefs";
 import { useRuns, type RunSheetTarget } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { messageOf, useToasts } from "./toasts";
+import { offerUndo } from "./undo";
 
 interface WorkstreamsState {
   backend: Backend | null;
@@ -68,9 +69,6 @@ let closedSeq = 0;
 const eventsSeq = new Map<string, number>();
 let eventsCounter = 0;
 
-const ofItem = (list: readonly WorkstreamView[], key: string, connectionId?: string) =>
-  list.find((v) => v.workstream.itemKey === key && v.workstream.closedAt === null && (!connectionId || v.workstream.connectionId === connectionId)) ?? null;
-
 /** "1 workstream", "2 workstreams". */
 const workstreams = (n: number) => `${n} ${n === 1 ? "workstream" : "workstreams"}`;
 
@@ -93,6 +91,19 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
   }
   const ok = async (failed: string, call: (backend: Backend) => Promise<Workstream>) => (await act(failed, call)).ok;
 
+  /** Takes a change back through the backend, which allows it only while that change is the last thing in the audit. A refusal rejects, for the Undo to tell. */
+  async function undoChange(id: string, undo: WorkstreamUndo): Promise<void> {
+    const backend = get().backend ?? useWorkspace.getState().backend;
+    if (!backend) throw new Error("Not connected yet.");
+    await backend.workstreamsUndo(id, undo);
+    if (get().backend === backend) await get().refresh();
+  }
+  const undoAll = async (ids: readonly string[]) => {
+    const results = await Promise.allSettled(ids.map((id) => undoChange(id, { type: "hold", was: null })));
+    const failed = results.filter((r) => r.status === "rejected");
+    if (failed.length) throw new Error(`${failed.length} of ${ids.length} couldn't be freed: ${messageOf((failed[0] as PromiseRejectedResult).reason)}`);
+  };
+
   return {
     backend: null,
     list: [],
@@ -114,6 +125,8 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const offRuns = backend.onRunsChanged(() => (void get().refresh(), selectedEvents()));
       stop = () => (offWorkstreams(), offRuns());
       void get().refresh();
+      // Settings' auto-start switches, for the Next line; it stays hidden until they are read.
+      void get().loadGlobals();
     },
 
     dispose() {
@@ -202,7 +215,21 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       if (settings && (get().backend ?? useWorkspace.getState().backend) === backend) set({ globals: settings.autostart });
     },
 
-    setMode: (id, mode) => ok(mode === "manage" ? "Couldn't let Pip manage the workstream" : "Couldn't stop Pip managing the workstream", (b) => b.workstreamsSetMode(id, mode)),
+    async setMode(id, mode) {
+      const before = get().list.find((v) => v.workstream.id === id)?.workstream;
+      const done = await act(mode === "manage" ? "Couldn't let Pip manage the workstream" : "Couldn't stop Pip managing the workstream", (b) => b.workstreamsSetMode(id, mode));
+      if (!done.ok) return false;
+      // Back to Advise is the one switch that can be taken back: nothing it stopped needs restarting. It restores the mode a tripwire kept, too.
+      if (before && mode === "advise" && before.mode === "manage" && done.value.mode === "advise") {
+        const name = before.itemKey ?? before.title;
+        offerUndo({
+          text: `Switched ${name} to Advise.`,
+          undone: `${name} is back in Manage.`,
+          undo: () => undoChange(id, { type: "mode", was: before.mode, resumeMode: before.resumeMode ?? null }),
+        });
+      }
+      return true;
+    },
 
     async fixRound(reviewRun) {
       const done = await act("Couldn't send another fix round", (b) => b.workstreamsFixRound(reviewRun));
@@ -213,7 +240,17 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
 
     takeOver: (id, reviewRun) => ok("Couldn't take the workstream over", (b) => b.workstreamsTakeOver(id, reviewRun)),
 
-    hold: (id) => ok("Couldn't hold the workstream", (b) => b.workstreamsHold(id)),
+    async hold(id) {
+      const before = get().list.find((v) => v.workstream.id === id)?.workstream;
+      const done = await act("Couldn't hold the workstream", (b) => b.workstreamsHold(id));
+      if (!done.ok) return false;
+      // Only a hold that changed something is offered back; Pip's turn it cancelled is not restarted, only the hold is lifted.
+      if (before && before.heldReason !== done.value.heldReason && done.value.heldReason === HELD_PERSON) {
+        const name = before.itemKey ?? before.title;
+        offerUndo({ text: `Held ${name}.`, undone: `${name} is free again.`, undo: () => undoChange(id, { type: "hold", was: before.heldReason }) });
+      }
+      return true;
+    },
 
     resume: (id) => ok("Couldn't resume the workstream", (b) => b.workstreamsResume(id)),
 
@@ -225,7 +262,9 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const n = done.value.length;
       const open = get().list.length;
       const said = n ? `Held ${workstreams(n)}. ${n === 1 ? "Its" : "Their"} agents carry on; nothing starts on its own until you resume.` : open ? "Every open workstream is held already." : "There are no open workstreams to hold.";
-      useToasts.getState().push(said, "info");
+      // Each one it held was free before, so each goes back to free; Pip's turns it cancelled are not restarted.
+      if (n) offerUndo({ text: said, undone: `${workstreams(n)} ${n === 1 ? "is" : "are"} free again.`, undo: () => undoAll(done.value.map((w) => w.id)) });
+      else useToasts.getState().push(said, "info");
       return n;
     },
 
@@ -315,12 +354,7 @@ function focusedRunId(route: string, sheet: RunSheetTarget | null, selectedId: s
   return route === "agents" ? selectedId : null;
 }
 
-/** The open workstream `run` belongs to, or else the one open on its ticket. */
-export function runWorkstream(list: readonly WorkstreamView[], run: Run | null | undefined): WorkstreamView | null {
-  if (!run) return null;
-  const own = run.spec.workstream ? list.find((v) => v.workstream.id === run.spec.workstream && v.workstream.closedAt === null) : undefined;
-  return own ?? (run.item ? ofItem(list, run.item.key, run.item.connectionId) : null);
-}
+export { runWorkstream };
 
 /**
  * The workstream in focus for the Pip pane: the open one on the ticket the peek shows; otherwise the one of the run in
