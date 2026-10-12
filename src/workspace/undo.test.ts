@@ -126,6 +126,22 @@ describe("the Undo toast", () => {
     expect(useToasts.getState().toasts.map((t) => t.text)).toContain("CA-401 is free again.");
   });
 
+  it("takes the toast down when the offer is undone from the palette's path, and when it failed", async () => {
+    const id = offerUndo({ text: "Held CA-401.", undone: "CA-401 is free again.", undo: async () => {} });
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Held CA-401."]);
+    expect(await undoLog.run(id)).toBe("undone");
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["CA-401 is free again."]);
+    const bad = offerUndo({ text: "Skipped it.", undo: async () => false });
+    expect(await undoLog.run(bad)).toBe("failed");
+    expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain("Skipped it.");
+  });
+
+  it("push returns the toast's id", () => {
+    const id = useToasts.getState().push("Hello", "info");
+    expect(useToasts.getState().toasts[0].id).toBe(id);
+    expect(useToasts.getState().push("Hello", "info")).toBeNull();
+  });
+
   it("comes to the front over a note, is never dropped for waiting, and waits behind an error", () => {
     const { push } = useToasts.getState();
     push("A note.", "info");

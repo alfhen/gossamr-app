@@ -71,6 +71,33 @@ export function StopRunConfirm({ name, onStop, onKeep }: { name: string; onStop(
   );
 }
 
+/** What a card asks before Deny tells the agent no: unlike Allow once, nothing else follows it. */
+export const DENY_QUESTION = "Tell Claude no? It carries on without it.";
+
+/** The card's confirm step for Deny, as `StopRunConfirm` is for Stop. Escape keeps it waiting. */
+export function DenyConfirm({ onDeny, onKeep }: { onDeny(): void; onKeep(): void }) {
+  return (
+    <span
+      role="group"
+      aria-label="Deny this request"
+      data-deny-confirm
+      data-esc-local
+      className="inline-flex flex-wrap items-center gap-1.5"
+      onKeyDown={(ev) => {
+        if (ev.key === "Escape") (ev.stopPropagation(), onKeep());
+      }}
+    >
+      <span className="text-ws-ink2">{DENY_QUESTION}</span>
+      <Btn tone="dangerFill" autoFocus onClick={onDeny}>
+        Yes, deny
+      </Btn>
+      <Btn tone="ghost" onClick={onKeep}>
+        Keep waiting
+      </Btn>
+    </span>
+  );
+}
+
 /** Moves focus to the first decision button when it is on the sheet itself, as it is on opening; a click elsewhere is not stolen. */
 export function focusDecision(root: Pick<Element, "closest" | "querySelector"> | null, active: Element | null) {
   const sheet = root?.closest("#agent-sheet");
@@ -85,6 +112,7 @@ export function focusDecision(root: Pick<Element, "closest" | "querySelector"> |
 export function PermissionAsk({ run, onAttach, onStop, label, answered: given, confirmStop = false }: { run: Run; onAttach(): void; onStop(): void; label?: string; answered?: PermissionAnswered | null; confirmStop?: boolean }) {
   // A card asks here before Stop; the sheet passes its own confirm step as `onStop`.
   const [stopping, setStopping] = useState(false);
+  const [denying, setDenying] = useState(false);
   const runs = useRuns((s) => s.runs);
   const busy = useRuns((s) => s.answering.has(run.id));
   const name = useMemo(() => label ?? labelsByRun(runs).get(run.id) ?? "Claude", [label, runs, run.id]);
@@ -126,9 +154,13 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
             Allow once in Terminal
           </Btn>
         )}
-        <Btn tone={offer.allow === "readOnly" || offer.allow === "forbidden" ? "primary" : "plain"} icon="x" disabled={busy || !command} aria-describedby={note} onClick={deny}>
-          Deny
-        </Btn>
+        {denying ? (
+          <DenyConfirm onDeny={() => (setDenying(false), deny())} onKeep={() => setDenying(false)} />
+        ) : (
+          <Btn tone={offer.allow === "readOnly" || offer.allow === "forbidden" ? "primary" : "plain"} icon="x" disabled={busy || !command} aria-describedby={note} onClick={() => setDenying(true)}>
+            Deny
+          </Btn>
+        )}
         {(offer.allow === "notExact" || offer.allow === "unchecked" || allowed) && (
           <Btn tone={allowed ? "plain" : "primary"} icon="term" disabled={!run.shortId} title={run.shortId ? undefined : "There is no session to open yet"} onClick={onAttach}>
             Open in Terminal

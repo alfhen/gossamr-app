@@ -141,6 +141,9 @@ const TOLD_ELSEWHERE = new Set(["run_approved", "autostart", "wake", "draft_crea
 /** Audit lines that ask the person to decide something, whoever wrote them. */
 const ASKS = new Set(["fix_rounds_exhausted", "held"]);
 
+/** What the person did that counts as deciding something. Opening or closing a workstream and the notes are bookkeeping, not decisions. */
+const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "taken_over", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset"]);
+
 const time = (iso: string | undefined) => {
   const t = iso ? Date.parse(iso) : NaN;
   return Number.isFinite(t) ? t : NaN;
@@ -205,6 +208,20 @@ export function runSentence(run: Run, label: string | undefined, verdict: Review
   }
 }
 
+/** Whose draft it was, for a sentence about the person's decision on it: "Pip", "an agent", "you". */
+const makerWord = (p: Proposal) => (p.createdBy === "agent" ? "an agent" : p.createdBy === "user" ? "you" : MAKER[p.createdBy]);
+
+/** What an applied draft says: the person's decision, and for a review or a run what it came to. */
+function appliedSentence(p: Proposal, on: string): string {
+  const i = p.intent;
+  if (i.type === "githubReview") {
+    const n = i.comments.length;
+    return `You posted ${p.createdBy === "user" ? "your" : `${makerWord(p)}'s`} GitHub review on ${i.repo}#${i.number}: ${n} inline comment${n === 1 ? "" : "s"}${p.revisions.length ? ", edited by you" : ""}`;
+  }
+  if (i.type === "startRun") return `You started the ${KIND_WORD[i.spec.kind].toLowerCase()} run ${makerWord(p)} drafted${on}`;
+  return `You approved ${DRAFT_WORDS[i.type]}${on}${p.createdBy === "user" ? "" : `, drafted by ${makerWord(p)}`}: ${i.type === "runAnswer" ? "sent" : "posted"}`;
+}
+
 /** The sentence a draft's entry says: who made what on which ticket, then how it stands. */
 export function draftSentence(p: Proposal): string {
   const target = targetOf(p.intent);
@@ -216,7 +233,7 @@ export function draftSentence(p: Proposal): string {
     case "applying":
       return `${made}: posting`;
     case "applied":
-      return `${made}: ${p.intent.type === "startRun" ? "started" : p.intent.type === "runAnswer" ? "sent" : "posted"}`;
+      return appliedSentence(p, on);
     case "skipped":
       return `${made}: skipped`;
     case "retired":
@@ -343,7 +360,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       text,
       target,
       needKey: need?.key ?? null,
-      decision: e.actor === "person" || ASKS.has(e.action) || !!need,
+      decision: (e.actor === "person" && DECIDED.has(e.action)) || ASKS.has(e.action) || !!need,
       actor: e.actor,
       action: e.action,
       order: order++,

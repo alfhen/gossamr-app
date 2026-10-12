@@ -183,6 +183,7 @@ test("Deny on a read-only run, which is never offered Allow: Claude carries on w
   await expect(asking(page).getByRole("button")).toHaveText(["Copy", "Deny", "Stop the run (abandons it)"]);
 
   await asking(page).getByRole("button", { name: "Deny" }).click();
+  await asking(page).getByRole("group", { name: "Deny this request" }).getByRole("button", { name: "Yes, deny" }).click();
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === run.id)?.state).toBe("working");
   expect(await audited(page, "permission_denied")).toEqual([{ actor: "person", runId: run.id, detail: "rm -rf node_modules" }]);
   // Dealt with, it leaves Needs you, and the pane has moved on from it.
@@ -275,6 +276,12 @@ test("a review that still blocks after two fix rounds comes to the person with t
   await expect(draft.getByRole("button", { name: "Post review" })).toBeFocused();
   expect(await githubWrites(page)).toEqual([]);
   await expect(escalationItem(page)).toHaveCount(1);
+  // As on the rail's card, the choices wait while the draft is open and say why; discarding it brings them back.
+  await expect(card.locator("[data-escalation-draft-open]")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Run another fix round" })).toBeDisabled();
+  await draft.getByRole("button", { name: "Discard" }).click();
+  await expect(card.locator("[data-escalation-draft-open]")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Run another fix round" })).toBeEnabled();
 
   // Run another fix round: the person's, past the cap, recorded as theirs; the item goes.
   const passes = (await mockRuns(page)).find((r) => r.id === build)!.passes;

@@ -124,7 +124,7 @@ describe("timeline: one list, oldest first", () => {
       "You: question q1",
       "You let Pip manage the workstream",
       "Investigate R1 finished",
-      "An agent drafted a comment on CA-401: posted",
+      "You approved a comment on CA-401, drafted by an agent: posted",
       "You approved a comment on CA-401",
       "You: question q2",
       "Build R2 started",
@@ -307,10 +307,18 @@ describe("timeline: drafts", () => {
   });
 
   it("says a run draft was started and an answer sent", () => {
-    expect(draftSentence(draft("d1", answer("r1"), 5, { state: { type: "applied" } }))).toBe("An agent drafted an answer on CA-401: sent");
+    expect(draftSentence(draft("d1", answer("r1"), 5, { state: { type: "applied" } }))).toBe("You approved an answer on CA-401, drafted by an agent: sent");
     const start = { type: "startRun", item: ref("CA-401"), spec: { ...base.spec } } as unknown as Intent;
-    expect(draftSentence(draft("d2", start, 5, { createdBy: "pip", state: { type: "applied" } }))).toBe("Pip drafted an agent run on CA-401: started");
+    expect(draftSentence(draft("d2", start, 5, { createdBy: "pip", state: { type: "applied" } }))).toBe("You started the investigate run Pip drafted on CA-401");
     expect(draftSentence(draft("d3", comment("CA-401"), 5, { state: { type: "retired", reason: "gone" } }))).toBe("An agent drafted a comment on CA-401: no longer needed");
+  });
+
+  it("says who posted a GitHub review, to which pull request, with how many comments and whether it was edited", () => {
+    const review = (n: number) => ({ type: "githubReview", connectionId: "gh", item: ref("CA-402"), runId: "r1", repo: "hobbii/cart", number: 17, commitSha: "abc", summary: "s", comments: Array.from({ length: n }, (_, i) => ({ path: "a.ts", line: i + 1, side: "RIGHT", body: "x" })) }) as unknown as Intent;
+    expect(draftSentence(draft("d1", review(2), 5, { state: { type: "applied" } }))).toBe("You posted an agent's GitHub review on hobbii/cart#17: 2 inline comments");
+    expect(draftSentence(draft("d2", review(1), 5, { createdBy: "autopilot", state: { type: "applied" } }))).toBe("You posted Gossamr's GitHub review on hobbii/cart#17: 1 inline comment");
+    const edited = { ...draft("d3", review(3), 5, { createdBy: "pip", state: { type: "applied" } }), revisions: [{}] } as unknown as Proposal;
+    expect(draftSentence(edited)).toBe("You posted Pip's GitHub review on hobbii/cart#17: 3 inline comments, edited by you");
   });
 
   it("knows the question a chat draft answered, so its card can stay with the answer", () => {
@@ -386,6 +394,15 @@ describe("timeline: the audit", () => {
       ["waiting_for_pr", false],
       ["budget_reset", true],
       ["fix_rounds_exhausted", true],
+    ]);
+  });
+
+  it("leaves opening and closing the workstream and the notes out of the decisions", () => {
+    const list = timeline({ events: [line("opened", 10), line("notes_set", 9), line("closed", 8), line("mode_set", 7, { detail: "manage" })] });
+    expect(list.map((e) => [e.action, e.decision])).toEqual([
+      ["opened", false],
+      ["closed", false],
+      ["mode_set", true],
     ]);
   });
 

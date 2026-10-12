@@ -40,7 +40,8 @@ export interface ToastAction {
 interface ToastState {
   /** Only the head is on screen; the rest wait their turn, errors ahead of notes, each kind oldest first. */
   toasts: Toast[];
-  push(text: string, tone?: ToastTone, action?: ToastAction, options?: ToastOptions): void;
+  /** Returns the new toast's id, or null when the same words are already waiting. */
+  push(text: string, tone?: ToastTone, action?: ToastAction, options?: ToastOptions): number | null;
   dismiss(id: number): void;
   clear(): void;
 }
@@ -85,7 +86,7 @@ export const useToasts = create<ToastState>((set, get) => {
 
     push(text, tone = "error", action, options) {
       const keep = !!options?.keep;
-      if (!keep && get().toasts.some((t) => t.text === text)) return;
+      if (!keep && get().toasts.some((t) => t.text === text)) return null;
       const id = ++seq;
       set((s) => {
         const toast: Toast = { id, text, tone, action, at: Date.now(), current: options?.current, lifetime: options?.lifetime, keep };
@@ -105,6 +106,7 @@ export const useToasts = create<ToastState>((set, get) => {
         return { toasts: [...toasts.slice(0, drop), ...toasts.slice(drop + 1)] };
       });
       arm();
+      return id;
     },
 
     dismiss(id) {

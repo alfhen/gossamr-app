@@ -242,6 +242,8 @@ async function answerPermission(get: () => RunsState, set: (patch: Partial<RunsS
     const copied = kind === "allowed" && (await copyText(command));
     const at = kind === "allowed" ? (run.permissionAllowed?.at ?? run.lastProgressAt) : run.lastProgressAt;
     set({ runs: get().runs.map((r) => (r.id === id ? run : r)), permissionAnswered: { ...get().permissionAnswered, [id]: { kind, command, at, copied } } });
+    // The Needs-you pane moves on before the card's own line can show; Deny reached the agent, so no Undo.
+    if (kind === "denied") useToasts.getState().push(`Denied. ${labelsByRun(get().runs).get(id) ?? run.item?.key ?? "The run"} carries on without it.`, "info");
   } catch (e) {
     useToasts.getState().push(`Couldn't ${kind === "denied" ? "deny it" : "open it to allow"}: ${messageOf(e)}`);
   } finally {
@@ -442,6 +444,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     if (!backend) return;
     try {
       await backend.runsAdoptSession(id, session);
+      useToasts.getState().push(`Adopted session ${session.slice(0, 8)}. Gossamr follows that session from here.`, "info");
     } catch (e) {
       useToasts.getState().push(`Couldn't adopt the session: ${messageOf(e)}`);
     }

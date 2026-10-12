@@ -71,6 +71,7 @@ export function FailureNext({ run, failure }: { run: Run; failure: FailureState 
   if (!help) return null;
   const ready = retryEnabled(help, failure.opened);
   const next = help.primary && !(help.retryNeedsTerminal && failure.opened);
+  const why = `retry-waits-${run.id}`;
   return (
     <div className="flex flex-wrap items-center gap-2">
       {help.primary && (
@@ -82,13 +83,18 @@ export function FailureNext({ run, failure }: { run: Run; failure: FailureState 
       <button
         type="button"
         disabled={!ready}
-        title={ready ? undefined : RETRY_WAITS}
+        aria-describedby={ready ? undefined : why}
         onClick={(ev) => (ev.stopPropagation(), failure.on.retry())}
         className={`${BUTTON} ${ready && !next ? "border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:brightness-110" : "border-ws-sep2 text-ws-ink hover:bg-ws-hover"}`}
       >
         <Icon name="retry" />
         Retry
       </button>
+      {!ready && (
+        <span id={why} className="text-xs text-ws-ink2">
+          {RETRY_WAITS}
+        </span>
+      )}
     </div>
   );
 }

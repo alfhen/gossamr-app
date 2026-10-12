@@ -188,9 +188,19 @@ describe("nextStep when the person is waited on", () => {
   it("does not hide a working run behind a draft that only needs approving, but shows it once nothing works", () => {
     const draft = { ...applied("d1", "b"), state: { type: "pending" } as const, intent: { type: "comment", item: ref("CA-401"), body: "Hi", mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "q", workstream: "ws-1" } } as Proposal;
     expect(next([run("b", "build", "working")], {}, [draft])?.kind).toBe("auto");
-    const idle = next([run("b", "build", "done")], { stage: "build" }, [draft]);
+    const idle = next([run("b", "build", "done")], { stage: "build", rules: { build_review: false } }, [draft]);
     expect(idle?.kind).toBe("waiting");
     expect(idle?.need?.kind).toBe("draft");
+  });
+
+  it("is not waiting on a draft while a step is queued or about to start by a rule; it is once the line would be idle", () => {
+    const draft = { ...applied("d1", "b"), state: { type: "pending" } as const, intent: { type: "comment", item: ref("CA-401"), body: "Hi", mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "q", workstream: "ws-1" } } as Proposal;
+    expect(next([run("b", "build", "queued")], { stage: "build" }, [draft])).toMatchObject({ kind: "auto", need: null });
+    // The build has finished and build_review is on: a review is about to start.
+    expect(next([run("b", "build", "done")], { stage: "build", rules: { build_review: true } }, [draft])).toMatchObject({ kind: "auto", need: null, text: "Next: a review starts automatically after R1 (Build)." });
+    expect(next([], {}, [draft])).toMatchObject({ kind: "waiting" });
+    // A draft decides again where the rule is off.
+    expect(next([run("b", "build", "done")], { stage: "build", rules: { build_review: false } }, [draft])?.kind).toBe("waiting");
   });
 
   it("is waiting on a failed run, which stays a need until dealt with", () => {

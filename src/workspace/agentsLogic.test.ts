@@ -84,6 +84,12 @@ describe("lanes", () => {
     expect(laneOf(run("needsAnswer", { lastProgressAt: iso(600) }), NOW)).toBe("bad");
   });
 
+  it("keeps a stopped run that may be continued out of Earlier, since it is in Needs you", () => {
+    expect(laneOf(run("stopped"), NOW)).toBe("earlier");
+    expect(laneOf(run("stopped", { possibleContinuations: [] }), NOW)).toBe("earlier");
+    expect(laneOf(run("stopped", { possibleContinuations: [{ shortId: "abc12345" }] }), NOW)).toBe("bad");
+  });
+
   it("says quiet in minutes, then in hours, then in days, and never stuck", () => {
     expect(quietText(40)).toBe("Quiet for 40 min");
     expect(quietText(180)).toBe("Quiet for 3 h");

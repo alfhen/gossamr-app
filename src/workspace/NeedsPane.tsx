@@ -7,12 +7,13 @@ import { Box, BoxTitle, Btn } from "./AgentSheet";
 import { planOpenQuestions, progressText, quietMinutes, quietText } from "./agentsLogic";
 import { draftSummary, draftTitle, LiveDraftCard } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
-import { escalationActions, EscalationCardView, fixRoundSent, TAKEN_OVER } from "./EscalationCard";
+import { escalationActions, EscalationCardView, fixRoundSent, postingReview, TAKEN_OVER } from "./EscalationCard";
 import { failureAction } from "./failureActions";
 import { failureHelp } from "./failureHelp";
 import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
 import { GroupChip } from "./NeedsYou";
 import { groupId, openInWorkstream, takePaneIntent } from "./needsActions";
+import { openInWorkstreamLabel } from "../lib/needs";
 import { PermissionAsk, StopRunConfirm } from "./PermissionAsk";
 import { usePipHome } from "./pipHomeStore";
 import { RunAnswer } from "./RunAnswer";
@@ -199,8 +200,14 @@ function UnknownBody({ run }: { run: Run }) {
 function EscalationBody({ view }: { view: WorkstreamView }) {
   const e = view.escalation;
   const [busy, setBusy] = useState(false);
+  // Post the review as is was pressed: the choices wait, as on the rail's card, until the draft is posted or goes.
+  const [posting, setPosting] = useState(false);
   const draft = useWorkspace((s) => (e?.reviewDraft ? s.proposals[e.reviewDraft] : undefined));
   const review = useRef<HTMLDivElement>(null);
+  const pending = draft?.state.type === "pending";
+  useEffect(() => {
+    if (posting && !pending) setPosting(false);
+  }, [posting, pending]);
   if (!e) return null;
   const actions = escalationActions(view.workstream.id, e);
   const choose = (call: () => Promise<boolean>, text: string) => {
@@ -214,9 +221,11 @@ function EscalationBody({ view }: { view: WorkstreamView }) {
       <EscalationCardView
         escalation={e}
         busy={busy}
+        drafting={postingReview(posting, draft)}
         onFixRound={() => choose(actions.onFixRound, fixRoundSent(e.buildLabel))}
         onTakeOver={() => choose(actions.onTakeOver, TAKEN_OVER)}
         onPost={() => {
+          setPosting(true);
           // The draft is under the choices; nothing goes to GitHub until its own Post review.
           const buttons = Array.from(review.current?.querySelectorAll<HTMLElement>("[data-draft-actions] button:not(:disabled)") ?? []);
           const post = buttons.pop() ?? review.current?.querySelector<HTMLElement>("button:not(:disabled)");
@@ -382,7 +391,7 @@ function NeedDecision({ need }: { need: Need }) {
             onClick={(ev) => (ev.preventDefault(), openInWorkstream(need))}
             className="rounded font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
           >
-            Open in workstream
+            {openInWorkstreamLabel(need)}
           </a>
           <button
             type="button"

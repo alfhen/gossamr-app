@@ -60,6 +60,8 @@ export interface CommandActions {
   askPip(query: string): void;
   /** Goes to Pip home. */
   openPipHome(): void;
+  /** Goes to the Agents screen: every run across every workstream. */
+  openAgents(): void;
   /** Shows open workstream `id` on Pip home. */
   openWorkstream(id: string): void;
   /** Opens (or finds) the workstream on `item`, shows it on Pip home and asks Pip there to plan it: Pip only drafts, nothing starts. */
@@ -84,6 +86,8 @@ export interface CommandContext {
   ticket?: { key: string; workstream: boolean } | null;
   /** The person is on Pip home, where opening it is nothing and ⌘J goes to its composer. */
   onPipHome?: boolean;
+  /** The person is on the Agents screen. */
+  onAgents?: boolean;
 }
 
 /** The shortcut for Hold all workstreams, as the rail and the palette show it. */
@@ -139,6 +143,8 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", keywords: "pip proposals review waiting", run: a.openDrafts },
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences autopilot", run: a.openSettings },
     ...(ctx.agents && !ctx.onPipHome ? [{ id: "app:pip-home", group: "Go to" as const, icon: "✦", label: "Open Pip home", hint: PIP_HOME_HINT, keywords: "pip workstreams conversation agents manager needs you", run: a.openPipHome }] : []),
+    // Before "Stop all agents…" in the list, so the query "agents" lands here first.
+    ...(ctx.agents && !ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents runs every workstream timeline", run: a.openAgents }] : []),
     ...FILTERS.map(
       (f): Command => ({ id: `filter:${f.id}`, group: "Filters", icon: "⏷", label: `Filter: ${f.label}`, keywords: f.keywords, run: () => a.addFilter(f.filter) }),
     ),

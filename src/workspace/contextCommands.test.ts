@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { docFromText } from "../lib/docs";
-import { needGroups, type ActionSpec, type Need } from "../lib/needs";
+import { needGroups, openInWorkstreamLabel, type ActionSpec, type Need } from "../lib/needs";
 import type { Proposal, Run, WorkstreamView } from "../types";
 import { buildCommands, rankCommands, type CommandActions } from "./commands";
 import { batchCommands, contextCommands, type ContextData, type ContextDeps, type Subject } from "./contextCommands";
@@ -53,7 +53,7 @@ describe("the palette's entries for the focused item", () => {
     const d = deps();
     const subject: Subject = { type: "need", key: permission.key };
     const entries = contextCommands(subject, data({ needs: [permission] }), d);
-    expect(labels(entries)).toEqual(["Allow once", "Deny", "Open in workstream", "Hold the workstream on CA-401", "Switch CA-401 to Advise", "Open the workstream on CA-401"]);
+    expect(labels(entries)).toEqual(["Allow once", "Deny", "Open in workstream", "Hold the workstream on CA-401", "Switch CA-401 to Advise"]);
     expect(entries.every((c) => c.group === "This item")).toBe(true);
     // Each one calls the need's own button of that name, and the palette adds nothing to it.
     entries[0].run();
@@ -79,7 +79,15 @@ describe("the palette's entries for the focused item", () => {
     expect(labels(contextCommands({ type: "need", key: limit.key }, data({ needs: [limit] }), deps())).slice(0, 2)).toEqual(["Resume", "Dismiss"]);
     const held = need({ key: "held:ws-1", kind: "hold", target: { type: "workstream" }, primary: spec("resume", "Resume") });
     const entries = contextCommands({ type: "need", key: held.key }, data({ needs: [held], workstreams: [view({ heldReason: "person" })] }), deps());
-    expect(labels(entries)).toEqual(["Resume", "Open in workstream", "Switch CA-401 to Advise", "Open the workstream on CA-401"]);
+    expect(labels(entries)).toEqual(["Resume", "Open in workstream", "Switch CA-401 to Advise"]);
+  });
+
+  it("a need in General says where its link goes; one in a workstream never lists a second open entry", () => {
+    const general = need({ key: "run:r-9", workstreamId: null, kind: "failure", runId: "r-9", target: { type: "run", id: "r-9" }, primary: spec("retry", "Retry") });
+    expect(labels(contextCommands({ type: "need", key: general.key }, data({ needs: [general], workstreams: [] }), deps()))).toEqual(["Retry", "Open the run"]);
+    expect(openInWorkstreamLabel({ workstreamId: null, target: { type: "draft", id: "p-1" } })).toBe("Show in General timeline");
+    expect(contextCommands({ type: "need", key: permission.key }, data({ needs: [permission] }), deps()).some((c) => c.id.startsWith("context:open:"))).toBe(false);
+    expect(openInWorkstreamLabel({ workstreamId: "ws-1", target: { type: "run", id: "r-1" } })).toBe("Open in workstream");
   });
 
   it("a draft need offers Approve, Edit and Skip as its buttons do", () => {

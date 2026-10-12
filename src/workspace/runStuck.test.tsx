@@ -89,7 +89,7 @@ describe("the sample backend and the store follow the same rules", () => {
     expect(after).toMatchObject({ state: "working", shortId: "bbb748a7", possibleContinuations: [] });
     expect(after.earlierSessions).toEqual([{ shortId: offered.shortId, sessionId: offered.sessionId }]);
     expect(after.sessionId).toBe("bbb748a7-dca2-4f33-9da1-caa7f80584b8");
-    expect(useToasts.getState().toasts).toHaveLength(0);
+    expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toEqual([[expect.stringMatching(/^Adopted session /), "info"]]);
   });
 
   it("removes the earlier session along with the worktree, so nothing is left to retry", async () => {

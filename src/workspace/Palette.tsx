@@ -22,7 +22,7 @@ import { openOnPipHome, togglePip, useWorkstreams } from "./workstreamsStore";
 import { contextEntries, focusedSubject } from "./contextActions";
 import { undoLog } from "./undo";
 import { usePipHome } from "./pipHomeStore";
-import { showTimeline } from "./TimelineFilterBar";
+import { showAllRuns, showTimeline } from "./TimelineFilterBar";
 
 /** Where focus lands when the palette closes and the element that opened it is gone. */
 export const MAIN_ID = "workspace-main";
@@ -212,6 +212,7 @@ export function appActions(): CommandActions {
     },
     askPip,
     openPipHome: () => tabs.setRoute("pip"),
+    openAgents: showAllRuns,
     openWorkstream: openOnPipHome,
     askPipToPlan: (item) => void askPipToPlan(item),
     startWorkstreamOn: (item) => void useWorkstreams.getState().start(item.item),
@@ -340,6 +341,7 @@ export function Palette() {
       needsYou: needingMe,
       ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
       onPipHome: useTabs.getState().route === "pip",
+      onAgents: useTabs.getState().route === "agents",
     };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);

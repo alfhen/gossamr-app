@@ -115,7 +115,7 @@ test("deciding a permission from the pane: Deny, then focus is on the next need"
   await expect(pane).toContainText("wants to run `git push origin HEAD`.");
   await expect(pane).toContainText("If you wait:");
   await expect(pane).toContainText("The run stays paused; nothing else in DEVOPS-471 moves.");
-  await expect(pane.getByRole("link", { name: "Open in workstream" })).toBeVisible();
+  await expect(pane.getByRole("link", { name: "Open the run" })).toBeVisible();
   await expect(pane.locator("[data-permission-ask]")).toBeVisible();
   const first = (await pane.getAttribute("data-needs-pane"))!;
   // The decision has the keyboard as it opens.
@@ -124,6 +124,7 @@ test("deciding a permission from the pane: Deny, then focus is on the next need"
   const run = await runOn(page, "DEVOPS-471");
   expect(await stateOf(page, run.id)).toBe("needsPermission");
   await pane.getByRole("button", { name: "Deny", exact: true }).click();
+  await pane.getByRole("button", { name: "Yes, deny" }).click();
   await expect.poll(() => stateOf(page, run.id)).toBe("working");
   // It leaves the list, the count drops by one, and the next need opens in the pane with the keyboard in it.
   await expect(needsYouCount(page)).toHaveText(String(Number(before) - 1));
