@@ -163,8 +163,18 @@ impl Board {
 
     /// What to show now. `waiting` is everything that waits on the person at `now`, so a stream missing from it has been
     /// dealt with and is armed again. `watching` is the person looking at the app: nothing is shown, but what they could
-    /// see counts as announced. `name_of` is how a stream is called ("CA-401").
-    pub fn tick(&mut self, now: DateTime<Utc>, settings: &Settings, watching: bool, waiting: &[Waiting], name_of: &dyn Fn(&Key) -> String) -> Vec<Outgoing> {
+    /// see counts as announced. `name_of` is how a stream is called ("CA-401"). `deliver` shows a notice and says whether
+    /// it got through: state moves on only for what was delivered, so a notice that failed is offered again at the next
+    /// tick, once per tick however long it keeps failing.
+    pub fn tick(
+        &mut self,
+        now: DateTime<Utc>,
+        settings: &Settings,
+        watching: bool,
+        waiting: &[Waiting],
+        name_of: &dyn Fn(&Key) -> String,
+        deliver: &mut dyn FnMut(&Outgoing) -> bool,
+    ) {
         let waiting: Vec<&Waiting> = waiting.iter().filter(|w| w.top().is_some()).collect();
         for (key, s) in &mut self.streams {
             if !waiting.iter().any(|w| &w.key == key) {
@@ -180,14 +190,15 @@ impl Board {
                 fresh.push(*w);
             }
         }
-        let mut out = Vec::new();
         if quiet {
             self.mark(&waiting);
         } else if settings.mode == NoticeMode::Workstream {
-            out.extend(fresh.iter().filter_map(|w| waiting_notice(&name_of(&w.key), w)));
-            self.mark(&fresh);
-        } else if !fresh.is_empty() && self.last_digest.is_none_or(|at| now - at >= settings.digest_every) {
-            out.extend(digest(&waiting, name_of));
+            for w in fresh {
+                if waiting_notice(&name_of(&w.key), w).is_some_and(|o| deliver(&o)) {
+                    self.mark(&[w]);
+                }
+            }
+        } else if !fresh.is_empty() && self.last_digest.is_none_or(|at| now - at >= settings.digest_every) && digest(&waiting, name_of).is_some_and(|o| deliver(&o)) {
             self.mark(&waiting);
             self.last_digest = Some(now);
         }
@@ -195,13 +206,11 @@ impl Board {
             if quiet || settings.mode == NoticeMode::Digest {
                 s.forget_finished();
                 s.announced = s.announced && !watching;
-            } else if !s.announced && s.finished() > 0 && s.first_finished.is_some_and(|at| now - at >= FINISH_HOLD) {
-                out.push(finished_notice(&name_of(key), s));
+            } else if !s.announced && s.finished() > 0 && s.first_finished.is_some_and(|at| now - at >= FINISH_HOLD) && deliver(&finished_notice(&name_of(key), s)) {
                 s.forget_finished();
                 s.announced = true;
             }
         }
-        out
     }
 
     fn mark(&mut self, ws: &[&Waiting]) {
@@ -266,7 +275,22 @@ mod tests {
     }
 
     fn tick(b: &mut Board, at: i64, s: &Settings, waiting: &[Waiting]) -> Vec<Outgoing> {
-        b.tick(t(at), s, false, waiting, &name)
+        let mut shown = Vec::new();
+        b.tick(t(at), s, false, waiting, &name, &mut |o| {
+            shown.push(Outgoing { notice: Notice { title: o.notice.title.clone(), body: o.notice.body.clone() }, open_run: o.open_run.clone() });
+            true
+        });
+        shown
+    }
+
+    /// A tick whose delivery succeeds or fails as told, and the notices it was asked to deliver.
+    fn tick_delivering(b: &mut Board, at: i64, s: &Settings, watching: bool, waiting: &[Waiting], works: bool) -> Vec<String> {
+        let mut asked = Vec::new();
+        b.tick(t(at), s, watching, waiting, &name, &mut |o| {
+            asked.push(o.notice.title.clone());
+            works
+        });
+        asked
     }
 
     fn titles(out: &[Outgoing]) -> Vec<&str> {
@@ -437,7 +461,7 @@ mod tests {
         let mut b = Board::default();
         let waiting = [ws("w1", vec![need(Group::Unblock, "r5", "a")])];
         b.finished(&Some("w1".into()), "r1", false, t(0));
-        assert!(b.tick(t(30), &each(), true, &waiting, &name).is_empty());
+        assert!(tick_delivering(&mut b, 30, &each(), true, &waiting, true).is_empty());
         assert!(tick(&mut b, 35, &each(), &waiting).is_empty(), "already seen");
         b.finished(&Some("w1".into()), "r2", false, t(40));
         assert_eq!(titles(&tick(&mut b, 70, &each(), &[])), ["CA-401: 1 run finished"], "looking re-armed finished notices");
@@ -499,6 +523,63 @@ mod tests {
         assert!(tick(&mut b, 100, &every_ten, &[]).is_empty());
         assert_eq!(tick(&mut b, 200, &every_ten, &[ws("w1", vec![need(Group::Decide, "r5", "c")])]).len(), 1);
         assert_eq!(tick(&mut b, 200 + 600, &every_ten, &[ws("w1", vec![need(Group::Decide, "r5", "c"), need(Group::Decide, "r6", "d")]), general(vec![need(Group::Approve, "g", "e")])]).len(), 1);
+    }
+
+    #[test]
+    fn a_failed_delivery_is_retried_once_per_tick_and_then_counts_as_told() {
+        let mut b = Board::default();
+        let waiting = [ws("w1", vec![need(Group::Unblock, "r5", "a")])];
+        assert_eq!(tick_delivering(&mut b, 0, &each(), false, &waiting, false), ["CA-401 is waiting on you"]);
+        assert_eq!(tick_delivering(&mut b, 5, &each(), false, &waiting, false), ["CA-401 is waiting on you"], "offered again");
+        assert_eq!(tick_delivering(&mut b, 10, &each(), false, &waiting, true), ["CA-401 is waiting on you"]);
+        assert!(tick_delivering(&mut b, 15, &each(), false, &waiting, true).is_empty(), "delivered once, then quiet");
+    }
+
+    #[test]
+    fn a_failed_finished_notice_keeps_its_runs_until_it_is_delivered() {
+        let mut b = Board::default();
+        let key = Some("w1".to_owned());
+        b.finished(&key, "r1", false, t(0));
+        assert_eq!(tick_delivering(&mut b, 20, &each(), false, &[], false), ["CA-401: 1 run finished"]);
+        b.finished(&key, "r2", false, t(25));
+        assert_eq!(tick_delivering(&mut b, 30, &each(), false, &[], true), ["CA-401: 2 runs finished"], "coalesced with the one that failed");
+        assert!(tick_delivering(&mut b, 60, &each(), false, &[], true).is_empty());
+    }
+
+    #[test]
+    fn a_failed_digest_is_retried_without_waiting_out_the_interval() {
+        let mut b = Board::default();
+        let one = [ws("w1", vec![need(Group::Decide, "r5", "c")])];
+        assert_eq!(tick_delivering(&mut b, 0, &digest_mode(), false, &one, false), ["1 workstream waits on you"]);
+        assert_eq!(tick_delivering(&mut b, 5, &digest_mode(), false, &one, true), ["1 workstream waits on you"]);
+        assert!(tick_delivering(&mut b, 10, &digest_mode(), false, &one, true).is_empty());
+    }
+
+    #[test]
+    fn one_failed_workstream_does_not_hold_back_the_others() {
+        let mut b = Board::default();
+        let both = [ws("w1", vec![need(Group::Unblock, "r5", "a")]), ws("w2", vec![need(Group::Unblock, "r7", "b")])];
+        let mut fail_first = true;
+        let mut asked = Vec::new();
+        b.tick(t(0), &each(), false, &both, &name, &mut |o| {
+            asked.push(o.notice.title.clone());
+            !std::mem::take(&mut fail_first)
+        });
+        assert_eq!(asked, ["CA-401 is waiting on you", "CA-388 is waiting on you"]);
+        assert_eq!(tick_delivering(&mut b, 5, &each(), false, &both, true), ["CA-401 is waiting on you"]);
+    }
+
+    #[test]
+    fn watching_and_off_advance_state_without_delivering() {
+        let off = Settings { mode: NoticeMode::Off, digest_every: Duration::minutes(30) };
+        let waiting = [ws("w1", vec![need(Group::Unblock, "r5", "a")])];
+        for (settings, watching) in [(each(), true), (off, false)] {
+            let mut b = Board::default();
+            b.finished(&Some("w1".into()), "r1", false, t(0));
+            assert!(tick_delivering(&mut b, 30, &settings, watching, &waiting, false).is_empty(), "nothing is asked to be delivered");
+            assert!(tick_delivering(&mut b, 35, &each(), false, &waiting, true).is_empty(), "the need counts as announced");
+            assert!(tick_delivering(&mut b, 40, &each(), false, &[], true).is_empty(), "and the finished run as seen");
+        }
     }
 
     #[test]

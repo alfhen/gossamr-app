@@ -716,10 +716,13 @@ impl RunNotifier for FanoutNotifier {
         }
     }
 
-    fn announce(&self, notice: &crate::runs::notices::Outgoing) {
+    fn announce(&self, notice: &crate::runs::notices::Outgoing) -> bool {
+        // Every notifier is told; delivered only when none failed, so a failure is retried rather than lost.
+        let mut delivered = true;
         for n in &self.0 {
-            n.announce(notice);
+            delivered &= n.announce(notice);
         }
+        delivered
     }
 
     fn watching(&self) -> bool {

@@ -62,8 +62,11 @@ pub trait RunNotifier: Send + Sync {
     /// notifications are chosen apart (`announce`).
     fn notify(&self, run: &Run, why: Attention);
 
-    /// A system notification the person should get (`notices::Board`).
-    fn announce(&self, _notice: &Outgoing) {}
+    /// A system notification the person should get (`notices::Board`). Whether it was delivered: a notice that wasn't
+    /// is offered again at the next poll. A notifier with nothing to show has delivered it.
+    fn announce(&self, _notice: &Outgoing) -> bool {
+        true
+    }
 
     /// Whether the person is looking at the app, so a notification would only repeat what they can see.
     fn watching(&self) -> bool {
@@ -300,13 +303,14 @@ impl RunService {
         let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(asking.to_vec()), ..RunQuery::default() }).await else { return };
         let Ok(drafts) = self.core.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..ProposalQuery::default() }).await else { return };
         let drafts: Vec<_> = drafts.into_iter().filter(|p| p.state == ProposalState::Pending).collect();
-        // The workstreams give names, run labels, escalations and holds.
-        let views = match self.core.scope().await {
-            Ok(scope) => self.core.workstreams(&scope, true).await.unwrap_or_default(),
-            Err(_) => Vec::new(),
+        // The open workstreams give names, run labels, escalations and holds; the closed ones are only told apart by id,
+        // so what belongs to one is skipped without loading it.
+        let (views, closed_ids) = match self.core.scope().await {
+            Ok(scope) => (self.core.workstreams(&scope, false).await.unwrap_or_default(), self.core.closed_workstream_ids(&scope).await.unwrap_or_default()),
+            Err(_) => (Vec::new(), HashSet::new()),
         };
         let view_of = |id: &str| views.iter().find(|v| v.workstream.id == id);
-        let closed = |id: &Option<String>| id.as_deref().and_then(view_of).is_some_and(|v| v.workstream.closed_at.is_some());
+        let closed = |id: &Option<String>| id.as_deref().is_some_and(|id| closed_ids.contains(id));
         let label_of = |id: &str, ws: &Option<String>| ws.as_deref().and_then(view_of).and_then(|v| v.labels.iter().find(|(run, _)| run == id)).map(|(_, l)| l.clone());
         let mut needs: BTreeMap<Key, Vec<Need>> = BTreeMap::new();
         // A run's question, permission or sign-in is something to unblock.
@@ -329,7 +333,7 @@ impl RunService {
         // A review that still blocks after the fix rounds is a decision, and a hold waits to be resumed. The escalation's
         // review draft is part of the escalation, so it isn't a need of its own.
         let mut folded = HashSet::new();
-        for v in views.iter().filter(|v| v.workstream.closed_at.is_none()) {
+        for v in &views {
             let key = Some(v.workstream.id.clone());
             if let Some(e) = &v.escalation {
                 folded.extend(e.review_draft.clone());
@@ -366,10 +370,9 @@ impl RunService {
             None => GENERAL.to_owned(),
             Some(id) => view_of(id).map(|v| v.workstream.item_key.clone().unwrap_or_else(|| v.workstream.title.clone())).unwrap_or_else(|| "A workstream".to_owned()),
         };
-        let out = self.notices.lock().expect("notices lock poisoned").tick(now, &settings, self.notifier.watching(), &waiting, &name_of);
-        for notice in &out {
-            self.notifier.announce(notice);
-        }
+        // A notice counts as told only once it is delivered, so one that fails is offered again at the next poll.
+        let watching = self.notifier.watching();
+        self.notices.lock().expect("notices lock poisoned").tick(now, &settings, watching, &waiting, &name_of, &mut |notice| self.notifier.announce(notice));
     }
 
     /// The person looked at the app: finished runs are seen, so the next one gets a notice again.

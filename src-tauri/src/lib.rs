@@ -124,12 +124,15 @@ fn announce(app: &AppHandle, events: &[events::NewEvent]) {
 /// A system notification chosen by `runs::notices`. Focusing the window soon after opens the run it points at
 /// (`open-run`): the top need of the workstream, or the newest run that finished in it, since the notification has no
 /// click handler.
-fn announce_run(app: &AppHandle, open: &runs::tracker::OpenOnFocus, out: &runs::notices::Outgoing) {
-    if app.notification().builder().title(out.notice.title.clone()).body(out.notice.body.clone()).show().is_ok() {
+/// Whether it was shown.
+fn announce_run(app: &AppHandle, open: &runs::tracker::OpenOnFocus, out: &runs::notices::Outgoing) -> bool {
+    let shown = app.notification().builder().title(out.notice.title.clone()).body(out.notice.body.clone()).show().is_ok();
+    if shown {
         if let Some(run_id) = &out.open_run {
             open.record(run_id, std::time::Instant::now());
         }
     }
+    shown
 }
 
 struct RunNotices {
@@ -141,8 +144,8 @@ impl runs::tracker::RunNotifier for RunNotices {
     /// Notices aren't made per event; the run service sends them through `announce`.
     fn notify(&self, _run: &Run, _why: runs::tracker::Attention) {}
 
-    fn announce(&self, notice: &runs::notices::Outgoing) {
-        announce_run(&self.app, &self.open, notice);
+    fn announce(&self, notice: &runs::notices::Outgoing) -> bool {
+        announce_run(&self.app, &self.open, notice)
     }
 
     fn watching(&self) -> bool {
