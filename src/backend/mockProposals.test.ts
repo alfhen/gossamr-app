@@ -349,4 +349,12 @@ describe("one review of a pull request waiting at a time, as tidy_reviews in pro
     expect(runCommentSupersession(older, newer, kinds({ "run-b": "review" }))).toBeNull();
     expect(runCommentSupersession(older, newer, kinds({ "run-a": "review" }))).toBeNull();
   });
+
+  it("keeps a run comment whose post failed and is back in Pending", () => {
+    const made = (id: string, runId: string, error: string | null): Proposal =>
+      ({ id, createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z", origin: { type: "run", runId, shortId: null, workstream: "ws-1" }, createdBy: "agent", intent: comment, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error, run: null, supersededBy: null }) as unknown as Proposal;
+    const kinds = () => "review" as RunKind;
+    expect(runCommentSupersession(made("a", "run-a", null), made("b", "run-b", null), kinds)).toBe("supersede");
+    expect(runCommentSupersession(made("a", "run-a", "Jira is down"), made("b", "run-b", null), kinds)).toBeNull();
+  });
 });

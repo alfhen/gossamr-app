@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
 import { labelsByRun, stageText } from "../lib/workstreamStage";
 import type { ReviewView, Run, RunsEnvironment, WorkstreamView } from "../types";
@@ -297,7 +297,10 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     const workstreams = sorted.workstreams && stableGroups(before.workstreams ?? [], sorted.workstreams, true, (g) => g.id ?? "none");
     return { lanes, workstreams, order: navOrder((lanes ?? workstreams) as readonly { runs: readonly Run[]; lane?: LaneId }[], earlierOpen, filters) };
   }, [sorted, frozen, group, earlierOpen, filters]);
-  shownBefore.current = { group, lanes, workstreams: wsGroups };
+  // Recorded once committed, so a render React discards never becomes the order the next frozen render keeps.
+  useLayoutEffect(() => {
+    shownBefore.current = { group, lanes, workstreams: wsGroups };
+  }, [group, lanes, wsGroups]);
   useEffect(() => onOrder?.(order), [order, onOrder]);
   const filtered = isFiltered(filters);
   const shown = (lanes ?? wsGroups ?? []).reduce((n, g) => n + g.runs.length, 0);
