@@ -302,6 +302,16 @@ impl Core {
                     db.save_proposal(&p)?;
                     proposals::record(db, &p, Actor::Person, "draft_approved", at);
                     if let Some(ws) = p.workstream().filter(|ws| db.workstream(ws).ok().flatten().is_some()) {
+                        // Whether it was the draft an escalation offered to post as it is, which this resolves.
+                        match super::workstreams::escalation_posted_event(db, ws, &p, at) {
+                            Ok(Some(line)) => {
+                                if let Err(e) = db.append_workstream_event(&line) {
+                                    eprintln!("couldn't record that the escalation of workstream {ws} was resolved by draft {}: {e}", p.id);
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => eprintln!("couldn't tell whether draft {} resolved an escalation of workstream {ws}: {e}", p.id),
+                        }
                         if let Err(e) = db.append_workstream_event(&WorkstreamEvent::new(ws, Actor::Person, "review_posted", at).proposal(&p.id).detail(detail)) {
                             eprintln!("couldn't record the posted review of draft {} in workstream {ws}: {e}", p.id);
                         }
@@ -635,6 +645,34 @@ mod tests {
         assert_eq!(body["comments"].as_array().unwrap().iter().map(|c| (c["path"].as_str().unwrap(), c["line"].as_u64().unwrap())).collect::<Vec<_>>(), [("src/consumer/retry.ts", 42), ("src/consumer/retry.ts", 17)]);
         assert!(fx.tracker.intents().is_empty(), "posting a review writes nothing to Jira");
         assert_eq!(fx.core.proposal(&p.id).await.unwrap(), Some(done));
+    }
+
+    #[tokio::test]
+    async fn posting_the_review_an_escalation_offered_resolves_it_and_is_audited() {
+        use crate::domain::workstream::Mode;
+        use crate::domain::{Actor, RunState, WorkstreamEvent};
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
+        let build = run_with(&fx, |r| (r.spec.kind, r.state, r.spec.workstream) = (RunKind::Build, RunState::Done, Some(ws.id.clone()))).await;
+        let review = run_with(&fx, |r| {
+            (r.spec.kind, r.spec.pr, r.spec.pr_sha, r.spec.instruction) = (RunKind::Review, Some(12), Some("a1b2c3d4e5f6".into()), String::new());
+            (r.spec.workstream, r.spec.build_from_run, r.result, r.result_complete) = (Some(ws.id.clone()), Some(build.id.clone()), Some(WRITTEN.into()), true);
+            r.queued_at = build.queued_at + chrono::Duration::seconds(10);
+        })
+        .await;
+        let draft = fx.core.auto_draft_run_review(&review.id).await.unwrap().expect("a review draft");
+        fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Supervisor, "fix_rounds_exhausted", chrono::Utc::now()).run(&review.id).detail("2")).await.unwrap();
+        let escalation = || async { fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().escalation };
+        assert_eq!(escalation().await.and_then(|e| e.review_draft), Some(draft.id.clone()), "the draft is offered");
+
+        fx.core.post_review_draft(&draft.id, draft.revisions.len(), false).await.unwrap();
+        assert_eq!(escalation().await, None, "posted: resolved");
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        let line: Vec<_> = events.iter().filter(|e| e.action == "escalation_posted").map(|e| (e.actor, e.run_id.as_deref(), e.proposal_id.as_deref())).collect();
+        assert_eq!(line, [(Actor::Person, Some(review.id.as_str()), Some(draft.id.as_str()))]);
+        assert!(events.iter().any(|e| e.action == "review_posted"));
+        assert!(fx.core.workstreams(&fx.scope, false).await.unwrap().iter().all(|v| v.escalation.is_none()));
     }
 
     #[tokio::test]

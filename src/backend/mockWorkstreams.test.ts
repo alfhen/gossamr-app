@@ -605,8 +605,8 @@ describe("a review that still blocks after the automatic fix rounds", () => {
   const line = (seq: number, action: string, runId: string, detail: string, actor: WorkstreamEvent["actor"] = "supervisor"): WorkstreamEvent => ({ workstreamId: "ws-1", seq, at: `2026-09-30T11:00:0${seq}Z`, actor, action, runId, proposalId: null, digest: null, detail });
   const rounds = [line(1, "autostart", "b", "fix_round after r0"), line(2, "autostart", "b", "fix_round after r1")];
   const blocking = () => "blocking" as const;
-  const reviewDraft = (id: string, runId: string, repo: string, number: number, at: string, state: Proposal["state"] = { type: "pending" }) =>
-    ({ id, createdAt: at, state, intent: { type: "githubReview", connectionId: "github:sample", item: null, runId, repo, number, commitSha: "a1b2c3d4", summary: "S.", comments: [] } }) as unknown as Proposal;
+  const reviewDraft = (id: string, runId: string, repo: string, number: number, at: string, state: Proposal["state"] = { type: "pending" }, workstream: string | null = "ws-1") =>
+    ({ id, createdAt: at, state, origin: { type: "run", runId, shortId: null, workstream }, intent: { type: "githubReview", connectionId: "github:sample", item: null, runId, repo, number, commitSha: "a1b2c3d4", summary: "S.", comments: [] } }) as unknown as Proposal;
 
   it("is there exactly once the rounds ran out for the newest review and it blocks, as escalation_of", () => {
     expect(escalationOf(ws, runs, blocking, rounds, [])).toBeNull();
@@ -621,6 +621,8 @@ describe("a review that still blocks after the automatic fix rounds", () => {
     expect(escalationOf(ws, runs, blocking, [...events, line(5, "fix_round_person", "b", "after r1", "person")], [])).not.toBeNull();
     expect(escalationOf(ws, runs, blocking, [...events, line(5, "escalation_taken", "r2", "", "person")], [])).toBeNull();
     expect(escalationOf(ws, runs, blocking, [...events, line(5, "escalation_taken", "r1", "", "person")], [])).not.toBeNull();
+    expect(escalationOf(ws, runs, blocking, [...events, line(5, "escalation_posted", "r2", "", "person")], [])).toBeNull();
+    expect(escalationOf(ws, runs, blocking, [...events, line(5, "escalation_posted", "r1", "", "person")], [])).not.toBeNull();
     expect(escalationOf({ ...ws, mode: "advise" }, runs, blocking, events, [])).toBeNull();
     expect(escalationOf({ ...ws, closedAt: "2026-09-30T12:00:00Z" }, runs, blocking, events, [])).toBeNull();
     expect(escalationOf({ ...ws, heldReason: "person" }, runs, blocking, events, [])).not.toBeNull();
@@ -638,6 +640,39 @@ describe("a review that still blocks after the automatic fix rounds", () => {
     expect(draft([older, newer, other, posted])).toBe("p-new");
     expect(draft([older, newer, reviewDraft("p-own", "r2", "acme/storefront", 218, "2026-09-30T10:00:00Z")])).toBe("p-own");
     expect(draft([other, posted])).toBeNull();
+  });
+
+  it("offers a pending draft only from the escalation of the workstream it was made in", () => {
+    const events = [...rounds, line(3, "fix_rounds_exhausted", "r2", "2")];
+    const ws2 = { ...ws, id: "ws-2" } as Workstream;
+    const runs2 = runs.map((r) => ({ ...r, id: `${r.id}-2`, spec: { ...r.spec, workstream: "ws-2", ...(r.spec.buildFromRun ? { buildFromRun: `${r.spec.buildFromRun}-2` } : {}) } })) as Run[];
+    const events2 = [{ ...line(3, "fix_rounds_exhausted", "r2-2", "2"), workstreamId: "ws-2" }];
+    const theirs = reviewDraft("p-theirs", "rx", "acme/storefront", 218, "2026-09-30T10:21:00Z");
+    expect(escalationOf(ws, runs, blocking, events, [theirs])?.reviewDraft).toBe("p-theirs");
+    expect(escalationOf(ws2, runs2, blocking, events2, [theirs])?.reviewDraft).toBeNull();
+    const loose = reviewDraft("p-loose", "ry", "acme/storefront", 218, "2026-09-30T10:29:00Z", { type: "pending" }, null);
+    expect(escalationOf(ws, runs, blocking, events, [theirs, loose])?.reviewDraft).toBe("p-theirs");
+  });
+
+  it("is resolved by posting the review draft it offered, which is audited as escalation_posted, and by no other draft", () => {
+    const store = new MockWorkstreams(() => runs, () => "Checkout fails", undefined, "escalation-posted-test", false, "manage");
+    const id = store.open(CA401).id;
+    const linked = runs.map((r) => ({ ...r, spec: { ...r.spec, workstream: id } }));
+    const live = new MockWorkstreams(() => linked, () => "Checkout fails", undefined, "escalation-posted-test", false);
+    live.verdictOf = blocking;
+    live.record(id, "supervisor", "fix_rounds_exhausted", { runId: "r2", detail: "2" });
+    expect(live.escalationOffering("p-1")).toBeNull();
+    const drafts = [reviewDraft("p-1", "r2", "acme/webshop", 218, "2026-09-30T12:00:00Z")];
+    live.pendingDrafts = () => drafts;
+    expect(live.escalationOffering("p-1")).toEqual({ workstream: id, reviewRun: "r2" });
+    expect(live.escalationOffering("p-other")).toBeNull();
+    live.escalationPosted(id, "r2", "p-1");
+    expect(live.events(id).slice(-1).map((e) => [e.actor, e.action, e.runId, e.proposalId])).toEqual([["person", "escalation_posted", "r2", "p-1"]]);
+    expect(live.get(id)?.escalation).toBeUndefined();
+    expect(live.list()[0].escalation).toBeUndefined();
+    live.setMode(id, "advise", "person");
+    live.setMode(id, "manage", "person");
+    expect(live.get(id)?.escalation, "Manage again: the review posted stays resolved").toBeUndefined();
   });
 
   it("is taken over only by the person, for the review it is about: Advise, escalation_taken, and nothing else", () => {
