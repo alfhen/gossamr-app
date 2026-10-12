@@ -255,7 +255,7 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   await workstreamRow(page, "General").click();
   await needRow(page, "Start Investigate").click();
   await expect(row).toHaveAttribute("aria-selected", "true");
-  await expect(needsPane(page)).toContainText("drafted a Investigate agent for CA-401");
+  await expect(needsPane(page)).toContainText("drafted an Investigate agent for CA-401");
   await needsPane(page).getByRole("button", { name: "Skip" }).click();
   await expect(needRow(page, "Start Investigate")).toHaveCount(0);
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");

@@ -216,7 +216,7 @@ test("Needs you: Pip's investigation draft waits in the list and on its row, ope
   await settled(page);
   const item = needOfKind(page, "runStart");
   await expect(item).toHaveCount(1);
-  await expect(item).toContainText("drafted a Investigate agent for CA-401");
+  await expect(item).toContainText("drafted an Investigate agent for CA-401");
   await expect(item.locator("[data-needs-you-chip]")).toHaveText("Approve");
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
 
