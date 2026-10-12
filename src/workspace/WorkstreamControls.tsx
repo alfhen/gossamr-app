@@ -1,8 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Switch } from "../components/Switch";
+import type { Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
 import { RULE_SWITCH, TURN_HELP, budgetNote, heldBanner, ruleText, stepsLeftText } from "../lib/workstreamHold";
-import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
+import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
 import { EscalationCard } from "./EscalationCard";
@@ -266,6 +267,14 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
   );
 }
 
+/**
+ * The Next line's step, or null (the line stays hidden) while Settings' switches are unread: guessing from the defaults could
+ * promise a step the person's saved settings switched off.
+ */
+export function nextStepOnceKnown(view: WorkstreamView, runs: Run[], proposals: Proposal[], needs: Need[], globals: AutoStartSwitches | null): NextStep | null {
+  return globals ? nextStep(view, runs, proposals, needs, globals) : null;
+}
+
 /** `WorkstreamControlsView` for workstream `view`, wired to workstreamsStore. */
 export function WorkstreamControls({ view }: { view: WorkstreamView }) {
   const globals = useWorkstreams((s) => s.globals);
@@ -275,6 +284,6 @@ export function WorkstreamControls({ view }: { view: WorkstreamView }) {
   const runs = useRuns((s) => s.runs);
   const proposals = useWorkspace((s) => s.proposals);
   const needs = useNeedsYou();
-  const next = useMemo(() => nextStep(view, runs, Object.values(proposals), needs, globals ?? undefined), [view, runs, proposals, needs, globals]);
+  const next = useMemo(() => nextStepOnceKnown(view, runs, Object.values(proposals), needs, globals), [view, runs, proposals, needs, globals]);
   return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} next={next} />;
 }
