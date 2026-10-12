@@ -142,7 +142,7 @@ const TOLD_ELSEWHERE = new Set(["run_approved", "autostart", "wake", "draft_crea
 const ASKS = new Set(["fix_rounds_exhausted", "held"]);
 
 /** What the person did that counts as deciding something. Opening or closing a workstream and the notes are bookkeeping, not decisions. */
-const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "taken_over", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset"]);
+const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "escalation_taken", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset"]);
 
 const time = (iso: string | undefined) => {
   const t = iso ? Date.parse(iso) : NaN;

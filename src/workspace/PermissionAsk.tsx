@@ -118,6 +118,8 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
   const name = useMemo(() => label ?? labelsByRun(runs).get(run.id) ?? "Claude", [label, runs, run.id]);
   const offer = permissionOffer(run);
   const command = readAs(run.needs);
+  // A Deny confirm belongs to the request it was opened for: a new request on the same run starts unasked.
+  useEffect(() => setDenying(false), [command]);
   const kept = usePermissionConfirmation(run);
   // The sheet hands its own in, as it does every other state it shows; a card reads the store.
   const answered = given === undefined ? kept : given;
