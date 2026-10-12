@@ -409,7 +409,8 @@ function NeedDecision({ need }: { need: Need }) {
  */
 export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const deciding = usePipHome((s) => s.deciding);
+  const paneRev = usePipHome((s) => s.paneRev);
   useAdvance(needs);
   const need = needs.find((n) => n.key === deciding);
-  return need ? <NeedDecision key={need.key} need={need} /> : null;
+  return need ? <NeedDecision key={`${need.key}:${paneRev}`} need={need} /> : null;
 }

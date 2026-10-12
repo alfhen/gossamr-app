@@ -44,7 +44,7 @@ import { useWorkstreams } from "./workstreamsStore";
 import { stableGroups } from "./stableOrder";
 import { useNow } from "./useNow";
 import { agentKey } from "./agentKeys";
-import { arm, confirmArmed, disarm, keyPlan, openNeed, setPaneIntent } from "./needsActions";
+import { arm, confirmArmed, disarm, keyPlan, openNeed } from "./needsActions";
 import { usePipHome } from "./pipHomeStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
 import type { TimelineFilter } from "../lib/timeline";
@@ -546,8 +546,7 @@ export function AgentsView() {
           ev.preventDefault();
           if (plan.type === "ask") return arm(need, plan);
           if (plan.type === "do") return plan.run();
-          if (plan.edit) setPaneIntent("edit");
-          return openNeed(need);
+          return openNeed(need, { edit: plan.edit });
         }
       }
       const { selectedId: current, select } = useRuns.getState();
