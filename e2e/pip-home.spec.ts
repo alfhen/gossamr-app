@@ -379,9 +379,9 @@ test("Esc on a draft card asking for Enter cancels the ask and leaves Pip answer
   await openApp(page, MANAGED);
   await agentsSettled(page, true);
   await homeWorkstream(page);
-  await askPip(page, "investigate this");
+  await askPip(page, "Draft a comment");
   await settled(page);
-  const card = homeConversationRegion(page).getByRole("article", { name: "Start an agent: CA-401" }).last();
+  const card = homeConversationRegion(page).getByRole("article", { name: "Comment on CA-401" }).last();
   await expect(card).toHaveCount(1);
 
   await holdPip(page, true);
@@ -390,10 +390,10 @@ test("Esc on a draft card asking for Enter cancels the ask and leaves Pip answer
   await expect(stop).toBeVisible();
   await homeComposer(page).press("ArrowUp");
   await expect(card).toBeFocused();
-  await page.keyboard.press("s");
-  await expect(card.getByRole("status")).toHaveText(/^↵ skip/);
+  await page.keyboard.press("a");
+  await expect(card.getByRole("status")).toHaveText(/^↵ approve/);
   await page.keyboard.press("Escape");
-  await expect(card.getByRole("status")).not.toHaveText(/^↵ skip/);
+  await expect(card.getByRole("status")).not.toHaveText(/^↵ approve/);
   await expect(card).toHaveAttribute("data-state", "pending");
   await expect(stop).toBeVisible();
 

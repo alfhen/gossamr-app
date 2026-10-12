@@ -393,6 +393,8 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           const plan = need ? keyPlan(need, action.act) : null;
           if (!need || !plan) return;
           if (plan.type === "ask") return setPaneIntent(null), arm(need, plan);
+          // Skipping or dismissing acts at once and offers Undo; the row keeps the keyboard, or hands it on as it leaves.
+          if (plan.type === "do") return setPaneIntent(null), plan.run();
           return openNeed(need, { edit: plan.edit });
         }
         case "confirm":

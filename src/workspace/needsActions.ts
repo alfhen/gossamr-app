@@ -44,11 +44,17 @@ export function openInWorkstream(need: Need) {
   if (need.target.type === "run") useRuns.getState().openRun(need.target.id, { stay: true });
 }
 
-/** The keys of the list that act on a need: a approves or allows its primary, d denies or dismisses, e edits. */
-export type NeedKey = "approve" | "deny" | "edit";
+/**
+ * The keys of the list that act on a need, as the one model names them (`keyMap.ts`): a approves or allows its primary, d
+ * dismisses or denies, s skips a draft, e edits.
+ */
+export type NeedKey = "approve" | "dismiss" | "skip" | "edit";
 
-/** What a key does: asks for Enter first (`ask`), or opens the decision, with the pane's first move (`open`). */
-export type KeyPlan = { type: "ask"; text: string; run(): void } | { type: "open"; edit: boolean };
+/**
+ * What a key does: asks for Enter first (`ask`), acts at once (`do`: what can be undone, which offers Undo as it does), or
+ * opens the decision, with the pane's first move (`open`).
+ */
+export type KeyPlan = { type: "ask"; text: string; run(): void } | { type: "do"; run(): void } | { type: "open"; edit: boolean };
 
 const proposalOf = (need: Need) => (need.target.type === "draft" ? useWorkspace.getState().proposals[need.target.id] : undefined);
 const runOf = (need: Need) => (need.runId ? useRuns.getState().runs.find((r) => r.id === need.runId) : undefined);
@@ -57,9 +63,10 @@ const runOf = (need: Need) => (need.runId ? useRuns.getState().runs.find((r) => 
 const thing = (need: Need) => (need.kind === "question" ? "this reply" : need.kind === "review" ? "this review" : "this draft");
 
 /**
- * What key `which` does on `need`. Anything that writes, posts or answers an agent asks for Enter first, as a draft's own
- * card does ("a" then Enter): any other key cancels. What needs reading before it is decided (a rewrite's diff, a run's
- * prompt, a hold's cause) or has nothing to write opens its decision instead. Null when the key means nothing here.
+ * What key `which` does on `need`. Anything that writes, posts, starts or answers an agent asks for Enter first, as a draft's
+ * own card does ("a" then Enter): any other key cancels. Skipping a draft and dismissing a run touch nothing outside Gossamr,
+ * so they act at once and offer Undo. What needs reading before it is decided (a rewrite's diff, a run's prompt, a hold's
+ * cause) or has nothing to write opens its decision instead. Null when the key means nothing here.
  */
 export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
   const all = [need.primary, ...need.secondary];
@@ -89,11 +96,13 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
         return { type: "open", edit: false };
     }
   }
+  if (which === "skip") return p && all.some((a) => a.id === "dismiss") ? { type: "do", run: draftDecisions(p.id, p).skip } : null;
   const stop = all.find((a) => a.id === "deny" || a.id === "dismiss");
   if (!stop) return null;
+  // A deny reaches the agent, so it keeps its Enter; the rest are the person's own and can be undone.
   if (stop.id === "deny") return run ? { type: "ask", text: "deny it; Claude carries on without it", run: () => void useRuns.getState().denyPermission(run.id, readAs(run.needs)) } : null;
-  if (p) return { type: "ask", text: "skip this draft", run: draftDecisions(p.id, p).skip };
-  return run ? { type: "ask", text: "dismiss this", run: () => useRuns.getState().dismiss(run.id) } : null;
+  if (p) return { type: "do", run: draftDecisions(p.id, p).skip };
+  return run ? { type: "do", run: () => useRuns.getState().dismiss(run.id) } : null;
 }
 
 /** What the next Enter does, once a key asked for it; cleared when it is confirmed or cancelled. */

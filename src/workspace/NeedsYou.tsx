@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind } from "../lib/needs";
 import { relativeTime } from "../lib/views";
 import { useWorkspace } from "../workspaceStore";
@@ -50,13 +50,26 @@ function Asking({ need }: { need: Need }) {
  * "Approve N safe drafts" under a group's needs, with what each would do in one combined preview, then a confirm: the
  * same step the step rail's "Approve these N" asks, over exactly the drafts it showed (`freezeBatch`, `confirmBatch`).
  */
-function SafeBatch({ needs }: { needs: readonly Need[] }) {
+function SafeBatch({ needs, gid }: { needs: readonly Need[]; gid: string }) {
   const proposals = useWorkspace((s) => s.proposals);
   const drafts = needs.flatMap((n) => (n.target.type === "draft" && proposals[n.target.id] ? [proposals[n.target.id]] : []));
   const [frozen, setFrozen] = useState<BatchSnapshot | null>(null);
   const [outcome, setOutcome] = useState<{ text: string; failed: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const ask = useRef<HTMLButtonElement>(null);
+  // The palette's "Approve all safe drafts in …" opens the same preview and its confirm; it approves nothing itself.
+  const asked = usePipHome((s) => s.batchPreview === gid);
+  const count = drafts.length;
+  useEffect(() => {
+    if (!asked) return;
+    usePipHome.setState({ batchPreview: null });
+    if (count >= 2) {
+      setOutcome(null);
+      setFrozen(freezeBatch(drafts));
+    }
+    // The preview is frozen from the drafts as they are when it opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked]);
   if (drafts.length < 2 && !outcome) return null;
   const confirm = async (covered: BatchSnapshot) => {
     setFrozen(null);
@@ -213,7 +226,7 @@ function GroupRow({ group: g, now, onPick }: { group: NeedGroup; now: number; on
           {[g.top, ...g.rest].map((n) => (
             <NeedRow key={n.key} need={n} gid={gid} now={now} onPick={onPick} showTicket={g.workstreamId === null || n.ticketKey !== g.ticketKey} />
           ))}
-          <SafeBatch needs={g.safeBatch} />
+          <SafeBatch needs={g.safeBatch} gid={gid} />
         </ul>
       )}
     </li>

@@ -35,6 +35,13 @@ interface PipHomeState {
   expanded: ReadonlySet<string>;
   /** The key press in the Needs you list that waits for Enter. */
   asking: NeedAsking | null;
+  /**
+   * The group (its row id, "general" for General) whose "Approve N safe drafts" preview the palette asked to open: the list
+   * opens the group, shows the combined preview and clears this. It confirms nothing.
+   */
+  batchPreview: string | null;
+  /** Asks the list to open group `gid`'s combined preview of its safe drafts, for the person to confirm. */
+  previewBatch(gid: string): void;
   /** Opens need `key`'s decision in the middle column, for workstream `workstreamId` (null is General). */
   decide(key: string, workstreamId: string | null): void;
   /** Remounts the open decision. */
@@ -52,7 +59,7 @@ interface PipHomeState {
   reset(): void;
 }
 
-const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), asking: null } as const;
+const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), asking: null, batchPreview: null } as const;
 
 export const usePipHome = create<PipHomeState>((set) => ({
   ...BLANK,
@@ -66,6 +73,7 @@ export const usePipHome = create<PipHomeState>((set) => ({
   closeDecision: () => set({ deciding: null, asking: null }),
   setExpanded: (id, on) => set((s) => (s.expanded.has(id) === on ? s : { expanded: new Set(on ? [...s.expanded, id] : [...s.expanded].filter((x) => x !== id)) })),
   ask: (asking) => set({ asking }),
+  previewBatch: (gid) => set((s) => ({ batchPreview: gid, expanded: new Set([...s.expanded, gid]) })),
   reset: () => set({ ...BLANK }),
 }));
 

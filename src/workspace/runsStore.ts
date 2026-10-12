@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { targetOf } from "../lib/proposals";
+import { labelsByRun } from "../lib/workstreamStage";
 import type { CleanupResult, ItemRef, PlanComment, Proposal, Run, RunKind, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
@@ -12,6 +13,7 @@ import { planCommentMessage } from "./runSheetLogic";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
+import { offerUndo } from "./undo";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -127,8 +129,13 @@ interface RunsState {
   fix(id: string, act: Extract<FailureAct, "terminal" | "install">): Promise<void>;
   /** Notes that the person copied the command to run it themselves, which is as good as opening Terminal. */
   noteCopied(id: string): void;
-  /** Takes run `id` out of Needs you: the person's explicit Dismiss of its failure, limit stop, unclear state or possible continuation. */
+  /**
+   * Takes run `id` out of Needs you: the person's explicit Dismiss of its failure, limit stop, unclear state or possible
+   * continuation. It is local (nothing reaches the run), so it offers Undo; `undismiss` is what Undo calls.
+   */
   dismiss(id: string): void;
+  /** Puts run `id` back in Needs you if it is dismissed, leaving every other dismissal as it is. */
+  undismiss(id: string, before?: ReadonlySet<string>): void;
   attach(id: string): Promise<void>;
   /** Drafts a comment from the run's result and takes the person to it. Nothing is posted. */
   draftComment(id: string): Promise<void>;
@@ -481,8 +488,23 @@ export const useRuns = create<RunsState>((set, get) => ({
   },
 
   dismiss(id) {
-    if (get().dismissed.has(id)) return;
-    const kept = new Set([...get().dismissed, id].slice(-DISMISSED_KEPT));
+    const before = get().dismissed;
+    if (before.has(id)) return;
+    const kept = new Set([...before, id].slice(-DISMISSED_KEPT));
+    writeStored(DISMISSED_KEY, [...kept]);
+    set({ dismissed: kept });
+    const run = get().runs.find((r) => r.id === id);
+    const name = labelsByRun(get().runs).get(id) ?? run?.item?.key ?? "the run";
+    // Local only: nothing reached the run, so it can be put back exactly.
+    offerUndo({ text: `Dismissed ${name} from Needs you.`, undone: `${name} is back in Needs you.`, undo: async () => get().undismiss(id, before) });
+  },
+
+  undismiss(id, before) {
+    const now = get().dismissed;
+    if (!now.has(id)) return;
+    // What it was before the dismissal, plus anything dismissed since.
+    const had = before ?? new Set<string>();
+    const kept = new Set([...had, ...[...now].filter((x) => x !== id && !had.has(x))].slice(-DISMISSED_KEPT));
     writeStored(DISMISSED_KEY, [...kept]);
     set({ dismissed: kept });
   },

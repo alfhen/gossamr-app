@@ -329,7 +329,7 @@ test("the keyboard in the list: j and k move, Enter opens, ← folds, a asks for
   await group.focus();
   // With the keyboard on a row, the footer names the list's own keys.
   const hints = pipHome(page).locator("[data-pip-home-hints]");
-  await expect(hints).toContainText("approve or allow, deny or dismiss, edit; ↵ confirms");
+  await expect(hints).toContainText("approve or allow (then ↵), edit, dismiss or deny, skip");
   // Enter opens the top need and expands the group; the keyboard is in the decision.
   await page.keyboard.press("Enter");
   await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
@@ -351,7 +351,7 @@ test("the keyboard in the list: j and k move, Enter opens, ← folds, a asks for
   await expect(group).toHaveAttribute("aria-expanded", "false");
   await expect(group).toBeFocused();
 
-  // → opens too. a on a draft asks for Enter, and any other key cancels it.
+  // → opens too. a on a draft asks for Enter, and any other key cancels it; d skips at once.
   await page.keyboard.press("ArrowRight");
   await expect(needsPane(page)).toBeVisible();
   await page.keyboard.press("Escape");
@@ -369,13 +369,12 @@ test("the keyboard in the list: j and k move, Enter opens, ← folds, a asks for
   await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toEqual(["comment"]);
   await expect(needsYouCount(page)).toHaveText("2");
 
-  // d skips the next draft, after the same Enter, and focus is on a row still.
+  // d skips the next draft at once, with an Undo, and focus is on a row still.
   const next = need(page, /Draft comment/).first();
   await next.focus();
   await page.keyboard.press("d");
-  await expect(next.locator("[data-needs-asking]")).toHaveText("↵ skip this draft · any other key cancels");
-  await page.keyboard.press("Enter");
   await expect(needsYouCount(page)).toHaveText("1");
+  await expect(page.locator("[data-toast]").getByRole("button", { name: "Undo" })).toBeVisible();
   expect((await jiraWrites(page)).length).toBe(1);
   await expect.poll(async () => page.evaluate(() => document.activeElement?.closest("[data-needs-you]") !== null)).toBe(true);
 });

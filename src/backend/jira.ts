@@ -65,6 +65,7 @@ import type {
   Workstream,
   WorkstreamEvent,
   WorkstreamMode,
+  WorkstreamUndo,
   WorkstreamRule,
   WorkstreamView,
   WorkstreamsChanged,
@@ -310,6 +311,10 @@ export class JiraBackend implements Backend {
     return invoke<Proposal>("proposals_skip", { id });
   }
 
+  proposalsUnskip(id: string) {
+    return invoke<Proposal>("proposals_unskip", { id });
+  }
+
   proposalsApprove(id: string) {
     return invoke<Proposal>("proposals_approve", { id });
   }
@@ -551,6 +556,10 @@ export class JiraBackend implements Backend {
 
   workstreamsResume(id: string) {
     return invoke<Workstream>("workstreams_resume", { id });
+  }
+
+  workstreamsUndo(id: string, undo: WorkstreamUndo) {
+    return invoke<Workstream>("workstreams_undo", { id, undo });
   }
 
   workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null) {

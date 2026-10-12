@@ -63,6 +63,7 @@ import type {
   Workstream,
   WorkstreamEvent,
   WorkstreamMode,
+  WorkstreamUndo,
   WorkstreamRule,
   WorkstreamView,
   WorkstreamsChanged,
@@ -175,6 +176,8 @@ export interface Backend {
   /** Replaces a pending draft's payload. */
   proposalsEdit(id: string, edit: ProposalEdit): Promise<Proposal>;
   proposalsSkip(id: string): Promise<Proposal>;
+  /** The person's Undo of a skip: a draft skipped a moment ago (within about a minute) is pending again, as it was. Refused for an older skip or a draft in any other state. */
+  proposalsUnskip(id: string): Promise<Proposal>;
   /**
    * Applies a pending draft; nothing else writes on the assistant's behalf. A failed attempt resolves with the draft
    * back to pending and `error` set, and subtasks it did create remembered so a retry doesn't repeat them.
@@ -317,6 +320,11 @@ export interface Backend {
   workstreamsHold(id: string): Promise<Workstream>;
   /** The person lifts a workstream's hold; lifting a budget hold starts its budget again from zero. */
   workstreamsResume(id: string): Promise<Workstream>;
+  /**
+   * The person's Undo of a hold or of a switch to Advise, a moment after it: the workstream goes back to how `undo` says it stood.
+   * Allowed only while that change is the last line of the audit and under a minute old; it adds its own `undone` line.
+   */
+  workstreamsUndo(id: string, undo: WorkstreamUndo): Promise<Workstream>;
   /** The person's switch for one auto-start rule in a workstream; null follows the global switch again. */
   workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null): Promise<Workstream>;
   /** The person's Hold all: holds every open workstream. Returns those it held. */
