@@ -12,6 +12,10 @@ import {
   inlineStart,
   jiraWrites,
   mockRuns,
+  expandNeedsYou,
+  needRow,
+  needsPane,
+  needsYouCount,
   needsYouTray,
   openApp,
   openPipHome,
@@ -189,8 +193,7 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await expect(drafts).toHaveCount(1);
   await expect(stepChip(page, "review").getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
   const id = (await drafts.getAttribute("data-draft"))!;
-  const inTray = needsYouTray(page).locator("[data-needs-you-item]");
-  const trayBefore = await inTray.count();
+  const trayBefore = Number(await needsYouCount(page).innerText());
   await drafts.getByRole("button", { name: "Review on CA-401 →" }).click();
   await peekSheet(page).locator(`article[data-draft="${id}"]`).getByRole("button", { name: "Post comment" }).click();
   await expect
@@ -200,7 +203,7 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
         .map((w) => w.proposalId),
     )
     .toEqual([id]);
-  await expect(inTray).toHaveCount(trayBefore - 1);
+  await expect(needsYouCount(page)).toHaveText(String(trayBefore - 1));
   await page.keyboard.press("Escape");
   await expect(peekSheet(page)).toHaveCount(0);
   await expect(pipHome(page)).toBeVisible();
@@ -231,62 +234,68 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   }
 });
 
-test("the Needs you tray lists a hold before a draft, goes to each, and each leaves once dealt with", async ({ page }) => {
+test("the Needs you list ranks a hold ahead of a draft to approve, opens each in the pane, and each leaves once dealt with", async ({ page }) => {
   await openApp(page, MANAGED);
   await agentsSettled(page);
   await homeWorkstream(page);
   const row = workstreamRow(page, "CA-401");
-  const items = needsYouTray(page).locator("[data-needs-you-item]");
-  await expect(items).toHaveCount(0);
+  await expect(needsYouCount(page)).toHaveText("0");
 
   await homeConversationRegion(page).getByRole("button", { name: "Investigate CA-401", exact: true }).click();
   await homeSettled(page);
   await stepRail(page).getByRole("button", { name: "Hold", exact: true }).click();
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("2 need you");
-  // A hold sorts ahead of a draft however old each is (R2); within a kind, oldest first.
-  await expect.poll(async () => (await items.allTextContents()).map((l) => l.replace(/ · (?:now|\d+[mhd])$/, ""))).toEqual(["CA-401 · Welcome flow refresh · Held by you", "CA-401 · Welcome flow refresh · Start Investigate"]);
+  // One row for the workstream; what is stuck (the hold) ranks ahead of a draft to approve, however old each is (R2).
+  await expect(needsYouTray(page).locator("[data-needs-you-row]")).toHaveCount(1);
+  await expandNeedsYou(page, "CA-401");
+  const titles = needsYouTray(page).locator("[data-needs-you-need-title]");
+  await expect(titles).toHaveText(["Held by you", "Start Investigate"]);
 
-  // From General, the draft's item selects the workstream again and focuses its card; skipped there, it leaves.
+  // From General, the draft's need selects the workstream again and opens its decision; skipped there, it leaves.
   await workstreamRow(page, "General").click();
-  await items.last().click();
+  await needRow(page, "Start Investigate").click();
   await expect(row).toHaveAttribute("aria-selected", "true");
-  await expect(homeRunCards(page, "CA-401").last()).toBeFocused();
-  await page.keyboard.press("s");
-  await page.keyboard.press("Enter");
-  await expect(items).toHaveCount(1);
+  await expect(needsPane(page)).toContainText("drafted a Investigate agent for CA-401");
+  await needsPane(page).getByRole("button", { name: "Skip" }).click();
+  await expect(needRow(page, "Start Investigate")).toHaveCount(0);
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
 
-  // The hold's item goes to Resume, which clears it and the badge.
-  await workstreamRow(page, "General").click();
-  await items.first().click();
-  const resume = pipHome(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
+  // Focus moved on to the hold, whose decision is Resume; it clears the need and the badge.
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
+  const resume = needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
   await expect(resume).toBeFocused();
   await resume.click();
-  await expect(items).toHaveCount(0);
+  await expect(needsYouCount(page)).toHaveText("0");
   await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);
+  await expect(needsYouTray(page)).toContainText("Nothing needs you.");
 });
 
-test("a failed run waits in the tray under General, opens its sheet over Pip home, and stays until it is dealt with, not just seen", async ({ page }) => {
+test("a failed run waits in the list under General, opens its decision, and stays until it is dealt with, not just seen", async ({ page }) => {
   await openApp(page, "prSurface=manual");
   await agentsSettled(page);
   await openPipHome(page);
-  // The sample's failed run failed on a folder it may not use yet, so it waits as a permission to give.
-  const failed = needsYouTray(page).getByRole("button", { name: /^SUP-9 · .* needs its folder trusted · / });
+  await expandNeedsYou(page);
+  // The sample's failed run failed on a folder it may not use yet, so it waits as a failure with a step to take.
+  const failed = needRow(page, /SUP-9.*needs its folder trusted/);
   await expect(failed).toHaveCount(1);
-  await expect(failed).toHaveAttribute("data-kind", "permission");
+  await expect(failed).toHaveAttribute("data-kind", "failure");
   await failed.click();
   await expect(workstreamRow(page, "General")).toHaveAttribute("aria-selected", "true");
+  await expect(needsPane(page)).toContainText("Trust this folder in Terminal");
+  // Its link opens the run's sheet over Pip home.
+  await needsPane(page).getByRole("link", { name: "Open in workstream" }).click();
   const sheet = page.getByRole("dialog").filter({ hasText: "SUP-9" });
   await expect(sheet.first()).toBeVisible();
   await expect(pipHome(page)).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(sheet).toHaveCount(0);
 
-  // The Agents view is where failures are seen, but a folder to trust needs an action: back on Pip home it still waits (R5).
+  // Agents shows the failure, and showing it clears nothing: back on Pip home it still waits (R5).
   await page.getByRole("button", { name: /^Agents/ }).click();
   await expect(pipHome(page)).toHaveCount(0);
   await openPipHome(page);
-  await expect(failed).toHaveCount(1);
+  await expandNeedsYou(page);
+  await expect(needRow(page, /SUP-9.*needs its folder trusted/)).toHaveCount(1);
 });
 
 test("on a window about 900px wide the steps drop below the conversation, nothing scrolls sideways, and F6 still goes list, conversation, steps", async ({ page }) => {

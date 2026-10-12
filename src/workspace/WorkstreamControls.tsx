@@ -151,6 +151,30 @@ function TurnHelp() {
   );
 }
 
+/** Why the workstream is held, with its Resume; nothing while it isn't held. The Needs you decision for a hold shows the same banner. */
+export function HeldBanner({ view, onResume }: { view: WorkstreamView; onResume(): void }) {
+  const ws = view.workstream;
+  const held = heldBanner(ws, view.budget);
+  if (!held) return null;
+  const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
+  return (
+    <div role="status" data-held-banner={ws.heldReason} className="flex flex-wrap items-center gap-2 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1 text-sm text-ws-ink">
+      <span className="min-w-0 flex-1">
+        {held}
+        {drift && (
+          <span data-drift-hint className="block text-xs text-ws-ink2">
+            Read {ws.itemKey ?? "the ticket"} as it is now before you resume: what Pip planned may no longer fit. Resuming takes it as the new starting point.
+          </span>
+        )}
+        {ws.heldReason === HELD_BUDGET && <TurnHelp />}
+      </span>
+      <Btn tone="plain" onClick={onResume} className="px-2 py-0.5">
+        Resume
+      </Btn>
+    </div>
+  );
+}
+
 export interface ControlsViewProps {
   view: WorkstreamView;
   globals: AutoStartSwitches | null;
@@ -166,8 +190,6 @@ export interface ControlsViewProps {
  */
 export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop }: ControlsViewProps) {
   const ws = view.workstream;
-  const held = heldBanner(ws, view.budget);
-  const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
   const note = budgetNote(view.budget);
   const manage = ws.mode === "manage";
   const pausedId = useId();
@@ -200,22 +222,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         </span>
         {confirmingStop && <StopConfirm onStop={() => (closeConfirm(), actions.onStop())} onKeep={closeConfirm} />}
       </div>
-      {held && (
-        <div role="status" data-held-banner={ws.heldReason} className="flex flex-wrap items-center gap-2 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1 text-sm text-ws-ink">
-          <span className="min-w-0 flex-1">
-            {held}
-            {drift && (
-              <span data-drift-hint className="block text-xs text-ws-ink2">
-                Read {ws.itemKey ?? "the ticket"} as it is now before you resume: what Pip planned may no longer fit. Resuming takes it as the new starting point.
-              </span>
-            )}
-            {ws.heldReason === HELD_BUDGET && <TurnHelp />}
-          </span>
-          <Btn tone="plain" onClick={actions.onResume} className="px-2 py-0.5">
-            Resume
-          </Btn>
-        </div>
-      )}
+      <HeldBanner view={view} onResume={actions.onResume} />
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
       <EscalationCard key={ws.id} view={view} />
       {note && !(note.level === "spent" && ws.heldReason === HELD_BUDGET) && (

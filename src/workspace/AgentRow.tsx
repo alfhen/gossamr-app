@@ -1,6 +1,6 @@
 import { Dot, RowText, StateChip } from "./AgentParts";
 import { KIND_LABEL, ageText, formatTokens, repoName, runTitle, stateView } from "./agentsLogic";
-import { AutoStarted, ReadOnlyBadge, RunLabel, RunRef, agentId, onActivate, ticketLabel, type AgentItemProps } from "./AgentCard";
+import { AutoStarted, InNeedsYou, ReadOnlyBadge, RunLabel, RunRef, agentId, onActivate, ticketLabel, type AgentItemProps } from "./AgentCard";
 
 /** Shared by the header and the rows so the columns line up. */
 export const ROW_GRID = "grid items-center gap-x-3 px-3.5 grid-cols-[10px_100px_minmax(0,1.3fr)_minmax(0,1.6fr)_44px] @6xl:grid-cols-[10px_100px_minmax(0,1.3fr)_88px_minmax(0,0.8fr)_minmax(0,1.6fr)_72px_44px]";
@@ -21,7 +21,7 @@ export function AgentRowHeader() {
   );
 }
 
-export function AgentRow({ run, now, selected, position, total, ticketTitle, label, onOpen }: AgentItemProps) {
+export function AgentRow({ run, now, selected, position, total, ticketTitle, label, onOpen, onOpenNeed }: AgentItemProps) {
   const view = stateView(run, now);
   const title = runTitle(run, ticketTitle);
   const tokens = formatTokens(run.tokens);
@@ -57,6 +57,7 @@ export function AgentRow({ run, now, selected, position, total, ticketTitle, lab
         <span className="hidden shrink-0 @md:inline-flex">
           <StateChip run={run} now={now} />
         </span>
+        {onOpenNeed && <InNeedsYou onOpen={onOpenNeed} />}
         <span className={`min-w-0 truncate ${view.tone === "blocked" ? "text-ws-blocked" : ""}`}><RowText run={run} now={now} /></span>
       </span>
       <span className="hidden truncate text-right text-ws-ink3 tabular-nums @6xl:block">{tokens?.replace(/ tokens?$/, "") ?? ""}</span>

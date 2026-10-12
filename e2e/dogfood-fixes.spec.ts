@@ -6,6 +6,9 @@ import {
   githubWrites,
   reviewedDraft,
   homeConversationRegion,
+  expandNeedsYou,
+  needRow,
+  needsPane,
   needsYouTray,
   openPip,
   askPip,
@@ -352,7 +355,10 @@ test.describe("answering and retry (D11, D14, D15)", () => {
   test("an answer from the sheet is confirmed, timed in the timeline, and the sheet keeps its place among the runs", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
-    await needsYouTray(page).getByRole("button", { name: /^CA-409 · .* asks a question/ }).click();
+    // The decision's own link opens the run, with its sheet over Pip home.
+    await expandNeedsYou(page);
+    await needRow(page, /CA-409.*asks a question/).click();
+    await needsPane(page).getByRole("link", { name: "Open in workstream" }).click();
     await expect(runSheet(page)).toBeVisible();
     await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "needsAnswer");
     const place = (await sheetHint(page).textContent())?.match(/(\d+) of (\d+)$/)?.slice(1);
@@ -374,19 +380,20 @@ test.describe("answering and retry (D11, D14, D15)", () => {
   test("the answer box starts empty; Claude's suggestion is offered with Use this, and an empty box never sends", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
-    await needsYouTray(page).getByRole("button", { name: /^CA-409 · .* asks a question/ }).click();
-    const box = runSheet(page).getByRole("textbox", { name: "Your answer" });
-    const send = runSheet(page).getByRole("button", { name: "Send answer" });
+    await expandNeedsYou(page);
+    await needRow(page, /CA-409.*asks a question/).click();
+    const box = needsPane(page).getByRole("textbox", { name: "Your answer" });
+    const send = needsPane(page).getByRole("button", { name: "Send answer" });
     await expect(box).toHaveValue("");
     await expect(box).toHaveAttribute("placeholder", /Write your answer/);
     await expect(send).toBeDisabled();
-    await expect(runSheet(page).locator("[data-suggested-answer]")).toContainText("Claude suggests: “Yes, keep the old rounding.”");
-    await runSheet(page).getByRole("button", { name: "Use this" }).click();
+    await expect(needsPane(page).locator("[data-suggested-answer]")).toContainText("Claude suggests: “Yes, keep the old rounding.”");
+    await needsPane(page).getByRole("button", { name: "Use this" }).click();
     await expect(box).toHaveValue("Yes, keep the old rounding.");
     await expect(send).toBeEnabled();
     await box.fill("   ");
     await expect(send).toBeDisabled();
-    const details = runSheet(page).locator("details", { hasText: "What Gossamr adds" });
+    const details = needsPane(page).locator("details", { hasText: "What Gossamr adds" });
     await details.locator("summary").click();
     await expect(details).toContainText("This goes in front of your answer: Reminder:");
     expect((await mockRuns(page)).find((r) => r.state === "needsAnswer")).toBeTruthy();
@@ -396,7 +403,10 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openApp(page);
     await openPipHome(page);
-    await needsYouTray(page).getByRole("button", { name: /^SUP-9 · .* needs its folder trusted/ }).click();
+    // The sheet is where a failed run's command is shown to copy; the decision's link opens it.
+    await expandNeedsYou(page);
+    await needRow(page, /SUP-9.*needs its folder trusted/).click();
+    await needsPane(page).getByRole("link", { name: "Open in workstream" }).click();
     const retry = runSheet(page).getByRole("button", { name: "Retry", exact: true });
     await expect(retry).toBeDisabled();
     // Select the command's text and copy it with the keyboard; the Copy button is never pressed.
@@ -437,16 +447,17 @@ test.describe("agent counts and tray (D4, D27)", () => {
     await expect(setupSheet(page).locator("[data-level]", { hasText: /\d+ of \d+ agent slots in use \(including ones waiting on you\)$/ })).toBeVisible();
   });
 
-  test("Needs you rows put the ticket and its title first and the wait second, with the whole line as a tooltip", async ({ page }) => {
+  test("Needs you rows put the ticket and its title first and the need second, with the whole line as a tooltip", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
-    const row = needsYouTray(page).locator('[data-needs-you-item][data-kind="question"]').first();
+    await expandNeedsYou(page);
+    const row = needsYouTray(page).locator('[data-needs-you-need][data-kind="question"]').first();
     await expect(row.locator("[data-needs-you-head]")).toHaveText(/^CA-409 · \S/);
-    await expect(row.locator("[data-needs-you-reason]")).toHaveText(/asks a question · /);
+    await expect(row.locator("[data-needs-you-need-title]")).toHaveText(/asks a question/);
     const head = await row.locator("[data-needs-you-head]").textContent();
     await expect(row).toHaveAttribute("title", new RegExp(`^${head!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} · .*asks a question · `));
     const top = await row.locator("[data-needs-you-head]").boundingBox();
-    const bottom = await row.locator("[data-needs-you-reason]").boundingBox();
+    const bottom = await row.locator("[data-needs-you-need-title]").boundingBox();
     expect(bottom!.y).toBeGreaterThan(top!.y);
     await expect(homeConversationRegion(page)).toBeVisible();
   });
@@ -498,7 +509,7 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
     await expect(page.getByRole("feed", { name: "Activity" }).locator("[data-your-turn]").first()).toHaveAttribute("title", /^Your turn: /);
   });
 
-  test("each rail badge names what it counts, in its tooltip and in its button's name, and no two read alike", async ({ page }) => {
+  test("the rail's two badges name what they count, in their tooltip and in their button's name, and Agents has none", async ({ page }) => {
     await openApp(page);
     await agentsSettled(page, true);
     const named = async (button: RegExp, badge: RegExp) => {
@@ -508,12 +519,12 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
       await expect(tip).toHaveAttribute("title", badge);
       return (await tip.getAttribute("title"))!;
     };
-    const titles = [
-      await named(/^Activity, \d+ unread updates?$/, /^\d+ unread updates?$/),
-      await named(/^Agents, \d+ agent runs? waits? on you$/, /^\d+ agent runs? waits? on you$/),
-      await named(/^Pip home, \d+ items? waits? in Needs you$/, /^\d+ items? waits? in Needs you$/),
-    ];
-    expect(new Set(titles.map((t) => t.replace(/^\d+ /, ""))).size).toBe(3);
+    const titles = [await named(/^Activity, \d+ unread updates?$/, /^\d+ unread updates?$/), await named(/^Pip home, \d+ things? needs? you$/, /^\d+ things? needs? you$/)];
+    expect(new Set(titles.map((t) => t.replace(/^\d+ /, ""))).size).toBe(2);
+    // What the agents need is in Needs you, counted once.
+    const agents = page.getByRole("button", { name: "Agents", exact: true });
+    await expect(agents).toBeVisible();
+    await expect(agents.locator("[title]")).toHaveCount(0);
   });
 });
 

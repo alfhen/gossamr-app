@@ -32,12 +32,13 @@ export function homeConversationLine(selected: string | null, list: readonly Wor
 
 export interface AgentsScene {
   openRun: string | null;
+  /** The agents waiting on the person: the run needs among Needs you. */
   waiting: number;
+  /** Everything that needs the person, as Needs you counts it. */
+  needsYou: number;
   runs: readonly Run[];
   filters: AgentFilters;
   earlierOpen: boolean;
-  /** Failed runs the person has looked at, which no longer wait on them. */
-  seenFailed?: ReadonlySet<string>;
   now: number;
 }
 
@@ -80,7 +81,7 @@ export function buildScreenContext(s: Screen): ScreenContext {
     filter: filtered ? filter : null,
     selection: onBoard ? s.marked.flatMap((k) => (s.items[k] ? [s.items[k].item] : [])) : [],
     ...(s.agents ? { run: s.agents.openRun, runsWaiting: s.agents.waiting } : {}),
-    ...(shown.length && s.agents ? { runsSummary: summaryLine(shown, s.agents.now, s.agents.seenFailed) } : {}),
+    ...(shown.length && s.agents ? { runsSummary: summaryLine(shown, s.agents.now, s.agents.needsYou) } : {}),
   };
 }
 

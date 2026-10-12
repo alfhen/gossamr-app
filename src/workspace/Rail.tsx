@@ -10,7 +10,6 @@ import { usePopover } from "./Popover";
 import { projectColour, projectInitials } from "./projects";
 import { useAgentsEnabled } from "./agentsFlag";
 import { usePrefs } from "./prefs";
-import { useAttention } from "./runsStore";
 import { Icon } from "./AgentIcons";
 import { Icon as Glyph } from "../components/icons";
 import { SavedViewsPanel } from "./SavedViews";
@@ -19,7 +18,8 @@ import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watc
 import { useClaude } from "../claudeStore";
 import { HOLD_ALL_HINT, PIP_HOME_HINT } from "./commands";
 import { holdAllVisible, togglePip, useWorkstreams } from "./workstreamsStore";
-import { NeedsYouTray, useNeedsYou } from "./NeedsYouTray";
+import { NeedsYouList } from "./NeedsYou";
+import { needsYouText, useNeedsYou } from "./useNeeds";
 
 /** Fixed so the scrolling project list can't clip it. */
 export function RailTip({ label, hint, note, at }: { label: string; hint?: string; note?: string; at: { x: number; y: number } | null }) {
@@ -239,7 +239,7 @@ function HoldAllButton() {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-/** A count over a rail button, named and titled with what it counts: three of them sit side by side and count different things. */
+/** A count over a rail button, named and titled with what it counts: Activity's unread updates, and Pip home's one count of what needs you. */
 function RailBadge({ count, what }: { count: number; what: string }) {
   return (
     <span aria-label={what} title={what} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
@@ -248,16 +248,15 @@ function RailBadge({ count, what }: { count: number; what: string }) {
   );
 }
 
-/** What each rail badge counts, as its tooltip says and as the button's name ends ("Agents, 3 agent runs wait on you"). */
+/** What each rail badge counts, as its tooltip says and as the button's name ends ("Pip home, 3 things need you"). Agents has none: what needs you is counted once, on Pip home. */
 export const railBadgeText = {
   activity: (n: number) => plural(n, "unread update", "unread updates"),
-  agents: (n: number) => `${plural(n, "agent run waits", "agent runs wait")} on you`,
-  pipHome: (n: number) => `${plural(n, "item waits", "items wait")} in Needs you`,
+  pipHome: needsYouText,
 };
 
 /**
- * Pip home, with how many things wait on the person across the workstreams. Its context menu (a right click, or the
- * keyboard's menu key) opens the Needs you tray as a popover from any route; an item there goes to it on Pip home.
+ * Pip home, with how many things need the person across the workstreams: the one count (`needs.length`). Its context menu
+ * (a right click, or the keyboard's menu key) opens the Needs you list as a popover from any route; a need there opens on Pip home.
  */
 /** How the rail's Pip home button opens what needs the person without leaving the screen. */
 export const PIP_HOME_TRAY_NOTE = "Right-click or Shift+F10: what needs you";
@@ -289,7 +288,7 @@ function PipHomeButton({ current }: { current: boolean }) {
       </RailButton>
       {open && (
         <div role="dialog" aria-label="Needs you" className="absolute bottom-0 left-full z-40 ml-2 w-[300px] overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win text-ws-ink shadow-ws-pop">
-          <NeedsYouTray items={items} compact onPick={() => setOpen(false)} />
+          <NeedsYouList needs={items} compact onPick={() => setOpen(false)} />
         </div>
       )}
     </div>
@@ -305,7 +304,6 @@ export function Rail() {
   const kind = useWorkspace((s) => workConnections(s.connections)[0]?.kind);
   const unread = useActivity((s) => s.unread + s.codeUnread);
   const agentsEnabled = useAgentsEnabled();
-  const attention = useAttention();
   // Pip home has its own composer in place of the pane, so there the Pip button goes to it.
   const pipOpen = usePrefs((s) => s.pipOpen) && route !== "pip";
   const setPaletteOpen = usePrefs((s) => s.setPaletteOpen);
@@ -355,9 +353,8 @@ export function Rail() {
           {unread > 0 && <RailBadge count={unread} what={railBadgeText.activity(unread)} />}
         </RailButton>
         {agentsEnabled && (
-          <RailButton label={attention > 0 ? `Agents, ${railBadgeText.agents(attention)}` : "Agents"} current={route === "agents"} onClick={() => setRoute("agents")} className={`text-lg ${plain(route === "agents")}`}>
+          <RailButton label="Agents" current={route === "agents"} onClick={() => setRoute("agents")} className={`text-lg ${plain(route === "agents")}`}>
             <Icon name="term" className="size-[19px]" />
-            {attention > 0 && <RailBadge count={attention} what={railBadgeText.agents(attention)} />}
           </RailButton>
         )}
         {agentsEnabled && <PipHomeButton current={route === "pip"} />}

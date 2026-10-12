@@ -318,7 +318,7 @@ describe("Hold all", () => {
 
   it("is a palette command with its shortcut beside it, while agents are on", () => {
     const actions = new Proxy({}, { get: (t: Record<string, unknown>, k: string) => (t[k] ??= vi.fn()) }) as unknown as CommandActions;
-    const on = buildCommands([], [], actions, { project: null, view: null, unreadActivity: 0, pendingDrafts: 0, agents: true });
+    const on = buildCommands([], [], actions, { project: null, view: null, unreadActivity: 0, agents: true });
     const hold = rankCommands(on, "hold all")[0];
     expect(hold).toMatchObject({ id: "workstream:hold-all", label: "Hold all workstreams", hint: HOLD_ALL_HINT });
     expect(HOLD_ALL_HINT).toBe("⌘⇧.");

@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ALL, containerKey, itemKey } from "../lib/filter";
 import type { CatalogEntry, ContainerRef, WorkContainer, WorkItem } from "../types";
-import { itemsByFilter, pendingDrafts, useWorkspace } from "../workspaceStore";
+import { itemsByFilter, useWorkspace } from "../workspaceStore";
+import { useNeedsYou } from "./useNeeds";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
@@ -10,9 +11,8 @@ import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
 import { useAgentsEnabled } from "./agentsFlag";
 import { usePrefs } from "./prefs";
-import { NO_FILTERS } from "./agentsLogic";
 import { useRunSetup } from "./runSetupStore";
-import { useAttention, useRuns } from "./runsStore";
+import { useRuns } from "./runsStore";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
 import { openTicketByKey } from "./jump";
 import { focusPeekOf } from "./PeekSheet";
@@ -182,9 +182,11 @@ export function appActions(): CommandActions {
     togglePip,
     startAgent: () => useRuns.getState().setPicking(true),
     startAgentOn: (item, kind) => void useRunSetup.getState().begin({ item: item.item, kind }),
-    showAgentsNeedingMe: () => {
-      useRuns.setState({ filters: { ...NO_FILTERS, lane: "needs" }, sheet: null });
-      tabs.setRoute("agents");
+    showNeedsYou: () => {
+      // Pip home, with the keyboard in the Needs you list.
+      useRuns.setState({ sheet: null });
+      tabs.setRoute("pip");
+      requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-pip-home-column="list"] [data-needs-you-group], [data-pip-home-column="list"] [data-needs-you-title]')?.focus());
     },
     openAgentSafety: () => {
       tabs.setRoute("agents");
@@ -277,7 +279,7 @@ export function Palette() {
   const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const unread = useActivity((s) => s.unread + s.codeUnread);
   const agents = useAgentsEnabled();
-  const needingMe = useAttention();
+  const needingMe = useNeedsYou().length;
   const savedViews = useTabs((s) => s.savedViews);
   const selected = useTabs((s) => s.selected);
   const workstreams = useWorkstreams((s) => s.list);
@@ -312,10 +314,9 @@ export function Palette() {
       project: projectOf(tab.filter) ?? null,
       view: tab.view,
       unreadActivity: unread,
-      pendingDrafts: pendingDrafts({ proposals }).length,
       github,
       agents,
-      agentsNeedingMe: needingMe,
+      needsYou: needingMe,
       ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
       onPipHome: useTabs.getState().route === "pip",
     };

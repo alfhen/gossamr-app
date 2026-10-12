@@ -99,7 +99,7 @@ describe("screen context by route", () => {
   });
 
   it("names the runs on Agents, sends no board filter or ticked cards, and keeps a ticket peeked over it", () => {
-    const agents = { openRun: null, waiting: 0, runs: [], filters: { lane: "all", repo: "all", ticket: "all" } as const, earlierOpen: false, now: 0 };
+    const agents = { openRun: null, waiting: 0, needsYou: 0, runs: [], filters: { lane: "all", repo: "all", ticket: "all" } as const, earlierOpen: false, now: 0 };
     const s = { ...screen(tab, "mock:DEVOPS-471", ["mock:DEVOPS-471", "mock:DEVOPS-473"], "agents"), agents };
     const ctx = buildScreenContext(s);
     expect(ctx.view).toBe("Agents · All · 0 runs");

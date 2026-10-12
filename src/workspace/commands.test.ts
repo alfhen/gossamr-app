@@ -10,7 +10,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showAgentsNeedingMe", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openWorkstream", "askPipToPlan", "startWorkstreamOn"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openWorkstream", "askPipToPlan", "startWorkstreamOn"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -89,11 +89,12 @@ describe("palette extras", () => {
   });
 
   it("shows live counts beside Activity and Drafts, and marks what is current", () => {
-    const ctx = { project: containerRef("CA"), view: "board" as const, unreadActivity: 22, pendingDrafts: 3 };
+    const ctx = { project: containerRef("CA"), view: "board" as const, unreadActivity: 22 };
     const live = buildCommands(containers, BUILT_IN_VIEWS, a, ctx);
     const hint = (id: string) => live.find((c) => c.id === id)?.hint;
     expect(hint("app:activity")).toBe("22 new");
-    expect(hint("app:drafts")).toBe("3 pending");
+    // Drafts are counted once, in Needs you, so Open drafts carries no number of its own.
+    expect(hint("app:drafts")).toBeUndefined();
     expect(hint("project:CA")).toBe("current");
     expect(hint("mode:board")).toBe("current");
     expect(hint("mode:list")).toBeUndefined();
@@ -196,7 +197,7 @@ describe("GitHub commands", () => {
   const noop = new Proxy({}, { get: () => () => {} }) as CommandActions;
 
   it("offers to connect, and to manage repositories only once connected", () => {
-    const labels = (github: boolean) => buildCommands([], [], noop, { project: null, view: null, unreadActivity: 0, pendingDrafts: 0, github }).map((c) => c.label);
+    const labels = (github: boolean) => buildCommands([], [], noop, { project: null, view: null, unreadActivity: 0, github }).map((c) => c.label);
     expect(labels(false)).toContain("Connect GitHub");
     expect(labels(false)).not.toContain("Manage repositories");
     expect(labels(false).some((l) => l.startsWith("Filter: PR"))).toBe(false);
@@ -223,25 +224,25 @@ describe("GitHub commands", () => {
 
 describe("agent commands", () => {
   const noop = new Proxy({}, { get: () => () => {} }) as CommandActions;
-  const ctx = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
+  const ctx = { project: null, view: null, unreadActivity: 0 };
   const labels = (agents: boolean) => buildCommands([], [], noop, { ...ctx, agents }).map((c) => c.label);
 
   it("offers the agent entries only when Agents is on", () => {
     expect(labels(false).some((l) => /agent/i.test(l))).toBe(false);
-    expect(labels(true)).toEqual(expect.arrayContaining(["Start an agent…", "Show agents that need me", "Stop all agents…", "Agent safety and settings"]));
+    expect(labels(true)).toEqual(expect.arrayContaining(["Start an agent…", "Show what needs me", "Stop all agents…", "Agent safety and settings"]));
   });
 
   it("runs each entry", () => {
     const a = actions();
-    const found = buildCommands([], [], a, { ...ctx, agents: true, agentsNeedingMe: 2 });
+    const found = buildCommands([], [], a, { ...ctx, agents: true, needsYou: 2 });
     const named = (label: string) => found.find((c) => c.label === label)!;
     named("Start an agent…").run();
-    named("Show agents that need me").run();
+    named("Show what needs me").run();
     named("Agent safety and settings").run();
     expect(a.startAgent).toHaveBeenCalled();
-    expect(a.showAgentsNeedingMe).toHaveBeenCalled();
+    expect(a.showNeedsYou).toHaveBeenCalled();
     expect(a.openAgentSafety).toHaveBeenCalled();
-    expect(named("Show agents that need me").hint).toBe("2 waiting");
+    expect(named("Show what needs me").hint).toBe("2 waiting");
     expect(named("Start an agent…").stay).toBeFalsy();
   });
 
@@ -329,7 +330,7 @@ describe("agent commands", () => {
 });
 
 describe("Pip home in the palette", () => {
-  const ctx = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
+  const ctx = { project: null, view: null, unreadActivity: 0 };
   const view = (id: string, key: string | null, closed = false) =>
     ({ workstream: { id, itemKey: key, title: key ? `${key} Refund rounding` : "Look into the logs", closedAt: closed ? "2026-10-01T00:00:00Z" : null }, stage: "intake", runs: [], labels: [] }) as unknown as Parameters<typeof workstreamCommands>[0][number];
 

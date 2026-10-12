@@ -114,13 +114,13 @@ describe("the strip of live runs", () => {
   it("lists the runs waiting on the person first, unseen failures among them as in the Needs you tray, then working ones", () => {
     const runs = [run("working", { id: "w1", lastProgressAt: iso(1) }), run("done", { id: "d" }), run("needsAnswer", { id: "n1" }), run("working", { id: "w2", lastProgressAt: iso(3) }), run("needsPermission", { id: "n2" }), run("failed", { id: "f" })];
     expect(stripRuns(runs).map((r) => r.id)).toEqual(["f", "n1", "n2", "w1", "w2"]);
-    // A failed run the person has looked at leaves it, as it leaves the tray.
+    // A failed run the person dismissed leaves it, as it leaves Needs you.
     expect(stripRuns(runs, new Set(["f"])).map((r) => r.id)).toEqual(["n1", "n2", "w1", "w2"]);
     expect(stripRuns([run("done"), run("failed", { id: "f" }), run("stopped")], new Set(["f"]))).toEqual([]);
   });
 
   it("is absent while agents are off or nothing is going, and lists live runs when it is on", () => {
-    const view = (runs: Run[], enabled = true) => renderToStaticMarkup(<PipRunStripView runs={runs} enabled={enabled} now={NOW} seenFailed={new Set(["f"])} titleOf={() => null} onOpen={() => {}} />);
+    const view = (runs: Run[], enabled = true) => renderToStaticMarkup(<PipRunStripView runs={runs} enabled={enabled} now={NOW} dismissed={new Set(["f"])} titleOf={() => null} onOpen={() => {}} />);
     const waiting = [run("needsAnswer", { id: "n1", needs: "Keep the old rounding?" })];
     expect(view(waiting)).toContain('aria-label="Your agents"');
     expect(view(waiting, false)).toBe("");
@@ -185,7 +185,7 @@ describe("what Pip is told about agents", () => {
   };
 
   it("includes the open run and how many agents wait while agents are on, and neither when they are off", () => {
-    const on = buildScreenContext(screen({ openRun: "r1", waiting: 2, runs: [], filters: NO_FILTERS, earlierOpen: false, now: NOW }));
+    const on = buildScreenContext(screen({ openRun: "r1", waiting: 2, needsYou: 3, runs: [], filters: NO_FILTERS, earlierOpen: false, now: NOW }));
     expect([on.run, on.runsWaiting]).toEqual(["r1", 2]);
     const off = buildScreenContext(screen());
     expect("run" in off || "runsWaiting" in off).toBe(false);

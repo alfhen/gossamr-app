@@ -24,7 +24,7 @@ const screen = (over: Partial<Screen> = {}, filters: AgentFilters = NO_FILTERS, 
     selected: null,
     marked: ["mock:X-1"],
     activity: { chip: "all", container: null },
-    agents: { openRun, waiting: 1, runs, filters, earlierOpen: false, now: NOW },
+    agents: { openRun, waiting: 1, needsYou: 2, runs, filters, earlierOpen: false, now: NOW },
     ...over,
   };
 };
@@ -32,7 +32,7 @@ const screen = (over: Partial<Screen> = {}, filters: AgentFilters = NO_FILTERS, 
 describe("the Agents screen", () => {
   it("is named with its filter and the runs shown, leaving the folded Earlier lane out", () => {
     expect(screenLine(screen())).toBe("Agents · All · 3 runs");
-    expect(screenLine(screen({}, { ...NO_FILTERS, lane: "needs" }))).toBe("Agents · Needs you · 1 run");
+    expect(screenLine(screen({}, { ...NO_FILTERS, lane: "bad" }))).toBe("Agents · Failed or stuck · 1 run");
     expect(screenLine(screen({}, { lane: "earlier", repo: "all", ticket: "all" }))).toBe("Agents · Earlier · 1 run");
     expect(screenLine(screen({}, { ...NO_FILTERS, ticket: "NOPE-1" }))).toBe("Agents · NOPE-1 · 0 runs");
     expect(screenLine(screen({ agents: undefined }))).toBe("Agents");
@@ -41,7 +41,7 @@ describe("the Agents screen", () => {
   it("sends no board data, but the open run, the waiting count and the runs by state", () => {
     const board = { ...screen().tab, filter: { type: "mine" } as const };
     const ctx = buildScreenContext(screen({ tab: board, shown: [], items: {} }, NO_FILTERS, "c"));
-    expect(ctx).toEqual({ view: "Agents · All · 3 runs", item: null, filter: null, selection: [], run: "c", runsWaiting: 1, runsSummary: "1 waiting on you · 1 running · 1 ready to review" });
+    expect(ctx).toEqual({ view: "Agents · All · 3 runs", item: null, filter: null, selection: [], run: "c", runsWaiting: 1, runsSummary: "2 need you · 1 running · 1 ready to review · 1 failed or stuck" });
     expect(buildScreenContext(screen()).run).toBeNull();
   });
 
@@ -61,7 +61,7 @@ describe("the Agents screen", () => {
     expect(contextLines(ctx, null, words)).toEqual([
       "Screen: Agents · All · 3 runs",
       "Open agent run: Investigate CA-1 · Ready to review",
-      "Runs shown: 1 waiting on you · 1 running · 1 ready to review",
+      "Runs shown: 2 need you · 1 running · 1 ready to review · 1 failed or stuck",
       "Agents waiting on you: 1",
     ]);
   });

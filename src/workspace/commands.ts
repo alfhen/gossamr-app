@@ -46,7 +46,8 @@ export interface CommandActions {
   togglePip(): void;
   startAgent(): void;
   startAgentOn(item: WorkItem, kind: RunKind): void;
-  showAgentsNeedingMe(): void;
+  /** Shows what needs the person: Pip home, with Needs you in focus. */
+  showNeedsYou(): void;
   openAgentSafety(): void;
   /** Opens (or finds) the workstream on the ticket the peek shows and shows its conversation in Pip. */
   startWorkstream(): void;
@@ -71,12 +72,11 @@ export interface CommandContext {
   project: ContainerRef | null;
   view: ViewMode | null;
   unreadActivity: number;
-  pendingDrafts: number;
   /** A GitHub account is connected. */
   github?: boolean;
   agents?: boolean;
-  /** Agents waiting on the person, for the hint beside "Show agents that need me". */
-  agentsNeedingMe?: number;
+  /** How many things need the person (Needs you's one count), for the hint beside "Show what needs me". */
+  needsYou?: number;
   /** The synced ticket the peek shows, and whether it has an open workstream already. */
   ticket?: { key: string; workstream: boolean } | null;
   /** The person is on Pip home, where opening it is nothing and ⌘J goes to its composer. */
@@ -99,7 +99,7 @@ export const PIP_HOME_HINT = "⌘0";
 /** Whether a key press opens Pip home: Cmd/Ctrl+0 and nothing else held. A plain 0 stays the map's. */
 export const isPipHomeKey = (ev: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">) => (ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key === "0";
 
-const NO_CONTEXT: CommandContext = { project: null, view: null, unreadActivity: 0, pendingDrafts: 0 };
+const NO_CONTEXT: CommandContext = { project: null, view: null, unreadActivity: 0 };
 
 const sameProject = (a: ContainerRef | null, b: ContainerRef) => !!a && a.connectionId === b.connectionId && a.externalId === b.externalId;
 
@@ -133,7 +133,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
       (v): Command => ({ id: `mode:${v}`, group: "Layout", icon: "▦", label: `Show ${VIEW_LABEL[v]}`, hint: ctx.view === v ? "current" : undefined, keywords: "switch view layout", run: () => a.setView(v) }),
     ),
     { id: "app:activity", group: "Go to", icon: "→", label: "Open activity", hint: ctx.unreadActivity ? `${ctx.unreadActivity} new` : undefined, keywords: "feed events", run: a.openActivity },
-    { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", hint: ctx.pendingDrafts ? `${ctx.pendingDrafts} pending` : undefined, keywords: "pip proposals review waiting", run: a.openDrafts },
+    { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", keywords: "pip proposals review waiting", run: a.openDrafts },
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences autopilot", run: a.openSettings },
     ...(ctx.agents && !ctx.onPipHome ? [{ id: "app:pip-home", group: "Go to" as const, icon: "✦", label: "Open Pip home", hint: PIP_HOME_HINT, keywords: "pip workstreams conversation agents manager needs you", run: a.openPipHome }] : []),
     ...FILTERS.map(
@@ -151,7 +151,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     ...(ctx.agents
       ? [
           { id: "agents:start", group: "Agents" as const, icon: ">_", label: "Start an agent…", hint: "n", keywords: "run claude investigate background task", run: a.startAgent },
-          { id: "agents:needs", group: "Agents" as const, icon: "✋", label: "Show agents that need me", hint: ctx.agentsNeedingMe ? `${ctx.agentsNeedingMe} waiting` : undefined, keywords: "agents waiting permission question blocked", run: a.showAgentsNeedingMe },
+          { id: "agents:needs", group: "Agents" as const, icon: "✋", label: "Show what needs me", hint: ctx.needsYou ? `${ctx.needsYou} waiting` : undefined, keywords: "needs you agents waiting permission question blocked failed drafts approve decide", run: a.showNeedsYou },
           { id: "agents:stop", group: "Agents" as const, icon: "■", label: "Stop all agents…", keywords: "agents halt kill end everything", run: a.openAgentSafety },
           { id: "agents:safety", group: "Agents" as const, icon: "⛨", label: "Agent safety and settings", keywords: "agents touch permissions", run: a.openAgentSafety },
           {

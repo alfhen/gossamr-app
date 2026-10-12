@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunState, WorkstreamView } from "../types";
 import { AgentCard, onActivate } from "./AgentCard";
@@ -129,12 +129,13 @@ describe("a failed launch on a card", () => {
 });
 
 describe("the lanes", () => {
-  it("shows the scripted runs in four lanes with a card each", () => {
-    const out = screen();
-    expect(out.match(/data-lane="(\w+)"/g)).toEqual(['data-lane="needs"', 'data-lane="running"', 'data-lane="done"', 'data-lane="bad"']);
-    for (const heading of ["Needs you", "Running", "Done, ready to review", "Failed or stuck"]) expect(out).toContain(`>${heading}</h3>`);
+  it("shows the scripted runs in three lanes with a card each, and no Needs you lane", () => {
+    const out = screen({ needsYou: 4 });
+    expect(out.match(/data-lane="(\w+)"/g)).toEqual(['data-lane="running"', 'data-lane="done"', 'data-lane="bad"']);
+    for (const heading of ["Running", "Done, ready to review", "Failed or stuck"]) expect(out).toContain(`>${heading}</h3>`);
+    expect(out).not.toContain(">Needs you</h3>");
     expect(articles(out)).toHaveLength(8);
-    expect(out).toContain("3 waiting on you · 2 running · 2 ready to review · 2 failed or stuck (1 quiet)");
+    expect(out).toContain("4 need you · 2 running · 2 ready to review · 4 failed or stuck (1 quiet)");
   });
 
   it("folds Earlier and says how many are in it", () => {
@@ -307,10 +308,10 @@ describe("list mode", () => {
 
 describe("filters", () => {
   it("shows only the runs in the chosen lane", () => {
-    const out = screen({ filters: { ...NO_FILTERS, lane: "needs" } });
-    expect(articles(out)).toHaveLength(2);
+    const out = screen({ filters: { ...NO_FILTERS, lane: "bad" } });
+    expect(articles(out)).toHaveLength(4);
     expect(out).toContain(">Clear<");
-    expect(out.match(/data-lane="(\w+)"/g)).toEqual(['data-lane="needs"']);
+    expect(out.match(/data-lane="(\w+)"/g)).toEqual(['data-lane="bad"']);
   });
 
   it("narrows by repo and by ticket", () => {
@@ -326,7 +327,7 @@ describe("filters", () => {
   });
 
   it("says nothing matches and offers Clear filters", () => {
-    const out = screen({ filters: { lane: "needs", repo: "acme/payments", ticket: "all" } });
+    const out = screen({ filters: { lane: "bad", repo: "acme/payments", ticket: "all" } });
     expect(out).toContain("No agents match these filters");
     expect(out).toContain("8 runs are hidden by the filters above.");
     expect(out).toContain("Clear filters");
@@ -444,40 +445,61 @@ describe("stop all", () => {
 });
 
 describe("the rail", () => {
-  const set = (runs: Run[], seen: string[] = []) => {
+  const set = (runs: Run[], dismissed: string[] = []) => {
     const initial = useRuns.getInitialState();
     initial.runs = runs;
-    (initial as { seenFailed: ReadonlySet<string> }).seenFailed = new Set(seen);
+    (initial as { dismissed: ReadonlySet<string> }).dismissed = new Set(dismissed);
   };
-  const agents = (out: string) => /<button[^>]*aria-label="(Agents[^"]*)"[^>]*>(.*?)<\/button>/s.exec(out)!;
-
-  it("puts the count in the button's label and shows it as a badge", () => {
-    set(eight());
-    const [, label, inner] = agents(renderToStaticMarkup(<Rail />));
-    expect(label).toBe("Agents, 3 agent runs wait on you");
-    expect(inner).toContain('aria-label="3 agent runs wait on you" title="3 agent runs wait on you"');
-    expect(inner).toContain(">3<");
-    expect(inner).toContain("bg-ws-pip");
+  const button = (out: string, name: RegExp) => new RegExp(`<button[^>]*aria-label="(${name.source}[^"]*)"[^>]*>(.*?)</button>`, "s").exec(out)!;
+  // The sample's clock stands at 12:00 on 30 September 2026; five minutes on, its quiet run has been quiet 45.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW + 5 * 60_000);
   });
-
-  it("counts a failed run only until it has been seen", () => {
-    set(eight(), [eight().find((r) => r.state === "failed")!.id]);
-    expect(agents(renderToStaticMarkup(<Rail />))[1]).toBe("Agents, 2 agent runs wait on you");
-  });
-
-  it("says needs for one and drops the badge at zero", () => {
-    set([run("needsAnswer")]);
-    expect(agents(renderToStaticMarkup(<Rail />))[1]).toBe("Agents, 1 agent run waits on you");
-    set([run("working"), run("working", { id: "quiet", lastProgressAt: iso(300) }), run("done", { id: "d" })]);
-    const [, label, inner] = agents(renderToStaticMarkup(<Rail />));
-    expect(label).toBe("Agents");
-    expect(inner).not.toContain("bg-ws-pip");
+  afterEach(() => {
+    vi.useRealTimers();
     set([]);
   });
 
+  it("has no badge on Agents: what needs the person is counted once, on Pip home", () => {
+    set(eight());
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Agents/);
+    expect(label).toBe("Agents");
+    expect(inner).not.toContain("bg-ws-pip");
+    expect(inner).not.toMatch(/>\d+</);
+  });
+
+  it("puts the one count in Pip home's label and shows it as its badge", () => {
+    set(eight());
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Pip home/);
+    // A permission, a question, a failure and the run that has been quiet for 45 minutes.
+    expect(label).toBe("Pip home, 4 things need you");
+    expect(inner).toContain('aria-label="4 things need you" title="4 things need you"');
+    expect(inner).toContain(">4<");
+    expect(inner).toContain("bg-ws-pip");
+  });
+
+  it("keeps a failed run in the count however long it is looked at, until it is dismissed", () => {
+    const failedRun = eight().find((r) => r.state === "failed")!;
+    set(eight());
+    expect(button(renderToStaticMarkup(<Rail />), /Pip home/)[1]).toBe("Pip home, 4 things need you");
+    set(eight(), [failedRun.id]);
+    expect(button(renderToStaticMarkup(<Rail />), /Pip home/)[1]).toBe("Pip home, 3 things need you");
+  });
+
+  it("says thing for one and drops the badge at zero", () => {
+    set([run("needsAnswer")]);
+    expect(button(renderToStaticMarkup(<Rail />), /Pip home/)[1]).toBe("Pip home, 1 thing needs you");
+    set([run("working", { lastProgressAt: new Date(NOW + 4 * 60_000).toISOString() }), run("done", { id: "d" })]);
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Pip home/);
+    expect(label).toBe("Pip home");
+    expect(inner).not.toContain("bg-ws-pip");
+  });
+
   it("names what each badge counts, in words no other badge uses", () => {
-    expect([railBadgeText.activity(24), railBadgeText.agents(3), railBadgeText.pipHome(4)]).toEqual(["24 unread updates", "3 agent runs wait on you", "4 items wait in Needs you"]);
-    expect([railBadgeText.activity(1), railBadgeText.agents(1), railBadgeText.pipHome(1)]).toEqual(["1 unread update", "1 agent run waits on you", "1 item waits in Needs you"]);
+    expect([railBadgeText.activity(24), railBadgeText.pipHome(4)]).toEqual(["24 unread updates", "4 things need you"]);
+    expect([railBadgeText.activity(1), railBadgeText.pipHome(1)]).toEqual(["1 unread update", "1 thing needs you"]);
+    expect(railBadgeText).not.toHaveProperty("agents");
   });
 
   it("sits beside Activity in the bottom group", () => {
@@ -485,6 +507,28 @@ describe("the rail", () => {
     const out = renderToStaticMarkup(<Rail />);
     expect(out.indexOf('aria-label="Activity"')).toBeLessThan(out.indexOf('aria-label="Agents"'));
     expect(out.indexOf('aria-label="Agents"')).toBeLessThan(out.indexOf('aria-label="Settings"'));
+  });
+});
+
+describe("a run in Needs you", () => {
+  it("shows an 'In Needs you' pill on its card and its row, which opens the need rather than the run", () => {
+    const asking = run("needsAnswer");
+    const open = vi.fn();
+    const onOpen = vi.fn();
+    const withPill = renderToStaticMarkup(<AgentCard run={asking} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={onOpen} onAttach={vi.fn()} onOpenNeed={open} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    expect(withPill).toContain("data-in-needs-you");
+    expect(withPill).toContain(">In Needs you<");
+    expect(card(asking)).not.toContain("In Needs you");
+    const row = renderToStaticMarkup(<AgentRow run={asking} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={onOpen} onAttach={vi.fn()} onOpenNeed={open} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    expect(row).toContain(">In Needs you<");
+  });
+
+  it("is told only for the runs Needs you lists, and the header counts Needs you's one count", () => {
+    const out = screen({ needsYou: 4, inNeeds: new Map() });
+    expect(out).toContain("4 need you · ");
+    expect(out).not.toContain("In Needs you");
+    expect(out).not.toContain('data-lane="needs"');
+    expect(out).not.toContain(">Needs you<");
   });
 });
 

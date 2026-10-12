@@ -97,12 +97,42 @@ describe("pipHomeKey: stepping and opening", () => {
     expect(pipHomeKey(key("j"), at({ count: 0, at: -1, kind: null }))).toBeNull();
   });
 
-  it("Enter or Space opens a row or a tray item and toggles a chip", () => {
+  it("Enter or Space opens a workstream's row and toggles a chip", () => {
     expect(pipHomeKey(key("Enter"), at({ kind: "row" }))).toEqual({ type: "open" });
     expect(pipHomeKey(key(" "), at({ kind: "row" }))).toEqual({ type: "open" });
-    expect(pipHomeKey(key("Enter"), at({ kind: "tray" }))).toEqual({ type: "open" });
     expect(pipHomeKey(key("Enter"), at({ column: "rail", kind: "chip" }))).toEqual({ type: "toggle" });
     expect(pipHomeKey(key(" "), at({ column: "rail", kind: "chip" }))).toEqual({ type: "toggle" });
+  });
+
+  describe("on the Needs you list", () => {
+    for (const kind of ["group", "need"] as const) {
+      it(`${kind}: Enter, Space and → open the decision, ← folds, and a, d and e act on it`, () => {
+        for (const k of ["Enter", " ", "ArrowRight"]) expect(pipHomeKey(key(k), at({ kind }))).toEqual({ type: "decide" });
+        expect(pipHomeKey(key("ArrowLeft"), at({ kind }))).toEqual({ type: "collapse" });
+        expect(pipHomeKey(key("a"), at({ kind }))).toEqual({ type: "act", act: "approve" });
+        expect(pipHomeKey(key("d"), at({ kind }))).toEqual({ type: "act", act: "deny" });
+        expect(pipHomeKey(key("e"), at({ kind }))).toEqual({ type: "act", act: "edit" });
+      });
+
+      it(`${kind}: j and k still move, and Esc goes back from an open decision, else is left alone`, () => {
+        expect(pipHomeKey(key("j"), at({ kind, at: 1 }))).toEqual({ type: "focus", index: 2 });
+        expect(pipHomeKey(key("k"), at({ kind, at: 1 }))).toEqual({ type: "focus", index: 0 });
+        expect(pipHomeKey(key("Escape"), at({ kind, pane: true }))).toEqual({ type: "closePane" });
+        expect(pipHomeKey(key("Escape"), at({ kind, pane: false }))).toBeNull();
+      });
+
+      it(`${kind}: once a key asked for Enter, Enter confirms and every other key only cancels it`, () => {
+        expect(pipHomeKey(key("Enter"), at({ kind, asking: true }))).toEqual({ type: "confirm" });
+        for (const k of ["a", "d", "e", "j", "k", "Escape", "ArrowRight", " ", "x"]) expect(pipHomeKey(key(k), at({ kind, asking: true }))).toEqual({ type: "cancel" });
+      });
+    }
+
+    it("leaves a, d and e to the page on a workstream's row, a chip and a card, and to a field while the person types", () => {
+      for (const kind of ["row", "chip", "run", "draft"] as const) for (const k of ["a", "d", "e"]) expect(pipHomeKey(key(k), at({ kind }))).toBeNull();
+      expect(pipHomeKey(key("a", { target: { tagName: "TEXTAREA" } }), at({ kind: "need" }))).toBeNull();
+      expect(pipHomeKey(key("a"), at({ kind: "need", overlay: true }))).toBeNull();
+      expect(pipHomeKey(key("a", { metaKey: true }), at({ kind: "need" }))).toBeNull();
+    });
   });
 
   it("Enter opens a run card on the rail; a draft card there keeps its own keys", () => {
@@ -114,6 +144,14 @@ describe("pipHomeKey: stepping and opening", () => {
 });
 
 describe("Pip home's footer hint", () => {
+  it("names the Needs you list's keys in place of the draft keys while a row has the keyboard", () => {
+    const hints = pipHomeHints(true);
+    expect(hints.map((h) => h.keys.join(" "))).toEqual(["F6 ⌘]", "j k", "↵", "a d e", "⌘↵", "Esc", "⌘K"]);
+    expect(hints.find((h) => h.id === "needs")?.text).toBe("approve or allow, deny or dismiss, edit; ↵ confirms");
+    expect(hints.some((h) => h.keys.join(" ") === "a s")).toBe(false);
+    expect(pipHomeHints().some((h) => h.id === "needs")).toBe(false);
+  });
+
   it("names the column keys first, then j and k, Enter, the draft keys, ⌘↵ and Esc, each kept by rank as it narrows", () => {
     const hints = pipHomeHints();
     expect(hints.map((h) => h.keys.join(" "))).toEqual(["F6 ⌘]", "j k", "↵", "a s", "⌘↵", "Esc", "⌘K"]);
