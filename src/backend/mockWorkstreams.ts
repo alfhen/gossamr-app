@@ -3,11 +3,14 @@ import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
 import { BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
-import type { BasisField, Escalation, ItemRef, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamView, WorkstreamsChanged } from "../types";
+import type { BasisField, Escalation, ItemRef, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 import { startedFresh } from "./mockPipTurns";
 
 const CONNECTION = "mock";
 /** Where the sample backend keeps its workstreams and their audit, so both survive a reload. */
+/** How long after a hold or a switch of mode it can be undone, as `UNDO_WINDOW_SECS` in `inbox/workstreams.rs`. */
+export const UNDO_WINDOW_MS = 60_000;
+
 export const MOCK_WORKSTREAMS_KEY = "gossamr-mock-workstreams";
 /** Pip's notes are kept up to this many bytes, after scrubbing (NOTES_LIMIT in src-tauri/src/inbox/workstreams.rs). */
 export const NOTES_LIMIT = 2_048;
@@ -454,6 +457,28 @@ export class MockWorkstreams {
     if (reset) this.record(id, "person", "budget_reset");
     if (rebase && next.basis) this.record(id, "supervisor", "basis_captured");
     return next;
+  }
+
+  /**
+   * The person's Undo of a hold or of a switch of mode, as `undo_workstream` does: only while that change is the last line of
+   * the audit, the person's, under `UNDO_WINDOW_MS` old, and the workstream still stands as it left it. It adds an `undone`
+   * line naming what it took back; the line it follows stays.
+   */
+  undo(id: string, undo: WorkstreamUndo): Workstream {
+    const ws = this.openOne(id);
+    const events = this.events(id);
+    const last = events[events.length - 1];
+    const gone = () => new Error("That change can't be undone any more: something else happened since, or it was a while ago.");
+    const fresh = !!last && last.actor === "person" && this.now().getTime() - Date.parse(last.at) <= UNDO_WINDOW_MS;
+    if (undo.type === "hold") {
+      if (!fresh || last!.action !== "held" || !last!.detail || last!.detail !== ws.heldReason) throw gone();
+      if ((undo.was !== null && !validHoldReason(undo.was)) || undo.was === ws.heldReason) throw new Error("That isn't a hold to go back to.");
+      return this.changedTo({ ...ws, heldReason: undo.was }, "person", "undone", { detail: "held" });
+    }
+    if (!fresh || last!.action !== "mode_set" || last!.detail !== ws.mode) throw gone();
+    if (undo.was === ws.mode) throw new Error("The workstream is in that mode already.");
+    const { resumeMode: _, ...rest } = ws;
+    return this.changedTo({ ...rest, mode: undo.was, ...(undo.resumeMode ? { resumeMode: undo.resumeMode } : {}) }, "person", "undone", { detail: "mode_set" });
   }
 
   /**

@@ -40,6 +40,7 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
             t.action!.run();
             onDismiss();
           }}
+          data-toast-action={t.action.label}
           className="shrink-0 font-semibold text-ws-accent underline"
         >
           {t.action.label}

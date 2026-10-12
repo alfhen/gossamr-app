@@ -17,6 +17,7 @@ import { PipRunStripView } from "./PipRunCard";
 import { railBadgeText } from "./Rail";
 import { useRuns } from "./runsStore";
 import { loadTabs, useTabs } from "./tabsStore";
+import { useToasts } from "./toasts";
 import { needsYouText } from "./useNeeds";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -242,34 +243,42 @@ describe("what the list's keys do", () => {
     useRuns.setState({ runs: [...input().runs] });
   });
 
-  it("asks for Enter before it approves a comment, a move, a deny or a dismissal, and only then does it", () => {
+  it("asks for Enter before it approves a comment or a move, or denies, and only then does it", () => {
     const plan = keyPlan(need("draft:c1"), "approve");
     expect(plan).toMatchObject({ type: "ask", text: "approve this draft" });
     expect(keyPlan(need("draft:c2"), "approve")).toMatchObject({ type: "ask" });
-    expect(keyPlan(need("run:r-perm"), "deny")).toMatchObject({ type: "ask", text: "deny it; Claude carries on without it" });
-    expect(keyPlan(need("draft:c1"), "deny")).toMatchObject({ type: "ask", text: "skip this draft" });
-    const dismiss = keyPlan(need("run:r-fail"), "deny");
-    expect(dismiss).toMatchObject({ type: "ask", text: "dismiss this" });
-    if (dismiss?.type !== "ask") throw new Error("a dismissal asks first");
+    const deny = keyPlan(need("run:r-perm"), "dismiss");
+    expect(deny).toMatchObject({ type: "ask", text: "deny it; Claude carries on without it" });
+    if (deny?.type !== "ask") throw new Error("a deny reaches the agent, so it asks first");
     // Nothing happens until Enter confirms what was asked.
-    arm(need("run:r-fail"), dismiss);
-    expect(usePipHome.getState().asking).toEqual({ key: "run:r-fail", text: "↵ dismiss this · any other key cancels" });
-    expect(useRuns.getState().dismissed.has("r-fail")).toBe(false);
-    confirmArmed();
-    expect(useRuns.getState().dismissed.has("r-fail")).toBe(true);
+    arm(need("run:r-perm"), deny);
+    expect(usePipHome.getState().asking).toEqual({ key: "run:r-perm", text: "↵ deny it; Claude carries on without it · any other key cancels" });
+    expect(usePipHome.getState().asking).not.toBeNull();
+    disarm();
     expect(usePipHome.getState().asking).toBeNull();
-    // Confirming again does nothing more.
+    // Confirming what was dropped does nothing.
     confirmArmed();
   });
 
-  it("drops what was asked when any other key comes first", () => {
-    const plan = keyPlan(need("run:r-fail"), "deny");
-    if (plan?.type !== "ask") throw new Error("a dismissal asks first");
-    arm(need("run:r-fail"), plan);
-    disarm();
-    expect(usePipHome.getState().asking).toBeNull();
-    confirmArmed();
+  it("skips a draft and dismisses a run at once, with no Enter, since both can be undone", () => {
+    expect(keyPlan(need("draft:c1"), "dismiss")).toMatchObject({ type: "do" });
+    expect(keyPlan(need("draft:c1"), "skip")).toMatchObject({ type: "do" });
+    expect(keyPlan(need("run:r-q"), "skip")).toBeNull();
+    expect(keyPlan(need("run:r-perm"), "skip")).toBeNull();
+    const dismiss = keyPlan(need("run:r-fail"), "dismiss");
+    expect(dismiss).toMatchObject({ type: "do" });
+    if (dismiss?.type !== "do") throw new Error("a dismissal acts at once");
     expect(useRuns.getState().dismissed.has("r-fail")).toBe(false);
+    dismiss.run();
+    expect(useRuns.getState().dismissed.has("r-fail")).toBe(true);
+    // The same keys on the same need as the button's: Undo puts it back.
+    expect(useToasts.getState().toasts.some((t) => t.action?.label === "Undo")).toBe(true);
+  });
+
+  it("allows, retries and resumes only after Enter: they reach an agent or start something", () => {
+    // A permission's primary is an Allow once only where the run offers one; otherwise a opens its decision.
+    expect(["ask", "open"]).toContain(keyPlan(need("run:r-perm"), "approve")?.type);
+    expect(keyPlan(need("held:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
   });
 
   it("opens the decision where there is something to read first: a rewrite's diff, a question, a run to start", () => {
@@ -284,7 +293,8 @@ describe("what the list's keys do", () => {
     expect(keyPlan(need("run:r-q"), "edit")).toEqual({ type: "open", edit: true });
     expect(keyPlan(need("run:r-perm"), "edit")).toBeNull();
     expect(keyPlan(need("held:ws-2"), "edit")).toBeNull();
-    expect(keyPlan(need("held:ws-2"), "deny")).toBeNull();
+    expect(keyPlan(need("held:ws-2"), "dismiss")).toBeNull();
+    expect(keyPlan(need("held:ws-2"), "skip")).toBeNull();
   });
 });
 

@@ -45,6 +45,18 @@ export interface AgentItemProps {
   failure: FailureState;
   /** Present while the run is one of the things in Needs you: pressing it opens that need on Pip home. */
   onOpenNeed?(): void;
+  /** What a key pressed on the card waits for Enter to do ("↵ allow this once in Terminal · any other key cancels"), while one does. */
+  asking?: string;
+}
+
+/** The line a card or row shows while a key waits for Enter. */
+export function KeyAsking({ text }: { text?: string }) {
+  if (!text) return null;
+  return (
+    <span data-needs-asking role="status" className="min-w-0 text-xs font-semibold text-ws-pip [overflow-wrap:anywhere]">
+      {text}
+    </span>
+  );
 }
 
 /** The pill on a run that is in Needs you; pressing it opens the need rather than the run. */
@@ -153,7 +165,7 @@ export function ReadOnlyBadge({ run, compact = false }: { run: Run; compact?: bo
   );
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onResume, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onResume, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
   const view = stateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -170,7 +182,8 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
       aria-setsize={total}
       aria-current={selected ? "true" : undefined}
       onClick={onOpen}
-      onKeyDown={onActivate(onOpen)}
+      // While a key of the Agents list waits for Enter, Enter is that key's (the window's handler does it), not "open".
+      onKeyDown={asking ? undefined : onActivate(onOpen)}
       style={{ ["--c" as string]: tone.color, boxShadow: `inset 3px 0 0 var(--c)${selected ? ", 0 0 0 2px var(--color-ws-accent-soft)" : ""}` }}
       className={`ws-agent-card relative grid cursor-pointer content-start gap-2 rounded-[10px] border py-2.5 pr-3.5 pl-4 outline-offset-2 ${selected ? "border-ws-accent" : needs ? "border-ws-pip/45" : "border-ws-sep"} ${needs ? "bg-ws-pip-soft" : "bg-ws-win"}`}
     >
@@ -197,6 +210,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
         </span>
         <RunRef run={run} className="ml-auto shrink-0" />
       </p>
+      <KeyAsking text={asking} />
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
       <div className="flex flex-wrap items-center gap-2 empty:hidden">
         {draftReady && onOpenDraft ? (

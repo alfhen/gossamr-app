@@ -70,18 +70,21 @@
 - **Agents screen**: drops the "Needs you" lane. Runs that need the person show a pill "In Needs you", and pressing it opens that need.
 - **Other surfaces** keep showing their context (draft cards in the conversation, the step rail, the peek) but no longer count. Only the list counts.
 
-## Keyboard (one model; step 4 extends it app-wide)
-In the list:
-- j/k: move.
-- Enter or →: expand / open the decision.
-- ←: collapse.
-- a: approve or allow (the primary), confirmed with Enter as today for posting.
-- d: deny or dismiss.
+## Keyboard (one model, app-wide since step 4)
+The same keys mean the same thing in every list that holds actionable items (the Needs you list, draft cards in the conversation and the step rail, Activity's Drafts, the ticket peek's drafts, the Agents list); a place that can't do what a key says ignores it. The table is `src/workspace/keyMap.ts`.
+- j/k (or the arrows): move.
+- Enter or o: open. On a Needs you row also → (expand) and ← (collapse).
+- a: approve or allow (the primary), confirmed with Enter, since it posts, writes or reaches an agent.
 - e: edit.
-- Esc: back to the list.
+- d: dismiss (a failure, a draft) or deny (a permission, which reaches the agent, so it keeps its Enter).
+- s: skip a draft. d and s on a draft, and d on a failure, act at once and offer Undo.
+- Esc: back.
+
+## Undo (step 4)
+Reversible actions act at once and offer Undo in a toast for about 8 seconds (`src/workspace/undo.ts`): skipping a draft, dismissing a failed or stuck run, holding a workstream, switching it to Advise. Undo restores the exact previous state; when the action wrote an audit line the undo writes its own (`undone`). The backend allows an undo for 60 seconds, only while that change is the last line of the workstream's audit, so a stale toast can't undo over later changes. Anything that reached Jira, GitHub or an agent (post, approve, apply, Deny, Allow, Stop, Resume, start) keeps its confirm.
 
 ## Later steps (separate PRs)
 - **2.** Workstream header shows "Next: …" and "N of M automatic steps left". (The budget PR adds the numbers.)
 - **3.** One timeline per workstream: conversation, runs, drafts and audit merged. Agents becomes a filter view.
-- **4.** Undo for reversible actions (dismiss or skip a draft, hold, Advise switch, deny?: no, a deny reaches the agent, keep it final). Confirm only for posting to Jira or GitHub and for stopping a run. The same keys work app-wide, and every action is in ⌘K.
+- **4.** Done: undo for reversible actions, one key model app-wide, and every action in ⌘K (see above).
 - **5.** Notifications per workstream state change ("CA-401 is waiting on you"), not per event, with an optional digest setting.

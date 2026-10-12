@@ -288,14 +288,15 @@ describe("the controls call the person's own commands", () => {
     const other = (await backend.workstreamsOpen(itemRef("CA-402"))).id;
     const push = vi.spyOn(useToasts.getState(), "push");
     expect(await useWorkstreams.getState().holdAll()).toBe(2);
-    expect(push).toHaveBeenCalledWith(expect.stringMatching(/^Held 2 workstreams\./), "info");
+    // With an Undo that frees both again.
+    expect(push).toHaveBeenCalledWith(expect.stringMatching(/^Held 2 workstreams\./), "info", expect.objectContaining({ label: "Undo" }), expect.objectContaining({ keep: true }));
     const held = useWorkstreams.getState().list.filter((v) => [id, other].includes(v.workstream.id)).map((v) => v.workstream.heldReason);
     expect(held).toEqual([HELD_ALL, HELD_ALL]);
     expect(await useWorkstreams.getState().holdAll()).toBe(0);
     expect(push).toHaveBeenLastCalledWith("Every open workstream is held already.", "info");
     await useWorkstreams.getState().resume(other);
     expect(await useWorkstreams.getState().holdAll()).toBe(1);
-    expect(push).toHaveBeenLastCalledWith(expect.stringMatching(/^Held 1 workstream\. Its agents carry on/), "info");
+    expect(push).toHaveBeenLastCalledWith(expect.stringMatching(/^Held 1 workstream\. Its agents carry on/), "info", expect.objectContaining({ label: "Undo" }), expect.objectContaining({ keep: true }));
   });
 });
 

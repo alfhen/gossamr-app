@@ -302,8 +302,7 @@ describe("which run drafts start in place", () => {
   it("hides an open review on Esc and keeps the keyboard on the card, unless a decision waits for Enter", () => {
     const esc = (over: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) => ({ key: "Escape", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...over });
     expect(escapeCollapses(esc(), null)).toBe(true);
-    // A pending skip or approve keeps Esc for cancelling itself.
-    expect(escapeCollapses(esc(), "skip")).toBe(false);
+    // A pending approve keeps Esc for cancelling itself; a skip waits for nothing.
     expect(escapeCollapses(esc(), "approve")).toBe(false);
     expect(escapeCollapses(esc({ shiftKey: true }), null)).toBe(false);
     expect(escapeCollapses({ ...esc(), key: "Enter" }, null)).toBe(false);

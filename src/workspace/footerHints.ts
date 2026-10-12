@@ -32,17 +32,18 @@ export function footerHints(view: ViewMode, pipHome = false): FooterHint[] {
 }
 
 /**
- * Pip home's own footer: its keys, the columns first since they are what the rest of the screen hangs on. With the
- * keyboard on a Needs you row (`onNeed`), the keys of that list take the draft keys' place: a, d and e, with Enter to confirm.
+ * Pip home's own footer: its keys, the columns first since they are what the rest of the screen hangs on. The keys are the
+ * one model's (`keyMap.ts`) wherever the keyboard is: a approves or allows (then ↵ confirms), e edits, d dismisses or
+ * denies, s skips; a skip or a dismiss acts at once and offers Undo. On a Needs you row (`onNeed`) the words say what each does there.
  */
 export function pipHomeHints(onNeed = false): FooterHint[] {
   const decide: FooterHint = onNeed
-    ? { id: "needs", rank: 1, keys: ["a", "d", "e"], text: "approve or allow, deny or dismiss, edit; ↵ confirms" }
-    : { id: "decide", rank: 2, keys: ["a", "s"], text: "then ↵: approve or skip a draft" };
+    ? { id: "needs", rank: 1, keys: ["a", "e", "d", "s"], text: "approve or allow (then ↵), edit, dismiss or deny, skip" }
+    : { id: "decide", rank: 2, keys: ["a", "e", "d", "s"], text: "on a draft: approve (then ↵), edit, skip; skips undo" };
   return [
     { id: "columns", rank: 0, keys: ["F6", "⌘]"], text: "next column" },
     { id: "move", rank: 0, keys: ["j", "k"], text: "move" },
-    { id: "open", rank: 1, keys: ["↵"], text: "open" },
+    { id: "open", rank: 1, keys: ["↵", "o"], text: "open" },
     decide,
     { id: "start", rank: 2, keys: ["⌘↵"], text: "start" },
     { id: "close", rank: 1, keys: ["Esc"], text: "close, then stop Pip" },

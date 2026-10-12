@@ -563,7 +563,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     const armed = cards.first();
     await expect(armed).toBeFocused();
     const hint = armed.getByRole("status");
-    await expect(hint).toHaveText("a approve · s skip · ↵ open");
+    await expect(hint).toHaveText("a approve · e edit · d s skip · ↵ open");
     // The hint hangs under the card: the card is as tall with it as without it.
     const tall = (await armed.boundingBox())!.height;
     await page.locator(PIP_INPUT).focus();
@@ -605,7 +605,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
 
   test("a on a run draft opens its review scrolled into view with the keyboard in it; Tab reaches Start, Esc hides it and keeps the card", async ({ page }) => {
     const card = await generalRunDraft(page);
-    await expect(pipHome(page).locator("[data-pip-home-hints]")).toContainText("then ↵: approve or skip a draft");
+    await expect(pipHome(page).locator("[data-pip-home-hints]")).toContainText("on a draft: approve (then ↵), edit, skip; skips undo");
     await page.locator(PIP_INPUT).focus();
     await page.keyboard.press("ArrowUp");
     await expect(card).toBeFocused();
@@ -663,31 +663,28 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await expect.poll(() => focusIn(page, '[aria-label="Review and start"][role="group"]')).toBe(true);
   });
 
-  test("s then a only cancels the skip: no approve ask, no safety sheet, no review", async ({ page }) => {
+  test("a then s only cancels the approve: nothing is skipped, no safety sheet, no review", async ({ page }) => {
     const cards = await twoComments(page);
     const newest = cards.last();
     await page.locator(PIP_INPUT).focus();
     await page.keyboard.press("ArrowUp");
     await expect(newest).toBeFocused();
-    await page.keyboard.press("s");
-    await expect(newest.getByRole("status")).toHaveText("↵ skip · any other key cancels");
     await page.keyboard.press("a");
-    await expect(newest.getByRole("status")).toHaveText("a approve · s skip · ↵ open");
+    await expect(newest.getByRole("status")).toHaveText("↵ approve · any other key cancels");
+    await page.keyboard.press("s");
+    await expect(newest.getByRole("status")).toHaveText("a approve · e edit · d s skip · ↵ open");
     await expect(newest).toBeFocused();
-    await page.keyboard.press("Enter").catch(() => undefined);
-    // Enter now opens the ticket, as it would on a card with nothing asked: nothing was approved or skipped.
+    // The s that cancelled did not skip: the draft is still pending, and nothing was written.
     await expect(newest).toHaveAttribute("data-state", "pending");
+    await expect(page.locator("[data-toast]")).toHaveCount(0);
     expect(await jiraWrites(page)).toEqual([]);
 
+    // On a run draft a opens its review rather than asking, and nothing starts.
     const card = await generalRunDraft(page, "CA-402");
     await page.locator(PIP_INPUT).focus();
     await page.keyboard.press("ArrowUp");
     await expect(card).toBeFocused();
-    await page.keyboard.press("s");
-    await page.keyboard.press("a");
-    await expect(card.getByRole("status")).toHaveText("s skip · ↵ open");
-    await expect(safety(page)).toHaveCount(0);
-    await expect(card.getByRole("group", { name: "Review and start" })).toHaveCount(0);
+    await expect(card.getByRole("status")).toHaveText("e edit · d s skip · ↵ open");
     await expect(card).toHaveAttribute("data-state", "pending");
   });
 });

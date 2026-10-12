@@ -390,6 +390,8 @@ function eventText(e: WorkstreamEvent, label: (id: string | null) => string, rou
       return `${who} approved a draft`;
     case "draft_skipped":
       return `${who} skipped a draft`;
+    case "undone":
+      return e.detail === "held" ? `${who} undid holding the workstream` : e.detail === "mode_set" ? `${who} undid a change of mode` : e.detail === "draft_skipped" ? `${who} brought back a skipped draft` : `${who} undid an action`;
     case "notes_set":
       return "Pip updated its notes";
     case "budget_reset":

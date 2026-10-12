@@ -412,6 +412,21 @@ impl Core {
         .await
     }
 
+    /// The person's Undo of a skip (`proposals::unskip`): the draft is pending again, and a workstream's audit says the
+    /// skip was undone, as its own line after the skip's, which stays.
+    pub async fn unskip_proposal(&self, id: &str) -> Result<Proposal> {
+        self.with_proposals(|db| {
+            let was_skipped = db.proposal(id)?.is_some_and(|p| p.state == ProposalState::Skipped);
+            let at = Utc::now();
+            let back = proposals::unskip(db, id, at)?;
+            if was_skipped {
+                proposals::record_detailed(db, &back, Actor::Person, "undone", Some("draft_skipped"), at);
+            }
+            Ok(back)
+        })
+        .await
+    }
+
     /// The clone as the run will use it: an existing folder with a `.git`, under the person's home, by its real path.
     pub(super) fn resolve_clone(&self, path: &Path) -> Result<PathBuf> {
         let refused = |why: &str| Error::Proposal(format!("{} {why}", path.display()));

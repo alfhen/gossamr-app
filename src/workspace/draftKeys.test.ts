@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { docFromText } from "../lib/docs";
 import type { Intent, Proposal, ProposalState, RunSpec } from "../types";
+import { keyIntent } from "./keyMap";
 import { DRAFT_CARD, FROM_INPUT, draftKeyAction, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, stepDraftCards, upToNewestDraft, type Asking } from "./draftKeys";
 
 const ref = itemRef("CA-412");
@@ -50,14 +51,16 @@ const draft = (intent: Intent, state: ProposalState = { type: "pending" }): Prop
 });
 
 const INLINE = new Set(["comment", "transition", "subtasks", "create", "link", "update", "runAnswer"]);
-const KEYS = ["a", "s", "Enter", "o", "x", "A", "ArrowUp", " "];
+const EDITABLE = new Set(["comment", "rewrite", "subtasks", "create", "followUp", "runAnswer", "startRun", "githubReview"]);
+const KEYS = ["a", "e", "d", "s", "Enter", "o", "x", "A", "ArrowUp", " "];
 
 /** What each key should do, written out once so the table below reads as the rule. */
 function expected(type: Intent["type"], state: ProposalState["type"], key: string) {
   if (key === "Enter" || key === "o") return "open";
   if (state !== "pending") return null;
   if (key === "a") return INLINE.has(type) ? "approve" : "open";
-  if (key === "s") return "skip";
+  if (key === "e") return EDITABLE.has(type) ? "edit" : null;
+  if (key === "s" || key === "d") return "skip";
   return null;
 }
 
@@ -75,13 +78,12 @@ describe("draftKeyAction", () => {
   it("opens a GitHub review on a unless the card knows the token may post it", () => {
     expect(draftKeyAction(draft(INTENTS.githubReview), "a")).toBe("open");
     expect(draftKeyAction(draft(INTENTS.githubReview), "a", false)).toBe("open");
-    expect(draftKeyHint(draft(INTENTS.githubReview))).toBe("s skip · ↵ open");
-    expect(draftKeyHint(draft(INTENTS.githubReview), null, false)).toBe("s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.githubReview))).toBe("e edit · d s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.githubReview), null, false)).toBe("e edit · d s skip · ↵ open");
     expect(draftKeyAction(draft(INTENTS.githubReview), "s")).toBe("skip");
     expect(draftKeyAction(draft(INTENTS.githubReview), "a", true)).toBe("approve");
-    expect(draftKeyHint(draft(INTENTS.githubReview), null, true)).toBe("a post · s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.githubReview), null, true)).toBe("a post · e edit · d s skip · ↵ open");
     expect(draftKeyHint(draft(INTENTS.githubReview), "approve", true)).toBe("↵ post this review · any other key cancels");
-    expect(draftKeyHint(draft(INTENTS.githubReview), "skip", true)).toBe("↵ skip · any other key cancels");
     expect(draftKeyAction(draft(INTENTS.githubReview, { type: "applied" }), "a", true)).toBe(null);
   });
 
@@ -122,24 +124,33 @@ describe("draftKeyAction", () => {
 
 describe("the focused card's hint and shortcuts", () => {
   it("offers approve only where a approves", () => {
-    expect(draftKeyHint(draft(INTENTS.comment))).toBe("a approve · s skip · ↵ open");
-    expect(draftKeyHint(draft(INTENTS.startRun))).toBe("s skip · ↵ open");
-    expect(draftKeyHint(draft(INTENTS.rewrite))).toBe("s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.comment))).toBe("a approve · e edit · d s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.transition))).toBe("a approve · d s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.startRun))).toBe("e edit · d s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.rewrite))).toBe("e edit · d s skip · ↵ open");
     expect(draftKeyHint(draft(INTENTS.comment, { type: "applied" }))).toBe("↵ open");
-    expect(draftKeyShortcuts(draft(INTENTS.comment))).toBe("a s Enter o");
+    expect(draftKeyShortcuts(draft(INTENTS.comment))).toBe("a e d s Enter o");
+    expect(draftKeyShortcuts(draft(INTENTS.transition))).toBe("a d s Enter o");
     expect(draftKeyShortcuts(draft(INTENTS.comment, { type: "skipped" }))).toBe("Enter o");
   });
 
   it("offers to send an answer, and nothing but skip once its run stopped asking", () => {
-    expect(draftKeyHint(draft(INTENTS.runAnswer))).toBe("a send · s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.runAnswer))).toBe("a send · e edit · d s skip · ↵ open");
     expect(draftKeyHint(draft(INTENTS.runAnswer), "approve")).toBe("↵ send this reply · any other key cancels");
-    expect(draftKeyHint(draft(INTENTS.runAnswer), null, false)).toBe("s skip · ↵ open");
-    expect(draftKeyShortcuts(draft(INTENTS.runAnswer))).toBe("a s Enter o");
+    expect(draftKeyHint(draft(INTENTS.runAnswer), null, false)).toBe("e edit · d s skip · ↵ open");
+    expect(draftKeyShortcuts(draft(INTENTS.runAnswer))).toBe("a e d s Enter o");
   });
 
-  it("says what Enter confirms while a decision waits for it", () => {
+  it("says what Enter confirms while an approval waits for it; a skip waits for nothing", () => {
     expect(draftKeyHint(draft(INTENTS.comment), "approve")).toBe("↵ approve · any other key cancels");
-    expect(draftKeyHint(draft(INTENTS.comment), "skip")).toBe("↵ skip · any other key cancels");
+  });
+
+  it("is built on the one key model: every key it names is a binding of keyMap", () => {
+    for (const intent of Object.values(INTENTS)) {
+      for (const word of draftKeyHint(draft(intent)).split(" · ")) {
+        for (const k of word.split(" ").slice(0, -1).filter((x) => x.length === 1 && /[a-z]/.test(x))) expect(keyIntent({ key: k })).not.toBeNull();
+      }
+    }
   });
 });
 
@@ -185,21 +196,51 @@ describe("onDraftCardKey", () => {
     expect(a.open).not.toHaveBeenCalled();
   });
 
-  it("skips on s and then Enter", () => {
-    const a = acts();
-    press(a, draft(INTENTS.comment), ["s", "Enter"]);
-    expect(a.skip).toHaveBeenCalledTimes(1);
-    expect(a.approve).not.toHaveBeenCalled();
+  it("skips at once on s or d, with nothing to confirm, since Undo puts the draft back", () => {
+    for (const k of ["s", "d"]) {
+      const a = acts();
+      expect(press(a, draft(INTENTS.comment), [k])).toBe(true);
+      expect(a.skip).toHaveBeenCalledTimes(1);
+      expect(a.ask).not.toHaveBeenCalled();
+      expect(a.approve).not.toHaveBeenCalled();
+    }
   });
 
-  it("cancels on Escape or any other key, and Enter then opens instead", () => {
+  it("edits on e where the card has its own editing, and opens where it has none", () => {
+    const a = { ...acts(), edit: vi.fn() };
+    expect(press(a, draft(INTENTS.comment), ["e"])).toBe(true);
+    expect(a.edit).toHaveBeenCalledTimes(1);
+    expect(a.open).not.toHaveBeenCalled();
+    const b = acts();
+    expect(press(b, draft(INTENTS.comment), ["e"])).toBe(true);
+    expect(b.open).toHaveBeenCalledTimes(1);
+    // A transition has nothing to edit: e is not the card's, and goes back to the input as any other letter does.
+    const c = acts();
+    press(c, draft(INTENTS.transition), ["e"]);
+    expect(c.open).not.toHaveBeenCalled();
+    expect(c.typed).toEqual(["e"]);
+  });
+
+  it("cancels a waiting approval on Escape or any other key, and Enter then opens instead", () => {
     const a = acts();
     press(a, draft(INTENTS.comment), ["a", "Escape", "Enter"]);
     expect(a.approve).not.toHaveBeenCalled();
     expect(a.open).toHaveBeenCalledTimes(1);
-    press(a, draft(INTENTS.comment), ["s", "ArrowDown", "Enter"]);
+    // The skip key only cancels while an approval waits: nothing is skipped by the same press.
+    press(a, draft(INTENTS.comment), ["a", "s", "Enter"]);
     expect(a.skip).not.toHaveBeenCalled();
+    expect(a.approve).not.toHaveBeenCalled();
     expect(a.open).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives d and e back to the input after a, as the start of a word: \"add\" and \"explain\" are typed, not decided", () => {
+    for (const [keys, typed] of [[["a", "d"], "ad"], [["a", "e"], "ae"]] as const) {
+      const a = acts();
+      press(a, draft(INTENTS.comment), [...keys]);
+      expect(a.typed).toEqual([typed]);
+      expect(a.skip).not.toHaveBeenCalled();
+      expect(a.approve).not.toHaveBeenCalled();
+    }
   });
 
   it("sends the first letter after ArrowUp from the empty input back to the input, j, k and o included", () => {
@@ -210,13 +251,18 @@ describe("onDraftCardKey", () => {
       expect(a.typed).toEqual([text[0]]);
       expect(a.open).not.toHaveBeenCalled();
     }
-    // a and s still only ask, and the letter after them goes back with them.
+    // a still only asks, and the letter after it goes back with it.
     const a = acts();
     onDraftCardKey(key("a", card()), draft(INTENTS.comment), a.asking, { ...a, fromInput: true });
     expect(a.asking).toBe("approve");
     onDraftCardKey(key("d", card()), draft(INTENTS.comment), a.asking, a);
     expect(a.typed).toEqual(["ad"]);
     expect(a.approve).not.toHaveBeenCalled();
+    // d and s keep their meaning there too: a skip can be undone, so it is not held back as typing.
+    const s = acts();
+    onDraftCardKey(key("s", card()), draft(INTENTS.comment), s.asking, { ...s, fromInput: true });
+    expect(s.skip).toHaveBeenCalledTimes(1);
+    expect(s.typed).toEqual([]);
     // Without the mark, o still opens and j is left for stepping.
     const b = acts();
     expect(onDraftCardKey(key("o", card()), draft(INTENTS.comment), null, b)).toBe(true);
@@ -224,9 +270,9 @@ describe("onDraftCardKey", () => {
     expect(onDraftCardKey(key("j", card()), draft(INTENTS.comment), null, b)).toBe(false);
   });
 
-  it("never decides a draft from text typed after ArrowUp, and gives the text back to the input", () => {
-    // A text that starts with o opens the ticket, which writes nothing; these are the ones that start with a card's decision keys.
-    for (const text of ["add a note", "show me the drafts", "sure", "a", "s", "As it says", "aaa", "ss"]) {
+  it("never approves a draft from text typed after ArrowUp, and gives the text back to the input", () => {
+    // Approving takes a then Enter, so no run of letters approves: the ones that start with a ask, and the next letter cancels.
+    for (const text of ["add a note", "a", "As it says", "aaa"]) {
       const a = acts();
       const p = draft(INTENTS.comment);
       for (const k of [...text]) {
@@ -234,12 +280,10 @@ describe("onDraftCardKey", () => {
         onDraftCardKey(key(k, card(), { shiftKey: k !== k.toLowerCase() }), p, a.asking, a);
       }
       expect(a.approve).not.toHaveBeenCalled();
-      expect(a.skip).not.toHaveBeenCalled();
-      if (a.typed.length) expect(text.startsWith(a.typed[0])).toBe(true);
     }
     const a = acts();
-    press(a, draft(INTENTS.comment), ["a", "d"]);
-    expect(a.typed).toEqual(["ad"]);
+    press(a, draft(INTENTS.comment), ["a", "x"]);
+    expect(a.typed).toEqual(["ax"]);
     expect(a.asking).toBeNull();
   });
 

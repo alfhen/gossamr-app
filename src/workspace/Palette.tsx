@@ -19,6 +19,8 @@ import { focusPeekOf } from "./PeekSheet";
 import { useGithubUi } from "./githubUi";
 import { openPull } from "./openPull";
 import { openOnPipHome, togglePip, useWorkstreams } from "./workstreamsStore";
+import { contextEntries, focusedSubject } from "./contextActions";
+import { undoLog } from "./undo";
 
 /** Where focus lands when the palette closes and the element that opened it is gone. */
 export const MAIN_ID = "workspace-main";
@@ -226,6 +228,12 @@ export async function askPipToPlan(item: WorkItem) {
   askPip(`plan ${item.item.key}`);
 }
 
+/** "Undo: Skipped the draft on CA-401." for the newest action still good to undo, for a keyboard that missed the toast. */
+function undoEntries(): Command[] {
+  const last = undoLog.latest();
+  return last ? [{ id: "undo:last", group: "App", icon: "↶", label: `Undo: ${last.text}`, hint: "put it back", keywords: "undo put back restore take back", run: () => void undoLog.run(last.id) }] : [];
+}
+
 /** What the palette asks: anything, a new ticket's project, then its title, or (opened by 'Start a workstream…') the ticket to start a workstream on. */
 type Step = { type: "search" } | { type: "project" } | { type: "title"; container: WorkContainer } | { type: "workstream" };
 
@@ -294,6 +302,8 @@ export function Palette() {
   const unwatched = useUnwatchedMatches(query, step.type === "search");
 
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
+  // What the keyboard was on when the palette opened: its entries act on that item, as its buttons do.
+  const [subject] = useState(() => focusedSubject(document.activeElement));
 
   useEffect(() => () => (opener?.isConnected ? opener : document.getElementById(MAIN_ID))?.focus(), [opener]);
 
@@ -331,11 +341,11 @@ export function Palette() {
       ...(agents ? workstreamCommands(workstreams, query, actions) : []),
       // The peeked ticket's own "Start a workstream" is in the commands already.
       ...(agents ? startWorkstreamCommands(all, query, workstreams, actions).filter((c) => !ticket || c.id !== `workstream:start:${itemKey(ticket.item)}`) : []),
-      ...rankCommands([...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query),
+      ...rankCommands([...contextEntries(subject, agents), ...undoEntries(), ...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query),
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me]);
+  }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me, subject]);
 
   // A new ticket's project and title are steps back to the search; the workstream's ticket is all the palette was opened for.
   const prompting = step.type === "project" || step.type === "title";

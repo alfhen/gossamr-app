@@ -46,7 +46,7 @@ test("ArrowUp from the empty input reaches Pip's new comment draft with a visibl
   await input.press("ArrowUp");
   await expect(draft).toBeFocused();
   expect(await ring(draft)).toEqual({ style: "solid", width: "2px" });
-  await expect(draft).toContainText("a approve · s skip · ↵ open");
+  await expect(draft).toContainText("a approve · e edit · d s skip · ↵ open");
   expect(await hintClipped(draft)).toBe(false);
   await page.keyboard.press("a");
   await expect(draft.getByRole("status")).toHaveText("↵ approve · any other key cancels");
@@ -126,7 +126,6 @@ test("skipping the last card under Drafts waiting hands focus to the input, so j
   await page.locator(PIP_INPUT).press("ArrowUp");
   await expect(waiting.getByRole("article", { name: name! })).toBeFocused();
   await page.keyboard.press("s");
-  await page.keyboard.press("Enter");
   await expect(waiting.getByRole("article", { name: name! })).toHaveCount(0);
 
   const next = before > 1 ? waiting.getByRole("article").last() : page.locator(PIP_INPUT);
@@ -136,7 +135,7 @@ test("skipping the last card under Drafts waiting hands focus to the input, so j
   if (before === 1) await expect(page.locator(PIP_INPUT)).toHaveValue("j");
 });
 
-test("a second draft reached with the arrows is skipped with s then Enter", async ({ page }) => {
+test("a second draft reached with the arrows is skipped with s, at once", async ({ page }) => {
   await onCa401(page);
   await askForComment(page);
   await askForComment(page);
@@ -149,8 +148,6 @@ test("a second draft reached with the arrows is skipped with s then Enter", asyn
   await page.keyboard.press("ArrowDown");
   await expect(second).toBeFocused();
   await page.keyboard.press("s");
-  await expect(stateOf(second)).toHaveText("Draft");
-  await page.keyboard.press("Enter");
 
   await expect(stateOf(second)).toHaveText("Skipped");
   await expect(stateOf(first)).toHaveText("Draft");
@@ -176,7 +173,7 @@ test("a on a run draft opens its setup and starts nothing", async ({ page }) => 
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.locator(PIP_INPUT).press("ArrowUp");
     await expect(draft).toBeFocused();
-    await expect(draft).toContainText("s skip · ↵ open");
+    await expect(draft).toContainText("e edit · d s skip · ↵ open");
     await expect(draft).not.toContainText("a approve");
     await page.keyboard.press("a");
     await expect(setup.or(safety)).toBeVisible();

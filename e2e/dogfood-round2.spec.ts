@@ -85,7 +85,7 @@ test.describe("counts that mean one thing (D4, D5, N3)", () => {
 });
 
 test.describe("draft keys after a skip (N1)", () => {
-  test("s then Enter skips a draft, and the next one takes its keys at once: a opens it and Enter approves it", async ({ page }) => {
+  test("s skips a draft at once, and the next one takes its keys at once: a opens it and Enter approves it", async ({ page }) => {
     await openApp(page, "pipRun=1");
     await openPipHome(page);
     const waiting = homeConversationRegion(page).getByRole("region", { name: "Drafts" });
@@ -96,8 +96,6 @@ test.describe("draft keys after a skip (N1)", () => {
     for (let i = 0; i < 4 && !(await start.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
     await expect(start).toBeFocused();
     await page.keyboard.press("s");
-    await expect(start.getByRole("status")).toHaveText("↵ skip · any other key cancels");
-    await page.keyboard.press("Enter");
     await expect(start).toHaveCount(0);
     // The next draft has the keyboard, armed: its hint shows, and its keys work without a Shift+Tab and Tab first.
     await expect(rewrite).toBeFocused();

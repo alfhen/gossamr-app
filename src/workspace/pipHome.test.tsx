@@ -235,12 +235,12 @@ describe("Pip home's keys with no workstream, and its footer", () => {
     expect(wrapTab(key("F6"), stops, "commands", true)).toBeNull();
   });
 
-  it("says a and s need Enter to confirm, and lists a once (R6)", () => {
+  it("says a needs Enter to confirm and a skip can be undone, and lists the draft keys once (R6)", () => {
     const decide = pipHomeHints().find((h) => h.id === "decide")!;
-    expect(decide.keys).toEqual(["a", "s"]);
-    expect(decide.text).toBe("then ↵: approve or skip a draft");
+    expect(decide.keys).toEqual(["a", "e", "d", "s"]);
+    expect(decide.text).toBe("on a draft: approve (then ↵), edit, skip; skips undo");
     const html = renderToStaticMarkup(<ShortcutHint view="list" hints={pipHomeHints()} />);
-    expect(html).toContain("then ↵: approve or skip a draft");
+    expect(html).toContain("on a draft: approve (then ↵), edit, skip; skips undo");
     expect(html).not.toContain("a opens a run draft");
   });
 });
