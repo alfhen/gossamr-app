@@ -169,7 +169,7 @@ describe("header and rail", () => {
     const list = out.indexOf('aria-label="Projects"');
     expect(out.slice(out.lastIndexOf("<div", list), list)).toContain("overflow-y-auto");
     expect(out.indexOf('aria-label="Activity"')).toBeGreaterThan(out.indexOf('aria-label="Project 7"'));
-    expect(out).toMatch(/<div class="flex shrink-0[^"]*border-t[^"]*"><span class="relative"><button[^>]*aria-label="Activity"/);
+    expect(out).toMatch(/<div class="flex shrink-0[^"]*border-t[^"]*"><span class="[^"]*\brelative\b[^"]*"><button[^>]*aria-label="Activity"/);
   });
 
   it("shows a tooltip only where it was asked for", () => {
