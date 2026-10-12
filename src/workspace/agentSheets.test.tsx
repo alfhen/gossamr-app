@@ -16,6 +16,7 @@ import { useRuns } from "./runsStore";
 import { useRunSetup } from "./runSetupStore";
 import { placesOf } from "./RunWhere";
 import { offsetText } from "./RunTimeline";
+import { commandDigest } from "../lib/permission";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -88,7 +89,7 @@ describe("the run sheet, by state", () => {
 
     it("after Allow once, confirms in a status line the keyboard can land on, and Allow is gone", () => {
       const command = "git push -u origin worktree-ca-401-fix";
-      const r = build(`approve Bash: ${command}`, { permissionAllowed: { command, at: iso(0) } });
+      const r = build(`approve Bash: ${command}`, { permissionAllowed: { commandDigest: commandDigest(command), at: iso(0) } });
       const html = sheet(r, { permissionAnswered: { kind: "allowed", command, at: iso(0), copied: true } });
       expect(html).toMatch(/<p tabindex="-1" role="status" data-permission-sent="allowed"[^>]*>[\s\S]*Opened in Terminal, command copied. Choose Yes there for this command only.<\/p>/);
       expect(buttons(asked(html))).toEqual(["Copy", "Deny", "Open in Terminal", "Stop the run (abandons it)"]);

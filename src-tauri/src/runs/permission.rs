@@ -505,7 +505,9 @@ impl RunService {
     /// The person's Allow once for the prompt they read as `command`, which only Claude Code itself can grant: when
     /// `offer` allows it, Terminal is opened on the session for them to answer Yes there, and the choice is recorded
     /// with the exact command. The session is neither stopped nor resumed. If Terminal can't be opened, nothing is
-    /// recorded.
+    /// recorded. The run's log and the audit keep the redacted command the person read (`run.needs` is redacted when
+    /// the tracker keeps it); the record kept for matching holds only that command's SHA-256, so no string used for
+    /// matching is stored (`PermissionAllowed`).
     pub async fn allow_permission_once(&self, run_id: &str, command: &str) -> Result<Run> {
         self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
@@ -520,7 +522,7 @@ impl RunService {
             eprintln!("couldn't record the choice: {e}");
         }
         self.note_person(&run, "permission_allowed_in_terminal", Some(command.to_owned())).await;
-        run.permission_allowed = Some(PermissionAllowed { command: command.to_owned(), at: Utc::now() });
+        run.permission_allowed = Some(PermissionAllowed::new(command, Utc::now()));
         self.store(&run).await?;
         Ok(run)
     }

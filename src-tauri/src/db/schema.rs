@@ -300,7 +300,14 @@ CREATE INDEX proposals_workstream ON proposals(workstream, state);";
 const GENERAL_CONVERSATION: &str = "
 UPDATE pip_turns SET conversation = 'general' WHERE conversation = 'workspace';";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION];
+/// An Allow once was kept with the command itself; it is now kept as a digest of it (`PermissionAllowed`), which SQL can't
+/// make. The choice only covers the prompt the run is waiting on, and the person can make it again, so a stored one is
+/// dropped rather than left holding the command.
+const PERMISSION_ALLOWED_DIGEST: &str = "
+UPDATE runs SET data = json_remove(data, '$.permissionAllowed')
+  WHERE json_valid(data) AND json_extract(data, '$.permissionAllowed.command') IS NOT NULL;";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, PERMISSION_ALLOWED_DIGEST];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -457,14 +464,14 @@ mod tests {
         for t in ["proposals", "item_links"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
     }
 
     #[test]
-    fn a_fresh_file_is_at_version_twelve() {
+    fn a_fresh_file_is_at_version_thirteen() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
     }
 
     #[test]
@@ -490,11 +497,11 @@ mod tests {
         }
         assert!(tables(&conn).contains(&"pip_turns".to_string()));
         assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
 
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
     }
 
     #[test]
@@ -528,7 +535,7 @@ mod tests {
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
     }
 
     #[test]
@@ -556,12 +563,12 @@ mod tests {
             assert!(tables(&conn).contains(&t.to_string()), "missing {t}");
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
 
         conn.execute("INSERT INTO workstreams (id, connection_id, item_key, title, mode, created_at, data) VALUES ('w1', 'c', 'CA-1', 't', 'advise', 't', '{}')", []).unwrap();
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM workstreams", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
     }
 
     #[test]
@@ -610,7 +617,7 @@ mod tests {
         assert_eq!(row("in-ws"), (some("chat"), some("w2")), "the origin's workstream wins");
         assert_eq!(row("empty"), (None, None));
         assert_eq!(row("broken"), (None, None));
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM proposals", [], |r| r.get::<_, i64>(0)).unwrap(), 6);
     }
@@ -641,8 +648,37 @@ mod tests {
         let in_conversation = |conn: &Connection, c: &str| conn.query_row("SELECT count(*) FROM pip_turns WHERE conversation = ?1", [c], |r| r.get::<_, i64>(0)).unwrap();
         assert_eq!((in_conversation(&conn, "general"), in_conversation(&conn, "workspace")), (4, 0));
         assert_eq!((in_conversation(&conn, "CA-1"), in_conversation(&conn, "ws:w1")), (2, 2));
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
         migrate(&mut conn).unwrap();
         assert_eq!(in_conversation(&conn, "general"), 4);
+    }
+
+    #[test]
+    fn a_version_twelve_file_drops_an_allow_once_that_holds_the_command_and_keeps_everything_else() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..12] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 12).unwrap();
+        let add = |id: &str, data: &str| {
+            conn.execute(
+                "INSERT INTO runs (id, proposal_id, connection_id, kind, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES (?1, ?1, 'c', 'build', 'r', ?1, 'needsPermission', 't', 't', ?2)",
+                rusqlite::params![id, data],
+            )
+            .unwrap();
+        };
+        add("old", r#"{"needs":"approve Bash: ls","permissionAllowed":{"command":"ls","at":"2026-01-01T00:00:00Z"}}"#);
+        add("new", r#"{"needs":"approve Bash: ls","permissionAllowed":{"commandDigest":"ab","at":"2026-01-01T00:00:00Z"}}"#);
+        add("none", r#"{"needs":"approve Bash: ls"}"#);
+        add("broken", "not json");
+
+        migrate(&mut conn).unwrap();
+
+        let data = |id: &str| conn.query_row("SELECT data FROM runs WHERE id = ?1", [id], |r| r.get::<_, String>(0)).unwrap();
+        assert_eq!(data("old"), r#"{"needs":"approve Bash: ls"}"#);
+        assert!(data("new").contains("commandDigest"));
+        assert_eq!(data("none"), r#"{"needs":"approve Bash: ls"}"#);
+        assert_eq!(data("broken"), "not json");
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
     }
 }

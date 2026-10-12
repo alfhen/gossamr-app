@@ -911,12 +911,33 @@ pub struct Run {
     pub permission_allowed: Option<PermissionAllowed>,
 }
 
-/// The exact command the person chose to allow once, and when.
+/// The command the person chose to allow once, as the SHA-256 of its exact text, and when. Only the digest is kept, so
+/// what is used for matching is never the string itself at rest: the request is covered when its digest is this one
+/// (`covers`), which is an exact match, so a command that differs by a single space is another one. The command the
+/// person read is still shown, and written to the run's log and the workstream audit, as the redacted text they decided
+/// on (`Run::needs` is redacted before it is kept), taken from the request they answered and never from this record, so
+/// there is no second copy of it here to keep. The digest is for matching only and is never shown.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionAllowed {
-    pub command: String,
+    pub command_digest: String,
     pub at: DateTime<Utc>,
+}
+
+impl PermissionAllowed {
+    pub fn new(command: &str, at: DateTime<Utc>) -> Self {
+        Self { command_digest: command_digest(command), at }
+    }
+
+    /// Whether `command`, exactly, is the one that was allowed.
+    pub fn covers(&self, command: &str) -> bool {
+        self.command_digest == command_digest(command)
+    }
+}
+
+/// The lowercase hex SHA-256 of a command's exact bytes: no trimming and no case folding.
+pub fn command_digest(command: &str) -> String {
+    Sha256::digest(command.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl Run {
@@ -1836,12 +1857,24 @@ mod tests {
         let json = serde_json::to_value(&plain).unwrap();
         assert!(json.get("permissionAllowed").is_none(), "a run nobody allowed anything for stores nothing new");
         assert_eq!(serde_json::from_value::<Run>(json).unwrap().permission_allowed, None);
-        let allowed = Run { permission_allowed: Some(PermissionAllowed { command: "git push origin worktree-x".into(), at: Utc::now() }), ..plain.clone() };
+        let allowed = Run { permission_allowed: Some(PermissionAllowed::new("git push origin worktree-x", Utc::now())), ..plain.clone() };
         let json = serde_json::to_value(&allowed).unwrap();
-        assert_eq!(json["permissionAllowed"]["command"], "git push origin worktree-x");
+        assert_eq!(json["permissionAllowed"]["commandDigest"], command_digest("git push origin worktree-x"));
+        assert!(json["permissionAllowed"].get("command").is_none(), "the command itself isn't stored");
+        assert!(!json.to_string().contains("git push origin worktree-x"));
         let back: Run = serde_json::from_value(json).unwrap();
         assert_eq!(back, allowed);
         assert_eq!((back.digest.as_str(), back.spec.digest()), (plain.digest.as_str(), plain.spec.digest()), "answering a prompt is not part of what is approved");
+    }
+
+    #[test]
+    fn a_command_digest_is_the_sha256_of_the_exact_text_and_covers_only_that_text() {
+        assert_eq!(command_digest("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        let allowed = PermissionAllowed::new("git push origin x", Utc::now());
+        assert!(allowed.covers("git push origin x"));
+        for other in ["git push origin x ", " git push origin x", "git  push origin x", "git push origin X", "git push origin y", ""] {
+            assert!(!allowed.covers(other), "{other:?}");
+        }
     }
 
     #[test]

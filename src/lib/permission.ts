@@ -1,4 +1,5 @@
 import type { Run, RunKind, RunSpec } from "../types";
+import { sha256Hex } from "./sha256";
 
 /**
  * A run's permission prompt as Gossamr reads it, and whether Allow once is offered for it: `runs/permission.rs`, kept in
@@ -54,6 +55,12 @@ export function parsePermission(needs: string | null | undefined): PermissionAsk
 
 /** What the person must have read to answer: the command, or the whole request when it isn't in the usual form. */
 export const readAs = (needs: string | null | undefined): string => parsePermission(needs)?.command ?? (needs ?? "").trim();
+
+/** The SHA-256 hex of a command's exact text: what an Allow once keeps in place of the command (`command_digest` in domain/run.rs). */
+export const commandDigest = (command: string): string => sha256Hex(command);
+
+/** Whether the person's Allow once is for exactly `command`: its digest is the stored one, so a space more or less is another command. */
+export const allowedFor = (allowed: { commandDigest: string } | null | undefined, command: string): boolean => !!allowed && allowed.commandDigest === commandDigest(command);
 
 /** A request that may not be what the agent asked: masked, cut at the length the tracker keeps, holding a NUL, or with no command. */
 const notWhole = (needs: string, ask: PermissionAsk) => needs.includes(MASK) || [...needs].length >= NEEDS_KEPT || needs.includes("\0") || !ask.command.trim();

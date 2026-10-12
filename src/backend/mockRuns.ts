@@ -4,7 +4,7 @@ import { approvedPlanText, assemblePlan, planSectionOf } from "./mockPlanSection
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, scriptedFinish, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
-import { DENIED_MESSAGE, permissionOffer, readAs } from "../lib/permission";
+import { commandDigest, DENIED_MESSAGE, permissionOffer, readAs } from "../lib/permission";
 import { reviewText } from "./mockReviewDraft";
 import { followUpBlocker, followUpProblem } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
@@ -1345,7 +1345,8 @@ export class MockRuns {
   /**
    * The person's Allow once for the prompt they read as `command`, as `allow_permission_once`: only when `permissionOffer`
    * offers it, Terminal is opened on the session (`attach`) for the person to answer Yes there, and only then is the choice
-   * recorded. The run is neither stopped nor resumed; it stays asking until Claude Code has the answer.
+   * recorded. The run is neither stopped nor resumed; it stays asking until Claude Code has the answer. The run keeps only
+   * the SHA-256 of the command, for matching; the log and the audit keep the redacted text the person read (`command`).
    */
   allowPermissionOnce(id: string, command: string): Run {
     const run = this.permissionAsked(id, command);
@@ -1354,7 +1355,7 @@ export class MockRuns {
     this.attach(id);
     const at = this.now();
     this.logPermission(id, at, "You chose Allow once, in Terminal", command);
-    const next = this.update(id, { permissionAllowed: { command, at } });
+    const next = this.update(id, { permissionAllowed: { commandDigest: commandDigest(command), at } });
     this.changed();
     this.workstreams?.record(next.spec.workstream, "person", "permission_allowed_in_terminal", { runId: id, detail: command });
     return next;

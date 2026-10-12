@@ -7,7 +7,7 @@ import { FINDINGS_LIMIT, FINDINGS_PREFACE, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, RE
 import { MockSupervisor } from "./mockSupervisor";
 import { ESCALATION_GONE, MockWorkstreams } from "./mockWorkstreams";
 import { heldText } from "../lib/workstreamHold";
-import { DENIED_MESSAGE } from "../lib/permission";
+import { allowedFor, commandDigest, DENIED_MESSAGE } from "../lib/permission";
 import { mockAsk } from "./mockPip";
 import { GUARD as GUARD_TEXT, MOVED_ON, VERIFY_UNPINNED, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
@@ -1144,7 +1144,11 @@ describe("answering a permission prompt, as runs/permission.rs", () => {
     const { b, ws, run } = await working();
     b.runs.askPermission(run.id, `approve Bash: ${PUSH}`);
     const after = await b.runsAllowPermissionOnce(run.id, PUSH);
-    expect(after).toMatchObject({ state: "needsPermission", permissionAllowed: { command: PUSH, at: expect.any(String) }, digest: run.digest });
+    expect(after).toMatchObject({ state: "needsPermission", permissionAllowed: { commandDigest: commandDigest(PUSH), at: expect.any(String) }, digest: run.digest });
+    // Only the digest is kept for matching, never the command; the audit and the log still show the redacted text the person read.
+    expect(JSON.stringify(after.permissionAllowed)).not.toContain(PUSH);
+    expect(allowedFor(after.permissionAllowed, PUSH)).toBe(true);
+    for (const other of [`${PUSH} `, ` ${PUSH}`, PUSH.replace(" ", "  "), `${PUSH}x`, ""]) expect(allowedFor(after.permissionAllowed, other), JSON.stringify(other)).toBe(false);
     expect(b.runs.attached).toEqual([run.id]);
     expect(audit(b, ws, "permission_allowed_in_terminal")).toEqual([expect.objectContaining({ actor: "person", runId: run.id, detail: PUSH })]);
     expect(b.runs.events(run.id)).toContainEqual(expect.objectContaining({ kind: "permission", text: "You chose Allow once, in Terminal", detail: PUSH }));

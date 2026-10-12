@@ -627,10 +627,11 @@ export interface Run {
   slotWaitSince?: string | null;
   /** The restriction a read-only run was launched with; absent for a Build and for a run that hasn't launched. */
   readOnly?: ReadOnly | null;  /**
-   * The person chose Allow once for this prompt, the exact command, and Terminal was opened for them to answer Yes there.
-   * Cleared once the run leaves the prompt or asks something else.
+   * The person chose Allow once for this prompt and Terminal was opened for them to answer Yes there. Only the SHA-256 of
+   * the exact command is kept, for matching (`allowedFor` in lib/permission.ts), never the command and never shown; what
+   * the person read stays the redacted request. Cleared once the run leaves the prompt or asks something else.
    */
-  permissionAllowed?: { command: string; at: string } | null;
+  permissionAllowed?: { commandDigest: string; at: string } | null;
 }
 
 /**

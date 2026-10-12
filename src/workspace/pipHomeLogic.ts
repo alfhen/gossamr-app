@@ -1,5 +1,5 @@
 import { inWorkstreamPane, targetOf, workstreamOf } from "../lib/proposals";
-import { readAs } from "../lib/permission";
+import { allowedFor, readAs } from "../lib/permission";
 import { heldText } from "../lib/workstreamHold";
 import { byQueue, STAGE_LABEL, stageText } from "../lib/workstreamStage";
 import { HELD_BUDGET, HELD_DAILY } from "../types";
@@ -214,7 +214,7 @@ export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt
     // A prompt the person chose Allow once for is theirs to answer in Terminal now, and stays an item until it is answered,
     // so a run left waiting there isn't forgotten and the tray counts as the rail badge does. One it asks after is asked again.
     else if (run.state === "needsPermission") {
-      const allowed = run.permissionAllowed?.command === readAs(run.needs);
+      const allowed = allowedFor(run.permissionAllowed, readAs(run.needs));
       items.push({ ...base, kind: "permission", ...say(key, allowed ? `${name} waits for your Yes in Terminal` : `${name} asks to run a command`) });
     } else if (run.state === "systemBlocked") items.push({ ...base, kind: "permission", ...say(key, `${name} needs permission`) });
     // The predicate the rail badge counts by: by now only a failed run passes it.

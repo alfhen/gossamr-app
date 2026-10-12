@@ -9,6 +9,7 @@ import { useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
 import { browseList, introCancelled, startWhat, useRuns } from "./runsStore";
 import { attentionCount } from "./agentsLogic";
+import { commandDigest } from "../lib/permission";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -489,7 +490,7 @@ describe("the run sheet", () => {
     it("copies the command after Allow once opens Terminal, and says so only when the clipboard took it", async () => {
       await settle();
       const run = s().runs.find((r) => r.state === "needsPermission")!;
-      const allowed = { ...run, permissionAllowed: { command: "ls", at: run.lastProgressAt } };
+      const allowed = { ...run, permissionAllowed: { commandDigest: commandDigest("ls"), at: run.lastProgressAt } };
       vi.spyOn(backend, "runsAllowPermissionOnce").mockResolvedValue(allowed);
       const writeText = vi.fn(() => Promise.resolve());
       const real = globalThis.navigator;

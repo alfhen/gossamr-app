@@ -208,8 +208,17 @@ async fn allow_once_on_a_builds_own_push_opens_terminal_and_records_the_exact_co
     let (rig, run, ws) = asking(RunKind::Build, true, "approve Bash: git push -u origin worktree-eng-1-fix-cart-0001").await;
     let command = own_push(&run);
     let allowed = rig.svc.allow_permission_once(&run.id, &command).await.unwrap();
-    assert_eq!(allowed.permission_allowed.as_ref().map(|a| a.command.as_str()), Some(command.as_str()));
+    let kept = allowed.permission_allowed.clone().unwrap();
+    assert_eq!(kept.command_digest, crate::domain::command_digest(&command), "the digest of the exact command is kept, not the command");
+    assert!(kept.covers(&command));
+    for other in [format!("{command} "), format!(" {command}"), command.replacen(' ', "  ", 1), format!("{command}x")] {
+        assert!(!kept.covers(&other), "{other:?} is another command");
+    }
     assert_eq!(rig.get(&run).await.permission_allowed, allowed.permission_allowed, "stored, not only returned");
+    // The request itself (`needs`, redacted) is what the person read; the record of the choice holds no copy of the command.
+    let stored = serde_json::to_string(&rig.get(&run).await.permission_allowed).unwrap();
+    assert!(!stored.contains(&command), "the record doesn't hold the command it allowed");
+    assert!(!stored.contains("\"command\""));
     assert_eq!((allowed.state, allowed.digest.as_str(), &allowed.spec), (RunState::NeedsPermission, run.digest.as_str(), &run.spec));
     assert_eq!(rig.opened.0.lock().unwrap().len(), 1, "Terminal was opened on the session");
     assert!(rig.cli.0.lock().unwrap().calls.is_empty(), "the session was neither stopped nor woken");

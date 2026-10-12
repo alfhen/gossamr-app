@@ -6,6 +6,7 @@ import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind
 import { agentSummary } from "../backend/mockPip";
 import { NO_FILTERS, attentionCount, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
 import { planRewriteDraft, titleFromTicketBlock, batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, needsYouCount, needsYouItems, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus, type NeedsYouInput } from "./pipHomeLogic";
+import { commandDigest } from "../lib/permission";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -110,7 +111,7 @@ describe("needsYouItems", () => {
     const asking = run("r-p", "build", "needsPermission", { needs: "approve Bash: git push -u origin worktree-x" });
     const listed = (r: Run) => needsYouItems(input({ workstreams: [ws1], runs: [r] })).map((i) => i.label);
     expect(listed(asking)).toEqual(["CA-401 · R2 asks to run a command"]);
-    const allowed = { ...asking, permissionAllowed: { command: "git push -u origin worktree-x", at: iso(1) } };
+    const allowed = { ...asking, permissionAllowed: { commandDigest: commandDigest("git push -u origin worktree-x"), at: iso(1) } };
     expect(listed(allowed)).toEqual(["CA-401 · R2 waits for your Yes in Terminal"]);
     // Counted as the rail badge counts it.
     expect(needsYouItems(input({ workstreams: [ws1], runs: [allowed] }))).toHaveLength(attentionCount([allowed], new Set()));

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { targetOf } from "../lib/proposals";
+import { allowedFor } from "../lib/permission";
 import type { CleanupResult, ItemRef, PlanComment, Proposal, Run, RunKind, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
@@ -157,7 +158,7 @@ export interface PermissionAnswered {
 export function permissionConfirmation(run: Pick<Run, "lastProgressAt" | "permissionAllowed" | "state">, answered: PermissionAnswered | undefined): PermissionAnswered | null {
   if (!answered) return null;
   if (answered.kind === "denied") return answered.at === run.lastProgressAt ? answered : null;
-  return run.state === "needsPermission" && run.permissionAllowed?.command === answered.command ? answered : null;
+  return run.state === "needsPermission" && allowedFor(run.permissionAllowed, answered.command) ? answered : null;
 }
 
 const idle = { runs: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, afterIntro: null, afterIntroWhat: null, browseOrder: null, picking: false };

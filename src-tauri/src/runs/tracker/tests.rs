@@ -1414,7 +1414,7 @@ async fn an_allow_once_is_forgotten_when_the_run_moves_on_or_asks_something_else
     rig.job(&id, |j| j.needs = Some("approve Bash: npm publish".into()));
     rig.session(&run, permission);
     rig.poll().await;
-    let allowed = Some(crate::domain::PermissionAllowed { command: "npm publish".into(), at: Utc::now() });
+    let allowed = Some(crate::domain::PermissionAllowed::new("npm publish", Utc::now()));
     rig.set(&run, |r| r.permission_allowed = allowed.clone()).await;
     rig.poll().await;
     assert_eq!(rig.get(&run).await.permission_allowed, allowed, "the same prompt keeps it");
