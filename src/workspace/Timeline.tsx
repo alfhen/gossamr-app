@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useClaude, type Turn } from "../claudeStore";
 import { GENERAL_CONVERSATION, workstreamConversation } from "../lib/conversations";
 import { itemKey } from "../lib/filter";
@@ -28,7 +28,7 @@ import { isTypingTarget } from "./pipHomeKeys";
 import { usePipHome } from "./pipHomeStore";
 import { useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
-import { TIMELINE_ENTRY, stepIndex, timelineKeyAction, timelineStop } from "./timelineKeys";
+import { TIMELINE_ENTRY, followsEnd, nearBottom, stepIndex, timelineKeyAction, timelineStop } from "./timelineKeys";
 import { PipRunCard } from "./PipRunCard";
 import { TimelineFilterBar, TimelineScopeToggle, showAllRuns, showTimeline } from "./TimelineFilterBar";
 import { useWorkstreams } from "./workstreamsStore";
@@ -271,9 +271,20 @@ export function TimelineView({
   for (const p of byId.drafts.values()) if (p.state.type === "pending") seenWaiting.current.add(p.id);
   const now = Date.now();
 
+  /** Whether the person is at the end: only then does new text follow it down, so reading older entries isn't undone. */
+  const stickToBottom = useRef(true);
+  const turnCount = useRef(0);
   useEffect(() => {
-    ref.current?.scrollTo({ top: ref.current.scrollHeight });
+    const el = ref.current;
+    const before = turnCount.current;
+    turnCount.current = turns.length;
+    if (!el || !followsEnd(stickToBottom.current, before, turns)) return;
+    stickToBottom.current = true;
+    el.scrollTo({ top: el.scrollHeight });
   }, [turns, shown.length]);
+  const onScroll = (ev: UIEvent<HTMLDivElement>) => {
+    stickToBottom.current = nearBottom(ev.currentTarget);
+  };
 
   const onKeyDown = (ev: KeyboardEvent<HTMLDivElement>) => {
     if (ev.defaultPrevented || isTypingTarget(ev.target)) return;
@@ -342,7 +353,7 @@ export function TimelineView({
           />
         )}
       </div>
-      <div ref={ref} data-pip-conversation-body data-timeline onKeyDown={onKeyDown} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 pt-3 pb-4">
+      <div ref={ref} data-pip-conversation-body data-timeline onKeyDown={onKeyDown} onScroll={onScroll} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 pt-3 pb-4">
         {empty &&
           !every &&
           filter === "all" &&

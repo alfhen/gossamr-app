@@ -78,3 +78,18 @@ export function upToTimeline(ev: KeyLike & { preventDefault(): void }, value: st
   stop.scrollIntoView?.({ block: "nearest" });
   return true;
 }
+
+/** How close to the end, in pixels, still counts as reading the newest entries. */
+export const BOTTOM_SLACK = 24;
+
+/** Whether a scroller sits at (or within a few pixels of) its end. */
+export const nearBottom = (el: { scrollTop: number; scrollHeight: number; clientHeight: number }) => el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLACK;
+
+/**
+ * Whether the timeline should follow its end after a change: while the person is at the end, and when they just sent
+ * something (a new turn of theirs, not one the supervisor woke), wherever they were reading.
+ */
+export function followsEnd(stuck: boolean, before: number, turns: readonly { kind?: "user" | "wake" }[]): boolean {
+  const sent = turns.length > before && turns[turns.length - 1]?.kind !== "wake";
+  return stuck || sent;
+}
