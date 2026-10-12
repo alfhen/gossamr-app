@@ -234,6 +234,8 @@ function useFocusTarget() {
     if (!target) return;
     // What is asked for may be filtered out of the timeline: it shows everything again.
     if (usePipHome.getState().timelineFilter !== "all") usePipHome.getState().setTimelineFilter("all");
+    // And it is in the selected workstream's own timeline.
+    if (usePipHome.getState().timelineScope !== "workstream") usePipHome.getState().setTimelineScope("workstream");
     let frame = 0;
     let tries = 0;
     const find = () => {

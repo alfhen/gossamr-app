@@ -27,6 +27,7 @@ const timeline = (page: Page) => homeConversationRegion(page).locator("[data-tim
 const entries = (page: Page) => timeline(page).locator("[data-timeline-entry]");
 const filterBar = (page: Page) => page.getByRole("group", { name: "Timeline filter" });
 const filter = (page: Page, name: string) => filterBar(page).getByRole("button", { name: new RegExp(`^${name}\\b`) });
+const scope = (page: Page, name: string) => page.getByRole("group", { name: "Timeline scope" }).getByRole("button", { name });
 
 /** The newest run of `kind`, as the sample backend holds it. */
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
@@ -136,12 +137,15 @@ test("the filters show the runs, the drafts or the decisions alone, and All brin
 test("Agents is the Runs filter across every workstream, with the same rows, and its other filters go back to the timeline", async ({ page }) => {
   const r1 = await investigating(page);
   await filter(page, "Runs").click();
-  await homeConversationRegion(page).getByRole("button", { name: "Runs in every workstream (Agents)" }).click();
+  // Runs in every workstream: the scope's Every workstream says, with Runs pressed, that it is the Agents screen.
+  const every = scope(page, "Every workstream");
+  await expect(every).toHaveAttribute("title", "Runs in every workstream: the Agents screen");
+  await every.click();
   // The Agents screen, with Runs pressed, lists the run on the same row the timeline shows it with.
   const main = page.locator("main");
   await expect(main.getByRole("heading", { name: "Agents" })).toBeVisible();
   await expect(filterBar(page).getByRole("button", { name: "Runs" })).toHaveAttribute("aria-pressed", "true");
-  await expect(main.locator("[data-agents-scope]")).toHaveText("in every workstream");
+  await expect(main.locator("[data-agents-scope]").getByRole("button", { name: "Every workstream" })).toHaveAttribute("aria-pressed", "true");
   await main.getByRole("button", { name: "List", exact: true }).click();
   await expect(main.locator(`article#agent-${r1.id}[data-run-id="${r1.id}"]`)).toBeVisible();
   // The rail's Agents button lands here too.
@@ -151,8 +155,12 @@ test("Agents is the Runs filter across every workstream, with the same rows, and
   await filterBar(page).getByRole("button", { name: "Drafts" }).click();
   await expect(pipHome(page)).toBeVisible();
   await expect(filter(page, "Drafts")).toHaveAttribute("aria-pressed", "true");
+  // Agents is every workstream, and so is the timeline it goes back to.
+  await expect(scope(page, "Every workstream")).toHaveAttribute("aria-pressed", "true");
   await expect.poll(async () => (await shown(page)).every((e) => e.kind === "draft")).toBe(true);
-  // The timeline's run row is the Agents row.
+  // The timeline's run row is the Agents row: Runs in this workstream.
+  await scope(page, "This workstream").click();
+  await expect(scope(page, "This workstream")).toHaveAttribute("aria-pressed", "true");
   await filter(page, "Runs").click();
   await expect(timeline(page).locator(`article#agent-${r1.id}[data-run-id="${r1.id}"]`)).toBeVisible();
 });

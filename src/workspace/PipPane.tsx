@@ -26,6 +26,8 @@ import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
 import { stageText } from "../lib/workstreamStage";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { workstreamSuggestionScene } from "./pipHomeLogic";
+import { TimelineView } from "./Timeline";
+import { useNeedsYou } from "./useNeeds";
 
 export { AppliedCard, GENERAL_CONVERSATION, PIP_INPUT_ID, workstreamConversation } from "./PipConversation";
 
@@ -204,7 +206,11 @@ export function ConversationLine({ conversation, workstream }: { conversation: s
   );
 }
 
-/** Docked to the right of the canvas: the conversation with Pip, with what it can see and the drafts it made. */
+/**
+ * Docked to the right of the canvas: the conversation with Pip, with what it can see and the drafts it made. A
+ * workstream's conversation is its timeline, the same one Pip home shows; General's follows the screen, listing the runs
+ * going and the drafts waiting with the ticket on screen first.
+ */
 export function PipPane({ onClose }: { onClose(): void }) {
   // The ticket the peek shows has an open workstream: its conversation is the one here. Otherwise it is General.
   const workstream = usePaneWorkstream();
@@ -216,6 +222,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const drop = useFileDrop((files) => void attached.add(files));
   const proposalList = useConversationDrafts(conversation, workstream);
   const { chips, primary, scene, kind, label, context, words, quote, following } = usePipChips(workstream);
+  const needs = useNeedsYou();
 
   usePaneEscape(onClose);
 
@@ -244,8 +251,12 @@ export function PipPane({ onClose }: { onClose(): void }) {
         <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
         {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
       </header>
-      {/* About one ticket, outside a workstream, the pane lists that ticket's drafts and folds the rest. */}
-      <PipConversation key={conversation} conversation={conversation} proposals={proposalList} primary={primary} ticket={workstream ? null : context.item} />
+      {workstream ? (
+        <TimelineView key={conversation} conversation={conversation} workstream={workstream} proposals={proposalList} needs={needs} primary={primary} pane />
+      ) : (
+        // About one ticket, outside a workstream, the pane lists that ticket's drafts and folds the rest.
+        <PipConversation key={conversation} conversation={conversation} proposals={proposalList} primary={primary} ticket={context.item} />
+      )}
       <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} />
     </aside>
   );

@@ -5,9 +5,11 @@ import { MockBackend } from "../backend/mock";
 import type { Proposal, Run, WorkstreamView } from "../types";
 import { pipHomeHints } from "./footerHints";
 import { HINTS, keyHint } from "./keyMap";
-import { TimelineFilterBar } from "./TimelineFilterBar";
 import { timelineDrafts, timelineRuns } from "./Timeline";
 import { followsEnd, nearBottom, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
+import { usePipHome } from "./pipHomeStore";
+import { useTabs } from "./tabsStore";
+import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
 
 const press = (key: string, mods: { shiftKey?: boolean; metaKey?: boolean } = {}) => ({ key, ...mods });
 
@@ -30,6 +32,13 @@ describe("the timeline's keys", () => {
     expect(timelineKeyAction(press("o"), true, "run")).toEqual({ type: "open" });
     expect(timelineKeyAction(press("Enter"), true, "draft")).toBeNull();
     expect(timelineKeyAction(press("o"), true, "draft")).toBeNull();
+  });
+
+  it("opens the Pip pane's run card on Enter too, since the card has no Enter of its own", () => {
+    expect(timelineKeyAction(press("Enter"), true, "run", false)).toEqual({ type: "open" });
+    expect(timelineKeyAction(press("o"), true, "run", false)).toEqual({ type: "open" });
+    // A draft's card keeps its own keys there too.
+    expect(timelineKeyAction(press("Enter"), true, "draft", false)).toBeNull();
   });
 
   it("leaves a key pressed inside an entry (a button, a field) or with a modifier, and every other key, alone", () => {
@@ -91,6 +100,21 @@ describe("the filter bar", () => {
     for (const label of ["All", "Runs", "Drafts", "Decisions"]) expect(html).toMatch(new RegExp(`>${label} <span data-filter-count`));
     expect(html).toContain(">2<");
   });
+
+  it("names the pane's filter its own, so it never reads as the main timeline's", () => {
+    const html = renderToStaticMarkup(createElement(TimelineFilterBar, { value: "all", onChange: () => {}, label: "Filter" }));
+    expect(html).toContain('aria-label="Filter"');
+    expect(html).not.toContain("Timeline filter");
+  });
+
+  it("presses the scope shown, and says Every workstream with Runs is the Agents screen", () => {
+    const html = renderToStaticMarkup(createElement(TimelineScopeToggle, { value: "workstream", filter: "runs", onChange: () => {} }));
+    expect(html).toContain('aria-label="Timeline scope"');
+    expect(html).toMatch(/aria-pressed="true"[^>]*data-scope="workstream"[^>]*>This workstream</);
+    expect(html).toMatch(/aria-pressed="false"[^>]*data-scope="every"[^>]*title="Runs in every workstream: the Agents screen"[^>]*>Every workstream</);
+    const all = renderToStaticMarkup(createElement(TimelineScopeToggle, { value: "every", filter: "all", onChange: () => {} }));
+    expect(all).not.toContain("Agents screen");
+  });
 });
 
 describe("what a conversation's timeline holds", () => {
@@ -118,6 +142,26 @@ describe("what a conversation's timeline holds", () => {
     expect(timelineDrafts(all, true, new Set())).toEqual(all);
     expect(timelineDrafts(all, false, new Set(["q1"])).map((x) => x.id)).toEqual(["loose", "mine", "waiting"]);
     expect(timelineDrafts(all, false, new Set()).map((x) => x.id)).toEqual(["loose", "waiting"]);
+  });
+});
+
+describe("showing a filter in a scope", () => {
+  it("goes to Pip home's timeline with both, and to the Agents screen for Runs in every workstream", () => {
+    usePipHome.getState().reset();
+    useTabs.getState().setRoute("workspace");
+    showTimeline("drafts", "every");
+    expect(useTabs.getState().route).toBe("pip");
+    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "drafts", timelineScope: "every" });
+    showTimeline("runs");
+    expect(useTabs.getState().route).toBe("agents");
+    // Pip home keeps what it showed, and the scope: leaving Agents by another filter stays in every workstream.
+    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "drafts", timelineScope: "every" });
+    showTimeline("decisions");
+    expect(useTabs.getState().route).toBe("pip");
+    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "decisions", timelineScope: "every" });
+    showTimeline("runs", "workstream");
+    expect(useTabs.getState().route).toBe("pip");
+    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "runs", timelineScope: "workstream" });
   });
 });
 

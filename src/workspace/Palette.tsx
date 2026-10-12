@@ -6,7 +6,7 @@ import { useNeedsYou } from "./useNeeds";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
+import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, timelineCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext, type TimelineState } from "./commands";
 import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
 import { useAgentsEnabled } from "./agentsFlag";
@@ -21,6 +21,8 @@ import { openPull } from "./openPull";
 import { openOnPipHome, togglePip, useWorkstreams } from "./workstreamsStore";
 import { contextEntries, focusedSubject } from "./contextActions";
 import { undoLog } from "./undo";
+import { usePipHome } from "./pipHomeStore";
+import { showTimeline } from "./TimelineFilterBar";
 
 /** Where focus lands when the palette closes and the element that opened it is gone. */
 export const MAIN_ID = "workspace-main";
@@ -213,7 +215,16 @@ export function appActions(): CommandActions {
     openWorkstream: openOnPipHome,
     askPipToPlan: (item) => void askPipToPlan(item),
     startWorkstreamOn: (item) => void useWorkstreams.getState().start(item.item),
+    showTimeline,
   };
+}
+
+/** What the timeline shows: Pip home's filter and scope, or, on the Agents screen, Runs in every workstream. */
+export function timelineState(): TimelineState {
+  const route = useTabs.getState().route;
+  if (route === "agents") return { filter: "runs", scope: "every", shown: true };
+  const { timelineFilter, timelineScope } = usePipHome.getState();
+  return { filter: timelineFilter, scope: timelineScope, shown: route === "pip" };
 }
 
 /**
@@ -341,7 +352,7 @@ export function Palette() {
       ...(agents ? workstreamCommands(workstreams, query, actions) : []),
       // The peeked ticket's own "Start a workstream" is in the commands already.
       ...(agents ? startWorkstreamCommands(all, query, workstreams, actions).filter((c) => !ticket || c.id !== `workstream:start:${itemKey(ticket.item)}`) : []),
-      ...rankCommands([...contextEntries(subject, agents), ...undoEntries(), ...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query),
+      ...rankCommands([...contextEntries(subject, agents), ...undoEntries(), ...commands, ...(agents ? timelineCommands(timelineState(), actions) : []), ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query),
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);

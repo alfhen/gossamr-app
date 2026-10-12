@@ -31,10 +31,11 @@ interface KeyLike {
 /**
  * The one key model (`keyMap.ts`) on the timeline, with the keyboard on an entry's stop (`onStop`; a key pressed on a
  * button or a field inside an entry is that one's): j and k (or the arrows) move to the entry after or before, Enter and
- * o open what it is about. `ownOpen` says the stop opens itself on Enter (a draft's card, a run's row), so only o is left
- * for the timeline there, and a draft's card takes o itself too.
+ * o open what it is about. A draft's card opens itself on Enter and o, and a run's row on Enter, so only o is left for the
+ * timeline there; `runOpensItself` false is a run's card that has no Enter of its own (the Pip pane's), which the timeline
+ * opens on Enter too.
  */
-export function timelineKeyAction(ev: KeyLike, onStop: boolean, kind: string | null): TimelineKeyAction | null {
+export function timelineKeyAction(ev: KeyLike, onStop: boolean, kind: string | null, runOpensItself = true): TimelineKeyAction | null {
   if (!onStop) return null;
   const intent = keyIntent(ev);
   if (intent === "next") return { type: "move", by: 1 };
@@ -42,7 +43,7 @@ export function timelineKeyAction(ev: KeyLike, onStop: boolean, kind: string | n
   if (intent !== "open") return null;
   // A draft's card opens itself on Enter and o; a run's row on Enter.
   if (kind === "draft") return null;
-  if (kind === "run" && ev.key === "Enter") return null;
+  if (kind === "run" && ev.key === "Enter" && runOpensItself) return null;
   return { type: "open" };
 }
 
@@ -64,7 +65,7 @@ interface Root {
 
 /**
  * ArrowUp from an empty input with no draft waiting goes to the newest entry of the timeline, so the keyboard can walk it
- * back with k. False where there is no timeline (the Pip pane).
+ * back with k. False where there is no timeline (General's conversation in the Pip pane).
  */
 export function upToTimeline(ev: KeyLike & { preventDefault(): void }, value: string, root: Root): boolean {
   if (ev.key !== "ArrowUp" || value !== "" || ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return false;

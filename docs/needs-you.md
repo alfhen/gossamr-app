@@ -108,17 +108,26 @@ A workstream's story used to be spread over the conversation, the run strip, the
   - Audit lines are one line each.
   - Lines for things in Needs you have an "In Needs you" pill and open their need with the same `openNeed`.
   - The composer, the Next line, the decision pane and the Needs you list are unchanged. General's timeline holds the runs and drafts in no workstream, plus every draft still waiting, as its old "Drafts waiting" did.
-  - The Pip pane (outside Pip home) keeps its conversation, run strip and "Drafts waiting".
-- **Agents is the Runs filter across every workstream.** The Agents screen has the same filter bar with Runs pressed ("in every workstream"); choosing All, Drafts or Decisions goes to Pip home's timeline with that filter. On Pip home, the Runs filter offers "Runs in every workstream (Agents)". The rail's Agents button still lands on the Agents screen. Its selection, keys (`agentKeys.ts`), settings, banners, lanes and layouts are unchanged.
+  - **The Pip pane** (outside Pip home) shows the same `TimelineView` for the pane's workstream (`pane`), under its header (Manage switch, Hold, what Pip sees) and over its composer, which are unchanged.
+    - Its filter is its own (a group named "Filter", not "Timeline filter"), so filtering the pane leaves Pip home's filter as it was. It has no scope toggle: the pane is one workstream. Its Runs filter links to Agents.
+    - Runs render with the pane's narrow `PipRunCard` (with its Open button), not the Agents row, so the Agents screen's row and its `agent-<id>` id stay the only ones on screen when both show. Enter on the card opens the entry (`timelineKeyAction(…, runOpensItself = false)`).
+    - General's conversation in the pane is unchanged: it follows the screen, lists the runs going ("Your agents", "See all in Agents") and the drafts waiting with the ticket on screen first and the rest folded. On Pip home General is a timeline as before.
+- **Scope: This workstream / Every workstream.** Beside the filter, a toggle (group "Timeline scope") says whose timeline it is. It applies to every filter and lives in `pipHomeStore` (`timelineScope`) beside `timelineFilter`.
+  - **Every workstream** is every open workstream's timeline plus General's, merged by time (`timelineAcross(everyWorkstreamParts(…))` in `src/lib/timeline.ts`, pure). Each part is the same `timeline()` its own workstream shows (its turns, its runs, the drafts its conversation shows, its audit), then General's. Something two parts both show (a draft waiting on a workstream's ticket, which General lists too) is one entry, in the workstream's part. Ties keep the order by kind, then the parts' order.
+  - Each entry carries a small label (`data-timeline-workstream`): its ticket key, the workstream's title without one, or "General". Its accessible name starts with it.
+  - While Every workstream is shown, every open workstream's conversation and audit are loaded. The composer stays the selected workstream's; the workstream intro shows only in This workstream.
+  - **Runs + Every workstream is the Agents screen** (`isAgentsView`, `showTimeline` in `TimelineFilterBar.tsx`): choosing Runs in Every workstream, or Every workstream with Runs, goes to Agents. The Agents screen has the same filter bar with Runs pressed and the scope toggle on Every workstream; choosing All, Drafts or Decisions goes to Pip home's timeline in Every workstream, and This workstream goes to Pip home's Runs for the selected workstream. Pip home keeps the scope it was last shown with. The rail's Agents button still lands on the Agents screen. Its selection, keys (`agentKeys.ts`), settings, banners, lanes and layouts are unchanged.
+  - Asking Pip home to show a card (`focus`) sets the filter back to All and the scope back to This workstream.
+- **⌘K**: "Timeline: All", "Timeline: Runs", "Timeline: Drafts", "Timeline: Decisions", "Timeline: This workstream" and "Timeline: Every workstream" (`timelineCommands` in `commands.ts`, in the Workstreams group, while Agents are on). A filter keeps the scope and a scope keeps the filter, as the buttons do; from anywhere but Pip home or Agents they go to Pip home. The filter and scope on screen are marked current, and Runs in every workstream is marked "Agents".
 - **Keyboard** (`src/workspace/timelineKeys.ts`, the `keyMap.ts` model):
   - j/k (or the arrows) move from entry to entry. An entry's stop is its draft card, its run row, or the entry itself.
   - Enter or o opens the target. A draft card keeps its own keys (a, e, d, s, Enter, o), and a run row opens on Enter.
   - ArrowUp from the empty composer reaches the newest draft waiting, else the newest entry.
   - The footer says "j k move through the timeline · ↵ o open what it is about" while the keyboard is on an entry.
-  - Asking Pip home to show a card (`focus`) sets the filter back to All.
+  - Asking Pip home to show a card (`focus`) sets the filter back to All (and the scope to This workstream).
 
 ## Later steps (separate PRs)
 - **2.** Workstream header shows "Next: …" and "N of M automatic steps left". (The budget PR adds the numbers.)
-- **3.** Done: one timeline per workstream, with Agents as its Runs filter (see above).
+- **3.** Done: one timeline per workstream, with Agents as its Runs filter, a This workstream / Every workstream scope, the timeline in the Pip pane, and ⌘K commands for the filter and scope (see above).
 - **4.** Done: undo for reversible actions, one key model app-wide, and every action in ⌘K (see above).
 - **5.** Notifications per workstream state change ("CA-401 is waiting on you"), not per event, with an optional digest setting.
