@@ -29,12 +29,16 @@ interface PipHomeState {
   focusTarget: PipHomeFocus | null;
   /** The need whose decision is open in the middle column, by its key; null while none is. */
   deciding: string | null;
+  /** Bumped to remount the open decision, so a pane intent set for the need already open is read. */
+  paneRev: number;
   /** The workstreams (by id, "general" for General) whose row in the Needs you list is expanded to every need it holds. */
   expanded: ReadonlySet<string>;
   /** The key press in the Needs you list that waits for Enter. */
   asking: NeedAsking | null;
   /** Opens need `key`'s decision in the middle column, for workstream `workstreamId` (null is General). */
   decide(key: string, workstreamId: string | null): void;
+  /** Remounts the open decision. */
+  redecide(): void;
   /** Closes the decision. */
   closeDecision(): void;
   setExpanded(id: string, on: boolean): void;
@@ -48,7 +52,7 @@ interface PipHomeState {
   reset(): void;
 }
 
-const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, expanded: new Set<string>(), asking: null } as const;
+const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), asking: null } as const;
 
 export const usePipHome = create<PipHomeState>((set) => ({
   ...BLANK,
@@ -58,6 +62,7 @@ export const usePipHome = create<PipHomeState>((set) => ({
   setColumn: (column) => set({ column }),
   focus: (focusTarget) => set({ focusTarget }),
   decide: (key, workstreamId) => set({ deciding: key, selected: workstreamId, asking: null, focusTarget: null }),
+  redecide: () => set((s) => ({ paneRev: s.paneRev + 1 })),
   closeDecision: () => set({ deciding: null, asking: null }),
   setExpanded: (id, on) => set((s) => (s.expanded.has(id) === on ? s : { expanded: new Set(on ? [...s.expanded, id] : [...s.expanded].filter((x) => x !== id)) })),
   ask: (asking) => set({ asking }),

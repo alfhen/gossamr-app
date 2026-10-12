@@ -266,6 +266,8 @@ function useTurnEscape() {
         paletteOpen: usePrefs.getState().paletteOpen,
         popoverOpen: popoverOpen(),
         lightbox: lightboxOpen(),
+        // An open Needs you decision closes first: the next Esc stops Pip.
+        paneOpen: usePipHome.getState().deciding !== null,
         // A confirmation that takes Esc itself, or a field being edited other than Pip's own input.
         handled: ev.defaultPrevented || (field instanceof HTMLElement && !!field.closest("[data-esc-local]")) || (editable && field?.id !== PIP_INPUT_ID),
         running: (useClaude.getState().byTicket[conversation]?.turns ?? []).some((t) => t.status === "running"),
@@ -390,9 +392,8 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
         case "act": {
           const plan = need ? keyPlan(need, action.act) : null;
           if (!need || !plan) return;
-          if (plan.type === "ask") return arm(need, plan);
-          if (plan.edit) setPaneIntent("edit");
-          return openNeed(need);
+          if (plan.type === "ask") return setPaneIntent(null), arm(need, plan);
+          return openNeed(need, { edit: plan.edit });
         }
         case "confirm":
           return confirmArmed();

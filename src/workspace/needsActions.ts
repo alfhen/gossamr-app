@@ -18,10 +18,15 @@ import { useWorkstreams } from "./workstreamsStore";
 export const groupId = (workstreamId: string | null) => workstreamId ?? "general";
 
 /** Opens need `need`'s decision in Pip home's middle column, going to Pip home from any other route. */
-export function openNeed(need: Need) {
+export function openNeed(need: Need, opts: { edit?: boolean } = {}) {
   const tabs = useTabs.getState();
   if (tabs.route !== "pip") tabs.setRoute("pip");
-  usePipHome.getState().decide(need.key, need.workstreamId);
+  const home = usePipHome.getState();
+  // The intent is read by the pane as it mounts; one already open for this need is remounted to read it. Anything but Edit clears it.
+  setPaneIntent(opts.edit ? "edit" : null);
+  const open = home.deciding === need.key;
+  home.decide(need.key, need.workstreamId);
+  if (open && opts.edit) home.redecide();
 }
 
 /**
