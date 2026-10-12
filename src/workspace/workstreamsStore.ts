@@ -111,6 +111,8 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const offRuns = backend.onRunsChanged(() => (void get().refresh(), selectedEvents()));
       stop = () => (offWorkstreams(), offRuns());
       void get().refresh();
+      // Settings' auto-start switches, for the Next line; it stays hidden until they are read.
+      void get().loadGlobals();
     },
 
     dispose() {
