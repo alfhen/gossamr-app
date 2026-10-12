@@ -301,7 +301,8 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
   useLayoutEffect(() => {
     shownBefore.current = { group, lanes, workstreams: wsGroups };
   }, [group, lanes, wsGroups]);
-  useEffect(() => onOrder?.(order), [order, onOrder]);
+  // Published in the commit, not after paint: j and k read this from a native window listener, which a passive effect can trail by one event.
+  useLayoutEffect(() => onOrder?.(order), [order, onOrder]);
   const filtered = isFiltered(filters);
   const shown = (lanes ?? wsGroups ?? []).reduce((n, g) => n + g.runs.length, 0);
   // A run's short name in its workstream shows in the lanes too, as it does in the conversation that uses it.
