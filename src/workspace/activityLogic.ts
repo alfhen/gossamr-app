@@ -396,6 +396,8 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
       return "Pip updated its notes";
     case "budget_reset":
       return `${who} reset the budget`;
+    case "steps_allowed":
+      return `${who} allowed ${e.detail ?? "5"} more automatic steps`;
     default:
       return null;
   }

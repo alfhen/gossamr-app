@@ -511,7 +511,11 @@ export class MockSupervisor {
     const conversation = `ws:${id}`;
     const now = workstreams.get(id)?.workstream ?? ws;
     const decision = decideWake(now, false, this.dailyUsed(), runs.settings().managerTurnsPerDay);
-    if (!workstreams.admitWake(id, fresh, decision, !this.parts.hasWaitingWake(conversation))) return;
+    // Telling Pip about a fix round the rules sent, or about the build that went back for one finishing, is no automatic
+    // step of its own: the rounds are capped already (`FIX_ROUNDS_MAX`).
+    const fixBuilds = fixRoundBuilds(events);
+    const free = fresh.every((f) => !!f.fixRound || fixBuilds.has(f.run));
+    if (!workstreams.admitWake(id, fresh, decision, !this.parts.hasWaitingWake(conversation) && !free)) return;
     this.parts.wake(id, fresh.map(({ key: _, ...f }) => f));
   }
 
@@ -595,6 +599,11 @@ export class MockSupervisor {
     }
     return { notes, marked: null };
   }
+}
+
+/** The builds the rules sent a fix round, by the audit's `autostart` lines (`fix_round after <review>`, on the build), as `fix_round_builds`. */
+function fixRoundBuilds(events: readonly WorkstreamEvent[]): Set<string> {
+  return new Set(events.filter((e) => e.action === "autostart" && !!e.runId && !!e.detail?.startsWith("fix_round after ")).map((e) => e.runId!));
 }
 
 /** The investigation a Triage carried, whose findings its Plan carries on, as `autostart::carried`: checked as the source is. */

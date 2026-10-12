@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { needAfter, type Need } from "../lib/needs";
-import type { Proposal, Run, WorkstreamView } from "../types";
+import { ALLOW_MORE_STEPS, type Proposal, type Run, type WorkstreamView } from "../types";
+import { stepsOf } from "../lib/workstreamHold";
 import { useWorkspace } from "../workspaceStore";
 import { OpenInTerminal, FailureNext } from "./AgentParts";
 import { Box, BoxTitle, Btn } from "./AgentSheet";
@@ -196,6 +197,29 @@ function UnknownBody({ run }: { run: Run }) {
   );
 }
 
+/** The choice a workstream that used its automatic steps asks for: allow more, or Advise, where nothing starts on its own. */
+function BudgetBody({ view }: { view: WorkstreamView }) {
+  const id = view.workstream.id;
+  const { used, limit } = stepsOf(view.budget);
+  const store = useWorkstreams.getState();
+  return (
+    <Box tone="warn" label="Automatic steps">
+      <BoxTitle icon="clock" tone="warn">
+        {used} of {limit} automatic steps used
+      </BoxTitle>
+      <p className="m-0 text-ws-ink2">Pip and the automatic steps are paused; its agents carry on. Allow {ALLOW_MORE_STEPS} more to carry on from here, or switch to Advise, where Pip suggests and you start.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Btn tone="primary" onClick={() => void store.allowMore(id)}>
+          Allow {ALLOW_MORE_STEPS} more
+        </Btn>
+        <Btn tone="plain" onClick={() => void store.setMode(id, "advise")}>
+          Switch to Advise
+        </Btn>
+      </div>
+    </Box>
+  );
+}
+
 /** The three choices on a review that still blocks, and the review draft that folded into it, ready to post as it is. */
 function EscalationBody({ view }: { view: WorkstreamView }) {
   const e = view.escalation;
@@ -295,6 +319,8 @@ function Decision({ need }: { need: Need }) {
       return run ? <QuietBody run={run} /> : null;
     case "unknown":
       return run ? <UnknownBody run={run} /> : null;
+    case "budget":
+      return view ? <BudgetBody view={view} /> : null;
     case "hold":
       return view ? <HeldBanner view={view} onResume={() => controlActions(view.workstream.id).onResume()} /> : null;
     case "escalation":

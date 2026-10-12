@@ -632,6 +632,61 @@ async fn a_wake_is_charged_for_the_turn_the_queue_made_of_it_whatever_it_saw_fir
     assert_eq!(*queue.asked.lock().unwrap(), [false, true, true]);
 }
 
+#[tokio::test]
+async fn a_fix_round_and_its_build_finishing_are_no_automatic_step_and_never_hold_the_budget() {
+    let t = setup().await;
+    let sup = Supervisor::new(CoreFacade::new(t.fx.core.clone()), Arc::new(AgentSettings::default), Arc::new(|_, _| {}), Arc::new(|_| {}));
+    let queue = Arc::new(Racing::default());
+    let agent: Arc<dyn WakeQueue> = queue.clone();
+    let connection = t.workstream().await.connection_id;
+    let round = |run: &Run| {
+        let mut fact = WakeFact::new(run, WakeState::Done);
+        fact.fix_round = Some(FixRoundSent { round: 1, build: "R1".into() });
+        fact
+    };
+    let wake = |facts: Vec<WakeFact>, builds: HashSet<String>| {
+        let (sup, agent, t, connection) = (&sup, &agent, &t, &connection);
+        async move { sup.wake_for(agent, &t.fx.scope, &t.ws, connection, facts, &builds, false, Utc::now()).await }
+    };
+    
+    // A turn of its own, but about a fix round: Pip is told, and nothing is charged.
+    let r1 = t.run("r1", RunKind::Review, RunState::Done, |_| {}).await;
+    wake(vec![round(&r1)], HashSet::new()).await;
+    let ws = t.workstream().await;
+    assert_eq!((ws.spent.auto_turns, ws.spent.wakes), (0, 0));
+    assert_eq!(t.wakes().await, [("r1".to_string(), "done".to_string())], "Pip is told all the same");
+    assert_eq!(*queue.asked.lock().unwrap(), [true]);
+
+    // Even the last step doesn't hold the workstream for it.
+    let mut nearly = t.workstream().await;
+    nearly.spent.auto_turns = 10;
+    t.fx.save_workstream(&nearly).await;
+    let r2 = t.run("r2", RunKind::Review, RunState::Done, |_| {}).await;
+    wake(vec![round(&r2)], HashSet::new()).await;
+    let ws = t.workstream().await;
+    assert_eq!((ws.held_reason, ws.spent.auto_turns), (None, 10));
+
+    // The build that went back for a fix round finishing is free too; another build finishing is a step.
+    let fix_build = t.run("b1", RunKind::Build, RunState::Done, |_| {}).await;
+    let builds = HashSet::from(["b1".to_string()]);
+    wake(vec![WakeFact::new(&fix_build, WakeState::Done)], builds.clone()).await;
+    assert_eq!(t.workstream().await.spent.auto_turns, 10);
+    let other = t.run("b2", RunKind::Build, RunState::Done, |_| {}).await;
+    wake(vec![WakeFact::new(&other, WakeState::Done)], builds.clone()).await;
+    assert_eq!(t.workstream().await.spent.auto_turns, 11, "no fix round was sent it");
+    let mut again = t.workstream().await;
+    again.spent.auto_turns = 10;
+    again.held_reason = None;
+    t.fx.save_workstream(&again).await;
+
+    // Mixed with another fact, it is a step like any other.
+    let r3 = t.run("r3", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let r4 = t.run("r4", RunKind::Review, RunState::Done, |_| {}).await;
+    wake(vec![WakeFact::new(&r3, WakeState::Done), round(&r4)], HashSet::new()).await;
+    let ws = t.workstream().await;
+    assert_eq!((ws.held_reason.as_deref(), ws.spent.auto_turns), (Some(HELD_BUDGET), 11));
+}
+
 /// A wake queue whose wakes all fail with `error`, telling their sink first when `error` says a start failed, as
 /// `AgentService::start_wake` does.
 struct Failing(&'static str);

@@ -142,7 +142,7 @@ const TOLD_ELSEWHERE = new Set(["run_approved", "autostart", "wake", "draft_crea
 const ASKS = new Set(["fix_rounds_exhausted", "held"]);
 
 /** What the person did that counts as deciding something. Opening or closing a workstream and the notes are bookkeeping, not decisions. */
-const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "taken_over", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset"]);
+const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "taken_over", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset", "steps_allowed"]);
 
 const time = (iso: string | undefined) => {
   const t = iso ? Date.parse(iso) : NaN;
@@ -331,7 +331,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   const byDraft = new Map(drafts.map((p) => [p.id, p]));
   const label = (id: string | null) => (id ? (labels.get(id) ?? `run ${id.length <= 12 ? id : id.slice(0, 8)}`) : "a run");
   const lastHeld = [...events].reverse().find((e) => e.action === "held" || e.action === "resumed" || (e.action === "undone" && e.detail === "held"));
-  const holdNeed = needs.find((n) => n.kind === "hold");
+  const holdNeed = needs.find((n) => n.kind === "hold" || n.kind === "budget");
   const escalationNeed = needs.find((n) => n.kind === "escalation");
   let rounds = 0;
   let previous: (TimelineEntry & { order: number }) | null = null;

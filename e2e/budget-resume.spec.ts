@@ -16,7 +16,7 @@ import {
   workstreamEvents,
 } from "./support/app";
 
-// The automatic turn budget shown up front ("N of M automatic steps left", with a default that fits a whole chain), and a
+// The automatic step budget shown up front ("N of M automatic steps left", with a default that fits a whole chain), and a
 // run Gossamr stopped at its limit: it needs the person, counted in Needs you, and only the person's Resume carries it on.
 
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
@@ -56,7 +56,7 @@ test("a managed workstream says how many automatic steps are left up front, from
   await openApp(page, MANAGED);
   await startWorkstream(page, "CA-401");
   const left = pipPane(page).locator("[data-steps-left]");
-  // The whole chain: investigate, triage, plan, build, review and two fix rounds with their reviews is 9 turns, and 2 are spare.
+  // The whole chain: investigate, triage, plan, build, review and verify is 6 steps whatever the fix rounds, which cost none, so 5 are spare.
   await expect(left).toHaveText("11 of 11 automatic steps left");
   await expect(pipPane(page).locator("[data-budget]")).toHaveCount(0);
 

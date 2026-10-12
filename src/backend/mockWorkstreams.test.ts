@@ -456,6 +456,47 @@ describe("holding and managing a mock workstream", () => {
     expect(store.events(ws.id).map((e) => e.action)).toEqual(["opened", "held", "budget_reset", "resumed", "budget_reset"]);
   });
 
+  it("allows 5 more steps: raises both allowances by 5, keeps what was spent, lifts the budget hold, and audits it as the person's", () => {
+    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    const ws = store.open(null, "spent");
+    store.hold(ws.id, "budget", "supervisor");
+    (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === ws.id)!.spent = { autoTurns: 11, wakes: 11, tokens: 5 };
+    expect(store.get(ws.id)?.budget.level).toBe("spent");
+    const after = store.allowMore(ws.id);
+    expect(after).toMatchObject({ heldReason: null, budget: { autoTurns: 16, wakes: 17 }, spent: { autoTurns: 11, wakes: 11, tokens: 5 } });
+    expect(store.get(ws.id)?.budget).toEqual({ autoTurns: { used: 11, limit: 16 }, wakes: { used: 11, limit: 17 }, level: "ok" });
+    expect(store.events(ws.id).map((e) => [e.actor, e.action, e.detail])).toEqual([
+      ["person", "opened", null],
+      ["supervisor", "held", "budget"],
+      ["person", "steps_allowed", "5"],
+      ["person", "resumed", "budget"],
+    ]);
+    // A second time, and any other hold, is refused and changes nothing.
+    expect(() => store.allowMore(ws.id)).toThrow("isn't held for its automatic steps");
+    store.hold(ws.id, "person");
+    expect(() => store.allowMore(ws.id)).toThrow("isn't held for its automatic steps");
+    expect(store.events(ws.id).filter((e) => e.action === "steps_allowed")).toHaveLength(1);
+  });
+
+  it("allows more steps through the backend command, and resumes the workstream", async () => {
+    const backend = new MockBackend();
+    const ws = await backend.workstreamsOpen(CA401);
+    backend.workstreams.hold(ws.id, "budget", "supervisor");
+    const allowed = await backend.workstreamsAllowMore(ws.id);
+    expect(allowed).toMatchObject({ heldReason: null, budget: { autoTurns: 16, wakes: 17 } });
+    expect(await actions(backend, ws.id)).toEqual([["person", "opened"], ["supervisor", "held"], ["person", "steps_allowed"], ["person", "resumed"]]);
+    await expect(backend.workstreamsAllowMore(ws.id)).rejects.toThrow("isn't held for its automatic steps");
+  });
+
+  it("charges a wake that is no automatic step nothing, whatever it would have brought", () => {
+    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    const ws = store.open(null, "free");
+    expect(store.admitWake(ws.id, [{ run: "r1", key: "done" }], { wake: true, hold: "budget" }, false)).toBe(true);
+    expect(store.get(ws.id)?.workstream).toMatchObject({ heldReason: null, spent: { autoTurns: 0, wakes: 0 } });
+    expect(store.admitWake(ws.id, [{ run: "r2", key: "done" }], { wake: true, hold: null }, true)).toBe(true);
+    expect(store.get(ws.id)?.workstream.spent).toMatchObject({ autoTurns: 1, wakes: 1 });
+  });
+
   it("holds every open workstream on Hold all, once", async () => {
     const backend = new MockBackend();
     const a = await backend.workstreamsOpen(CA401);

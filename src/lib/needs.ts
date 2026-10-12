@@ -1,10 +1,10 @@
-import type { Intent, Proposal, Run, WorkstreamView } from "../types";
+import { ALLOW_MORE_STEPS, HELD_BUDGET, type Intent, type Proposal, type Run, type WorkstreamView } from "../types";
 import { quietMinutes, stoppedAtLimit } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { parsePermission, permissionOffer, readAs } from "./permission";
 import { inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
 import { humanDuration } from "./runNames";
-import { shortHeld } from "./workstreamHold";
+import { isHeldByYou, shortHeld, stepsOf } from "./workstreamHold";
 import { STAGE_LABEL, runWorkstream } from "./workstreamStage";
 
 /**
@@ -29,12 +29,13 @@ export type NeedKind =
   | "unknown"
   | "continuation"
   | "hold"
+  | "budget"
   | "draft"
   | "review"
   | "runStart";
 
 /** What the person can do about a need, as the keys and the pane's buttons name it. */
-export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "answer" | "open";
+export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "allowMore" | "advise" | "answer" | "open";
 
 export interface ActionSpec {
   id: NeedActionId;
@@ -237,8 +238,8 @@ const EDITABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "rewrite", "cr
 
 /**
  * Everything waiting on the person across the open workstreams and General, highest rank first: a decision (an escalation,
- * a plan or description to approve), then what is stuck (a permission, a question, a sign-in, a failure, a run stopped at
- * its limit, gone quiet for 30 minutes, unclear or that may have carried on elsewhere, a hold), then drafts to approve (a
+ * a plan or description to approve, a workstream that used its automatic steps), then what is stuck (a permission, a question, a sign-in, a failure, a run stopped at
+ * its limit, gone quiet for 30 minutes, unclear or that may have carried on elsewhere, a hold the system made), then drafts to approve (a
  * Jira draft, a GitHub review, a run to start). Within a group, oldest first.
  *
  * One thing is one need: a run asking a question that has a drafted reply is the question; a review that still blocks
@@ -469,8 +470,28 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
 
   for (const v of open) {
     const held = shortHeld(v.workstream.heldReason, v.workstream.drifted);
-    if (!held) continue;
+    // A hold the person chose is not a need: they know, and the workstream's header says it with a Resume.
+    if (!held || isHeldByYou(v.workstream.heldReason)) continue;
     const id = v.workstream.id;
+    if (v.workstream.heldReason === HELD_BUDGET) {
+      // Running out of automatic steps is a question for the person: more, or no more. In Advise nothing starts on its own, so it is answered.
+      if (v.workstream.mode !== "manage") continue;
+      out.push({
+        key: `budget:${id}`,
+        group: "decide",
+        kind: "budget",
+        ...where(id, v.workstream.itemKey),
+        title: `${v.workstream.itemKey ?? "This workstream"} used its ${stepsOf(v.budget).limit} automatic steps`,
+        why: "Pip and the automatic steps are paused until you decide.",
+        ifYouWait: "Nothing more starts on its own; its agents carry on.",
+        at: heldAt?.[id] ?? v.workstream.createdAt,
+        primary: action("allowMore", `Allow ${ALLOW_MORE_STEPS} more`),
+        secondary: [action("advise", "Switch to Advise")],
+        target: { type: "workstream" },
+        batchable: false,
+      });
+      continue;
+    }
     out.push({
       key: `held:${id}`,
       group: "unblock",

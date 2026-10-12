@@ -151,7 +151,7 @@ describe("nextStep while a run works", () => {
 
   it("mentions the steps left once the budget runs low, and says it is used up once it is", () => {
     expect(text([run("b", "build", "working")], { spent: { autoTurns: 9, wakes: 0 } })).toBe("Next: when R1 (Build) finishes, a review starts automatically (2 of 11 automatic steps left).");
-    expect(next([run("b", "build", "working")], { spent: { autoTurns: 11, wakes: 0 } })).toMatchObject({ kind: "spent", text: "Next: the automatic budget is used up. Your click starts the next step." });
+    expect(next([run("b", "build", "working")], { spent: { autoTurns: 11, wakes: 0 } })).toMatchObject({ kind: "spent", text: "Next: the automatic steps are used up. Your click starts the next step." });
     expect(next([run("b", "build", "working")], { spent: { autoTurns: 0, wakes: 12 } })?.kind).toBe("spent");
   });
 
@@ -225,8 +225,15 @@ describe("nextStep when held", () => {
   it("says it is held with the reason and that Resume continues", () => {
     expect(next([run("b", "build", "working")], { heldReason: HELD_PERSON })).toMatchObject({ kind: "held", text: "Next: held by you. Resume to continue.", need: null });
     expect(text([], { heldReason: HELD_RESTART })).toBe("Next: held after a restart. Resume to continue.");
-    expect(text([], { heldReason: HELD_BUDGET })).toBe("Next: held: budget. Resume to continue.");
+    expect(text([], { heldReason: HELD_BUDGET, mode: "advise" })).toBe("Next: held: budget. Resume to continue.");
     expect(text([], { heldReason: `${TRIPWIRE}repeated_failure` })).toBe("Next: held: the same step failed twice. Resume to continue.");
+  });
+
+  it("points a budget hold at its question in Needs you, and says nothing of a hold the person chose being a need", () => {
+    const result = next([run("b", "build", "working")], { heldReason: HELD_BUDGET, spent: { autoTurns: 11, wakes: 11 } });
+    expect(result).toMatchObject({ kind: "held", text: "Next: the automatic steps are used up. Choose in Needs you: allow 5 more, or switch to Advise." });
+    expect(result?.need).toMatchObject({ key: "budget:ws-1", kind: "budget", title: "CA-401 used its 11 automatic steps" });
+    expect(next([run("b", "build", "working")], { heldReason: HELD_PERSON })?.need).toBeNull();
   });
 
   it("outranks every other line, a waiting need and Advise included", () => {
@@ -237,11 +244,11 @@ describe("nextStep when held", () => {
 
 describe("nextStep when the budget is spent", () => {
   it("says the click starts the next step, with nothing running too", () => {
-    expect(text([run("t", "triage", "done")], { spent: { autoTurns: 11, wakes: 0 } })).toBe("Next: the automatic budget is used up. Your click starts the next step.");
+    expect(text([run("t", "triage", "done")], { spent: { autoTurns: 11, wakes: 0 } })).toBe("Next: the automatic steps are used up. Your click starts the next step.");
   });
 
   it("says nothing of a budget while there is plenty left", () => {
-    expect(text([run("b", "build", "working")])).not.toMatch(/budget|steps left/);
+    expect(text([run("b", "build", "working")])).not.toMatch(/budget|steps left|turns/);
   });
 });
 

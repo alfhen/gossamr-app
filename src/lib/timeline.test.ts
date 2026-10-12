@@ -407,7 +407,7 @@ describe("timeline: the audit", () => {
   });
 
   it("links the hold that still holds and the open escalation to their needs", () => {
-    const held = view({ heldReason: "person" });
+    const held = view({ heldReason: "restart" });
     const all = needs({ workstreams: [held], runs: [], proposals: [], dismissed: new Set(), now: NOW, heldAt: { "ws-1": iso(5) } });
     const hold = all.find((n) => n.kind === "hold")!;
     const escalation: Need = { ...hold, key: "escalation:r2", kind: "escalation", group: "decide" };
@@ -418,6 +418,21 @@ describe("timeline: the audit", () => {
     const undone = timeline({ events: [line("held", 30, { actor: "supervisor" }), line("held", 20), line("undone", 10, { detail: "held" })], needs: [hold] });
     expect(undone.map((e) => e.target)).toEqual([null, null, { type: "need", key: hold.key }]);
     expect(undone[2].needKey).toBe(hold.key);
+  });
+
+  it("links a budget hold's line to its question, and a hold the person chose to no need", () => {
+    const budget = needs({ workstreams: [view({ heldReason: "budget" })], runs: [], proposals: [], dismissed: new Set(), now: NOW })[0];
+    expect(budget.kind).toBe("budget");
+    const list = timeline({ events: [line("held", 5, { actor: "supervisor", detail: "budget" })], needs: [budget] });
+    expect(list.map((e) => e.target)).toEqual([{ type: "need", key: "budget:ws-1" }]);
+    const own = needs({ workstreams: [view({ heldReason: "person" })], runs: [], proposals: [], dismissed: new Set(), now: NOW });
+    expect(own).toEqual([]);
+    expect(timeline({ events: [line("held", 5, { detail: "person" })], needs: own }).map((e) => e.target)).toEqual([null]);
+  });
+
+  it("words the person's Allow 5 more and counts it among their decisions", () => {
+    const [allowed] = timeline({ events: [line("steps_allowed", 5, { detail: "5" })] });
+    expect(allowed).toMatchObject({ text: "You allowed 5 more automatic steps", decision: true });
   });
 
   it("opens the run or the draft a line names, when it is on the timeline", () => {

@@ -380,6 +380,26 @@ describe("the sample supervisor", () => {
     expect(supervisorLines(b, ws).filter((l) => l.startsWith("fix_rounds_exhausted"))).toHaveLength(1);
   });
 
+  it("counts no automatic step for a fix round or for the build that comes back from one, so a whole chain fits the default budget", async () => {
+    const { b, wakes } = world();
+    const ws = b.workstreams.open(CA401).id;
+    const build = await toBuild(b, ws);
+    for (let round = 0; round < 3; round++) {
+      finish(b, build.id);
+      b.runs.surfacePullRequests();
+      finish(b, newest(b, ws, "review")!.id);
+    }
+    expect(b.workstreams.events(ws).filter((e) => e.action === "fix_round_sent")).toHaveLength(2);
+    // Pip was told of all nine runs finishing, but only five were steps: the investigation, triage, plan, the build's
+    // first finish and the review that ran out of rounds. The two reviews that sent a round and the builds that came back are free.
+    expect(wakes).toHaveLength(9);
+    const view = b.workstreams.get(ws)!;
+    expect(view.workstream.spent).toMatchObject({ autoTurns: 5, wakes: 5 });
+    expect(view.workstream.heldReason).toBeNull();
+    expect(view.budget.level).toBe("ok");
+    expect(supervisorLines(b, ws).filter((l) => l.startsWith("budget") || l.startsWith("held"))).toEqual([]);
+  });
+
   it("starts nothing for a rule switched off, for the workstream or for everyone", async () => {
     const off = world();
     const ws = off.b.workstreams.open(CA401).id;

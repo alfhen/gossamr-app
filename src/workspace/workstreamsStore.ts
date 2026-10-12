@@ -52,6 +52,8 @@ interface WorkstreamsState {
   hold(id: string): Promise<boolean>;
   /** Lifts workstream `id`'s hold, whatever held it. False when it couldn't. */
   resume(id: string): Promise<boolean>;
+  /** The person's "Allow 5 more" on workstream `id`, held for its automatic steps: its allowance goes up by 5 and it resumes. False when it couldn't. */
+  allowMore(id: string): Promise<boolean>;
   /** The workstream's own switch for one automatic step; null follows Settings again. False when it couldn't. */
   setRule(id: string, rule: WorkstreamRule, on: boolean | null): Promise<boolean>;
   /** Holds every open workstream and stops Pip's turns in them, and says how many it held. Null when it couldn't. */
@@ -253,6 +255,8 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     },
 
     resume: (id) => ok("Couldn't resume the workstream", (b) => b.workstreamsResume(id)),
+
+    allowMore: (id) => ok("Couldn't allow more steps", (b) => b.workstreamsAllowMore(id)),
 
     setRule: (id, rule, on) => ok("Couldn't change the automatic step", (b) => b.workstreamsSetRule(id, rule, on)),
 

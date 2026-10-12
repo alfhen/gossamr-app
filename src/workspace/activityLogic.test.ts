@@ -137,6 +137,11 @@ describe("the Pip & agents chip", () => {
     expect(toWorkstreamEntries({}, [ws])).toEqual([]);
   });
 
+  it("words the person's Allow 5 more", () => {
+    const allowed = ev(9, "person", "steps_allowed", null, "5");
+    expect(toWorkstreamEntries({ w1: [allowed] }, [ws]).map((e) => e.text)).toEqual(["You allowed 5 more automatic steps"]);
+  });
+
   it("is the workstreams' audit alone, newest first, and nothing of it shows under the other chips", () => {
     const entries = toWorkstreamEntries(events, [ws], () => ({ connectionId: "c", externalId: "A-1", key: "A-1" }));
     const input = { source: "all" as const, container: null, jira: [entry("j1", "2026-09-30T10:30:00Z")], more: false, code: [], agents: [], workstream: entries, containerOf: () => null };

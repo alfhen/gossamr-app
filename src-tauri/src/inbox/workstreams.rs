@@ -12,7 +12,7 @@ use super::Core;
 use crate::auth::Scope;
 use crate::db::Db;
 use crate::agent::supervisor::{decide_wake, level_word, WakeFact, TRIP_BASIS};
-use crate::domain::workstream::{BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, budget_level, budget_limits, review_blocking, run_labels, stage, tripwire, valid_hold_reason, BudgetLevel, Mode, Rule, Stage, WorkstreamBasis, HELD_ALL, HELD_BUDGET, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE};
+use crate::domain::workstream::{ALLOW_MORE_STEPS, BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, budget_level, budget_limits, review_blocking, run_labels, stage, tripwire, valid_hold_reason, BudgetLevel, Mode, Rule, Stage, WorkstreamBasis, HELD_ALL, HELD_BUDGET, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE};
 use crate::domain::{has_markers, Actor, Category, Intent, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunQuery, RunState, StateKind, WorkItem, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
@@ -665,6 +665,29 @@ impl Core {
             if rebase && ws.basis.is_some() {
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_captured", at))?;
             }
+            Ok(ws)
+        })
+        .await
+    }
+
+    /// The person's "Allow 5 more" on a workstream held for its budget: raises its automatic turns and wakes allowance by
+    /// `ALLOW_MORE_STEPS` and lifts the hold, keeping what was spent. Records `steps_allowed` and `resumed`, both the
+    /// person's. Refused unless the workstream is held for its budget, so a stale choice changes nothing.
+    pub async fn allow_more_steps(&self, scope: &Scope, id: &str) -> Result<Workstream> {
+        let connection_id = Connection::jira_id(scope);
+        let at = Utc::now();
+        self.with_db_for(scope, |db| {
+            let mut ws = open(db, &connection_id, id)?;
+            if ws.held_reason.as_deref() != Some(HELD_BUDGET) {
+                return Err(refuse("this workstream isn't held for its automatic steps"));
+            }
+            let (turns, wakes) = budget_limits(&ws);
+            ws.budget.auto_turns = Some(turns + ALLOW_MORE_STEPS);
+            ws.budget.wakes = Some(wakes + ALLOW_MORE_STEPS);
+            ws.held_reason = None;
+            db.save_workstream(&ws)?;
+            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "steps_allowed", at).detail(ALLOW_MORE_STEPS.to_string()))?;
+            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "resumed", at).detail(HELD_BUDGET))?;
             Ok(ws)
         })
         .await
@@ -1610,6 +1633,32 @@ mod tests {
         fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
         assert_eq!(fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap().spent.wakes, 3);
         assert!(!actions(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap())[4..].iter().any(|(_, a)| *a == "budget_reset"));
+    }
+
+    #[tokio::test]
+    async fn allowing_more_steps_raises_the_allowance_keeps_what_was_spent_and_lifts_only_a_budget_hold() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, None, Some("Budgeted".into())).await.unwrap();
+        let mut spent = ws.clone();
+        spent.spent.auto_turns = 11;
+        spent.spent.wakes = 11;
+        fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&spent)).await.unwrap();
+
+        // Not held for its budget: refused, nothing changes.
+        assert!(fx.core.allow_more_steps(&fx.scope, &ws.id).await.is_err());
+        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
+        assert!(fx.core.allow_more_steps(&fx.scope, &ws.id).await.is_err(), "the person's own hold is theirs to resume");
+        fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+
+        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
+        let after = fx.core.allow_more_steps(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!((after.held_reason.clone(), after.budget.auto_turns, after.budget.wakes, after.spent.auto_turns, after.spent.wakes), (None, Some(16), Some(17), 11, 11));
+        let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+        assert_eq!(view.budget, BudgetView { auto_turns: BudgetCount { used: 11, limit: 16 }, wakes: BudgetCount { used: 11, limit: 17 }, level: BudgetLevel::Ok });
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(actions(&events)[events.len() - 3..], [(Actor::Supervisor, "held"), (Actor::Person, "steps_allowed"), (Actor::Person, "resumed")]);
+        assert_eq!(events.iter().find(|e| e.action == "steps_allowed").and_then(|e| e.detail.as_deref()), Some("5"));
+        assert!(!events.iter().any(|e| e.action == "budget_reset"), "nothing was reset");
     }
 
     #[tokio::test]

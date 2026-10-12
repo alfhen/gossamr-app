@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { HELD_BUDGET, HELD_PERSON, TRIPWIRE } from "../types";
+import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { BATCHABLE, GROUP_RANK, byRank, escalationReason, needAfter, needGroups, needs, needsIn, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
@@ -87,7 +87,7 @@ describe("needs: every kind", () => {
   it("finds each kind of wait in its group, with the words that say it", () => {
     const list = needs(
       input({
-        workstreams: [ws1, view("ws-2", "CA-402", { heldReason: HELD_PERSON, createdAt: iso(50) }), { ...escalated(), workstream: { ...escalated().workstream, id: "ws-3", itemKey: "CA-403", title: "CA-403 Third" } }],
+        workstreams: [ws1, view("ws-2", "CA-402", { heldReason: HELD_RESTART, createdAt: iso(50) }), { ...escalated(), workstream: { ...escalated().workstream, id: "ws-3", itemKey: "CA-403", title: "CA-403 Third" } }, view("ws-4", "CA-404", { heldReason: HELD_BUDGET })],
         proposals: [
           draft("d-comment", comment("CA-401"), 20),
           draft("d-start", startRun("CA-401", "investigate", "ws-1"), 25),
@@ -113,6 +113,7 @@ describe("needs: every kind", () => {
       plan: "decide",
       description: "decide",
       escalation: "decide",
+      budget: "decide",
       question: "unblock",
       permission: "unblock",
       failure: "unblock",
@@ -126,11 +127,12 @@ describe("needs: every kind", () => {
       review: "approve",
       runStart: "approve",
     });
-    expect(list).toHaveLength(15);
+    expect(list).toHaveLength(16);
     expect(by("plan")[0].target).toEqual({ type: "draft", id: "d-plan" });
     expect(by("description")[0].title).toBe("Draft rewrite");
     expect(by("escalation")[0].title).toBe("Review still blocks after 2 fix rounds");
-    expect(by("hold")[0]).toMatchObject({ title: "Held by you", workstreamId: "ws-2", target: { type: "workstream" } });
+    expect(by("hold")[0]).toMatchObject({ title: "Held after a restart", workstreamId: "ws-2", target: { type: "workstream" } });
+    expect(by("budget")[0]).toMatchObject({ workstreamId: "ws-4", target: { type: "workstream" } });
     expect(by("question")[0]).toMatchObject({ title: "R1 asks a question", target: { type: "run", id: "r-q" }, runId: "r-q" });
     expect(by("permission")[0].title).toBe("R2 asks to run a command");
     expect(by("failure")[0].title).toBe("R3 failed");
@@ -233,7 +235,7 @@ describe("needs: rank", () => {
   it("is oldest first within a group, then by key", () => {
     const list = needs(
       input({
-        workstreams: [view("ws-1", "CA-401", { heldReason: HELD_PERSON })],
+        workstreams: [view("ws-1", "CA-401", { heldReason: HELD_RESTART })],
         proposals: [draft("new", comment("CA-401"), 2), draft("old", comment("CA-401"), 40), draft("same-b", comment("CA-401"), 10), draft("same-a", comment("CA-401"), 10)],
         runs: [run("r1", "investigate", "failed", { lastProgressAt: iso(10) }), run("r2", "investigate", "needsAnswer", { lastProgressAt: iso(3) })],
         heldAt: { "ws-1": iso(5) },
@@ -244,10 +246,64 @@ describe("needs: rank", () => {
   });
 
   it("counts a hold from when it was last held, and from its workstream's opening when that isn't known", () => {
-    const held = view("ws-1", "CA-401", { heldReason: HELD_PERSON, createdAt: iso(300) });
+    const held = view("ws-1", "CA-401", { heldReason: HELD_RESTART, createdAt: iso(300) });
     const run1 = run("r1", "investigate", "needsAnswer", { lastProgressAt: iso(100) });
     expect(kinds(needs(input({ workstreams: [held], runs: [run1], heldAt: { "ws-1": iso(5) } })))).toEqual(["question", "hold"]);
     expect(kinds(needs(input({ workstreams: [held], runs: [run1] })))).toEqual(["hold", "question"]);
+  });
+});
+
+describe("needs: holds", () => {
+  const held = (reason: string, over: { mode?: "manage" | "advise" } = {}): WorkstreamView => {
+    const v = view("ws-1", "CA-401", { heldReason: reason });
+    return { ...v, workstream: { ...v.workstream, mode: over.mode ?? "manage" } };
+  };
+
+  it("makes no need of a hold the person chose, Hold or Hold all, and counts nothing for it", () => {
+    for (const reason of [HELD_PERSON, HELD_ALL]) expect(needs(input({ workstreams: [held(reason)] })), reason).toEqual([]);
+    // Other needs in the workstream are untouched by it.
+    const list = needs(input({ workstreams: [held(HELD_PERSON)], runs: [run("r1", "investigate", "failed")] }));
+    expect(kinds(list)).toEqual(["failure"]);
+  });
+
+  it("keeps every hold the system makes a need: a restart, a tripwire, the daily cap and the quota", () => {
+    for (const reason of [HELD_RESTART, HELD_DAILY, HELD_QUOTA, `${TRIPWIRE}basis_drift`, `${TRIPWIRE}marker`, `${TRIPWIRE}repeated_failure`, `${TRIPWIRE}chain_refused`]) {
+      expect(kinds(needs(input({ workstreams: [held(reason)] }))), reason).toEqual(["hold"]);
+    }
+    expect(needs(input({ workstreams: [held(HELD_RESTART)] }))[0]).toMatchObject({ key: "held:ws-1", group: "unblock", title: "Held after a restart", primary: { id: "resume" } });
+  });
+
+  it("asks a Decide question when the automatic steps run out, with the two choices", () => {
+    const list = needs(input({ workstreams: [{ ...held(HELD_BUDGET), budget: { autoTurns: { used: 11, limit: 11 }, wakes: { used: 11, limit: 12 }, level: "spent" } }] }));
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      key: "budget:ws-1",
+      group: "decide",
+      kind: "budget",
+      workstreamId: "ws-1",
+      ticketKey: "CA-401",
+      title: "CA-401 used its 11 automatic steps",
+      why: "Pip and the automatic steps are paused until you decide.",
+      primary: { id: "allowMore", label: "Allow 5 more" },
+      secondary: [{ id: "advise", label: "Switch to Advise" }],
+      target: { type: "workstream" },
+      batchable: false,
+    });
+    expect(list[0].ifYouWait).toMatch(/\.$/);
+  });
+
+  it("names the count the person reads: whichever of turns and wakes is nearer its limit", () => {
+    const wakes = needs(input({ workstreams: [{ ...held(HELD_BUDGET), budget: { autoTurns: { used: 3, limit: 11 }, wakes: { used: 12, limit: 12 }, level: "spent" } }] }));
+    expect(wakes[0].title).toBe("CA-401 used its 12 automatic steps");
+  });
+
+  it("is answered once the workstream is in Advise, where nothing starts on its own", () => {
+    expect(needs(input({ workstreams: [held(HELD_BUDGET, { mode: "advise" })] }))).toEqual([]);
+  });
+
+  it("ranks the question with the decisions, ahead of what is stuck", () => {
+    const list = needs(input({ workstreams: [held(HELD_BUDGET)], runs: [run("r1", "investigate", "failed")] }));
+    expect(kinds(list)).toEqual(["budget", "failure"]);
   });
 });
 
@@ -419,9 +475,9 @@ describe("needs: where a need is", () => {
     expect(needs(input({ workstreams: [ws], runs, proposals: [fromRun("c1", "r1", 5), fromRun("c2", "r2", 4), fromRun("c4", "gone", 3)] })).map((n) => n.title)).toEqual(["R1 review · comment", "R2 plan · comment", "Draft comment"]);
   });
 
-  it("labels budget and tripwire holds the short way", () => {
+  it("labels a tripwire hold the short way, and a used-up budget as the question it is", () => {
     const list = needs(input({ workstreams: [view("ws-1", "CA-401", { heldReason: HELD_BUDGET }), view("ws-2", null, { heldReason: `${TRIPWIRE}repeated_failure` })] }));
-    expect(list.map((n) => n.title).sort()).toEqual(["Held: budget", "Held: the same step failed twice"]);
+    expect(list.map((n) => n.title).sort()).toEqual(["CA-401 used its 6 automatic steps", "Held: the same step failed twice"]);
   });
 
   it("words an escalation the way the list says it", () => {

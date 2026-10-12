@@ -50,7 +50,10 @@ export const contextDeps: ContextDeps = {
       case "allow":
       case "retry":
       case "resume":
+      case "allowMore":
         return go(plan("approve"));
+      case "advise":
+        return need.workstreamId ? contextDeps.advise(need.workstreamId) : openNeed(need);
       case "deny":
       case "dismiss":
         return go(plan("dismiss"));

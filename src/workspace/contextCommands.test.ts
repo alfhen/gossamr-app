@@ -82,6 +82,19 @@ describe("the palette's entries for the focused item", () => {
     expect(labels(entries)).toEqual(["Resume", "Open in workstream", "Switch CA-401 to Advise"]);
   });
 
+  it("a used-up budget offers Allow 5 more and Switch to Advise once, each calling the need's own button", () => {
+    const budget = need({ key: "budget:ws-1", kind: "budget", group: "decide", target: { type: "workstream" }, primary: spec("allowMore", "Allow 5 more"), secondary: [spec("advise", "Switch to Advise")] });
+    const d = deps();
+    const entries = contextCommands({ type: "need", key: budget.key }, data({ needs: [budget], workstreams: [view({ heldReason: "budget" })] }), d);
+    // The workstream's own Switch to Advise would say the same thing twice.
+    expect(labels(entries)).toEqual(["Allow 5 more", "Switch to Advise", "Open in workstream", "Resume the workstream on CA-401"]);
+    entries[0].run();
+    entries[1].run();
+    expect(d.needAct).toHaveBeenNthCalledWith(1, budget, "allowMore");
+    expect(d.needAct).toHaveBeenNthCalledWith(2, budget, "advise");
+    expect(labels(rankCommands(entries, "allow more"))[0]).toBe("Allow 5 more");
+  });
+
   it("a need in General says where its link goes; one in a workstream never lists a second open entry", () => {
     const general = need({ key: "run:r-9", workstreamId: null, kind: "failure", runId: "r-9", target: { type: "run", id: "r-9" }, primary: spec("retry", "Retry") });
     expect(labels(contextCommands({ type: "need", key: general.key }, data({ needs: [general], workstreams: [] }), deps()))).toEqual(["Retry", "Open the run"]);

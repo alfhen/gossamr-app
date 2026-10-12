@@ -862,6 +862,8 @@ export type Tripwire = (typeof TRIPWIRES)[number];
 /** Automatic Pip turns since the person last wrote, and wakes in all, that a workstream may have unless its budget says otherwise. */
 export const AUTO_TURNS_DEFAULT = 11;
 export const WAKES_DEFAULT = 12;
+/** What the person's "Allow 5 more" adds to a workstream's allowance of automatic steps. */
+export const ALLOW_MORE_STEPS = 5;
 
 /** Where a workstream is, derived from its runs and never stored. */
 export type WorkstreamStage = "intake" | "investigate" | "triage" | "plan" | "build" | "review" | "verify" | "done";

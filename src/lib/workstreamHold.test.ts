@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AUTO_TURNS_DEFAULT, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
 import type { BudgetView, Workstream } from "../types";
 import { FIX_ROUNDS_MAX } from "../backend/mockSupervisor";
-import { TURN_HELP, budgetLevel, budgetView, heldBanner, heldText, ruleText, stepsLeftText, tripwireResumeText } from "./workstreamHold";
+import { STEP_HELP, budgetLevel, budgetView, heldBanner, heldText, ruleText, stepsLeftText, tripwireResumeText } from "./workstreamHold";
 
 describe("heldText", () => {
   it("says nothing for a workstream that isn't held", () => {
@@ -14,13 +14,13 @@ describe("heldText", () => {
   it("names every hold reason", () => {
     expect(heldText(HELD_RESTART)).toBe("Held after a restart");
     expect(heldText(HELD_PERSON)).toBe("Held by you");
-    expect(heldText(HELD_ALL)).toBe("Held: Hold all");
-    expect(heldText(HELD_BUDGET)).toBe("Held: automatic turns used up. Resume to give it 11 more");
+    expect(heldText(HELD_ALL)).toBe("Held by you (Hold all)");
+    expect(heldText(HELD_BUDGET)).toBe("Held: automatic steps used up. Resume to give it 11 more");
     const budget = (autoTurns: [number, number], wakes: [number, number]): BudgetView => ({ autoTurns: { used: autoTurns[0], limit: autoTurns[1] }, wakes: { used: wakes[0], limit: wakes[1] }, level: "spent" });
-    // A message to Pip starts the automatic turns again, so it is offered while they are what ran out, never for the wakes.
-    expect(heldText(HELD_BUDGET, null, budget([3, 3], [3, 12]))).toBe("Held: automatic turns used up. Resume, or write to Pip, to give it 3 more");
-    expect(heldText(HELD_BUDGET, null, budget([2, 6], [12, 12]))).toBe("Held: wakes used up. Resume to give it 12 more");
-    expect(heldText(HELD_BUDGET, null, budget([6, 6], [12, 12]))).toBe("Held: wakes used up. Resume to give it 12 more");
+    // One unit, whichever counter is nearer its limit; neither is named.
+    expect(heldText(HELD_BUDGET, null, budget([3, 3], [3, 12]))).toBe("Held: automatic steps used up. Resume to give it 3 more");
+    expect(heldText(HELD_BUDGET, null, budget([2, 6], [12, 12]))).toBe("Held: automatic steps used up. Resume to give it 12 more");
+    expect(heldText(HELD_BUDGET, null, budget([6, 6], [12, 12]))).toBe("Held: automatic steps used up. Resume to give it 6 more");
     expect(heldText(HELD_DAILY)).toBe("Held: today's Pip turns are used up");
     expect(heldText(HELD_QUOTA)).toBe("Paused: quota");
   });
@@ -64,13 +64,14 @@ describe("heldText", () => {
     // Any other hold says only why; the budget's says how many turns resuming gives.
     expect(tripwireResumeText(HELD_PERSON, null, "manage")).toBeNull();
     expect(heldBanner({ heldReason: HELD_PERSON })).toBe("Held by you");
-    expect(heldBanner({ heldReason: HELD_BUDGET })).toBe("Held: automatic turns used up. Resume to give it 11 more");
+    expect(heldBanner({ heldReason: HELD_BUDGET })).toBe("Held: automatic steps used up. Resume to give it 11 more");
     // Manage switched back on while a tripwire holds it: Resume turns the automatic steps on, whatever resumeMode says.
     expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: null, mode: "manage" })).toBe("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
     expect(tripwireResumeText(`${TRIPWIRE}marker`, null, "manage")).toBe("Automatic steps are paused. Resume turns them back on.");
     expect(tripwireResumeText(`${TRIPWIRE}marker`, null, "advise")).toBe("Resume only lifts the hold; Manage stays off.");
     expect(heldBanner({ heldReason: null })).toBeNull();
-    expect(TURN_HELP).toMatch(/^An automatic turn is each time Pip acts without you asking/);
+    expect(STEP_HELP).toMatch(/^An automatic step is each time Pip acts without you asking/);
+    expect(STEP_HELP).toContain("Automatic fix rounds don't count");
   });
 
   it("names every rule", () => {
@@ -124,11 +125,12 @@ describe("budgetLevel", () => {
     expect(budgetLevel(own(5))).toBe("amber");
   });
 
-  it("fits a whole automatic chain with two turns to spare", () => {
-    // investigate, triage, plan, build, review, then fix round and review up to FIX_ROUNDS_MAX times; each finished run is a turn.
-    const chain = 5 + 2 * FIX_ROUNDS_MAX;
-    expect(chain).toBe(9);
-    expect(AUTO_TURNS_DEFAULT).toBe(chain + 2);
+  it("fits a whole automatic chain with steps to spare, whatever the fix rounds", () => {
+    // investigate, triage, plan, build, the review that passes and verify; each finished run is a step. A fix round (the
+    // review that sends it and the build that comes back) costs none, so FIX_ROUNDS_MAX changes nothing here.
+    const chain = 6;
+    expect(FIX_ROUNDS_MAX).toBe(2);
+    expect(AUTO_TURNS_DEFAULT).toBe(chain + 5);
   });
 });
 

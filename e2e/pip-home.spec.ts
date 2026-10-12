@@ -3,6 +3,7 @@ import {
   advanceRuns,
   askPip,
   dismissAgentSafety,
+  holdBySystem,
   holdPip,
   homeSettled,
   inlineStart,
@@ -236,7 +237,7 @@ test("Needs you: Pip's investigation draft waits in the list and on its row, ope
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
 });
 
-test("Needs you: holding the workstream adds 'Held by you', its need opens Resume, and Resume clears it", async ({ page }) => {
+test("Needs you: a hold the person chose is no need, so the header says 'Held by you' with Resume and nothing is counted; a restart's hold is a need that opens Resume", async ({ page }) => {
   await openApp(page, MANAGED);
   await agentsSettled(page, true);
   await homeWorkstream(page);
@@ -245,11 +246,21 @@ test("Needs you: holding the workstream adds 'Held by you', its need opens Resum
   await expect(held).toHaveCount(0);
 
   await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-  await expect(held).toHaveCount(1);
-  await expect(held).toContainText("Held by you");
+  const banner = pipHome(page).locator("[data-held-banner]");
+  await expect(banner).toContainText("Held by you");
+  await expect(banner).toContainText("You chose this, so it is not in Needs you.");
+  await expect(held).toHaveCount(0);
   await expect(row.locator("[data-status]")).toHaveText("· Held by you");
-  await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
+  await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);
+  await expect(needsYouTray(page)).toContainText("Nothing needs you.");
+  await banner.getByRole("button", { name: "Resume" }).click();
+  await expect(banner).toHaveCount(0);
 
+  // A hold the system makes is a need, with Resume as its decision.
+  await holdBySystem(page, "CA-401", "restart");
+  await expect(held).toHaveCount(1);
+  await expect(held).toContainText("Held after a restart");
+  await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
   await workstreamRow(page, "General").click();
   await held.click();
   const resume = needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
@@ -265,10 +276,10 @@ test("Needs you from the board: the rail's Pip home popover lists the same rows 
   await homeWorkstream(page);
   await askPip(page, "investigate this");
   await settled(page);
-  await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+  await holdBySystem(page, "CA-401", "restart");
   const onHome = await needsYouTray(page).locator("[data-needs-you-group]").allTextContents();
   expect(onHome).toHaveLength(1);
-  expect(onHome[0]).toContain("Held by you");
+  expect(onHome[0]).toContain("Held after a restart");
   const total = Number(await needsYouCount(page).innerText());
   expect(total).toBe(2);
 

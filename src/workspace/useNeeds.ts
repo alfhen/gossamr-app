@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { needs as buildNeeds, type Need } from "../lib/needs";
+import { isHeldByYou } from "../lib/workstreamHold";
 import { useWorkspace } from "../workspaceStore";
 import { lastHeldAt } from "./pipHomeLogic";
 import { useRuns } from "./runsStore";
@@ -20,7 +21,7 @@ function useHeldTimes(): Record<string, string> {
   const backend = useWorkstreams((s) => s.backend);
   const holds = useWorkstreams((s) =>
     s.list
-      .filter((v) => v.workstream.closedAt === null && v.workstream.heldReason)
+      .filter((v) => v.workstream.closedAt === null && v.workstream.heldReason && !isHeldByYou(v.workstream.heldReason))
       .map((v) => `${v.workstream.id}\n${v.workstream.heldReason}`)
       .join("\t"),
   );

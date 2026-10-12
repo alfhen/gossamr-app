@@ -558,6 +558,10 @@ export class JiraBackend implements Backend {
     return invoke<Workstream>("workstreams_resume", { id });
   }
 
+  workstreamsAllowMore(id: string) {
+    return invoke<Workstream>("workstreams_allow_more", { id });
+  }
+
   workstreamsUndo(id: string, undo: WorkstreamUndo) {
     return invoke<Workstream>("workstreams_undo", { id, undo });
   }

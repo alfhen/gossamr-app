@@ -360,6 +360,7 @@ pub async fn run_tools_are_read_only(h: &Harness) -> std::result::Result<(), Str
         "approve_run",
         "hold_workstream",
         "resume_workstream",
+        "allow_more_steps",
         "set_workstream_mode",
         "send_fix_round",
         "launch_waiting",
@@ -843,7 +844,7 @@ pub async fn workstream_tools_change_only_notes(h: &Harness) -> std::result::Res
     if let Some(missing) = super::workstream::NAMES.iter().find(|n| !names.contains(n)) {
         return Err(format!("{missing} isn't offered"));
     }
-    let forbidden = ["start_run", "stop_run", "answer_run", "attach_run", "rm_run", "launch_run", "retry_run", "hold_workstream", "resume_workstream", "set_workstream_mode", "set_workstream_rule", "hold_all", "close_workstream", "open_workstream"];
+    let forbidden = ["start_run", "stop_run", "answer_run", "attach_run", "rm_run", "launch_run", "retry_run", "hold_workstream", "resume_workstream", "allow_more_steps", "set_workstream_mode", "set_workstream_rule", "hold_all", "close_workstream", "open_workstream"];
     let writes = |n: &&&str| forbidden.contains(n) || n.starts_with("approve") || n.starts_with("transition") || n.starts_with("write") || n.starts_with("apply");
     if let Some(name) = names.iter().find(writes) {
         return Err(format!("{name} is offered"));

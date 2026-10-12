@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { docFromText } from "../lib/docs";
 import { needGroups, needs, type Need, type NeedsInput } from "../lib/needs";
-import { HELD_PERSON } from "../types";
+import { HELD_BUDGET, HELD_PERSON, HELD_RESTART } from "../types";
 import type { Intent, Proposal, Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Launcher } from "./PipExtras";
@@ -68,7 +68,7 @@ const rewrite = (key: string): Intent => ({ type: "rewrite", item: ref(key), tit
 const startRun = (key: string): Intent => ({ type: "startRun", connectionId: "mock", item: ref(key), spec: { ...base.spec, kind: "investigate", workstream: "ws-1" } }) as unknown as Intent;
 
 const ws1 = view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-perm", "r-q", "r-fail"] });
-const ws2 = view("ws-2", "CA-402", "CA-402 Cart merge", { heldReason: HELD_PERSON });
+const ws2 = view("ws-2", "CA-402", "CA-402 Cart merge", { heldReason: HELD_RESTART });
 
 const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({
   workstreams: [ws1, ws2],
@@ -134,7 +134,7 @@ describe("the Needs you list", () => {
     expect([...html.matchAll(/data-needs-you-head[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["Cart merge", "Welcome flow refresh", "General"]);
     expect([...html.matchAll(/data-needs-you-chip="(\w+)"/g)].map((m) => m[1])).toEqual(["unblock", "unblock", "approve"]);
     expect(html).toContain("R1 wants to run `git push origin ca-401`.");
-    expect(html).toContain("Held by you.");
+    expect(html).toContain("Held after a restart.");
     // The age of each top need.
     expect([...html.matchAll(/data-needs-you-age[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["10h", "14m", "10m"]);
   });
@@ -291,6 +291,20 @@ describe("what the list's keys do", () => {
     expect(keyPlan(need("held:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
   });
 
+  it("allows 5 more automatic steps only after Enter, as it reaches the workstream's allowance", () => {
+    const list = needs({ ...input(), workstreams: [{ ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { heldReason: HELD_BUDGET }), budget: { autoTurns: { used: 11, limit: 11 }, wakes: { used: 0, limit: 12 }, level: "spent" } }], runs: [], proposals: [] });
+    const plan = keyPlan(list[0], "approve");
+    expect(plan).toMatchObject({ type: "ask", text: "allow 5 more automatic steps" });
+    expect(keyPlan(list[0], "dismiss")).toBeNull();
+    const was = useWorkstreams.getState().allowMore;
+    const allowMore = vi.fn(async () => true);
+    useWorkstreams.setState({ allowMore });
+    if (plan?.type !== "ask") throw new Error("it asks for Enter first");
+    plan.run();
+    expect(allowMore).toHaveBeenCalledWith("ws-1");
+    useWorkstreams.setState({ allowMore: was });
+  });
+
   it("opens the decision where there is something to read first: a rewrite's diff, a question, a run to start", () => {
     expect(keyPlan(need("draft:rw"), "approve")).toEqual({ type: "open", edit: false });
     expect(keyPlan(need("run:r-q"), "approve")).toEqual({ type: "open", edit: false });
@@ -369,6 +383,24 @@ describe("the decision pane", () => {
     const card = pane(list, "draft:c1");
     expect(card).toContain('data-draft="c1"');
     expect(card).toContain("Nothing is written to Jira until you approve it.");
+  });
+
+  it("decides a used-up budget with Allow 5 more and Switch to Advise, and shows no need for a hold the person chose", () => {
+    const spent: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { heldReason: HELD_BUDGET }), budget: { autoTurns: { used: 11, limit: 11 }, wakes: { used: 11, limit: 12 }, level: "spent" } };
+    const list = set({ workstreams: [spent], runs: [], proposals: [] });
+    const html = pane(list, "budget:ws-1");
+    expect(html).toContain("CA-401 used its 11 automatic steps");
+    expect(html).toContain("Pip and the automatic steps are paused until you decide.");
+    expect(html).toContain(">Allow 5 more<");
+    expect(html).toContain(">Switch to Advise<");
+    expect(html).toContain('data-needs-you-chip="decide"');
+    expect(html).toContain("11 of 11 automatic steps used");
+    expect(html).not.toMatch(/turns|wakes/);
+    // The person's own hold and Hold all are no need, and so in no count.
+    for (const reason of [HELD_PERSON, "hold_all"]) {
+      const own = set({ workstreams: [view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { heldReason: reason })], runs: [], proposals: [] });
+      expect(own).toEqual([]);
+    }
   });
 
   it("decides an escalation with its three choices and the review draft that folded into it, and a plan with its approval note", () => {

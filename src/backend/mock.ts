@@ -551,6 +551,11 @@ export class MockBackend implements Backend {
     return this.workstreams.resume(id);
   }
 
+  /** The person's "Allow 5 more", as `workstreams_allow_more`: the allowance goes up by 5 and the workstream resumes. */
+  async workstreamsAllowMore(id: string) {
+    return this.workstreams.allowMore(id);
+  }
+
   async workstreamsUndo(id: string, undo: WorkstreamUndo) {
     return this.workstreams.undo(id, undo);
   }

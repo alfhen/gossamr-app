@@ -40,7 +40,7 @@ describe("opening a need with an intent", () => {
 
 describe("hold times Pip is told", () => {
   it("are the ones the list last read", () => {
-    const held = { workstream: { id: "ws-1", closedAt: null, heldReason: "person", createdAt: "2026-01-01T00:00:00Z" }, stage: "intake", runs: [], labels: [] };
+    const held = { workstream: { id: "ws-1", closedAt: null, heldReason: "restart", createdAt: "2026-01-01T00:00:00Z" }, stage: "intake", runs: [], labels: [] };
     useWorkstreams.setState({ list: [held] as never });
     const before = currentNeeds().find((n) => n.key === "held:ws-1");
     setLastReadHeldTimes({ "ws-1": "2026-06-01T00:00:00Z" });

@@ -320,6 +320,8 @@ export interface Backend {
   workstreamsHold(id: string): Promise<Workstream>;
   /** The person lifts a workstream's hold; lifting a budget hold starts its budget again from zero. */
   workstreamsResume(id: string): Promise<Workstream>;
+  /** The person's "Allow 5 more" on a workstream held for its automatic steps: its allowance goes up by 5 and it resumes, keeping what was spent. Refused when it isn't held for its budget. */
+  workstreamsAllowMore(id: string): Promise<Workstream>;
   /**
    * The person's Undo of a hold or of a switch to Advise, a moment after it: the workstream goes back to how `undo` says it stood.
    * Allowed only while that change is the last line of the audit and under a minute old; it adds its own `undone` line.

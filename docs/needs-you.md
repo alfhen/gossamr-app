@@ -15,8 +15,8 @@
 ### A Need
 - `{ key, group: 'decide'|'unblock'|'approve', kind, workstreamId|null, ticketKey?, title, why, ifYouWait, at, primary: ActionSpec, secondary: ActionSpec[], target, batchable }`
 - **group** is what the person is being asked to do:
-  - **decide**: escalation, plan or description approval.
-  - **unblock**: permission, question, sign-in, failure, stopped at limit, quiet over 30 minutes, unknown, possible continuation, hold.
+  - **decide**: escalation, plan or description approval, a workstream that used its automatic steps (`budget`).
+  - **unblock**: permission, question, sign-in, failure, stopped at limit, quiet over 30 minutes, unknown, possible continuation, a hold the system made (restart, a tripwire, the daily cap, the quota).
   - **approve**: a Jira draft, a GitHub review draft, a run start.
 - **Rank**: decide, then unblock, then approve. Within a group, oldest first, then by key.
 - **why**: one plain sentence saying why it is asked. Examples:
@@ -31,6 +31,24 @@
   - A retired or superseded draft never shows.
 - **Failures** leave only when dealt with: Retry, a fix, or an explicit Dismiss. Viewing never clears them, so remove the `markSeen` effect on needs.
 - `systemBlocked` reads "needs you to sign in to Claude".
+
+### Holds: only the system's are needs
+A hold's cause is its reason (`heldReason`; the audit's `held` line carries the same reason and its actor). `person` (Hold, Stop) and `hold_all` (Hold all) are the person's own, and the audit says actor `person` for them.
+- **A hold the person chose is not a need.** It creates no need, is in no count (the rail badge, the composer footer, the palette, the launcher, Activity) and has no row. The workstream's header shows its banner, "Held by you" (or "Held by you (Hold all)"), with a line saying so ("You chose this, so it is not in Needs you…") and a Resume button. `isHeldByYou` in `src/lib/workstreamHold.ts` is the one test. Undo of a hold is unchanged (it reads the audit, not the need).
+- **A hold the system makes stays a need** (`hold`, Unblock, primary Resume): a restart, the ticket changed under the run (basis drift), the other tripwires (a marker, a repeated failure, a refused chain step), the daily cap and the quota.
+- **Budget is the exception**: it is a Decide need of its own (below), not a plain hold.
+
+### One budget unit, and running out is a question
+- The page counts one unit, **automatic steps**: "N of M automatic steps left", "N of M automatic steps used", "Held: automatic steps used up". It never says "turns" or "wakes". Behind it the backend still keeps two counters (`autoTurns` and `wakes`, one of each per Pip turn the supervisor starts); `stepsOf` in `src/lib/workstreamHold.ts` picks the one nearer its limit, so the page's number is always the one that will stop the workstream first.
+- **Automatic fix rounds cost no step**, in Rust (`wake_for` in `src-tauri/src/agent/supervisor.rs`) and in the mock (`MockSupervisor.handle`): a wake whose facts are all the review that sent a round (`fix_round` note) or the build that went back for one (`fix_round_builds`) is not charged, never holds the workstream for its budget, and still tells Pip. Rounds are capped at 2 per review. A whole chain (investigate, triage, plan, build, review, verify) is 6 steps whatever the rounds, against the default of 11.
+- **When a workstream used its allowance it is held for its budget, and Needs you gets a Decide need** (kind `budget`, key `budget:<workstream id>`):
+  - title "CA-401 used its 11 automatic steps" (the ticket, or "This workstream" without one),
+  - why "Pip and the automatic steps are paused until you decide.",
+  - choices **Allow 5 more** (primary) and **Switch to Advise** (secondary).
+- **Allow 5 more** is `workstreams_allow_more` (Rust, `Core::allow_more_steps`; `workstreamsAllowMore` in the backend interface and the mock). It raises both allowances by 5 (`ALLOW_MORE_STEPS`), keeps what was spent, lifts the hold, and writes `steps_allowed` (detail "5") and `resumed`, both with actor `person`. It is refused unless the workstream is held for its budget, so a stale button changes nothing. It reaches nothing outside Gossamr, but it starts agent work again, so on the keyboard it asks for Enter. Pip has no tool for it.
+- **Switch to Advise** is the existing mode switch (with its Undo). In Advise nothing starts on its own, so the need is answered and goes; the hold stays, and the header's Resume lifts it (which starts the count again).
+- **Resume** on a budget hold still works and starts the count from zero (`budget_reset`).
+- **The Next line** for such a workstream points at the need ("Next: the automatic steps are used up. Choose in Needs you: allow 5 more, or switch to Advise.") and opens it. Any other hold keeps "held: … Resume to continue."
 
 ### A NeedGroup
 - One per workstream, plus General (null).
@@ -74,7 +92,7 @@
 The same keys mean the same thing in every list that holds actionable items (the Needs you list, draft cards in the conversation and the step rail, Activity's Drafts, the ticket peek's drafts, the Agents list); a place that can't do what a key says ignores it. The table is `src/workspace/keyMap.ts`.
 - j/k (or the arrows): move.
 - Enter or o: open. On a Needs you row also → (expand) and ← (collapse).
-- a: approve or allow (the primary), confirmed with Enter, since it posts, writes or reaches an agent.
+- a: approve or allow (the primary; on a used-up budget, "Allow 5 more"), confirmed with Enter, since it posts, writes or reaches an agent.
 - e: edit.
 - d: dismiss (a failure, a draft) or deny (a permission, which reaches the agent, so it keeps its Enter).
 - s: skip a draft. d and s on a draft, and d on a failure, act at once and offer Undo.
@@ -96,7 +114,7 @@ A workstream's story used to be spread over the conversation, the run strip, the
 - **A run is one entry**, updated in place: it stands where the audit says it was approved or started by a rule (else when it was queued), and its `phase` (queued, started, waiting, finished, failed, stopped, stopped at limit, unknown) and `lifecycle` change as it moves. A finished review says its verdict.
 - **A draft is one entry**, at when it was made, saying who made what and how it stands (waiting, posting, posted, sent, started, skipped, replaced, no longer needed).
 - **Audit lines** are worded as Activity words them. The lines a run's or a draft's own entry already tells are left out (`run_approved`, `autostart`, `wake`, `draft_created`, `draft_retired`, `notes_set`). The same line repeated in a row collapses into one ("… (3 times)").
-- **Linking to Needs you**: a waiting run, a waiting draft, the hold that still holds and the open escalation carry the need's key.
+- **Linking to Needs you**: a waiting run, a waiting draft, the hold the system made that still holds (and a used-up budget's question), and the open escalation carry the need's key. A hold the person chose has no need, so its line opens nothing.
 - **Ordering**: by time; a tie goes to what was said, then the audit, then runs, then drafts. Turns now carry `at` (the stored turn's `createdAt`, or when it was asked).
 - **Filters**: All, Runs (`kind` run), Drafts (`kind` draft), Decisions (what the person did, what asks them to decide, and whatever waits in Needs you).
 

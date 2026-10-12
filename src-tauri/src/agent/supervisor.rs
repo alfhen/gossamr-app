@@ -661,6 +661,11 @@ pub fn woken_in(events: &[WorkstreamEvent]) -> HashSet<(String, String)> {
 }
 
 /// The runs a tripwire named: what they wrote may be hostile, so no rule chains on them (`RuleInput::tripped`).
+/// The builds the rules sent a fix round, by the audit's `autostart` lines (`fix_round after <review>`, on the build).
+fn fix_round_builds(events: &[WorkstreamEvent]) -> HashSet<String> {
+    events.iter().filter(|e| e.action == "autostart" && e.detail.as_deref().is_some_and(|d| d.starts_with("fix_round after "))).filter_map(|e| e.run_id.clone()).collect()
+}
+
 fn tripped_runs(events: &[WorkstreamEvent]) -> HashSet<&str> {
     events.iter().filter(|e| e.action == "tripwire").filter_map(|e| e.run_id.as_deref()).collect()
 }
@@ -943,7 +948,8 @@ impl Supervisor {
             let note = rules.notes.get(&f.run).filter(|_| f.state == WakeState::Done);
             f.with_note(note)
         }).collect();
-        self.wake_for(&agent, &scope, ws_id, &connection, fresh, retry, now).await;
+        let fix_builds = fix_round_builds(&events);
+        self.wake_for(&agent, &scope, ws_id, &connection, fresh, &fix_builds, retry, now).await;
         if rules.started {
             // Under the run service's own checks: a workstream the wake just held keeps what started waiting.
             if let Err(e) = self.core.launch_waiting().await {
@@ -966,14 +972,18 @@ impl Supervisor {
 
     /// Wakes Pip in `ws_id` with `fresh`, as far as the workstream's budget and today's cap allow.
     #[allow(clippy::too_many_arguments)]
-    async fn wake_for(&self, agent: &Arc<dyn WakeQueue>, scope: &Scope, ws_id: &str, connection: &str, fresh: Vec<WakeFact>, retry: bool, now: DateTime<Utc>) {
+    async fn wake_for(&self, agent: &Arc<dyn WakeQueue>, scope: &Scope, ws_id: &str, connection: &str, fresh: Vec<WakeFact>, fix_builds: &HashSet<String>, retry: bool, now: DateTime<Utc>) {
         if fresh.is_empty() {
             return;
         }
         let conversation = format!("ws:{ws_id}");
         let settings = (self.settings)();
         // Only a guess: whether it merges is the queue's to say, under its own lock, and the charge follows that.
-        let spend = !agent.has_waiting_wake(&conversation);
+        let waiting = agent.has_waiting_wake(&conversation);
+        // Telling Pip about a fix round the rules sent, or about the build that went back for one finishing, is no
+        // automatic step of its own: the rounds are capped already (`autostart::FIX_ROUNDS_MAX`).
+        let free = fresh.iter().all(|f| f.fix_round.is_some() || fix_builds.contains(&f.run));
+        let spend = !waiting && !free;
         let ask = WakeAdmission {
             spend,
             daily_cap: settings.manager_turns_per_day,
@@ -1008,7 +1018,7 @@ impl Supervisor {
         let sink = self.sink(&conversation, facts.clone());
         // A wake charged as a turn of its own stays one; one admitted to merge that found nothing waiting is charged now.
         match agent.wake(ws_id, facts.clone(), sink, !spend).await {
-            Ok(false) if !spend => match self.core.charge_wake(scope, ws_id, now).await {
+            Ok(false) if waiting && !free => match self.core.charge_wake(scope, ws_id, now).await {
                 Ok(true) => (self.changed)(connection),
                 Ok(false) => {}
                 Err(e) => eprintln!("couldn't count a wake in workstream {ws_id}: {e}"),

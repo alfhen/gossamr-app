@@ -3,7 +3,7 @@ import { workstreamOf } from "../lib/proposals";
 import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
-import { BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
+import { ALLOW_MORE_STEPS, BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
 import type { BasisField, Escalation, ItemRef, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 import { startedFresh } from "./mockPipTurns";
 
@@ -469,6 +469,21 @@ export class MockWorkstreams {
     if (restore) this.record(id, "person", "mode_set", { detail: restore });
     if (reset) this.record(id, "person", "budget_reset");
     if (rebase && next.basis) this.record(id, "supervisor", "basis_captured");
+    return next;
+  }
+
+  /**
+   * The person's "Allow 5 more", as `allow_more_steps` does: raises the automatic turns and wakes allowance by
+   * `ALLOW_MORE_STEPS` and lifts the hold, keeping what was spent (`steps_allowed` and `resumed`, the person's). Refused
+   * unless the workstream is held for its budget, so a stale choice changes nothing.
+   */
+  allowMore(id: string): Workstream {
+    const ws = this.openOne(id);
+    if (ws.heldReason !== HELD_BUDGET) throw new Error("this workstream isn't held for its automatic steps");
+    const { autoTurns, wakes } = budgetView(ws);
+    const next: Workstream = { ...ws, heldReason: null, budget: { ...ws.budget, autoTurns: autoTurns.limit + ALLOW_MORE_STEPS, wakes: wakes.limit + ALLOW_MORE_STEPS } };
+    this.changedTo(next, "person", "steps_allowed", { detail: String(ALLOW_MORE_STEPS) });
+    this.record(id, "person", "resumed", { detail: HELD_BUDGET });
     return next;
   }
 

@@ -1,5 +1,6 @@
 import { readAs } from "../lib/permission";
 import type { Need } from "../lib/needs";
+import { ALLOW_MORE_STEPS } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { draftKeyAction } from "./draftKeys";
 import { draftDecisions } from "./DraftPreview";
@@ -86,6 +87,8 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
         return run ? { type: "ask", text: "allow this once in Terminal", run: () => void useRuns.getState().allowPermissionOnce(run.id, readAs(run.needs)) } : null;
       case "retry":
         return run ? { type: "ask", text: "retry this run", run: () => void useRuns.getState().retryLaunch(run.id) } : null;
+      case "allowMore":
+        return need.workstreamId ? { type: "ask", text: `allow ${ALLOW_MORE_STEPS} more automatic steps`, run: () => void useWorkstreams.getState().allowMore(need.workstreamId!) } : null;
       case "resume":
         return need.kind === "hold" && need.workstreamId
           ? { type: "ask", text: "resume this workstream", run: () => void useWorkstreams.getState().resume(need.workstreamId!) }

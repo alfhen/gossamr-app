@@ -722,6 +722,14 @@ async fn workstreams_resume(app: AppHandle, core: State<'_, CoreState>, id: Stri
     Ok(ws)
 }
 
+/// The person's "Allow 5 more" on a workstream held for its automatic steps: its allowance goes up by 5 and it resumes.
+#[tauri::command]
+async fn workstreams_allow_more(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
+    let ws = core.allow_more_steps(&core.scope().await?, &id).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
 /// The person's Undo of a hold or of a switch to Advise, a moment after it: the workstream goes back to how it stood. Refused once anything else happened in it, or after a minute.
 #[tauri::command]
 async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String, undo: inbox::WorkstreamUndo) -> Result<Workstream> {
@@ -1470,6 +1478,7 @@ pub fn run() {
             workstreams_take_over,
             workstreams_hold,
             workstreams_resume,
+            workstreams_allow_more,
             workstreams_undo,
             workstreams_set_rule,
             workstreams_hold_all,

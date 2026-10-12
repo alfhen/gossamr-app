@@ -126,6 +126,7 @@ interface Handle {
   jiraWrites(): { proposalId: string; type: string; key: string | null }[];
   reviewDrafts(): ReviewDraftRow[];
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
+  holdWorkstream(key: string, reason: string): void;
   holdPip(on: boolean): void;
   pipIdle(): boolean;
   editTicket(key: string, change: TicketEdit): void;
@@ -326,6 +327,17 @@ export const editTicket = (page: Page, key: string, change: TicketEdit) =>
       mock.editTicket(key, change);
     },
     { key, change, missing: NO_MOCK },
+  );
+
+/** Holds the open workstream on ticket `key` as the system would, for `reason` ("restart", "budget", "daily_cap", ...): the holds that are a need, unlike the person's own Hold. */
+export const holdBySystem = (page: Page, key: string, reason: string) =>
+  page.evaluate(
+    ({ key, reason, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.holdWorkstream(key, reason);
+    },
+    { key, reason, missing: NO_MOCK },
   );
 
 /** Makes the scripted Pip wait, still answering, after it starts each turn (`on`), or lets it go on: a turn to act on while it runs. */
