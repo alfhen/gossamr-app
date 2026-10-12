@@ -19,13 +19,29 @@ test.describe("rail names", () => {
     await expect(rail(page).getByRole("button", { name: "All projects" })).toBeFocused();
     await expect(page.getByRole("tooltip")).toHaveText("All projects");
 
-    // Focus keeps its tooltip while the pointer shows another, so leave the keyboard's button first.
-    await rail(page).getByRole("button", { name: "All projects" }).blur();
-    await expect(page.getByRole("tooltip")).toHaveCount(0);
     const settings = rail(page).getByRole("button", { name: "Settings" });
     await expect(settings).toHaveAttribute("aria-label", "Settings");
     await settings.hover();
     await expect(page.getByRole("tooltip")).toHaveText("Settings");
+  });
+
+  test("only the hovered button's tooltip shows while another rail button has keyboard focus", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await rail(page).getByRole("button", { name: "Search and jump" }).focus();
+    await page.keyboard.press("Tab");
+    const focused = rail(page).getByRole("button", { name: "All projects" });
+    await expect(focused).toBeFocused();
+    await expect(page.getByRole("tooltip")).toHaveText("All projects");
+
+    await rail(page).getByRole("button", { name: "Settings" }).hover();
+    const tips = page.getByRole("tooltip");
+    await expect(tips.filter({ visible: true })).toHaveCount(1);
+    await expect(tips.filter({ visible: true })).toHaveText("Settings");
+
+    // The pointer leaves the rail, and the keyboard's tooltip comes back.
+    await page.mouse.move(700, 500);
+    await expect(tips.filter({ visible: true })).toHaveText("All projects");
+    await expect(tips.filter({ visible: true })).toHaveCount(1);
   });
 });
 

@@ -37,4 +37,11 @@ describe("the icon rail's names", () => {
     // A screen with no shortcut shows its name alone.
     expect(renderToStaticMarkup(<RailTip label="Settings" at={at} />)).not.toContain("<kbd");
   });
+
+  it("hides a tooltip while the pointer is on another rail button, so the hovered one wins", () => {
+    // The rail's tips hide by CSS (a markup test can't hover), so check the selectors that do it are in place.
+    expect(renderToStaticMarkup(<Rail />)).toMatch(/<aside[^>]*class="[^"]*group\/rail/);
+    const tip = renderToStaticMarkup(<RailTip label="Settings" at={{ x: 60, y: 20 }} />);
+    expect(tip).toContain("not-group-has-[button:hover]/btn:group-has-[button:hover]/rail:hidden");
+  });
 });

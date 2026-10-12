@@ -28,7 +28,8 @@ export function RailTip({ label, hint, note, at }: { label: string; hint?: strin
     <span
       role="tooltip"
       style={{ left: at.x, top: at.y }}
-      className="pointer-events-none fixed z-40 -translate-y-1/2 rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm font-semibold whitespace-nowrap text-ws-ink shadow-ws-pop"
+      // While the pointer is on any rail button, only the hovered button's tip shows, so a focused one gives way to it.
+      className="pointer-events-none fixed z-40 -translate-y-1/2 not-group-has-[button:hover]/btn:group-has-[button:hover]/rail:hidden rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm font-semibold whitespace-nowrap text-ws-ink shadow-ws-pop"
     >
       {label}
       {hint && <kbd className="ml-1.5">{hint}</kbd>}
@@ -73,7 +74,7 @@ export function RailButton({
     setAt({ x: r.right + 8, y: r.top + r.height / 2 });
   };
   return (
-    <span className="relative">
+    <span className="group/btn relative">
       <button
         type="button"
         aria-label={label}
@@ -316,7 +317,7 @@ export function Rail() {
   const noun = nounFor(kind);
 
   return (
-    <aside className="relative flex min-h-0 flex-col items-center gap-2 border-r border-ws-sep bg-ws-side pt-10 pb-2.5">
+    <aside className="group/rail relative flex min-h-0 flex-col items-center gap-2 border-r border-ws-sep bg-ws-side pt-10 pb-2.5">
       <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-10" />
       <nav aria-label="Workspace" className="flex min-h-0 w-full flex-1 flex-col items-center gap-2">
         <RailButton label="Search and jump" hint="⌘K" onClick={() => setPaletteOpen(true)} className={`text-lg ${plain(false)}`}>
