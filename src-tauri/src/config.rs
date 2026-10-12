@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::workstream::{Rule, Workstream};
 use crate::error::Result;
+use crate::runs::notices::{NoticeMode, DIGEST_MINUTES, DIGEST_MINUTES_MAX};
 
 const FILE: &str = "config.json";
 
@@ -87,6 +88,10 @@ pub struct AgentSettings {
     /// Pip turns the supervisor may start in a day across every workstream, counted from UTC midnight. Zero is no daily
     /// limit; each workstream's own budget still holds.
     pub manager_turns_per_day: u32,
+    /// Which system notifications about runs the person gets (`runs::notices`).
+    pub notifications: NoticeMode,
+    /// Minutes between digest notifications, when `notifications` is a digest.
+    pub digest_minutes: u32,
 }
 
 impl Default for AgentSettings {
@@ -100,6 +105,8 @@ impl Default for AgentSettings {
             report_result: false,
             autostart: AutoStartSwitches::default(),
             manager_turns_per_day: 40,
+            notifications: NoticeMode::Workstream,
+            digest_minutes: DIGEST_MINUTES,
         }
     }
 }
@@ -115,6 +122,8 @@ impl AgentSettings {
             report_result: self.report_result,
             autostart: self.autostart,
             manager_turns_per_day: self.manager_turns_per_day.min(MAX_MANAGER_TURNS),
+            notifications: self.notifications,
+            digest_minutes: self.digest_minutes.clamp(1, DIGEST_MINUTES_MAX),
         }
     }
 }
@@ -202,7 +211,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gossamr-config-limits-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal, draft_on_finish: true, report_result: false, autostart: AutoStartSwitches::default(), manager_turns_per_day: 40 });
+        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal, draft_on_finish: true, report_result: false, autostart: AutoStartSwitches::default(), manager_turns_per_day: 40, notifications: NoticeMode::Workstream, digest_minutes: 30 });
         std::fs::write(dir.join(FILE), r#"{"agents":{"draftOnFinish":false}}"#).unwrap();
         assert!(!AppConfig::load(&dir).agents.draft_on_finish);
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2}}"#).unwrap();
@@ -239,6 +248,25 @@ mod tests {
         assert_eq!(AppConfig::load(&dir).agents.manager_turns_per_day, 0, "zero turns the cap off");
 
         let chosen = AppConfig { agents: AgentSettings { autostart: AutoStartSwitches { review_verify: true, fix_round: false, ..Default::default() }, manager_turns_per_day: 7, ..AgentSettings::default() }, ..AppConfig::default() };
+        chosen.save(&dir).unwrap();
+        assert_eq!(AppConfig::load(&dir), chosen);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_notification_choice_defaults_to_each_workstream_clamps_the_digest_and_round_trips() {
+        let dir = std::env::temp_dir().join(format!("gossamr-config-notices-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2}}"#).unwrap();
+        let older = AppConfig::load(&dir).agents;
+        assert_eq!((older.notifications, older.digest_minutes), (NoticeMode::Workstream, 30), "an older config gets the defaults");
+        std::fs::write(dir.join(FILE), r#"{"agents":{"notifications":"digest","digestMinutes":0}}"#).unwrap();
+        let loaded = AppConfig::load(&dir).agents;
+        assert_eq!((loaded.notifications, loaded.digest_minutes), (NoticeMode::Digest, 1));
+        std::fs::write(dir.join(FILE), r#"{"agents":{"digestMinutes":99999}}"#).unwrap();
+        assert_eq!(AppConfig::load(&dir).agents.digest_minutes, DIGEST_MINUTES_MAX);
+        let chosen = AppConfig { agents: AgentSettings { notifications: NoticeMode::Off, digest_minutes: 45, ..AgentSettings::default() }, ..AppConfig::default() };
         chosen.save(&dir).unwrap();
         assert_eq!(AppConfig::load(&dir), chosen);
         std::fs::remove_dir_all(&dir).unwrap();

@@ -1,6 +1,8 @@
 //! Workstreams as stored: the whole value in `data`, with the columns lists narrow on kept in step with it, and their
 //! audit, which is only ever appended to.
 
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use rusqlite::{params, ErrorCode, OptionalExtension};
 
@@ -74,6 +76,13 @@ impl Db {
             out.push(serde_json::from_str(&row?)?);
         }
         Ok(out)
+    }
+
+    /// The ids of the connection's closed workstreams, without reading their data.
+    pub fn closed_workstream_ids(&self, connection_id: &str) -> Result<HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM workstreams WHERE connection_id = ?1 AND closed_at IS NOT NULL")?;
+        let ids = stmt.query_map(params![connection_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<HashSet<_>>>()?;
+        Ok(ids)
     }
 
     /// The open workstream of a ticket, if it has one.
@@ -219,6 +228,7 @@ mod tests {
         assert!(db.save_workstream(&closed).unwrap());
         assert_eq!(ids(false), ["b"]);
         assert_eq!(ids(true), ["b", "a"]);
+        assert_eq!(db.closed_workstream_ids("c").unwrap(), HashSet::from(["a".to_owned()]));
         assert_eq!(db.workstream("a").unwrap().unwrap(), closed);
         assert!(!db.save_workstream(&ws("missing", "c", None, 0)).unwrap());
     }

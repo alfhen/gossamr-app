@@ -121,17 +121,18 @@ fn announce(app: &AppHandle, events: &[events::NewEvent]) {
     }
 }
 
-/// A needs-state, a finished run or a failed one, as a system notification unless the window is already in front.
-/// Focusing the window soon after opens the run (`open-run`), since the notification has no click handler.
-fn announce_run(app: &AppHandle, open: &runs::tracker::OpenOnFocus, run: &Run, why: runs::tracker::Attention) {
-    let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
-    if focused {
-        return;
+/// A system notification chosen by `runs::notices`. Focusing the window soon after opens the run it points at
+/// (`open-run`): the top need of the workstream, or the newest run that finished in it, since the notification has no
+/// click handler.
+/// Whether it was shown.
+fn announce_run(app: &AppHandle, open: &runs::tracker::OpenOnFocus, out: &runs::notices::Outgoing) -> bool {
+    let shown = app.notification().builder().title(out.notice.title.clone()).body(out.notice.body.clone()).show().is_ok();
+    if shown {
+        if let Some(run_id) = &out.open_run {
+            open.record(run_id, std::time::Instant::now());
+        }
     }
-    let notice = runs::tracker::notice_text(run, why);
-    if app.notification().builder().title(notice.title).body(notice.body).show().is_ok() {
-        open.record(&run.id, std::time::Instant::now());
-    }
+    shown
 }
 
 struct RunNotices {
@@ -140,8 +141,15 @@ struct RunNotices {
 }
 
 impl runs::tracker::RunNotifier for RunNotices {
-    fn notify(&self, run: &Run, why: runs::tracker::Attention) {
-        announce_run(&self.app, &self.open, run, why);
+    /// Notices aren't made per event; the run service sends them through `announce`.
+    fn notify(&self, _run: &Run, _why: runs::tracker::Attention) {}
+
+    fn announce(&self, notice: &runs::notices::Outgoing) -> bool {
+        announce_run(&self.app, &self.open, notice)
+    }
+
+    fn watching(&self) -> bool {
+        self.app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false)
     }
 }
 
@@ -1267,6 +1275,7 @@ pub fn run() {
                 }
                 if let Some(runs) = app.try_state::<RunsState>() {
                     runs.focus.notify_one();
+                    runs.looked();
                 }
                 if let Some(run_id) = app.try_state::<Arc<runs::tracker::OpenOnFocus>>().and_then(|open| open.take(std::time::Instant::now())) {
                     let _ = app.emit("open-run", serde_json::json!({ "runId": run_id }));
