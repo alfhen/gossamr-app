@@ -9,6 +9,7 @@ import { AUTOSTART_DEFAULTS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HEL
 import { useWorkspace } from "../workspaceStore";
 import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandActions } from "./commands";
 import { useToasts } from "./toasts";
+import { NextStepLine } from "./WorkstreamControls";
 import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 import { EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, escalationActions, escalationShown, fixRoundSent } from "./EscalationCard";
@@ -33,6 +34,24 @@ const viewOf = (over: Partial<WorkstreamView["workstream"]> = {}): WorkstreamVie
 const noop = (): ControlActions => ({ onManage: vi.fn(), onHold: vi.fn(), onResume: vi.fn(), onStop: vi.fn(), onRule: vi.fn() });
 const render = (view: WorkstreamView, confirmingStop = false) =>
   renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={confirmingStop} onConfirmStop={vi.fn()} />);
+
+describe("the next-step line", () => {
+  it("shows the sentence with data-next-step, and leaves the line out when nothing is given", () => {
+    const view = viewOf({ mode: "manage" });
+    const withLine = renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={false} onConfirmStop={vi.fn()} next={{ kind: "auto", text: "Next: when R5 (Build) finishes, a review starts automatically.", need: null }} />);
+    expect(withLine).toContain('data-next-step="auto"');
+    expect(withLine).toContain("Next: when R5 (Build) finishes, a review starts automatically.");
+    expect(withLine).not.toContain("data-next-step-need");
+    expect(render(view)).not.toContain("data-next-step");
+  });
+
+  it("is a link to the need while it waits on the person", () => {
+    const need = { key: "run:r1" } as never;
+    const html = renderToStaticMarkup(<NextStepLine next={{ kind: "waiting", text: "Next: waiting on you. R5 wants to run a command.", need }} />);
+    expect(html).toContain('data-next-step="waiting"');
+    expect(html).toMatch(/<button[^>]*data-next-step-need="run:r1"[^>]*>Next: waiting on you\. R5 wants to run a command\.<\/button>/);
+  });
+});
 
 describe("the workstream's controls", () => {
   it("shows the Manage switch as the workstream's mode", () => {
