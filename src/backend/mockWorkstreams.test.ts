@@ -605,8 +605,8 @@ describe("a review that still blocks after the automatic fix rounds", () => {
   const line = (seq: number, action: string, runId: string, detail: string, actor: WorkstreamEvent["actor"] = "supervisor"): WorkstreamEvent => ({ workstreamId: "ws-1", seq, at: `2026-09-30T11:00:0${seq}Z`, actor, action, runId, proposalId: null, digest: null, detail });
   const rounds = [line(1, "autostart", "b", "fix_round after r0"), line(2, "autostart", "b", "fix_round after r1")];
   const blocking = () => "blocking" as const;
-  const reviewDraft = (id: string, runId: string, repo: string, number: number, at: string, state: Proposal["state"] = { type: "pending" }) =>
-    ({ id, createdAt: at, state, intent: { type: "githubReview", connectionId: "github:sample", item: null, runId, repo, number, commitSha: "a1b2c3d4", summary: "S.", comments: [] } }) as unknown as Proposal;
+  const reviewDraft = (id: string, runId: string, repo: string, number: number, at: string, state: Proposal["state"] = { type: "pending" }, workstream: string | null = "ws-1") =>
+    ({ id, createdAt: at, state, origin: { type: "run", runId, shortId: null, workstream }, intent: { type: "githubReview", connectionId: "github:sample", item: null, runId, repo, number, commitSha: "a1b2c3d4", summary: "S.", comments: [] } }) as unknown as Proposal;
 
   it("is there exactly once the rounds ran out for the newest review and it blocks, as escalation_of", () => {
     expect(escalationOf(ws, runs, blocking, rounds, [])).toBeNull();
@@ -640,6 +640,18 @@ describe("a review that still blocks after the automatic fix rounds", () => {
     expect(draft([older, newer, other, posted])).toBe("p-new");
     expect(draft([older, newer, reviewDraft("p-own", "r2", "acme/storefront", 218, "2026-09-30T10:00:00Z")])).toBe("p-own");
     expect(draft([other, posted])).toBeNull();
+  });
+
+  it("offers a pending draft only from the escalation of the workstream it was made in", () => {
+    const events = [...rounds, line(3, "fix_rounds_exhausted", "r2", "2")];
+    const ws2 = { ...ws, id: "ws-2" } as Workstream;
+    const runs2 = runs.map((r) => ({ ...r, id: `${r.id}-2`, spec: { ...r.spec, workstream: "ws-2", ...(r.spec.buildFromRun ? { buildFromRun: `${r.spec.buildFromRun}-2` } : {}) } })) as Run[];
+    const events2 = [{ ...line(3, "fix_rounds_exhausted", "r2-2", "2"), workstreamId: "ws-2" }];
+    const theirs = reviewDraft("p-theirs", "rx", "acme/storefront", 218, "2026-09-30T10:21:00Z");
+    expect(escalationOf(ws, runs, blocking, events, [theirs])?.reviewDraft).toBe("p-theirs");
+    expect(escalationOf(ws2, runs2, blocking, events2, [theirs])?.reviewDraft).toBeNull();
+    const loose = reviewDraft("p-loose", "ry", "acme/storefront", 218, "2026-09-30T10:29:00Z", { type: "pending" }, null);
+    expect(escalationOf(ws, runs, blocking, events, [theirs, loose])?.reviewDraft).toBe("p-theirs");
   });
 
   it("is resolved by posting the review draft it offered, which is audited as escalation_posted, and by no other draft", () => {

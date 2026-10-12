@@ -114,9 +114,11 @@ pub fn escalation_of(ws: &Workstream, runs: &[Run], verdict_of: impl Fn(&Run) ->
         })
         .collect();
     let own = reviews.iter().find(|(_, run, ..)| *run == review.id).map(|(p, ..)| p.id.clone());
+    // The fallback is limited to this workstream's own drafts, so a draft is offered by at most one escalation, the one
+    // whose workstream it was made in, which is also the one posting it resolves.
     let of_pull = || {
         let number = review.spec.pr?;
-        reviews.iter().filter(|(_, _, repo, n)| *n == number && repo.eq_ignore_ascii_case(&review.spec.repo)).max_by(|a, b| (a.0.created_at, &a.0.id).cmp(&(b.0.created_at, &b.0.id))).map(|(p, ..)| p.id.clone())
+        reviews.iter().filter(|(p, _, repo, n)| *n == number && repo.eq_ignore_ascii_case(&review.spec.repo) && p.workstream() == Some(ws.id.as_str())).max_by(|a, b| (a.0.created_at, &a.0.id).cmp(&(b.0.created_at, &b.0.id))).map(|(p, ..)| p.id.clone())
     };
     let labels = run_labels(&runs.iter().filter(mine).cloned().collect::<Vec<_>>());
     let label = |id: &str| labels.iter().find(|(r, _)| r == id).map(|(_, l)| l.clone()).unwrap_or_default();
@@ -1012,6 +1014,14 @@ mod tests {
             Proposal { id: id.into(), created_at: at, updated_at: at, origin, created_by: CreatedBy::Agent, intent, label: None, basis: None, state, revisions: vec![], created: vec![], error: None, run: None, superseded_by: None, posted: None, maybe_posted: None }
         }
 
+        /// `p` as made in workstream `ws`.
+        fn in_ws(mut p: Proposal, ws: &str) -> Proposal {
+            if let Origin::Run { workstream, .. } = &mut p.origin {
+                *workstream = Some(ws.into());
+            }
+            p
+        }
+
         /// A workstream in Manage with a finished build `b`, two finished reviews of it (`r1`, then `r2`) and the
         /// supervisor's two automatic rounds on record.
         async fn chain(fx: &Fixture) -> (Workstream, Vec<Run>, Vec<WorkstreamEvent>) {
@@ -1081,14 +1091,42 @@ mod tests {
             let (ws, runs, mut events) = chain(&fx).await;
             events.push(line(&ws.id, 3, "fix_rounds_exhausted", "r2", "2"));
             let draft = |drafts: &[Proposal]| escalation_of(&ws, &runs, blocking, &events, drafts).unwrap().review_draft;
-            let older = review_draft("p-old", "r1", "acme/webshop", 218, 1, ProposalState::Pending);
-            let newer = review_draft("p-new", "r0", "ACME/webshop", 218, 2, ProposalState::Pending);
-            let other_pr = review_draft("p-219", "rx", "acme/webshop", 219, 9, ProposalState::Pending);
-            let posted = review_draft("p-posted", "ry", "acme/webshop", 218, 9, ProposalState::Applied);
+            let older = in_ws(review_draft("p-old", "r1", "acme/webshop", 218, 1, ProposalState::Pending), &ws.id);
+            let newer = in_ws(review_draft("p-new", "r0", "ACME/webshop", 218, 2, ProposalState::Pending), &ws.id);
+            let other_pr = in_ws(review_draft("p-219", "rx", "acme/webshop", 219, 9, ProposalState::Pending), &ws.id);
+            let posted = in_ws(review_draft("p-posted", "ry", "acme/webshop", 218, 9, ProposalState::Applied), &ws.id);
             assert_eq!(draft(&[older.clone(), newer.clone(), other_pr.clone(), posted.clone()]).as_deref(), Some("p-new"), "the newest pending one of the pull request");
             let own = review_draft("p-own", "r2", "acme/webshop", 218, 0, ProposalState::Pending);
             assert_eq!(draft(&[older, newer, own, other_pr.clone()]).as_deref(), Some("p-own"), "the review's own comes first");
             assert_eq!(draft(&[other_pr, posted]), None);
+        }
+
+        #[tokio::test]
+        async fn a_pending_draft_is_offered_by_the_escalation_of_its_own_workstream_only() {
+            let fx = fixture().await;
+            let (ws, runs, mut events) = chain(&fx).await;
+            events.push(line(&ws.id, 3, "fix_rounds_exhausted", "r2", "2"));
+            // A second workstream whose escalation is about the same pull request.
+            let ws2 = Workstream { id: "ws-2".into(), ..ws.clone() };
+            let runs2: Vec<Run> = runs
+                .iter()
+                .map(|r| {
+                    let mut r = r.clone();
+                    r.id = format!("{}-2", r.id);
+                    r.spec.workstream = Some(ws2.id.clone());
+                    r.spec.build_from_run = r.spec.build_from_run.map(|b| format!("{b}-2"));
+                    r
+                })
+                .collect();
+            let events2 = vec![line(&ws2.id, 3, "fix_rounds_exhausted", "r2-2", "2")];
+            let draft_of = |ws: &Workstream, runs: &[Run], events: &[WorkstreamEvent], drafts: &[Proposal]| escalation_of(ws, runs, blocking, events, drafts).unwrap().review_draft;
+            let theirs = in_ws(review_draft("p-theirs", "rx", "acme/webshop", 218, 5, ProposalState::Pending), &ws.id);
+            let drafts = [theirs.clone()];
+            assert_eq!(draft_of(&ws, &runs, &events, &drafts).as_deref(), Some("p-theirs"));
+            assert_eq!(draft_of(&ws2, &runs2, &events2, &drafts), None, "another workstream's draft is not offered, even when newer");
+            // A draft made in no workstream is nobody's fallback: posting it records nothing, so offering it would never resolve.
+            let loose = review_draft("p-loose", "ry", "acme/webshop", 218, 9, ProposalState::Pending);
+            assert_eq!(draft_of(&ws, &runs, &events, &[theirs, loose]).as_deref(), Some("p-theirs"));
         }
 
         #[tokio::test]

@@ -1,4 +1,5 @@
 import { docText } from "../lib/docs";
+import { workstreamOf } from "../lib/proposals";
 import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
@@ -129,7 +130,8 @@ export function escalationOf(ws: Workstream, runs: readonly Run[], verdictOf: (r
   const reviews = drafts.filter((p) => p.state.type === "pending").flatMap((p) => (p.intent.type === "githubReview" ? [{ p, i: p.intent }] : []));
   const own = reviews.find((d) => d.i.runId === review.id)?.p.id;
   const pr = review.spec.pr;
-  const ofPull = pr == null ? undefined : reviews.filter((d) => d.i.number === pr && d.i.repo.toLowerCase() === review.spec.repo.toLowerCase()).sort((a, b) => a.p.createdAt.localeCompare(b.p.createdAt) || a.p.id.localeCompare(b.p.id)).pop()?.p.id;
+  // Only this workstream's own drafts, so a draft is offered by at most one escalation, as in Rust.
+  const ofPull = pr == null ? undefined : reviews.filter((d) => d.i.number === pr && d.i.repo.toLowerCase() === review.spec.repo.toLowerCase() && workstreamOf(d.p) === ws.id).sort((a, b) => a.p.createdAt.localeCompare(b.p.createdAt) || a.p.id.localeCompare(b.p.id)).pop()?.p.id;
   const labels = new Map(runLabels(mine));
   return {
     reviewRun: review.id,
