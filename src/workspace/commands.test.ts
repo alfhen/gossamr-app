@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { SUGGESTED_TICKETS, START_WORKSTREAM, agentTicketChoices, askToPlanCommands, buildCommands, agentCommands, startWorkstreamCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
+import { SUGGESTED_TICKETS, START_WORKSTREAM, agentTicketChoices, askToPlanCommands, buildCommands, agentCommands, startWorkstreamCommands, timelineCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
 import { BUILT_IN_VIEWS } from "./filters";
 import type { WorkItem } from "../types";
 
@@ -10,7 +10,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openWorkstream", "askPipToPlan", "startWorkstreamOn"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "showTimeline"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -423,5 +423,38 @@ describe("Pip home in the palette", () => {
   it("keeps the peek's workstream entry as it was", () => {
     const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true, ticket: { key: "CA-401", workstream: false } });
     expect(on.find((c) => c.id === "workstream:start")?.label).toBe("Start a workstream on CA-401");
+  });
+});
+
+describe("timeline commands", () => {
+  it("offers each filter and each scope, keeping the other as it is", () => {
+    const a = actions();
+    const found = timelineCommands({ filter: "drafts", scope: "workstream", shown: true }, a);
+    expect(found.map((c) => c.label)).toEqual(["Timeline: All", "Timeline: Runs", "Timeline: Drafts", "Timeline: Decisions", "Timeline: This workstream", "Timeline: Every workstream"]);
+    expect(found.every((c) => c.group === "Workstreams" && !!c.icon)).toBe(true);
+    found.find((c) => c.label === "Timeline: Decisions")!.run();
+    expect(a.showTimeline).toHaveBeenLastCalledWith("decisions", "workstream");
+    found.find((c) => c.label === "Timeline: Every workstream")!.run();
+    expect(a.showTimeline).toHaveBeenLastCalledWith("drafts", "every");
+  });
+
+  it("marks what the timeline on screen shows as current, and says where Runs in every workstream goes", () => {
+    const hints = (state: Parameters<typeof timelineCommands>[0]) => Object.fromEntries(timelineCommands(state, actions()).map((c) => [c.id, c.hint]));
+    expect(hints({ filter: "drafts", scope: "workstream", shown: true })).toMatchObject({ "timeline:filter:drafts": "current", "timeline:scope:workstream": "current", "timeline:filter:runs": undefined, "timeline:scope:every": undefined });
+    // In every workstream, Runs is the Agents screen; with Runs on, so is Every workstream.
+    expect(hints({ filter: "all", scope: "every", shown: true })["timeline:filter:runs"]).toBe("Agents");
+    expect(hints({ filter: "runs", scope: "workstream", shown: true })["timeline:scope:every"]).toBe("Agents");
+    // On the Agents screen, Runs and Every workstream are what it shows.
+    expect(hints({ filter: "runs", scope: "every", shown: true })).toMatchObject({ "timeline:filter:runs": "current", "timeline:scope:every": "current" });
+    // Off screen, nothing is current.
+    expect(Object.values(hints({ filter: "all", scope: "workstream", shown: false })).filter((h) => h === "current")).toEqual([]);
+  });
+
+  it("finds them by the filter's and the scope's plain words", () => {
+    const found = (q: string) => rankCommands(timelineCommands({ filter: "all", scope: "workstream", shown: false }, actions()), q).map((c) => c.id);
+    expect(found("decisions")[0]).toBe("timeline:filter:decisions");
+    expect(found("timeline runs")[0]).toBe("timeline:filter:runs");
+    expect(found("every workstream")[0]).toBe("timeline:scope:every");
+    expect(found("this workstream")[0]).toBe("timeline:scope:workstream");
   });
 });

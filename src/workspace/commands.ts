@@ -7,6 +7,7 @@ import { parsePullRef, pullLabel, type PullRef } from "../lib/githubUrl";
 import { isWorkConnection } from "./domains";
 import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
+import { FILTER_LABEL, SCOPE_LABEL, TIMELINE_FILTERS, TIMELINE_SCOPES, isAgentsView, type TimelineFilter, type TimelineScope } from "../lib/timeline";
 
 export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Agents" | "Workstreams" | "Ask Pip" | "This item";
 
@@ -65,6 +66,8 @@ export interface CommandActions {
   askPipToPlan(item: WorkItem): void;
   /** Starts a workstream on `item` and shows its conversation where the person is: on Pip home, or in the Pip pane. */
   startWorkstreamOn(item: WorkItem): void;
+  /** Shows the timeline with `filter` in `scope` on Pip home; Runs in every workstream is the Agents screen. */
+  showTimeline(filter: TimelineFilter, scope: TimelineScope): void;
 }
 
 /** What the screen shows right now, for the hints beside entries. */
@@ -284,6 +287,58 @@ export function workstreamCommands(list: readonly WorkstreamView[], query: strin
       keywords: "workstream pip home conversation",
       run: () => a.openWorkstream(ws.id),
     }));
+}
+
+/** What the timeline shows now, for its palette entries: its filter and scope, and whether it is on screen (`shown`). */
+export interface TimelineState {
+  filter: TimelineFilter;
+  scope: TimelineScope;
+  shown: boolean;
+}
+
+const FILTER_WORDS: Record<TimelineFilter, string> = {
+  all: "everything story history",
+  runs: "runs agents",
+  drafts: "drafts comments moves",
+  decisions: "decisions decided waiting on me approvals",
+};
+
+const SCOPE_WORDS: Record<TimelineScope, string> = {
+  workstream: "this one current selected workstream only",
+  every: "every all workstreams across everything general merged",
+};
+
+/**
+ * The timeline's filters and scopes as palette entries: "Timeline: Runs", "Timeline: Every workstream". A filter keeps
+ * the scope and a scope keeps the filter (`state`), as the buttons do; Runs in every workstream says it is Agents. While
+ * the timeline is on screen, the filter and scope it shows are marked current.
+ */
+export function timelineCommands(state: TimelineState, a: Pick<CommandActions, "showTimeline">): Command[] {
+  const hint = (filter: TimelineFilter, scope: TimelineScope, current: boolean) => (state.shown && current ? "current" : isAgentsView(filter, scope) ? "Agents" : undefined);
+  return [
+    ...TIMELINE_FILTERS.map(
+      (f): Command => ({
+        id: `timeline:filter:${f}`,
+        group: "Workstreams",
+        icon: "☰",
+        label: `Timeline: ${FILTER_LABEL[f]}`,
+        hint: hint(f, state.scope, state.filter === f),
+        keywords: `timeline filter show ${FILTER_WORDS[f]}`,
+        run: () => a.showTimeline(f, state.scope),
+      }),
+    ),
+    ...TIMELINE_SCOPES.map(
+      (s): Command => ({
+        id: `timeline:scope:${s}`,
+        group: "Workstreams",
+        icon: "☰",
+        label: `Timeline: ${SCOPE_LABEL[s]}`,
+        hint: hint(state.filter, s, state.scope === s),
+        keywords: `timeline scope ${SCOPE_WORDS[s]}`,
+        run: () => a.showTimeline(state.filter, s),
+      }),
+    ),
+  ];
 }
 
 /**

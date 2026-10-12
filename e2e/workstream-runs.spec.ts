@@ -76,8 +76,8 @@ test("Pip drafts an Investigate run in a workstream; the run and its result draf
   const result = peekSheet(page).locator("#peek-drafts").locator('article:has([data-created-by="agent"])');
   await expect(result.first()).toBeVisible();
   await expect(result.first().locator('[data-created-by="agent"]')).toHaveText("Drafted by an agent");
-  // In the workstream's conversation, its drafts are listed: the result draft is there too.
-  await expect(pipPane(page).getByRole("region", { name: "Drafts" }).getByRole("article", { name: "Comment on CA-401" })).toBeVisible();
+  // In the workstream's conversation, its timeline, its drafts are listed: the result draft is there too.
+  await expect(pipPane(page).locator('[data-timeline] [data-timeline-entry][data-kind="draft"]').getByRole("article", { name: "Comment on CA-401" })).toBeVisible();
 
   // A triage started from the ticket's Agent menu joins the workstream as R2 and moves the stage on as it is queued.
   await startFromSetup(page, async () => {
@@ -110,9 +110,9 @@ test("after starting a run from the workstream's conversation, the Agents view k
   const ref = (await card.locator("[data-run-ref]").getAttribute("data-run-ref"))!;
   const runId = await card.getAttribute("data-run-id");
   expect(ref.length).toBeGreaterThanOrEqual(4);
-  // Grouped by state, the card still carries its short name, as Pip's strip of the workstream's agents does.
+  // Grouped by state, the card still carries its short name, as the run's card on the workstream's timeline in Pip does.
   await expect(card.locator('[data-run-label="R1"]')).toBeVisible();
-  await expect(pipPane(page).getByRole("region", { name: "Your agents" }).locator('[data-run-label="R1"]')).toBeVisible();
+  await expect(pipPane(page).locator(`[data-timeline] [data-timeline-entry="run:${runId}"] article[data-run-id="${runId}"]`).locator('[data-run-label="R1"]')).toBeVisible();
   // Its sheet names it the same two ways, and the pane stays with the workstream while it is open.
   await card.click();
   const sheet = page.getByRole("dialog", { name: "Agent run" });
