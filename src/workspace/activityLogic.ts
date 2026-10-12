@@ -347,7 +347,7 @@ const HELD_WORDS: Record<WorkstreamActor, string> = { person: "You held the work
  * feed leaves out (a fix round's own auto-start line, which "Fix round n sent" already says, and bookkeeping).
  * `rounds` counts the fix rounds sent so far, this one included.
  */
-function eventText(e: WorkstreamEvent, label: (id: string | null) => string, rounds: number): string | null {
+export function eventText(e: WorkstreamEvent, label: (id: string | null) => string, rounds: number): string | null {
   const who = e.actor === "person" ? "You" : e.actor === "pip" ? "Pip" : e.actor === "supervisor" ? "Gossamr" : "An agent";
   switch (e.action) {
     case "opened":

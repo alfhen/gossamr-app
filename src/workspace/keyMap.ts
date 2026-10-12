@@ -1,6 +1,6 @@
 /**
  * One keyboard model for every list that holds things to act on: the Needs you list, draft cards (in the conversation, the
- * step rail, Activity's Drafts and the ticket peek), the Agents list. The same key means the same thing wherever it is
+ * step rail, Activity's Drafts and the ticket peek), the Agents list, a workstream's timeline. The same key means the same thing wherever it is
  * pressed; what a place can't do with it, it ignores.
  *
  *   j / k (or the arrows)  move
@@ -53,7 +53,7 @@ export function keyIntent(ev: Modifiers): KeyIntent | null {
 export const isActionKey = (key: string) => key.length === 1 && BY_KEY.has(key) && !["j", "k"].includes(key);
 
 /** The kinds of item the keys act on, for `keyHint`. */
-export type KeyItem = "need" | "draft" | "run" | "list";
+export type KeyItem = "need" | "draft" | "run" | "list" | "timeline";
 
 /** What each key does on each kind of item, for the hint line: the keys, then the words. A kind leaves out a key it has no use for. */
 export const HINTS: Record<KeyItem, readonly (readonly [keys: string, what: string])[]> = {
@@ -61,6 +61,8 @@ export const HINTS: Record<KeyItem, readonly (readonly [keys: string, what: stri
   draft: [["j k", "move"], ["↵", "open"], ["a", "approve"], ["e", "edit"], ["d s", "skip"], ["Esc", "back"]],
   run: [["j k", "move"], ["↵", "open"], ["a", "allow or retry"], ["d", "dismiss or deny"], ["Esc", "back"]],
   list: [["j k", "move"], ["↵", "open"], ["Esc", "back"]],
+  /** A workstream's timeline: each entry opens what it is about (a run's sheet, a draft's card, its need in Needs you). */
+  timeline: [["j k", "move through the timeline"], ["↵ o", "open"]],
 };
 
 /** The footer line for the keyboard on a `kind` of item: "j k move · ↵ open · a approve …", from the same table everywhere. */

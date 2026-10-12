@@ -41,7 +41,7 @@ async function investigateFromPeek(page: Page) {
 }
 
 test.describe("counts that mean one thing (D4, D5, N3)", () => {
-  test("Needs you's one count is the same on Pip home, the rail, the composer and the Agents header; Your agents counts agents", async ({ page }) => {
+  test("Needs you's one count is the same on Pip home, the rail, the composer and the Agents header; the timeline lists every agent once", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
     await expect(needsYouTray(page).locator("[data-needs-you-group]").first()).toBeVisible();
@@ -52,10 +52,11 @@ test.describe("counts that mean one thing (D4, D5, N3)", () => {
     await expect(railButton(page, /^Pip home/)).toHaveAccessibleName(`Pip home, ${count} ${count === "1" ? "thing needs" : "things need"} you`);
     // Agents has no badge: what its runs need is in that count, once.
     await expect(railButton(page, /^Agents/)).toHaveAccessibleName("Agents");
-    // Your agents: every run at work or waiting on the person.
+    // The timeline: a row for every run at work or waiting on the person, each once.
     const listed = new Set(["needsAnswer", "needsPermission", "systemBlocked", "failed", "queued", "launching", "working"]);
     const agents = (await mockRuns(page)).filter((r) => listed.has(r.state)).length;
-    await expect(pipHome(page).getByRole("region", { name: "Your agents" }).locator("[data-strip-count]")).toHaveText(`3 of ${agents}`);
+    const live = homeConversationRegion(page).locator('[data-kind="run"]:is([data-phase="queued"], [data-phase="started"], [data-phase="waiting"], [data-phase="failed"])');
+    await expect(live).toHaveCount(agents);
     // The Agents header says the same count, and nothing opening Agents does moves it.
     await railButton(page, /^Agents/).click();
     const header = page.locator("main header").filter({ has: page.getByRole("heading", { name: "Agents" }) });
@@ -88,12 +89,13 @@ test.describe("draft keys after a skip (N1)", () => {
   test("s skips a draft at once, and the next one takes its keys at once: a opens it and Enter approves it", async ({ page }) => {
     await openApp(page, "pipRun=1");
     await openPipHome(page);
-    const waiting = homeConversationRegion(page).getByRole("region", { name: "Drafts" });
+    // General's timeline holds the drafts waiting, among its other entries.
+    const waiting = homeConversationRegion(page).locator("[data-timeline]");
     const start = waiting.getByRole("article", { name: "Start an agent: CA-402" });
     const rewrite = waiting.getByRole("article", { name: "Update the description of CA-401" });
     await expect(start).toBeVisible();
     await page.locator(PIP_INPUT).focus();
-    for (let i = 0; i < 4 && !(await start.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
+    for (let i = 0; i < 8 && !(await start.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
     await expect(start).toBeFocused();
     await page.keyboard.press("s");
     await expect(start).toHaveCount(0);
@@ -214,11 +216,12 @@ test.describe("agent cards and help (N9, N12)", () => {
     await openApp(page);
     await openPipHome(page);
     await expandNeedsYou(page);
+    const asking = (await mockRuns(page)).find((r) => r.key === "CA-409" && r.state === "needsAnswer")!;
     await needRow(page, /CA-409.*asks a question/).click();
     await needsPane(page).getByRole("textbox", { name: "Your answer" }).fill("Yes, keep the old rounding for refunds.");
     await needsPane(page).getByRole("button", { name: "Send answer" }).click();
     await expect(needRow(page, /CA-409/)).toHaveCount(0);
-    const card = pipHome(page).getByRole("region", { name: "Your agents" }).locator("article[data-run-id]", { hasText: "CA-409" });
+    const card = homeConversationRegion(page).locator(`[data-timeline-entry] article[data-run-id="${asking.id}"]`);
     await expect(card).toContainText("Working");
     await expect(card).not.toContainText(/Working\s*·\s*Working/);
   });

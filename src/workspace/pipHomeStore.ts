@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { TimelineFilter } from "../lib/timeline";
 
 /** The three columns of Pip home, left to right. */
 export const PIP_HOME_COLUMNS = ["list", "conversation", "rail"] as const;
@@ -40,6 +41,9 @@ interface PipHomeState {
    * opens the group, shows the combined preview and clears this. It confirms nothing.
    */
   batchPreview: string | null;
+  /** What the workstream's timeline shows: everything, its runs, its drafts or its decisions. Agents is Runs across every workstream. */
+  timelineFilter: TimelineFilter;
+  setTimelineFilter(filter: TimelineFilter): void;
   /** Asks the list to open group `gid`'s combined preview of its safe drafts, for the person to confirm. */
   previewBatch(gid: string): void;
   /** Opens need `key`'s decision in the middle column, for workstream `workstreamId` (null is General). */
@@ -59,7 +63,7 @@ interface PipHomeState {
   reset(): void;
 }
 
-const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), asking: null, batchPreview: null } as const;
+const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), asking: null, batchPreview: null, timelineFilter: "all" } as const;
 
 export const usePipHome = create<PipHomeState>((set) => ({
   ...BLANK,
@@ -74,6 +78,7 @@ export const usePipHome = create<PipHomeState>((set) => ({
   setExpanded: (id, on) => set((s) => (s.expanded.has(id) === on ? s : { expanded: new Set(on ? [...s.expanded, id] : [...s.expanded].filter((x) => x !== id)) })),
   ask: (asking) => set({ asking }),
   previewBatch: (gid) => set((s) => ({ batchPreview: gid, expanded: new Set([...s.expanded, gid]) })),
+  setTimelineFilter: (timelineFilter) => set({ timelineFilter }),
   reset: () => set({ ...BLANK }),
 }));
 

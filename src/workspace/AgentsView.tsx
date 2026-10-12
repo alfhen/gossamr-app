@@ -47,6 +47,8 @@ import { agentKey } from "./agentKeys";
 import { arm, confirmArmed, disarm, keyPlan, openNeed } from "./needsActions";
 import { usePipHome } from "./pipHomeStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
+import type { TimelineFilter } from "../lib/timeline";
+import { TimelineFilterBar, showTimeline } from "./TimelineFilterBar";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
@@ -151,6 +153,8 @@ export interface AgentsActions {
   openSafety(): void;
   /** Opens a need on Pip home, from a run's "In Needs you" pill. */
   openNeed?(need: Need): void;
+  /** Another of the timeline's filters (All, Drafts, Decisions): the selected workstream's timeline on Pip home. */
+  showTimeline?(filter: TimelineFilter): void;
 }
 
 function Toolbar({ runs, filters, view, group, introShown, on }: { runs: readonly Run[]; filters: AgentFilters; view: AgentsViewMode; group: AgentsGroup; introShown: boolean; on: AgentsActions }) {
@@ -376,6 +380,20 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
         </button>
         <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
       </header>
+      {/* Agents is the timeline's Runs filter across every workstream; the other filters are a workstream's timeline on Pip home. */}
+      {on.showTimeline && (
+        <div className="border-b border-ws-sep px-6 py-1.5">
+          <TimelineFilterBar
+            value="runs"
+            onChange={(f) => f !== "runs" && on.showTimeline?.(f)}
+            after={
+              <span data-agents-scope className="text-sm text-ws-ink3">
+                in every workstream
+              </span>
+            }
+          />
+        </div>
+      )}
       <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} on={on} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-[max(80px,var(--ws-launcher-clear,0px))]">
         <div
@@ -466,6 +484,7 @@ const actions: AgentsActions = {
   startAgent: () => useRuns.getState().setPicking(true),
   openSafety: () => useRuns.getState().openSafety(),
   openNeed,
+  showTimeline,
 };
 
 export function AgentsView() {

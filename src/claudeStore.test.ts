@@ -364,7 +364,7 @@ describe("wake turns", () => {
   it("registers a wake from a request id it hasn't seen as a turn of its own in its conversation", () => {
     onClaudeEvent("wake-1", { type: "running" }, wake);
     onClaudeEvent("wake-1", { type: "text", text: "R1 finished." }, wake);
-    expect(useClaude.getState().byTicket["ws:w1"].turns).toEqual([{ requestId: "wake-1", kind: "wake", prompt: wake.prompt, steps: [], text: "R1 finished.", status: "running", error: null }]);
+    expect(useClaude.getState().byTicket["ws:w1"].turns).toEqual([{ requestId: "wake-1", kind: "wake", prompt: wake.prompt, steps: [], text: "R1 finished.", status: "running", error: null, at: expect.any(String) }]);
     onClaudeEvent("wake-1", { type: "done", sessionId: "s1", ok: true, message: null }, wake);
     expect(useClaude.getState().byTicket["ws:w1"]).toMatchObject({ sessionId: "s1", turns: [{ kind: "wake", status: "done" }] });
     expect(useClaude.getState().byTicket["ws:w1"].turns).toHaveLength(1);
