@@ -145,16 +145,7 @@ impl RunService {
         self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
-        let Some(ws) = run.spec.workstream.clone() else { return Err(refuse("a fix round goes only to a workstream's build")) };
-        if run.spec.kind != RunKind::Build || !run.spec.allow_push {
-            return Err(refuse("a fix round goes only to a workstream's build that pushes to a draft pull request"));
-        }
-        if run.state != RunState::Done {
-            return Err(refuse(format!("This build is {}, so it can't be sent a fix round.", run.state.as_str())));
-        }
-        if let Some(why) = run.follow_up_blocker() {
-            return Err(refuse(format!("This build can't be sent back: {why}.")));
-        }
+        let ws = fix_round_target(&run)?;
         let scope = self.core.scope().await?;
         let settings = self.settings();
         if !matches!(self.core.workstream(&scope, &ws).await?, Some(v) if rule_runs(&settings, &v.workstream, Rule::FixRound)) {
@@ -190,6 +181,107 @@ impl RunService {
                 Err(Error::Claude(why))
             }
         }
+    }
+}
+
+/// The workstream of `build` when a fix round may go to it: a finished build of a workstream that pushes to a draft pull
+/// request and can be sent back.
+fn fix_round_target(build: &Run) -> Result<String> {
+    let Some(ws) = build.spec.workstream.clone() else { return Err(refuse("a fix round goes only to a workstream's build")) };
+    if build.spec.kind != RunKind::Build || !build.spec.allow_push {
+        return Err(refuse("a fix round goes only to a workstream's build that pushes to a draft pull request"));
+    }
+    if build.state != RunState::Done {
+        return Err(refuse(format!("This build is {}, so it can't be sent a fix round.", build.state.as_str())));
+    }
+    if let Some(why) = build.follow_up_blocker() {
+        return Err(refuse(format!("This build can't be sent back: {why}.")));
+    }
+    Ok(ws)
+}
+
+/// Why a person's fix round isn't sent when none of the review's blocking findings cites a file and line.
+pub const NOTHING_TO_FIX: &str = "None of the review's blocking findings cites a file and line, so a fix round has nothing to send. Post the review or take it from here.";
+/// Why a person's fix round isn't sent when the review's output holds Gossamr's data markers.
+pub const REVIEW_MARKED: &str = "The review's output holds text Gossamr reserves, so a fix round won't carry it. Post the review or take it from here.";
+
+impl RunService {
+    /// The person's "Run another fix round" on review `review_id`, which still blocks after the automatic fix rounds ran
+    /// out: the same resume as an automatic round, with the message Core builds from the review's blocking findings
+    /// (`autostart::fix_round_message`, scrubbed and marker-wrapped), past the cap of automatic rounds. Only while the
+    /// workstream's escalation is about that review, else `ESCALATION_GONE`, so each extra round needs a fresh click on
+    /// a fresh escalation. The workstream's mode, hold and rule switch don't matter: the person chose it.
+    ///
+    /// The audit line `fix_round_person` (actor Person, detail `after <review>`) takes the escalation away, so it is
+    /// written only once the session was woken, still under the launch lock so a second click finds the escalation gone.
+    /// A resume that fails records nothing and leaves the escalation offered: unlike an automatic round there is no cap
+    /// to protect, and the person must still be able to choose. It is not an `autostart` line, so the supervisor's count
+    /// of automatic rounds stays as it was and the rule never sends a third one itself. Pip and the supervisor have no
+    /// way to call this.
+    pub async fn send_person_fix_round(&self, review_id: &str) -> Result<Run> {
+        self.ensure_enabled()?;
+        let _turn = self.launching.lock().await;
+        let review = self.load(review_id).await?;
+        let gone = || refuse(crate::inbox::ESCALATION_GONE);
+        let Some(ws) = review.spec.workstream.clone() else { return Err(gone()) };
+        let scope = self.core.scope().await?;
+        let view = self.core.workstream(&scope, &ws).await?.ok_or_else(gone)?;
+        let Some(escalation) = view.escalation.filter(|e| e.review_run == review.id) else { return Err(gone()) };
+        let mut run = self.load(&escalation.build_run).await?;
+        if run.spec.workstream.as_deref() != Some(ws.as_str()) {
+            return Err(refuse("a fix round goes only to a workstream's build"));
+        }
+        fix_round_target(&run)?;
+        let resolved = self.core.resolved_of(&review).await?;
+        let mut texts: Vec<&str> = [review.result.as_deref(), review.summary.as_deref()].into_iter().flatten().collect();
+        texts.extend(resolved.findings.iter().flat_map(|f| [Some(f.text.as_str()), f.where_.as_deref()]).flatten());
+        if crate::agent::supervisor::marked(&texts) {
+            return Err(refuse(REVIEW_MARKED));
+        }
+        let message = crate::agent::autostart::fix_round_message(&resolved.findings).ok_or_else(|| refuse(NOTHING_TO_FIX))?;
+        let digest = format!("{:x}", sha2::Sha256::digest(message.as_bytes()));
+        match self.another_pass(&mut run, &message, false).await? {
+            None => {
+                let chosen = WorkstreamEvent::new(&ws, Actor::Person, "fix_round_person", run.last_progress_at).run(&run.id).digest(&digest).detail(format!("after {}", review.id));
+                if let Err(e) = self.core.record_workstream_event(&scope, chosen).await {
+                    eprintln!("couldn't record your fix round of run {} in workstream {ws}: {e}", run.id);
+                }
+                let event = RunEvent {
+                    run_id: run.id.clone(),
+                    seq: 0,
+                    at: run.last_progress_at,
+                    kind: "follow_up".into(),
+                    text: "You asked for another pass: fix what the review found blocking".into(),
+                    detail: Some(format!("Pass {}. Started by you after the {} automatic rounds.", run.passes, escalation.rounds)),
+                };
+                if let Err(e) = self.core.append_run_events(&run.id, &[event]).await {
+                    eprintln!("couldn't record the fix round: {e}");
+                }
+                let line = WorkstreamEvent::new(&ws, Actor::Person, "fix_round_sent", run.last_progress_at).run(&run.id).digest(&digest).detail(message.chars().count().to_string());
+                if let Err(e) = self.core.record_workstream_event(&scope, line).await {
+                    eprintln!("couldn't record the fix round of run {} in workstream {ws}: {e}", run.id);
+                }
+                Ok(run)
+            }
+            Some(why) => {
+                if run.state == RunState::Stopped {
+                    run.error = Some(why.clone());
+                }
+                self.store(&run).await?;
+                Err(Error::Claude(why))
+            }
+        }
+    }
+}
+
+impl RunService {
+    /// The person's "I'll take it from here" on review `review` of workstream `ws` (`Core::take_over_escalation`), under
+    /// the launch lock a person's fix round holds, so a fix round and a take over clicked at once in two windows can't
+    /// both pass the check that the escalation is still there.
+    pub async fn take_over_escalation(&self, ws: &str, review: &str) -> Result<crate::domain::Workstream> {
+        let _turn = self.launching.lock().await;
+        let scope = self.core.scope().await?;
+        self.core.take_over_escalation(&scope, ws, review).await
     }
 }
 

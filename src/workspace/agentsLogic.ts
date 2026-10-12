@@ -1,3 +1,4 @@
+import { parsePermission } from "../lib/permission";
 import { humanDuration } from "../lib/runNames";
 import { relativeTime } from "../lib/views";
 import { runLabels, stage } from "../lib/workstreamStage";
@@ -132,8 +133,7 @@ export function runTitle(run: Pick<Run, "item" | "spec">, ticketTitle: string | 
 export function permissionRequest(needs: string | null): { tool: string | null; command: string } | null {
   const text = needs?.trim();
   if (!text) return null;
-  const m = /^approve\s+([^:\s]+):\s*([\s\S]*)$/i.exec(text);
-  return m ? { tool: m[1], command: m[2] } : { tool: null, command: text };
+  return parsePermission(text) ?? { tool: null, command: text };
 }
 
 /** The first line or sentence of a result, for the card; the full text is for the run sheet. */

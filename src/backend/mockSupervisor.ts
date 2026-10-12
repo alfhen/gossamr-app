@@ -104,7 +104,7 @@ function factLine(f: WakeFact): string {
   const label = (l: string) => (shownId(l) && l.length <= 8 ? l : "a run");
   if (f.started) line += `; started ${f.started.kind} ${label(f.started.label)} automatically`;
   if (f.fixRound) line += `; sent fix round ${f.fixRound.round} to build ${label(f.fixRound.build)}`;
-  if (f.exhausted) line += `; review still blocking after ${FIX_ROUNDS_MAX} fix rounds`;
+  if (f.exhausted) line += `; review still blocking after ${FIX_ROUNDS_MAX} fix rounds; the person chooses what happens next`;
   if (f.waitingForPr) line += "; waiting for its pull request";
   return line;
 }

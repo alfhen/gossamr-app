@@ -69,6 +69,34 @@ Not run, because both need a signed-in session spending the person's own Claude 
 - `--` before the message is accepted, as with launch.
 - Not tested: a session stopped in the middle of a tool call, a resumed `needsPermission` session, and whether the guard text still applies after a conversation has been compacted.
 
+## Answering a permission prompt (Claude Code 2.1.296, read from --help only)
+
+Read from `claude --help` and `claude agents --help`, `claude attach --help`, `claude logs --help`, `claude respawn --help` and `claude stop --help` of the installed 2.1.296; no session was started and nothing went over the network. There is no supported way to answer a pending permission prompt of a background session from outside it:
+
+- `claude agents` only lists (`--json`) or opens its own interactive screen; it has no respond or approve subcommand.
+- `claude attach <id>` is interactive: it is where a person answers the prompt, in Terminal.
+- `claude logs` only reads, `claude respawn` restarts a session, `claude stop` stops one.
+- `--permission-prompt-tool` and `--permission-prompts host|none` apply only with `--print`, which `--bg` rejects.
+- An allow rule on resume isn't usable: any flag on `--bg --resume` makes `claude` start a copy, and a copy is a new job without the run's saved flags (see "Resume after stop" and the run-report tool section). `--allowedTools "Bash(<exact command>)"` on resume was therefore not used, and `ClaudeCli::resume` still passes no flag.
+
+What Gossamr does (`runs/permission.rs`):
+
+- **Deny** is delivered for real, by the same mechanism as an answer: the session is stopped (which drops the pending prompt, so the request never runs) and woken in place with `--bg --resume <session id> -- <reminder + message>`. The message is fixed text that quotes nothing of the request, since the agent knows what it asked: the person did not allow it, don't run it or anything that does the same, carry on without it and say so in the answer if the work can't be finished. The exact command is recorded only in the run's log and the workstream audit. A wake that starts a copy is handled as for an answer (stopped, and removed for a read-only run). If the wake fails, the run is left stopped with the denial kept to send again. Deny is offered for every prompt, read-only runs included.
+- **Allow once** can't be delivered by Gossamr, so it is "Allow once in Terminal": Gossamr checks the policy below, records the person's choice with the exact command (the run's log and the workstream audit, actor person, action `permission_allowed_in_terminal`), and opens Terminal on `claude attach <id>`. The page copies the exact command, and the person picks Claude Code's own one-time "Yes" for exactly that request. Gossamr never stops or resumes the session for it and writes no allow rule anywhere. The choice is forgotten once the run moves past that prompt or asks something else.
+
+The policy (`offer`, shared fixtures in `src/lib/permission.fixtures.json`):
+
+- Allow is offered only for the exact tool and command the agent asked for, never a pattern, and only when the request reached Gossamr whole: not for one masked by redaction, cut at the 500 characters the tracker keeps, holding a NUL, or not in the `approve <Tool>: <command>` form.
+- A read-only run (its kind, or the restriction it was launched with) never gets Allow, whatever the command: it launches in `dontAsk`, which refuses anything not on its exact allow list, and its deny list beats that. The page says "This run is read-only: Claude Code refuses this." and offers only Deny and Stop.
+- A Build gets Allow except for what Gossamr itself forbids it, checked on each command of a Bash line (split on `&&`, `||`, `;`, `|`, `&` and newlines; any `$(`, backtick, `<(` or `>(` is refused outright): a push of anything but `git push [-u|--set-upstream] origin worktree-<name>` or `origin HEAD:worktree-<name>` word for word, and any push at all when the Build wasn't approved to push (a bare `git push` and `origin HEAD` are refused too, as they push wherever the checked-out branch is or tracks); `gh pr create` without `--draft` or without push approved; `gh pr merge`, `ready`, `review` and `close`; and Gossamr's own `mcp__gossamr` tools.
+- Beyond those rules, a Build's Bash command is offered Allow only when it is plain (`plain` in `runs/permission.rs`): every command in it starts with one of a short list of programs that run nothing else (`ls`, `cat`, `grep`, `rg`, `find`, `cp`, `mv`, `mkdir`, `git status`/`diff`/`log`/`add`/`commit`/`fetch` and the like, `gh` reads and draft pull requests), with no variable, glob, brace, redirect, subshell, escape, comment or `NAME=value` outside quotes, no variable or escape inside double quotes, none of the options that make a plain program run another (`find -exec`, `rg --pre`, `git fetch --upload-pack`, `ext::` and the like), and paths for `cd`, `cp`, `mv`, `rm`, `mkdir` and `touch` that stay inside the checkout. A file tool (Edit, Write, MultiEdit, NotebookEdit) is offered Allow only for a path inside the checkout: relative, or under the run's worktree, with no `..` and no home directory. Any other tool, such as a web fetch, is "unchecked" too. Anything else, a script, an interpreter or a package manager included, is "unchecked" and answered in Terminal. A list of what to refuse can always be talked around (a glob for `.git`, an interpreter the list doesn't name); a list of what to allow can't.
+- Allow and Deny are the person's alone. Pip has no tool for them (`run_tools_are_read_only`), and the supervisor's auto-start never answers a prompt (`autostart_and_pip_never_answer_a_permission_prompt`). Answering changes nothing that was approved: the digest and spec stay as they were.
+
+To check by hand, with a signed-in session (not done yet):
+
+1. Whether a session stopped while it waits on a permission prompt and resumed in place treats the prompt as interrupted (the request isn't run) and reads the denial as the next turn. Expected from the stop-and-resume runs above, which never covered a `needsPermission` session.
+2. Whether a later CLI offers a way to answer a background session's prompt from outside it (a respond subcommand of `claude agents`, or `--permission-prompt-tool` without `--print`). If one appears, Allow once can be delivered in place and the Terminal step dropped.
+
 ## A finished run's final answer (Claude Code 2.1.287)
 
 Seen on one real Triage run (CA-271) in the person's own config, reading structure and lengths only:
@@ -155,7 +183,7 @@ What is decided in code, not by the CLI:
 
 To check by hand, with a signed-in Claude (`cargo test real_report -- --ignored --nocapture`, which starts a stub server, a real `--bg` session in `~/Code` and one resume, and stops and removes what it started):
 
-1. That a `--bg` session loads the `--mcp-config` file and calls the tool without a permission prompt. `claude agents --help` lists `--mcp-config` among the flags applied to dispatched sessions but not `--allowedTools`, so a permission prompt for the tool is possible: it would show as Needs permission and can only be answered in Terminal.
+1. That a `--bg` session loads the `--mcp-config` file and calls the tool without a permission prompt. `claude agents --help` lists `--mcp-config` among the flags applied to dispatched sessions but not `--allowedTools`, so a permission prompt for the tool is possible: it would show as Needs permission, answered with Deny in Gossamr or in Terminal (see "Answering a permission prompt").
 2. That the token is on no command line (the test checks `ps`) and where Claude keeps the config: the test prints whether the token is in the job's files. If it is, any process of the same user can read it for as long as the job exists; the token only works for one run and only while it is live.
 3. Whether a `--resume` with no flag still has the tool. The test prints KEPT or LOST. Either is workable: the person's answer marks the earlier report stale, and the written answer is read when the resumed turn does not report again.
 4. Whether a session that started while Gossamr was restarting (the tool server rebinds the port it used last time, and a bind failure only disables the tool) reconnects to a server that was down, and whether Claude defers the tool's schema so the prompt's field list is what the agent calls it from.

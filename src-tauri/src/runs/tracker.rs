@@ -30,7 +30,7 @@ const STOPPED_SETTLE: chrono::Duration = chrono::Duration::seconds(60);
 /// Focusing the window this soon after a notification opens the run it was about.
 pub const OPEN_WINDOW: Duration = Duration::from_secs(30);
 
-const NEEDS_KEPT: usize = 500;
+pub(crate) const NEEDS_KEPT: usize = 500;
 const DETAIL_KEPT: usize = 500;
 const EVENT_TEXT_KEPT: usize = 500;
 const EVENT_DETAIL_KEPT: usize = 2_048;
@@ -371,6 +371,11 @@ impl RunService {
                 }
                 Err(e) => eprintln!("couldn't stop run {run_id} for passing a limit: {e}"),
             }
+        }
+        // Allow once covers the one prompt the person read: once the run is past it or asks something else, the new
+        // prompt is theirs to answer again.
+        if run.state != RunState::NeedsPermission || run.needs != before.needs {
+            run.permission_allowed = None;
         }
         let ended = matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped);
         if ended {

@@ -6,7 +6,7 @@ import { useWorkspace } from "../workspaceStore";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
 import { StateChip, useSlotQueue } from "./AgentParts";
-import { KIND_LABEL, agentGroups, ageText, formatTokens, ordinal, permissionRequest, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition, stateView } from "./agentsLogic";
+import { KIND_LABEL, agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition, stateView } from "./agentsLogic";
 import { openTicketByKey } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { failureAction } from "./failureActions";
@@ -18,6 +18,8 @@ import { cleanupReason } from "./cleanupLogic";
 import { answerable, sheetTopOn, mayTouch, readOnlyNote, buildFromPlanOptions, canStartNow, reviewThisControl, reviewThisOptions, pendingBreakdownOn, pipAsks, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
+import { PermissionAsk, PermissionSent } from "./PermissionAsk";
+import { permissionConfirmation, type PermissionAnswered } from "./runsStore";
 import { RunContinuation } from "./RunContinuation";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
@@ -74,6 +76,8 @@ export interface RunSheetViewProps {
   opened: boolean;
   /** The person's answer went through and the run hasn't reported anything since. */
   answerSent?: boolean;
+  /** The person's answer to the run's permission prompt while it still applies (`permissionConfirmation`): a denial shows at the top, an Allow once in the prompt. */
+  permissionAnswered?: PermissionAnswered | null;
   /** Why this run is worth cleaning up, when it is. */
   cleanup?: string | null;
   /** Where the run is in line for a slot, 1 for next, when it waits for one. */
@@ -112,24 +116,17 @@ function OpenInTerminal({ run, on, filled = true }: { run: Run; on: RunSheetActi
   );
 }
 
-function Attention({ run, opened, answering, slotPlace, on }: { run: Run; opened: boolean; answering: boolean; slotPlace: number | null; on: RunSheetActions }) {
+function Attention({ run, label, permissionAnswered, opened, answering, slotPlace, on }: { run: Run; label?: string; permissionAnswered: PermissionAnswered | null; opened: boolean; answering: boolean; slotPlace: number | null; on: RunSheetActions }) {
   switch (run.state) {
-    case "needsPermission": {
-      const ask = permissionRequest(run.needs);
+    case "needsPermission":
       return (
         <Box tone="needs" label="Permission request">
           <BoxTitle icon="hand" tone="needs">
             Claude is asking permission
           </BoxTitle>
-          <p className="m-0 text-ws-ink">{ask ? `It wants to run ${ask.tool && ask.tool !== "Bash" ? `a ${ask.tool} command` : "this command"}:` : "It is waiting for permission."}</p>
-          {ask && <CodeBox text={ask.command} what="the command" wrap />}
-          <p className="m-0 text-sm text-ws-ink2">The session is waiting in Terminal. Gossamr can&apos;t answer for you: open it there and choose. Gossamr adds no rules of its own on top of yours.</p>
-          <div>
-            <OpenInTerminal run={run} on={on} />
-          </div>
+          <PermissionAsk run={run} label={label} answered={permissionAnswered} onAttach={on.attach} onStop={on.askStop} />
         </Box>
       );
-    }
     case "needsAnswer":
     case "stopped":
       return <RunAnswer key={run.id} run={run} answering={answering} on={on} />;
@@ -290,7 +287,7 @@ function BriefBody({ brief, readOnly }: { brief: RunSheetViewProps["brief"]; rea
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, answerSent = false, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, answerSent = false, permissionAnswered = null, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
   const view = stateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -328,6 +325,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
         <AutoStarted run={run} className="text-sm" />
         <Facts run={run} now={now} ticketTitle={ticketTitle} on={on} />
         {answerSent && <AnswerSent />}
+        {permissionAnswered?.kind === "denied" && <PermissionSent answered={permissionAnswered} />}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -370,7 +368,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       </div>
 
       <RunContinuation key={`continue-${run.id}`} run={run} adopt={on.adoptSession} />
-      {attention && <Attention run={run} opened={opened} answering={answering} slotPlace={slotPlace} on={on} />}
+      {attention && <Attention run={run} label={label} permissionAnswered={permissionAnswered} opened={opened} answering={answering} slotPlace={slotPlace} on={on} />}
       {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingBreakdown} drafting={drafting} on={on} />}
       {outcome?.change && <Changes change={outcome.change} on={on} />}
 
@@ -435,6 +433,7 @@ export function RunSheet({ id }: { id: string }) {
   const disk = useDisk(backend, id);
   const opened = useRuns((s) => s.terminalOpened.has(id));
   const sentAt = useRuns((s) => s.answered[id]);
+  const permissionAnswered = useRuns((s) => s.permissionAnswered[id]);
   const browseOrder = useRuns((s) => s.browseOrder);
 
   useEffect(() => {
@@ -561,6 +560,6 @@ export function RunSheet({ id }: { id: string }) {
       backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
     },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} permissionAnswered={permissionConfirmation(run, permissionAnswered)} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
 }
 

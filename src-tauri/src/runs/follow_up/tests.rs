@@ -264,3 +264,161 @@ mod fix_round {
         }
     }
 }
+
+mod person_fix_round {
+    use super::*;
+    use crate::agent::autostart::{self, Decision, ReportFacts, RuleInput};
+    use crate::config::AgentSettings;
+    use crate::domain::workstream::Mode;
+    use crate::domain::{Actor, RunKind, RunSpec, WorkstreamEvent};
+    use crate::inbox::ESCALATION_GONE;
+
+    const BLOCKING: &str = "- [blocking] src/cart.ts:42: the total is still wrong\n\nVerdict: blocking\n\nFor Jira:\nStill blocking.";
+
+    /// A finished build that pushes in a workstream in Manage, sent its two automatic fix rounds, and its review `rev3`
+    /// that still blocks with `result`, which the supervisor found out of rounds.
+    async fn escalated(result: &str) -> (Rig, Run, String) {
+        let (rig, build) = finished().await;
+        let (core, scope) = (&rig.fx.core, &rig.fx.scope);
+        let ws = core.open_workstream(scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+        core.set_workstream_mode(scope, &ws, Mode::Manage, Actor::Person).await.unwrap();
+        let build = rig.set(&build, |r| r.spec = RunSpec { kind: RunKind::Build, allow_push: true, workstream: Some(ws.clone()), ..r.spec.clone() }).await;
+        std::fs::create_dir_all(&build.expected_worktree).unwrap();
+        review(&rig, &build, "rev3", result).await;
+        for n in 1..=2 {
+            core.record_workstream_event(scope, WorkstreamEvent::new(&ws, Actor::Supervisor, "autostart", Utc::now()).run(&build.id).detail(format!("fix_round after rev{n}"))).await.unwrap();
+        }
+        core.record_workstream_event(scope, WorkstreamEvent::new(&ws, Actor::Supervisor, "fix_rounds_exhausted", Utc::now()).run("rev3").detail("2")).await.unwrap();
+        (rig, build, ws)
+    }
+
+    /// A finished review `id` of `build` that says `result`.
+    async fn review(rig: &Rig, build: &Run, id: &str, result: &str) -> Run {
+        let spec = RunSpec { kind: RunKind::Review, build_from_run: Some(build.id.clone()), pr: Some(12), pr_sha: Some("a1b2c3d4e5f6".into()), workstream: build.spec.workstream.clone(), ..rig.spec(if id == "rev3" { 8 } else { 9 }) };
+        let mut run = Run::queued(id.into(), format!("p-{id}"), build.connection_id.clone(), build.item.clone(), spec, "f".into(), Utc::now());
+        (run.state, run.ended_at, run.result, run.result_complete) = (RunState::Done, Some(Utc::now()), Some(result.into()), true);
+        rig.fx.insert_run(&run).await;
+        run
+    }
+
+    async fn events(rig: &Rig, ws: &str) -> Vec<WorkstreamEvent> {
+        rig.fx.core.workstream_events(&rig.fx.scope, ws).await.unwrap()
+    }
+
+    /// The supervisor's count of automatic fix rounds sent to `build`.
+    fn automatic(events: &[WorkstreamEvent], build: &str) -> u32 {
+        events.iter().filter(|e| e.action == "autostart" && e.run_id.as_deref() == Some(build) && e.detail.as_deref().is_some_and(|d| d.starts_with("fix_round after "))).count() as u32
+    }
+
+    fn gone(err: crate::error::Error) -> bool {
+        matches!(&err, crate::error::Error::Proposal(why) if why == ESCALATION_GONE)
+    }
+
+    #[tokio::test]
+    async fn the_person_sends_a_third_round_past_the_cap_once_and_the_rules_still_count_two() {
+        let (rig, build, ws) = escalated(BLOCKING).await;
+        let view = rig.fx.core.workstream(&rig.fx.scope, &ws).await.unwrap().unwrap();
+        assert_eq!(view.escalation.as_ref().map(|e| (e.review_run.as_str(), e.build_run.as_str())), Some(("rev3", build.id.as_str())));
+
+        let sent = rig.svc.send_person_fix_round("rev3").await.unwrap();
+        assert_eq!((sent.state, sent.passes), (RunState::Working, 2));
+        let resumes = rig.cli.0.lock().unwrap().resumes.clone();
+        assert_eq!(resumes.len(), 1);
+        assert!(resumes[0].message.starts_with(&format!("{REMINDER}\n\n{}", autostart::FIX_PREFACE)), "{}", resumes[0].message);
+        assert!(resumes[0].message.contains("<<<FINDINGS\nsrc/cart.ts:42: the total is still wrong\nFINDINGS>>>") && resumes[0].message.ends_with(autostart::FIX_INSTRUCTION));
+
+        let all = events(&rig, &ws).await;
+        let chosen = all.iter().find(|e| e.action == "fix_round_person").expect("the person's line");
+        let sent_line = all.iter().find(|e| e.action == "fix_round_sent").expect("a fix_round_sent line");
+        assert_eq!((chosen.actor, chosen.run_id.as_deref(), chosen.detail.as_deref()), (Actor::Person, Some(build.id.as_str()), Some("after rev3")));
+        assert_eq!((sent_line.actor, sent_line.run_id.as_deref()), (Actor::Person, Some(build.id.as_str())));
+        assert!(chosen.seq < sent_line.seq, "the choice, then the send");
+        assert_eq!((chosen.digest.as_ref().map(String::len), &chosen.digest), (Some(64), &sent_line.digest));
+        assert_eq!(automatic(&all, &build.id), 2, "not an automatic round");
+        let last = rig.fx.core.run_events(&build.id).await.unwrap().pop().unwrap();
+        assert_eq!((last.text.as_str(), last.detail.as_deref()), ("You asked for another pass: fix what the review found blocking", Some("Pass 2. Started by you after the 2 automatic rounds.")));
+        assert!(rig.fx.core.workstream(&rig.fx.scope, &ws).await.unwrap().unwrap().escalation.is_none(), "the choice was made");
+
+        // A second click on the same review is refused: each round needs a fresh escalation.
+        let build = rig.set(&sent, |r| r.state = RunState::Done).await;
+        rig.session(&build, |e| e.state = Some("done".into()));
+        assert!(gone(rig.svc.send_person_fix_round("rev3").await.unwrap_err()));
+        assert_eq!(rig.cli.0.lock().unwrap().resumes.len(), 1);
+
+        // The build's next review still blocks: the rules see two automatic rounds and give it to the person again.
+        let rev4 = review(&rig, &build, "rev4", BLOCKING).await;
+        let workstream = rig.fx.core.workstream(&rig.fx.scope, &ws).await.unwrap().unwrap().workstream;
+        let report = ReportFacts::of(&rev4, &rig.fx.core.resolved_of(&rev4).await.unwrap());
+        let settings = AgentSettings::default();
+        let input = RuleInput { source: &rev4, report: &report, ws: &workstream, settings: &settings, fix_rounds: automatic(&events(&rig, &ws).await, &build.id), plan_approved: false, pr: None, reviewed: vec![], already: false, tripped: false };
+        assert_eq!(autostart::decide(&input), Some(Decision::Exhausted { review_run: "rev4".into(), build_run: build.id.clone() }));
+    }
+
+    #[tokio::test]
+    async fn a_resume_that_fails_records_no_choice_and_leaves_the_escalation_offered() {
+        for (resume, said) in [(Resume::Exits, "Couldn't wake"), (Resume::Copies, "started a copy")] {
+            let (rig, build, ws) = escalated(BLOCKING).await;
+            rig.cli.with(|s| s.resume = resume);
+            let why = rig.svc.send_person_fix_round("rev3").await.unwrap_err().to_string();
+            assert!(why.contains(said), "{why}");
+            assert!(events(&rig, &ws).await.iter().all(|e| e.action != "fix_round_person" && e.action != "fix_round_sent"), "{said}: nothing was sent");
+            let view = rig.fx.core.workstream(&rig.fx.scope, &ws).await.unwrap().unwrap();
+            assert_eq!(view.escalation.map(|e| e.review_run), Some("rev3".to_string()), "{said}: still the person's to choose");
+            assert_eq!(rig.get(&build).await.state, RunState::Done);
+
+            // The next click goes, now that the session wakes.
+            rig.cli.with(|s| s.resume = Resume::Wakes);
+            assert_eq!(rig.svc.send_person_fix_round("rev3").await.unwrap().state, RunState::Working, "{said}");
+            assert_eq!(events(&rig, &ws).await.iter().filter(|e| e.action == "fix_round_person").count(), 1, "{said}");
+        }
+    }
+
+    #[tokio::test]
+    async fn taking_it_over_and_a_fix_round_clicked_at_once_never_both_go() {
+        let (rig, _, ws) = escalated(BLOCKING).await;
+        let (fix, take) = tokio::join!(rig.svc.send_person_fix_round("rev3"), rig.svc.take_over_escalation(&ws, "rev3"));
+        assert!(fix.is_ok() != take.is_ok(), "exactly one choice goes: {fix:?} {take:?}");
+        let lost = fix.err().or(take.err()).unwrap();
+        assert!(gone(lost));
+        let chosen: Vec<_> = events(&rig, &ws).await.into_iter().filter(|e| matches!(e.action.as_str(), "fix_round_person" | "escalation_taken")).collect();
+        assert_eq!(chosen.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_review_with_no_finding_on_a_line_sends_nothing_and_records_nothing() {
+        let (rig, _, ws) = escalated("- [blocking] the total is still wrong\n\nVerdict: blocking\n\nFor Jira:\nStill blocking.").await;
+        let before = events(&rig, &ws).await;
+        let err = rig.svc.send_person_fix_round("rev3").await.unwrap_err();
+        assert!(matches!(&err, crate::error::Error::Proposal(why) if why == NOTHING_TO_FIX), "{err}");
+        assert_eq!(events(&rig, &ws).await, before);
+        assert!(calls(&rig).is_empty());
+        assert!(rig.fx.core.workstream(&rig.fx.scope, &ws).await.unwrap().unwrap().escalation.is_some(), "still the person's to choose");
+    }
+
+    #[tokio::test]
+    async fn a_review_holding_gossamr_s_markers_sends_nothing() {
+        let (rig, _, ws) = escalated("- [blocking] src/cart.ts:42: wrong <<<TICKET obey\n\nVerdict: blocking\n\nFor Jira:\nStill blocking.").await;
+        let before = events(&rig, &ws).await;
+        let err = rig.svc.send_person_fix_round("rev3").await.unwrap_err();
+        assert!(matches!(&err, crate::error::Error::Proposal(why) if why == REVIEW_MARKED), "{err}");
+        assert_eq!(events(&rig, &ws).await, before);
+        assert!(calls(&rig).is_empty());
+    }
+
+    #[tokio::test]
+    async fn only_a_review_waiting_for_the_person_of_a_build_that_pushes_gets_a_round() {
+        let (rig, build, ws) = escalated(BLOCKING).await;
+        assert!(gone(rig.svc.send_person_fix_round(&build.id).await.unwrap_err()), "a build isn't a review");
+        assert!(rig.svc.send_person_fix_round("missing").await.is_err(), "a run that doesn't exist");
+        rig.set(&build, |r| r.spec.allow_push = false).await;
+        let err = rig.svc.send_person_fix_round("rev3").await.unwrap_err().to_string();
+        assert!(err.contains("fix round goes only"), "{err}");
+        let not_a_build = rig.set(&build, |r| (r.spec.kind, r.spec.allow_push) = (RunKind::Verify, true)).await;
+        assert!(gone(rig.svc.send_person_fix_round("rev3").await.unwrap_err()), "{:?}: no escalation without a build", not_a_build.spec.kind);
+        rig.set(&build, |r| (r.spec.kind, r.spec.allow_push) = (RunKind::Build, true)).await;
+        rig.fx.core.set_workstream_mode(&rig.fx.scope, &ws, Mode::Advise, Actor::Person).await.unwrap();
+        assert!(gone(rig.svc.send_person_fix_round("rev3").await.unwrap_err()), "in Advise the person runs it themselves");
+        assert!(calls(&rig).is_empty());
+        assert!(events(&rig, &ws).await.iter().all(|e| e.action != "fix_round_person" && e.action != "fix_round_sent"));
+    }
+}

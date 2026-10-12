@@ -4,6 +4,7 @@ import { targetOf } from "../lib/proposals";
 import type { CleanupResult, ItemRef, PlanComment, Proposal, Run, RunKind, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
+import { copyText } from "./AgentSheet";
 import { KIND_LABEL, NO_FILTERS, agentGroups, attentionCount, stepRun, stopAllText, type AgentFilters } from "./agentsLogic";
 import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
@@ -73,6 +74,12 @@ interface RunsState {
   browseOrder: readonly string[] | null;
   /** Runs whose answer went through, with the progress time they had then: "Answer sent" shows until it moves on. */
   answered: Readonly<Record<string, string>>;
+  /**
+   * The person's last answer to each run's permission prompt, with the exact command: a denial shows its confirmation
+   * until the run reports something new (`at`, its progress time then), an Allow once while the run still waits on that
+   * command in Terminal. `copied` says whether the command reached the clipboard.
+   */
+  permissionAnswered: Readonly<Record<string, PermissionAnswered>>;
   /** The ticket picker for starting an agent without a ticket open. */
   picking: boolean;
   init(backend: Backend): void;
@@ -106,6 +113,10 @@ interface RunsState {
   startNow(id: string): Promise<void>;
   /** Sends the person's answer to a run that is asking a question; the run carries on under the same id. */
   answer(id: string, text: string): Promise<void>;
+  /** The person's Deny for the permission prompt they read as `command`: Claude is told no and carries on without it. */
+  denyPermission(id: string, command: string): Promise<void>;
+  /** The person's Allow once for the permission prompt they read as `command`: opens the run in Terminal, where they answer Yes, and copies the command. */
+  allowPermissionOnce(id: string, command: string): Promise<void>;
   /** Takes a listed session over as the continuation of a stopped or finished run, after the person chose it. */
   adoptSession(id: string, session: string): Promise<void>;
   retryLaunch(id: string): Promise<void>;
@@ -132,6 +143,21 @@ interface RunsState {
   cleanupAll(ids: readonly string[]): Promise<{ removed: number; refused: string[] }>;
   setEarlierOpen(open: boolean): void;
   setIntroOpen(open: boolean | null): void;
+}
+
+/** What the person answered to a run's permission prompt (`permissionAnswered`). */
+export interface PermissionAnswered {
+  kind: "denied" | "allowed";
+  command: string;
+  at: string;
+  copied: boolean;
+}
+
+/** The confirmation for a run's answered permission prompt while it still applies: a denial until the run moves on, an Allow once while it waits on that command. */
+export function permissionConfirmation(run: Pick<Run, "lastProgressAt" | "permissionAllowed" | "state">, answered: PermissionAnswered | undefined): PermissionAnswered | null {
+  if (!answered) return null;
+  if (answered.kind === "denied") return answered.at === run.lastProgressAt ? answered : null;
+  return run.state === "needsPermission" && run.permissionAllowed?.command === answered.command ? answered : null;
 }
 
 const idle = { runs: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, afterIntro: null, afterIntroWhat: null, browseOrder: null, picking: false };
@@ -192,6 +218,25 @@ async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState
   }
 }
 
+/** Sends the person's Deny or Allow once and keeps the run as it came back, so the confirmation shows at once; a refusal is a toast. */
+async function answerPermission(get: () => RunsState, set: (patch: Partial<RunsState>) => void, id: string, kind: PermissionAnswered["kind"], command: string) {
+  const { backend, answering } = get();
+  if (!backend || answering.has(id)) return;
+  set({ answering: new Set([...answering, id]) });
+  try {
+    const run = kind === "denied" ? await backend.runsDenyPermission(id, command) : await backend.runsAllowPermissionOnce(id, command);
+    // Only once Terminal is open: the command goes on the clipboard for the person to compare with Claude Code's prompt.
+    const copied = kind === "allowed" && (await copyText(command));
+    const at = kind === "allowed" ? (run.permissionAllowed?.at ?? run.lastProgressAt) : run.lastProgressAt;
+    set({ runs: get().runs.map((r) => (r.id === id ? run : r)), permissionAnswered: { ...get().permissionAnswered, [id]: { kind, command, at, copied } } });
+  } catch (e) {
+    useToasts.getState().push(`Couldn't ${kind === "denied" ? "deny it" : "open it to allow"}: ${messageOf(e)}`);
+  } finally {
+    set({ answering: new Set([...get().answering].filter((x) => x !== id)) });
+    void get().reload();
+  }
+}
+
 const TICKET_READY = "Draft ticket ready. Nothing is created until you approve it.";
 
 let stop: (() => void) | null = null;
@@ -219,6 +264,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   drafting: null,
   answering: new Set<string>(),
   answered: {},
+  permissionAnswered: {},
   ...idle,
 
   init(backend) {
@@ -366,6 +412,14 @@ export const useRuns = create<RunsState>((set, get) => ({
       set({ answering: new Set([...get().answering].filter((x) => x !== id)) });
       void get().reload();
     }
+  },
+
+  async denyPermission(id, command) {
+    await answerPermission(get, set, id, "denied", command);
+  },
+
+  async allowPermissionOnce(id, command) {
+    await answerPermission(get, set, id, "allowed", command);
   },
 
   async adoptSession(id, session) {

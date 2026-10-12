@@ -473,11 +473,41 @@ describe("the run sheet", () => {
       expect(send.mock.calls).toEqual([[first.id, "Yes"], [second.id, "No"]]);
     });
 
+    it("denies a permission prompt and confirms it until the run moves on; a refused Allow once is a toast and records nothing", async () => {
+      await settle();
+      const run = s().runs.find((r) => r.state === "needsPermission")!;
+      await s().allowPermissionOnce(run.id, "git push origin HEAD");
+      expect(useToasts.getState().toasts[0].text).toMatch(/^Couldn't open it to allow: /);
+      expect(s().permissionAnswered[run.id]).toBeUndefined();
+      expect(backend.runs.attached).toEqual([]);
+      await s().denyPermission(run.id, "git push origin HEAD");
+      const after = s().runs.find((r) => r.id === run.id)!;
+      expect(after.state).toBe("working");
+      expect(s().permissionAnswered[run.id]).toEqual({ kind: "denied", command: "git push origin HEAD", at: after.lastProgressAt, copied: false });
+    });
+
+    it("copies the command after Allow once opens Terminal, and says so only when the clipboard took it", async () => {
+      await settle();
+      const run = s().runs.find((r) => r.state === "needsPermission")!;
+      const allowed = { ...run, permissionAllowed: { command: "ls", at: run.lastProgressAt } };
+      vi.spyOn(backend, "runsAllowPermissionOnce").mockResolvedValue(allowed);
+      const writeText = vi.fn(() => Promise.resolve());
+      const real = globalThis.navigator;
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      await s().allowPermissionOnce(run.id, "ls");
+      expect(writeText).toHaveBeenCalledWith("ls");
+      expect(s().permissionAnswered[run.id]).toMatchObject({ kind: "allowed", command: "ls", copied: true });
+      vi.stubGlobal("navigator", {});
+      await s().allowPermissionOnce(run.id, "ls");
+      expect(s().permissionAnswered[run.id]).toMatchObject({ kind: "allowed", copied: false });
+      vi.stubGlobal("navigator", real);
+    });
+
     it("is refused for a permission prompt", async () => {
       await settle();
       const run = s().runs.find((r) => r.state === "needsPermission")!;
       await s().answer(run.id, "Yes");
-      expect(useToasts.getState().toasts[0].text).toMatch(/permission prompt can only be answered in Terminal/);
+      expect(useToasts.getState().toasts[0].text).toMatch(/asking permission: answer it with Allow once or Deny/);
       expect(s().runs.find((r) => r.id === run.id)?.state).toBe("needsPermission");
     });
   });

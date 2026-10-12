@@ -36,7 +36,7 @@ export interface MayTouch {
 export const MAY_TOUCH: readonly MayTouch[] = [
   { tone: "yes", title: "Starts in its own worktree.", text: "Your own checkout and branch are not changed by the launch. Nothing stops it reading any other file you can, or a Build editing one." },
   { tone: "yes", title: "Runs whatever your Claude settings allow:", text: "your allowed commands, MCP servers and skills. Gossamr adds no fence of its own." },
-  { tone: "ask", title: "Pushing a branch, opening a PR, network commands:", text: "your Claude settings decide. If they would ask you, the run stops under Needs you, and you answer in Terminal." },
+  { tone: "ask", title: "Pushing a branch, opening a PR, network commands:", text: "your Claude settings decide. If they would ask you, the run stops under Needs you: deny it here, or allow it once in Terminal." },
   { tone: "no", title: "Writing to Jira:", text: "the agent is told not to, and to send anything for Jira back to you. Nothing enforces that: it runs as you and could use any Atlassian tool in your own Claude config." },
 ];
 

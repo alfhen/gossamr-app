@@ -1282,7 +1282,7 @@ mod auto {
         assert_eq!(exhausted.len(), 1);
         assert_eq!(exhausted[0].run_id.as_deref(), Some("rev3"));
         let turns = core.pip_turns(&format!("ws:{}", w.ws)).await.unwrap();
-        assert!(turns.iter().any(|t| t.kind == "wake" && t.prompt.contains("run rev3 (review) Done; verdict: blocking; 1 blocking finding; review still blocking after 2 fix rounds")), "{:?}", turns.iter().map(|t| &t.prompt).collect::<Vec<_>>());
+        assert!(turns.iter().any(|t| t.kind == "wake" && t.prompt.contains("run rev3 (review) Done; verdict: blocking; 1 blocking finding; review still blocking after 2 fix rounds; the person chooses what happens next")), "{:?}", turns.iter().map(|t| &t.prompt).collect::<Vec<_>>());
     }
 
     #[tokio::test]

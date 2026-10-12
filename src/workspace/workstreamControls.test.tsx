@@ -11,6 +11,9 @@ import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandA
 import { useToasts } from "./toasts";
 import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
+import { EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, escalationActions, escalationShown, fixRoundSent } from "./EscalationCard";
+import { ESCALATION_GONE } from "../backend/mockWorkstreams";
+import type { Escalation } from "../types";
 import type { WatchState } from "../types";
 import type { StepChip } from "./pipHomeLogic";
 import { NO_PULL_VIEW, autoNote, pullViewOrGithub } from "./StepRail";
@@ -108,6 +111,77 @@ describe("the workstream's controls", () => {
     const confirm = renderToStaticMarkup(<StopConfirm onStop={vi.fn()} onKeep={vi.fn()} />);
     expect(confirm).toContain(">Yes, stop</button>");
     expect(confirm).toContain(">Keep going</button>");
+  });
+});
+
+describe("a review that still blocks after the fix rounds", () => {
+  const escalation: Escalation = { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R5", buildLabel: "R4", rounds: 2, reviewDraft: "p-review", at: "2026-10-01T10:00:00Z" };
+  const card = (e: Escalation = escalation, busy = false) => renderToStaticMarkup(<EscalationCardView escalation={e} busy={busy} onFixRound={vi.fn()} onTakeOver={vi.fn()} onPost={vi.fn()} />);
+  const buttons = (html: string) => [...html.matchAll(/<button\b([^>]*)>([^<]*)<\/button>/g)].map(([, attrs, text]) => ({ text: text.replace(/&#x27;/g, "'"), disabled: /\bdisabled=""/.test(attrs), title: /title="([^"]*)"/.exec(attrs)?.[1]?.replace(/&#x27;/g, "'") ?? null }));
+
+  it("asks what next and offers the person's three choices, in order, each saying what it does", () => {
+    const html = card();
+    expect(html).toContain('role="group" aria-label="Review still blocks"');
+    expect(html).toContain("R5 still blocks after 2 fix rounds. What next?");
+    expect(buttons(html).map((b) => [b.text, b.disabled])).toEqual([
+      ["Run another fix round", false],
+      ["I'll take it from here", false],
+      ["Post the review as is", false],
+    ]);
+    for (const help of [FIX_ROUND_HELP, TAKE_OVER_HELP, POST_AS_IS_HELP]) expect(html).toContain(help.replace(/'/g, "&#x27;"));
+    // Every button says what it does to a screen reader too.
+    expect(html.match(/aria-describedby="escalation-r-rev-\d"/g)).toHaveLength(3);
+  });
+
+  it("can't post a review that has no draft waiting, and waits while a choice is on its way", () => {
+    expect(buttons(card({ ...escalation, reviewDraft: null }))[2]).toEqual({ text: "Post the review as is", disabled: true, title: NO_REVIEW_DRAFT });
+    expect(buttons(card(escalation, true)).every((b) => b.disabled)).toBe(true);
+  });
+
+  it("confirms the choice in a status line that can take the keyboard", () => {
+    const html = renderToStaticMarkup(<EscalationSent text={fixRoundSent("R4")} />);
+    expect(html).toMatch(/<p[^>]*tabindex="-1"[^>]*role="status"[^>]*data-escalation-sent=/);
+    expect(html).toContain("Fix round sent to R4.");
+    expect(TAKEN_OVER).toBe("Over to you: this workstream is on Advise now.");
+  });
+
+  it("says Over to you only while it is true, and a newer escalation brings the card back", () => {
+    const took = { review: "r-rev", text: TAKEN_OVER, tookOver: true };
+    const sent = { review: "r-rev", text: fixRoundSent("R4"), tookOver: false };
+    expect(escalationShown(escalation, null, "manage")).toBe("card");
+    expect(escalationShown(null, took, "advise")).toBe("sent");
+    // Manage on again after taking it over: no false "on Advise now", and the same review's card doesn't come back.
+    expect(escalationShown(null, took, "manage")).toBeNull();
+    // Were it offered again, the card shows rather than the old confirmation.
+    expect(escalationShown(escalation, took, "manage")).toBe("card");
+    expect(escalationShown(null, sent, "manage")).toBe("sent");
+    expect(escalationShown(escalation, sent, "manage")).toBe("sent");
+    expect(escalationShown({ ...escalation, reviewRun: "r-newer" }, sent, "manage")).toBe("card");
+  });
+
+  it("shows under the workstream's controls only while there is one", () => {
+    const view = viewOf({ mode: "manage" });
+    expect(render(view)).not.toContain("data-escalation");
+    expect(render({ ...view, escalation })).toContain('data-escalation="r-rev"');
+  });
+
+  it("each choice calls only the person's own command, and a refusal is said in a toast", async () => {
+    vi.stubGlobal("localStorage", memory());
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    await useWorkspace.getState().init(backend);
+    useWorkstreams.getState().init(backend);
+    const id = (await backend.workstreamsOpen(itemRef("CA-401"))).id;
+    const calls = { fix: vi.spyOn(backend, "workstreamsFixRound"), take: vi.spyOn(backend, "workstreamsTakeOver"), mode: vi.spyOn(backend, "workstreamsSetMode") };
+    const pushed = vi.spyOn(useToasts.getState(), "push");
+    const a = escalationActions(id, escalation);
+    expect(await a.onFixRound()).toBe(false);
+    expect(await a.onTakeOver()).toBe(false);
+    expect(calls.fix.mock.calls).toEqual([["r-rev"]]);
+    expect(calls.take.mock.calls).toEqual([[id, "r-rev"]]);
+    expect(calls.mode).not.toHaveBeenCalled();
+    expect(pushed.mock.calls.map(([text]) => text)).toEqual([`Couldn't send another fix round. ${ESCALATION_GONE}`, `Couldn't take the workstream over. ${ESCALATION_GONE}`]);
+    useWorkstreams.getState().dispose();
+    vi.unstubAllGlobals();
   });
 });
 

@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Run, RunSpec } from "../types";
+import type { Proposal, Run, RunSpec, Workstream, WorkstreamEvent } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { mockPipTurns } from "./mockPipTurns";
 import { mockDigest } from "./mockRuns";
-import { MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, basisOfItem, driftOf, lastTripOf, waitingForPr, type BasisTicket } from "./mockWorkstreams";
+import { ESCALATION_GONE, MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, basisOfItem, driftOf, escalationOf, lastTripOf, waitingForPr, type BasisTicket } from "./mockWorkstreams";
 import { driftLine } from "./mockPip";
 import fixtures from "./supervisor.fixtures.json";
 import { docFromText } from "../lib/docs";
@@ -591,5 +591,77 @@ describe("a mock workstream's ticket drifting from its basis", () => {
     expect(lastTripOf(backend.workstreams.events(ws))).toEqual(trip);
     expect(driftLine({ kind: "basis_drift", fields: ["status"], at: "", resumedAt: "x" })).toBe("The ticket was moved to Done while I was held; I'll work from it as it reads now.");
     expect(driftLine({ kind: "marker", fields: [], at: "", resumedAt: "x" })).toBeNull();
+  });
+});
+
+describe("a review that still blocks after the automatic fix rounds", () => {
+  beforeEach(() => saved.clear());
+
+  const run = (id: string, kind: Run["spec"]["kind"], minute: number, over: Partial<RunSpec> = {}) =>
+    ({ id, state: "done", queuedAt: `2026-09-30T10:${String(minute).padStart(2, "0")}:00Z`, spec: { ...spec({ kind, workstream: "ws-1" }), ...over } }) as Run;
+  const ws = { id: "ws-1", mode: "manage", closedAt: null, heldReason: null } as Workstream;
+  const review = { buildFromRun: "b", pr: 218 };
+  const runs = [run("b", "build", 10, { allowPush: true }), run("r1", "review", 20, review), run("r2", "review", 30, review)];
+  const line = (seq: number, action: string, runId: string, detail: string, actor: WorkstreamEvent["actor"] = "supervisor"): WorkstreamEvent => ({ workstreamId: "ws-1", seq, at: `2026-09-30T11:00:0${seq}Z`, actor, action, runId, proposalId: null, digest: null, detail });
+  const rounds = [line(1, "autostart", "b", "fix_round after r0"), line(2, "autostart", "b", "fix_round after r1")];
+  const blocking = () => "blocking" as const;
+  const reviewDraft = (id: string, runId: string, repo: string, number: number, at: string, state: Proposal["state"] = { type: "pending" }) =>
+    ({ id, createdAt: at, state, intent: { type: "githubReview", connectionId: "github:sample", item: null, runId, repo, number, commitSha: "a1b2c3d4", summary: "S.", comments: [] } }) as unknown as Proposal;
+
+  it("is there exactly once the rounds ran out for the newest review and it blocks, as escalation_of", () => {
+    expect(escalationOf(ws, runs, blocking, rounds, [])).toBeNull();
+    const older = [...rounds, line(3, "fix_rounds_exhausted", "r1", "2")];
+    expect(escalationOf(ws, runs, blocking, older, [])).toBeNull();
+    const events = [...older, line(4, "fix_rounds_exhausted", "r2", "2")];
+    expect(escalationOf(ws, runs, blocking, events, [])).toEqual({ reviewRun: "r2", buildRun: "b", reviewLabel: "R3", buildLabel: "R1", rounds: 2, reviewDraft: null, at: events[3].at });
+
+    expect(escalationOf(ws, runs, (r) => (r.id === "r2" ? "pass" : "blocking"), events, [])).toBeNull();
+    expect(escalationOf(ws, runs, () => null, events, [])).toBeNull();
+    expect(escalationOf(ws, runs, blocking, [...events, line(5, "fix_round_person", "b", "after r2", "person")], [])).toBeNull();
+    expect(escalationOf(ws, runs, blocking, [...events, line(5, "fix_round_person", "b", "after r1", "person")], [])).not.toBeNull();
+    expect(escalationOf(ws, runs, blocking, [...events, line(5, "escalation_taken", "r2", "", "person")], [])).toBeNull();
+    expect(escalationOf(ws, runs, blocking, [...events, line(5, "escalation_taken", "r1", "", "person")], [])).not.toBeNull();
+    expect(escalationOf({ ...ws, mode: "advise" }, runs, blocking, events, [])).toBeNull();
+    expect(escalationOf({ ...ws, closedAt: "2026-09-30T12:00:00Z" }, runs, blocking, events, [])).toBeNull();
+    expect(escalationOf({ ...ws, heldReason: "person" }, runs, blocking, events, [])).not.toBeNull();
+    expect(escalationOf(ws, [{ ...runs[0], state: "working" }, ...runs.slice(1)], blocking, events, [])).toBeNull();
+    expect(escalationOf(ws, [...runs, { ...run("r3", "review", 40, review), state: "working" }], blocking, events, [])).toBeNull();
+  });
+
+  it("offers the review's own pending draft, else the newest pending one of its pull request", () => {
+    const events = [...rounds, line(3, "fix_rounds_exhausted", "r2", "2")];
+    const draft = (drafts: Proposal[]) => escalationOf(ws, runs, blocking, events, drafts)?.reviewDraft;
+    const older = reviewDraft("p-old", "r1", "acme/storefront", 218, "2026-09-30T10:21:00Z");
+    const newer = reviewDraft("p-new", "r0", "ACME/storefront", 218, "2026-09-30T10:22:00Z");
+    const other = reviewDraft("p-219", "rx", "acme/storefront", 219, "2026-09-30T10:29:00Z");
+    const posted = reviewDraft("p-posted", "ry", "acme/storefront", 218, "2026-09-30T10:29:00Z", { type: "applied" });
+    expect(draft([older, newer, other, posted])).toBe("p-new");
+    expect(draft([older, newer, reviewDraft("p-own", "r2", "acme/storefront", 218, "2026-09-30T10:00:00Z")])).toBe("p-own");
+    expect(draft([other, posted])).toBeNull();
+  });
+
+  it("is taken over only by the person, for the review it is about: Advise, escalation_taken, and nothing else", () => {
+    const store = new MockWorkstreams(() => runs, () => "Checkout fails", undefined, "escalation-test", false, "manage");
+    const id = store.open(CA401).id;
+    const linked = runs.map((r) => ({ ...r, spec: { ...r.spec, workstream: id } }));
+    const live = new MockWorkstreams(() => linked, () => "Checkout fails", undefined, "escalation-test", false);
+    live.verdictOf = blocking;
+    expect(() => live.takeOver(id, "r2")).toThrow(ESCALATION_GONE);
+    live.record(id, "supervisor", "fix_rounds_exhausted", { runId: "r2", detail: "2" });
+    expect(live.get(id)?.escalation?.reviewRun).toBe("r2");
+    expect(live.list()[0].escalation).toEqual(live.get(id)?.escalation);
+    expect(() => live.takeOver(id, "r1")).toThrow(ESCALATION_GONE);
+    const before = live.get(id)!.workstream;
+    const taken = live.takeOver(id, "r2");
+    expect(taken).toEqual({ ...before, mode: "advise" });
+    expect(live.events(id).slice(-2).map((e) => [e.actor, e.action, e.runId, e.detail])).toEqual([
+      ["person", "escalation_taken", "r2", null],
+      ["person", "mode_set", null, "advise"],
+    ]);
+    expect(live.get(id)?.escalation).toBeUndefined();
+    expect(() => live.takeOver(id, "r2")).toThrow(ESCALATION_GONE);
+    // Manage on again: the review the person took over stays theirs, so the tray and the card agree.
+    live.setMode(id, "manage", "person");
+    expect(live.get(id)?.escalation).toBeUndefined();
   });
 });

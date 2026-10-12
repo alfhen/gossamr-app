@@ -53,6 +53,25 @@ fn message(text: &str) -> String {
     format!("{REMINDER}\n\n{text}")
 }
 
+/// A run its woken session carries on: working again, with nothing it said while it waited kept.
+pub(super) fn back_at_work(run: &mut Run, now: chrono::DateTime<Utc>) {
+    run.state = RunState::Working;
+    run.needs = None;
+    run.suggested_reply = None;
+    run.unsent_answer = None;
+    run.permission_allowed = None;
+    // What it said while it asked ("waiting for an answer") is over; the tracker fills in what it does next.
+    run.last_detail = None;
+    run.error = None;
+    run.failure = None;
+    run.ended_at = None;
+    run.last_progress_at = now;
+    if std::mem::take(&mut run.stopped_by_limit) {
+        run.continued_at = Some(now);
+    }
+    limits::tick(run, now);
+}
+
 impl RunService {
     /// Answers a run that is asking a question, sends again an answer that was stopped on its way, or resumes a run
     /// Gossamr stopped for passing a limit. The run carries on under the same id. Once the session has been stopped,
@@ -109,7 +128,7 @@ impl RunService {
         let again = run.state == RunState::Stopped && (run.unsent_answer.is_some() || run.stopped_by_limit);
         if run.state != RunState::NeedsAnswer && !again {
             return Err(refuse(match run.state {
-                RunState::NeedsPermission => "A permission prompt can only be answered in Terminal.".to_owned(),
+                RunState::NeedsPermission => "This run is asking permission: answer it with Allow once or Deny.".to_owned(),
                 RunState::SystemBlocked => "Claude needs you to sign in, in Terminal.".to_owned(),
                 other => format!("This run is {}, so it isn't waiting for an answer.", other.as_str()),
             }));
@@ -139,20 +158,7 @@ impl RunService {
         match failure {
             None => {
                 let now = Utc::now();
-                run.state = RunState::Working;
-                run.needs = None;
-                run.suggested_reply = None;
-                run.unsent_answer = None;
-                // What it said while it asked ("waiting for an answer") is over; the tracker fills in what it does next.
-                run.last_detail = None;
-                run.error = None;
-                run.failure = None;
-                run.ended_at = None;
-                run.last_progress_at = now;
-                if std::mem::take(&mut run.stopped_by_limit) {
-                    run.continued_at = Some(now);
-                }
-                limits::tick(&mut run, now);
+                back_at_work(&mut run, now);
                 self.remember(&run);
                 self.store(&run).await?;
                 if let Err(e) = self.core.report_stale(&run.id).await {

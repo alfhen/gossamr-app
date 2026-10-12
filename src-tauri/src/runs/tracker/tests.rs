@@ -1405,3 +1405,29 @@ async fn other_kinds_and_builds_outside_a_workstream_ask_for_no_code_sync() {
     assert!(!build.spec.allow_push && build.spec.workstream.is_none());
     assert!(!finishing_requests_a_sync(&rig, &build).await, "a build outside a workstream");
 }
+
+#[tokio::test]
+async fn an_allow_once_is_forgotten_when_the_run_moves_on_or_asks_something_else_and_kept_while_it_still_asks() {
+    let (rig, run) = launched().await;
+    let id = run.short_id.clone().unwrap();
+    rig.poll().await;
+    rig.job(&id, |j| j.needs = Some("approve Bash: npm publish".into()));
+    rig.session(&run, permission);
+    rig.poll().await;
+    let allowed = Some(crate::domain::PermissionAllowed { command: "npm publish".into(), at: Utc::now() });
+    rig.set(&run, |r| r.permission_allowed = allowed.clone()).await;
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.permission_allowed, allowed, "the same prompt keeps it");
+
+    rig.job(&id, |j| j.needs = Some("approve Bash: npm publish --tag next".into()));
+    rig.poll().await;
+    let other = rig.get(&run).await;
+    assert_eq!((other.state, other.permission_allowed), (RunState::NeedsPermission, None), "another prompt is answered afresh");
+
+    rig.set(&run, |r| r.permission_allowed = allowed.clone()).await;
+    rig.job(&id, |j| j.needs = None);
+    rig.session(&run, working);
+    rig.poll().await;
+    let working = rig.get(&run).await;
+    assert_eq!((working.state, working.permission_allowed), (RunState::Working, None));
+}

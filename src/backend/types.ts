@@ -211,6 +211,18 @@ export interface Backend {
   runsStop(id: string): Promise<Run>;
   /** Answers a run that is asking a question: stops its session and wakes it with the answer. Also sends again an answer that was stopped on its way. */
   runsAnswer(id: string, text: string): Promise<Run>;
+  /**
+   * The person's Deny for the permission prompt they read as `command`: the session is stopped, which drops the prompt,
+   * and woken in place told the person said no, so the agent carries on without it. Rejects when the run isn't asking
+   * that any more.
+   */
+  runsDenyPermission(id: string, command: string): Promise<Run>;
+  /**
+   * The person's Allow once for the permission prompt they read as `command`, which only Claude Code itself can grant:
+   * when Gossamr's policy offers it (`permissionOffer`), records the choice with the exact command and opens the session
+   * in Terminal for the person to answer Yes there. The session is neither stopped nor resumed. Rejects with the reason otherwise.
+   */
+  runsAllowPermissionOnce(id: string, command: string): Promise<Run>;
   /** Sends a finished run back for another pass with a `followUp` draft's message. `message` is what the person read; a draft that changed since rejects with "The message changed after you read it. Read it again." Rejects with the reason when the run can't be resumed; the draft stays pending. */
   runsSendFollowUp(proposalId: string, message: string): Promise<Run>;
   /**
@@ -297,6 +309,10 @@ export interface Backend {
   workstreamsEvents(id: string): Promise<WorkstreamEvent[]>;
   /** The person sets how much Pip may do on its own in an open workstream. */
   workstreamsSetMode(id: string, mode: WorkstreamMode): Promise<Workstream>;
+  /** The person's "Run another fix round" on review `reviewRun`, which still blocks after the automatic fix rounds: sends the build its blocking findings again. Only while that review waits for their choice. */
+  workstreamsFixRound(reviewRun: string): Promise<Run>;
+  /** The person's "I'll take it from here" on review `reviewRun`: the workstream goes to Advise and nothing else changes. */
+  workstreamsTakeOver(id: string, reviewRun: string): Promise<Workstream>;
   /** The person holds an open workstream: nothing wakes Pip or starts on its own in it; its runs carry on. */
   workstreamsHold(id: string): Promise<Workstream>;
   /** The person lifts a workstream's hold; lifting a budget hold starts its budget again from zero. */

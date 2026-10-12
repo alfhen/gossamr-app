@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { docText } from "../lib/docs";
-import type { Intent, ScreenContext } from "../types";
+import type { Intent, Proposal, ScreenContext } from "../types";
 import type { AskRequest } from "./claude";
 import { mockAsk, mockPipEvents } from "./mockPip";
 import { mockPipTurns } from "./mockPipTurns";
-import { PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_EDIT_KEEPS_POSITIONS, WORKSTREAM_PENDING_CAP } from "../lib/proposals";
+import { KEPT_EDITED, KEPT_MAYBE_POSTED, keptOlderReviews, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_EDIT_KEEPS_POSITIONS, reviewSupersession, WORKSTREAM_PENDING_CAP } from "../lib/proposals";
 import { MockBackend } from "./mock";
 import { MockProposals } from "./mockProposals";
 import { bodyChange } from "./mockMarkdown";
@@ -279,5 +279,63 @@ describe("the person's edit of a review draft", () => {
     await expect(proposals.edit(p.id, { type: "githubReview", comments: [at(42, " ")] })).rejects.toThrow("comment can't be empty");
     expect(proposals.get(p.id)!.intent).toEqual(review);
     expect(proposals.get(p.id)!.revisions).toEqual([]);
+  });
+});
+
+describe("one review of a pull request waiting at a time, as tidy_reviews in proposals.rs", () => {
+  const review = (runId: string, repo = "acme/webshop", number = 218, connectionId = "github:sample"): Intent => ({ type: "githubReview", connectionId, item: null, runId, repo, number, commitSha: "a1b2c3d4e5f6", summary: "S.", comments: [] });
+  const origin = (runId: string, workstream?: string) => ({ type: "run" as const, runId, shortId: null, ...(workstream ? { workstream } : {}) });
+  const store = () => {
+    const lines: [string, string, string, string | undefined, string | null | undefined][] = [];
+    const proposals = new MockProposals(async () => []);
+    proposals.audit = (p, actor, action, detail, workstream) => void lines.push([p.id, actor, action, detail, workstream]);
+    return { proposals, lines };
+  };
+
+  it("replaces the older pending review of the same pull request in any workstream or none, and leaves other pull requests alone", () => {
+    const { proposals, lines } = store();
+    const w1 = proposals.fromRun(review("r1"), null, origin("r1", "ws-1"));
+    const w2 = proposals.fromRun(review("r2"), null, origin("r2", "ws-2"));
+    expect(proposals.get(w1.id)).toMatchObject({ state: { type: "retired", reason: REPLACED_REASON }, supersededBy: w2.id });
+    const none = proposals.fromRun(review("r3", "ACME/Webshop"), null, origin("r3"));
+    expect(proposals.get(w2.id)?.supersededBy).toBe(none.id);
+    const other = proposals.fromRun(review("r4", "acme/webshop", 219), null, origin("r4", "ws-1"));
+    const elsewhere = proposals.fromRun(review("r5", "acme/webshop", 218, "github:other"), null, origin("r5", "ws-1"));
+    const newest = proposals.fromRun(review("r6"), null, origin("r6", "ws-1"));
+    expect(proposals.get(none.id)?.supersededBy).toBe(newest.id);
+    expect([other, elsewhere, newest].map((p) => proposals.get(p.id)!.state.type)).toEqual(["pending", "pending", "pending"]);
+    const pending = proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "githubReview" && p.intent.number === 218 && p.intent.connectionId === "github:sample");
+    expect(pending.map((p) => p.id)).toEqual([newest.id]);
+    // Said in the older draft's workstream, or in the new one's for an older draft in none.
+    expect(lines.filter((l) => l[2] === "draft_superseded")).toEqual([
+      [w1.id, "run", "draft_superseded", w2.id, undefined],
+      [w2.id, "run", "draft_superseded", none.id, undefined],
+      [none.id, "run", "draft_superseded", newest.id, "ws-1"],
+    ]);
+  });
+
+  it("keeps one the person edited beside the new one, says so, and the new one's card can tell", async () => {
+    const { proposals, lines } = store();
+    const mine = proposals.fromRun(review("r1"), null, origin("r1", "ws-1"));
+    await proposals.edit(mine.id, { type: "githubReview", summary: "Mine." });
+    const next = proposals.fromRun(review("r2"), null, origin("r2", "ws-1"));
+    expect(proposals.get(mine.id)).toMatchObject({ state: { type: "pending" } });
+    expect(proposals.get(mine.id)?.supersededBy).toBeFalsy();
+    expect(lines).toContainEqual([mine.id, "run", KEPT_EDITED, next.id, undefined]);
+    expect(keptOlderReviews(next, proposals.list()).map((k) => [k.proposal.id, k.why])).toEqual([[mine.id, KEPT_EDITED]]);
+    expect(keptOlderReviews(proposals.get(mine.id)!, proposals.list())).toEqual([]);
+  });
+
+  it("keeps one that may be on GitHub, never touches one posted or posting, and replaces Pip's unedited revision", () => {
+    const made = (id: string, over: Partial<Proposal> = {}): Proposal =>
+      ({ id, createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z", origin: origin(id, "ws-1"), createdBy: "agent", intent: review(id), label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error: null, run: null, ...over }) as Proposal;
+    const newer = made("new", { createdAt: "2026-10-01T11:00:00Z" });
+    const unsure = made("unsure", { maybePosted: { at: "2026-10-01T10:30:00Z", commitSha: "a1b2c3d4e5f6", summary: "S.", checkedAt: null } });
+    expect(reviewSupersession(unsure, newer)).toBe(KEPT_MAYBE_POSTED);
+    expect(reviewSupersession(made("posted", { state: { type: "applied" } }), newer)).toBeNull();
+    expect(reviewSupersession(made("posting", { state: { type: "applying" } }), newer)).toBeNull();
+    expect(reviewSupersession(made("pips", { revisions: [{ at: "2026-10-01T10:10:00Z", note: "Revised by Pip", intent: review("pips") }] }), newer)).toBe("supersede");
+    expect(reviewSupersession(made("other", { intent: review("other", "acme/webshop", 219) }), newer)).toBeNull();
+    expect(keptOlderReviews(newer, [unsure, made("posted", { state: { type: "applied" } }), newer]).map((k) => k.why)).toEqual([KEPT_MAYBE_POSTED]);
   });
 });

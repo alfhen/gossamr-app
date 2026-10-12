@@ -1,4 +1,5 @@
 import { inWorkstreamPane, targetOf, workstreamOf } from "../lib/proposals";
+import { readAs } from "../lib/permission";
 import { heldText } from "../lib/workstreamHold";
 import { byQueue, STAGE_LABEL, stageText } from "../lib/workstreamStage";
 import { HELD_BUDGET, HELD_DAILY } from "../types";
@@ -51,10 +52,16 @@ export function workstreamStatus(view: WorkstreamView, runs: readonly Run[], wai
 }
 
 /** What kind of wait an item in the tray is. */
-export type NeedsYouKind = "draft" | "runStart" | "question" | "permission" | "failure" | "held";
+export type NeedsYouKind = "draft" | "runStart" | "question" | "permission" | "failure" | "held" | "escalation";
 
-/** What activating an item brings into view: a draft card, a run card (and its sheet), or the workstream's held banner. */
-export type NeedsYouTarget = { type: "draft"; id: string } | { type: "run"; id: string } | { type: "workstream" };
+/**
+ * What activating an item brings into view: a draft card, a run card (and its sheet), the workstream's held banner, or
+ * its card for a review that still blocks after the fix rounds.
+ */
+export type NeedsYouTarget = { type: "draft"; id: string } | { type: "run"; id: string } | { type: "workstream" } | { type: "escalation" };
+
+/** What the tray says of a review that still blocks after the automatic fix rounds. */
+export const escalationReason = (rounds: number) => `review still blocks after ${rounds} fix rounds`;
 
 /** One thing waiting on the person. `workstreamId` null is General. */
 export interface NeedsYouItem {
@@ -166,7 +173,8 @@ function answersByRun(proposals: readonly Proposal[], runs: readonly Run[]): Map
 /**
  * Everything waiting on the person across the open workstreams and General, oldest first by when it started waiting:
  * pending drafts (a draft run start apart), runs asking a question, asking permission or blocked (a folder to trust
- * among them), failed runs not yet looked at, and held workstreams. A run asking a question that Pip suggested a reply
+ * among them), failed runs not yet looked at, held workstreams, and reviews that still block after the automatic fix
+ * rounds (the person chooses what happens next). A run asking a question that Pip suggested a reply
  * to is one item, which goes to the reply. Decided drafts, runs that moved on and lifted holds aren't there, so an item
  * goes as soon as the stores say its wait is over.
  */
@@ -203,7 +211,12 @@ export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt
     const answer = answers.get(run.id);
     if (answer) items.push({ ...base, key: `draft:${answer.id}`, kind: "question", ...say(key, `${name} asks a question · ${answer.createdBy === "pip" ? "Pip suggests a reply" : "a reply is drafted"}`), target: { type: "draft", id: answer.id } });
     else if (run.state === "needsAnswer") items.push({ ...base, kind: "question", ...say(key, `${name} asks a question`) });
-    else if (run.state === "needsPermission" || run.state === "systemBlocked") items.push({ ...base, kind: "permission", ...say(key, `${name} needs permission`) });
+    // A prompt the person chose Allow once for is theirs to answer in Terminal now, and stays an item until it is answered,
+    // so a run left waiting there isn't forgotten and the tray counts as the rail badge does. One it asks after is asked again.
+    else if (run.state === "needsPermission") {
+      const allowed = run.permissionAllowed?.command === readAs(run.needs);
+      items.push({ ...base, kind: "permission", ...say(key, allowed ? `${name} waits for your Yes in Terminal` : `${name} asks to run a command`) });
+    } else if (run.state === "systemBlocked") items.push({ ...base, kind: "permission", ...say(key, `${name} needs permission`) });
     // The predicate the rail badge counts by: by now only a failed run passes it.
     else if (needsAttention(run, seenFailed)) {
       const trust = run.failure?.type === "untrustedFolder";
@@ -215,6 +228,11 @@ export function needsYouItems({ workstreams, runs, proposals, seenFailed, heldAt
     if (!held) continue;
     const id = v.workstream.id;
     items.push({ key: `held:${id}`, kind: "held", workstreamId: id, ...say(v.workstream.itemKey, held), at: heldAt?.[id] ?? v.workstream.createdAt, target: { type: "workstream" } });
+  }
+  for (const v of open) {
+    const e = v.escalation;
+    if (!e) continue;
+    items.push({ key: `escalation:${e.reviewRun}`, kind: "escalation", workstreamId: v.workstream.id, ...say(v.workstream.itemKey, escalationReason(e.rounds)), at: e.at, target: { type: "escalation" } });
   }
   return items.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
@@ -316,7 +334,7 @@ export interface StepChip {
   auto: boolean;
   /** A review's verdict once it is read: "Pass", "Blocking · 2". */
   verdict: string | null;
-  /** "fix round 1/2" once the rules sent the build back. */
+  /** "fix round 1/2" once the rules sent the build back; "fix round 3 (yours, after 2 automatic)" once the person did. */
   fixRound: string | null;
   /** Pending drafts under the step, and runs in it asking the person something. */
   needsYou: number;
@@ -341,11 +359,17 @@ function buildPullRequest(builds: readonly Run[], changes: Readonly<Record<strin
   return null;
 }
 
+/** The build's fix rounds as its chip says them: the automatic ones out of `FIX_ROUNDS`, and the person's after them. */
+export function fixRoundChip(automatic: number, yours: number): string | null {
+  if (!yours) return automatic ? `fix round ${Math.min(automatic, FIX_ROUNDS)}/${FIX_ROUNDS}` : null;
+  return `fix round ${automatic + yours} (${yours === 1 ? "yours" : `${yours} yours`}, after ${automatic} automatic)`;
+}
+
 /**
  * The six step chips of a workstream from its runs (`runs`, only the workstream's own), its audit (`events`, for the
  * fix rounds sent), the reviews' verdicts as read so far and its drafts (`proposals`, for what waits in each step).
  */
-export function stepChips(runs: readonly Run[], events: readonly Pick<WorkstreamEvent, "action" | "runId">[], verdicts: Readonly<Record<string, ReviewView | null>>, proposals: readonly Proposal[], { now = Date.now(), waitingForPr = null, changes = {} }: StepChipOptions = {}): StepChip[] {
+export function stepChips(runs: readonly Run[], events: readonly Pick<WorkstreamEvent, "action" | "runId" | "actor">[], verdicts: Readonly<Record<string, ReviewView | null>>, proposals: readonly Proposal[], { now = Date.now(), waitingForPr = null, changes = {} }: StepChipOptions = {}): StepChip[] {
   const drafts = stepDrafts(proposals, runs);
   return STEP_KINDS.map((kind) => {
     const own = runs.filter((r) => r.spec.kind === kind).sort(byQueue);
@@ -354,7 +378,8 @@ export function stepChips(runs: readonly Run[], events: readonly Pick<Workstream
     const waiting = kind === "build" && !!waitingForPr && newest?.state === "done";
     const review = kind === "review" && newest ? shownVerdict(newest, verdicts) : null;
     const ids = new Set(own.map((r) => r.id));
-    const rounds = kind === "build" ? events.filter((e) => e.action === "fix_round_sent" && e.runId !== null && ids.has(e.runId)).length : 0;
+    const sent = kind === "build" ? events.filter((e) => e.action === "fix_round_sent" && e.runId !== null && ids.has(e.runId)) : [];
+    const yours = sent.filter((e) => e.actor === "person").length;
     const pendingDrafts = (drafts[kind] ?? []).filter((p) => p.state.type === "pending");
     // A run asking a question that has a reply drafted waits on the person once, as the tray counts it.
     const answered = new Set(pendingDrafts.flatMap((p) => (p.intent.type === "runAnswer" ? [p.intent.runId] : [])));
@@ -368,7 +393,7 @@ export function stepChips(runs: readonly Run[], events: readonly Pick<Workstream
       tone: waiting ? "warn" : (view?.tone ?? null),
       auto: !!newest?.autoStart,
       verdict: review ? verdictChip(review) : null,
-      fixRound: rounds ? `fix round ${Math.min(rounds, FIX_ROUNDS)}/${FIX_ROUNDS}` : null,
+      fixRound: fixRoundChip(sent.length - yours, yours),
       needsYou: pending + own.filter((r) => needsPerson(r) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
       pr: kind === "build" ? buildPullRequest(own, changes) : null,
     };

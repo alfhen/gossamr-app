@@ -13,7 +13,7 @@ use crate::auth::Scope;
 use crate::db::Db;
 use crate::agent::supervisor::{decide_wake, level_word, WakeFact, TRIP_BASIS};
 use crate::domain::workstream::{BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, budget_level, budget_limits, review_blocking, run_labels, stage, tripwire, valid_hold_reason, BudgetLevel, Mode, Rule, Stage, WorkstreamBasis, HELD_ALL, HELD_BUDGET, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE};
-use crate::domain::{has_markers, Actor, Category, ItemRef, Run, RunKind, RunQuery, RunState, WorkItem, Workstream, WorkstreamEvent};
+use crate::domain::{has_markers, Actor, Category, Intent, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunQuery, RunState, StateKind, WorkItem, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::runs::report::{resolve, ReviewVerdict};
@@ -27,6 +27,9 @@ pub const NOTES_CLOSE: &str = "PIP_NOTES>>>";
 const TITLE_LIMIT: usize = 200;
 /// Told to Pip wherever a finished build's pull request hasn't been found yet: a review needs it pinned.
 pub const WAITING_FOR_PR_HINT: &str = "Gossamr asked GitHub for it; draft the review once get_workstream no longer says the build is waiting for its pull request.";
+/// Why a choice on a review that still blocks after the fix rounds is refused: that review was dealt with, or a newer
+/// one came, since the person saw it. Each extra fix round needs its own click on a fresh escalation.
+pub const ESCALATION_GONE: &str = "This review isn't waiting for your choice any more.";
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
@@ -49,7 +52,83 @@ pub struct WorkstreamView {
     /// The newest finished review asked for changes and nothing is in progress: the stage is Review, not Done.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub review_blocking: bool,
+    /// The newest review still blocks after the automatic fix rounds ran out: the person chooses what happens next.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub escalation: Option<Escalation>,
     pub budget: BudgetView,
+}
+
+/// A review that still blocks after `autostart::FIX_ROUNDS_MAX` automatic fix rounds, waiting for the person: run another
+/// fix round, take the workstream over (Advise), or post the review draft as it is. Only the person chooses.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Escalation {
+    pub review_run: String,
+    pub build_run: String,
+    pub review_label: String,
+    pub build_label: String,
+    /// The automatic fix rounds that were used up.
+    pub rounds: u32,
+    /// The pending GitHub review draft the person may post as it is: the review's own, else the newest of its pull
+    /// request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_draft: Option<String>,
+    /// When the supervisor found the rounds used up.
+    pub at: chrono::DateTime<Utc>,
+}
+
+/// The escalation of `ws`, if its newest review still blocks after the automatic fix rounds: the workstream is open and
+/// in Manage (a hold doesn't hide it), its newest review is Done, blocking and of a build, the supervisor said the
+/// rounds ran out for it (`fix_rounds_exhausted`), the person hasn't sent a fix round after it (`fix_round_person`) or
+/// taken it over (`escalation_taken`, which a later switch back to Manage doesn't undo), and the build is Done. `drafts` are the account's pending drafts; only GitHub reviews among them count.
+pub fn escalation_of(ws: &Workstream, runs: &[Run], verdict_of: impl Fn(&Run) -> Option<ReviewVerdict>, events: &[WorkstreamEvent], drafts: &[Proposal]) -> Option<Escalation> {
+    if ws.closed_at.is_some() || ws.mode != Mode::Manage {
+        return None;
+    }
+    let mine = |r: &&Run| r.spec.workstream.as_deref() == Some(ws.id.as_str());
+    let review = runs.iter().filter(mine).filter(|r| r.spec.kind == RunKind::Review).max_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)))?;
+    if review.state != RunState::Done || verdict_of(review) != Some(ReviewVerdict::Blocking) {
+        return None;
+    }
+    let build_id = review.spec.build_from_run.as_deref()?;
+    let build = runs.iter().filter(mine).find(|r| r.id == build_id && r.spec.kind == RunKind::Build)?;
+    if build.state != RunState::Done {
+        return None;
+    }
+    let exhausted = events.iter().filter(|e| e.action == "fix_rounds_exhausted" && e.run_id.as_deref() == Some(review.id.as_str())).max_by_key(|e| e.seq)?;
+    let after = format!("after {}", review.id);
+    let chosen = |e: &WorkstreamEvent| match e.action.as_str() {
+        "fix_round_person" => e.detail.as_deref() == Some(after.as_str()),
+        "escalation_taken" => e.run_id.as_deref() == Some(review.id.as_str()),
+        _ => false,
+    };
+    if events.iter().any(chosen) {
+        return None;
+    }
+    let reviews: Vec<(&Proposal, &str, &str, u64)> = drafts
+        .iter()
+        .filter(|p| p.state == ProposalState::Pending)
+        .filter_map(|p| match &p.intent {
+            Intent::GithubReview { run_id, repo, number, .. } => Some((p, run_id.as_str(), repo.as_str(), *number)),
+            _ => None,
+        })
+        .collect();
+    let own = reviews.iter().find(|(_, run, ..)| *run == review.id).map(|(p, ..)| p.id.clone());
+    let of_pull = || {
+        let number = review.spec.pr?;
+        reviews.iter().filter(|(_, _, repo, n)| *n == number && repo.eq_ignore_ascii_case(&review.spec.repo)).max_by(|a, b| (a.0.created_at, &a.0.id).cmp(&(b.0.created_at, &b.0.id))).map(|(p, ..)| p.id.clone())
+    };
+    let labels = run_labels(&runs.iter().filter(mine).cloned().collect::<Vec<_>>());
+    let label = |id: &str| labels.iter().find(|(r, _)| r == id).map(|(_, l)| l.clone()).unwrap_or_default();
+    Some(Escalation {
+        review_run: review.id.clone(),
+        build_run: build.id.clone(),
+        review_label: label(&review.id),
+        build_label: label(&build.id),
+        rounds: crate::agent::autostart::FIX_ROUNDS_MAX,
+        review_draft: own.or_else(of_pull),
+        at: exhausted.at,
+    })
 }
 
 /// One counter of a workstream's budget: how much is used of how much it may use.
@@ -103,8 +182,24 @@ impl WorkstreamView {
             budget: BudgetView::of(&workstream),
             workstream,
             waiting_for_pr: None,
+            escalation: None,
         }
     }
+}
+
+/// The audit lines an escalation is read from, for a workstream that can have one: open and in Manage. None for others,
+/// so a list of workstreams reads only the audits it needs.
+fn escalation_events(db: &Db, ws: &Workstream) -> Result<Vec<WorkstreamEvent>> {
+    if ws.closed_at.is_some() || ws.mode != Mode::Manage {
+        return Ok(Vec::new());
+    }
+    Ok(db.workstream_events(&ws.id)?.into_iter().filter(|e| matches!(e.action.as_str(), "fix_rounds_exhausted" | "fix_round_person" | "escalation_taken")).collect())
+}
+
+/// The account's pending GitHub review drafts, which an escalation offers to post as they are.
+fn pending_reviews(db: &Db) -> Result<Vec<Proposal>> {
+    let pending = db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })?;
+    Ok(pending.into_iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).collect())
 }
 
 /// Holds `ws` with `reason` unless it is closed or already held. An existing reason is kept, except that the person's own
@@ -329,16 +424,20 @@ impl Core {
                 let Some(ws) = db.workstream(id)?.filter(|w| w.connection_id == connection_id) else { return Ok(None) };
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), workstream: Some(ws.id.clone()), ..Default::default() })?;
                 let verdicts = verdicts_of(db, &runs)?;
-                Ok(Some((ws, runs, verdicts)))
+                let events = escalation_events(db, &ws)?;
+                Ok(Some((ws, runs, verdicts, events, pending_reviews(db)?)))
             })
             .await?;
-        found.map(|(ws, runs, verdicts)| self.view_of(ws, &runs, &verdicts)).transpose()
+        found.map(|(ws, runs, verdicts, events, drafts)| self.view_of(ws, &runs, &verdicts, &events, &drafts)).transpose()
     }
 
-    /// A workstream's view from its runs, with the build still waiting for its pull request. That is read from the
-    /// code cache, so it is looked up outside the account's database.
-    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &HashMap<String, ReviewVerdict>) -> Result<WorkstreamView> {
+    /// A workstream's view from its runs, with the build still waiting for its pull request and the review that still
+    /// blocks after the fix rounds. The pull request is read from the code cache, so it is looked up outside the
+    /// account's database.
+    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &HashMap<String, ReviewVerdict>, events: &[WorkstreamEvent], drafts: &[Proposal]) -> Result<WorkstreamView> {
+        let escalation = escalation_of(&workstream, runs, |r| verdicts.get(&r.id).copied(), events, drafts);
         let mut view = WorkstreamView::of(workstream, runs, verdicts);
+        view.escalation = escalation;
         if let Some(build) = pushed_build(runs) {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
@@ -348,19 +447,25 @@ impl Core {
     /// `scope`'s workstreams, newest first, each with its stage; closed ones only when asked for.
     pub async fn workstreams(&self, scope: &Scope, include_closed: bool) -> Result<Vec<WorkstreamView>> {
         let connection_id = Connection::jira_id(scope);
-        let (workstreams, runs, verdicts) = self
+        let (workstreams, runs, verdicts, mut events, drafts) = self
             .with_db_for(scope, |db| {
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?;
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.is_some()).cloned().collect();
                 let verdicts = verdicts_of(db, &linked)?;
-                Ok((db.workstreams(&connection_id, include_closed)?, runs, verdicts))
+                let workstreams = db.workstreams(&connection_id, include_closed)?;
+                let mut events = HashMap::new();
+                for ws in &workstreams {
+                    events.insert(ws.id.clone(), escalation_events(db, ws)?);
+                }
+                Ok((workstreams, runs, verdicts, events, pending_reviews(db)?))
             })
             .await?;
         workstreams
             .into_iter()
             .map(|ws| {
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())).cloned().collect();
-                self.view_of(ws, &linked, &verdicts)
+                let events = events.remove(&ws.id).unwrap_or_default();
+                self.view_of(ws, &linked, &verdicts, &events, &drafts)
             })
             .collect()
     }
@@ -450,6 +555,18 @@ impl Core {
             Ok(ws)
         })
         .await
+    }
+
+    /// The person's choice "I'll take it from here" on a review that still blocks after the automatic fix rounds: records
+    /// `escalation_taken` and switches the workstream to Advise. Nothing else changes: no hold, no draft, no run. Refused
+    /// with `ESCALATION_GONE` unless the workstream's escalation is about `review`.
+    pub async fn take_over_escalation(&self, scope: &Scope, id: &str, review: &str) -> Result<Workstream> {
+        let view = self.workstream(scope, id).await?.ok_or_else(|| refuse(format!("there is no workstream {id}")))?;
+        if view.escalation.as_ref().map(|e| e.review_run.as_str()) != Some(review) {
+            return Err(refuse(ESCALATION_GONE));
+        }
+        self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "escalation_taken", Utc::now()).run(review)).await?;
+        self.set_workstream_mode(scope, id, Mode::Advise, Actor::Person).await
     }
 
     /// Holds an open workstream: no wakes and no automatic starts while it is held; its runs carry on. A workstream
@@ -862,6 +979,145 @@ mod tests {
         insert_at(&fx, "r-other", &other.id, RunKind::Build, RunState::Done, 30, |r| r.spec.allow_push = true).await;
         insert_at(&fx, "r-older-review", &other.id, RunKind::Review, RunState::Done, 0, |r| r.spec.build_from_run = Some("r-other".into())).await;
         assert_eq!(waiting(&fx, &other.id).await, None, "a review of that very build counts whenever it was queued");
+    }
+
+    mod escalation {
+        use super::*;
+        use crate::domain::{CreatedBy, Origin};
+
+        fn line(ws: &str, seq: u32, action: &str, run: &str, detail: &str) -> WorkstreamEvent {
+            let mut e = WorkstreamEvent::new(ws, Actor::Supervisor, action, chrono::DateTime::from_timestamp(1_800_000_100 + i64::from(seq), 0).unwrap()).run(run).detail(detail);
+            e.seq = seq;
+            e
+        }
+
+        fn review_draft(id: &str, run: &str, repo: &str, number: u64, at: i64, state: ProposalState) -> Proposal {
+            let intent = Intent::GithubReview { connection_id: "github:ann".into(), item: None, run_id: run.into(), repo: repo.into(), number, commit_sha: "a1b2c3d4e5f6".into(), summary: "S.".into(), comments: vec![] };
+            let at = chrono::DateTime::from_timestamp(1_800_000_000 + at, 0).unwrap();
+            let origin = Origin::Run { run_id: run.into(), short_id: None, workstream: None };
+            Proposal { id: id.into(), created_at: at, updated_at: at, origin, created_by: CreatedBy::Agent, intent, label: None, basis: None, state, revisions: vec![], created: vec![], error: None, run: None, superseded_by: None, posted: None, maybe_posted: None }
+        }
+
+        /// A workstream in Manage with a finished build `b`, two finished reviews of it (`r1`, then `r2`) and the
+        /// supervisor's two automatic rounds on record.
+        async fn chain(fx: &Fixture) -> (Workstream, Vec<Run>, Vec<WorkstreamEvent>) {
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let ws = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
+            let review = |r: &mut Run| (r.spec.build_from_run, r.spec.pr) = (Some("b".into()), Some(218));
+            let runs = vec![
+                insert_at(fx, "b", &ws.id, RunKind::Build, RunState::Done, 10, |r| r.spec.allow_push = true).await,
+                insert_at(fx, "r1", &ws.id, RunKind::Review, RunState::Done, 20, review).await,
+                insert_at(fx, "r2", &ws.id, RunKind::Review, RunState::Done, 30, review).await,
+            ];
+            let events = vec![line(&ws.id, 1, "autostart", "b", "fix_round after r0"), line(&ws.id, 2, "autostart", "b", "fix_round after r1")];
+            (ws, runs, events)
+        }
+
+        fn blocking(_: &Run) -> Option<ReviewVerdict> {
+            Some(ReviewVerdict::Blocking)
+        }
+
+        #[tokio::test]
+        async fn a_review_still_blocking_once_the_rounds_ran_out_waits_for_the_person_and_nothing_else_does() {
+            let fx = fixture().await;
+            let (ws, runs, mut events) = chain(&fx).await;
+            assert_eq!(escalation_of(&ws, &runs, blocking, &events, &[]), None, "the rounds aren't used up yet");
+            events.push(line(&ws.id, 3, "fix_rounds_exhausted", "r1", "2"));
+            assert_eq!(escalation_of(&ws, &runs, blocking, &events, &[]), None, "a newer review came since");
+            events.push(line(&ws.id, 4, "fix_rounds_exhausted", "r2", "2"));
+            let found = escalation_of(&ws, &runs, blocking, &events, &[]).expect("an escalation");
+            assert_eq!(
+                found,
+                Escalation { review_run: "r2".into(), build_run: "b".into(), review_label: "R3".into(), build_label: "R1".into(), rounds: 2, review_draft: None, at: events[3].at }
+            );
+            let json = serde_json::to_value(&found).unwrap();
+            assert_eq!((json["reviewRun"].as_str(), json["rounds"].as_u64()), (Some("r2"), Some(2)));
+            assert!(json.get("reviewDraft").is_none());
+
+            let pass = |r: &Run| if r.id == "r2" { Some(ReviewVerdict::Pass) } else { Some(ReviewVerdict::Blocking) };
+            assert_eq!(escalation_of(&ws, &runs, pass, &events, &[]), None, "the newest review passes");
+            assert_eq!(escalation_of(&ws, &runs, |_| None, &events, &[]), None, "no verdict");
+            let mut after = events.clone();
+            after.push(WorkstreamEvent { actor: Actor::Person, ..line(&ws.id, 5, "fix_round_person", "b", "after r2") });
+            assert_eq!(escalation_of(&ws, &runs, blocking, &after, &[]), None, "the person sent a round after it");
+            let mut other = events.clone();
+            other.push(WorkstreamEvent { actor: Actor::Person, ..line(&ws.id, 5, "fix_round_person", "b", "after r1") });
+            assert!(escalation_of(&ws, &runs, blocking, &other, &[]).is_some(), "a round after an older review doesn't count");
+            let mut taken = events.clone();
+            taken.push(WorkstreamEvent { actor: Actor::Person, detail: None, ..line(&ws.id, 5, "escalation_taken", "r2", "") });
+            assert_eq!(escalation_of(&ws, &runs, blocking, &taken, &[]), None, "the person took it over");
+            let mut taken_older = events.clone();
+            taken_older.push(WorkstreamEvent { actor: Actor::Person, detail: None, ..line(&ws.id, 5, "escalation_taken", "r1", "") });
+            assert!(escalation_of(&ws, &runs, blocking, &taken_older, &[]).is_some(), "taking over an older review doesn't count");
+
+            assert_eq!(escalation_of(&Workstream { mode: Mode::Advise, ..ws.clone() }, &runs, blocking, &events, &[]), None, "in Advise");
+            assert_eq!(escalation_of(&Workstream { closed_at: Some(Utc::now()), ..ws.clone() }, &runs, blocking, &events, &[]), None, "closed");
+            assert!(escalation_of(&Workstream { held_reason: Some(HELD_PERSON.into()), ..ws.clone() }, &runs, blocking, &events, &[]).is_some(), "a hold doesn't hide it");
+            let mut working = runs.clone();
+            working[0].state = RunState::Working;
+            assert_eq!(escalation_of(&ws, &working, blocking, &events, &[]), None, "the build is at work again");
+            let mut newer = runs.clone();
+            newer.push(Run { id: "r3".into(), state: RunState::Working, queued_at: runs[2].queued_at + chrono::Duration::seconds(5), ..runs[2].clone() });
+            assert_eq!(escalation_of(&ws, &newer, blocking, &events, &[]), None, "a newer review of the build is under way");
+        }
+
+        #[tokio::test]
+        async fn the_review_draft_offered_is_the_review_s_own_else_the_newest_pending_one_of_its_pull_request() {
+            let fx = fixture().await;
+            let (ws, runs, mut events) = chain(&fx).await;
+            events.push(line(&ws.id, 3, "fix_rounds_exhausted", "r2", "2"));
+            let draft = |drafts: &[Proposal]| escalation_of(&ws, &runs, blocking, &events, drafts).unwrap().review_draft;
+            let older = review_draft("p-old", "r1", "acme/webshop", 218, 1, ProposalState::Pending);
+            let newer = review_draft("p-new", "r0", "ACME/webshop", 218, 2, ProposalState::Pending);
+            let other_pr = review_draft("p-219", "rx", "acme/webshop", 219, 9, ProposalState::Pending);
+            let posted = review_draft("p-posted", "ry", "acme/webshop", 218, 9, ProposalState::Applied);
+            assert_eq!(draft(&[older.clone(), newer.clone(), other_pr.clone(), posted.clone()]).as_deref(), Some("p-new"), "the newest pending one of the pull request");
+            let own = review_draft("p-own", "r2", "acme/webshop", 218, 0, ProposalState::Pending);
+            assert_eq!(draft(&[older, newer, own, other_pr.clone()]).as_deref(), Some("p-own"), "the review's own comes first");
+            assert_eq!(draft(&[other_pr, posted]), None);
+        }
+
+        #[tokio::test]
+        async fn the_view_carries_it_and_taking_it_over_goes_to_advise_and_changes_nothing_else() {
+            let fx = fixture().await;
+            let (ws, _, _) = chain(&fx).await;
+            let blocked = "- [blocking] src/cart.ts:42: wrong\n\nVerdict: blocking\n\nFor Jira:\nNo.";
+            for id in ["r1", "r2"] {
+                let mut run = fx.core.with_db_for(&fx.scope, |db| db.run(id)).await.unwrap().unwrap();
+                (run.result, run.result_complete) = (Some(blocked.into()), true);
+                fx.core.with_db_for(&fx.scope, |db| db.save_run(&run)).await.unwrap();
+            }
+            let view = |fx: &Fixture| {
+                let (core, scope, id) = (fx.core.clone(), fx.scope.clone(), ws.id.clone());
+                async move { core.workstream(&scope, &id).await.unwrap().unwrap() }
+            };
+            assert_eq!(view(&fx).await.escalation, None);
+            assert!(matches!(fx.core.take_over_escalation(&fx.scope, &ws.id, "r2").await.unwrap_err(), Error::Proposal(why) if why == ESCALATION_GONE));
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Supervisor, "fix_rounds_exhausted", Utc::now()).run("r2").detail("2")).await.unwrap();
+            let seen = view(&fx).await;
+            assert_eq!(seen.escalation.as_ref().map(|e| e.review_run.as_str()), Some("r2"));
+            let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
+            assert_eq!(listed.escalation, seen.escalation, "the list and the single view agree");
+            assert_eq!(serde_json::to_value(&seen).unwrap()["escalation"]["buildRun"], "b");
+
+            assert!(matches!(fx.core.take_over_escalation(&fx.scope, &ws.id, "r1").await.unwrap_err(), Error::Proposal(why) if why == ESCALATION_GONE), "only the review it is about");
+            let runs_before = fx.core.with_db_for(&fx.scope, |db| db.runs(&RunQuery::default())).await.unwrap();
+            let taken = fx.core.take_over_escalation(&fx.scope, &ws.id, "r2").await.unwrap();
+            assert_eq!(Workstream { mode: Mode::Manage, ..taken.clone() }, seen.workstream, "only the mode changed");
+            assert_eq!((taken.mode, taken.held_reason.clone()), (Mode::Advise, None));
+            let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+            let tail: Vec<_> = events.iter().rev().take(2).rev().map(|e| (e.actor, e.action.as_str(), e.run_id.as_deref(), e.detail.as_deref())).collect();
+            assert_eq!(tail, [(Actor::Person, "escalation_taken", Some("r2"), None), (Actor::Person, "mode_set", None, Some("advise"))]);
+            assert_eq!(view(&fx).await.escalation, None, "taken over");
+            assert_eq!(fx.core.with_db_for(&fx.scope, |db| db.runs(&RunQuery::default())).await.unwrap(), runs_before, "no run changed");
+            assert!(fx.tracker.intents().is_empty());
+            assert!(matches!(fx.core.take_over_escalation(&fx.scope, &ws.id, "r2").await.unwrap_err(), Error::Proposal(why) if why == ESCALATION_GONE), "once");
+            // Manage on again: the review the person took over stays theirs, so the tray and the card agree.
+            fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
+            assert_eq!(view(&fx).await.escalation, None, "taken over, then Manage again");
+            let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
+            assert_eq!(listed.escalation, None);
+        }
     }
 
     #[tokio::test]

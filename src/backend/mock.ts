@@ -411,7 +411,8 @@ export class MockBackend implements Backend {
     );
     this.runs.workstreams = this.workstreams;
     // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
-    this.proposals.audit = (p, actor, action, detail) => void this.workstreams.record(workstreamOf(p), actor, action, { proposalId: p.id, ...(detail ? { detail } : {}) });
+    this.proposals.audit = (p, actor, action, detail, workstream) => void this.workstreams.record(workstream ?? workstreamOf(p), actor, action, { proposalId: p.id, ...(detail ? { detail } : {}) });
+    this.workstreams.pendingDrafts = () => this.proposals.list({ states: ["pending"] });
     // A run that moved on may have moved its workstream's stage on.
     this.runs.onChanged(() => this.workstreams.changed());
     this.runs.ticketText = (ref) => {
@@ -526,6 +527,17 @@ export class MockBackend implements Backend {
     return this.workstreams.setMode(id, mode, "person");
   }
 
+  /** The person's "Run another fix round" on a review that still blocks after the automatic fix rounds, as `workstreams_fix_round`. */
+  async workstreamsFixRound(reviewRun: string) {
+    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
+    return this.runs.sendPersonFixRound(reviewRun);
+  }
+
+  /** The person's "I'll take it from here", as `workstreams_take_over`: the workstream goes to Advise and nothing else changes. */
+  async workstreamsTakeOver(id: string, reviewRun: string) {
+    return this.workstreams.takeOver(id, reviewRun);
+  }
+
   /** Holds a workstream and stops Pip's turns in its conversation, as `workstreams_hold` does; its runs carry on. */
   async workstreamsHold(id: string) {
     const held = this.workstreams.hold(id, HELD_PERSON, "person");
@@ -630,6 +642,16 @@ export class MockBackend implements Backend {
 
   async runsAnswer(id: string, text: string) {
     return this.runs.answer(id, text);
+  }
+
+  async runsDenyPermission(id: string, command: string) {
+    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
+    return this.runs.denyPermission(id, command);
+  }
+
+  async runsAllowPermissionOnce(id: string, command: string) {
+    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
+    return this.runs.allowPermissionOnce(id, command);
   }
 
   async runsAnswerDraft(proposalId: string, message: string) {

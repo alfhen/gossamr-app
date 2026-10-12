@@ -626,7 +626,11 @@ export interface Run {
   /** Set while an approved run stays queued only because the most agents allowed are running; it starts by itself once a slot frees. */
   slotWaitSince?: string | null;
   /** The restriction a read-only run was launched with; absent for a Build and for a run that hasn't launched. */
-  readOnly?: ReadOnly | null;
+  readOnly?: ReadOnly | null;  /**
+   * The person chose Allow once for this prompt, the exact command, and Terminal was opened for them to answer Yes there.
+   * Cleared once the run leaves the prompt or asks something else.
+   */
+  permissionAllowed?: { command: string; at: string } | null;
 }
 
 /**
@@ -921,7 +925,27 @@ export interface WorkstreamView {
   waitingForPr?: string | null;
   /** The newest finished review asked for changes and nothing is in progress: the stage is review, not done. */
   reviewBlocking?: boolean;
+  /** The newest review still blocks after the automatic fix rounds ran out: the person chooses what happens next. */
+  escalation?: Escalation | null;
   budget: BudgetView;
+}
+
+/**
+ * A review that still blocks after the automatic fix rounds, waiting for the person: run another fix round, take the
+ * workstream over (Advise), or post the review draft as it is. Only the person chooses. As `Escalation` in
+ * src-tauri/src/inbox/workstreams.rs.
+ */
+export interface Escalation {
+  reviewRun: string;
+  buildRun: string;
+  reviewLabel: string;
+  buildLabel: string;
+  /** The automatic fix rounds that were used up. */
+  rounds: number;
+  /** The pending GitHub review draft the person may post as it is: the review's own, else the newest of its pull request. */
+  reviewDraft?: string | null;
+  /** When the supervisor found the rounds used up. */
+  at: string;
 }
 
 /** Who did something recorded in a workstream's audit. */

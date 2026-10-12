@@ -3,7 +3,7 @@ import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
 import { BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
-import type { BasisField, ItemRef, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamView, WorkstreamsChanged } from "../types";
+import type { BasisField, Escalation, ItemRef, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamView, WorkstreamsChanged } from "../types";
 import { startedFresh } from "./mockPipTurns";
 
 const CONNECTION = "mock";
@@ -103,6 +103,45 @@ export function waitingForPr(runs: readonly Run[], prOf: (runId: string) => numb
   return prOf(build.id) == null ? build.id : null;
 }
 
+/** How many automatic fix rounds run before a review that still blocks is the person's, as `autostart::FIX_ROUNDS_MAX`. */
+const FIX_ROUNDS_MAX = 2;
+
+/** Why a choice on a review that still blocks after the fix rounds is refused, as `ESCALATION_GONE` in src-tauri/src/inbox/workstreams.rs. */
+export const ESCALATION_GONE = "This review isn't waiting for your choice any more.";
+
+/**
+ * The escalation of `ws`, if its newest review still blocks after the automatic fix rounds, as `escalation_of`: the
+ * workstream is open and in Manage (a hold doesn't hide it), its newest review is done, blocking and of a build, the
+ * supervisor said the rounds ran out for it (`fix_rounds_exhausted`), the person hasn't sent a fix round after it
+ * (`fix_round_person`), and the build is done. `drafts` are the pending drafts; only GitHub reviews among them count.
+ */
+export function escalationOf(ws: Workstream, runs: readonly Run[], verdictOf: (run: Run) => ReviewVerdict | null, events: readonly WorkstreamEvent[], drafts: readonly Proposal[]): Escalation | null {
+  if (ws.closedAt !== null || ws.mode !== "manage") return null;
+  const mine = runs.filter((r) => r.spec.workstream === ws.id);
+  const review = mine.filter((r) => r.spec.kind === "review").sort(byQueue).pop();
+  if (!review || review.state !== "done" || verdictOf(review) !== "blocking") return null;
+  const build = mine.find((r) => r.id === review.spec.buildFromRun && r.spec.kind === "build");
+  if (!build || build.state !== "done") return null;
+  const exhausted = events.filter((e) => e.action === "fix_rounds_exhausted" && e.runId === review.id).sort((a, b) => a.seq - b.seq).pop();
+  if (!exhausted) return null;
+  // The person sent a round after it, or took it over: a later switch back to Manage doesn't bring it back.
+  if (events.some((e) => (e.action === "fix_round_person" && e.detail === `after ${review.id}`) || (e.action === "escalation_taken" && e.runId === review.id))) return null;
+  const reviews = drafts.filter((p) => p.state.type === "pending").flatMap((p) => (p.intent.type === "githubReview" ? [{ p, i: p.intent }] : []));
+  const own = reviews.find((d) => d.i.runId === review.id)?.p.id;
+  const pr = review.spec.pr;
+  const ofPull = pr == null ? undefined : reviews.filter((d) => d.i.number === pr && d.i.repo.toLowerCase() === review.spec.repo.toLowerCase()).sort((a, b) => a.p.createdAt.localeCompare(b.p.createdAt) || a.p.id.localeCompare(b.p.id)).pop()?.p.id;
+  const labels = new Map(runLabels(mine));
+  return {
+    reviewRun: review.id,
+    buildRun: build.id,
+    reviewLabel: labels.get(review.id) ?? "",
+    buildLabel: labels.get(build.id) ?? "",
+    rounds: FIX_ROUNDS_MAX,
+    reviewDraft: own ?? ofPull ?? null,
+    at: exhausted.at,
+  };
+}
+
 /** Why `id` can't be a workstream id at all, as `RunSpec::validate` refuses it; null when it can. */
 export function workstreamIdProblem(id: string): string | null {
   if (!id || [...id].length > ID_LIMIT || /[\u0000-\u001f\u007f]/.test(id)) return "the workstream id must be 1 to 64 characters with no control characters";
@@ -173,6 +212,8 @@ export class MockWorkstreams {
   verdictOf: (run: Run) => ReviewVerdict | null = () => null;
   /** A cached ticket as it is now, by key, which a workstream's basis is taken from; set by the backend that owns the tickets. */
   ticketOf: (key: string) => BasisTicket | null = () => null;
+  /** The pending drafts there are, of which an escalation offers a GitHub review to post as it is; set by the backend that owns the drafts. */
+  pendingDrafts: () => readonly Proposal[] = () => [];
 
   /**
    * `runs` lists the runs there are, `titleOf` the title of a cached ticket (null when it isn't cached). `now` is the
@@ -235,7 +276,10 @@ export class MockWorkstreams {
     const judged = linked.map((r) => ({ ...r, verdict: r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null }));
     const view: WorkstreamView = { workstream: ws, stage: stage(judged), runs: linked.map((r) => r.id), labels: runLabels(linked), budget: budgetView(ws) };
     const waiting = waitingForPr(linked, this.prOf);
-    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}) };
+    // The audit is read only for a workstream that can have an escalation, as `escalation_events` does.
+    const events = ws.closedAt === null && ws.mode === "manage" ? this.audit.filter((e) => e.workstreamId === ws.id) : [];
+    const escalation = events.length ? escalationOf(ws, linked, (r) => (r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null), events, this.pendingDrafts()) : null;
+    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */
@@ -362,6 +406,19 @@ export class MockWorkstreams {
     }
     if (ws.mode === mode) return ws;
     return this.changedTo({ ...ws, mode }, actor, "mode_set", { detail: mode });
+  }
+
+  /**
+   * The person's "I'll take it from here" on a review that still blocks after the automatic fix rounds, as
+   * `take_over_escalation`: records `escalation_taken` and switches the workstream to Advise. Nothing else changes.
+   * Refused with `ESCALATION_GONE` unless the workstream's escalation is about `reviewRun`.
+   */
+  takeOver(id: string, reviewRun: string): Workstream {
+    const view = this.get(id);
+    if (!view) throw new Error(`there is no workstream ${id}`);
+    if (view.escalation?.reviewRun !== reviewRun) throw new Error(ESCALATION_GONE);
+    this.append(id, "person", "escalation_taken", { runId: reviewRun });
+    return this.setMode(id, "advise", "person");
   }
 
   /** Holds an open workstream, as `hold_workstream` does: an existing reason is kept unless the person's hold replaces a restart, budget or quota one. */

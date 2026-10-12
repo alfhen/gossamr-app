@@ -660,7 +660,7 @@
         "wake": true,
         "hold": null,
         "level": "ok",
-        "line": "[Event] run rev00003 (review) Done; verdict: blocking; 2 blocking findings; review still blocking after 2 fix rounds"
+        "line": "[Event] run rev00003 (review) Done; verdict: blocking; 2 blocking findings; review still blocking after 2 fix rounds; the person chooses what happens next"
       }
     },
     {
