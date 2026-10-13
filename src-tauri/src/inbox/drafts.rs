@@ -213,6 +213,9 @@ impl Edit {
                         spec.findings = None;
                         spec.findings_from_run = None;
                     }
+                    if v != RunKind::Plan {
+                        spec.assumptions.clear();
+                    }
                     if v != RunKind::Investigate {
                         spec.project = None;
                     }
@@ -534,6 +537,7 @@ impl Core {
             spec.plan_from_run = Some(self.attach_plan(&mut spec, &from, item.as_ref()).await?);
         }
         spec.findings = None;
+        spec.assumptions.clear();
         if let Some(from) = spec.findings_from_run.take() {
             if item.is_none() {
                 return Err(Error::Proposal("Findings from an investigation need a ticket".into()));

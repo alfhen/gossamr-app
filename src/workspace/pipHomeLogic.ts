@@ -1,4 +1,5 @@
-import { BATCHABLE } from "../lib/needs";
+import { safeToBatch } from "../lib/needs";
+import { WAITING_STATUS } from "../lib/reporterWait";
 import { inWorkstreamPane } from "../lib/proposals";
 import { shortHeld } from "../lib/workstreamHold";
 import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL, stageText } from "../lib/workstreamStage";
@@ -32,6 +33,7 @@ export function workstreamStatus(view: WorkstreamView, runs: readonly Run[], wai
   if (going) return `${STAGE_LABEL[going.spec.kind]} running`;
   const queued = furthest((r) => r.state === "queued");
   if (queued) return `${STAGE_LABEL[queued.spec.kind]} queued`;
+  if (view.waitingOnReporter) return WAITING_STATUS;
   if (view.reviewBlocking) return stageText(view.stage, null, true);
   if (waiting > 0 || own.some((r) => needsPerson(r) || stoppedAtLimit(r))) return "Needs you";
   const last = [...own].sort(byQueue).pop();
@@ -90,7 +92,7 @@ export const batchLabel = (count: number) => `Approve ${count} safe drafts`;
 
 /** The drafts of a step that "Approve N safe drafts" would approve, in order; it is offered only for two or more. */
 export function batchable(drafts: readonly Proposal[]): Proposal[] {
-  return drafts.filter((p) => p.state.type === "pending" && BATCHABLE.has(p.intent.type));
+  return drafts.filter((p) => p.state.type === "pending" && safeToBatch(p));
 }
 
 /** What an "Approve N safe drafts" covers, fixed when its confirm opens: each draft by id, with the revision shown then. */

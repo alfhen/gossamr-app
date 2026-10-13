@@ -453,6 +453,8 @@ pub trait SupervisorCore: Send + Sync {
     async fn workstreams(&self, scope: &Scope) -> Result<Vec<WorkstreamView>>;
     async fn workstream(&self, scope: &Scope, id: &str) -> Result<Option<WorkstreamView>>;
     async fn workstream_events(&self, scope: &Scope, id: &str) -> Result<Vec<WorkstreamEvent>>;
+    /// The times of the comments on `ws`'s cached ticket from anyone but the signed-in person (the reporter's replies).
+    async fn ticket_replies(&self, scope: &Scope, ws: &Workstream) -> Result<Vec<DateTime<Utc>>>;
     /// The runs linked to workstream `ws`.
     async fn linked_runs(&self, scope: &Scope, ws: &str) -> Result<Vec<Run>>;
     async fn resolved_of(&self, run: &Run) -> Result<Resolved>;
@@ -528,6 +530,10 @@ impl SupervisorCore for CoreFacade {
 
     async fn workstream_events(&self, scope: &Scope, id: &str) -> Result<Vec<WorkstreamEvent>> {
         self.core.workstream_events(scope, id).await
+    }
+
+    async fn ticket_replies(&self, scope: &Scope, ws: &Workstream) -> Result<Vec<DateTime<Utc>>> {
+        self.core.ticket_replies(scope, ws).await
     }
 
     async fn linked_runs(&self, scope: &Scope, ws: &str) -> Result<Vec<Run>> {
@@ -1060,6 +1066,7 @@ impl Supervisor {
             return out;
         }
         let tripped = tripped_runs(events);
+        let replies = self.core.ticket_replies(scope, ws).await.unwrap_or_default();
         let mut done: Vec<&Run> = runs.iter().filter(|r| r.state == RunState::Done).collect();
         done.sort_by(|a, b| (a.ended_at, a.queued_at, &a.id).cmp(&(b.ended_at, b.queued_at, &b.id)));
         for src in done {
@@ -1079,6 +1086,7 @@ impl Supervisor {
                 fix_rounds,
                 plan_approved,
                 readiness_overridden: src.spec.kind == RunKind::Triage && autostart::readiness_overridden(events, &src.id),
+                waiting_on_reporter: crate::inbox::reporter_follow(events, &replies).waiting.is_some(),
                 pr: pr.clone(),
                 reviewed,
                 already: already(src, &report, runs, events, pr.as_ref()),
@@ -1102,7 +1110,9 @@ impl Supervisor {
             let note = match decision {
                 Decision::Start { rule, kind, .. } => {
                     let Some(item) = src.item.as_ref() else { continue };
-                    let slots = Slots { findings_from_run: carried.map(String::from), pr: pr.as_ref().map(|p| p.number), pr_sha: pr.as_ref().and_then(|p| p.sha.clone()) };
+                    // A plan the person chose to start though its Triage found the ticket not ready assumes answers to that Triage's questions.
+                    let assumptions = if kind == RunKind::Plan && input.readiness_overridden { report.readiness.iter().filter(|r| !r.ready).flat_map(|r| r.questions.clone()).collect() } else { Vec::new() };
+                    let slots = Slots { findings_from_run: carried.map(String::from), assumptions, pr: pr.as_ref().map(|p| p.number), pr_sha: pr.as_ref().and_then(|p| p.sha.clone()) };
                     let spec = match self.core.plan(&src.spec.repo, item).await {
                         Ok(plan) => autostart::spec_for(&decision, src, plan, &slots),
                         Err(e) => {

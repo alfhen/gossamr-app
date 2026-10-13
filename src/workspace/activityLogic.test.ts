@@ -163,6 +163,11 @@ describe("the Pip & agents chip", () => {
     ]);
   });
 
+  it("words the clarity notice's two choices", () => {
+    const lines = [ev(1, "person", "clarity_asked", null, null), ev(2, "person", "clarity_dismissed", null, null)];
+    expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual(["You asked the reporter about what the ticket leaves unclear", "You said the ticket looks clear enough"]);
+  });
+
   it("is the workstreams' audit alone, newest first, and nothing of it shows under the other chips", () => {
     const entries = toWorkstreamEntries(events, [ws], () => ({ connectionId: "c", externalId: "A-1", key: "A-1" }));
     const input = { source: "all" as const, container: null, jira: [entry("j1", "2026-09-30T10:30:00Z")], more: false, code: [], agents: [], workstream: entries, containerOf: () => null };

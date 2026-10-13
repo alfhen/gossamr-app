@@ -408,6 +408,10 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
       return `${who} chose to answer ${label(e.runId)}'s open questions`;
     case "readiness_overridden":
       return `${who} chose to plan anyway after ${label(e.runId)} found the ticket not ready`;
+    case "clarity_asked":
+      return `${who} asked the reporter about what the ticket leaves unclear`;
+    case "clarity_dismissed":
+      return `${who} said the ticket looks clear enough`;
     default:
       return null;
   }

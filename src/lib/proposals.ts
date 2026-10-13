@@ -227,8 +227,48 @@ export const PLAN_COMMENT_LABEL = "Plan from agent run";
 /** The label of a comment draft that asks a ticket's reporter the questions a triage left open, which no run's comment replaces and which replaces none. As `READINESS_COMMENT_LABEL` in `proposals.rs`. */
 export const READINESS_COMMENT_LABEL = "Questions for the reporter";
 
-/** Whether `p` is the comment "Ask the reporter" drafted: Gossamr's words around the triage's open questions, from that triage run. */
-export const isReporterQuestions = (p: Proposal) => p.origin.type === "run" && p.intent.type === "comment" && p.label === READINESS_COMMENT_LABEL;
+/** Whether `p` is the comment "Ask the reporter" (or "Ask the reporter now") drafted: Gossamr's words around the open questions, never one Pip made, whatever it is labelled. As `is_reporter_questions`. */
+export const isReporterQuestions = (p: Proposal) => p.intent.type === "comment" && p.label === READINESS_COMMENT_LABEL && p.createdBy !== "pip";
+
+/** The label of a comment Pip drafts once the person chose "I'll answer" on a triage's open questions: each question with their answer, for the ticket. As `ANSWERS_COMMENT_LABEL` in `proposals.rs`. */
+export const ANSWERS_COMMENT_LABEL = "Answers to the open questions";
+
+/** Whether `p` is the comment Pip drafted with the person's answers to the open questions. As `is_answers_draft`. */
+export const isAnswersDraft = (p: Proposal) => p.intent.type === "comment" && p.label === ANSWERS_COMMENT_LABEL && p.createdBy === "pip";
+
+/**
+ * What the questions to a reporter made from a triage do to an older pending draft: the triage's own comment, which repeats
+ * them, is replaced, so "Approve N safe drafts" can't post both; the person's edit keeps it. Null when `older` is none of
+ * that. As `tidy_reporter_questions`.
+ */
+export function reporterSupersession(older: Proposal, newer: Proposal): "supersede" | typeof KEPT_EDITED | null {
+  if (!isReporterQuestions(newer) || newer.origin.type !== "run" || older.origin.type !== "run") return null;
+  const [on, to] = [targetOf(older.intent), targetOf(newer.intent)];
+  const same = isRunComment(older) && older.id !== newer.id && older.origin.runId === newer.origin.runId && workstreamOf(older) === workstreamOf(newer) && !!on && !!to && on.connectionId === to.connectionId && on.externalId === to.externalId;
+  if (!same || older.state.type !== "pending" || older.error) return null;
+  return older.revisions.some((r) => r.note === "Edited") ? KEPT_EDITED : "supersede";
+}
+
+/** Why a Triage's own pending comment was retired once the person chose "I'll answer", as `ANSWERED_REASON` in `proposals.rs`. */
+export const ANSWERED_REASON = "Replaced by your answers to the open questions";
+
+/** Why it was retired once the person chose "Plan anyway", as `OVERRIDDEN_REASON` in `proposals.rs`. */
+export const OVERRIDDEN_REASON = "You chose to plan anyway, so this note no longer fits";
+
+/**
+ * What the comment with the person's answers does to an older pending comment: the Triage's own note, which says the
+ * ticket can't be sized, is replaced, and the person's edit keeps it. Another run kind's comment (an Investigate's findings)
+ * is never touched. Null when `older` is not that: another ticket or workstream, not pending, or back in Pending after a
+ * failed post (`error` is set). As `answers_supersession` in `proposals.rs`.
+ */
+export function answersSupersession(older: Proposal, newer: Proposal, kindOf: (runId: string) => RunKind | null): "supersede" | typeof KEPT_EDITED | null {
+  const ws = workstreamOf(newer);
+  if (!ws || !isAnswersDraft(newer) || !isRunComment(older) || workstreamOf(older) !== ws || older.id === newer.id || older.state.type !== "pending" || older.error) return null;
+  const [on, to] = [targetOf(older.intent), targetOf(newer.intent)];
+  if (!on || !to || on.connectionId !== to.connectionId || on.externalId !== to.externalId || older.origin.type !== "run") return null;
+  if (kindOf(older.origin.runId) !== "triage") return null;
+  return older.revisions.some((r) => r.note === "Edited") ? KEPT_EDITED : "supersede";
+}
 
 /** Whether `p` is a comment an agent run left for its ticket, other than a plan's: what a finished run drafts on its own. As `is_run_comment`. */
 export const isRunComment = (p: Proposal) => p.origin.type === "run" && p.intent.type === "comment" && machineMade(p) && !p.label?.startsWith(PLAN_COMMENT_LABEL) && p.label !== READINESS_COMMENT_LABEL;

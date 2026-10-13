@@ -1,3 +1,5 @@
+import type { ClarityGap } from "./lib/ticketClarity";
+
 export type StatusCategory = "new" | "indeterminate" | "done";
 
 export interface Status {
@@ -552,6 +554,8 @@ export interface RunSpec {
   findings?: string | null;
   /** The investigation run the findings came from. Set with `findings`, triage and plans only. */
   findingsFromRun?: string | null;
+  /** For a plan the person chose to start though its triage found the ticket not ready: the open questions the plan assumes answers to. Set by the backend from that triage, never by the caller. */
+  assumptions?: string[];
   /** Whether a build is told it may push and open a draft pull request. Builds only. */
   allowPush?: boolean;
   /** Where the draft ticket of an investigation with no ticket lands. Its presence makes the run end as a ticket; the agent never chooses it. */
@@ -937,7 +941,25 @@ export interface WorkstreamView {
   escalation?: Escalation | null;
   /** The newest Triage found the ticket not ready to plan, and the Plan after it waits for the person's choice. */
   readiness?: ReadinessStop | null;
+  /** The ticket's description looks thin to Gossamr's own word check, before any Triage: a notice, never a need. As `Clarity` in src-tauri/src/inbox/workstreams.rs. */
+  clarity?: Clarity | null;
+  /** The person asked the reporter and the comment was posted; nothing has answered it yet. */
+  waitingOnReporter?: ReporterWait | null;
+  /** The ticket changed (a basis drift) while the workstream waited on the reporter, and the person hasn't chosen since: the held banner says so. */
+  changedWhileWaiting?: boolean;
+  /** The wait on the reporter ended with their reply on the ticket (a comment from someone else) and the person hasn't chosen since. Always with `changedWhileWaiting`. */
+  reporterReplied?: boolean;
   budget: BudgetView;
+}
+
+/** What the clarity check found missing in a ticket's description (`ClarityGap` in src/lib/ticketClarity.ts). */
+export interface Clarity {
+  gaps: ClarityGap[];
+}
+
+/** A workstream waiting on the ticket's reporter. `since` is when the comment with the questions was posted. */
+export interface ReporterWait {
+  since: string;
 }
 
 /**
@@ -951,6 +973,10 @@ export interface ReadinessStop {
   questions: string[];
   /** When the Triage finished. */
   at: string;
+  /** The person asked the reporter and then the ticket changed while they waited: the question is back as "changed: plan now?". */
+  changed?: boolean;
+  /** The wait ended with the reporter's reply on the ticket: the question is back as "<KEY>: the reporter replied, plan now?". Always with `changed`. */
+  replied?: boolean;
 }
 
 /**

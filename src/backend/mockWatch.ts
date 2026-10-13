@@ -143,6 +143,8 @@ export interface MockHandle {
   pipIdle(): boolean;
   /** Changes sample ticket `key` as someone editing it in Jira would (`MockBackend.editTicket`): its summary, description or status (an id or a name). */
   editTicket(key: string, change: TicketEdit): void;
+  /** Someone else comments on sample ticket `key` as in Jira (`MockBackend.commentOnTicket`), `by` a person's id in the sample (Mette by default): how a reporter answers. */
+  commentOnTicket(key: string, text: string, by?: string): void;
   /** Every review the sample GitHub was sent, oldest first: the only writes it takes, each from a draft the person approved. */
   githubWrites(): GithubWrite[];
   /** Someone pushes to pull request `number` of `repo`: its head moves to a new commit whose diff lacks the lines it showed. */
@@ -176,7 +178,7 @@ export interface MockClockParts {
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown; hold(id: string, reason: string, actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown; backdate(id: string, days: number): unknown };
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
-  tickets?: { edit(key: string, change: TicketEdit): void };
+  tickets?: { edit(key: string, change: TicketEdit): void; comment(key: string, text: string, by?: string): void };
   github?: { writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
 }
 
@@ -235,6 +237,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     holdPip: (on) => pip?.hold(on),
     pipIdle: () => pip?.idle() ?? true,
     editTicket: (key, change) => tickets?.edit(key, change),
+    commentOnTicket: (key, text, by) => tickets?.comment(key, text, by),
     githubWrites: () => (github?.writes ?? []).map((w) => ({ ...w, comments: w.comments.map((c) => ({ ...c })) })),
     movePullHead: (repo, number) => github?.movePullHead(repo, number) ?? false,
     githubPostsTried: () => github?.tried() ?? 0,

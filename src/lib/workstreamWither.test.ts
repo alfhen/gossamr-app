@@ -119,3 +119,30 @@ describe("what counts as a post", () => {
     expect(w).toMatchObject({ since: ago(8), days: 8, level: 4 });
   });
 });
+
+describe("a workstream waiting on the reporter", () => {
+  it("shows the cobweb from the days since the asked comment was posted, without any work going on, and says the reporter hasn't answered", () => {
+    const events = [line("opened", ago(9)), line("readiness_asked", ago(8), { proposalId: "q" }), line("draft_approved", ago(5, 2), { proposalId: "q" })];
+    const w = workstreamWither(events, [], NOW, { draft: drafts({ q: draft("comment") }) });
+    expect(w).toMatchObject({ reporter: true, days: 5, level: 3, runs: 0, turns: 0, since: ago(5, 2), text: "Reporter hasn't answered for 5 days" });
+  });
+
+  it("shows none before WITHER_DAYS.ticket's first stage, and says a day as one", () => {
+    const post = (days: number) => [line("clarity_asked", ago(days + 1), { proposalId: "q" }), line("draft_approved", ago(days), { proposalId: "q" })];
+    expect(workstreamWither(post(1), [], NOW)).toMatchObject({ level: 0, text: "" });
+    expect(workstreamWither(post(2), [], NOW)).toMatchObject({ level: 1, text: "Reporter hasn't answered for 2 days" });
+  });
+
+  it("is not the reporter's silence once they replied on the ticket, which the audit doesn't say", () => {
+    const events = [line("opened", ago(9)), line("readiness_asked", ago(8), { proposalId: "q" }), line("draft_approved", ago(5, 2), { proposalId: "q" })];
+    const w = workstreamWither(events, [], NOW, { draft: drafts({ q: draft("comment") }), replied: true });
+    expect(w.reporter).toBeUndefined();
+  });
+
+  it("is the ordinary cobweb again once the wait is over", () => {
+    const events = [line("opened", ago(9)), line("readiness_asked", ago(8), { proposalId: "q" }), line("draft_approved", ago(6), { proposalId: "q" }), line("readiness_answered", ago(5))];
+    const w = workstreamWither(events, [run(ago(4))], NOW, { draft: drafts({ q: draft("comment") }) });
+    expect(w.reporter).toBeUndefined();
+    expect(w.text).toMatch(/^No Jira update for 6 days/);
+  });
+});

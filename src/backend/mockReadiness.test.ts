@@ -4,7 +4,7 @@ import type { ScreenContext } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { readinessLine, scriptPip, type PipWorkstream } from "./mockPip";
-import { THIN_LIMIT, gapsSentence, readinessGaps, reporterComment, reporterDoc, thinDescription, unclearTriageResult } from "./mockReadiness";
+import { THIN_LIMIT, reporterComment, reporterDoc, thinDescription, unclearTriageResult } from "./mockReadiness";
 import { readiness } from "./mockSupervisor";
 
 describe("a thin description", () => {
@@ -26,19 +26,6 @@ describe("a thin description", () => {
       return item ? thinDescription(docText(item.body)) : false;
     });
     expect(thin).toEqual(["CA-408"]);
-  });
-});
-
-describe("what a thin description leaves out", () => {
-  it("names each of the four things it doesn't say, less the cue that says it", () => {
-    expect(readinessGaps("Make the winback flow better.")).toEqual(["what done looks like", "what's in or out of scope", "who is waiting on it"]);
-    expect(readinessGaps("Done when the flow sends")).toEqual(["what's in or out of scope", "who is waiting on it"]);
-    expect(readinessGaps("Mette asked for it; only emails")).toEqual(["what done looks like"]);
-  });
-
-  it("says it as one plain sentence naming the ticket", () => {
-    expect(gapsSentence("CA-408", ["what done looks like", "what's in or out of scope", "who is waiting on it"])).toBe("CA-408 doesn't say what done looks like, what's in or out of scope, or who is waiting on it.");
-    expect(gapsSentence("CA-408", ["what done looks like"])).toBe("CA-408 doesn't say what done looks like.");
   });
 });
 
@@ -82,10 +69,11 @@ describe("the comment to the reporter", () => {
 
 describe("Pip's first turn in a workstream", () => {
   const ctx: ScreenContext = { view: null, item: null, filter: null, selection: [], run: null, runsWaiting: 0, runsSummary: null } as unknown as ScreenContext;
-  const ws = (over: Partial<PipWorkstream> = {}): PipWorkstream => ({ id: "ws-1", item: itemRef("CA-408"), first: true, ticketText: "Make the winback flow better.", ...over });
+  const GAPS = ["short", "done", "scope", "who"] as const;
+  const ws = (over: Partial<PipWorkstream> = {}): PipWorkstream => ({ id: "ws-1", item: itemRef("CA-408"), first: true, clarity: GAPS, ...over });
 
-  it("opens by saying plainly what a vague ticket leaves out, and keeps what it was asked", () => {
-    const line = "CA-408 doesn't say what done looks like, what's in or out of scope, or who is waiting on it.";
+  it("opens by saying plainly what a thin ticket leaves out, and keeps what it was asked", () => {
+    const line = "CA-408 may be unclear: it has a very short description, doesn't say what done looks like, doesn't say what's in or out of scope, and doesn't say who is waiting on it.";
     expect(readinessLine(ws())).toBe(line);
     const script = scriptPip("Investigate CA-408", ctx, [], [], Date.now(), [], null, ws());
     expect(script.text.startsWith(`${line}\n\n`)).toBe(true);
@@ -94,9 +82,9 @@ describe("Pip's first turn in a workstream", () => {
     expect(scriptPip("Investigate CA-408", ctx, [], [], Date.now(), [], null, ws({ first: false })).text.startsWith(line)).toBe(false);
   });
 
-  it("says nothing for a ticket with a real description or none, for a later turn, or for no ticket", () => {
-    expect(readinessLine(ws({ ticketText: "Retries back off and cap at five attempts, so a provider outage doesn't build a wave." }))).toBeNull();
-    expect(readinessLine(ws({ ticketText: null }))).toBeNull();
+  it("says nothing when the check found nothing or its notice is gone, for a later turn, or for no ticket", () => {
+    expect(readinessLine(ws({ clarity: [] }))).toBeNull();
+    expect(readinessLine(ws({ clarity: null }))).toBeNull();
     expect(readinessLine(ws({ first: false }))).toBeNull();
     expect(readinessLine(ws({ item: null }))).toBeNull();
     expect(readinessLine(null)).toBeNull();
@@ -104,6 +92,6 @@ describe("Pip's first turn in a workstream", () => {
 
   it("is not part of a wake, which is the supervisor's, not Pip's first answer", () => {
     const script = scriptPip("[Event] run r1 (investigate) Done", ctx, [], [], Date.now(), [], null, ws());
-    expect(script.text).not.toContain("doesn't say");
+    expect(script.text).not.toContain("may be unclear");
   });
 });

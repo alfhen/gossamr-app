@@ -468,6 +468,36 @@ function beforeNote(text: string, line: string): string {
   return at < 0 ? `${text}\n\n${line}` : `${text.slice(0, at)}${line}\n\n${text.slice(at)}`;
 }
 
+/**
+ * The line a plan that assumes `n` answers puts in its summary, so its approval says so, as `assumptions_summary_line` in
+ * src-tauri/src/domain/run.rs.
+ */
+export const assumptionsSummaryLine = (n: number) => `Assumes answers to ${n} open ${n === 1 ? "question" : "questions"} from triage (listed at the end).`;
+
+/** The working answer the sample plan assumes for an open question: what a real plan would write after "Assumed:". */
+export function assumedAnswer(question: string): string {
+  const q = question.toLowerCase();
+  if (/done look|acceptance|how will we know/.test(q)) return "it is done when the behaviour the ticket describes works end to end in the sandbox.";
+  if (/scope/.test(q)) return "only the flow the ticket names is in scope; everything around it stays as it is.";
+  if (/who asked|who is waiting|waiting on/.test(q)) return "the reporter is the one waiting, and nobody else needs to be told.";
+  if (/goal|why/.test(q)) return "the goal is the one the ticket's title states.";
+  return "the usual behaviour stays as it is and nothing beyond the ticket changes.";
+}
+
+/**
+ * A plan's answer with the open questions it was started to assume answers to listed at the end of the plan, before its
+ * `For Jira:` note, each as the question and "Assumed: <the working answer>", so the plan's description draft shows them
+ * (the real plan run is told to, `ASSUMPTIONS_PREFACE` in domain/run.rs). The plan opens with a line saying it assumes
+ * them, and its `For Jira:` note starts with the same line.
+ */
+export function withAssumptions(plan: string, assumptions: readonly string[]): string {
+  if (!assumptions.length) return plan;
+  const block = `## Open questions the plan assumes answers to\n\nThe person chose to plan without answers to these, so the plan assumes them settled as the plan reads:\n\n${assumptions.map((q) => `- ${q} Assumed: ${assumedAnswer(q)}`).join("\n")}`;
+  const at = plan.search(/^For Jira:\n/m);
+  const noted = at < 0 ? plan : `${plan.slice(0, at)}For Jira:\n${assumptionsSummaryLine(assumptions.length)} ${plan.slice(at + "For Jira:\n".length)}`;
+  return beforeNote(`${assumptionsSummaryLine(assumptions.length)}\n\n${noted}`, block);
+}
+
 /** The answer a scripted run of `kind` finishes with, from its usual `base`, changed as `script` asks. */
 export function scriptedFinish(kind: RunKind, base: string, script: ScriptedFinish): string {
   let text = base;

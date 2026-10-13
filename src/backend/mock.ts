@@ -54,15 +54,17 @@ import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
-import { basisFieldsOf, targetOf, workstreamOf } from "../lib/proposals";
+import { ANSWERED_REASON, basisFieldsOf, OVERRIDDEN_REASON, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { MockSupervisor, triageReadiness } from "./mockSupervisor";
 import { READINESS_LABEL, reporterComment, reporterDoc } from "./mockReadiness";
+import { clarityQuestions } from "../lib/ticketClarity";
+import { answersDue, planDue } from "../lib/reporterWait";
 import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
 import { mockPipTurns } from "./mockPipTurns";
-import { MockWorkstreams, READINESS_GONE, lastTripOf, type LastTrip } from "./mockWorkstreams";
+import { MockWorkstreams, CLARITY_GONE, READINESS_GONE, lastTripOf, type LastTrip } from "./mockWorkstreams";
 
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
@@ -433,6 +435,8 @@ export class MockBackend implements Backend {
     this.workstreams.verdictOf = (run) => this.runs.resolvedOf(run.id)?.verdict ?? null;
     this.workstreams.readinessOfRun = (run) => triageReadiness(run);
     this.workstreams.ticketOf = (key) => this.connector.item(itemRef(key));
+    // The reporter replies on the ticket with a comment, which leaves no audit line: anyone's but the person's own.
+    this.workstreams.repliesTo = (key) => this.connector.comments(itemRef(key)).filter((c) => c.author.accountId !== this.connector.me.accountId).map((c) => c.created);
     // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for drift.
     this.proposals.onWritten = (p) => {
       const ws = workstreamOf(p);
@@ -452,7 +456,7 @@ export class MockBackend implements Backend {
       workstreams: this.workstreams,
       proposals: this.proposals,
       pip: { hold: holdMockPip, idle: mockPipIdle },
-      tickets: { edit: (key, change) => this.editTicket(key, change) },
+      tickets: { edit: (key, change) => this.editTicket(key, change), comment: (key, text, by) => this.commentOnTicket(key, text, by) },
       github: { writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
     });
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
@@ -571,14 +575,42 @@ export class MockBackend implements Backend {
     return proposal;
   }
 
+  /**
+   * The person's "Ask the reporter now", as `workstreams_clarity_ask`: the same comment to the reporter as "Ask the reporter",
+   * with one question per gap the clarity check found, as a draft the person approves like any other. Records
+   * `clarity_asked`. Refused with `CLARITY_GONE` unless the workstream's notice is showing.
+   */
+  async workstreamsClarityAsk(id: string) {
+    const notice = this.workstreams.clarityNotice(id);
+    const key = this.workstreams.get(id)?.workstream.itemKey;
+    if (!key) throw new Error(CLARITY_GONE);
+    const item = itemRef(key);
+    const reporter = this.connector.item(item)?.reporter ?? null;
+    const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
+    const body = reporterDoc(reporterComment(key, name, clarityQuestions(notice.gaps)), reporter && name ? { person: reporter, name } : null);
+    const proposal = this.proposals.askedFor({ type: "comment", item, body }, READINESS_LABEL, id);
+    this.workstreams.askedClarity(id, proposal.id);
+    return proposal;
+  }
+
+  /** The person's "Looks fine", as `workstreams_clarity_dismiss`: the notice doesn't show for this ticket again. */
+  async workstreamsClarityDismiss(id: string) {
+    return this.workstreams.dismissClarity(id);
+  }
+
   /** The person's "I'll answer", as `workstreams_readiness_answer`: settles the question and starts nothing. */
   async workstreamsReadinessAnswer(id: string, triageRun: string) {
-    return this.workstreams.answerReadiness(id, triageRun);
+    const ws = this.workstreams.answerReadiness(id, triageRun);
+    // Their answers go to the ticket as a comment of their own, so the triage's note, which says it can't be sized, no longer waits.
+    this.proposals.retireTriageNotes(id, triageRun, ANSWERED_REASON);
+    return ws;
   }
 
   /** The person's "Plan anyway", as `workstreams_readiness_override`: records the override; the supervisor's Triage-to-Plan rule then starts the Plan under its own checks. */
   async workstreamsReadinessOverride(id: string, triageRun: string) {
-    return this.workstreams.overrideReadiness(id, triageRun);
+    const ws = this.workstreams.overrideReadiness(id, triageRun);
+    this.proposals.retireTriageNotes(id, triageRun, OVERRIDDEN_REASON);
+    return ws;
   }
 
   /** The person's "Allow 5 more", as `workstreams_allow_more`: the allowance goes up by 5 and the workstream resumes. */
@@ -894,10 +926,27 @@ export class MockBackend implements Backend {
     return key ? itemRef(key) : null;
   }
 
-  /** The description of `item` as text, for Pip's readiness check in a workstream's first turn. */
-  pipTicketText(item: ItemRef): string | null {
-    const body = this.connector.item(item)?.body;
-    return body ? docText(body) : null;
+  /** The gaps Gossamr's word check found in workstream `id`'s ticket while its notice shows, for Pip's readiness line in a first turn. */
+  pipWorkstreamClarity(id: string) {
+    return this.workstreams.get(id)?.clarity?.gaps ?? null;
+  }
+
+  /** Whether the person chose "I'll answer" in workstream `id` and no comment with their answers was drafted in it since. */
+  pipWorkstreamAnswersDue(id: string): boolean {
+    return answersDue(
+      this.workstreams.events(id),
+      this.proposals.list().filter((p) => workstreamOf(p) === id),
+    );
+  }
+
+  /** Whether the person's answers to the open questions were posted in workstream `id` and no plan was drafted or started since: Pip's next turn proposes it. */
+  pipWorkstreamPlanDue(id: string): boolean {
+    return planDue(
+      this.workstreams.events(id),
+      this.proposals.list().filter((p) => workstreamOf(p) === id),
+      this.runs.list(),
+      id,
+    );
   }
 
   pipWorkstreamHeld(id: string): string | null {
@@ -963,6 +1012,12 @@ export class MockBackend implements Backend {
    */
   editTicket(key: string, change: TicketEdit) {
     this.connector.edit(itemRef(key), { title: change.summary, body: change.description === undefined ? undefined : docFromText(change.description), status: change.statusId });
+    this.workstreams.changed();
+  }
+
+  /** Someone else comments on sample ticket `key` in Jira, as its reporter would (`by` is a person's id in the sample, Mette by default); the workstreams tell their listeners. */
+  commentOnTicket(key: string, text: string, by = "mette") {
+    this.connector.commentBy(itemRef(key), by, text);
     this.workstreams.changed();
   }
 

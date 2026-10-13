@@ -22,6 +22,19 @@ export function driftText(drifted: readonly BasisField[] | null | undefined): st
 }
 
 /**
+ * What a basis-drift hold says when the ticket changed while the workstream waited on the reporter: the hold is the same,
+ * but what to do after it is the plan decision, which Resume leads to, e.g. "Held: CA-408's description changed while
+ * waiting on the reporter. Resume, then decide whether to plan now."
+ */
+export function driftWhileWaitingText(key: string | null | undefined, drifted: readonly BasisField[] | null | undefined): string {
+  const changed = (["summary", "description"] as const).filter((f) => drifted?.includes(f));
+  const done = drifted?.includes("status") ?? false;
+  const owner = key ? `${key}'s` : "the ticket's";
+  const what = changed.length ? `${owner} ${changed.join(" and ")} changed${done ? " and it was moved to Done" : ""}` : done ? `${key ?? "the ticket"} was moved to Done` : `${key ?? "the ticket"} changed`;
+  return `Held: ${what} while waiting on the reporter. Resume, then decide whether to plan now.`;
+}
+
+/**
  * The one count of the budget the person reads, in automatic steps: what is left of whichever of the backend's two counters
  * (automatic turns and wakes) is nearer its limit, out of the smaller of the two limits, so the total stays put when the
  * other counter takes over (a message from the person zeroes the turns, not the wakes). Nothing on the page names the other.
@@ -79,11 +92,15 @@ export function tripwireResumeText(reason: string | null | undefined, resumeMode
   return mode === "manage" ? "Automatic steps are paused. Resume turns them back on." : "Resume only lifts the hold; Manage stays off.";
 }
 
-/** The whole held banner of `ws`: why it is held, then for a tripwire what Resume does. */
-export function heldBanner(ws: Pick<Workstream, "heldReason" | "drifted" | "resumeMode"> & { mode?: WorkstreamMode }): string | null {
-  const held = heldText(ws.heldReason, ws.drifted);
+/**
+ * The whole held banner of `ws`: why it is held, then for a tripwire what Resume does. A basis-drift hold of a workstream
+ * whose ticket changed while it waited on the reporter (`changedWhileWaiting`) says so, and that Resume leads to the plan decision.
+ */
+export function heldBanner(ws: Pick<Workstream, "heldReason" | "drifted" | "resumeMode"> & { mode?: WorkstreamMode; itemKey?: string | null }, changedWhileWaiting = false): string | null {
+  const waited = changedWhileWaiting && ws.heldReason === `${TRIPWIRE}basis_drift`;
+  const held = waited ? driftWhileWaitingText(ws.itemKey, ws.drifted) : heldText(ws.heldReason, ws.drifted);
   const resume = tripwireResumeText(ws.heldReason, ws.resumeMode, ws.mode);
-  return held && resume ? `${held}. ${resume}` : held;
+  return held && resume ? `${waited ? held : `${held}.`} ${resume}` : held;
 }
 
 /** What one automatic step is, for the budget's meter and banner. */

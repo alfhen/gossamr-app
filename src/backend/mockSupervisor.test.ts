@@ -173,6 +173,49 @@ const wakeCount = (wakes: { facts: WakeFact[] }[]) => {
   return n;
 };
 
+describe("the sample supervisor while the workstream waits on the reporter", () => {
+  beforeEach(() => saved.clear());
+
+  it("starts no plan after a triage that recommends one, until the person chooses", async () => {
+    const { b } = world();
+    const ws = b.workstreams.open(CA408).id;
+    b.workstreams.setBudget(ws, { autoTurns: 12 });
+    // Asked and posted before any triage ran: the comment is the person's, approved like any other.
+    const asked = await b.workstreamsClarityAsk(ws);
+    await b.proposalsApprove(asked.id);
+    expect(b.workstreams.get(ws)?.waitingOnReporter?.since).toBeTruthy();
+    b.runs.scriptNext("triage", { planRecommended: true, ready: true });
+    finish(b, (await investigate(b, ws, CA408)).id);
+    finish(b, newest(b, ws, "triage")!.id);
+    expect(newest(b, ws, "plan")).toBeUndefined();
+    expect(supervisorLines(b, ws).filter((l) => l.startsWith("autostart") && l.includes("triage_plan"))).toEqual([]);
+    expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+    expect(b.workstreams.get(ws)?.waitingOnReporter).toBeTruthy();
+  });
+
+  it("brings the readiness question back as a changed one when the ticket changes, and Plan now starts the plan", async () => {
+    const { b } = world();
+    const ws = b.workstreams.open(CA408).id;
+    b.workstreams.setBudget(ws, { autoTurns: 12 });
+    finish(b, (await investigate(b, ws, CA408)).id);
+    const triage = newest(b, ws, "triage")!;
+    finish(b, triage.id);
+    const asked = await b.workstreamsReadinessAsk(ws, triage.id);
+    await b.proposalsApprove(asked.id);
+    expect(b.workstreams.get(ws)).toMatchObject({ waitingOnReporter: { since: expect.any(String) } });
+    expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+    // The ticket changes while they wait: the supervisor holds the workstream (the existing drift), the wait is over, and once the
+    // person resumes, the question is back, flagged.
+    b.editTicket("CA-408", { description: "Win back lapsed customers with three emails over two weeks." });
+    expect(b.workstreams.get(ws)?.waitingOnReporter).toBeFalsy();
+    b.workstreams.resume(ws);
+    expect(b.workstreams.get(ws)?.readiness).toMatchObject({ triageRun: triage.id, changed: true });
+    await b.workstreamsReadinessOverride(ws, triage.id);
+    expect(newest(b, ws, "plan")?.autoStart?.rule).toBe("triage_plan");
+    expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+  });
+});
+
 describe("the sample supervisor", () => {
   beforeEach(() => saved.clear());
 
@@ -241,6 +284,36 @@ describe("the sample supervisor", () => {
       await expect(b.workstreamsReadinessOverride(ws, triage.id)).rejects.toThrow("isn't waiting for your choice");
     });
 
+    it("gives the plan Plan anyway starts the open questions to assume answers to, and its description draft lists them", async () => {
+      const { b, ws, triage } = await triaged();
+      const questions = b.workstreams.get(ws)!.readiness!.questions;
+      await b.workstreamsReadinessOverride(ws, triage.id);
+      const plan = newest(b, ws, "plan")!;
+      expect(plan.spec.assumptions).toEqual(questions);
+      finish(b, plan.id);
+      const result = b.runs.get(plan.id)!.result!;
+      expect(result).toContain("## Open questions the plan assumes answers to");
+      for (const q of questions) expect(result).toMatch(new RegExp(`- ${q.replace(/[?.]/g, "\\$&")} Assumed: \\S`));
+      // Each is stated as the question and the answer the plan assumed, and the summary says the plan rests on them.
+      const line = `Assumes answers to ${questions.length} open questions from triage (listed at the end).`;
+      expect(result.startsWith(line)).toBe(true);
+      expect(result).toContain(`For Jira:\n${line}`);
+      expect(b.runs.get(plan.id)!.summary).toContain(line);
+      expect(result.indexOf("## Open questions the plan assumes answers to")).toBeGreaterThan(result.indexOf("## Risks"));
+      // The plan's description draft is made from that answer, so the person reads the assumptions where they approve it.
+      const rewrite = b.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === plan.id);
+      expect(JSON.stringify(rewrite?.intent)).toContain("the plan assumes answers to");
+      expect(JSON.stringify(rewrite?.intent)).toContain(line);
+    });
+
+    it("starts a plan with no assumptions after a triage that was ready, and carries none into any other kind", async () => {
+      const w = world();
+      const ws = w.b.workstreams.open(CA401).id;
+      finish(w.b, (await investigate(w.b, ws)).id);
+      finish(w.b, newest(w.b, ws, "triage")!.id);
+      expect(newest(w.b, ws, "plan")?.spec.assumptions ?? []).toEqual([]);
+    });
+
     it("lets only the person's line for that triage start it: not Pip's, the supervisor's, or one for another run", async () => {
       const { b, ws, triage, supervisor } = await triaged();
       for (const actor of ["pip", "supervisor", "run"] as const) b.workstreams.record(ws, actor, "readiness_overridden", { runId: triage.id });
@@ -281,9 +354,13 @@ describe("the sample supervisor", () => {
 
     it("drafts a comment to the reporter with Ask the reporter, posts nothing, and settles", async () => {
       const { b, ws, triage } = await triaged();
+      const own = b.proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === triage.id);
+      expect(own).toHaveLength(1);
       const before = b.proposals.list({ states: ["pending"] }).length;
       const draft = await b.workstreamsReadinessAsk(ws, triage.id);
-      expect(b.proposals.list({ states: ["pending"] })).toHaveLength(before + 1);
+      // The triage's own note repeated the questions: it is superseded by this draft, so only one of them can be posted.
+      expect(b.proposals.list({ states: ["pending"] })).toHaveLength(before);
+      expect(b.proposals.get(own[0].id)).toMatchObject({ state: { type: "retired" }, supersededBy: draft.id });
       expect(draft).toMatchObject({ state: { type: "pending" }, createdBy: "agent", label: "Questions for the reporter", origin: { type: "run", runId: triage.id, workstream: ws } });
       if (draft.intent.type !== "comment") throw new Error("a comment");
       expect(draft.intent.item.key).toBe("CA-408");

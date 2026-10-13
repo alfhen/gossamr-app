@@ -132,6 +132,7 @@ interface Handle {
   holdPip(on: boolean): void;
   pipIdle(): boolean;
   editTicket(key: string, change: TicketEdit): void;
+  commentOnTicket(key: string, text: string, by?: string): void;
   githubWrites(): GithubWrite[];
   movePullHead(repo: string, number: number): boolean;
   githubPostsTried(): number;
@@ -354,6 +355,17 @@ export const editTicket = (page: Page, key: string, change: TicketEdit) =>
       mock.editTicket(key, change);
     },
     { key, change, missing: NO_MOCK },
+  );
+
+/** Someone else comments on sample ticket `key` as in Jira (the reporter answering): `by` is a person's id in the sample, Mette by default; the signed-in person's own comments are "me". */
+export const commentOnTicket = (page: Page, key: string, text: string, by?: string) =>
+  page.evaluate(
+    ({ key, text, by, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.commentOnTicket(key, text, by);
+    },
+    { key, text, by, missing: NO_MOCK },
   );
 
 /** Holds the open workstream on ticket `key` as the system would, for `reason` ("restart", "budget", "daily_cap", ...): the holds that are a need, unlike the person's own Hold. */

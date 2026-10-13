@@ -1,4 +1,5 @@
 import type { Intent, Proposal, Run, WorkstreamEvent } from "../types";
+import { reporterFollow } from "./reporterWait";
 import { WITHER_DAYS, witherLevel, type WitherLevel } from "./views";
 
 /**
@@ -7,6 +8,10 @@ import { WITHER_DAYS, witherLevel, type WitherLevel } from "./views";
  * to Jira or GitHub for the workstream, or, with no post yet, since it opened. It only counts while the agents or Pip have
  * been at work since that post (runs started or finished, Pip's turns), so a workstream where nothing happens shows none:
  * the ticket's own cobweb in the ticket list covers a ticket nobody touches. It is never a need and is counted nowhere.
+ *
+ * While the workstream waits on the reporter (it asked and the comment was posted) the clock is the days since that post, and
+ * nothing else has to be happening: after `WITHER_DAYS.ticket` days without an answer the same cobweb says "Reporter hasn't
+ * answered for N days".
  */
 
 /** What a post to Jira writes: every kind of draft a tracker applies. A run, a follow-up or an answer reaches an agent, not Jira. */
@@ -16,7 +21,7 @@ const JIRA_WRITES: ReadonlySet<Intent["type"]> = new Set(["comment", "transition
 export const isJiraWrite = (intent: Intent) => JIRA_WRITES.has(intent.type);
 
 /** The short line a workstream row shows for its cobweb: "No Jira update · 6d". */
-export const witherShort = (w: Pick<WorkstreamWither, "days">) => `No Jira update · ${w.days}d`;
+export const witherShort = (w: Pick<WorkstreamWither, "days" | "reporter">) => (w.reporter ? `Reporter hasn't answered · ${w.days}d` : `No Jira update · ${w.days}d`);
 
 /** The row's tooltip: the full sentence, and where the update waits when a draft already does. */
 export const witherTitle = (w: Pick<WorkstreamWither, "text" | "draftWaiting">) => (w.draftWaiting ? `${w.text}. A draft is waiting in Needs you.` : w.text);
@@ -40,7 +45,9 @@ export interface WorkstreamWither {
   turns: number;
   /** A Jira write of this workstream's waits for the person, in Needs you; set by whoever holds the drafts (`withersOf`). */
   draftWaiting?: boolean;
-  /** The words for hover and for a screen reader: "No Jira update for 5 days (3 runs since)"; empty at level 0. */
+  /** The cobweb is the reporter's silence, not work with no post: the workstream waits on their answer. */
+  reporter?: boolean;
+  /** The words for hover and for a screen reader: "No Jira update for 5 days (3 runs since)", "Reporter hasn't answered for 5 days"; empty at level 0. */
   text: string;
 }
 
@@ -51,6 +58,8 @@ export interface WitherMore {
   turns?: readonly { at?: string | null }[] | null;
   /** When the workstream opened, when the audit has no `opened` line. */
   openedAt?: string | null;
+  /** The reporter replied on the ticket (`WorkstreamView.reporterReplied`): the wait on them is over, whatever the audit says. */
+  replied?: boolean;
 }
 
 const at = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
@@ -76,6 +85,12 @@ function sinceText(runs: number, turns: number): string {
 /** The workstream's cobweb at `now`, from its audit `events`, its `runs` and what `more` knows. Pure. */
 export function workstreamWither(events: readonly WorkstreamEvent[], runs: readonly WitherRun[], now: Date, more: WitherMore = {}): WorkstreamWither {
   const none: WorkstreamWither = { level: 0, days: 0, since: null, runs: 0, turns: 0, text: "" };
+  const waiting = more.replied ? null : reporterFollow(events).waiting;
+  if (waiting && !Number.isNaN(at(waiting))) {
+    const days = Math.max(0, Math.floor((now.getTime() - at(waiting)) / 86_400_000));
+    const level = witherLevel(waiting, now, WITHER_DAYS.ticket);
+    return { level, days, since: waiting, runs: 0, turns: 0, reporter: true, text: level ? `Reporter hasn't answered for ${plural(days, "day", "days")}` : "" };
+  }
   const posts = events.filter((e) => isPost(e, more.draft)).map((e) => e.at);
   const last = posts.length ? posts.reduce((a, b) => (at(b) > at(a) ? b : a)) : null;
   const since = last ?? events.find((e) => e.action === "opened")?.at ?? more.openedAt ?? null;

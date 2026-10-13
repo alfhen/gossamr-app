@@ -508,6 +508,14 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             {isReporterQuestions(p) ? ". Gossamr wrote this around the triage's open questions, which are the agent's words. Read and edit them before you approve." : ". The words are the agent's. Read and edit them before you approve."}
           </p>
         )}
+        {p.origin.type === "chat" && isReporterQuestions(p) && (
+          <p data-provenance="gossamr" className="m-0 text-sm text-ws-ink3">
+            <span data-created-by="gossamr" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
+              Drafted by Gossamr
+            </span>
+            Gossamr wrote this from what the ticket&apos;s description leaves out. Read and edit the questions before you approve.
+          </p>
+        )}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}
         {open && revision && !shownError && <p className="m-0 text-sm text-ws-ink3">{revision.note}</p>}
         {shownError && (

@@ -471,7 +471,12 @@ async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, 
 #[tauri::command]
 async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let skipped = core.skip_proposal(&id).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    let connection = Connection::jira_id(&core.scope().await?);
+    proposals_changed(&app, &connection);
+    // A draft in a workstream is a line in its audit, which its timeline's counts read.
+    if skipped.workstream().is_some() {
+        workstreams_changed(&app, &connection);
+    }
     Ok(skipped)
 }
 
@@ -479,7 +484,11 @@ async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String) 
 #[tauri::command]
 async fn proposals_unskip(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let back = core.unskip_proposal(&id).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    let connection = Connection::jira_id(&core.scope().await?);
+    proposals_changed(&app, &connection);
+    if back.workstream().is_some() {
+        workstreams_changed(&app, &connection);
+    }
     Ok(back)
 }
 
@@ -494,6 +503,11 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, superviso
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
         cache_changed(&app, &connection);
+        // Approving a draft in a workstream is a line in its audit: what the workstream waits on (the reporter, from the
+        // approved questions) and its timeline's counts read it.
+        if result.as_ref().is_ok_and(|p| p.workstream().is_some()) {
+            workstreams_changed(&app, &connection);
+        }
         if result.as_ref().is_ok_and(|p| matches!((&p.origin, &p.intent), (domain::Origin::Run { .. }, domain::Intent::Create { .. }))) {
             runs_changed(&app, &connection);
         }
@@ -714,6 +728,26 @@ async fn workstreams_readiness_ask(app: AppHandle, core: State<'_, CoreState>, i
     proposals_changed(&app, &Connection::jira_id(&scope));
     workstreams_changed(&app, &Connection::jira_id(&scope));
     Ok(made)
+}
+
+/// The person's "Ask the reporter now" on the clarity notice of a ticket no Triage has judged: the same comment to the
+/// reporter, from the gaps the check found, as a draft the person approves like any other. Pip has no way to call this.
+#[tauri::command]
+async fn workstreams_clarity_ask(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+    let scope = core.scope().await?;
+    let made = core.ask_reporter_now(&scope, &id).await?;
+    proposals_changed(&app, &Connection::jira_id(&scope));
+    workstreams_changed(&app, &Connection::jira_id(&scope));
+    Ok(made)
+}
+
+/// The person's "Looks fine" on the clarity notice: it doesn't show again for this ticket.
+#[tauri::command]
+async fn workstreams_clarity_dismiss(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
+    let scope = core.scope().await?;
+    let ws = core.dismiss_clarity(&scope, &id).await?;
+    workstreams_changed(&app, &Connection::jira_id(&scope));
+    Ok(ws)
 }
 
 /// The person's "I'll answer" on a Triage that found its ticket not ready to plan: it settles the question and starts
@@ -1507,6 +1541,8 @@ pub fn run() {
             workstreams_fix_round,
             workstreams_take_over,
             workstreams_readiness_ask,
+            workstreams_clarity_ask,
+            workstreams_clarity_dismiss,
             workstreams_readiness_answer,
             workstreams_readiness_override,
             workstreams_hold,

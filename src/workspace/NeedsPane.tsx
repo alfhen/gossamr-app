@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { docText } from "../lib/docs";
 import { needAfter, needGroups, type Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS, type Proposal, type Run, type WorkstreamView } from "../types";
 import { stepsOf } from "../lib/workstreamHold";
@@ -244,11 +245,36 @@ function BudgetBody({ view }: { view: WorkstreamView }) {
   );
 }
 
+/** The most of a ticket's description the decision shows before the rest is folded away. */
+const TICKET_NOW_EXCERPT = 280;
+
+/** What the ticket's description says now: all of it when short, else its start with the rest a disclosure away. Nothing when it is empty. */
+export function TicketNow({ text }: { text: string }) {
+  if (!text) return null;
+  const long = text.length > TICKET_NOW_EXCERPT;
+  const start = long ? `${text.slice(0, TICKET_NOW_EXCERPT).trimEnd()}…` : text;
+  return (
+    <div data-ticket-now className="grid gap-1">
+      <p className="m-0 text-xs font-semibold text-ws-ink2">The ticket now says</p>
+      <p className="m-0 whitespace-pre-wrap text-ws-ink2">{start}</p>
+      {long && (
+        <details data-ticket-now-more className="text-ws-ink2">
+          <summary className="cursor-pointer text-xs font-semibold">Show the whole description</summary>
+          <p className="m-0 mt-1 whitespace-pre-wrap">{text}</p>
+        </details>
+      )}
+    </div>
+  );
+}
+
 /** The three choices on a ticket its triage found not clear enough to plan: ask the reporter, answer the questions, or plan anyway. */
 function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
   const r = view.readiness;
   const id = view.workstream.id;
   const [busy, setBusy] = useState(false);
+  // The cached ticket, so a ticket that changed shows what it says now rather than only that it changed.
+  const itemKey = view.workstream.itemKey;
+  const description = useWorkspace((s) => (itemKey ? docText(Object.values(s.items).find((i) => i.item.key === itemKey)?.body ?? { blocks: [] }).trim() : ""));
   if (!r) return null;
   const key = view.workstream.itemKey ?? "the ticket";
   const choose = (call: () => Promise<boolean>) => {
@@ -257,7 +283,7 @@ function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
   };
   const store = useWorkstreams.getState();
   return (
-    <Box tone="warn" label="Not ready to plan">
+    <Box tone="warn" label={r.changed ? "Ticket changed" : "Not ready to plan"}>
       <BoxTitle icon="alert" tone="warn">
         {need.title}
       </BoxTitle>
@@ -270,18 +296,35 @@ function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
       ) : (
         <p className="m-0 text-ws-ink2">The triage found {key} unclear but listed no questions.</p>
       )}
-      <p className="m-0 text-ws-ink2">No plan starts until you choose. Asking the reporter drafts a Jira comment for you to approve; nothing is posted before that.</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.askReporter(id))}>
-          Ask the reporter
-        </Btn>
-        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.answerSelf(id))}>
-          I'll answer
-        </Btn>
-        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
-          Plan anyway
-        </Btn>
-      </div>
+      {r.changed ? (
+        <>
+          <TicketNow text={description} />
+          <p className="m-0 text-ws-ink2">No plan starts until you choose. Read the ticket as it is now, then plan, or ask the reporter again; asking drafts a Jira comment for you to approve, and nothing is posted before that.</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
+              Plan now
+            </Btn>
+            <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.askReporter(id))}>
+              Still unclear (ask again)
+            </Btn>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="m-0 text-ws-ink2">No plan starts until you choose. Asking the reporter drafts a Jira comment for you to approve; nothing is posted before that.</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.askReporter(id))}>
+              Ask the reporter
+            </Btn>
+            <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.answerSelf(id))}>
+              I'll answer
+            </Btn>
+            <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
+              Plan anyway
+            </Btn>
+          </div>
+        </>
+      )}
     </Box>
   );
 }

@@ -2340,6 +2340,62 @@
         "rules": {}
       },
       "expect": null
+    },
+    {
+      "name": "a triage that recommends a plan starts none while the workstream waits on the reporter",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": true
+      },
+      "waitingOnReporter": true,
+      "expect": {}
+    },
+    {
+      "name": "a triage that recommends a plan starts it once the wait is over",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": true
+      },
+      "waitingOnReporter": false,
+      "expect": {
+        "decision": "start",
+        "rule": "triage_plan",
+        "kind": "plan"
+      }
     }
   ],
   "fixRound": [
