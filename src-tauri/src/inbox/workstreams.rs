@@ -37,6 +37,14 @@ pub const READINESS_GONE: &str = "This ticket isn't waiting for your choice abou
 /// Why asking the reporter, or saying a ticket looks fine, is refused when its clarity notice isn't showing: the person
 /// chose already, a Triage spoke, or the ticket reads as clear now.
 pub const CLARITY_GONE: &str = "This ticket isn't flagged as possibly unclear any more.";
+/// How many days the reporter may stay silent before a nudge is offered: the first stage of `WITHER_DAYS.ticket` in
+/// src/lib/views.ts, which is when the workstream's cobweb says "Reporter hasn't answered".
+pub const NUDGE_AFTER_DAYS: i64 = 2;
+/// Why a nudge to the reporter is refused: nobody is being waited on, it is too soon, or a nudge already waits.
+pub const NUDGE_GONE: &str = "This workstream isn't due a nudge to the reporter.";
+/// The parts of the clarity learning the page may audit (`workstreams_clarity_note`): the person's repeated "Looks fine"
+/// made Gossamr stop flagging a gap for a project, or they gave it back.
+pub const CLARITY_NOTES: [&str; 2] = ["clarity_learned", "clarity_reset"];
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
@@ -116,7 +124,7 @@ pub struct ReporterWait {
 /// Where a workstream stands with the reporter, read from its audit (oldest first).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReporterFollow {
-    /// Waiting on the reporter since then: the comment of a `readiness_asked` or `clarity_asked` was approved, and since
+    /// Waiting on the reporter since then: the comment of a `readiness_asked`, `clarity_asked` or `reporter_nudged` was approved, and since
     /// then the ticket hasn't changed (`basis_drifted`) and the person hasn't chosen to answer or plan anyway
     /// (`readiness_answered`, `readiness_overridden`) or resumed.
     pub waiting: Option<chrono::DateTime<Utc>>,
@@ -152,7 +160,7 @@ pub fn reporter_follow(events: &[WorkstreamEvent], replies: &[chrono::DateTime<U
         }
         let person = e.actor == Actor::Person;
         match e.action.as_str() {
-            "readiness_asked" | "clarity_asked" if person => {
+            "readiness_asked" | "clarity_asked" | "reporter_nudged" if person => {
                 asked.extend(e.proposal_id.as_deref());
                 now.changed = false;
                 now.replied = false;
@@ -344,6 +352,12 @@ pub fn reporter_comment(key: &str, reporter: Option<&str>, questions: &[String])
     format!("{hello}\n\nBefore {key} can be planned we need a few things cleared up:\n\n{asks}\n\nCould you answer them here on the ticket? Thanks.")
 }
 
+/// The comment `nudge_reporter` drafts: a short, polite follow-up on the questions already asked on the ticket.
+pub fn nudge_comment(key: &str, reporter: Option<&str>) -> String {
+    let hello = reporter.map_or_else(|| "Hi,".to_string(), |name| format!("Hi @{name},"));
+    format!("{hello}\n\nA gentle nudge on the questions above; we can't plan {key} until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.")
+}
+
 /// One counter of a workstream's budget: how much is used of how much it may use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -432,9 +446,9 @@ fn escalation_events(db: &Db, ws: &Workstream) -> Result<Vec<WorkstreamEvent>> {
         return Ok(Vec::new());
     }
     let all = db.workstream_events(&ws.id)?;
-    let asked: HashSet<String> = all.iter().filter(|e| matches!(e.action.as_str(), "readiness_asked" | "clarity_asked")).filter_map(|e| e.proposal_id.clone()).collect();
+    let asked: HashSet<String> = all.iter().filter(|e| matches!(e.action.as_str(), "readiness_asked" | "clarity_asked" | "reporter_nudged")).filter_map(|e| e.proposal_id.clone()).collect();
     let kept = |e: &WorkstreamEvent| match e.action.as_str() {
-        "fix_rounds_exhausted" | "fix_round_person" | "escalation_taken" | "escalation_posted" | "readiness_asked" | "readiness_answered" | "readiness_overridden" | "clarity_asked" | "clarity_dismissed" | "basis_drifted" | "resumed" => true,
+        "fix_rounds_exhausted" | "fix_round_person" | "escalation_taken" | "escalation_posted" | "readiness_asked" | "readiness_answered" | "readiness_overridden" | "clarity_asked" | "clarity_dismissed" | "reporter_nudged" | "basis_drifted" | "resumed" => true,
         "draft_approved" => e.proposal_id.as_ref().is_some_and(|p| asked.contains(p)),
         _ => false,
     };
@@ -941,14 +955,19 @@ impl Core {
     /// "Questions for the reporter" comment as `ask_reporter`, with one question per gap the check found (Gossamr's own
     /// words, never an agent's). A draft like any other: nothing is posted before the person approves it. Records
     /// `clarity_asked` (the person's, naming the draft). Refused with `CLARITY_GONE` unless the notice is showing. Pip has
-    /// no way to call this.
-    pub async fn ask_reporter_now(&self, scope: &Scope, id: &str) -> Result<Proposal> {
+    /// no way to call this. `skip` are the gaps the page no longer flags for the ticket's project (the person said "Looks fine"
+    /// to them enough times); they are not asked about, and a notice with nothing left is refused like one that isn't showing.
+    pub async fn ask_reporter_now(&self, scope: &Scope, id: &str, skip: &[ClarityGap]) -> Result<Proposal> {
         let (ws, clarity) = self.clarity_notice(scope, id).await?;
+        let gaps: Vec<ClarityGap> = clarity.gaps.iter().copied().filter(|g| !skip.contains(g)).collect();
+        if gaps.is_empty() {
+            return Err(refuse(CLARITY_GONE));
+        }
         let key = ws.item_key.clone().ok_or_else(|| refuse(CLARITY_GONE))?;
         let item = Core::item(scope, &key);
         let reporter = self.ticket_for_pip(scope, &key).await.ok().and_then(|(t, _)| t.reporter);
         let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
-        let body = crate::tracker::comment_doc(&reporter_comment(&key, reporter.as_ref().map(|p| p.name.as_str()), &clarity_questions(&clarity.gaps)), &people);
+        let body = crate::tracker::comment_doc(&reporter_comment(&key, reporter.as_ref().map(|p| p.name.as_str()), &clarity_questions(&gaps)), &people);
         let draft = proposals::Draft { origin: Origin::Chat { request_id: format!("clarity:{id}"), workstream: Some(id.to_string()) }, created_by: CreatedBy::User, intent: Intent::Comment { item, body }, label: Some(READINESS_LABEL.into()), basis: None };
         let proposal = self.propose(scope, draft).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "clarity_asked", Utc::now()).proposal(&proposal.id)).await?;
@@ -961,6 +980,44 @@ impl Core {
         self.clarity_notice(scope, id).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "clarity_dismissed", Utc::now())).await?;
         self.workstream(scope, id).await?.map(|v| v.workstream).ok_or_else(|| refuse(format!("there is no workstream {id}")))
+    }
+
+    /// The person's "Draft a nudge" on a workstream that has waited `NUDGE_AFTER_DAYS` days or more on the reporter: drafts
+    /// "Nudge for the reporter", a short follow-up comment (Gossamr's own words, addressed to the reporter when the cache
+    /// knows them), as a draft like any other: nothing is posted before the person approves it, and it is never in the safe
+    /// batch. Records `reporter_nudged` (the person's, naming the draft); once it is posted the wait starts again from then.
+    /// Refused with `NUDGE_GONE` unless the workstream waits on the reporter, has for long enough, and has no nudge waiting.
+    /// Pip has no way to call this.
+    pub async fn nudge_reporter(&self, scope: &Scope, id: &str) -> Result<Proposal> {
+        let view = self.workstream(scope, id).await?.ok_or_else(|| refuse(format!("there is no workstream {id}")))?;
+        let key = view.workstream.item_key.clone().ok_or_else(|| refuse(NUDGE_GONE))?;
+        let since = view.waiting_on_reporter.ok_or_else(|| refuse(NUDGE_GONE))?.since;
+        if Utc::now() - since < chrono::Duration::days(NUDGE_AFTER_DAYS) {
+            return Err(refuse(NUDGE_GONE));
+        }
+        let waiting = self.proposals(&ProposalQuery { workstream: Some(id.to_string()), states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() }).await?;
+        if waiting.iter().any(proposals::is_reporter_nudge) {
+            return Err(refuse(NUDGE_GONE));
+        }
+        let item = Core::item(scope, &key);
+        let reporter = self.ticket_for_pip(scope, &key).await.ok().and_then(|(t, _)| t.reporter);
+        let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
+        let body = crate::tracker::comment_doc(&nudge_comment(&key, reporter.as_ref().map(|p| p.name.as_str())), &people);
+        let draft = proposals::Draft { origin: Origin::Chat { request_id: format!("nudge:{id}"), workstream: Some(id.to_string()) }, created_by: CreatedBy::User, intent: Intent::Comment { item, body }, label: Some(proposals::NUDGE_COMMENT_LABEL.into()), basis: None };
+        let proposal = self.propose(scope, draft).await?;
+        self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "reporter_nudged", Utc::now()).proposal(&proposal.id)).await?;
+        Ok(proposal)
+    }
+
+    /// Records that the page stopped flagging a gap for a project after the person said "Looks fine" to it enough times
+    /// (`clarity_learned`), or gave that back (`clarity_reset`), in the audit of workstream `id`, with `detail` saying which
+    /// gap and project. The learning itself is the page's (its prefs); this is only its audit. Anything else is refused.
+    pub async fn note_clarity(&self, scope: &Scope, id: &str, action: &str, detail: &str) -> Result<()> {
+        if !CLARITY_NOTES.contains(&action) {
+            return Err(refuse(format!("{action:?} isn't a note about the clarity check")));
+        }
+        let detail: String = detail.chars().filter(|c| !c.is_control()).take(120).collect();
+        self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, action, Utc::now()).detail(detail)).await.map(|_| ())
     }
 
     /// Holds an open workstream: no wakes and no automatic starts while it is held; its runs carry on. A workstream
@@ -1808,7 +1865,7 @@ mod tests {
         async fn the_view_says_what_the_workstream_waits_on_and_the_asked_comment_is_what_starts_it() {
             let fx = fixture().await;
             let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id).await.expect("the sample ticket is thin");
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[]).await.expect("the sample ticket is thin");
             let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
             assert_eq!((view.clarity, view.waiting_on_reporter), (None, None), "asked, not yet posted: nothing to say");
             fx.core.approve_proposal(&draft.id).await.unwrap();
@@ -1828,7 +1885,7 @@ mod tests {
         async fn the_view_flags_a_change_that_came_while_waiting_until_the_person_chooses() {
             let fx = fixture().await;
             let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id).await.unwrap();
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[]).await.unwrap();
             fx.core.approve_proposal(&draft.id).await.unwrap();
             let flagged = || async { fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap() };
             assert!(!flagged().await.changed_while_waiting, "waiting is not a change");
@@ -1847,7 +1904,7 @@ mod tests {
         async fn the_view_ends_the_wait_on_a_cached_comment_from_someone_else_but_not_on_mine_or_an_older_one() {
             let fx = fixture().await;
             let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id).await.unwrap();
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[]).await.unwrap();
             fx.core.approve_proposal(&draft.id).await.unwrap();
             let view = || async { fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap() };
             let comment = |by: &str, at: chrono::DateTime<Utc>| serde_json::json!({ "id": format!("n-{by}-{}", at.timestamp()), "author": { "accountId": by, "name": by, "avatarUrl": null }, "created": at.to_rfc3339(), "body": "hello" });
@@ -1906,7 +1963,7 @@ mod tests {
             assert_eq!(gaps, vec![ClarityGap::Short, ClarityGap::Done, ClarityGap::Scope, ClarityGap::Who]);
             assert_eq!(serde_json::to_value(&view).unwrap()["clarity"]["gaps"][0], "short");
 
-            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id).await.unwrap();
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[]).await.unwrap();
             assert_eq!((draft.state.clone(), draft.created_by, draft.label.as_deref()), (ProposalState::Pending, CreatedBy::User, Some(READINESS_LABEL)));
             assert!(matches!(&draft.origin, Origin::Chat { workstream, .. } if workstream.as_deref() == Some(ws.id.as_str())), "in this workstream");
             assert!(proposals::is_reporter_questions(&draft));
@@ -1920,11 +1977,11 @@ mod tests {
             let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
             let asked = events.iter().find(|e| e.action == "clarity_asked").expect("audited");
             assert_eq!((asked.actor, asked.proposal_id.as_deref()), (Actor::Person, Some(draft.id.as_str())));
-            assert!(matches!(fx.core.ask_reporter_now(&fx.scope, &ws.id).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE), "once");
+            assert!(matches!(fx.core.ask_reporter_now(&fx.scope, &ws.id, &[]).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE), "once");
             assert!(matches!(fx.core.dismiss_clarity(&fx.scope, &ws.id).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE));
 
             let other = fx.core.open_workstream(&fx.scope, None, Some("Other".into())).await.unwrap();
-            assert!(matches!(fx.core.ask_reporter_now(&fx.scope, &other.id).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE), "no ticket, no notice");
+            assert!(matches!(fx.core.ask_reporter_now(&fx.scope, &other.id, &[]).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE), "no ticket, no notice");
         }
 
         #[tokio::test]
@@ -1939,6 +1996,84 @@ mod tests {
             assert!(fx.tracker.intents().is_empty());
             let triaged = fx.core.open_workstream(&fx.scope, None, Some("T".into())).await.unwrap();
             assert!(matches!(fx.core.dismiss_clarity(&fx.scope, &triaged.id).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE));
+        }
+
+        #[tokio::test]
+        async fn asking_now_leaves_out_the_gaps_the_page_stopped_flagging_and_is_refused_when_none_are_left() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let all = [ClarityGap::Short, ClarityGap::Done, ClarityGap::Scope, ClarityGap::Who];
+            assert!(matches!(fx.core.ask_reporter_now(&fx.scope, &ws.id, &all).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE), "nothing left to ask");
+            assert!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().clarity.is_some(), "a refused ask changes nothing");
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[ClarityGap::Who, ClarityGap::Short]).await.unwrap();
+            let Intent::Comment { body, .. } = &draft.intent else { panic!("a comment") };
+            let text = body.plain_text();
+            assert!(text.contains("How will we know it is done") && text.contains("What is in scope"), "{text}");
+            assert!(!text.contains("Who asked for it"), "{text}");
+        }
+
+        #[test]
+        fn a_posted_nudge_starts_the_wait_again_and_only_the_persons_lines_count() {
+            let asked = line(1, Actor::Person, "clarity_asked", Some("c1"));
+            let posted = line(2, Actor::Person, "draft_approved", Some("c1"));
+            let nudge = line(3, Actor::Person, "reporter_nudged", Some("n1"));
+            let sent = line(4, Actor::Person, "draft_approved", Some("n1"));
+            let wait = |events: &[WorkstreamEvent]| reporter_follow(events, &[]).waiting;
+            assert_eq!(wait(&[asked.clone(), posted.clone(), nudge.clone()]), Some(posted.at), "a nudge that is only drafted changes nothing");
+            assert_eq!(wait(&[asked.clone(), posted.clone(), nudge.clone(), sent.clone()]), Some(sent.at), "once it is posted the wait runs from then");
+            assert_eq!(wait(&[asked.clone(), posted.clone(), line(3, Actor::Pip, "reporter_nudged", Some("n1")), line(4, Actor::Pip, "draft_approved", Some("n1"))]), Some(posted.at), "Pip's lines are no nudge");
+        }
+
+        #[test]
+        fn the_nudge_comment_is_short_polite_and_names_the_ticket() {
+            let text = nudge_comment("CA-1", Some("Mette"));
+            assert!(text.starts_with("Hi @Mette,") && text.contains("A gentle nudge on the questions above") && text.contains("CA-1"), "{text}");
+            assert!(nudge_comment("CA-1", None).starts_with("Hi,"));
+            assert!(text.len() < 300, "short");
+        }
+
+        #[tokio::test]
+        async fn a_nudge_is_offered_only_after_the_reporter_was_silent_for_days_and_is_a_draft_nothing_posts() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            assert!(matches!(fx.core.nudge_reporter(&fx.scope, &ws.id).await.unwrap_err(), Error::Proposal(why) if why == NUDGE_GONE), "nobody is being waited on");
+            let asked = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[]).await.unwrap();
+            fx.core.approve_proposal(&asked.id).await.unwrap();
+            assert!(matches!(fx.core.nudge_reporter(&fx.scope, &ws.id).await.unwrap_err(), Error::Proposal(why) if why == NUDGE_GONE), "posted just now: too soon");
+            // The same wait, begun three days ago: the approval the audit reads is the one that is old.
+            let old = Utc::now() - chrono::Duration::days(3);
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "clarity_asked", old).proposal("earlier")).await.unwrap();
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "draft_approved", old).proposal("earlier")).await.unwrap();
+            let posted = fx.tracker.intents().len();
+            let nudge = fx.core.nudge_reporter(&fx.scope, &ws.id).await.expect("three days is long enough");
+            assert!(proposals::is_reporter_nudge(&nudge) && !proposals::is_reporter_questions(&nudge));
+            assert_eq!((nudge.state.clone(), nudge.created_by, nudge.label.as_deref()), (ProposalState::Pending, CreatedBy::User, Some(proposals::NUDGE_COMMENT_LABEL)));
+            assert!(matches!(&nudge.origin, Origin::Chat { workstream, .. } if workstream.as_deref() == Some(ws.id.as_str())), "in this workstream");
+            let Intent::Comment { item, body } = &nudge.intent else { panic!("a comment: {:?}", nudge.intent) };
+            assert_eq!(item.key, "CA-1");
+            assert!(body.plain_text().contains("A gentle nudge on the questions above"));
+            assert_eq!(fx.tracker.intents().len(), posted, "nothing is posted before the person approves it");
+            let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+            let line = events.iter().find(|e| e.action == "reporter_nudged").expect("audited");
+            assert_eq!((line.actor, line.proposal_id.as_deref()), (Actor::Person, Some(nudge.id.as_str())));
+            assert!(matches!(fx.core.nudge_reporter(&fx.scope, &ws.id).await.unwrap_err(), Error::Proposal(why) if why == NUDGE_GONE), "one nudge waits at a time");
+            // Approving it starts the wait again from now, so the next nudge is days away.
+            fx.core.approve_proposal(&nudge.id).await.unwrap();
+            assert!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().waiting_on_reporter.is_some_and(|w| Utc::now() - w.since < chrono::Duration::days(1)));
+            assert!(matches!(fx.core.nudge_reporter(&fx.scope, &ws.id).await.unwrap_err(), Error::Proposal(why) if why == NUDGE_GONE));
+        }
+
+        #[tokio::test]
+        async fn clarity_notes_are_audited_in_the_workstream_and_nothing_else_is_taken() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            fx.core.note_clarity(&fx.scope, &ws.id, "clarity_learned", "who in CA").await.unwrap();
+            fx.core.note_clarity(&fx.scope, &ws.id, "clarity_reset", "CA").await.unwrap();
+            let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+            let notes: Vec<_> = events.iter().filter(|e| e.action.starts_with("clarity_")).map(|e| (e.actor, e.action.as_str(), e.detail.as_deref())).collect();
+            assert_eq!(notes, vec![(Actor::Person, "clarity_learned", Some("who in CA")), (Actor::Person, "clarity_reset", Some("CA"))]);
+            assert!(matches!(fx.core.note_clarity(&fx.scope, &ws.id, "draft_approved", "x").await.unwrap_err(), Error::Proposal(_)), "only the two notes");
+            assert!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().clarity.is_some(), "the notice is the page's to filter, not Core's");
         }
     }
 

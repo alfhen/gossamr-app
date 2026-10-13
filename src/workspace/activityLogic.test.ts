@@ -168,6 +168,16 @@ describe("the Pip & agents chip", () => {
     expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual(["You asked the reporter about what the ticket leaves unclear", "You said the ticket looks clear enough"]);
   });
 
+  it("words the nudge to the reporter and what Looks fine taught the notice, and how the person gave it back", () => {
+    const lines = [ev(1, "person", "reporter_nudged", null, null), ev(2, "person", "clarity_learned", null, "who in CA"), ev(3, "person", "clarity_reset", null, "CA"), ev(4, "person", "clarity_reset", null, null)];
+    expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual([
+      "You asked for a nudge to the reporter",
+      "Gossamr stopped flagging CA tickets that don't say who is waiting on them after you said Looks fine 3 times",
+      "You gave back what Gossamr learned from Looks fine for CA",
+      "You gave back what Gossamr learned from Looks fine",
+    ]);
+  });
+
   it("is the workstreams' audit alone, newest first, and nothing of it shows under the other chips", () => {
     const entries = toWorkstreamEntries(events, [ws], () => ({ connectionId: "c", externalId: "A-1", key: "A-1" }));
     const input = { source: "all" as const, container: null, jira: [entry("j1", "2026-09-30T10:30:00Z")], more: false, code: [], agents: [], workstream: entries, containerOf: () => null };

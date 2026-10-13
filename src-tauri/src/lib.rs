@@ -733,9 +733,9 @@ async fn workstreams_readiness_ask(app: AppHandle, core: State<'_, CoreState>, i
 /// The person's "Ask the reporter now" on the clarity notice of a ticket no Triage has judged: the same comment to the
 /// reporter, from the gaps the check found, as a draft the person approves like any other. Pip has no way to call this.
 #[tauri::command]
-async fn workstreams_clarity_ask(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+async fn workstreams_clarity_ask(app: AppHandle, core: State<'_, CoreState>, id: String, skip: Option<Vec<domain::ClarityGap>>) -> Result<Proposal> {
     let scope = core.scope().await?;
-    let made = core.ask_reporter_now(&scope, &id).await?;
+    let made = core.ask_reporter_now(&scope, &id, &skip.unwrap_or_default()).await?;
     proposals_changed(&app, &Connection::jira_id(&scope));
     workstreams_changed(&app, &Connection::jira_id(&scope));
     Ok(made)
@@ -748,6 +748,25 @@ async fn workstreams_clarity_dismiss(app: AppHandle, core: State<'_, CoreState>,
     let ws = core.dismiss_clarity(&scope, &id).await?;
     workstreams_changed(&app, &Connection::jira_id(&scope));
     Ok(ws)
+}
+
+/// The person's "Draft a nudge" on a workstream that has waited on the reporter for days: a short follow-up comment, as a
+/// draft the person approves like any other. Pip has no way to call this.
+#[tauri::command]
+async fn workstreams_nudge_reporter(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+    let scope = core.scope().await?;
+    let made = core.nudge_reporter(&scope, &id).await?;
+    proposals_changed(&app, &Connection::jira_id(&scope));
+    workstreams_changed(&app, &Connection::jira_id(&scope));
+    Ok(made)
+}
+
+/// Audits the page's clarity learning in a workstream: `clarity_learned` when "Looks fine" said enough times stopped a gap
+/// being flagged for a project, `clarity_reset` when the person gave that back. The learning itself is the page's.
+#[tauri::command]
+async fn workstreams_clarity_note(core: State<'_, CoreState>, id: String, action: String, detail: String) -> Result<()> {
+    let scope = core.scope().await?;
+    core.note_clarity(&scope, &id, &action, &detail).await
 }
 
 /// The person's "I'll answer" on a Triage that found its ticket not ready to plan: it settles the question and starts
@@ -1543,6 +1562,8 @@ pub fn run() {
             workstreams_readiness_ask,
             workstreams_clarity_ask,
             workstreams_clarity_dismiss,
+            workstreams_clarity_note,
+            workstreams_nudge_reporter,
             workstreams_readiness_answer,
             workstreams_readiness_override,
             workstreams_hold,

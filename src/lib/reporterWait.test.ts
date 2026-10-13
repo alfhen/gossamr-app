@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Proposal, WorkstreamActor } from "../types";
 import { ANSWERS_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "./proposals";
-import { agoText, answersDue, planDue, reporterFollow, waitingOnReporterText } from "./reporterWait";
+import { agoText, answersDue, nudgeComment, nudgeOffered, nudgeText, NUDGE_AFTER_DAYS, planDue, reporterFollow, waitedDays, waitingOnReporterText } from "./reporterWait";
+import { NUDGE_COMMENT_LABEL } from "./proposals";
 import fixtures from "./reporterWait.fixtures.json";
 
 const at = (minutes: number) => new Date(Date.parse("2026-10-12T10:00:00Z") + minutes * 60_000).toISOString();
@@ -120,5 +121,53 @@ describe("planDue", () => {
     expect(planDue(answered, [draft({})], [{ spec: { kind: "plan", workstream: "ws-1" }, queuedAt: at(9) }], "ws-1")).toBe(false);
     expect(planDue(answered, [draft({})], [{ spec: { kind: "plan", workstream: "ws-1" }, queuedAt: at(2) }], "ws-1")).toBe(true);
     expect(planDue([...answered, line(4, "person", "readiness_overridden")], [draft({})], [], "ws-1")).toBe(false);
+  });
+});
+
+describe("the nudge", () => {
+  const NOW = new Date(at(0));
+  const since = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
+  const nudge = (state: "pending" | "applying" | "applied" | "skipped" = "pending", workstream = "w1", createdBy: Proposal["createdBy"] = "user") =>
+    ({ intent: { type: "comment" }, label: NUDGE_COMMENT_LABEL, createdBy, state: { type: state }, origin: { type: "chat", requestId: "nudge:w1", workstream } }) as unknown as Proposal;
+
+  it("is offered after the cobweb's first stage, which is 2 days, and not before", () => {
+    expect(NUDGE_AFTER_DAYS).toBe(2);
+    expect(nudgeOffered({ since: since(1.9) }, NOW, [], "w1")).toBe(false);
+    expect(nudgeOffered({ since: since(2) }, NOW, [], "w1")).toBe(true);
+    expect(nudgeOffered({ since: since(9) }, NOW, [], "w1")).toBe(true);
+    expect(nudgeOffered(null, NOW, [], "w1")).toBe(false);
+    expect(nudgeOffered({ since: "not a time" }, NOW, [], "w1")).toBe(false);
+    expect(waitedDays(since(3.5), NOW)).toBe(3);
+  });
+
+  it("waits while a nudge draft waits in the workstream, and counts only that workstream's, Gossamr's and pending ones", () => {
+    const wait = { since: since(4) };
+    expect(nudgeOffered(wait, NOW, [nudge("pending")], "w1")).toBe(false);
+    expect(nudgeOffered(wait, NOW, [nudge("applying")], "w1")).toBe(false);
+    expect(nudgeOffered(wait, NOW, [nudge("skipped")], "w1")).toBe(true);
+    expect(nudgeOffered(wait, NOW, [nudge("applied")], "w1")).toBe(true);
+    expect(nudgeOffered(wait, NOW, [nudge("pending", "w2")], "w1")).toBe(true);
+    expect(nudgeOffered(wait, NOW, [nudge("pending", "w1", "pip")], "w1")).toBe(true);
+  });
+
+  it("says how long the reporter has been silent and that a nudge can be drafted", () => {
+    expect(nudgeText(3)).toBe("The reporter hasn't answered for 3 days. You can draft a nudge.");
+    expect(nudgeText(1)).toBe("The reporter hasn't answered for 1 day. You can draft a nudge.");
+  });
+
+  it("is short and polite, names the reporter when known, and says what the Rust side says", () => {
+    expect(nudgeComment("CA-408", "Mette Lund")).toBe("Hi @Mette Lund,\n\nA gentle nudge on the questions above; we can't plan CA-408 until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.");
+    expect(nudgeComment("CA-408", null).startsWith("Hi,\n")).toBe(true);
+  });
+
+  it("a posted nudge starts the wait again from then, and a nudge only drafted changes nothing", () => {
+    const asked = line(1, "person", "clarity_asked", "c1");
+    const posted = line(2, "person", "draft_approved", "c1");
+    const nudged = line(3, "person", "reporter_nudged", "n1");
+    expect(reporterFollow([asked, posted, nudged]).waiting).toBe(at(2));
+    expect(reporterFollow([asked, posted, nudged, line(4, "person", "draft_approved", "n1")])).toEqual({ waiting: at(4), changed: false, replied: false });
+    expect(reporterFollow([asked, posted, line(3, "pip", "reporter_nudged", "n1"), line(4, "pip", "draft_approved", "n1")]).waiting).toBe(at(2));
+    // Core only drafts a nudge while the workstream waits; read alone, its posting starts the wait from then, as the Rust side reads it.
+    expect(reporterFollow([nudged, line(4, "person", "draft_approved", "n1")]).waiting).toBe(at(4));
   });
 });

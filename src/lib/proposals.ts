@@ -230,6 +230,12 @@ export const READINESS_COMMENT_LABEL = "Questions for the reporter";
 /** Whether `p` is the comment "Ask the reporter" (or "Ask the reporter now") drafted: Gossamr's words around the open questions, never one Pip made, whatever it is labelled. As `is_reporter_questions`. */
 export const isReporterQuestions = (p: Proposal) => p.intent.type === "comment" && p.label === READINESS_COMMENT_LABEL && p.createdBy !== "pip";
 
+/** The label of the follow-up comment "Draft a nudge" drafts when the reporter has been silent for days: short and polite, never in the safe batch. As `NUDGE_COMMENT_LABEL` in `proposals.rs`. */
+export const NUDGE_COMMENT_LABEL = "Nudge for the reporter";
+
+/** Whether `p` is the comment "Draft a nudge" drafted: Gossamr's words, never one Pip made, whatever it is labelled. As `is_reporter_nudge`. */
+export const isReporterNudge = (p: Proposal) => p.intent.type === "comment" && p.label === NUDGE_COMMENT_LABEL && p.createdBy !== "pip";
+
 /** The label of a comment Pip drafts once the person chose "I'll answer" on a triage's open questions: each question with their answer, for the ticket. As `ANSWERS_COMMENT_LABEL` in `proposals.rs`. */
 export const ANSWERS_COMMENT_LABEL = "Answers to the open questions";
 

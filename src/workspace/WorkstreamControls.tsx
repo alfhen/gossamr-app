@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Switch } from "../components/Switch";
 import type { Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
+import { flaggedGaps, projectOfKey } from "../lib/clarityLearning";
 import { clarityText } from "../lib/ticketClarity";
 import { RULE_SWITCH, STEP_HELP, asksBudget, isHeldByYou, budgetNote, heldBanner, ruleText, stepsLeftText, stepsOf } from "../lib/workstreamHold";
 import { ALLOW_MORE_STEPS, HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamEvent, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
@@ -12,6 +13,7 @@ import { EscalationCard } from "./EscalationCard";
 import { openNeed } from "./needsActions";
 import { usePopover } from "./Popover";
 import { useRuns } from "./runsStore";
+import { usePrefs } from "./prefs";
 import { useNeedsYou } from "./useNeeds";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -210,8 +212,12 @@ export function HeldBanner({ view, actions }: { view: WorkstreamView; actions: P
  */
 export function ClarityNotice({ view }: { view: WorkstreamView }) {
   const c = view.clarity;
+  const learning = usePrefs((s) => s.clarityLearning);
   const [busy, setBusy] = useState(false);
   if (!c) return null;
+  // What "Looks fine" taught Gossamr to leave out for the ticket's project is not said; a notice with nothing left is not shown.
+  const gaps = flaggedGaps(c.gaps, learning, projectOfKey(view.workstream.itemKey ?? ""));
+  if (!gaps.length) return null;
   const id = view.workstream.id;
   const choose = (call: () => Promise<boolean>) => {
     setBusy(true);
@@ -221,7 +227,7 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
   return (
     <div role="status" data-clarity-notice={id} className="grid gap-1 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1.5 text-sm text-ws-ink">
       <p data-clarity-text className="m-0">
-        {clarityText(view.workstream.itemKey ?? "This ticket", c.gaps)}
+        {clarityText(view.workstream.itemKey ?? "This ticket", gaps)}
       </p>
       <p className="m-0 text-xs text-ws-ink2">This is a quick check of the words, not a verdict. It holds nothing up; the triage still decides whether the ticket is ready to plan.</p>
       <div className="flex flex-wrap items-center gap-2">
@@ -253,9 +259,13 @@ export const MODE_LINE: Record<"manage" | "advise", string> = {
   advise: "Pip advises: it answers when asked and starts nothing by itself.",
 };
 
-/** The one line that says what happens next. When it is waiting on the person, the line opens the top need in the Needs-you pane. */
-export function NextStepLine({ next }: { next: NextStep }) {
+/**
+ * The one line that says what happens next. When it is waiting on the person, the line opens the top need in the Needs-you pane.
+ * When the reporter has been silent for days (`next.nudge`), "Draft a nudge" sits beside it: a short follow-up comment, for approval.
+ */
+export function NextStepLine({ next, workstreamId }: { next: NextStep; workstreamId?: string }) {
   const { need } = next;
+  const [busy, setBusy] = useState(false);
   return (
     <p data-next-step={next.kind} className="m-0 text-sm text-ws-ink">
       {need ? (
@@ -264,6 +274,14 @@ export function NextStepLine({ next }: { next: NextStep }) {
         </button>
       ) : (
         next.text
+      )}
+      {next.nudge && workstreamId && (
+        <>
+          {" "}
+          <Btn tone="plain" data-nudge disabled={busy} onClick={() => (setBusy(true), void useWorkstreams.getState().nudgeReporter(workstreamId).finally(() => setBusy(false)))} className="px-2 py-0.5">
+            Draft a nudge
+          </Btn>
+        </>
       )}
     </p>
   );
@@ -316,7 +334,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
       {!paneHas(shown, "escalation", ws.id) && <EscalationCard key={ws.id} view={view} />}
       <ClarityNotice view={view} />
-      {next && <NextStepLine next={next} />}
+      {next && <NextStepLine next={next} workstreamId={ws.id} />}
       {manage && (
         <p data-steps-left={stepsOf(view.budget).limit - stepsOf(view.budget).used} title={STEP_HELP} className="m-0 text-xs text-ws-ink2">
           {stepsLeftText(view.budget)}

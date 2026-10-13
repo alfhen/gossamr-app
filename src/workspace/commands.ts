@@ -70,6 +70,12 @@ export interface CommandActions {
   startWorkstreamOn(item: WorkItem): void;
   /** Shows the timeline with `filter` in `scope` on Pip home. */
   showTimeline(filter: TimelineFilter, scope: TimelineScope): void;
+  /** Opens Start my day on Pip home again, whether or not it was set aside today. */
+  startMyDay(): void;
+  /** Opens "What Jira saw from me": everything Gossamr posted to Jira. */
+  openJiraSent(): void;
+  /** Gives back what "Looks fine" taught the clarity notice, in every project. */
+  giveBackClarity(): void;
 }
 
 /** What the screen shows right now, for the hints beside entries. */
@@ -88,6 +94,8 @@ export interface CommandContext {
   onPipHome?: boolean;
   /** The person is on the Agents screen. */
   onAgents?: boolean;
+  /** How many projects "Looks fine" has taught the clarity notice to leave a gap out for, for "Give back what Looks fine learned". */
+  clarityLearned?: number;
 }
 
 /** The shortcut for Hold all workstreams, as the rail and the palette show it. */
@@ -141,7 +149,9 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     ),
     { id: "app:activity", group: "Go to", icon: "→", label: "Open activity", hint: ctx.unreadActivity ? `${ctx.unreadActivity} new` : undefined, keywords: "feed events", run: a.openActivity },
     { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", keywords: "pip proposals review waiting", run: a.openDrafts },
+    { id: "app:jira-sent", group: "Go to", icon: "→", label: "What Jira saw from me", keywords: "posted sent wrote comments moves transitions descriptions subtasks audit history", run: a.openJiraSent },
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences autopilot", run: a.openSettings },
+    ...(ctx.agents ? [{ id: "app:start-my-day", group: "Go to" as const, icon: "☀", label: "Start my day", keywords: "morning today summary needs you unclear reporter waiting cobweb drafts", run: a.startMyDay }] : []),
     ...(ctx.agents && !ctx.onPipHome ? [{ id: "app:pip-home", group: "Go to" as const, icon: "✦", label: "Open Pip home", hint: PIP_HOME_HINT, keywords: "pip workstreams conversation agents manager needs you", run: a.openPipHome }] : []),
     // Before "Stop all agents…" in the list, so the query "agents" lands here first.
     ...(ctx.agents && !ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents running capacity operations stop all", run: a.openAgents }] : []),
@@ -199,6 +209,9 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
               ]
             : []),
         ]
+      : []),
+    ...(ctx.clarityLearned
+      ? [{ id: "clarity:reset", group: "App" as const, icon: "↺", label: "Give back what Looks fine learned", hint: ctx.clarityLearned === 1 ? "1 project" : `${ctx.clarityLearned} projects`, keywords: "clarity unclear notice reset forget flag again", run: a.giveBackClarity }]
       : []),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },
     { id: "app:pip", group: "App", icon: "✦", label: ctx.onPipHome ? "Go to Pip's composer" : "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
