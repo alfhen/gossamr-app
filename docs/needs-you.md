@@ -47,7 +47,7 @@ A hold's cause is its reason (`heldReason`; the audit's `held` line carries the 
   - choices **Allow 5 more** (primary) and **Switch to Advise** (secondary).
 - **Allow 5 more** is `workstreams_allow_more` (Rust, `Core::allow_more_steps`; `workstreamsAllowMore` in the backend interface and the mock). It raises both allowances by 5 (`ALLOW_MORE_STEPS`), keeps what was spent, lifts the hold, and writes `steps_allowed` (detail "5") and `resumed`, both with actor `person`. It is refused unless the workstream is held for its budget, so a stale button changes nothing. It reaches nothing outside Gossamr, but it starts agent work again, so on the keyboard it asks for Enter. Pip has no tool for it.
 - **Switch to Advise** is the existing mode switch (with its Undo). In Advise nothing starts on its own, so the need is answered and goes; the hold stays, and the header's Resume lifts it (which starts the count again).
-- **Resume** on a budget hold still works and starts the count from zero (`budget_reset`).
+- **Resume** on a budget hold still works in the backend and starts the count from zero (`budget_reset`), so the header's held banner and ⌘K offer it for a budget hold only in Advise (where the count no longer matters); in Manage the banner has Allow 5 more and Switch to Advise, as the decision has, and ⌘K lists no Resume.
 - **The Next line** for such a workstream points at the need ("Next: the automatic steps are used up. Choose in Needs you: allow 5 more, or switch to Advise.") and opens it. Any other hold keeps "held: … Resume to continue."
 
 ### Unclear tickets: Pip speaks up, and the Triage is a hard stop

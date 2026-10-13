@@ -240,7 +240,7 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
     await spent(page);
     const title = "CA-401 used its 2 automatic steps";
     // The header says so in steps, and the Next line points at the question.
-    await expect(heldBanner(page)).toContainText("Held: automatic steps used up. Resume to give it 2 more");
+    await expect(heldBanner(page)).toContainText("Held: automatic steps used up");
     await expect(heldBanner(page)).not.toContainText(/turns|wakes|write to Pip/);
     await expect(nextLine(page)).toHaveAttribute("data-next-step", "held");
     await expect(nextLine(page)).toHaveText("Next: the automatic steps are used up. Choose in Needs you: allow 5 more, or switch to Advise.");
@@ -297,6 +297,36 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
     await expect(pipHome(page).locator("[data-held-banner]")).toContainText("Held: automatic steps used up");
     expect(await actions(page, "steps_allowed")).toEqual([]);
     await expect(toast(page)).toContainText("CA-401 to Advise");
+  });
+
+  test("the header's banner for a budget hold offers Allow 5 more and Switch to Advise, never Resume, which would reset what was spent", async ({ page }) => {
+    await spent(page);
+    const banner = heldBanner(page);
+    await expect(banner.getByRole("button", { name: "Resume" })).toHaveCount(0);
+    await expect(banner.getByRole("button", { name: "Switch to Advise" })).toBeVisible();
+    await banner.getByRole("button", { name: "Allow 5 more" }).click();
+    await expect(heldBanner(page)).toHaveCount(0);
+    const events = await workstreamEvents(page);
+    expect(events.filter((e) => e.action === "steps_allowed").map((e) => [e.actor, e.detail])).toEqual([["person", "5"]]);
+    expect(events.filter((e) => e.action === "budget_reset")).toEqual([]);
+    await expect(pipPane(page).locator("[data-steps-left]")).toHaveText("5 of 7 automatic steps left");
+  });
+
+  test("the banner's Switch to Advise answers the question, and the hold it leaves is lifted with Resume", async ({ page }) => {
+    await spent(page);
+    await heldBanner(page).getByRole("button", { name: "Switch to Advise" }).click();
+    await expect(needOfKind(page, "budget")).toHaveCount(0);
+    await expect(heldBanner(page).getByRole("button", { name: "Allow 5 more" })).toHaveCount(0);
+    await expect(heldBanner(page).getByRole("button", { name: "Resume" })).toBeVisible();
+  });
+
+  test("a double click on Allow 5 more allows once and shows no error", async ({ page }) => {
+    await spent(page);
+    await nextLine(page).getByRole("button").click();
+    await needsPane(page).getByRole("button", { name: "Allow 5 more" }).dblclick();
+    await expect(needOfKind(page, "budget")).toHaveCount(0);
+    expect((await actions(page, "steps_allowed")).length).toBe(1);
+    await expect(toast(page).filter({ hasText: /Couldn't/ })).toHaveCount(0);
   });
 });
 

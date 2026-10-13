@@ -1143,15 +1143,15 @@ describe("the sample's workstreams, held and reviewed", () => {
     const spend = (s: object) => {
       (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === ws.id)!.spent = s;
     };
-    const banner = () => heldText(store.get(ws.id)!.workstream.heldReason, null, store.get(ws.id)!.budget)!;
+    const banner = () => heldText(store.get(ws.id)!.workstream.heldReason, null)!;
     // The wakes ran out: a message resets only the turns, so a message keeps the hold. The banner says only "steps".
     spend({ autoTurns: 3, wakes: 12, tokens: 0 });
-    expect(banner()).toBe("Held: automatic steps used up. Resume to give it 12 more");
+    expect(banner()).toBe("Held: automatic steps used up");
     store.personWrote(ws.id);
     expect(store.get(ws.id)?.workstream.heldReason).toBe("budget");
     // The turns ran out: a message lifts it.
     spend({ autoTurns: 11, wakes: 9, tokens: 0 });
-    expect(banner()).toBe("Held: automatic steps used up. Resume to give it 11 more");
+    expect(banner()).toBe("Held: automatic steps used up");
     store.personWrote(ws.id);
     expect(store.get(ws.id)?.workstream.heldReason).toBeNull();
   });

@@ -32,7 +32,7 @@ const viewOf = (over: Partial<WorkstreamView["workstream"]> = {}): WorkstreamVie
   const workstream = { ...sample, ...over };
   return { workstream, stage: "intake", runs: [], labels: [], budget: budgetView(workstream) };
 };
-const noop = (): ControlActions => ({ onManage: vi.fn(), onHold: vi.fn(), onResume: vi.fn(), onStop: vi.fn(), onRule: vi.fn() });
+const noop = (): ControlActions => ({ onManage: vi.fn(), onHold: vi.fn(), onResume: vi.fn(), onAllowMore: vi.fn(), onStop: vi.fn(), onRule: vi.fn() });
 const render = (view: WorkstreamView, confirmingStop = false) =>
   renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={confirmingStop} onConfirmStop={vi.fn()} />);
 
@@ -104,12 +104,25 @@ describe("the workstream's controls", () => {
       const view = viewOf({ heldReason: reason });
       const html = render(view);
       expect(html).toContain(`data-held-banner="${reason}"`);
-      expect(html).toContain(heldText(reason, null, view.budget)!.replace(/'/g, "&#x27;"));
+      expect(html).toContain(heldText(reason)!.replace(/'/g, "&#x27;"));
       expect(html).toContain(">Resume</button>");
       expect(html).not.toContain(">Hold</button>");
     }
-    expect(render(viewOf({ heldReason: HELD_BUDGET }))).toContain("Held: automatic steps used up. Resume to give it 11 more");
+    expect(render(viewOf({ heldReason: HELD_BUDGET }))).toContain("Held: automatic steps used up");
     expect(render(viewOf({ heldReason: HELD_RESTART }))).toContain("Held after a restart");
+  });
+
+  it("asks the budget question in a budget hold in Manage, with no Resume, which would reset what was spent; in Advise only the hold is left to lift", () => {
+    const spent = { budget: { autoTurns: 2, wakes: null, tokens: null }, spent: { autoTurns: 2, wakes: 2, tokens: 0 }, heldReason: HELD_BUDGET };
+    const manage = render(viewOf({ ...spent, mode: "manage" }));
+    expect(manage).toContain("Allow 5 more");
+    expect(manage).toContain("Switch to Advise");
+    expect(manage).not.toContain(">Resume</button>");
+    const advise = render(viewOf({ ...spent, mode: "advise" }));
+    expect(advise).toContain(">Resume</button>");
+    expect(advise).not.toContain("Allow 5 more");
+    // Any other hold in Manage keeps Resume.
+    expect(render(viewOf({ heldReason: HELD_QUOTA, mode: "manage" }))).toContain(">Resume</button>");
   });
 
   it("says a hold the person chose is not in Needs you and offers Resume, and says nothing of that for a hold the system made", () => {
@@ -134,11 +147,11 @@ describe("the workstream's controls", () => {
     const own = viewOf({ budget: { autoTurns: 2, wakes: null, tokens: null }, spent: { autoTurns: 2, wakes: 2, tokens: 0 }, heldReason: HELD_BUDGET });
     expect(own.budget.level).toBe("spent");
     expect(render(own)).not.toContain("data-budget");
-    expect(render(own)).toContain("Held: automatic steps used up. Resume to give it 2 more");
+    expect(render(own)).toContain("Held: automatic steps used up");
     expect(render(own)).toContain("data-step-help");
     // Held because the wakes ran out: it still says automatic steps, never a second unit.
     const wakes = render(viewOf({ spent: { autoTurns: 1, wakes: 12, tokens: 0 }, heldReason: HELD_BUDGET }));
-    expect(wakes).toContain("Held: automatic steps used up. Resume to give it 12 more");
+    expect(wakes).toContain("Held: automatic steps used up");
     expect(wakes).not.toMatch(/wakes|turns|write to Pip/);
     // Spent, but held for something else: the line says so.
     expect(render({ ...own, workstream: { ...own.workstream, heldReason: HELD_PERSON } })).toContain('data-budget="spent"');
@@ -381,6 +394,18 @@ describe("the controls call the person's own commands", () => {
     await vi.waitFor(() => expect(calls.stop).toHaveBeenCalledWith(id));
     await vi.waitFor(() => expect(shown()?.heldReason).toBe(HELD_PERSON));
     expect(Object.values(calls).every((c) => c.mock.calls.every(([first]) => first === id))).toBe(true);
+  });
+
+  it("Allow 5 more calls the audited command and keeps what was spent, where Resume would reset it", async () => {
+    const allow = vi.spyOn(backend, "workstreamsAllowMore");
+    const resume = vi.spyOn(backend, "workstreamsResume");
+    backend.workstreams.hold(id, HELD_BUDGET, "supervisor");
+    await useWorkstreams.getState().init(backend);
+    const shown = () => useWorkstreams.getState().list.find((v) => v.workstream.id === id)?.workstream;
+    controlActions(id).onAllowMore();
+    await vi.waitFor(() => expect(allow).toHaveBeenCalledWith(id));
+    expect(resume).not.toHaveBeenCalled();
+    expect(shown()?.heldReason ?? null).toBeNull();
   });
 
   it("reads what Settings has when the steps are opened", async () => {

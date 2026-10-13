@@ -87,7 +87,7 @@ describe("the palette's entries for the focused item", () => {
     const d = deps();
     const entries = contextCommands({ type: "need", key: budget.key }, data({ needs: [budget], workstreams: [view({ heldReason: "budget" })] }), d);
     // The workstream's own Switch to Advise would say the same thing twice.
-    expect(labels(entries)).toEqual(["Allow 5 more", "Switch to Advise", "Open in workstream", "Resume the workstream on CA-401"]);
+    expect(labels(entries)).toEqual(["Allow 5 more", "Switch to Advise", "Open in workstream"]);
     entries[0].run();
     entries[1].run();
     expect(d.needAct).toHaveBeenNthCalledWith(1, budget, "allowMore");

@@ -201,6 +201,12 @@ function UnknownBody({ run }: { run: Run }) {
 function BudgetBody({ view }: { view: WorkstreamView }) {
   const id = view.workstream.id;
   const { used, limit } = stepsOf(view.budget);
+  const [busy, setBusy] = useState(false);
+  // One choice at a time: a second click on Allow 5 more would be refused (the hold is gone) and toast an error.
+  const choose = (call: () => Promise<boolean>) => {
+    setBusy(true);
+    void call().finally(() => setBusy(false));
+  };
   const store = useWorkstreams.getState();
   return (
     <Box tone="warn" label="Automatic steps">
@@ -209,10 +215,10 @@ function BudgetBody({ view }: { view: WorkstreamView }) {
       </BoxTitle>
       <p className="m-0 text-ws-ink2">Pip and the automatic steps are paused; its agents carry on. Allow {ALLOW_MORE_STEPS} more to carry on from here, or switch to Advise, where Pip suggests and you start.</p>
       <div className="flex flex-wrap items-center gap-2">
-        <Btn tone="primary" onClick={() => void store.allowMore(id)}>
+        <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.allowMore(id))}>
           Allow {ALLOW_MORE_STEPS} more
         </Btn>
-        <Btn tone="plain" onClick={() => void store.setMode(id, "advise")}>
+        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.setMode(id, "advise"))}>
           Switch to Advise
         </Btn>
       </div>
@@ -364,7 +370,7 @@ function Decision({ need }: { need: Need }) {
     case "budget":
       return view ? <BudgetBody view={view} /> : null;
     case "hold":
-      return view ? <HeldBanner view={view} onResume={() => controlActions(view.workstream.id).onResume()} /> : null;
+      return view ? <HeldBanner view={view} actions={controlActions(view.workstream.id)} /> : null;
     case "readiness":
       return view ? <ReadinessBody view={view} need={need} /> : null;
     case "escalation":
