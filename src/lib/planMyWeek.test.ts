@@ -130,7 +130,7 @@ describe("reordering and adding", () => {
     expect(list).toEqual(["a", "b", "c"]);
   });
   it("makes a pick of a ticket added by hand", () => {
-    expect(ticketPick(ticket("CA-7"))).toEqual({ id: "ticket:CA-7", kind: "ticket", workstreamId: null, ticketKey: "CA-7", title: "CA-7 Title of CA-7", because: "you added it." });
+    expect(ticketPick(ticket("CA-7"))).toEqual({ id: "ticket:CA-7", kind: "ticket", workstreamId: null, ticketKey: "CA-7", connectionId: "c", title: "CA-7 Title of CA-7", because: "you added it." });
   });
 });
 
@@ -186,5 +186,29 @@ describe("the kept plan", () => {
     expect(itemDone(pick, [ws("w2", "CA-2")], [])).toBe(false);
     expect(itemDone(pick, [ws("w2", "CA-2", {}, { closedAt: ago(1) })], [])).toBe(true);
     expect(itemDone(pick, [], [ticket("CA-2", { status: { id: "9", name: "Done", category: "done" } })])).toBe(true);
+  });
+  it("ticks only for the item's own connection: the same key on another connection is another ticket", () => {
+    const done = { status: { id: "9", name: "Done", category: "done" } } as const;
+    const elsewhere = (key: string, over: Partial<WorkItem> = {}) => ticket(key, { item: { connectionId: "d", externalId: key, key }, ...over } as Partial<WorkItem>);
+    const mine = ticketPick(ticket("CA-2"));
+    expect(mine.connectionId).toBe("c");
+    expect(itemDone(mine, [], [elsewhere("CA-2", done)])).toBe(false);
+    expect(itemDone(mine, [ws("w9", "CA-2", {}, { connectionId: "d", closedAt: ago(1) })], [])).toBe(false);
+    expect(itemDone(mine, [ws("w2", "CA-2", {}, { closedAt: ago(1) })], [])).toBe(true);
+    expect(itemDone(mine, [], [ticket("CA-2", done)])).toBe(true);
+    // A workstream pick carries its connection too; the other one's closing leaves it, and a workstream is found by id.
+    const picked = planMyWeek(input({ workstreams: [ws("w1", "CA-1")] }))[0];
+    expect(picked.connectionId).toBe("c");
+    expect(itemDone(picked, [ws("w1", "CA-1")], [])).toBe(false);
+    // A stored item from before connections were kept still matches by key alone.
+    const { connectionId: _, ...old } = mine;
+    expect(itemDone(old, [], [elsewhere("CA-2", done)])).toBe(true);
+  });
+  it("keeps the connection through storage, and drops an item whose connection is not text", () => {
+    const withConn: PlanItem = { ...ticketPick(ticket("CA-1")) };
+    const kept = JSON.parse(JSON.stringify(keepPlan({}, [withConn], NOW)));
+    expect(parseWeekPlans(kept)["2026-W42"].items[0].connectionId).toBe("c");
+    kept["2026-W42"].items.push({ ...withConn, id: "ticket:CA-9", connectionId: 4 });
+    expect(parseWeekPlans(kept)["2026-W42"].items.map((p) => p.id)).toEqual(["ticket:CA-1"]);
   });
 });

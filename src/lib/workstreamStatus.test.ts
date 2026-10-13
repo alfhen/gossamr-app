@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { Run, WorkstreamView } from "../types";
 import { QUIET_DAYS, STATUS_ORDER, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
@@ -19,6 +19,15 @@ describe("workstreamStatus: every state", () => {
   it("Needs you: a need in this workstream, counted in the detail, and another workstream's need is not", () => {
     expect(at(view(), [need, need])).toMatchObject({ state: "needs-you", word: "Needs you", detail: "2 waiting" });
     expect(at(view(), [{ workstreamId: "w2" }, { workstreamId: null }]).state).toBe("idle");
+  });
+
+  it("Needs you: a system hold that has no words of its own falls back to the count", async () => {
+    vi.resetModules();
+    vi.doMock("./workstreamHold", async (orig) => ({ ...(await orig<typeof import("./workstreamHold")>()), shortHeld: () => null }));
+    const { workstreamStatus: status } = await import("./workstreamStatus");
+    vi.doUnmock("./workstreamHold");
+    expect(status(view({}, { heldReason: HELD_RESTART }), [need], { now: NOW })).toMatchObject({ state: "needs-you", detail: "1 waiting" });
+    vi.resetModules();
   });
 
   it("Held: by the system with its reason, or by you with no detail", () => {

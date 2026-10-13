@@ -27,6 +27,8 @@ export interface PlanPick {
   kind: "workstream" | "ticket";
   workstreamId: string | null;
   ticketKey: string | null;
+  /** The Jira connection the ticket or workstream is on; a key alone is not unique across connections. Plans kept before this was stored have none, and match by key. */
+  connectionId?: string;
   /** The key and title, or the workstream's title. */
   title: string;
   /** One line saying why it is on the list: "because 2 things need you here". */
@@ -79,7 +81,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     const mine = i.needs.filter((n) => n.workstreamId === ws.id).sort(byRank);
     const status = workstreamStatus(v, i.needs, { runs: i.runs, wither: i.withers?.[ws.id] ?? null, now: i.now });
     const name = ws.itemKey ? `${ws.itemKey} ${ws.title.startsWith(ws.itemKey) ? ws.title.slice(ws.itemKey.length).trim() || ws.title : ws.title}` : ws.title;
-    const pick = (because: string): PlanPick => ({ id: `ws:${ws.id}`, kind: "workstream", workstreamId: ws.id, ticketKey: ws.itemKey, title: name, because });
+    const pick = (because: string): PlanPick => ({ id: `ws:${ws.id}`, kind: "workstream", workstreamId: ws.id, ticketKey: ws.itemKey, connectionId: ws.connectionId, title: name, because });
     if (status.state === "needs-you") {
       scored.push({ pick: pick(`${plural(mine.length, "thing needs", "things need")} you here: ${mine[0]?.title ?? "a decision"}.`), tier: 0, score: 3 - GROUPS.indexOf(mine[0]?.group ?? "approve"), at: mine[0]?.at ?? ws.createdAt });
       continue;
@@ -99,7 +101,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     let score = (t.priority ? PRIORITY[t.priority] : 2) + Math.min(age, 30) / 5;
     let because = t.priority === "high" || t.priority === "highest" ? `${t.priority} priority, assigned to you, no workstream yet.` : `assigned to you ${age === 0 ? "today" : `for ${plural(age, "day", "days")}`}, no workstream yet.`;
     if (gaps.length) (score -= 6, (because = `assigned to you, but it ${gapsPhrase(gaps)}; clear that up first.`));
-    scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: `${t.item.key} ${t.title}`, because }, tier: 1, score, at: t.created });
+    scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because }, tier: 1, score, at: t.created });
   }
   // Needs you first (its own order: the group that is asked most, then oldest); then by score, then oldest, then by id.
   const order = (a: Scored, b: Scored) => a.tier - b.tier || b.score - a.score || a.at.localeCompare(b.at) || (a.pick.id < b.pick.id ? -1 : a.pick.id > b.pick.id ? 1 : 0);
@@ -137,7 +139,7 @@ export const WEEKS_KEPT = 8;
 
 const isItem = (x: unknown): x is PlanItem => {
   const o = x as Partial<PlanItem> | null;
-  return !!o && typeof o.id === "string" && (o.kind === "workstream" || o.kind === "ticket") && typeof o.title === "string" && typeof o.because === "string" && (o.workstreamId === null || typeof o.workstreamId === "string") && (o.ticketKey === null || typeof o.ticketKey === "string");
+  return !!o && typeof o.id === "string" && (o.kind === "workstream" || o.kind === "ticket") && typeof o.title === "string" && typeof o.because === "string" && (o.workstreamId === null || typeof o.workstreamId === "string") && (o.ticketKey === null || typeof o.ticketKey === "string") && (o.connectionId === undefined || typeof o.connectionId === "string");
 };
 
 /** Reads stored plans, dropping anything malformed. */
@@ -171,7 +173,7 @@ export function movePick<T>(list: readonly T[], from: number, to: number): T[] {
 
 /** A pick for a ticket the person adds by hand. */
 export function ticketPick(t: Pick<WorkItem, "item" | "title">): PlanPick {
-  return { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: `${t.item.key} ${t.title}`, because: "you added it." };
+  return { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because: "you added it." };
 }
 
 /**
@@ -179,8 +181,10 @@ export function ticketPick(t: Pick<WorkItem, "item" | "title">): PlanPick {
  * ticket itself is Done in Jira.
  */
 export function itemDone(item: PlanItem, workstreams: readonly WorkstreamView[], items: readonly WorkItem[]): boolean {
-  const mine = workstreams.filter((v) => v.workstream.id === item.workstreamId || (!!item.ticketKey && v.workstream.itemKey === item.ticketKey));
+  // The same key on another connection is another ticket; an item kept before connections were stored matches by key alone.
+  const own = (connectionId: string) => item.connectionId === undefined || item.connectionId === connectionId;
+  const mine = workstreams.filter((v) => v.workstream.id === item.workstreamId || (!!item.ticketKey && v.workstream.itemKey === item.ticketKey && own(v.workstream.connectionId)));
   if (mine.some((v) => v.workstream.closedAt === null)) return false;
   if (mine.length) return true;
-  return !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && t.status.category === "done");
+  return !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && own(t.item.connectionId) && t.status.category === "done");
 }
