@@ -437,6 +437,17 @@ fn hold(ws: &mut Workstream, reason: &str) -> bool {
     true
 }
 
+/// Holds `ws` for its budget when it is in Manage, not held and has used its automatic steps up: Allow 5 more is the only
+/// way to grant more, so going back to Manage (or a resume that restores it) can't be a way round the question. Returns
+/// whether it held.
+fn rehold_spent(ws: &mut Workstream) -> bool {
+    if ws.closed_at.is_some() || ws.mode != Mode::Manage || ws.held_reason.is_some() || budget_level(ws) != BudgetLevel::Spent {
+        return false;
+    }
+    ws.held_reason = Some(HELD_BUDGET.to_string());
+    true
+}
+
 /// The `held` line for holding workstream `id` with `reason`.
 pub(crate) fn held_event(id: &str, actor: Actor, reason: &str, at: chrono::DateTime<Utc>) -> WorkstreamEvent {
     WorkstreamEvent::new(id, actor, "held", at).detail(reason)
@@ -772,7 +783,9 @@ impl Core {
     }
 
     /// Sets how much Pip may do on its own in an open workstream. Setting the mode it has records nothing. The person
-    /// setting it forgets the mode a tripwire took away, so resuming leaves their choice.
+    /// setting it forgets the mode a tripwire took away, so resuming leaves their choice. Changing to Manage while not
+    /// held and with the automatic steps used up holds it for its budget again (a supervisor `held` line), so Allow 5
+    /// more is asked again rather than skipped.
     pub async fn set_workstream_mode(&self, scope: &Scope, id: &str, mode: Mode, actor: Actor) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
@@ -782,8 +795,12 @@ impl Core {
             let chosen = actor == Actor::Person && ws.resume_mode.take().is_some();
             if ws.mode != mode {
                 ws.mode = mode;
+                let reheld = rehold_spent(&mut ws);
                 db.save_workstream(&ws)?;
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, actor, "mode_set", at).detail(mode.as_str()))?;
+                if reheld {
+                    db.append_workstream_event(&held_event(&ws.id, Actor::Supervisor, HELD_BUDGET, at))?;
+                }
             } else if chosen {
                 db.save_workstream(&ws)?;
             }
@@ -899,8 +916,9 @@ impl Core {
         .await
     }
 
-    /// The person lifts a workstream's hold. Lifting a budget hold also starts its automatic turns and wakes again from
-    /// zero (`budget_reset`); lifting a basis-drift hold takes the basis again from the ticket as the cache has it now
+    /// The person lifts a workstream's hold. What was spent is kept, whatever the hold: lifting a budget hold (offered in
+    /// Advise, where nothing starts on its own) doesn't grant steps, so going back to Manage holds it for its budget again
+    /// (`set_workstream_mode`) and Allow 5 more is the only way on. Lifting a basis-drift hold takes the basis again from the ticket as the cache has it now
     /// (`basis_captured`; forgotten when it isn't cached, so a sweep takes it later). Resuming puts back the mode a
     /// tripwire took away (`mode_set` by the person), whatever the hold, as a trip can land while another hold is on;
     /// unless the person chose a mode meanwhile. A workstream that isn't held records nothing.
@@ -910,11 +928,6 @@ impl Core {
         self.with_db_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
             let Some(reason) = ws.held_reason.take() else { return Ok(ws) };
-            let reset = reason == HELD_BUDGET;
-            if reset {
-                ws.spent.auto_turns = 0;
-                ws.spent.wakes = 0;
-            }
             let restore = ws.resume_mode.take();
             if let Some(mode) = restore {
                 ws.mode = mode;
@@ -928,16 +941,18 @@ impl Core {
                 ws.basis = work.as_ref().map(basis_of);
                 ws.drifted.clear();
             }
+            // Restoring Manage on a spent budget holds it again, as changing to Manage does.
+            let reheld = rehold_spent(&mut ws);
             db.save_workstream(&ws)?;
             db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "resumed", at).detail(reason))?;
             if let Some(mode) = restore {
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "mode_set", at).detail(mode.as_str()))?;
             }
-            if reset {
-                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "budget_reset", at))?;
-            }
             if rebase && ws.basis.is_some() {
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_captured", at))?;
+            }
+            if reheld {
+                db.append_workstream_event(&held_event(&ws.id, Actor::Supervisor, HELD_BUDGET, at))?;
             }
             Ok(ws)
         })
@@ -2182,7 +2197,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resuming_from_a_budget_hold_resets_what_was_spent() {
+    async fn resuming_from_a_budget_hold_keeps_what_was_spent_and_going_back_to_manage_holds_it_again() {
         let fx = fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, None, Some("Budgeted".into())).await.unwrap();
         let mut spent = ws.clone();
@@ -2195,20 +2210,46 @@ mod tests {
         let json = serde_json::to_value(&view).unwrap();
         assert_eq!(json["budget"], serde_json::json!({ "autoTurns": { "used": 11, "limit": 11 }, "wakes": { "used": 9, "limit": 12 }, "level": "spent" }));
 
+        // Switch to Advise leaves the hold; Resume there lifts it but grants nothing.
+        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
         fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
+        let advised = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Advise, Actor::Person).await.unwrap();
+        assert_eq!(advised.held_reason.as_deref(), Some(HELD_BUDGET), "the hold stays for Resume");
         let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!((resumed.held_reason.clone(), resumed.spent.auto_turns, resumed.spent.wakes, resumed.spent.tokens), (None, 0, 0, 1_234));
+        assert_eq!((resumed.held_reason.clone(), resumed.spent.auto_turns, resumed.spent.wakes, resumed.spent.tokens), (None, 11, 9, 1_234));
         let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(actions(&events)[1..], [(Actor::Supervisor, "held"), (Actor::Person, "resumed"), (Actor::Person, "budget_reset")]);
-        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().budget.level, BudgetLevel::Ok);
+        assert_eq!(last(&events), (Actor::Person, "resumed", Some(HELD_BUDGET)));
+        assert!(!events.iter().any(|e| e.action == "budget_reset"), "nothing was reset");
+        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().budget.level, BudgetLevel::Spent);
 
-        // Resuming from another hold leaves what was spent.
-        let mut again = resumed.clone();
+        // Back to Manage with the budget still spent: held for it again, as the supervisor, so Allow 5 more is asked again.
+        let manage = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
+        assert_eq!((manage.mode, manage.held_reason.as_deref(), manage.spent.auto_turns), (Mode::Manage, Some(HELD_BUDGET), 11));
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(last(&events), (Actor::Supervisor, "held", Some(HELD_BUDGET)));
+        assert_eq!(events[events.len() - 2].action, "mode_set");
+        let allowed = fx.core.allow_more_steps(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!((allowed.held_reason, allowed.spent.auto_turns, allowed.budget.auto_turns), (None, 11, Some(16)));
+
+        // With steps left, going back to Manage holds nothing.
+        let other = fx.core.open_workstream(&fx.scope, None, Some("Fresh".into())).await.unwrap();
+        fx.core.set_workstream_mode(&fx.scope, &other.id, Mode::Advise, Actor::Person).await.unwrap();
+        let back = fx.core.set_workstream_mode(&fx.scope, &other.id, Mode::Manage, Actor::Person).await.unwrap();
+        assert_eq!(back.held_reason, None);
+        assert!(!actions(&fx.core.workstream_events(&fx.scope, &other.id).await.unwrap()).iter().any(|(_, a)| *a == "held"));
+
+        // Resuming from another hold leaves what was spent, and a spent budget under a restored Manage is held again.
+        let mut again = back.clone();
         again.spent.wakes = 3;
         fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&again)).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
-        assert_eq!(fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap().spent.wakes, 3);
-        assert!(!actions(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap())[4..].iter().any(|(_, a)| *a == "budget_reset"));
+        fx.core.hold_workstream(&fx.scope, &other.id, HELD_PERSON, Actor::Person).await.unwrap();
+        assert_eq!(fx.core.resume_workstream(&fx.scope, &other.id).await.unwrap().spent.wakes, 3);
+        let mut used = fx.core.workstream(&fx.scope, &other.id).await.unwrap().unwrap().workstream;
+        used.spent.auto_turns = 11;
+        fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&used)).await.unwrap();
+        fx.core.trip_workstream(&fx.scope, &other.id, "marker", Some("r1"), &[]).await.unwrap();
+        let resumed = fx.core.resume_workstream(&fx.scope, &other.id).await.unwrap();
+        assert_eq!((resumed.mode, resumed.held_reason.as_deref()), (Mode::Manage, Some(HELD_BUDGET)), "the restored Manage asks again");
     }
 
     #[tokio::test]

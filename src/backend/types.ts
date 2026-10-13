@@ -328,7 +328,7 @@ export interface Backend {
   workstreamsReadinessOverride(id: string, triageRun: string): Promise<Workstream>;
   /** The person holds an open workstream: nothing wakes Pip or starts on its own in it; its runs carry on. */
   workstreamsHold(id: string): Promise<Workstream>;
-  /** The person lifts a workstream's hold; lifting a budget hold starts its budget again from zero. */
+  /** The person lifts a workstream's hold; what was spent is kept, so a budget hold lifted in Advise is held again on the way back to Manage. */
   workstreamsResume(id: string): Promise<Workstream>;
   /** The person's "Allow 5 more" on a workstream held for its automatic steps: its allowance goes up by 5 and it resumes, keeping what was spent. Refused when it isn't held for its budget. */
   workstreamsAllowMore(id: string): Promise<Workstream>;

@@ -3,8 +3,8 @@ import { Switch } from "../components/Switch";
 import type { Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
 import { clarityText } from "../lib/ticketClarity";
-import { RULE_SWITCH, STEP_HELP, isHeldByYou, budgetNote, heldBanner, ruleText, stepsLeftText, stepsOf } from "../lib/workstreamHold";
-import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamEvent, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
+import { RULE_SWITCH, STEP_HELP, asksBudget, isHeldByYou, budgetNote, heldBanner, ruleText, stepsLeftText, stepsOf } from "../lib/workstreamHold";
+import { ALLOW_MORE_STEPS, HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamEvent, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
 import { paneHas, useDecisionShown } from "./decisionShown";
@@ -29,6 +29,8 @@ export interface ControlActions {
   onManage(on: boolean): void;
   onHold(): void;
   onResume(): void;
+  /** "Allow 5 more", the person's answer to a spent budget: the audited way on from a budget hold, which Resume is not. */
+  onAllowMore(): void;
   onStop(): void;
   onRule(rule: WorkstreamRule, on: boolean | null): void;
   /** The steps popover opened: what "as in Settings" means is read again. */
@@ -42,6 +44,7 @@ export function controlActions(id: string): ControlActions {
     onManage: (on) => void ws().setMode(id, on ? "manage" : "advise"),
     onHold: () => void ws().hold(id),
     onResume: () => void ws().resume(id),
+    onAllowMore: () => void ws().allowMore(id),
     onStop: () => void ws().stop(id),
     onRule: (rule, on) => void ws().setRule(id, rule, on),
     onSteps: () => void ws().loadGlobals(),
@@ -159,10 +162,10 @@ function StepHelp() {
   );
 }
 
-/** Why the workstream is held, with its Resume; nothing while it isn't held. A hold the system made is also in Needs you, and its decision shows the same banner; the person's own hold is not, so this banner is where it shows. */
-export function HeldBanner({ view, onResume }: { view: WorkstreamView; onResume(): void }) {
+/** Why the workstream is held, with its Resume (for a budget hold in Manage, Allow 5 more and Switch to Advise instead, as the decision has them); nothing while it isn't held. A hold the system made is also in Needs you, and its decision shows the same banner; the person's own hold is not, so this banner is where it shows. */
+export function HeldBanner({ view, actions }: { view: WorkstreamView; actions: Pick<ControlActions, "onResume" | "onAllowMore" | "onManage"> }) {
   const ws = view.workstream;
-  const held = heldBanner(ws, view.budget);
+  const held = heldBanner(ws);
   if (!held) return null;
   const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
   const byYou = isHeldByYou(ws.heldReason);
@@ -182,9 +185,20 @@ export function HeldBanner({ view, onResume }: { view: WorkstreamView; onResume(
         )}
         {ws.heldReason === HELD_BUDGET && <StepHelp />}
       </span>
-      <Btn tone="plain" onClick={onResume} className="px-2 py-0.5">
-        Resume
-      </Btn>
+      {asksBudget(ws) ? (
+        <>
+          <Btn tone="primary" onClick={actions.onAllowMore} className="px-2 py-0.5">
+            Allow {ALLOW_MORE_STEPS} more
+          </Btn>
+          <Btn tone="plain" onClick={() => actions.onManage(false)} className="px-2 py-0.5">
+            Switch to Advise
+          </Btn>
+        </>
+      ) : (
+        <Btn tone="plain" onClick={actions.onResume} className="px-2 py-0.5">
+          Resume
+        </Btn>
+      )}
     </div>
   );
 }
@@ -298,7 +312,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
       <p data-mode-line={ws.mode} className="m-0 text-xs text-ws-ink2">
         {MODE_LINE[ws.mode]}
       </p>
-      {!paneHas(shown, "hold", ws.id) && <HeldBanner view={view} onResume={actions.onResume} />}
+      {!paneHas(shown, "hold", ws.id) && <HeldBanner view={view} actions={actions} />}
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
       {!paneHas(shown, "escalation", ws.id) && <EscalationCard key={ws.id} view={view} />}
       <ClarityNotice view={view} />

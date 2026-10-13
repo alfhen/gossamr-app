@@ -32,11 +32,6 @@ export function stepsOf(budget: BudgetView): { used: number; limit: number } {
   return { used: limit - left, limit };
 }
 
-/** What a budget hold says: the automatic steps are used up, and what Resume gives. Without `budget`, the default allowance. */
-function budgetHeldText(budget: BudgetView | undefined): string {
-  return `Held: automatic steps used up. Resume to give it ${budget ? stepsOf(budget).limit : AUTO_TURNS_DEFAULT} more`;
-}
-
 /** Whether `reason` is a hold the person chose (Hold, Stop or Hold all), which is no need: only the holds the system makes ask them anything. */
 export function isHeldByYou(reason: string | null | undefined): boolean {
   return reason === HELD_PERSON || reason === HELD_ALL;
@@ -44,10 +39,10 @@ export function isHeldByYou(reason: string | null | undefined): boolean {
 
 /**
  * What the page says about a workstream held for `reason` (`heldReason`); null when it isn't held. A basis-drift hold
- * says what changed when `drifted` names it, and a budget hold which limit ran out and what resuming gives (`budget`,
- * the workstream's budget view).
+ * says what changed when `drifted` names it. A budget hold says no more than that the steps are used up: what to do
+ * is Allow 5 more or Advise (the banner's buttons), never Resume: lifting the hold grants nothing, and Manage with the steps spent is held again.
  */
-export function heldText(reason: string | null | undefined, drifted?: readonly BasisField[] | null, budget?: BudgetView): string | null {
+export function heldText(reason: string | null | undefined, drifted?: readonly BasisField[] | null): string | null {
   if (!reason) return null;
   switch (reason) {
     case HELD_RESTART:
@@ -57,7 +52,7 @@ export function heldText(reason: string | null | undefined, drifted?: readonly B
     case HELD_ALL:
       return "Held by you (Hold all)";
     case HELD_BUDGET:
-      return budgetHeldText(budget);
+      return "Held: automatic steps used up";
     case HELD_DAILY:
       return "Held: today's Pip turns are used up";
     case HELD_QUOTA:
@@ -84,9 +79,9 @@ export function tripwireResumeText(reason: string | null | undefined, resumeMode
   return mode === "manage" ? "Automatic steps are paused. Resume turns them back on." : "Resume only lifts the hold; Manage stays off.";
 }
 
-/** The whole held banner of `ws`: why it is held, then for a tripwire what Resume does. `budget` is its budget view. */
-export function heldBanner(ws: Pick<Workstream, "heldReason" | "drifted" | "resumeMode"> & { mode?: WorkstreamMode }, budget?: BudgetView): string | null {
-  const held = heldText(ws.heldReason, ws.drifted, budget);
+/** The whole held banner of `ws`: why it is held, then for a tripwire what Resume does. */
+export function heldBanner(ws: Pick<Workstream, "heldReason" | "drifted" | "resumeMode"> & { mode?: WorkstreamMode }): string | null {
+  const held = heldText(ws.heldReason, ws.drifted);
   const resume = tripwireResumeText(ws.heldReason, ws.resumeMode, ws.mode);
   return held && resume ? `${held}. ${resume}` : held;
 }
@@ -149,6 +144,11 @@ export function budgetNote(budget: BudgetView): { level: "amber" | "spent"; text
   if (budget.level === "ok") return null;
   const { used, limit } = stepsOf(budget);
   return { level: budget.level, text: `${used} of ${limit} automatic steps used` };
+}
+
+/** Whether the held banner of `ws` asks the budget question (Allow 5 more, Switch to Advise) instead of offering Resume: a budget hold in Manage. In Advise nothing starts on its own, so only the hold is left to lift. */
+export function asksBudget(ws: Pick<Workstream, "heldReason" | "mode">): boolean {
+  return ws.heldReason === HELD_BUDGET && ws.mode === "manage";
 }
 
 /**

@@ -8,7 +8,7 @@ import { DENIED_MESSAGE, permissionOffer, readAs } from "../lib/permission";
 import { reviewText } from "./mockReviewDraft";
 import { followUpBlocker, followUpProblem } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
-import { makerName, PLAN_COMMENT_LABEL } from "../lib/proposals";
+import { isReporterQuestions, makerName, PLAN_COMMENT_LABEL } from "../lib/proposals";
 import { revisedByPipUnedited, runAnswerProblem, type MockProposals } from "./mockProposals";
 import { ESCALATION_GONE, textDigest, type MockWorkstreams } from "./mockWorkstreams";
 import { fixRoundMessage, marked, type ReviewFinding } from "./mockSupervisor";
@@ -1292,7 +1292,7 @@ export class MockRuns {
   }
 
   private commentDrafts(runId: string): Proposal[] {
-    return this.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === runId && p.intent.type === "comment" && !p.label?.startsWith(PLAN_LABEL));
+    return this.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === runId && p.intent.type === "comment" && !p.label?.startsWith(PLAN_LABEL) && !isReporterQuestions(p));
   }
 
   private planCommentDrafts(runId: string): Proposal[] {

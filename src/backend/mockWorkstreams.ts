@@ -215,6 +215,15 @@ function held(ws: Workstream, reason: string): Workstream | null {
   return { ...ws, heldReason: reason };
 }
 
+/**
+ * `ws` held for its budget when it is in Manage, open, not held and has used its automatic steps up, as `rehold_spent`
+ * does: Allow 5 more is the only way to grant more, so going back to Manage can't skip the question. Null otherwise.
+ */
+function reheldForBudget(ws: Workstream): Workstream | null {
+  if (ws.closedAt !== null || ws.mode !== "manage" || ws.heldReason !== null || budgetLevel(ws) !== "spent") return null;
+  return { ...ws, heldReason: HELD_BUDGET };
+}
+
 let restartTaken = false;
 
 /** True for the first store opened on a page that started the app afresh, false for any other: a page restarts once. */
@@ -450,7 +459,9 @@ export class MockWorkstreams {
 
   /**
    * Sets how much Pip may do on its own, as `set_workstream_mode` does; the same mode records nothing. The person setting
-   * it forgets the mode a tripwire took away (`resumeMode`), so resuming leaves their choice.
+   * it forgets the mode a tripwire took away (`resumeMode`), so resuming leaves their choice. Changing to Manage while not
+   * held and with the automatic steps used up holds it for its budget again (a supervisor `held` line), so Allow 5 more is
+   * asked again rather than skipped.
    */
   setMode(id: string, mode: WorkstreamMode, actor: WorkstreamActor = "person"): Workstream {
     let ws = this.openOne(id);
@@ -461,7 +472,10 @@ export class MockWorkstreams {
       this.save();
     }
     if (ws.mode === mode) return ws;
-    return this.changedTo({ ...ws, mode }, actor, "mode_set", { detail: mode });
+    const reheld = reheldForBudget({ ...ws, mode });
+    const changed = this.changedTo(reheld ?? { ...ws, mode }, actor, "mode_set", { detail: mode });
+    if (reheld) this.record(id, "supervisor", "held", { detail: HELD_BUDGET });
+    return changed;
   }
 
   /** The workstream and review whose escalation offers draft `draftId` to post as it is, or null: read before the post, while the draft is still pending. */
@@ -551,29 +565,30 @@ export class MockWorkstreams {
   }
 
   /**
-   * Lifts a workstream's hold, as `resume_workstream` does; lifting a budget hold also resets what was spent
-   * (`budget_reset`), and lifting a basis-drift hold takes the basis again from the ticket as it is now (`basis_captured`).
-   * Resuming puts back the mode a tripwire took away (`mode_set` by the person), whatever the hold, unless the person
-   * chose one meanwhile.
+   * Lifts a workstream's hold, as `resume_workstream` does; what was spent is kept, whatever the hold (a budget hold is
+   * lifted without granting steps, so Manage holds it again), and lifting a basis-drift hold takes the basis again from the
+   * ticket as it is now (`basis_captured`). Resuming puts back the mode a tripwire took away (`mode_set` by the person),
+   * whatever the hold, unless the person chose one meanwhile; a restored Manage on a spent budget is held again.
    */
   resume(id: string): Workstream {
     const ws = this.openOne(id);
     if (ws.heldReason === null) return ws;
-    const reset = ws.heldReason === HELD_BUDGET;
     const rebase = ws.heldReason === `${TRIPWIRE}basis_drift`;
     // Whatever the hold, as a trip can land while another is on.
     const restore = ws.resumeMode ?? null;
     const { resumeMode: _, ...kept } = ws;
-    let next: Workstream = { ...kept, heldReason: null, mode: restore ?? ws.mode, spent: reset ? { ...ws.spent, autoTurns: 0, wakes: 0 } : ws.spent };
+    let next: Workstream = { ...kept, heldReason: null, mode: restore ?? ws.mode };
     if (rebase) {
       const ticket = ws.itemKey ? this.ticketOf(ws.itemKey) : null;
       const { drifted: _, ...rest } = next;
       next = { ...rest, basis: ticket ? basisOfItem(ticket) : null };
     }
+    const reheld = reheldForBudget(next);
+    if (reheld) next = reheld;
     this.changedTo(next, "person", "resumed", { detail: ws.heldReason });
     if (restore) this.record(id, "person", "mode_set", { detail: restore });
-    if (reset) this.record(id, "person", "budget_reset");
     if (rebase && next.basis) this.record(id, "supervisor", "basis_captured");
+    if (reheld) this.record(id, "supervisor", "held", { detail: HELD_BUDGET });
     return next;
   }
 
