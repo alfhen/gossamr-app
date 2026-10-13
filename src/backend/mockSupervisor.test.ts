@@ -6,7 +6,8 @@ import { itemRef } from "./mockConnector";
 import { ESCALATION_GONE, MockWorkstreams, basisOfItem, driftOf, type BasisTicket } from "./mockWorkstreams";
 import { docFromText, docText } from "../lib/docs";
 import fixtures from "./supervisor.fixtures.json";
-import { FIX_FINDING_LIMIT, FIX_INSTRUCTION, FIX_PREFACE, MockSupervisor, budgetLevel, decideAutostart, decideWake, eventLine, fixRoundMessage, keysIn, planRecommended, readiness, readinessOverridden, tripwireOf } from "./mockSupervisor";
+import readinessFixtures from "./readiness.fixtures.json";
+import { FIX_FINDING_LIMIT, FIX_INSTRUCTION, FIX_PREFACE, MockSupervisor, decideAutostart, decideWake, eventLine, fixRoundMessage, keysIn, planRecommended, readiness, readinessOverridden, tripwireOf } from "./mockSupervisor";
 import type { AutostartInput, ReviewFinding, WakeFact } from "./mockSupervisor";
 
 interface Shape {
@@ -51,12 +52,8 @@ describe("the supervisor fixtures the Rust side runs too", () => {
     expect(planRecommended(note)).toBe(expected);
   });
 
-  it.each(fixtures.readiness.map((c) => [c.note, c.expect] as const))("readiness in %j", (note, expected) => {
+  it.each(readinessFixtures.report.map((c) => [c.note, c.expect] as const))("readiness in %j (readiness.fixtures.json)", (note, expected) => {
     expect(readiness(note)).toEqual(expected);
-  });
-
-  it.each(fixtures.budget.map((c) => [JSON.stringify(c), c] as const))("budget %s", (_, c) => {
-    expect(budgetLevel(workstream({ spent: c.spent, budget: c.budget }))).toBe(c.expect);
   });
 
   it.each(fixtures.basisDrift.map((c) => [c.name, c] as const))("basis drift: %s", (_, c) => {

@@ -19,9 +19,9 @@ export type FollowLine = Pick<WorkstreamEvent, "actor" | "action" | "proposalId"
  * `ReporterFollow` of the audit `events` (oldest first), as `reporter_follow`: the wait starts when the comment of a
  * `readiness_asked`, `clarity_asked` or `reporter_nudged` (a nudge posted starts it again) is approved, and ends at the
  * first of the ticket changing (`basis_drifted`, the supervisor's), the reporter replying, the person choosing to answer or
- * plan anyway, or resuming. Only the person's own lines count as theirs. `replies` are the times (ISO) of the ticket's
- * comments from anyone but the signed-in person: a Jira comment leaves no audit line, so one newer than the wait's start
- * ends it, placed among the audit lines by its time.
+ * plan anyway, or resuming. Only the person's own lines count as theirs. Both sides run src/lib/reporterWait.fixtures.json.
+ * `replies` are the times (ISO) of the ticket's comments from anyone but the signed-in person: a Jira comment leaves no
+ * audit line, so one newer than the wait's start ends it, placed among the audit lines by its time.
  */
 export function reporterFollow(events: readonly FollowLine[], replies: readonly string[] = []): ReporterFollow {
   const asked = new Set<string>();

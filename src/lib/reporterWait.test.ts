@@ -3,9 +3,18 @@ import type { Proposal, WorkstreamActor } from "../types";
 import { ANSWERS_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "./proposals";
 import { agoText, answersDue, nudgeComment, nudgeOffered, nudgeText, NUDGE_AFTER_DAYS, planDue, reporterFollow, waitedDays, waitingOnReporterText } from "./reporterWait";
 import { NUDGE_COMMENT_LABEL } from "./proposals";
+import fixtures from "./reporterWait.fixtures.json";
 
 const at = (minutes: number) => new Date(Date.parse("2026-10-12T10:00:00Z") + minutes * 60_000).toISOString();
 const line = (minutes: number, actor: WorkstreamActor, action: string, proposalId: string | null = null) => ({ actor, action, proposalId, at: at(minutes) });
+
+describe("reporterFollow in the shared cases the Rust side runs too (reporterWait.fixtures.json)", () => {
+  it.each(fixtures.cases.map((c) => [c.name, c] as const))("%s", (_, c) => {
+    const replies = c.comments.filter((k) => k.author !== c.me).map((k) => k.at);
+    const got = reporterFollow(c.events.map((e) => ({ proposalId: null, ...e }) as Parameters<typeof reporterFollow>[0][number]), replies);
+    expect({ waiting: got.waiting !== null, since: got.waiting, changed: got.changed, replied: got.replied }).toEqual(c.expect);
+  });
+});
 
 describe("reporterFollow", () => {
   const asked = line(1, "person", "readiness_asked", "d1");

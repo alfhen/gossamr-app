@@ -193,7 +193,7 @@ function openQuestionsRest(line: string): string | null {
  * A Triage's `Ready to plan: yes|no` line in its written answer, as `readiness` in runs/result.rs: read as the plan
  * recommendation is, and with a `no`, the list under its `Open questions:` heading (or the text after it on the same
  * line). Quoted lines, code fences and disagreeing lines count for nothing. The questions are one line each, cut, at most
- * `QUESTIONS_MAX`. Null without a verdict, which reads as ready.
+ * `QUESTIONS_MAX`. Null without a verdict, which reads as ready. Both run `report` in src/backend/readiness.fixtures.json.
  */
 export function readiness(result: string): Readiness | null {
   const clean = scrubbed(result);
@@ -633,7 +633,7 @@ export class MockSupervisor {
     // Telling Pip about a fix round the rules sent, or about the build that went back for one finishing, is no automatic
     // step of its own: the rounds are capped already (`FIX_ROUNDS_MAX`).
     const fixBuilds = fixRoundBuilds(events);
-    const free = fresh.every((f) => !!f.fixRound || fixBuilds.has(f.run));
+    const free = isFreeWake(fresh, fixBuilds);
     if (!workstreams.admitWake(id, fresh, decision, !this.parts.hasWaitingWake(conversation) && !free)) return;
     this.parts.wake(id, fresh.map(({ key: _, ...f }) => f));
   }
@@ -726,8 +726,16 @@ export class MockSupervisor {
 }
 
 /** The builds the rules sent a fix round, by the audit's `autostart` lines (`fix_round after <review>`, on the build), as `fix_round_builds`. */
-function fixRoundBuilds(events: readonly WorkstreamEvent[]): Set<string> {
+export function fixRoundBuilds(events: readonly Pick<WorkstreamEvent, "action" | "runId" | "detail">[]): Set<string> {
   return new Set(events.filter((e) => e.action === "autostart" && !!e.runId && !!e.detail?.startsWith("fix_round after ")).map((e) => e.runId!));
+}
+
+/**
+ * Whether waking Pip about `fresh` is no automatic step: every fact is the review that sent a fix round or the build that went
+ * back for one (`fixBuilds`, from `fixRoundBuilds`), as `wake_is_free`; both run `free` in src/lib/workstreamHold.fixtures.json.
+ */
+export function isFreeWake(fresh: readonly { run: string; fixRound?: unknown }[], fixBuilds: ReadonlySet<string>): boolean {
+  return fresh.every((f) => !!f.fixRound || fixBuilds.has(f.run));
 }
 
 /** The investigation a Triage carried, whose findings its Plan carries on, as `autostart::carried`: checked as the source is. */

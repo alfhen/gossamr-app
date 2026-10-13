@@ -124,7 +124,7 @@ export function ruleText(rule: WorkstreamRule): string {
   }
 }
 
-/** The budget level of `ws`, as `budget_level` in src-tauri/src/domain/workstream.rs works it out: `amber` from 80% of either limit, `spent` at 100%. */
+/** The budget level of `ws`, as `budget_level` in src-tauri/src/domain/workstream.rs works it out: `amber` from 80% of either limit, `spent` at 100%. Both run `budget` in src/lib/workstreamHold.fixtures.json. */
 export function budgetLevel(ws: Workstream): BudgetLevel {
   const level = (used: number, limit: number): BudgetLevel => (used >= limit ? "spent" : used * 5 >= limit * 4 ? "amber" : "ok");
   const levels = [level(ws.spent.autoTurns, ws.budget.autoTurns ?? AUTO_TURNS_DEFAULT), level(ws.spent.wakes, ws.budget.wakes ?? WAKES_DEFAULT)];
