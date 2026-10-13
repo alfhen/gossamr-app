@@ -263,6 +263,7 @@ fn action_line(e: &WorkstreamEvent, labels: &HashMap<&str, &str>) -> String {
         ("readiness_overridden", Some(r)) => format!("chose to plan anyway after {r} found the ticket not ready"),
         ("clarity_asked", _) => format!("asked the reporter about what the ticket leaves unclear ({draft})"),
         ("clarity_dismissed", _) => "said the ticket looks clear enough".into(),
+        ("reporter_nudged", _) => format!("asked for a nudge to the reporter ({draft})"),
         ("undone", _) => match e.detail.as_deref() {
             Some("draft_skipped") => format!("undid skipping {draft}"),
             Some("held") => "undid holding this workstream".into(),

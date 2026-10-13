@@ -360,9 +360,21 @@ describe("nextStep while the workstream waits on the reporter", () => {
 
   it("says since when and that nothing starts on its own, and it is not a need", () => {
     const runs = [run("t", "triage", "done")];
-    const v = waiting(runs, { stage: "triage" });
-    expect(line(v, runs)).toMatchObject({ kind: "reporter", need: null, text: "Next: Waiting on the reporter since 3 days ago; nothing starts on its own." });
+    const v = waiting(runs, { stage: "triage" }, iso(60 * 24 * 1));
+    expect(line(v, runs)).toMatchObject({ kind: "reporter", need: null, text: "Next: Waiting on the reporter since yesterday; nothing starts on its own." });
+    expect(line(v, runs)?.nudge).toBeUndefined();
     expect(needsOf(v, runs)).toEqual([]);
+  });
+
+  it("offers a nudge once the reporter has been silent for 2 days, never as a need, and not while one waits", () => {
+    const runs = [run("t", "triage", "done")];
+    const v = waiting(runs, { stage: "triage" });
+    expect(line(v, runs)).toMatchObject({ kind: "reporter", need: null, nudge: true, text: "Next: Waiting on the reporter since 3 days ago; nothing starts on its own. The reporter hasn't answered for 3 days. You can draft a nudge." });
+    expect(needsOf(v, runs)).toEqual([]);
+    expect(line(waiting(runs, { stage: "triage" }, iso(60 * 24 * 2)), runs)?.nudge).toBe(true);
+    expect(line(waiting(runs, { stage: "triage" }, iso(60 * 24 * 2 - 60)), runs)?.nudge).toBeUndefined();
+    const drafted = { ...applied("n1", "b"), state: { type: "pending" } as const, label: "Nudge for the reporter", createdBy: "user", intent: { type: "comment", item: ref("CA-401"), body: "Hi", mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "nudge:w", workstream: v.workstream.id } } as Proposal;
+    expect(line(v, runs, [drafted])?.nudge).toBeUndefined();
   });
 
   it("gives way to a hold, to anything that decides or unblocks, and to a step in hand", () => {

@@ -13,6 +13,8 @@ import { keyInitials } from "./projects";
 import { disconnectGithub, useGithubUi } from "./githubUi";
 import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
+import { gapWords, learnedList, LEARN_AFTER } from "../lib/clarityLearning";
+import { giveBackClarity } from "./clarityActions";
 
 export function connectionsOf(containers: { ref: { connectionId: string } }[]): { id: string; name: string; projects: number }[] {
   const counts = new Map<string, number>();
@@ -213,6 +215,34 @@ function Section({ title, id, children }: { title: string; id?: string; children
   );
 }
 
+/** What "Looks fine" taught the clarity notice, per project, each with a way to give it back. */
+function ClaritySection() {
+  const learned = learnedList(usePrefs((s) => s.clarityLearning));
+  return (
+    <div data-clarity-learning className="grid gap-2">
+      <p className="m-0 text-ws-ink2">
+        When you say Looks fine to the same gap {LEARN_AFTER} times in one Jira project, Gossamr stops flagging that gap there. It changes only what the notice and Start my day say; the triage still decides whether a ticket is ready to plan.
+      </p>
+      {learned.length === 0 ? (
+        <p className="m-0 text-ws-ink3">Nothing learned yet.</p>
+      ) : (
+        <ul aria-label="Learned from Looks fine" className="m-0 grid list-none gap-1.5 p-0">
+          {learned.map((l) => (
+            <li key={l.project} data-clarity-project={l.project} className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="min-w-0 flex-1">
+                <b className="font-mono font-semibold">{l.project}</b> tickets that {l.gaps.map(gapWords).join(", and ")} are no longer flagged.
+              </span>
+              <button type="button" onClick={() => void giveBackClarity(l.project)} className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm hover:bg-ws-hover">
+                Give back
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function Settings() {
   const theme = usePrefs((s) => s.theme);
   const setTheme = usePrefs((s) => s.setTheme);
@@ -263,6 +293,12 @@ export function Settings() {
         {isTauri() && (
           <Section title="Agents">
             <AgentsSwitch enabled={agents.enabled} pending={agents.pending} error={agents.error} note={agents.note} onChange={(on) => void agents.set(on)} />
+          </Section>
+        )}
+
+        {agents.enabled && (
+          <Section title="Unclear tickets" id="settings-clarity">
+            <ClaritySection />
           </Section>
         )}
 

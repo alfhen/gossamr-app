@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, type Mention } from "../lib/mentions";
-import { isReporterQuestions, targetOf, unreachable } from "../lib/proposals";
+import { isReporterNudge, isReporterQuestions, targetOf, unreachable } from "../lib/proposals";
 import { useBackend } from "../backend/useBackend";
 import type { Person, Proposal, ProposalEdit, ReviewAccess } from "../types";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
@@ -514,6 +514,14 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
               Drafted by Gossamr
             </span>
             Gossamr wrote this from what the ticket&apos;s description leaves out. Read and edit the questions before you approve.
+          </p>
+        )}
+        {p.origin.type === "chat" && isReporterNudge(p) && (
+          <p data-provenance="gossamr" className="m-0 text-sm text-ws-ink3">
+            <span data-created-by="gossamr" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
+              Drafted by Gossamr
+            </span>
+            Gossamr wrote this follow-up because the reporter hasn&apos;t answered for days. Read and edit it before you approve.
           </p>
         )}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}

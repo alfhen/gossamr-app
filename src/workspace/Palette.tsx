@@ -23,6 +23,9 @@ import { contextEntries, focusedSubject } from "./contextActions";
 import { undoLog } from "./undo";
 import { usePipHome } from "./pipHomeStore";
 import { showAllRuns, showTimeline } from "./TimelineFilterBar";
+import { showStartMyDay } from "./StartMyDay";
+import { giveBackClarity } from "./clarityActions";
+import { learnedList } from "../lib/clarityLearning";
 
 /** Where focus lands when the palette closes and the element that opened it is gone. */
 export const MAIN_ID = "workspace-main";
@@ -217,6 +220,9 @@ export function appActions(): CommandActions {
     askPipToPlan: (item) => void askPipToPlan(item),
     startWorkstreamOn: (item) => void useWorkstreams.getState().start(item.item),
     showTimeline,
+    startMyDay: showStartMyDay,
+    openJiraSent: () => tabs.setRoute("sent"),
+    giveBackClarity: () => void giveBackClarity(),
   };
 }
 
@@ -310,6 +316,7 @@ export function Palette() {
   const [active, setActive] = useState(0);
   const [step, setStep] = useState<Step>(() => (seed === START_WORKSTREAM ? { type: "workstream" } : { type: "search" }));
   const me = useWorkspace((s) => s.me);
+  const clarityLearning = usePrefs((s) => s.clarityLearning);
   const unwatched = useUnwatchedMatches(query, step.type === "search");
 
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
@@ -341,6 +348,7 @@ export function Palette() {
       ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
       onPipHome: useTabs.getState().route === "pip",
       onAgents: useTabs.getState().route === "agents",
+      clarityLearned: learnedList(clarityLearning).length,
     };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);
@@ -362,7 +370,7 @@ export function Palette() {
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me, subject]);
+  }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me, subject, clarityLearning]);
 
   // A new ticket's project and title are steps back to the search; the workstream's ticket is all the palette was opened for.
   const prompting = step.type === "project" || step.type === "title";

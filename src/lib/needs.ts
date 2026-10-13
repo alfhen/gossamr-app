@@ -2,7 +2,7 @@ import { ALLOW_MORE_STEPS, HELD_BUDGET, type Intent, type Proposal, type Readine
 import { quietMinutes, stoppedAtLimit } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { parsePermission, permissionOffer, readAs } from "./permission";
-import { inWorkstreamPane, isAnswersDraft, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
+import { inWorkstreamPane, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
 import { humanDuration } from "./runNames";
 import { isHeldByYou, shortHeld, stepsOf } from "./workstreamHold";
 import { STAGE_LABEL, runWorkstream } from "./workstreamStage";
@@ -130,9 +130,9 @@ export const BATCHABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "trans
 
 /**
  * Whether `p` may be approved with the others in "Approve N safe drafts": a batchable kind, but never the questions to a
- * reporter or Pip's comment with the person's answers, which are read and approved on their own before they reach Jira.
+ * reporter, the nudge that follows them up, or Pip's comment with the person's answers, which are read and approved on their own before they reach Jira.
  */
-export const safeToBatch = (p: Proposal) => BATCHABLE.has(p.intent.type) && !isReporterQuestions(p) && !isAnswersDraft(p);
+export const safeToBatch = (p: Proposal) => BATCHABLE.has(p.intent.type) && !isReporterQuestions(p) && !isReporterNudge(p) && !isAnswersDraft(p);
 
 /** What the list says of a review that still blocks after the automatic fix rounds. */
 export const escalationReason = (rounds: number) => `Review still blocks after ${rounds} fix ${rounds === 1 ? "round" : "rounds"}`;
@@ -324,15 +324,17 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
     const label = from && ws?.labels.find(([id]) => id === from)?.[1];
     const step = from ? runs.find((r) => r.id === from)?.spec.kind : undefined;
     const what = DRAFT_TEXT[p.intent.type].replace(/^Draft /, "");
-    const title = isReporterQuestions(p) ? "Questions for the reporter" : isAnswersDraft(p) ? "Answers to the open questions" : label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : DRAFT_TEXT[p.intent.type];
+    const title = isReporterQuestions(p) ? "Questions for the reporter" : isReporterNudge(p) ? "Nudge for the reporter" : isAnswersDraft(p) ? "Answers to the open questions" : label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : DRAFT_TEXT[p.intent.type];
     const by = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "autopilot" ? "The autopilot" : p.createdBy === "agent" ? "An agent" : "You";
     // The questions to a reporter are Gossamr's words around the triage's own, and the person's choice: say so.
     const asked = isReporterQuestions(p);
     const drafted = asked
       ? `Gossamr drafted a comment to the reporter${key ? ` of ${key}` : ""}${label ? ` from ${label}'s open questions` : " from what the ticket leaves out"}; it is posted only when you approve it.`
-      : isAnswersDraft(p)
-        ? `Pip drafted a comment${key ? ` on ${key}` : ""} with your answers to the open questions; it is posted only when you approve it.`
-        : `${by} drafted ${DRAFT_WHAT[p.intent.type](key)}.`;
+      : isReporterNudge(p)
+        ? `Gossamr drafted a gentle nudge to the reporter${key ? ` of ${key}` : ""}, who hasn't answered; it is posted only when you approve it.`
+        : isAnswersDraft(p)
+          ? `Pip drafted a comment${key ? ` on ${key}` : ""} with your answers to the open questions; it is posted only when you approve it.`
+          : `${by} drafted ${DRAFT_WHAT[p.intent.type](key)}.`;
     const edit = EDITABLE.has(p.intent.type) ? [action("edit", "Edit")] : [];
     if (p.intent.type === "rewrite") {
       // A plan run's description update is how the plan is approved; any other rewrite is read in its diff first.

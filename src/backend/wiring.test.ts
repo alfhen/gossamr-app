@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { REVIEW_CHANGED, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
+import { NUDGE_COMMENT_LABEL, REVIEW_CHANGED, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
+import { NUDGE_AFTER_DAYS, NUDGE_GONE, nudgeComment } from "../lib/reporterWait";
+import { CLARITY_NOTES } from "./mockWorkstreams";
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -37,5 +39,15 @@ describe("the desktop backend's wiring", () => {
     expect(rust).toContain(`pub const REVIEW_MAYBE_POSTED_NOTE: &str = "${REVIEW_MAYBE_POSTED_NOTE}";`);
     expect(rust).toContain(`pub const REVIEW_NOT_FOUND_NOTE: &str =\n    "${REVIEW_NOT_FOUND_NOTE}";`);
     expect(rust).toContain(`pub const REVIEW_CHANGED: &str = "${REVIEW_CHANGED}";`);
+  });
+
+  it("says the reporter nudge and the clarity notes the way the backend does", () => {
+    const rust = read("../../src-tauri/src/inbox/workstreams.rs");
+    expect(rust).toContain(`pub const NUDGE_GONE: &str = "${NUDGE_GONE}";`);
+    expect(rust).toContain(`pub const NUDGE_AFTER_DAYS: i64 = ${NUDGE_AFTER_DAYS};`);
+    expect(rust).toContain(`pub const CLARITY_NOTES: [&str; 2] = [${CLARITY_NOTES.map((n) => `"${n}"`).join(", ")}];`);
+    // The comment is the same words around the greeting and the ticket's key.
+    expect(rust).toContain(nudgeComment("{key}", null).replace("Hi,", "{hello}").replace(/\n/g, "\\n"));
+    expect(read("../../src-tauri/src/proposals.rs")).toContain(`pub const NUDGE_COMMENT_LABEL: &str = "${NUDGE_COMMENT_LABEL}";`);
   });
 });

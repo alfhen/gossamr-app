@@ -2,7 +2,7 @@ import type { Intent, Proposal, ProposalMaker, Run, RunKind, WorkstreamActor, Wo
 import { eventText } from "../workspace/activityLogic";
 import { GENERAL_CONVERSATION, workstreamConversation } from "./conversations";
 import type { Need } from "./needs";
-import { inWorkstreamPane, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
+import { inWorkstreamPane, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
 
 /**
  * One timeline per workstream (docs/needs-you.md, step 3): what Pip said, what the person said, each run from start to end
@@ -141,7 +141,7 @@ const TOLD_ELSEWHERE = new Set(["run_approved", "autostart", "wake", "draft_crea
 const ASKS = new Set(["fix_rounds_exhausted", "held"]);
 
 /** What the person did that counts as deciding something. Opening or closing a workstream and the notes are bookkeeping, not decisions. */
-const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "escalation_taken", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset", "steps_allowed", "readiness_asked", "readiness_answered", "readiness_overridden", "clarity_asked", "clarity_dismissed"]);
+const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "escalation_taken", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset", "steps_allowed", "readiness_asked", "readiness_answered", "readiness_overridden", "clarity_asked", "clarity_dismissed", "reporter_nudged", "clarity_learned", "clarity_reset"]);
 
 const time = (iso: string | undefined) => {
   const t = iso ? Date.parse(iso) : NaN;
@@ -211,7 +211,7 @@ export function runSentence(run: Run, label: string | undefined, verdict: Review
 }
 
 /** Whose draft it was, for a sentence about the person's decision on it: "Pip", "an agent", "you". */
-const makerWord = (p: Proposal) => (isReporterQuestions(p) ? "Gossamr" : p.createdBy === "agent" ? "an agent" : p.createdBy === "user" ? "you" : MAKER[p.createdBy]);
+const makerWord = (p: Proposal) => (isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : p.createdBy === "agent" ? "an agent" : p.createdBy === "user" ? "you" : MAKER[p.createdBy]);
 
 /** What an applied draft says: the person's decision, and for a review or a run what it came to. */
 function appliedSentence(p: Proposal, on: string): string {
@@ -228,7 +228,7 @@ function appliedSentence(p: Proposal, on: string): string {
 export function draftSentence(p: Proposal): string {
   const target = targetOf(p.intent);
   const on = target ? ` on ${target.key}` : "";
-  const made = `${isReporterQuestions(p) ? "Gossamr" : MAKER[p.createdBy]} drafted ${DRAFT_WORDS[p.intent.type]}${on}`;
+  const made = `${isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : MAKER[p.createdBy]} drafted ${DRAFT_WORDS[p.intent.type]}${on}`;
   switch (p.state.type) {
     case "pending":
       return made;

@@ -10,7 +10,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "showTimeline"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "showTimeline", "startMyDay", "openJiraSent", "giveBackClarity"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -509,5 +509,44 @@ describe("timeline commands", () => {
     expect(found("timeline runs")[0]).toBe("timeline:filter:runs");
     expect(found("every workstream")[0]).toBe("timeline:scope:every");
     expect(found("this workstream")[0]).toBe("timeline:scope:workstream");
+  });
+});
+
+describe("the habits in the palette", () => {
+  const ctx = { project: null, view: null, unreadActivity: 0 };
+
+  it("offers 'Start my day' while Agents are on, and finds it by what it is for", () => {
+    const a = actions();
+    expect(buildCommands(containers, BUILT_IN_VIEWS, a, ctx).some((c) => c.id === "app:start-my-day")).toBe(false);
+    const on = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, agents: true });
+    const start = on.find((c) => c.id === "app:start-my-day")!;
+    expect(start).toMatchObject({ group: "Go to", label: "Start my day" });
+    expect(rankCommands(on, "start my day")[0].id).toBe("app:start-my-day");
+    expect(rankCommands(on, "morning")[0].id).toBe("app:start-my-day");
+    start.run();
+    expect(a.startMyDay).toHaveBeenCalled();
+  });
+
+  it("offers 'What Jira saw from me' always, and finds it by what it shows", () => {
+    const a = actions();
+    const all = buildCommands(containers, BUILT_IN_VIEWS, a, ctx);
+    const sent = all.find((c) => c.id === "app:jira-sent")!;
+    expect(sent).toMatchObject({ group: "Go to", label: "What Jira saw from me" });
+    expect(rankCommands(all, "jira saw")[0].id).toBe("app:jira-sent");
+    expect(rankCommands(all, "posted")[0].id).toBe("app:jira-sent");
+    sent.run();
+    expect(a.openJiraSent).toHaveBeenCalled();
+  });
+
+  it("offers giving back what Looks fine learned only once it learned something, with how many projects", () => {
+    const a = actions();
+    expect(buildCommands(containers, BUILT_IN_VIEWS, a, ctx).some((c) => c.id === "clarity:reset")).toBe(false);
+    expect(buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, clarityLearned: 0 }).some((c) => c.id === "clarity:reset")).toBe(false);
+    const one = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, clarityLearned: 1 }).find((c) => c.id === "clarity:reset")!;
+    expect(one).toMatchObject({ group: "App", label: "Give back what Looks fine learned", hint: "1 project" });
+    const two = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, clarityLearned: 2 }).find((c) => c.id === "clarity:reset")!;
+    expect(two.hint).toBe("2 projects");
+    two.run();
+    expect(a.giveBackClarity).toHaveBeenCalled();
   });
 });

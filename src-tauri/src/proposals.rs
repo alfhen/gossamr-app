@@ -479,6 +479,15 @@ pub fn is_reporter_questions(p: &Proposal) -> bool {
     matches!(p.intent, Intent::Comment { .. }) && p.label.as_deref() == Some(READINESS_COMMENT_LABEL) && p.created_by != CreatedBy::Pip
 }
 
+/// The label of a comment Gossamr drafts when the reporter has been silent for days (`Core::nudge_reporter`): a short, polite
+/// follow-up on the questions already asked. Like the questions it is never in the safe batch.
+pub const NUDGE_COMMENT_LABEL: &str = "Nudge for the reporter";
+
+/// Whether `p` is the follow-up comment `Core::nudge_reporter` drafted: never one Pip made, whatever it is labelled.
+pub fn is_reporter_nudge(p: &Proposal) -> bool {
+    matches!(p.intent, Intent::Comment { .. }) && p.label.as_deref() == Some(NUDGE_COMMENT_LABEL) && p.created_by != CreatedBy::Pip
+}
+
 /// Whether `p` is the comment Pip drafted with the person's answers to the open questions.
 pub fn is_answers_draft(p: &Proposal) -> bool {
     matches!(p.intent, Intent::Comment { .. }) && p.label.as_deref() == Some(ANSWERS_COMMENT_LABEL) && p.created_by == CreatedBy::Pip
@@ -2082,6 +2091,11 @@ mod tests {
         assert!(is_answers_draft(&labelled(ANSWERS_COMMENT_LABEL, CreatedBy::Pip, chat())));
         assert!(!is_answers_draft(&labelled(ANSWERS_COMMENT_LABEL, CreatedBy::Agent, run())), "only Pip's");
         assert!(!is_answers_draft(&labelled(READINESS_COMMENT_LABEL, CreatedBy::Pip, chat())));
+        // The nudge is its own kind: Gossamr's follow-up, never the questions, never Pip's, and no run's comment.
+        let nudge = labelled(NUDGE_COMMENT_LABEL, CreatedBy::User, chat());
+        assert!(is_reporter_nudge(&nudge) && !is_reporter_questions(&nudge) && !is_answers_draft(&nudge));
+        assert!(!is_reporter_nudge(&labelled(NUDGE_COMMENT_LABEL, CreatedBy::Pip, chat())), "never one Pip labelled so");
+        assert!(!is_reporter_nudge(&labelled(READINESS_COMMENT_LABEL, CreatedBy::User, chat())));
     }
 
     #[test]

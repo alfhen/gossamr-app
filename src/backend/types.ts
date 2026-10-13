@@ -1,4 +1,5 @@
 import type { Mention } from "../lib/mentions";
+import type { ClarityGap } from "../lib/ticketClarity";
 import type {
   AssignedElsewhere,
   CacheChanged,
@@ -319,9 +320,13 @@ export interface Backend {
   /** The person's "Ask the reporter" on Triage `triageRun`, which found its ticket not ready to plan: a Jira comment to the reporter with its open questions, as a draft the person approves like any other. Refused when the stop isn't about that Triage any more. */
   workstreamsReadinessAsk(id: string, triageRun: string): Promise<Proposal>;
   /** The person's "Ask the reporter now" on a workstream's clarity notice (a ticket no Triage has judged): the same comment to the reporter, with one question per gap the check found, as a draft the person approves like any other. Refused when the notice isn't showing any more. */
-  workstreamsClarityAsk(id: string): Promise<Proposal>;
+  workstreamsClarityAsk(id: string, skip?: ClarityGap[]): Promise<Proposal>;
   /** The person's "Looks fine" on the clarity notice: it doesn't show for this ticket again. Refused when the notice isn't showing. */
   workstreamsClarityDismiss(id: string): Promise<Workstream>;
+  /** The person's "Draft a nudge" on a workstream that has waited on the reporter for `NUDGE_AFTER_DAYS` days or more: a short follow-up comment to them, as a draft the person approves like any other; once it is posted the wait starts again from then. Refused unless the workstream is due one. */
+  workstreamsNudgeReporter(id: string): Promise<Proposal>;
+  /** Audits the page's clarity learning in workstream `id`: `clarity_learned` (a gap is no longer flagged for a project after enough "Looks fine") or `clarity_reset` (the person gave it back), with `detail` saying which. The learning itself is the page's. */
+  workstreamsClarityNote(id: string, action: "clarity_learned" | "clarity_reset", detail: string): Promise<void>;
   /** The person's "I'll answer" on Triage `triageRun`: it settles the question and starts nothing. */
   workstreamsReadinessAnswer(id: string, triageRun: string): Promise<Workstream>;
   /** The person's "Plan anyway" on Triage `triageRun`: records the override and lets the Triage-to-Plan rule start the Plan under its own checks (Manage, not held, within budget). */
