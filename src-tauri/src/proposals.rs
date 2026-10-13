@@ -552,6 +552,54 @@ fn tidy_reporter_questions(db: &Db, p: &Proposal) -> Result<Tidied> {
     Ok(tidied)
 }
 
+/// Why a Triage's own pending comment was retired once the person chose "I'll answer": their answers go to the ticket as
+/// a comment of their own, so the Triage's note, which says the ticket can't be sized, must not be posted beside it.
+pub const ANSWERED_REASON: &str = "Replaced by your answers to the open questions";
+
+/// Why a Triage's own pending comment was retired once the person chose "Plan anyway": the plan goes ahead, so a note that
+/// says the ticket can't be planned would contradict it.
+pub const OVERRIDDEN_REASON: &str = "You chose to plan anyway, so this note no longer fits";
+
+/// What the comment with the person's answers does to an older pending comment of a Triage: the Triage's own note, which
+/// says the ticket can't be sized, is replaced, and the person's edit keeps it. `None` when `older` is not that: another
+/// ticket, workstream or run kind, not pending, or back in Pending after a failed post. A run of another kind (an
+/// Investigate's findings) is never touched. As `answers_supersession` in `proposals.ts`.
+pub fn answers_supersession(older: &Proposal, newer: &Proposal, kind_of: impl Fn(&str) -> Option<crate::domain::RunKind>) -> Option<std::result::Result<(), &'static str>> {
+    let ws = newer.workstream()?;
+    let same = is_answers_draft(newer) && is_run_comment(older) && older.workstream() == Some(ws) && older.target() == newer.target();
+    if !same || older.id == newer.id || older.state != ProposalState::Pending || older.error.is_some() {
+        return None;
+    }
+    if kind_of(comment_run_id(older)?)? != crate::domain::RunKind::Triage {
+        return None;
+    }
+    Some(if person_edited(older) { Err(KEPT_EDITED) } else { Ok(()) })
+}
+
+/// The person chose "I'll answer" or "Plan anyway" on Triage `triage` of `workstream`: its own pending comment, which says
+/// the ticket can't be sized, is retired (`reason`) and the audit says so (`draft_superseded`, the person's), as asking the
+/// reporter does. The person's edit keeps it (`draft_kept_edited`). Another run's comment, and a comment back in Pending
+/// after a failed post, are left. Returns the ids retired.
+pub fn retire_triage_notes(db: &Db, workstream: &str, triage: &str, reason: &str, at: DateTime<Utc>) -> Result<Vec<String>> {
+    let pending = db.proposals(&ProposalQuery { workstream: Some(workstream.into()), states: Some(vec![StateKind::Pending]), ..Default::default() })?;
+    let mut retired = Vec::new();
+    for mut old in pending {
+        if !is_run_comment(&old) || comment_run_id(&old) != Some(triage) || old.error.is_some() {
+            continue;
+        }
+        if person_edited(&old) {
+            record(db, &old, Actor::Person, KEPT_EDITED, at);
+            continue;
+        }
+        old.state = ProposalState::Retired(reason.into());
+        old.updated_at = at;
+        db.save_proposal(&old)?;
+        record(db, &old, Actor::Person, "draft_superseded", at);
+        retired.push(old.id);
+    }
+    Ok(retired)
+}
+
 /// A new review an agent run left replaces the older pending review drafts of the same pull request, whichever
 /// workstream they are in or none: one pull request has one review waiting for the person. Writes nothing.
 fn tidy_reviews(db: &Db, p: &Proposal) -> Result<Tidied> {
@@ -593,13 +641,26 @@ fn tidy(db: &Db, p: &Proposal) -> Result<Tidied> {
             Supersession::Unrelated | Supersession::Alongside => {}
         }
     }
+    // The person's answers replace the Triage's own note, which says the ticket can't be sized, if it still waits.
+    let mut kept = Vec::new();
+    if is_answers_draft(p) {
+        let kind_of = |run_id: &str| db.run(run_id).ok().flatten().map(|r| r.spec.kind);
+        for older in &open {
+            match answers_supersession(older, p, kind_of) {
+                Some(Ok(())) if !replaced.iter().any(|r| r.id == older.id) => replaced.push(older.clone()),
+                Some(Err(why)) => kept.push((older.clone(), why)),
+                Some(Ok(())) => {}
+                None => {}
+            }
+        }
+    }
     // What a run reported is never refused; Pip is told to settle what is waiting first.
     if p.created_by == CreatedBy::Pip && open.len() - replaced.len() >= WORKSTREAM_PENDING_CAP {
         return Err(refuse(format!(
             "Workstream {ws} already has {WORKSTREAM_PENDING_CAP} drafts waiting for the user. Don't draft more until they decide some; revise one with revise_proposal or withdraw one with retire_proposal."
         )));
     }
-    Ok(Tidied { replaced, kept: Vec::new() })
+    Ok(Tidied { replaced, kept })
 }
 
 fn load(db: &Db, id: &str) -> Result<Proposal> {
@@ -1942,6 +2003,69 @@ mod tests {
         assert_eq!((retired.state, retired.superseded_by.as_deref()), (ProposalState::Retired(REPLACED_REASON.into()), Some(questions.id.as_str())));
         assert_eq!(state_of(&questions.id).state, ProposalState::Pending);
         assert!(db.workstream_events("w").unwrap().iter().any(|e| e.action == "draft_superseded" && e.proposal_id.as_deref() == Some(triage_note.id.as_str())));
+    }
+
+    #[test]
+    fn the_person_s_answers_replace_a_triage_s_pending_comment_but_not_another_kind_of_run_s_nor_an_edited_one() {
+        let db = Db::in_memory().unwrap();
+        stored_workstream(&db, "w");
+        let comment = |id: &str, run: &str, by: CreatedBy, label: Option<&str>| {
+            let mut p = made(&db, comment_draft("1"));
+            p.id = id.into();
+            p.created_by = by;
+            p.label = label.map(String::from);
+            p.origin = if by == CreatedBy::Pip { Origin::Chat { request_id: "q".into(), workstream: Some("w".into()) } } else { Origin::Run { run_id: run.into(), short_id: None, workstream: Some("w".into()) } };
+            p
+        };
+        use crate::domain::RunKind::{Investigate, Triage};
+        let kind_of = |id: &str| match id {
+            "t1" => Some(Triage),
+            "i1" => Some(Investigate),
+            _ => None,
+        };
+        let answers = comment("answers", "", CreatedBy::Pip, Some(ANSWERS_COMMENT_LABEL));
+        assert_eq!(answers_supersession(&comment("note", "t1", CreatedBy::Agent, None), &answers, kind_of), Some(Ok(())));
+        assert_eq!(answers_supersession(&comment("findings", "i1", CreatedBy::Agent, None), &answers, kind_of), None, "an investigation's findings are not the readiness text");
+        assert_eq!(answers_supersession(&comment("gone", "r9", CreatedBy::Agent, None), &answers, kind_of), None, "a run that can't be found");
+        assert_eq!(answers_supersession(&comment("asked", "t1", CreatedBy::Agent, Some(READINESS_COMMENT_LABEL)), &answers, kind_of), None, "the questions to the reporter stay");
+        let mut edited = comment("edited", "t1", CreatedBy::Agent, None);
+        edited.revisions.push(Revision { at: now(), note: EDITED_NOTE.into(), intent: edited.intent.clone() });
+        assert_eq!(answers_supersession(&edited, &answers, kind_of), Some(Err(KEPT_EDITED)));
+        let mut failed = comment("failed", "t1", CreatedBy::Agent, None);
+        failed.error = Some("Jira is down".into());
+        assert_eq!(answers_supersession(&failed, &answers, kind_of), None);
+        assert_eq!(answers_supersession(&comment("note", "t1", CreatedBy::Agent, None), &comment("plain", "t1", CreatedBy::Pip, None), kind_of), None, "only the answers draft replaces it");
+    }
+
+    #[test]
+    fn choosing_to_answer_or_plan_anyway_retires_that_triage_s_own_pending_comment_and_keeps_an_edited_one() {
+        let db = Db::in_memory().unwrap();
+        stored_workstream(&db, "w");
+        let from_run = |run: &str, ws: &str| Draft {
+            origin: Origin::Run { run_id: run.into(), short_id: None, workstream: Some(ws.into()) },
+            created_by: CreatedBy::Agent,
+            intent: Intent::Comment { item: item_ref("1"), body: Doc::paragraph("Triage could not size this. Three questions are open.") },
+            label: None,
+            basis: None,
+        };
+        let state_of = |id: &str| db.proposal(id).unwrap().unwrap();
+        let own = made(&db, from_run("t1", "w"));
+        let edited = made(&db, from_run("t1", "w"));
+        edit(&db, &edited.id, Intent::Comment { item: item_ref("1"), body: Doc::paragraph("My own words.") }, now()).unwrap();
+        let other_run = made(&db, from_run("i1", "w"));
+        let other_workstream = made(&db, from_run("t1", "w2"));
+        let pip = made(&db, comment_draft("1"));
+        let retired = retire_triage_notes(&db, "w", "t1", ANSWERED_REASON, now()).unwrap();
+        assert_eq!(retired, vec![own.id.clone()]);
+        assert_eq!(state_of(&own.id).state, ProposalState::Retired(ANSWERED_REASON.into()));
+        assert_eq!(state_of(&edited.id).state, ProposalState::Pending, "the person's edit keeps theirs");
+        for kept in [&other_run, &other_workstream, &pip] {
+            assert_eq!(state_of(&kept.id).state, ProposalState::Pending, "{:?} is not this triage's note", kept.origin);
+        }
+        let events = db.workstream_events("w").unwrap();
+        assert!(events.iter().any(|e| e.action == "draft_superseded" && e.actor == Actor::Person && e.proposal_id.as_deref() == Some(own.id.as_str())));
+        assert!(events.iter().any(|e| e.action == KEPT_EDITED && e.proposal_id.as_deref() == Some(edited.id.as_str())));
+        assert!(retire_triage_notes(&db, "w", "t1", OVERRIDDEN_REASON, now()).unwrap().is_empty(), "once");
     }
 
     #[test]

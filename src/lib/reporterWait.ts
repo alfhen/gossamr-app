@@ -44,6 +44,26 @@ export function answersDue(events: readonly Pick<WorkstreamEvent, "actor" | "act
   return !drafts.some((p) => isAnswersDraft(p as Proposal) && p.createdAt >= chosen.at);
 }
 
+/**
+ * Whether the plan is due after the person's answers: the newest of their readiness choices is "I'll answer", the comment
+ * with their answers (drafted after it) was posted, and no plan was drafted or started since. Pip's next turn proposes it,
+ * not before: the plan is drafted next to a comment that is not posted yet only to confuse which is waiting. `workstream` is
+ * the workstream's id, which the plan drafts and runs carry.
+ */
+export function planDue(
+  events: readonly Pick<WorkstreamEvent, "actor" | "action" | "at">[],
+  drafts: readonly Pick<Proposal, "intent" | "label" | "createdBy" | "createdAt" | "state">[],
+  runs: readonly { spec: { kind: string; workstream?: string | null }; queuedAt: string }[],
+  workstream: string,
+): boolean {
+  const chosen = [...events].reverse().find((e) => e.actor === "person" && ["readiness_asked", "readiness_answered", "readiness_overridden"].includes(e.action));
+  if (chosen?.action !== "readiness_answered") return false;
+  const answers = drafts.filter((p) => isAnswersDraft(p as Proposal) && p.createdAt >= chosen.at).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  if (answers?.state.type !== "applied") return false;
+  const drafted = drafts.some((p) => p.intent.type === "startRun" && p.intent.spec.kind === "plan" && p.intent.spec.workstream === workstream && p.createdAt >= answers.createdAt);
+  return !drafted && !runs.some((r) => r.spec.kind === "plan" && r.spec.workstream === workstream && r.queuedAt >= answers.createdAt);
+}
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** How long ago `iso` was, in words that follow "since": "2 days ago", "yesterday", "3 hours ago", "just now". */

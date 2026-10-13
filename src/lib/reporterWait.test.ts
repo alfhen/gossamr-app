@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Proposal, WorkstreamActor } from "../types";
 import { ANSWERS_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "./proposals";
-import { agoText, answersDue, reporterFollow, waitingOnReporterText } from "./reporterWait";
+import { agoText, answersDue, planDue, reporterFollow, waitingOnReporterText } from "./reporterWait";
 
 const at = (minutes: number) => new Date(Date.parse("2026-10-12T10:00:00Z") + minutes * 60_000).toISOString();
 const line = (minutes: number, actor: WorkstreamActor, action: string, proposalId: string | null = null) => ({ actor, action, proposalId, at: at(minutes) });
@@ -63,5 +63,27 @@ describe("answersDue", () => {
     expect(answersDue([line(2, "person", "readiness_asked", "d1")], [])).toBe(false);
     expect(answersDue([line(3, "pip", "readiness_answered")], [])).toBe(false);
     expect(answersDue([], [])).toBe(false);
+  });
+});
+
+describe("planDue", () => {
+  const draft = (over: Partial<Proposal>) => ({ intent: { type: "comment" }, label: ANSWERS_COMMENT_LABEL, createdBy: "pip", createdAt: at(5), state: { type: "applied" }, ...over }) as Pick<Proposal, "intent" | "label" | "createdBy" | "createdAt" | "state">;
+  const plan = (over: Partial<Proposal> = {}) => draft({ intent: { type: "startRun", spec: { kind: "plan", workstream: "ws-1" } } as Proposal["intent"], label: null, state: { type: "pending" }, createdAt: at(8), ...over });
+  const answered = [line(3, "person", "readiness_answered")];
+  it("is true once the answers comment was posted, and not while it still waits or before it was drafted", () => {
+    expect(planDue(answered, [draft({})], [], "ws-1")).toBe(true);
+    expect(planDue(answered, [draft({ state: { type: "pending" } })], [], "ws-1")).toBe(false);
+    expect(planDue(answered, [draft({ state: { type: "skipped" } })], [], "ws-1")).toBe(false);
+    expect(planDue(answered, [], [], "ws-1")).toBe(false);
+    expect(planDue(answered, [draft({ createdAt: at(1) })], [], "ws-1")).toBe(false);
+    expect(planDue(answered, [draft({ createdBy: "agent" })], [], "ws-1")).toBe(false);
+  });
+  it("is over once a plan was drafted or started since, or another choice was the newest", () => {
+    expect(planDue(answered, [draft({}), plan()], [], "ws-1")).toBe(false);
+    expect(planDue(answered, [draft({}), plan({ state: { type: "retired", reason: "x" } as Proposal["state"] })], [], "ws-1")).toBe(false);
+    expect(planDue(answered, [draft({}), plan({ intent: { type: "startRun", spec: { kind: "plan", workstream: "ws-2" } } as Proposal["intent"] })], [], "ws-1")).toBe(true);
+    expect(planDue(answered, [draft({})], [{ spec: { kind: "plan", workstream: "ws-1" }, queuedAt: at(9) }], "ws-1")).toBe(false);
+    expect(planDue(answered, [draft({})], [{ spec: { kind: "plan", workstream: "ws-1" }, queuedAt: at(2) }], "ws-1")).toBe(true);
+    expect(planDue([...answered, line(4, "person", "readiness_overridden")], [draft({})], [], "ws-1")).toBe(false);
   });
 });

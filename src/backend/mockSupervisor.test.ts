@@ -293,10 +293,17 @@ describe("the sample supervisor", () => {
       finish(b, plan.id);
       const result = b.runs.get(plan.id)!.result!;
       expect(result).toContain("## Open questions the plan assumes answers to");
-      for (const q of questions) expect(result).toContain(`- ${q}`);
+      for (const q of questions) expect(result).toMatch(new RegExp(`- ${q.replace(/[?.]/g, "\\$&")} Assumed: \\S`));
+      // Each is stated as the question and the answer the plan assumed, and the summary says the plan rests on them.
+      const line = `Assumes answers to ${questions.length} open questions from triage (listed at the end).`;
+      expect(result.startsWith(line)).toBe(true);
+      expect(result).toContain(`For Jira:\n${line}`);
+      expect(b.runs.get(plan.id)!.summary).toContain(line);
+      expect(result.indexOf("## Open questions the plan assumes answers to")).toBeGreaterThan(result.indexOf("## Risks"));
       // The plan's description draft is made from that answer, so the person reads the assumptions where they approve it.
       const rewrite = b.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === plan.id);
       expect(JSON.stringify(rewrite?.intent)).toContain("the plan assumes answers to");
+      expect(JSON.stringify(rewrite?.intent)).toContain(line);
     });
 
     it("starts a plan with no assumptions after a triage that was ready, and carries none into any other kind", async () => {

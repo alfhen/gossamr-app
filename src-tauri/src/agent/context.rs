@@ -132,8 +132,9 @@ pub const MANAGER: &str = "This conversation belongs to a workstream, and you ma
      plan, the next step is the person's: they ask the reporter (Gossamr drafts the comment for them to approve), answer the \
      questions themselves, or plan anyway. Explain those options when asked, and don't draft a plan run for it. When the block says the person chose to \
      answer the open questions themselves, their next message holds the answers: draft one comment on the ticket with \
-     propose_comment, its first line exactly 'Answers to the open questions', quoting each question with their answer, never a \
-     description rewrite, then offer to draft the plan. When the block says the workstream waits on the reporter, nothing \
+     propose_comment, its first line exactly 'Answers to the open questions', each answer put under the question it answers, never a \
+     description rewrite. Don't draft the plan beside it: say 'Once you post the answers, I'll draft the plan.', and draft it \
+     (propose_run, kind plan, from_run the triage) on your next turn after the comment is posted. When the block says the workstream waits on the reporter, nothing \
      starts until they answer or the person chooses; say so when asked, and don't draft a plan run for it. A turn that \
      opens with [Event] lines is a wake: Gossamr, not the person, \
      asked you because a run changed; reply in at most about three lines. A workstream holds at most 8 drafts waiting for \
@@ -819,6 +820,8 @@ mod tests {
         let due = ws.block();
         assert!(due.contains("their next message holds the answers. Draft one comment on the ticket with propose_comment whose first line is exactly 'Answers to the open questions'"), "{due}");
         assert!(due.contains("never a rewrite of the description") && due.contains("needs their approval like any draft"), "{due}");
+        assert!(due.contains("puts each answer under the question it answers"), "{due}");
+        assert!(due.contains("Once you post the answers, I'll draft the plan.") && due.contains("on your next turn after the comment is posted"), "the plan waits for the post: {due}");
     }
 
     #[test]

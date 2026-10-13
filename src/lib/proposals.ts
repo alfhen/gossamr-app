@@ -249,6 +249,27 @@ export function reporterSupersession(older: Proposal, newer: Proposal): "superse
   return older.revisions.some((r) => r.note === "Edited") ? KEPT_EDITED : "supersede";
 }
 
+/** Why a Triage's own pending comment was retired once the person chose "I'll answer", as `ANSWERED_REASON` in `proposals.rs`. */
+export const ANSWERED_REASON = "Replaced by your answers to the open questions";
+
+/** Why it was retired once the person chose "Plan anyway", as `OVERRIDDEN_REASON` in `proposals.rs`. */
+export const OVERRIDDEN_REASON = "You chose to plan anyway, so this note no longer fits";
+
+/**
+ * What the comment with the person's answers does to an older pending comment: the Triage's own note, which says the
+ * ticket can't be sized, is replaced, and the person's edit keeps it. Another run kind's comment (an Investigate's findings)
+ * is never touched. Null when `older` is not that: another ticket or workstream, not pending, or back in Pending after a
+ * failed post (`error` is set). As `answers_supersession` in `proposals.rs`.
+ */
+export function answersSupersession(older: Proposal, newer: Proposal, kindOf: (runId: string) => RunKind | null): "supersede" | typeof KEPT_EDITED | null {
+  const ws = workstreamOf(newer);
+  if (!ws || !isAnswersDraft(newer) || !isRunComment(older) || workstreamOf(older) !== ws || older.id === newer.id || older.state.type !== "pending" || older.error) return null;
+  const [on, to] = [targetOf(older.intent), targetOf(newer.intent)];
+  if (!on || !to || on.connectionId !== to.connectionId || on.externalId !== to.externalId || older.origin.type !== "run") return null;
+  if (kindOf(older.origin.runId) !== "triage") return null;
+  return older.revisions.some((r) => r.note === "Edited") ? KEPT_EDITED : "supersede";
+}
+
 /** Whether `p` is a comment an agent run left for its ticket, other than a plan's: what a finished run drafts on its own. As `is_run_comment`. */
 export const isRunComment = (p: Proposal) => p.origin.type === "run" && p.intent.type === "comment" && machineMade(p) && !p.label?.startsWith(PLAN_COMMENT_LABEL) && p.label !== READINESS_COMMENT_LABEL;
 

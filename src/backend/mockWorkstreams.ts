@@ -344,7 +344,8 @@ export class MockWorkstreams {
     const clarity = ticket ? clarityOf(ws, linked, clarityGaps(docText(ticket.body)), events) : null;
     const since = ws.closedAt === null ? reporterFollow(events).waiting : null;
     const waitingOnReporter: ReporterWait | null = since ? { since } : null;
-    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}) };
+    const changedWhileWaiting = ws.closedAt === null && reporterFollow(events).changed;
+    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */

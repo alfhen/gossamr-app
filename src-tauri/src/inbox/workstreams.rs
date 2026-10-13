@@ -87,6 +87,10 @@ pub struct WorkstreamView {
     /// The person asked the reporter and the comment was posted; nothing has answered it yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_on_reporter: Option<ReporterWait>,
+    /// The ticket changed (a basis drift) while the workstream waited on the reporter, and the person hasn't chosen since: the
+    /// held banner says so, and Resume leads to the plan decision.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub changed_while_waiting: bool,
     pub budget: BudgetView,
 }
 
@@ -372,6 +376,7 @@ impl WorkstreamView {
             readiness: None,
             clarity: None,
             waiting_on_reporter: None,
+            changed_while_waiting: false,
         }
     }
 }
@@ -675,6 +680,7 @@ impl Core {
         view.readiness = readiness;
         view.clarity = clarity;
         view.waiting_on_reporter = waiting;
+        view.changed_while_waiting = reporter_follow(events).changed && view.workstream.closed_at.is_none();
         if let Some(build) = pushed_build(runs) {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
@@ -851,6 +857,8 @@ impl Core {
     pub async fn answer_readiness(&self, scope: &Scope, id: &str, triage: &str) -> Result<Workstream> {
         self.readiness_stop(scope, id, triage).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "readiness_answered", Utc::now()).run(triage)).await?;
+        // Their answers go to the ticket as a comment of their own, so the Triage's note, which says it can't be sized, no longer waits.
+        self.with_db_for(scope, |db| proposals::retire_triage_notes(db, id, triage, proposals::ANSWERED_REASON, Utc::now())).await?;
         self.workstream(scope, id).await?.map(|v| v.workstream).ok_or_else(|| refuse(format!("there is no workstream {id}")))
     }
 
@@ -861,6 +869,8 @@ impl Core {
     pub async fn override_readiness(&self, scope: &Scope, id: &str, triage: &str) -> Result<Workstream> {
         self.readiness_stop(scope, id, triage).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "readiness_overridden", Utc::now()).run(triage)).await?;
+        // The plan goes ahead, so the Triage's note, which says the ticket can't be planned, would contradict it in Jira.
+        self.with_db_for(scope, |db| proposals::retire_triage_notes(db, id, triage, proposals::OVERRIDDEN_REASON, Utc::now())).await?;
         self.workstream(scope, id).await?.map(|v| v.workstream).ok_or_else(|| refuse(format!("there is no workstream {id}")))
     }
 
@@ -1492,6 +1502,61 @@ mod tests {
             assert_eq!((note_now.state, note_now.superseded_by.as_deref()), (ProposalState::Retired(proposals::REPLACED_REASON.into()), Some(draft.id.as_str())), "superseded by the questions draft, so no batch posts both");
         }
 
+        /// The triage's own note, drafted when it finished, waiting as a comment on the ticket.
+        async fn triage_note(fx: &Fixture) -> Proposal {
+            fx.core.auto_draft_run_comment("t1").await.unwrap().expect("the triage's note drafted on its own")
+        }
+
+        #[tokio::test]
+        async fn choosing_to_answer_retires_the_triage_s_own_note_so_it_can_neither_be_approved_nor_batched_beside_the_answers() {
+            let fx = fixture().await;
+            let (ws, _) = triaged(&fx).await;
+            let note = triage_note(&fx).await;
+            let edited = fx.core.auto_draft_run_comment("t1").await;
+            assert!(edited.is_err() || edited.unwrap().is_none(), "one note per triage");
+            fx.core.answer_readiness(&fx.scope, &ws.id, "t1").await.unwrap();
+            let now = fx.core.proposal_in(&fx.scope, &note.id).await.unwrap().unwrap();
+            assert_eq!(now.state, ProposalState::Retired(proposals::ANSWERED_REASON.into()));
+            let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+            assert!(events.iter().any(|e| e.action == "draft_superseded" && e.actor == Actor::Person && e.proposal_id.as_deref() == Some(note.id.as_str())), "audited");
+            let waiting = fx.core.proposals_in(&fx.scope, &ProposalQuery { states: Some(vec![StateKind::Pending]), workstream: Some(ws.id.clone()), ..Default::default() }).await.unwrap();
+            assert!(waiting.is_empty(), "nothing left to approve: {waiting:?}");
+            assert!(fx.tracker.intents().is_empty());
+        }
+
+        #[tokio::test]
+        async fn choosing_plan_anyway_retires_it_too_and_an_edited_note_stays() {
+            let fx = fixture().await;
+            let (ws, _) = triaged(&fx).await;
+            let note = triage_note(&fx).await;
+            let Intent::Comment { item, .. } = note.intent.clone() else { panic!("a comment") };
+            fx.core.edit_proposal(&note.id, &crate::inbox::Edit::Comment { body: "Mine.".into(), mentions: vec![], quote: None }).await.unwrap();
+            fx.core.override_readiness(&fx.scope, &ws.id, "t1").await.unwrap();
+            assert_eq!(fx.core.proposal_in(&fx.scope, &note.id).await.unwrap().unwrap().state, ProposalState::Pending, "the person edited it");
+            assert_eq!(item.key, "CA-1");
+        }
+
+        #[tokio::test]
+        async fn the_answers_draft_replaces_a_triage_note_that_still_waits_and_leaves_an_investigation_s_comment() {
+            let fx = fixture().await;
+            let (ws, _) = triaged(&fx).await;
+            let note = triage_note(&fx).await;
+            // The investigation's findings in the same workstream, on the same ticket: not the readiness text.
+            insert_at(&fx, "i1", &ws.id, RunKind::Investigate, RunState::Done, 5, |r| (r.result, r.result_complete) = (Some("The flow is one email.\n\nFor Jira:\nThe flow is one email.".into()), true)).await;
+            let findings = fx.core.auto_draft_run_comment("i1").await.unwrap().expect("the investigation's note");
+            let answers = proposals::Draft::from_pip("req", Some(&ws.id), Intent::Comment { item: fx.item("CA-1"), body: crate::domain::Doc::paragraph("Answers to the open questions\n\nAnswer: it is all about winback.") }, Some(proposals::ANSWERS_COMMENT_LABEL.into()));
+            let made = fx.core.propose(&fx.scope, answers).await.unwrap();
+            let after = |id: String| {
+                let core = fx.core.clone();
+                let scope = fx.scope.clone();
+                async move { core.proposal_in(&scope, &id).await.unwrap().unwrap() }
+            };
+            let note_now = after(note.id).await;
+            assert_eq!((note_now.state, note_now.superseded_by.as_deref()), (ProposalState::Retired(proposals::REPLACED_REASON.into()), Some(made.id.as_str())), "marked superseded by the answers");
+            assert_eq!(after(findings.id).await.state, ProposalState::Pending, "findings are not the readiness text");
+            assert_eq!(made.state, ProposalState::Pending);
+        }
+
         #[tokio::test]
         async fn answering_or_overriding_settles_it_once_starts_nothing_and_a_stale_choice_changes_nothing() {
             let fx = fixture().await;
@@ -1608,6 +1673,25 @@ mod tests {
             fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
             fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
             assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().waiting_on_reporter, None, "the person resumed");
+        }
+
+        #[tokio::test]
+        async fn the_view_flags_a_change_that_came_while_waiting_until_the_person_chooses() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id).await.unwrap();
+            fx.core.approve_proposal(&draft.id).await.unwrap();
+            let flagged = || async { fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap() };
+            assert!(!flagged().await.changed_while_waiting, "waiting is not a change");
+            assert!(serde_json::to_value(flagged().await).unwrap().get("changedWhileWaiting").is_none(), "an ordinary view says nothing of it");
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_drifted", Utc::now()).detail("description")).await.unwrap();
+            let view = flagged().await;
+            assert!(view.changed_while_waiting && view.waiting_on_reporter.is_none(), "the wait is over and the banner can say why");
+            assert_eq!(serde_json::to_value(&view).unwrap()["changedWhileWaiting"], true);
+            let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
+            assert!(listed.changed_while_waiting, "the list agrees");
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "readiness_overridden", Utc::now())).await.unwrap();
+            assert!(!flagged().await.changed_while_waiting, "choosing settles it");
         }
 
         #[test]

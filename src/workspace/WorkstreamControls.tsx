@@ -165,7 +165,7 @@ function StepHelp() {
 /** Why the workstream is held, with its Resume (for a budget hold in Manage, Allow 5 more and Switch to Advise instead, as the decision has them); nothing while it isn't held. A hold the system made is also in Needs you, and its decision shows the same banner; the person's own hold is not, so this banner is where it shows. */
 export function HeldBanner({ view, actions }: { view: WorkstreamView; actions: Pick<ControlActions, "onResume" | "onAllowMore" | "onManage"> }) {
   const ws = view.workstream;
-  const held = heldBanner(ws);
+  const held = heldBanner(ws, view.changedWhileWaiting);
   if (!held) return null;
   const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
   const byYou = isHeldByYou(ws.heldReason);

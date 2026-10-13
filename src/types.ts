@@ -945,6 +945,8 @@ export interface WorkstreamView {
   clarity?: Clarity | null;
   /** The person asked the reporter and the comment was posted; nothing has answered it yet. */
   waitingOnReporter?: ReporterWait | null;
+  /** The ticket changed (a basis drift) while the workstream waited on the reporter, and the person hasn't chosen since: the held banner says so. */
+  changedWhileWaiting?: boolean;
   budget: BudgetView;
 }
 

@@ -54,12 +54,12 @@ import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
-import { basisFieldsOf, targetOf, workstreamOf } from "../lib/proposals";
+import { ANSWERED_REASON, basisFieldsOf, OVERRIDDEN_REASON, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { MockSupervisor, triageReadiness } from "./mockSupervisor";
 import { READINESS_LABEL, reporterComment, reporterDoc } from "./mockReadiness";
 import { clarityQuestions } from "../lib/ticketClarity";
-import { answersDue } from "../lib/reporterWait";
+import { answersDue, planDue } from "../lib/reporterWait";
 import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
@@ -598,12 +598,17 @@ export class MockBackend implements Backend {
 
   /** The person's "I'll answer", as `workstreams_readiness_answer`: settles the question and starts nothing. */
   async workstreamsReadinessAnswer(id: string, triageRun: string) {
-    return this.workstreams.answerReadiness(id, triageRun);
+    const ws = this.workstreams.answerReadiness(id, triageRun);
+    // Their answers go to the ticket as a comment of their own, so the triage's note, which says it can't be sized, no longer waits.
+    this.proposals.retireTriageNotes(id, triageRun, ANSWERED_REASON);
+    return ws;
   }
 
   /** The person's "Plan anyway", as `workstreams_readiness_override`: records the override; the supervisor's Triage-to-Plan rule then starts the Plan under its own checks. */
   async workstreamsReadinessOverride(id: string, triageRun: string) {
-    return this.workstreams.overrideReadiness(id, triageRun);
+    const ws = this.workstreams.overrideReadiness(id, triageRun);
+    this.proposals.retireTriageNotes(id, triageRun, OVERRIDDEN_REASON);
+    return ws;
   }
 
   /** The person's "Allow 5 more", as `workstreams_allow_more`: the allowance goes up by 5 and the workstream resumes. */
@@ -929,6 +934,16 @@ export class MockBackend implements Backend {
     return answersDue(
       this.workstreams.events(id),
       this.proposals.list().filter((p) => workstreamOf(p) === id),
+    );
+  }
+
+  /** Whether the person's answers to the open questions were posted in workstream `id` and no plan was drafted or started since: Pip's next turn proposes it. */
+  pipWorkstreamPlanDue(id: string): boolean {
+    return planDue(
+      this.workstreams.events(id),
+      this.proposals.list().filter((p) => workstreamOf(p) === id),
+      this.runs.list(),
+      id,
     );
   }
 

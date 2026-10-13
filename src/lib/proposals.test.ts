@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Intent, Proposal, RunSpec } from "../types";
-import { ANSWERS_COMMENT_LABEL, READINESS_COMMENT_LABEL, draftsForTurn, earlierDrafts, inWorkstreamPane, isAnswersDraft, isReporterQuestions, reporterSupersession, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
+import type { Intent, Proposal, RunKind, RunSpec } from "../types";
+import { ANSWERS_COMMENT_LABEL, answersSupersession, READINESS_COMMENT_LABEL, draftsForTurn, earlierDrafts, inWorkstreamPane, isAnswersDraft, isReporterQuestions, reporterSupersession, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
 import fixtures from "./draftHygiene.fixtures.json";
 import { isRunPlanRewrite } from "../backend/mockProposals";
 
@@ -192,5 +192,20 @@ describe("the comments about a ticket's open questions", () => {
     expect(reporterSupersession(fromRun("7", "t1", { origin: { type: "run", runId: "t1", shortId: null, workstream: "ws-2" } }), asked("9", "t1"))).toBeNull();
     expect(reporterSupersession(proposal("8", comment("A-1")), asked("9", "t1"))).toBeNull();
     expect(reporterSupersession(own, fromRun("10", "t1"))).toBeNull();
+  });
+
+  it("replaces the triage's own pending comment once the person's answers are drafted, and leaves any other run's", () => {
+    const answers = proposal("9", comment("A-1"), { label: ANSWERS_COMMENT_LABEL, origin: { type: "chat", requestId: "q1", workstream: "ws-1" } });
+    const kinds: Record<string, RunKind> = { t1: "triage", i1: "investigate" };
+    const kindOf = (run: string) => kinds[run] ?? null;
+    expect(answersSupersession(fromRun("1", "t1"), answers, kindOf)).toBe("supersede");
+    expect(answersSupersession(fromRun("2", "t1", { revisions: [{ note: "Edited" } as Proposal["revisions"][number]] }), answers, kindOf)).toBe("draft_kept_edited");
+    expect(answersSupersession(fromRun("3", "i1"), answers, kindOf), "an investigation's findings are not the readiness text").toBeNull();
+    expect(answersSupersession(fromRun("4", "unknown"), answers, kindOf)).toBeNull();
+    expect(answersSupersession(fromRun("5", "t1", { state: { type: "retired", reason: "x" } as Proposal["state"] }), answers, kindOf)).toBeNull();
+    expect(answersSupersession(fromRun("6", "t1", { error: "boom" }), answers, kindOf)).toBeNull();
+    expect(answersSupersession(fromRun("7", "t1", { origin: { type: "run", runId: "t1", shortId: null, workstream: "ws-2" } }), answers, kindOf)).toBeNull();
+    expect(answersSupersession(asked("8", "t1"), answers, kindOf), "the questions to the reporter stay").toBeNull();
+    expect(answersSupersession(fromRun("10", "t1"), fromRun("11", "t1"), kindOf), "only the answers draft supersedes").toBeNull();
   });
 });

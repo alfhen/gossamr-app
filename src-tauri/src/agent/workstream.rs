@@ -73,7 +73,7 @@ pub fn waiting_line_for_reporter(since: DateTime<Utc>) -> String {
 
 /// The line that tells Pip the person chose to answer the open questions themselves and their next message holds the
 /// answers: it goes to the ticket as a comment for approval, never as a description rewrite.
-pub const ANSWERS_LINE: &str = "The person chose to answer the triage's open questions themselves; their next message holds the answers. Draft one comment on the ticket with propose_comment whose first line is exactly 'Answers to the open questions' and which then quotes each question with their answer. It is a comment, never a rewrite of the description, and it needs their approval like any draft. Then offer to draft the plan (propose_run, kind plan, from_run the triage).";
+pub const ANSWERS_LINE: &str = "The person chose to answer the triage's open questions themselves; their next message holds the answers. Draft one comment on the ticket with propose_comment whose first line is exactly 'Answers to the open questions' and which then puts each answer under the question it answers (the question quoted, then the answer). It is a comment, never a rewrite of the description, and it needs their approval like any draft. Don't draft the plan beside it: say 'Once you post the answers, I'll draft the plan.' and propose it (propose_run, kind plan, from_run the triage) on your next turn after the comment is posted.";
 
 /// What Pip is told about the workstream its conversation belongs to.
 #[derive(Clone, Debug, PartialEq)]

@@ -471,7 +471,12 @@ async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, 
 #[tauri::command]
 async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let skipped = core.skip_proposal(&id).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    let connection = Connection::jira_id(&core.scope().await?);
+    proposals_changed(&app, &connection);
+    // A draft in a workstream is a line in its audit, which its timeline's counts read.
+    if skipped.workstream().is_some() {
+        workstreams_changed(&app, &connection);
+    }
     Ok(skipped)
 }
 
@@ -479,7 +484,11 @@ async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String) 
 #[tauri::command]
 async fn proposals_unskip(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let back = core.unskip_proposal(&id).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    let connection = Connection::jira_id(&core.scope().await?);
+    proposals_changed(&app, &connection);
+    if back.workstream().is_some() {
+        workstreams_changed(&app, &connection);
+    }
     Ok(back)
 }
 
@@ -494,6 +503,11 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, superviso
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
         cache_changed(&app, &connection);
+        // Approving a draft in a workstream is a line in its audit: what the workstream waits on (the reporter, from the
+        // approved questions) and its timeline's counts read it.
+        if result.as_ref().is_ok_and(|p| p.workstream().is_some()) {
+            workstreams_changed(&app, &connection);
+        }
         if result.as_ref().is_ok_and(|p| matches!((&p.origin, &p.intent), (domain::Origin::Run { .. }, domain::Intent::Create { .. }))) {
             runs_changed(&app, &connection);
         }

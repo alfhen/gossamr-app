@@ -2,7 +2,7 @@ import { AUTOSTART_DEFAULTS, DIGEST_MINUTES, SUMMARY_ONLY, type AgentSettings, t
 import { containerRef, itemRef } from "./mockConnector";
 import { approvedPlanText, assemblePlan, planSectionOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
-import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, scriptedFinish, withAssumptions, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
+import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, scriptedFinish, withAssumptions, assumptionsSummaryLine, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
 import { DENIED_MESSAGE, permissionOffer, readAs } from "../lib/permission";
 import { reviewText } from "./mockReviewDraft";
@@ -953,6 +953,7 @@ export class MockRuns {
       if (run.spec.kind === "plan") patch.result = withAssumptions(patch.result, run.spec.assumptions ?? []);
       if (opened) patch.branch = opened.headRef;
       patch.summary = answered ? PLAN_ANSWERED_SUMMARY : opened ? PUSHED_SUMMARY : unclear ? UNCLEAR_TRIAGE_SUMMARY : SCRIPTED_SUMMARY[run.spec.kind];
+      if (run.spec.kind === "plan" && run.spec.assumptions?.length) patch.summary = `${patch.summary}. ${assumptionsSummaryLine(run.spec.assumptions.length)}`;
       patch.resultComplete = true;
       patch.endedAt = at;
       this.scriptedReport(run, patch.result);

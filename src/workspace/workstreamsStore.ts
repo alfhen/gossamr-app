@@ -117,7 +117,15 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     const open = home.deciding === key;
     home.decide(key, id);
     if (open) home.redecide();
-    useToasts.getState().push("Here is the comment to the reporter. Nothing is posted until you press Post comment.", "info");
+    // Its words stop being true once the draft is posted or skipped: the note goes then, not after its own few seconds.
+    const waiting = () => useWorkspace.getState().proposals[draftId]?.state.type === "pending";
+    const toast = useToasts.getState().push("Here is the comment to the reporter. Nothing is posted until you press Post comment.", "info", undefined, { current: waiting });
+    if (toast === null) return;
+    const off = useWorkspace.subscribe(() => {
+      if (waiting()) return;
+      off();
+      useToasts.getState().dismiss(toast);
+    });
   }
   const ok = async (failed: string, call: (backend: Backend) => Promise<Workstream>) => (await act(failed, call)).ok;
   /** What a choice about a triage's open questions says when the workstream no longer waits for it. */
@@ -150,10 +158,11 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     init(backend) {
       get().dispose();
       set({ backend });
-      // The selected workstream on Pip home has its audit read again with the list, for its step rail.
+      // Every audit something read (the selected workstream's, for its step rail; a timeline's, in the Pip pane or across
+      // workstreams) is read again with the list, so a draft decided meanwhile shows in its counts and lines at once.
       const selectedEvents = () => {
-        const id = usePipHome.getState().selected;
-        if (id) void get().loadEvents(id);
+        const selected = usePipHome.getState().selected;
+        for (const id of new Set([...(selected ? [selected] : []), ...Object.keys(get().events)])) void get().loadEvents(id);
       };
       const offWorkstreams = backend.onWorkstreamsChanged(() => (void get().refresh(), selectedEvents()));
       // A run that moved on may have moved its workstream's stage on.

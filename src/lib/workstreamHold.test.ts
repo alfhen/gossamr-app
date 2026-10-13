@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AUTO_TURNS_DEFAULT, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
 import type { BudgetView, Workstream } from "../types";
 import { FIX_ROUNDS_MAX } from "../backend/mockSupervisor";
-import { STEP_HELP, budgetLevel, budgetView, heldBanner, heldText, ruleText, stepsLeftText, tripwireResumeText } from "./workstreamHold";
+import { STEP_HELP, budgetLevel, budgetView, driftWhileWaitingText, heldBanner, heldText, ruleText, stepsLeftText, tripwireResumeText } from "./workstreamHold";
 
 describe("heldText", () => {
   it("says nothing for a workstream that isn't held", () => {
@@ -52,6 +52,14 @@ describe("heldText", () => {
     const drift = `${TRIPWIRE}basis_drift`;
     expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: "manage" })).toBe("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
     expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: null })).toBe("Held: the ticket's description changed in Jira. Resume only lifts the hold; Manage stays off.");
+    // The ticket changing while the workstream waited on the reporter says so, and that Resume leads to the plan decision.
+    const waited = { heldReason: drift, drifted: ["description" as const], itemKey: "CA-408", resumeMode: "manage" as const };
+    expect(heldBanner(waited, true)).toBe("Held: CA-408's description changed while waiting on the reporter. Resume, then decide whether to plan now. Automatic steps are paused. Resume turns them back on.");
+    expect(heldBanner({ ...waited, itemKey: null, drifted: ["status"], resumeMode: null }, true)).toBe("Held: the ticket was moved to Done while waiting on the reporter. Resume, then decide whether to plan now. Resume only lifts the hold; Manage stays off.");
+    expect(driftWhileWaitingText("CA-408", ["summary", "description"])).toBe("Held: CA-408's summary and description changed while waiting on the reporter. Resume, then decide whether to plan now.");
+    // Any other case keeps the usual wording: no wait, or another hold.
+    expect(heldBanner(waited, false)).toBe("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
+    expect(heldBanner({ heldReason: HELD_PERSON, resumeMode: "manage" }, true)).toBe("Held by you. Automatic steps are paused. Resume turns them back on.");
     expect(tripwireResumeText(`${TRIPWIRE}marker`, "manage")).toBe("Automatic steps are paused. Resume turns them back on.");
     // A trip that landed on another hold took Manage away too: that hold's banner says so, as the switch does.
     expect(tripwireResumeText(HELD_PERSON, "manage")).toBe("Automatic steps are paused. Resume turns them back on.");
