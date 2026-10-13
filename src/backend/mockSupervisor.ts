@@ -1,6 +1,7 @@
 import { AUTOSTART_DEFAULTS, HELD_BUDGET, HELD_DAILY } from "../types";
 import type { AutoStartSwitches, BasisField, BudgetLevel, Run, RunKind, Tripwire, Workstream, WorkstreamEvent, WorkstreamRule, WorkstreamRules } from "../types";
 import { budgetLevel } from "../lib/workstreamHold";
+import { reporterFollow } from "../lib/reporterWait";
 import { byQueue, runLabels } from "../lib/workstreamStage";
 import { runRef } from "../lib/composerVerbs";
 import { withoutMarkers } from "./mockRunKinds";
@@ -300,6 +301,8 @@ export interface AutostartInput {
   planApproved?: boolean;
   /** The person chose "Plan anyway" after this Triage found the ticket not ready. */
   readinessOverridden?: boolean;
+  /** The person asked the reporter and the comment was posted: nothing starts after a Triage while the workstream waits on their answer. */
+  waitingOnReporter?: boolean;
   pr?: { number: number; sha: string | null } | null;
   /** The commit each review of a build read. */
   reviewed?: (string | null)[];
@@ -340,6 +343,8 @@ export function decideAutostart(input: AutostartInput): AutostartDecision | null
     case "investigate":
       return on("investigate_triage") ? start("investigate_triage", "triage") : null;
     case "triage":
+      // Waiting on the reporter: the Triage's plan, which the answer may change, stays unstarted until the person chooses or the ticket changes.
+      if (input.waitingOnReporter) return null;
       // A Triage that found the ticket not ready starts nothing; the person's own "Plan anyway" starts the Plan it was
       // going to, even when the Triage didn't recommend one or the rule is off: they chose it.
       if (input.readinessOverridden) return start("triage_plan", "plan");
@@ -667,6 +672,7 @@ export class MockSupervisor {
         fixRounds,
         planApproved: src.spec.kind === "plan" && runs.planApprovedOf(src.id),
         readinessOverridden: src.spec.kind === "triage" && readinessOverridden(events, src.id),
+        waitingOnReporter: !!reporterFollow(events).waiting,
         pr,
         reviewed: linked.filter((r) => r.spec.kind === "review" && r.spec.buildFromRun === src.id).map((r) => r.spec.prSha ?? null),
         already: already(src, report.verdict, linked, events, pr),
@@ -687,7 +693,9 @@ export class MockSupervisor {
       switch (decision.decision) {
         case "start":
           try {
-            const run = runs.autoStart(decision.kind, src.id, decision.rule);
+            // A plan the person chose to start though its Triage found the ticket not ready assumes answers to that Triage's questions.
+            const assumptions = decision.kind === "plan" && input.readinessOverridden ? (triageReadiness(src)?.questions ?? []) : [];
+            const run = runs.autoStart(decision.kind, src.id, decision.rule, assumptions);
             notes.set(src.id, { started: { kind: decision.kind, label: labelOf(run.id) } });
           } catch {
             failed(decision.rule);

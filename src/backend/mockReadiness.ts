@@ -1,9 +1,10 @@
 /**
  * What the sample backend stands in for when Pip checks a ticket's readiness. The app's Pip and Triage judge a ticket
  * against four things: its goal, how anyone will know it is done (acceptance criteria), what is in and out of scope, and
- * who asked and who is waiting on it. The sample can't judge, so it recognises one deliberately vague kind of ticket: a
- * description of one short line. A ticket with no description or a real one is left alone, so the sample tickets the
- * other flows use read as ready.
+ * who asked and who is waiting on it. The sample's Triage can't judge, so it recognises one deliberately vague kind of
+ * ticket: a description of one short line. A ticket with no description or a real one is left alone, so the sample tickets
+ * the other flows use read as ready. (Pip's and the page's earlier word check is `clarityGaps` in src/lib/ticketClarity.ts,
+ * which the sample runs for real.)
  */
 
 import { docFromText } from "../lib/docs";
@@ -16,24 +17,6 @@ export const THIN_LIMIT = 40;
 export function thinDescription(text: string | null | undefined): boolean {
   const t = (text ?? "").trim();
   return t !== "" && !t.includes("\n") && t.length < THIN_LIMIT;
-}
-
-/** What a ticket's description leaves out, as the sentence that names it would say it ("what done looks like"). */
-export type Gap = "what done looks like" | "what's in or out of scope" | "who is waiting on it";
-
-/** The readiness gaps of a thin description: the cues the sample looks for are the words a description would use for each. */
-export function readinessGaps(text: string): Gap[] {
-  const gaps: Gap[] = [];
-  if (!/accept|done when|definition of done|criteria|so that/i.test(text)) gaps.push("what done looks like");
-  if (!/scope|only|out of|not include|won't/i.test(text)) gaps.push("what's in or out of scope");
-  if (!/asked|requested|waiting|stakeholder|needs it|for the .+ team/i.test(text)) gaps.push("who is waiting on it");
-  return gaps;
-}
-
-/** `CA-408 doesn't say what done looks like, what's in or out of scope, or who is waiting on it.` */
-export function gapsSentence(key: string, gaps: readonly Gap[]): string {
-  const list = gaps.length > 1 ? `${gaps.slice(0, -1).join(", ")}, or ${gaps[gaps.length - 1]}` : gaps[0];
-  return `${key} doesn't say ${list}.`;
 }
 
 /**

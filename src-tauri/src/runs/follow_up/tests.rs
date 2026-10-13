@@ -350,7 +350,7 @@ mod person_fix_round {
         let workstream = rig.fx.core.workstream(&rig.fx.scope, &ws).await.unwrap().unwrap().workstream;
         let report = ReportFacts::of(&rev4, &rig.fx.core.resolved_of(&rev4).await.unwrap());
         let settings = AgentSettings::default();
-        let input = RuleInput { source: &rev4, report: &report, ws: &workstream, settings: &settings, fix_rounds: automatic(&events(&rig, &ws).await, &build.id), plan_approved: false, readiness_overridden: false, pr: None, reviewed: vec![], already: false, tripped: false };
+        let input = RuleInput { source: &rev4, report: &report, ws: &workstream, settings: &settings, fix_rounds: automatic(&events(&rig, &ws).await, &build.id), plan_approved: false, readiness_overridden: false, waiting_on_reporter: false, pr: None, reviewed: vec![], already: false, tripped: false };
         assert_eq!(autostart::decide(&input), Some(Decision::Exhausted { review_run: "rev4".into(), build_run: build.id.clone() }));
     }
 

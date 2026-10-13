@@ -337,6 +337,21 @@ describe("needs: a ticket the triage found not clear enough to plan", () => {
     expect(list[0].ifYouWait).toMatch(/^No plan starts until you choose.*\.$/);
   });
 
+  it("comes back as 'changed: plan now?' when the ticket changed while the person waited on the reporter, with Plan now and Still unclear", () => {
+    const changed = unclear(["What does done look like?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["What does done look like?"], at: iso(9), changed: true } });
+    const [need] = needs(input({ workstreams: [changed], runs: [run("r-t", "triage", "done")] }));
+    expect(need).toMatchObject({
+      key: "readiness:r-t",
+      group: "decide",
+      kind: "readiness",
+      title: "CA-401 changed: plan now?",
+      why: "CA-401 changed while you waited for the reporter. R1 left this question open: What does done look like?",
+      primary: { id: "planAnyway", label: "Plan now" },
+      secondary: [{ id: "askReporter", label: "Still unclear (ask again)" }],
+      batchable: false,
+    });
+  });
+
   it("is counted once, ranks with the decisions ahead of what is stuck, and is not a run's need", () => {
     const list = needs(input({ workstreams: [unclear()], runs: [run("r-f", "build", "failed")] }));
     expect(kinds(list)).toEqual(["readiness", "failure"]);
@@ -373,11 +388,28 @@ describe("needs: the comment to a reporter", () => {
       title: "Questions for the reporter",
       why: "Gossamr drafted a comment to the reporter of CA-401 from R1's open questions; it is posted only when you approve it.",
       primary: { id: "approve" },
-      batchable: true,
+      // Gossamr's words to a person outside the team are read and approved on their own, never in "Approve N safe drafts".
+      batchable: false,
     });
     // The triage's own note is the agent's, as before.
     const note = needs(input({ workstreams: [view("ws-1", "CA-401", { runs: ["r-t"] })], runs: [run("r-t", "triage", "done")], proposals: [{ ...asked, createdBy: "agent" }] }));
     expect(note[0]).toMatchObject({ title: "R1 triage · comment", why: "R1 triage drafted a comment on CA-401." });
+  });
+});
+
+describe("needs: the comment with the person's answers", () => {
+  it("is Pip's draft to approve on its own: said so, and never in the safe batch, as the questions to a reporter are not", () => {
+    const answers = { ...draft("d-ans", comment("CA-401"), 3, { workstream: "ws-1" }), label: "Answers to the open questions" } as Proposal;
+    const plain = draft("d-plain", comment("CA-401"), 2, { workstream: "ws-1" });
+    const asked = { ...draft("d-ask", comment("CA-401"), 4, { workstream: "ws-1" }), createdBy: "user", label: "Questions for the reporter" } as Proposal;
+    const list = needs(input({ workstreams: [view("ws-1", "CA-401")], proposals: [answers, plain, asked] }));
+    const by = (key: string) => list.find((n) => n.key === key)!;
+    expect(by("draft:d-ans")).toMatchObject({ title: "Answers to the open questions", why: "Pip drafted a comment on CA-401 with your answers to the open questions; it is posted only when you approve it.", batchable: false });
+    expect(by("draft:d-ask")).toMatchObject({ title: "Questions for the reporter", why: "Gossamr drafted a comment to the reporter of CA-401 from what the ticket leaves out; it is posted only when you approve it.", batchable: false });
+    expect(by("draft:d-plain").batchable).toBe(true);
+    // A comment Pip merely labels like Gossamr's is Pip's, and an ordinary draft.
+    const pretend = { ...draft("d-pip", comment("CA-401"), 1, { workstream: "ws-1" }), label: "Questions for the reporter" } as Proposal;
+    expect(needs(input({ workstreams: [view("ws-1", "CA-401")], proposals: [pretend] }))[0]).toMatchObject({ batchable: true });
   });
 });
 

@@ -469,6 +469,21 @@ pub const PLAN_COMMENT_LABEL: &str = "Plan from agent run";
 /// which no later comment of a run replaces and which replaces none: it is the person's choice, not a run's note.
 pub const READINESS_COMMENT_LABEL: &str = "Questions for the reporter";
 
+/// The label of a comment Pip drafts once the person chose "I'll answer" on a triage's open questions: each question with
+/// the person's answer, for the ticket. Pip sets it by starting the comment with these words (`Core::propose_comment`).
+pub const ANSWERS_COMMENT_LABEL: &str = "Answers to the open questions";
+
+/// Whether `p` is the comment Gossamr drafted to ask a ticket's reporter (`Core::ask_reporter`, `Core::ask_reporter_now`):
+/// never one Pip made, whatever it is labelled.
+pub fn is_reporter_questions(p: &Proposal) -> bool {
+    matches!(p.intent, Intent::Comment { .. }) && p.label.as_deref() == Some(READINESS_COMMENT_LABEL) && p.created_by != CreatedBy::Pip
+}
+
+/// Whether `p` is the comment Pip drafted with the person's answers to the open questions.
+pub fn is_answers_draft(p: &Proposal) -> bool {
+    matches!(p.intent, Intent::Comment { .. }) && p.label.as_deref() == Some(ANSWERS_COMMENT_LABEL) && p.created_by == CreatedBy::Pip
+}
+
 /// Whether `p` is a comment an agent run left for its ticket, other than a plan's or the questions to a reporter: what a
 /// finished run drafts on its own.
 fn is_run_comment(p: &Proposal) -> bool {
@@ -520,6 +535,23 @@ fn tidy_run_comments(db: &Db, p: &Proposal) -> Result<Tidied> {
     Ok(tidied)
 }
 
+/// The questions to a reporter made from a Triage replace that Triage's own pending comment, which repeats them, so
+/// "Approve N safe drafts" can't post both. The person's edit keeps it. Writes nothing.
+fn tidy_reporter_questions(db: &Db, p: &Proposal) -> Result<Tidied> {
+    let Some(run) = comment_run_id(p) else { return Ok(Tidied::default()) };
+    let pending = db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })?;
+    let mut tidied = Tidied::default();
+    for older in pending {
+        let same = is_run_comment(&older) && older.id != p.id && comment_run_id(&older) == Some(run) && older.workstream() == p.workstream() && older.target() == p.target() && older.error.is_none();
+        match (same, person_edited(&older)) {
+            (true, false) => tidied.replaced.push(older),
+            (true, true) => tidied.kept.push((older, KEPT_EDITED)),
+            _ => {}
+        }
+    }
+    Ok(tidied)
+}
+
 /// A new review an agent run left replaces the older pending review drafts of the same pull request, whichever
 /// workstream they are in or none: one pull request has one review waiting for the person. Writes nothing.
 fn tidy_reviews(db: &Db, p: &Proposal) -> Result<Tidied> {
@@ -544,6 +576,9 @@ fn tidy(db: &Db, p: &Proposal) -> Result<Tidied> {
     }
     if p.created_by == CreatedBy::Agent && is_run_comment(p) {
         return tidy_run_comments(db, p);
+    }
+    if is_reporter_questions(p) {
+        return tidy_reporter_questions(db, p);
     }
     let Some(ws) = p.workstream() else { return Ok(Tidied::default()) };
     if !machine_made(p) {
@@ -1875,6 +1910,54 @@ mod tests {
         let later = create(&db, Draft { origin: Origin::Board, created_by: CreatedBy::User, intent: move_to("1", "todo"), label: None, basis: None }, Utc::now() + chrono::Duration::seconds(5)).unwrap();
         assert_eq!(reconcile_pending(&db, &me(), Utc::now() + chrono::Duration::seconds(5)).unwrap(), 0, "a move drafted after the approval stays");
         assert_eq!(state_of(&db, &later.id), ProposalState::Pending);
+    }
+
+    #[test]
+    fn the_questions_to_a_reporter_made_from_a_triage_retire_that_triage_s_own_pending_comment_and_nothing_else() {
+        let db = Db::in_memory().unwrap();
+        stored_workstream(&db, "w");
+        let from_run = |run: &str, label: Option<&str>, ws: &str| Draft {
+            origin: Origin::Run { run_id: run.into(), short_id: None, workstream: Some(ws.into()) },
+            created_by: CreatedBy::Agent,
+            intent: Intent::Comment { item: item_ref("1"), body: Doc::paragraph("Three questions are open.") },
+            label: label.map(String::from),
+            basis: None,
+        };
+        let state_of = |id: &str| db.proposal(id).unwrap().unwrap();
+        let own = made(&db, from_run("t1", None, "w"));
+        let edited = made(&db, from_run("t1", None, "w"));
+        edit(&db, &edited.id, Intent::Comment { item: item_ref("1"), body: Doc::paragraph("My own words.") }, now()).unwrap();
+        let other_run = made(&db, from_run("t2", None, "w"));
+        let pip = made(&db, comment_draft("1"));
+        let asked = made(&db, from_run("t1", Some(READINESS_COMMENT_LABEL), "w"));
+        assert!(is_reporter_questions(&asked));
+        assert_eq!(state_of(&own.id).state, ProposalState::Retired(REPLACED_REASON.into()), "the triage's own note repeated the questions");
+        assert_eq!(state_of(&edited.id).state, ProposalState::Pending, "the person's edit keeps theirs");
+        assert!(db.workstream_events("w").unwrap().iter().any(|e| e.action == KEPT_EDITED && e.proposal_id.as_deref() == Some(edited.id.as_str())));
+        assert_eq!((state_of(&other_run.id).state, state_of(&pip.id).state), (ProposalState::Pending, ProposalState::Pending), "another run's, and Pip's");
+        // Its own note is superseded by the questions draft, and says by which.
+        let triage_note = made(&db, from_run("t3", None, "w"));
+        let questions = made(&db, from_run("t3", Some(READINESS_COMMENT_LABEL), "w"));
+        let retired = state_of(&triage_note.id);
+        assert_eq!((retired.state, retired.superseded_by.as_deref()), (ProposalState::Retired(REPLACED_REASON.into()), Some(questions.id.as_str())));
+        assert_eq!(state_of(&questions.id).state, ProposalState::Pending);
+        assert!(db.workstream_events("w").unwrap().iter().any(|e| e.action == "draft_superseded" && e.proposal_id.as_deref() == Some(triage_note.id.as_str())));
+    }
+
+    #[test]
+    fn the_comments_about_open_questions_are_told_apart_by_label_and_by_who_made_them() {
+        let db = Db::in_memory().unwrap();
+        let labelled = |label: &str, by: CreatedBy, origin: Origin| {
+            made(&db, Draft { origin, created_by: by, intent: Intent::Comment { item: item_ref("1"), body: Doc::paragraph("x") }, label: Some(label.into()), basis: None })
+        };
+        let chat = || Origin::Chat { request_id: "clarity:w".into(), workstream: Some("w".into()) };
+        let run = || Origin::Run { run_id: "t1".into(), short_id: None, workstream: None };
+        assert!(is_reporter_questions(&labelled(READINESS_COMMENT_LABEL, CreatedBy::Agent, run())), "from a triage");
+        assert!(is_reporter_questions(&labelled(READINESS_COMMENT_LABEL, CreatedBy::User, chat())), "from the clarity notice");
+        assert!(!is_reporter_questions(&labelled(READINESS_COMMENT_LABEL, CreatedBy::Pip, chat())), "never one Pip labelled so");
+        assert!(is_answers_draft(&labelled(ANSWERS_COMMENT_LABEL, CreatedBy::Pip, chat())));
+        assert!(!is_answers_draft(&labelled(ANSWERS_COMMENT_LABEL, CreatedBy::Agent, run())), "only Pip's");
+        assert!(!is_answers_draft(&labelled(READINESS_COMMENT_LABEL, CreatedBy::Pip, chat())));
     }
 
     #[test]

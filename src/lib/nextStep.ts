@@ -2,6 +2,7 @@ import { decideAutostart, ruleOn, type AutostartInput, type ReviewFinding } from
 import { slotPosition, slotQueue, ordinal } from "../workspace/agentsLogic";
 import { ALLOW_MORE_STEPS, AUTOSTART_DEFAULTS, HELD_BUDGET, type AutoStartSwitches, type Proposal, type Run, type RunKind, type WorkstreamEvent, type WorkstreamRule, type WorkstreamView } from "../types";
 import { byRank, type Need } from "./needs";
+import { waitingOnReporterText } from "./reporterWait";
 import { shortHeld, stepsLeftText, ruleText } from "./workstreamHold";
 import { byQueue, reviewPosted, STAGE_LABEL } from "./workstreamStage";
 
@@ -18,6 +19,8 @@ export type NextStepKind =
   | "waiting"
   /** The workstream is held. */
   | "held"
+  /** The person asked the reporter and the comment was posted: nothing starts until they answer or the person chooses. */
+  | "reporter"
   /** An approved run waits for a free slot. */
   | "slot"
   /** Advise: nothing starts on its own. */
@@ -109,7 +112,7 @@ function whyNothing(run: Run, view: WorkstreamView, globals: Partial<AutoStartSw
  * slot; the chain finished; Advise; the automatic budget spent; then what the rules start after the running step, or after
  * the last one that finished.
  */
-export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[], needs: readonly Need[], globals: Partial<AutoStartSwitches> = AUTOSTART_DEFAULTS, events: readonly AuditLine[] = []): NextStep | null {
+export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[], needs: readonly Need[], globals: Partial<AutoStartSwitches> = AUTOSTART_DEFAULTS, events: readonly AuditLine[] = [], now: Date = new Date()): NextStep | null {
   const ws = view.workstream;
   if (ws.closedAt) return null;
   const step = (kind: NextStepKind, text: string, need: Need | null = null): NextStep => ({ kind, text: `Next: ${text}`, need });
@@ -130,6 +133,8 @@ export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: 
   // nothing is going to happen on its own.
   const blocking = own.find((n) => n.group !== "approve");
   if (blocking) return step("waiting", `waiting on you. ${blocking.why}`, blocking);
+  // Asked and posted: nothing starts on its own until the reporter answers, the ticket changes or the person chooses. A step in hand carries on first.
+  if (view.waitingOnReporter && going.length === 0) return step("reporter", waitingOnReporterText(view.waitingOnReporter.since, now));
   const approve = own[0];
   const line = chain(view, runs, proposals, globals, mine, going, step, events);
   if (approve && line.kind !== "slot" && line.kind !== "auto" && line.kind !== "depends") return step("waiting", `waiting on you. ${approve.why}`, approve);

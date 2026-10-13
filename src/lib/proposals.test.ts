@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Intent, Proposal, RunSpec } from "../types";
-import { draftsForTurn, earlierDrafts, inWorkstreamPane, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
+import { ANSWERS_COMMENT_LABEL, READINESS_COMMENT_LABEL, draftsForTurn, earlierDrafts, inWorkstreamPane, isAnswersDraft, isReporterQuestions, reporterSupersession, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
 import fixtures from "./draftHygiene.fixtures.json";
 import { isRunPlanRewrite } from "../backend/mockProposals";
 
@@ -159,5 +159,38 @@ describe("GitHub review drafts", () => {
   it("are left out for screens that approve with proposalsApprove", () => {
     const all = [proposal("1", subtasks("A-1")), proposal("2", githubReview("acme/webshop"))];
     expect(withoutRunDrafts(all).map((p) => p.id)).toEqual(["1"]);
+  });
+});
+
+describe("the comments about a ticket's open questions", () => {
+  const comment = (key: string): Intent => ({ type: "comment", item: ref(key), body: { blocks: [] } }) as unknown as Intent;
+  const fromRun = (id: string, run: string, over: Partial<Proposal> = {}) => proposal(id, comment("A-1"), { origin: { type: "run", runId: run, shortId: null, workstream: "ws-1" }, createdBy: "agent", ...over });
+  const asked = (id: string, run: string, over: Partial<Proposal> = {}) => fromRun(id, run, { label: READINESS_COMMENT_LABEL, ...over });
+
+  it("is Gossamr's questions to a reporter whoever's run or request they came from, and never one Pip made", () => {
+    expect(isReporterQuestions(asked("1", "t1"))).toBe(true);
+    expect(isReporterQuestions(proposal("2", comment("A-1"), { createdBy: "user", label: READINESS_COMMENT_LABEL, origin: { type: "chat", requestId: "clarity:ws-1", workstream: "ws-1" } }))).toBe(true);
+    expect(isReporterQuestions(proposal("3", comment("A-1"), { label: READINESS_COMMENT_LABEL }))).toBe(false);
+    expect(isReporterQuestions(fromRun("4", "t1"))).toBe(false);
+    expect(isReporterQuestions(proposal("5", subtasks("A-1"), { createdBy: "user", label: READINESS_COMMENT_LABEL }))).toBe(false);
+  });
+
+  it("is Pip's comment with the person's answers only when Pip made it", () => {
+    expect(isAnswersDraft(proposal("1", comment("A-1"), { label: ANSWERS_COMMENT_LABEL }))).toBe(true);
+    expect(isAnswersDraft(proposal("2", comment("A-1"), { label: ANSWERS_COMMENT_LABEL, createdBy: "user" }))).toBe(false);
+    expect(isAnswersDraft(proposal("3", comment("A-1")))).toBe(false);
+  });
+
+  it("replaces the triage's own pending comment, which repeats the questions, and nothing else", () => {
+    const own = fromRun("1", "t1");
+    expect(reporterSupersession(own, asked("9", "t1"))).toBe("supersede");
+    expect(reporterSupersession(fromRun("2", "t1", { revisions: [{ note: "Edited" } as Proposal["revisions"][number]] }), asked("9", "t1"))).toBe("draft_kept_edited");
+    expect(reporterSupersession(fromRun("3", "other-run"), asked("9", "t1"))).toBeNull();
+    expect(reporterSupersession(fromRun("4", "t1", { state: { type: "applied" } as Proposal["state"] }), asked("9", "t1"))).toBeNull();
+    expect(reporterSupersession(fromRun("5", "t1", { error: "boom" }), asked("9", "t1"))).toBeNull();
+    expect(reporterSupersession(asked("6", "t1"), asked("9", "t1"))).toBeNull();
+    expect(reporterSupersession(fromRun("7", "t1", { origin: { type: "run", runId: "t1", shortId: null, workstream: "ws-2" } }), asked("9", "t1"))).toBeNull();
+    expect(reporterSupersession(proposal("8", comment("A-1")), asked("9", "t1"))).toBeNull();
+    expect(reporterSupersession(own, fromRun("10", "t1"))).toBeNull();
   });
 });

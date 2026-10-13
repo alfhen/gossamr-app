@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Switch } from "../components/Switch";
 import type { Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
+import { clarityText } from "../lib/ticketClarity";
 import { RULE_SWITCH, STEP_HELP, isHeldByYou, budgetNote, heldBanner, ruleText, stepsLeftText, stepsOf } from "../lib/workstreamHold";
 import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamEvent, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -188,6 +189,39 @@ export function HeldBanner({ view, onResume }: { view: WorkstreamView; onResume(
   );
 }
 
+/**
+ * A ticket Gossamr's own word check found thin, before any triage: what it leaves out, with "Ask the reporter now" (the
+ * comment to the reporter, for approval) and "Looks fine". It is a notice, not a need: it blocks and counts nothing, and
+ * the triage's verdict stays the authority.
+ */
+export function ClarityNotice({ view }: { view: WorkstreamView }) {
+  const c = view.clarity;
+  const [busy, setBusy] = useState(false);
+  if (!c) return null;
+  const id = view.workstream.id;
+  const choose = (call: () => Promise<boolean>) => {
+    setBusy(true);
+    void call().finally(() => setBusy(false));
+  };
+  const store = useWorkstreams.getState();
+  return (
+    <div role="status" data-clarity-notice={id} className="grid gap-1 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1.5 text-sm text-ws-ink">
+      <p data-clarity-text className="m-0">
+        {clarityText(view.workstream.itemKey ?? "This ticket", c.gaps)}
+      </p>
+      <p className="m-0 text-xs text-ws-ink2">This is a quick check of the words, not a verdict. It holds nothing up; the triage still decides whether the ticket is ready to plan.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.askReporterNow(id))} className="px-2 py-0.5">
+          Ask the reporter now
+        </Btn>
+        <Btn tone="ghost" disabled={busy} onClick={() => choose(() => store.looksFine(id))} className="px-2 py-0.5">
+          Looks fine
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
 export interface ControlsViewProps {
   view: WorkstreamView;
   globals: AutoStartSwitches | null;
@@ -267,6 +301,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
       {!paneHas(shown, "hold", ws.id) && <HeldBanner view={view} onResume={actions.onResume} />}
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
       {!paneHas(shown, "escalation", ws.id) && <EscalationCard key={ws.id} view={view} />}
+      <ClarityNotice view={view} />
       {next && <NextStepLine next={next} />}
       {manage && (
         <p data-steps-left={stepsOf(view.budget).limit - stepsOf(view.budget).used} title={STEP_HELP} className="m-0 text-xs text-ws-ink2">

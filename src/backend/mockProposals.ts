@@ -1,6 +1,6 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
-import { capRefusal, isRunComment, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
+import { capRefusal, isReporterQuestions, isRunComment, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reporterSupersession, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
 import { commentable } from "../lib/diffHunks";
 import { followUpProblem } from "../workspace/followUp";
 import { answerProblem } from "../lib/answer";
@@ -110,6 +110,11 @@ export class MockProposals {
     return Promise.resolve(this.store(intent, label, { type: "board" }, "user"));
   }
 
+  /** Stores the comment "Ask the reporter now" drafts, from the clarity notice of `workstream`: Gossamr's, made for the person, not a run's. */
+  askedFor(intent: Intent, label: string, workstream: string): Proposal {
+    return this.store(intent, label, { type: "chat", requestId: `clarity:${workstream}`, workstream }, "user");
+  }
+
   /** Stores a draft an agent run's result left for the person, in the run's workstream. */
   fromRun(intent: Intent, label: string | null, origin: Extract<ProposalOrigin, { type: "run" }>): Proposal {
     return this.store(intent, label, origin, "agent");
@@ -151,6 +156,17 @@ export class MockProposals {
    */
   private tidy(p: Proposal): { replaced: Proposal[]; kept: { proposal: Proposal; why: string }[] } {
     const byTicket = p.createdBy === "agent" && isRunComment(p);
+    if (isReporterQuestions(p)) {
+      // The questions to a reporter replace the triage's own comment, which repeats them, as `tidy_reporter_questions`.
+      const replaced: Proposal[] = [];
+      const kept: { proposal: Proposal; why: string }[] = [];
+      for (const older of this.drafts.filter((d) => d.state.type === "pending")) {
+        const verdict = reporterSupersession(older, p);
+        if (verdict === "supersede") replaced.push(older);
+        else if (verdict) kept.push({ proposal: older, why: verdict });
+      }
+      return { replaced, kept };
+    }
     if (isRunReview(p) || byTicket) {
       const replaced: Proposal[] = [];
       const kept: { proposal: Proposal; why: string }[] = [];

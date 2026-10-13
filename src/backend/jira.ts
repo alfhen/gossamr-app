@@ -554,6 +554,14 @@ export class JiraBackend implements Backend {
     return invoke<Proposal>("workstreams_readiness_ask", { id, triageRun });
   }
 
+  workstreamsClarityAsk(id: string) {
+    return invoke<Proposal>("workstreams_clarity_ask", { id });
+  }
+
+  workstreamsClarityDismiss(id: string) {
+    return invoke<Workstream>("workstreams_clarity_dismiss", { id });
+  }
+
   workstreamsReadinessAnswer(id: string, triageRun: string) {
     return invoke<Workstream>("workstreams_readiness_answer", { id, triageRun });
   }

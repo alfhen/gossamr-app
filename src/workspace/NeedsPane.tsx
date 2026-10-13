@@ -250,7 +250,7 @@ function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
   };
   const store = useWorkstreams.getState();
   return (
-    <Box tone="warn" label="Not ready to plan">
+    <Box tone="warn" label={r.changed ? "Ticket changed" : "Not ready to plan"}>
       <BoxTitle icon="alert" tone="warn">
         {need.title}
       </BoxTitle>
@@ -263,18 +263,34 @@ function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
       ) : (
         <p className="m-0 text-ws-ink2">The triage found {key} unclear but listed no questions.</p>
       )}
-      <p className="m-0 text-ws-ink2">No plan starts until you choose. Asking the reporter drafts a Jira comment for you to approve; nothing is posted before that.</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.askReporter(id))}>
-          Ask the reporter
-        </Btn>
-        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.answerSelf(id))}>
-          I'll answer
-        </Btn>
-        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
-          Plan anyway
-        </Btn>
-      </div>
+      {r.changed ? (
+        <>
+          <p className="m-0 text-ws-ink2">No plan starts until you choose. Read the ticket as it is now, then plan, or ask the reporter again; asking drafts a Jira comment for you to approve, and nothing is posted before that.</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
+              Plan now
+            </Btn>
+            <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.askReporter(id))}>
+              Still unclear (ask again)
+            </Btn>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="m-0 text-ws-ink2">No plan starts until you choose. Asking the reporter drafts a Jira comment for you to approve; nothing is posted before that.</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.askReporter(id))}>
+              Ask the reporter
+            </Btn>
+            <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.answerSelf(id))}>
+              I'll answer
+            </Btn>
+            <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
+              Plan anyway
+            </Btn>
+          </div>
+        </>
+      )}
     </Box>
   );
 }

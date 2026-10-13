@@ -1079,6 +1079,7 @@ impl Supervisor {
                 fix_rounds,
                 plan_approved,
                 readiness_overridden: src.spec.kind == RunKind::Triage && autostart::readiness_overridden(events, &src.id),
+                waiting_on_reporter: crate::inbox::reporter_follow(events).waiting.is_some(),
                 pr: pr.clone(),
                 reviewed,
                 already: already(src, &report, runs, events, pr.as_ref()),
@@ -1102,7 +1103,9 @@ impl Supervisor {
             let note = match decision {
                 Decision::Start { rule, kind, .. } => {
                     let Some(item) = src.item.as_ref() else { continue };
-                    let slots = Slots { findings_from_run: carried.map(String::from), pr: pr.as_ref().map(|p| p.number), pr_sha: pr.as_ref().and_then(|p| p.sha.clone()) };
+                    // A plan the person chose to start though its Triage found the ticket not ready assumes answers to that Triage's questions.
+                    let assumptions = if kind == RunKind::Plan && input.readiness_overridden { report.readiness.iter().filter(|r| !r.ready).flat_map(|r| r.questions.clone()).collect() } else { Vec::new() };
+                    let slots = Slots { findings_from_run: carried.map(String::from), assumptions, pr: pr.as_ref().map(|p| p.number), pr_sha: pr.as_ref().and_then(|p| p.sha.clone()) };
                     let spec = match self.core.plan(&src.spec.repo, item).await {
                         Ok(plan) => autostart::spec_for(&decision, src, plan, &slots),
                         Err(e) => {

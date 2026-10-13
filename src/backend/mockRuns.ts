@@ -2,7 +2,7 @@ import { AUTOSTART_DEFAULTS, DIGEST_MINUTES, SUMMARY_ONLY, type AgentSettings, t
 import { containerRef, itemRef } from "./mockConnector";
 import { approvedPlanText, assemblePlan, planSectionOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
-import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, scriptedFinish, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
+import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, scriptedFinish, withAssumptions, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
 import { DENIED_MESSAGE, permissionOffer, readAs } from "../lib/permission";
 import { reviewText } from "./mockReviewDraft";
@@ -950,6 +950,7 @@ export class MockRuns {
       patch.result = !run.item && run.spec.project ? SCRIPTED_TICKET_RESULT : answered ? SCRIPTED_PLAN_ANSWERED : opened ? pushedResult(opened.url) : unclear ? unclearTriageResult(unclear.key) : SCRIPTED_RESULT[run.spec.kind];
       const script = this.scripts.get(run.spec.kind)?.shift();
       if (script) patch.result = scriptedFinish(run.spec.kind, patch.result, script);
+      if (run.spec.kind === "plan") patch.result = withAssumptions(patch.result, run.spec.assumptions ?? []);
       if (opened) patch.branch = opened.headRef;
       patch.summary = answered ? PLAN_ANSWERED_SUMMARY : opened ? PUSHED_SUMMARY : unclear ? UNCLEAR_TRIAGE_SUMMARY : SCRIPTED_SUMMARY[run.spec.kind];
       patch.resultComplete = true;
@@ -1062,14 +1063,14 @@ export class MockRuns {
    * from its kind's template with every handoff filled in here and no focus, it is drafted by the agent side and approved
    * with its own digest at once, and it waits to launch with `autoStart` set. The audit gets the rule and the digest.
    */
-  autoStart(kind: RunKind, fromRun: string, rule: WorkstreamRule): Run {
+  autoStart(kind: RunKind, fromRun: string, rule: WorkstreamRule, assumptions: readonly string[] = []): Run {
     const source = this.get(fromRun);
     if (!source?.item) throw new Error(`there is no finished run ${fromRun} on a ticket`);
     const workstream = source.spec.workstream ?? null;
     // A triage or plan carries only the investigation the rule names, never the workstream's newest: the supervisor checked that one.
     const carried = kind === "triage" && source.spec.kind === "investigate" ? source.id : kind === "plan" ? (source.spec.findingsFromRun ?? null) : null;
     const made = kind === "build" || kind === "review" ? this.chainSpec(source.item, kind, fromRun, null, workstream).spec : this.plainSpec(source.item, kind, fromRun, null, workstream, carried);
-    let spec: RunSpec = { ...made, focus: null, focusFromRun: null };
+    let spec: RunSpec = { ...made, focus: null, focusFromRun: null, ...(kind === "plan" && assumptions.length ? { assumptions: [...assumptions] } : {}) };
     if (spec.kind === "build" && workstream) spec = { ...spec, allowPush: true };
     // A verify after a passing review checks the pull request at the commit that review read, as `fill_chain_slots` does;
     // a review with no pinned commit starts none, since the verify would check the base branch instead.

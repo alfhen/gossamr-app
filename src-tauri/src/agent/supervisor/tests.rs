@@ -1541,8 +1541,37 @@ mod auto {
         w.sweep().await;
         let plan = w.started(RunKind::Plan, Rule::TriagePlan, &triage).await.unwrap();
         assert_eq!(plan.spec.findings_from_run, triage.spec.findings_from_run, "the plan carries what the triage carried, as the rule always does");
+        // The questions the person chose to plan without answers to go into the plan's prompt as stated assumptions.
+        assert_eq!(plan.spec.assumptions, vec!["What does done look like?".to_string(), "Who is waiting on it?".to_string()]);
+        let prompt = crate::domain::render_prompt(&plan.spec);
+        assert!(prompt.contains(crate::domain::ASSUMPTIONS_PREFACE) && prompt.contains("<<<ASSUMPTIONS\n- What does done look like?\n- Who is waiting on it?\nASSUMPTIONS>>>"), "{prompt}");
         w.sweep().await;
         assert_eq!(w.of_kind(RunKind::Plan).await.len(), 1, "once");
+    }
+
+    #[tokio::test]
+    async fn a_workstream_waiting_on_the_reporter_starts_no_plan_after_a_triage_that_recommends_one_until_the_wait_is_over() {
+        let w = World::start().await;
+        w.pip.quiet.store(true, Ordering::SeqCst);
+        let (core, scope) = (&w.rig.fx.core, &w.rig.fx.scope);
+        let person = |action: &str, proposal: Option<&str>| {
+            let e = WorkstreamEvent::new(&w.ws, Actor::Person, action, Utc::now());
+            match proposal {
+                Some(p) => e.proposal(p),
+                None => e,
+            }
+        };
+        // Asked before the triage ran, and the comment posted.
+        core.record_workstream_event(scope, person("clarity_asked", Some("c1"))).await.unwrap();
+        core.record_workstream_event(scope, person("draft_approved", Some("c1"))).await.unwrap();
+        let triage = triaged(&w, "Small.\n\nFor Jira:\nReady to plan: yes\nPlan recommended: yes").await;
+        w.sweep().await;
+        assert!(w.of_kind(RunKind::Plan).await.is_empty(), "waiting on the reporter: nothing starts");
+        assert!(core.workstream(scope, &w.ws).await.unwrap().unwrap().waiting_on_reporter.is_some());
+        // The person resuming ends the wait; the rule then starts the plan as it always did.
+        core.record_workstream_event(scope, person("resumed", None)).await.unwrap();
+        w.sweep().await;
+        w.started(RunKind::Plan, Rule::TriagePlan, &triage).await.unwrap();
     }
 
     #[tokio::test]

@@ -353,3 +353,27 @@ describe("nextStep edge cases", () => {
     }
   });
 });
+
+describe("nextStep while the workstream waits on the reporter", () => {
+  const waiting = (runs: Run[], over: Over = {}, since = iso(60 * 24 * 3)): WorkstreamView => ({ ...view(runs, over), waitingOnReporter: { since } });
+  const line = (v: WorkstreamView, runs: Run[], proposals: Proposal[] = [], events: Parameters<typeof nextStep>[5] = []) => nextStep(v, runs, proposals, needsOf(v, runs, proposals), AUTOSTART_DEFAULTS, events, new Date(NOW));
+
+  it("says since when and that nothing starts on its own, and it is not a need", () => {
+    const runs = [run("t", "triage", "done")];
+    const v = waiting(runs, { stage: "triage" });
+    expect(line(v, runs)).toMatchObject({ kind: "reporter", need: null, text: "Next: Waiting on the reporter since 3 days ago; nothing starts on its own." });
+    expect(needsOf(v, runs)).toEqual([]);
+  });
+
+  it("gives way to a hold, to anything that decides or unblocks, and to a step in hand", () => {
+    const going = [run("t", "triage", "working")];
+    expect(line(waiting(going, { stage: "triage" }), going)?.kind).not.toBe("reporter");
+    expect(line(waiting([], { heldReason: HELD_PERSON }), [])?.kind).toBe("held");
+    const failed = [run("b", "build", "failed")];
+    expect(line(waiting(failed), failed)?.kind).toBe("waiting");
+  });
+
+  it("is gone once the wait is", () => {
+    expect(line(view([]), [])?.kind).not.toBe("reporter");
+  });
+});

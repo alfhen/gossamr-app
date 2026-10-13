@@ -202,10 +202,12 @@ describe("mockAsk", () => {
     expect(backend.proposals.list({ workstream: ws.id }).filter((p) => p.origin.type === "chat" && p.origin.requestId === "p2" && p.intent.type === "startRun")).toHaveLength(0);
   });
 
-  it("opens its first turn in a workstream on a vague ticket by saying what the ticket leaves out, and only then", async () => {
+  it("opens its first turn in a workstream on a thin ticket by saying what the ticket leaves out, and only then", async () => {
     const { MockBackend } = await import("./mock");
     const { itemRef } = await import("./mockConnector");
     const backend = new MockBackend({ runs: { seed: "empty" } });
+    // A ticket whose description says what done looks like, what is in scope and who is waiting is not remarked on.
+    backend.editTicket("CA-401", { description: "The welcome flow should send three emails. Only the welcome flow is in scope; the winback flow is not. The CRM team is waiting on it. Done when all three send in the sandbox." });
     const vague = await backend.workstreamsOpen(itemRef("CA-408"));
     const clear = await backend.workstreamsOpen(itemRef("CA-401"));
     const context: ScreenContext = { view: null, item: null, filter: null, selection: [] };
@@ -214,13 +216,13 @@ describe("mockAsk", () => {
       return openMockPipTurns().turns(`ws:${ws}`).find((t) => t.requestId === requestId);
     };
     const first = await answer(vague.id, "v1", "Why is it held?");
-    expect(first?.text.startsWith("CA-408 doesn't say what done looks like, what's in or out of scope, or who is waiting on it.\n\n")).toBe(true);
+    expect(first?.text.startsWith("CA-408 may be unclear: it has a very short description, doesn't say what done looks like, doesn't say what's in or out of scope, and doesn't say who is waiting on it.\n\n")).toBe(true);
     expect(first?.steps[0]).toBe("Read the ticket");
-    expect((await answer(vague.id, "v2", "Why is it held?"))?.text).not.toContain("doesn't say");
-    expect((await answer(clear.id, "c1", "Why is it held?"))?.text).not.toContain("doesn't say");
+    expect((await answer(vague.id, "v2", "Why is it held?"))?.text).not.toContain("may be unclear");
+    expect((await answer(clear.id, "c1", "Why is it held?"))?.text).not.toContain("may be unclear");
     // General's first turn is nobody's workstream: no check.
     await mockAsk({ requestId: "g1", prompt: "What changed?", sessionId: null, context, conversation: "general", meta: { imageCount: 0 } }, backend, 0);
-    expect(openMockPipTurns().turns("general").find((t) => t.requestId === "g1")?.text).not.toContain("doesn't say");
+    expect(openMockPipTurns().turns("general").find((t) => t.requestId === "g1")?.text).not.toContain("may be unclear");
   });
 
   it("answers 'Why is this held?' from the workstream's held reason, and 'Approve the plan' with where to approve it", async () => {

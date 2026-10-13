@@ -88,6 +88,7 @@ fn the_shared_rule_table_passes() {
             fix_rounds: case["fixRounds"].as_u64().unwrap_or(0) as u32,
             plan_approved: case["planApproved"].as_bool().unwrap_or(false),
             readiness_overridden: case["readinessOverridden"].as_bool().unwrap_or(false),
+            waiting_on_reporter: case["waitingOnReporter"].as_bool().unwrap_or(false),
             pr,
             reviewed,
             already: case["already"].as_bool().unwrap_or(false),
@@ -167,7 +168,7 @@ fn a_started_spec_is_the_kind_s_template_and_never_carries_pip_s_focus() {
     for (from, kind) in [(RunKind::Investigate, RunKind::Triage), (RunKind::Triage, RunKind::Plan), (RunKind::Plan, RunKind::Build), (RunKind::Build, RunKind::Review), (RunKind::Review, RunKind::Verify)] {
         source.spec.kind = from;
         let decision = Decision::Start { rule: Rule::InvestigateTriage, kind, from_run: "src1".into() };
-        let slots = Slots { findings_from_run: Some("i1".into()), pr: Some(12), pr_sha: Some("aaa".into()) };
+        let slots = Slots { findings_from_run: Some("i1".into()), assumptions: Vec::new(), pr: Some(12), pr_sha: Some("aaa".into()) };
         let spec = spec_for(&decision, &source, plan(), &slots).unwrap();
         assert_eq!((spec.kind, spec.instruction.as_str()), (kind, default_instruction(kind)));
         assert_eq!((spec.focus, spec.focus_from_run), (None, None), "{kind:?}");

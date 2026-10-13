@@ -4,6 +4,7 @@ import {
   agentsSettled,
   askPip,
   backdateWorkstream,
+  editTicket,
   expandAllNeeds,
   expandNeedsYou,
   heldBanner,
@@ -309,7 +310,9 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
 // Pip speaks up when a ticket is unclear.
 
 const VAGUE = "CA-408";
-const VAGUE_WORDS = "CA-408 doesn't say what done looks like, what's in or out of scope, or who is waiting on it.";
+const VAGUE_WORDS = "CA-408 may be unclear: it has a very short description, doesn't say what done looks like, doesn't say what's in or out of scope, and doesn't say who is waiting on it.";
+/** A description that says what done looks like, what is in scope and who is waiting, which Pip's check reads as clear. */
+const CLEAR_WORDS = "The retry should cap at five attempts. Only the webhook handler is in scope. The payments team is waiting on it. Done when a provider outage no longer produces a retry burst.";
 
 /** A managed workstream on the sample's vague ticket, its investigation and the triage a rule started after it finished: the triage says it is not ready to plan. Left on Pip home, on its row. */
 async function unclear(page: Page) {
@@ -331,17 +334,19 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     await askPip(page, "where do we stand?");
     await settled(page);
     await expect(pipPane(page)).toContainText(VAGUE_WORDS);
-    // Only its first turn does: the second doesn't say it again.
+    // Only its first turn does: the second doesn't say it again. (The notice above the conversation says it once more, in its own box.)
     await askPip(page, "where do we stand now?");
     await settled(page);
-    expect(((await pipPane(page).innerText()).match(/doesn't say what done looks like/g) ?? []).length).toBe(1);
+    expect(((await pipPane(page).innerText()).match(/may be unclear/g) ?? []).length).toBe(2);
+    await expect(pipPane(page).locator("[data-clarity-notice]")).toContainText("CA-408 may be unclear");
 
-    // A ticket with a real description is not remarked on.
+    // A ticket whose description says what done looks like, what is in scope and who is waiting is not remarked on.
+    await editTicket(page, "DEVOPS-471", { description: CLEAR_WORDS });
     await startWorkstream(page, "DEVOPS-471");
     await settled(page);
     await askPip(page, "where do we stand?");
     await settled(page);
-    await expect(pipPane(page)).not.toContainText("doesn't say what done looks like");
+    await expect(pipPane(page)).not.toContainText("DEVOPS-471 may be unclear");
   });
 
   test("a triage that says the ticket isn't ready stops the plan: a Decide need lists the questions, with the three choices", async ({ page }) => {

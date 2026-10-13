@@ -468,6 +468,15 @@ function beforeNote(text: string, line: string): string {
   return at < 0 ? `${text}\n\n${line}` : `${text.slice(0, at)}${line}\n\n${text.slice(at)}`;
 }
 
+/**
+ * A plan's answer with the open questions it was started to assume answers to listed in the plan, before its `For Jira:`
+ * note, so the plan's description draft shows them (the real plan run is told to, `ASSUMPTIONS_PREFACE` in domain/run.rs).
+ */
+export function withAssumptions(plan: string, assumptions: readonly string[]): string {
+  if (!assumptions.length) return plan;
+  return beforeNote(plan, `## Open questions the plan assumes answers to\n\nThe person chose to plan without answers to these, so the plan assumes them settled as the plan reads:\n\n${assumptions.map((q) => `- ${q}`).join("\n")}`);
+}
+
 /** The answer a scripted run of `kind` finishes with, from its usual `base`, changed as `script` asks. */
 export function scriptedFinish(kind: RunKind, base: string, script: ScriptedFinish): string {
   let text = base;

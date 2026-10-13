@@ -13,7 +13,7 @@ use crate::auth::Scope;
 use crate::db::Db;
 use crate::agent::supervisor::{decide_wake, level_word, WakeFact, TRIP_BASIS};
 use crate::domain::workstream::{ALLOW_MORE_STEPS, BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, budget_level, budget_limits, review_blocking, run_labels, stage, tripwire, valid_hold_reason, BudgetLevel, Mode, Rule, Stage, WorkstreamBasis, HELD_ALL, HELD_BUDGET, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE};
-use crate::domain::{has_markers, Actor, Category, Intent, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunQuery, RunState, StateKind, WorkItem, Workstream, WorkstreamEvent};
+use crate::domain::{clarity_gaps, clarity_questions, has_markers, Actor, ClarityGap, CreatedBy, Origin, Category, Intent, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunQuery, RunState, StateKind, WorkItem, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::runs::report::{resolve, ReviewVerdict};
@@ -34,6 +34,9 @@ pub const ESCALATION_GONE: &str = "This review isn't waiting for your choice any
 /// Why a choice on a Triage that found its ticket not ready is refused: the person chose already, a newer Triage or a Plan
 /// came, or the workstream isn't managed any more.
 pub const READINESS_GONE: &str = "This ticket isn't waiting for your choice about its open questions any more.";
+/// Why asking the reporter, or saying a ticket looks fine, is refused when its clarity notice isn't showing: the person
+/// chose already, a Triage spoke, or the ticket reads as clear now.
+pub const CLARITY_GONE: &str = "This ticket isn't flagged as possibly unclear any more.";
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
@@ -77,7 +80,83 @@ pub struct WorkstreamView {
     /// The newest Triage found the ticket not ready to plan and the Plan after it waits for the person's choice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readiness: Option<ReadinessStop>,
+    /// The ticket's description looks thin to Gossamr's own check (`clarity_gaps`), before any Triage: Pip and the page say
+    /// so. Never a need; the Triage's verdict stays the authority.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clarity: Option<Clarity>,
+    /// The person asked the reporter and the comment was posted; nothing has answered it yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_on_reporter: Option<ReporterWait>,
     pub budget: BudgetView,
+}
+
+/// What the clarity check found missing in a ticket's description.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Clarity {
+    pub gaps: Vec<ClarityGap>,
+}
+
+/// A workstream waiting on the ticket's reporter to answer the questions the person asked them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReporterWait {
+    /// When the comment with the questions was posted (approved).
+    pub since: chrono::DateTime<Utc>,
+}
+
+/// Where a workstream stands with the reporter, read from its audit (oldest first).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReporterFollow {
+    /// Waiting on the reporter since then: the comment of a `readiness_asked` or `clarity_asked` was approved, and since
+    /// then the ticket hasn't changed (`basis_drifted`) and the person hasn't chosen to answer or plan anyway
+    /// (`readiness_answered`, `readiness_overridden`) or resumed.
+    pub waiting: Option<chrono::DateTime<Utc>>,
+    /// The wait ended because the ticket changed, and the person hasn't chosen since: the readiness question comes back.
+    pub changed: bool,
+}
+
+/// `ReporterFollow` of the audit `events`. Only the person's own lines count as asking, approving, answering, planning
+/// anyway or resuming, and only the supervisor's as the ticket changing.
+pub fn reporter_follow(events: &[WorkstreamEvent]) -> ReporterFollow {
+    let mut asked: HashSet<&str> = HashSet::new();
+    let mut now = ReporterFollow::default();
+    for e in events {
+        let person = e.actor == Actor::Person;
+        match e.action.as_str() {
+            "readiness_asked" | "clarity_asked" if person => {
+                asked.extend(e.proposal_id.as_deref());
+                now.changed = false;
+            }
+            "draft_approved" if person && e.proposal_id.as_deref().is_some_and(|p| asked.contains(p)) => {
+                now = ReporterFollow { waiting: Some(e.at), changed: false };
+            }
+            "readiness_answered" | "readiness_overridden" if person => now = ReporterFollow::default(),
+            "basis_drifted" if e.actor == Actor::Supervisor && now.waiting.is_some() => now = ReporterFollow { waiting: None, changed: true },
+            "resumed" if person => now.waiting = None,
+            _ => {}
+        }
+    }
+    now
+}
+
+/// The clarity notice of `ws`, if it should show: the ticket is cached and reads thin (`gaps`), no Triage ran in the
+/// workstream (its verdict is the authority), the person hasn't dismissed or asked about it (unless the ticket changed
+/// since they asked), and nothing is waiting on the reporter.
+pub fn clarity_of(ws: &Workstream, runs: &[Run], gaps: &[ClarityGap], events: &[WorkstreamEvent]) -> Option<Clarity> {
+    if ws.closed_at.is_some() || ws.item_key.is_none() || gaps.is_empty() {
+        return None;
+    }
+    let mine = |r: &&Run| r.spec.workstream.as_deref() == Some(ws.id.as_str());
+    if runs.iter().filter(mine).any(|r| r.spec.kind == RunKind::Triage) {
+        return None;
+    }
+    let follow = reporter_follow(events);
+    let said = |action: &str| events.iter().any(|e| e.actor == Actor::Person && e.action == action);
+    if said("clarity_dismissed") || follow.waiting.is_some() || (said("clarity_asked") && !follow.changed) {
+        return None;
+    }
+    Some(Clarity { gaps: gaps.to_vec() })
 }
 
 /// A review that still blocks after `autostart::FIX_ROUNDS_MAX` automatic fix rounds, waiting for the person: run another
@@ -166,12 +245,18 @@ pub struct ReadinessStop {
     pub questions: Vec<String>,
     /// When the Triage finished.
     pub at: chrono::DateTime<Utc>,
+    /// The person asked the reporter and then the ticket changed while they waited: the question is back, as "changed:
+    /// plan now?", with the choices Plan now and Still unclear (ask again).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub changed: bool,
 }
 
 /// The readiness stop of `ws`, if its newest Triage on a ticket is Done and said `Ready to plan: no`: the workstream is
 /// open and in Manage, the person hasn't chosen yet (`readiness_asked`, `readiness_answered` or `readiness_overridden`,
 /// theirs, naming that Triage), and no Plan was started since it finished. A newer Triage, which is under way or says
 /// ready, takes it away, as does a Plan the person started by hand. `readiness` is what a Triage's report resolves to.
+/// A choice to ask the reporter is undone by the ticket changing while the person waited (`ReporterFollow::changed`): the
+/// stop comes back, flagged `changed`.
 pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> Option<Readiness>, events: &[WorkstreamEvent]) -> Option<ReadinessStop> {
     if ws.closed_at.is_some() || ws.mode != Mode::Manage {
         return None;
@@ -184,7 +269,8 @@ pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> O
     let found = readiness(triage).filter(|r| !r.ready)?;
     let chosen = |e: &WorkstreamEvent| e.actor == Actor::Person && matches!(e.action.as_str(), "readiness_asked" | "readiness_answered" | "readiness_overridden") && e.run_id.as_deref() == Some(triage.id.as_str());
     let since = triage.ended_at.unwrap_or(triage.queued_at);
-    if events.iter().any(chosen) || runs.iter().filter(mine).any(|r| r.spec.kind == RunKind::Plan && r.queued_at >= since) {
+    let changed = reporter_follow(events).changed;
+    if (events.iter().any(chosen) && !changed) || runs.iter().filter(mine).any(|r| r.spec.kind == RunKind::Plan && r.queued_at >= since) {
         return None;
     }
     let labels = run_labels(&runs.iter().filter(mine).cloned().collect::<Vec<_>>());
@@ -193,6 +279,7 @@ pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> O
         triage_label: labels.iter().find(|(r, _)| *r == triage.id).map(|(_, l)| l.clone()).unwrap_or_default(),
         questions: found.questions,
         at: since,
+        changed,
     })
 }
 
@@ -283,17 +370,34 @@ impl WorkstreamView {
             waiting_for_pr: None,
             escalation: None,
             readiness: None,
+            clarity: None,
+            waiting_on_reporter: None,
         }
     }
 }
 
-/// The audit lines an escalation or a readiness stop is read from, for a workstream that can have one: open and in
-/// Manage. None for others, so a list of workstreams reads only the audits it needs.
+/// The audit lines an escalation, a readiness stop, a clarity notice or a wait on the reporter is read from, for an open
+/// workstream (each of them checks the mode itself). None for a closed one, so a list of workstreams reads only the
+/// audits it needs. The approvals kept are those of the comments the person asked the reporter with.
 fn escalation_events(db: &Db, ws: &Workstream) -> Result<Vec<WorkstreamEvent>> {
-    if ws.closed_at.is_some() || ws.mode != Mode::Manage {
+    if ws.closed_at.is_some() {
         return Ok(Vec::new());
     }
-    Ok(db.workstream_events(&ws.id)?.into_iter().filter(|e| matches!(e.action.as_str(), "fix_rounds_exhausted" | "fix_round_person" | "escalation_taken" | "escalation_posted" | "readiness_asked" | "readiness_answered" | "readiness_overridden")).collect())
+    let all = db.workstream_events(&ws.id)?;
+    let asked: HashSet<String> = all.iter().filter(|e| matches!(e.action.as_str(), "readiness_asked" | "clarity_asked")).filter_map(|e| e.proposal_id.clone()).collect();
+    let kept = |e: &WorkstreamEvent| match e.action.as_str() {
+        "fix_rounds_exhausted" | "fix_round_person" | "escalation_taken" | "escalation_posted" | "readiness_asked" | "readiness_answered" | "readiness_overridden" | "clarity_asked" | "clarity_dismissed" | "basis_drifted" | "resumed" => true,
+        "draft_approved" => e.proposal_id.as_ref().is_some_and(|p| asked.contains(p)),
+        _ => false,
+    };
+    Ok(all.into_iter().filter(kept).collect())
+}
+
+/// The clarity gaps of the ticket workstream `ws` is on, as its description reads in the cache; none without a ticket,
+/// a cached one, or when the workstream is closed.
+fn ticket_gaps(db: &Db, scope: &Scope, ws: &Workstream) -> Result<Vec<ClarityGap>> {
+    let Some(key) = ws.item_key.as_deref().filter(|_| ws.closed_at.is_none()) else { return Ok(Vec::new()) };
+    Ok(db.item(&Core::item(scope, key))?.map(|work| clarity_gaps(&work.body.plain_text())).unwrap_or_default())
 }
 
 /// The `escalation_posted` line for workstream `ws_id` when review draft `posted`, just posted to GitHub, is the one its
@@ -540,21 +644,26 @@ impl Core {
                 let verdicts = verdicts_of(db, &runs)?;
                 let readiness = readiness_verdicts(db, &runs)?;
                 let events = escalation_events(db, &ws)?;
-                Ok(Some((ws, runs, Verdicts { reviews: verdicts, readiness }, events, pending_reviews(db)?)))
+                let gaps = ticket_gaps(db, scope, &ws)?;
+                Ok(Some((ws, runs, Verdicts { reviews: verdicts, readiness }, events, pending_reviews(db)?, gaps)))
             })
             .await?;
-        found.map(|(ws, runs, verdicts, events, drafts)| self.view_of(ws, &runs, &verdicts, &events, &drafts)).transpose()
+        found.map(|(ws, runs, verdicts, events, drafts, gaps)| self.view_of(ws, &runs, &verdicts, &events, &drafts, &gaps)).transpose()
     }
 
     /// A workstream's view from its runs, with the build still waiting for its pull request and the review that still
     /// blocks after the fix rounds. The pull request is read from the code cache, so it is looked up outside the
     /// account's database.
-    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &Verdicts, events: &[WorkstreamEvent], drafts: &[Proposal]) -> Result<WorkstreamView> {
+    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &Verdicts, events: &[WorkstreamEvent], drafts: &[Proposal], gaps: &[ClarityGap]) -> Result<WorkstreamView> {
         let escalation = escalation_of(&workstream, runs, |r| verdicts.reviews.get(&r.id).copied(), events, drafts);
         let readiness = readiness_of(&workstream, runs, |r| verdicts.readiness.get(&r.id).cloned(), events);
+        let clarity = clarity_of(&workstream, runs, gaps, events);
+        let waiting = reporter_follow(events).waiting.filter(|_| workstream.closed_at.is_none()).map(|since| ReporterWait { since });
         let mut view = WorkstreamView::of(workstream, runs, &verdicts.reviews);
         view.escalation = escalation;
         view.readiness = readiness;
+        view.clarity = clarity;
+        view.waiting_on_reporter = waiting;
         if let Some(build) = pushed_build(runs) {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
@@ -564,17 +673,19 @@ impl Core {
     /// `scope`'s workstreams, newest first, each with its stage; closed ones only when asked for.
     pub async fn workstreams(&self, scope: &Scope, include_closed: bool) -> Result<Vec<WorkstreamView>> {
         let connection_id = Connection::jira_id(scope);
-        let (workstreams, runs, verdicts, mut events, drafts) = self
+        let (workstreams, runs, verdicts, mut events, drafts, mut gaps) = self
             .with_db_for(scope, |db| {
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?;
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.is_some()).cloned().collect();
                 let verdicts = Verdicts { reviews: verdicts_of(db, &linked)?, readiness: readiness_verdicts(db, &linked)? };
                 let workstreams = db.workstreams(&connection_id, include_closed)?;
                 let mut events = HashMap::new();
+                let mut gaps = HashMap::new();
                 for ws in &workstreams {
                     events.insert(ws.id.clone(), escalation_events(db, ws)?);
+                    gaps.insert(ws.id.clone(), ticket_gaps(db, scope, ws)?);
                 }
-                Ok((workstreams, runs, verdicts, events, pending_reviews(db)?))
+                Ok((workstreams, runs, verdicts, events, pending_reviews(db)?, gaps))
             })
             .await?;
         workstreams
@@ -582,7 +693,8 @@ impl Core {
             .map(|ws| {
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())).cloned().collect();
                 let events = events.remove(&ws.id).unwrap_or_default();
-                self.view_of(ws, &linked, &verdicts, &events, &drafts)
+                let gaps = gaps.remove(&ws.id).unwrap_or_default();
+                self.view_of(ws, &linked, &verdicts, &events, &drafts, &gaps)
             })
             .collect()
     }
@@ -732,6 +844,39 @@ impl Core {
     pub async fn override_readiness(&self, scope: &Scope, id: &str, triage: &str) -> Result<Workstream> {
         self.readiness_stop(scope, id, triage).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "readiness_overridden", Utc::now()).run(triage)).await?;
+        self.workstream(scope, id).await?.map(|v| v.workstream).ok_or_else(|| refuse(format!("there is no workstream {id}")))
+    }
+
+    /// The clarity notice of workstream `id` as it stands, refused with `CLARITY_GONE` when it isn't showing.
+    async fn clarity_notice(&self, scope: &Scope, id: &str) -> Result<(Workstream, Clarity)> {
+        let view = self.workstream(scope, id).await?.ok_or_else(|| refuse(format!("there is no workstream {id}")))?;
+        let clarity = view.clarity.ok_or_else(|| refuse(CLARITY_GONE))?;
+        Ok((view.workstream, clarity))
+    }
+
+    /// The person's "Ask the reporter now" on a ticket the clarity check flagged, before any Triage: drafts the same
+    /// "Questions for the reporter" comment as `ask_reporter`, with one question per gap the check found (Gossamr's own
+    /// words, never an agent's). A draft like any other: nothing is posted before the person approves it. Records
+    /// `clarity_asked` (the person's, naming the draft). Refused with `CLARITY_GONE` unless the notice is showing. Pip has
+    /// no way to call this.
+    pub async fn ask_reporter_now(&self, scope: &Scope, id: &str) -> Result<Proposal> {
+        let (ws, clarity) = self.clarity_notice(scope, id).await?;
+        let key = ws.item_key.clone().ok_or_else(|| refuse(CLARITY_GONE))?;
+        let item = Core::item(scope, &key);
+        let reporter = self.ticket_for_pip(scope, &key).await.ok().and_then(|(t, _)| t.reporter);
+        let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
+        let body = crate::tracker::comment_doc(&reporter_comment(&key, reporter.as_ref().map(|p| p.name.as_str()), &clarity_questions(&clarity.gaps)), &people);
+        let draft = proposals::Draft { origin: Origin::Chat { request_id: format!("clarity:{id}"), workstream: Some(id.to_string()) }, created_by: CreatedBy::User, intent: Intent::Comment { item, body }, label: Some(READINESS_LABEL.into()), basis: None };
+        let proposal = self.propose(scope, draft).await?;
+        self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "clarity_asked", Utc::now()).proposal(&proposal.id)).await?;
+        Ok(proposal)
+    }
+
+    /// The person's "Looks fine" on the clarity notice: records `clarity_dismissed`, so the notice doesn't show for this
+    /// ticket again. Refused with `CLARITY_GONE` unless the notice is showing.
+    pub async fn dismiss_clarity(&self, scope: &Scope, id: &str) -> Result<Workstream> {
+        self.clarity_notice(scope, id).await?;
+        self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "clarity_dismissed", Utc::now())).await?;
         self.workstream(scope, id).await?.map(|v| v.workstream).ok_or_else(|| refuse(format!("there is no workstream {id}")))
     }
 
@@ -1327,9 +1472,9 @@ mod tests {
             let waiting = fx.core.proposals_in(&fx.scope, &ProposalQuery { states: Some(vec![StateKind::Pending]), workstream: Some(ws.id.clone()), ..Default::default() }).await.unwrap();
             let mut ids: Vec<&str> = waiting.iter().map(|p| p.id.as_str()).collect();
             ids.sort_unstable();
-            let mut both = [note.id.as_str(), draft.id.as_str()];
-            both.sort_unstable();
-            assert_eq!(ids, both, "the questions don't replace the triage's own note, and both wait in the workstream's list");
+            assert_eq!(ids, [draft.id.as_str()], "only the questions wait: the triage's own note repeated them");
+            let note_now = fx.core.proposal_in(&fx.scope, &note.id).await.unwrap().unwrap();
+            assert_eq!((note_now.state, note_now.superseded_by.as_deref()), (ProposalState::Retired(proposals::REPLACED_REASON.into()), Some(draft.id.as_str())), "superseded by the questions draft, so no batch posts both");
         }
 
         #[tokio::test]
@@ -1366,6 +1511,152 @@ mod tests {
             );
             let none = reporter_comment("CA-401", None, &[]);
             assert!(none.starts_with("Hi,\n") && none.contains("- What is the goal?") && none.contains("acceptance criteria") && none.contains("in scope, and what is out") && none.contains("who is waiting on it"), "{none}");
+        }
+    }
+
+    mod follow {
+        use super::*;
+        use crate::domain::{CreatedBy, Origin};
+
+        fn line(seq: u32, actor: Actor, action: &str, proposal: Option<&str>) -> WorkstreamEvent {
+            let mut e = WorkstreamEvent::new("w", actor, action, chrono::DateTime::from_timestamp(1_800_000_000 + i64::from(seq) * 60, 0).unwrap());
+            e.seq = seq;
+            match proposal {
+                Some(p) => e.proposal(p),
+                None => e,
+            }
+        }
+
+        #[test]
+        fn the_wait_starts_when_the_asked_comment_is_approved_and_ends_at_the_first_of_a_change_a_choice_or_a_resume() {
+            let asked = line(1, Actor::Person, "readiness_asked", Some("d1"));
+            let posted = line(2, Actor::Person, "draft_approved", Some("d1"));
+            assert_eq!(reporter_follow(std::slice::from_ref(&asked)), ReporterFollow::default(), "asked is not posted");
+            let waiting = reporter_follow(&[asked.clone(), posted.clone()]);
+            assert_eq!((waiting.waiting, waiting.changed), (Some(posted.at), false));
+            assert_eq!(reporter_follow(&[asked.clone(), line(2, Actor::Person, "draft_approved", Some("other"))]), ReporterFollow::default(), "another draft's approval");
+            assert_eq!(reporter_follow(&[asked.clone(), line(2, Actor::Pip, "draft_approved", Some("d1"))]), ReporterFollow::default(), "only the person's approval");
+
+            let ended = |e: WorkstreamEvent| reporter_follow(&[asked.clone(), posted.clone(), e]);
+            assert_eq!(ended(line(3, Actor::Supervisor, "basis_drifted", None)), ReporterFollow { waiting: None, changed: true }, "the ticket changed");
+            assert_eq!(ended(line(3, Actor::Person, "basis_drifted", None)), waiting, "only the supervisor says the ticket changed");
+            assert_eq!(ended(line(3, Actor::Person, "readiness_answered", None)), ReporterFollow::default());
+            assert_eq!(ended(line(3, Actor::Person, "readiness_overridden", None)), ReporterFollow::default());
+            assert_eq!(ended(line(3, Actor::Person, "resumed", None)), ReporterFollow::default(), "resuming ends it without bringing the question back");
+            assert_eq!(ended(line(3, Actor::Supervisor, "resumed", None)), waiting, "the person's resume only");
+
+            // After a change the question stays until the person chooses; asking again begins a new wait with the next post.
+            let changed = [asked.clone(), posted.clone(), line(3, Actor::Supervisor, "basis_drifted", None)];
+            assert!(reporter_follow(&[&changed[..], &[line(4, Actor::Person, "resumed", None)]].concat()).changed, "resuming doesn't answer it");
+            assert!(!reporter_follow(&[&changed[..], &[line(4, Actor::Person, "readiness_asked", Some("d2"))]].concat()).changed);
+            let again = reporter_follow(&[&changed[..], &[line(4, Actor::Person, "readiness_asked", Some("d2")), line(5, Actor::Person, "draft_approved", Some("d2"))]].concat());
+            assert!(again.waiting.is_some() && !again.changed);
+            assert!(reporter_follow(&[line(1, Actor::Person, "clarity_asked", Some("c1")), line(2, Actor::Person, "draft_approved", Some("c1"))]).waiting.is_some(), "the clarity ask waits too");
+            // A change with nobody waiting is not "changed while waiting".
+            assert_eq!(reporter_follow(&[line(1, Actor::Supervisor, "basis_drifted", None)]), ReporterFollow::default());
+        }
+
+        #[tokio::test]
+        async fn a_change_while_waiting_brings_the_readiness_question_back_flagged_until_the_person_chooses() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let ws = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
+            let triage = insert_at(&fx, "t1", &ws.id, RunKind::Triage, RunState::Done, 10, |r| (r.result, r.result_complete) = (Some("Small.\n\nFor Jira:\nReady to plan: no\nOpen questions:\n- What does done look like?".into()), true)).await;
+            let said = |_: &Run| Some(Readiness { ready: false, questions: vec!["Q?".into()] });
+            let mut events = vec![line(1, Actor::Person, "readiness_asked", Some("d1")).run(&triage.id), line(2, Actor::Person, "draft_approved", Some("d1"))];
+            assert_eq!(readiness_of(&ws, std::slice::from_ref(&triage), said, &events), None, "asked and waiting: no question");
+            events.push(line(3, Actor::Supervisor, "basis_drifted", None));
+            let back = readiness_of(&ws, std::slice::from_ref(&triage), said, &events).expect("the ticket changed while they waited");
+            assert!(back.changed);
+            assert_eq!(serde_json::to_value(&back).unwrap()["changed"], true);
+            events.push(line(4, Actor::Person, "readiness_overridden", None).run(&triage.id));
+            assert_eq!(readiness_of(&ws, std::slice::from_ref(&triage), said, &events), None, "Plan now settles it");
+            let unchanged = readiness_of(&ws, std::slice::from_ref(&triage), said, &[]).unwrap();
+            assert!(!unchanged.changed && serde_json::to_value(&unchanged).unwrap().get("changed").is_none(), "an ordinary stop says nothing of a change");
+        }
+
+        #[tokio::test]
+        async fn the_view_says_what_the_workstream_waits_on_and_the_asked_comment_is_what_starts_it() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id).await.expect("the sample ticket is thin");
+            let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+            assert_eq!((view.clarity, view.waiting_on_reporter), (None, None), "asked, not yet posted: nothing to say");
+            fx.core.approve_proposal(&draft.id).await.unwrap();
+            let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+            assert!(view.waiting_on_reporter.is_some(), "posted: waiting");
+            let json = serde_json::to_value(&view).unwrap();
+            assert!(json["waitingOnReporter"]["since"].is_string() && json.get("clarity").is_none());
+            let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
+            assert_eq!(listed.waiting_on_reporter, view.waiting_on_reporter, "the list agrees");
+            fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+            fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
+            fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+            assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().waiting_on_reporter, None, "the person resumed");
+        }
+
+        #[test]
+        fn the_clarity_notice_shows_for_a_thin_ticket_until_a_triage_a_dismissal_or_an_ask_and_comes_back_when_the_ticket_changed_after_one() {
+            let ws: Workstream = serde_json::from_value(serde_json::json!({ "id": "w", "connectionId": "c", "title": "t", "createdAt": "2026-10-01T10:00:00Z", "itemKey": "CA-1" })).unwrap();
+            let gaps = [ClarityGap::Short, ClarityGap::Done];
+            let shown = |ws: &Workstream, runs: &[Run], events: &[WorkstreamEvent]| clarity_of(ws, runs, &gaps, events);
+            assert_eq!(shown(&ws, &[], &[]), Some(Clarity { gaps: gaps.to_vec() }));
+            assert_eq!(clarity_of(&ws, &[], &[], &[]), None, "nothing missing");
+            assert_eq!(shown(&Workstream { item_key: None, ..ws.clone() }, &[], &[]), None, "no ticket");
+            assert_eq!(shown(&Workstream { closed_at: Some(Utc::now()), ..ws.clone() }, &[], &[]), None, "closed");
+            assert!(shown(&Workstream { mode: Mode::Manage, ..ws.clone() }, &[], &[]).is_some(), "not a need: every mode");
+            assert_eq!(shown(&ws, &[], &[line(1, Actor::Person, "clarity_dismissed", None)]), None, "Looks fine");
+            assert!(shown(&ws, &[], &[line(1, Actor::Pip, "clarity_dismissed", None)]).is_some(), "only the person's");
+            let asked = [line(1, Actor::Person, "clarity_asked", Some("c1"))];
+            assert_eq!(shown(&ws, &[], &asked), None, "asked");
+            let posted = [asked[0].clone(), line(2, Actor::Person, "draft_approved", Some("c1"))];
+            assert_eq!(shown(&ws, &[], &posted), None, "waiting");
+            let changed = [posted[0].clone(), posted[1].clone(), line(3, Actor::Supervisor, "basis_drifted", None)];
+            assert!(shown(&ws, &[], &changed).is_some(), "the ticket changed after they were asked");
+        }
+
+        #[tokio::test]
+        async fn a_triage_in_the_workstream_ends_the_notice_and_the_ask_now_drafts_the_questions_for_approval() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+            let gaps = view.clarity.clone().expect("the sample ticket's description is a line").gaps;
+            assert_eq!(gaps, vec![ClarityGap::Short, ClarityGap::Done, ClarityGap::Scope, ClarityGap::Who]);
+            assert_eq!(serde_json::to_value(&view).unwrap()["clarity"]["gaps"][0], "short");
+
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id).await.unwrap();
+            assert_eq!((draft.state.clone(), draft.created_by, draft.label.as_deref()), (ProposalState::Pending, CreatedBy::User, Some(READINESS_LABEL)));
+            assert!(matches!(&draft.origin, Origin::Chat { workstream, .. } if workstream.as_deref() == Some(ws.id.as_str())), "in this workstream");
+            assert!(proposals::is_reporter_questions(&draft));
+            let Intent::Comment { item, body } = &draft.intent else { panic!("a comment: {:?}", draft.intent) };
+            assert_eq!(item.key, "CA-1");
+            let text = body.plain_text();
+            for part in ["Before CA-1 can be planned", "- What is the goal?", "- How will we know it is done", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"] {
+                assert!(text.contains(part), "{part} in {text}");
+            }
+            assert!(fx.tracker.intents().is_empty(), "nothing is posted before the person approves");
+            let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+            let asked = events.iter().find(|e| e.action == "clarity_asked").expect("audited");
+            assert_eq!((asked.actor, asked.proposal_id.as_deref()), (Actor::Person, Some(draft.id.as_str())));
+            assert!(matches!(fx.core.ask_reporter_now(&fx.scope, &ws.id).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE), "once");
+            assert!(matches!(fx.core.dismiss_clarity(&fx.scope, &ws.id).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE));
+
+            let other = fx.core.open_workstream(&fx.scope, None, Some("Other".into())).await.unwrap();
+            assert!(matches!(fx.core.ask_reporter_now(&fx.scope, &other.id).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE), "no ticket, no notice");
+        }
+
+        #[tokio::test]
+        async fn looks_fine_dismisses_the_notice_for_good_and_is_audited() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            assert!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().clarity.is_some());
+            fx.core.dismiss_clarity(&fx.scope, &ws.id).await.unwrap();
+            assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().clarity, None);
+            let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+            assert_eq!(events.last().map(|e| (e.actor, e.action.as_str())), Some((Actor::Person, "clarity_dismissed")));
+            assert!(fx.tracker.intents().is_empty());
+            let triaged = fx.core.open_workstream(&fx.scope, None, Some("T".into())).await.unwrap();
+            assert!(matches!(fx.core.dismiss_clarity(&fx.scope, &triaged.id).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE));
         }
     }
 

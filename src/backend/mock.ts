@@ -58,11 +58,13 @@ import { basisFieldsOf, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { MockSupervisor, triageReadiness } from "./mockSupervisor";
 import { READINESS_LABEL, reporterComment, reporterDoc } from "./mockReadiness";
+import { clarityQuestions } from "../lib/ticketClarity";
+import { answersDue } from "../lib/reporterWait";
 import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
 import { mockPipTurns } from "./mockPipTurns";
-import { MockWorkstreams, READINESS_GONE, lastTripOf, type LastTrip } from "./mockWorkstreams";
+import { MockWorkstreams, CLARITY_GONE, READINESS_GONE, lastTripOf, type LastTrip } from "./mockWorkstreams";
 
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
@@ -571,6 +573,29 @@ export class MockBackend implements Backend {
     return proposal;
   }
 
+  /**
+   * The person's "Ask the reporter now", as `workstreams_clarity_ask`: the same comment to the reporter as "Ask the reporter",
+   * with one question per gap the clarity check found, as a draft the person approves like any other. Records
+   * `clarity_asked`. Refused with `CLARITY_GONE` unless the workstream's notice is showing.
+   */
+  async workstreamsClarityAsk(id: string) {
+    const notice = this.workstreams.clarityNotice(id);
+    const key = this.workstreams.get(id)?.workstream.itemKey;
+    if (!key) throw new Error(CLARITY_GONE);
+    const item = itemRef(key);
+    const reporter = this.connector.item(item)?.reporter ?? null;
+    const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
+    const body = reporterDoc(reporterComment(key, name, clarityQuestions(notice.gaps)), reporter && name ? { person: reporter, name } : null);
+    const proposal = this.proposals.askedFor({ type: "comment", item, body }, READINESS_LABEL, id);
+    this.workstreams.askedClarity(id, proposal.id);
+    return proposal;
+  }
+
+  /** The person's "Looks fine", as `workstreams_clarity_dismiss`: the notice doesn't show for this ticket again. */
+  async workstreamsClarityDismiss(id: string) {
+    return this.workstreams.dismissClarity(id);
+  }
+
   /** The person's "I'll answer", as `workstreams_readiness_answer`: settles the question and starts nothing. */
   async workstreamsReadinessAnswer(id: string, triageRun: string) {
     return this.workstreams.answerReadiness(id, triageRun);
@@ -894,10 +919,17 @@ export class MockBackend implements Backend {
     return key ? itemRef(key) : null;
   }
 
-  /** The description of `item` as text, for Pip's readiness check in a workstream's first turn. */
-  pipTicketText(item: ItemRef): string | null {
-    const body = this.connector.item(item)?.body;
-    return body ? docText(body) : null;
+  /** The gaps Gossamr's word check found in workstream `id`'s ticket while its notice shows, for Pip's readiness line in a first turn. */
+  pipWorkstreamClarity(id: string) {
+    return this.workstreams.get(id)?.clarity?.gaps ?? null;
+  }
+
+  /** Whether the person chose "I'll answer" in workstream `id` and no comment with their answers was drafted in it since. */
+  pipWorkstreamAnswersDue(id: string): boolean {
+    return answersDue(
+      this.workstreams.events(id),
+      this.proposals.list().filter((p) => workstreamOf(p) === id),
+    );
   }
 
   pipWorkstreamHeld(id: string): string | null {

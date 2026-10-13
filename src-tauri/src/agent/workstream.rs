@@ -11,8 +11,9 @@ use super::context::draft_line;
 use super::mcp::{item_ref, opt, reachable, tool, McpState, PipRun, Reply};
 use crate::auth::Scope;
 use crate::domain::workstream::{run_labels, Stage, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, TRIPWIRES};
-use crate::domain::{Actor, Proposal, ProposalQuery, Run, RunQuery, StateKind, Workstream, WorkstreamEvent};
+use crate::domain::{gaps_phrase, Actor, ClarityGap, Proposal, ProposalQuery, Run, RunQuery, StateKind, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
+use crate::proposals;
 use crate::inbox::{Core, Escalation, ReadinessStop, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 
 pub(super) const NAMES: [&str; 3] = ["get_workstream", "list_workstreams", "set_workstream_notes"];
@@ -59,6 +60,21 @@ pub fn readiness_line(r: &ReadinessStop) -> String {
     )
 }
 
+/// The line that tells Pip what Gossamr's own word check found missing in the ticket's description. It is no verdict and
+/// no run: the Triage stays the authority. Pip names the gaps in its first line, in its own words.
+pub fn clarity_line(key: &str, gaps: &[ClarityGap]) -> String {
+    format!("Gossamr's word check of {key}'s description (no agent ran; it is not a verdict) found that it {}. Say so plainly in your first line, naming {key} and the gap, and never fill a gap with a guess of your own.", gaps_phrase(gaps))
+}
+
+/// The line that tells Pip the person asked the reporter and is waiting on their answer.
+pub fn waiting_line_for_reporter(since: DateTime<Utc>) -> String {
+    format!("Waiting on the reporter since {}: the person asked them the open questions and the comment was posted. Nothing starts on its own until they answer, the ticket changes, or the person chooses to answer or plan anyway; don't draft a plan run for it.", since.format("%Y-%m-%d %H:%M"))
+}
+
+/// The line that tells Pip the person chose to answer the open questions themselves and their next message holds the
+/// answers: it goes to the ticket as a comment for approval, never as a description rewrite.
+pub const ANSWERS_LINE: &str = "The person chose to answer the triage's open questions themselves; their next message holds the answers. Draft one comment on the ticket with propose_comment whose first line is exactly 'Answers to the open questions' and which then quotes each question with their answer. It is a comment, never a rewrite of the description, and it needs their approval like any draft. Then offer to draft the plan (propose_run, kind plan, from_run the triage).";
+
 /// What Pip is told about the workstream its conversation belongs to.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorkstreamContext {
@@ -82,6 +98,12 @@ pub struct WorkstreamContext {
     pub escalation: Option<Escalation>,
     /// The newest triage found the ticket not ready to plan and the person chooses what happens next.
     pub readiness: Option<ReadinessStop>,
+    /// What Gossamr's own word check found missing in the ticket's description, while its notice shows.
+    pub clarity: Vec<ClarityGap>,
+    /// When the person's comment to the reporter was posted, while the workstream waits on their answer.
+    pub waiting_on_reporter: Option<DateTime<Utc>>,
+    /// The person chose to answer the open questions themselves, and no comment with their answers was drafted since.
+    pub answers_due: bool,
 }
 
 /// The last tripwire that held a workstream, as its audit has it: only kinds, field names and times, never ticket text.
@@ -109,6 +131,14 @@ pub fn last_trip(events: &[WorkstreamEvent]) -> Option<LastTrip> {
         .unwrap_or_default();
     let resumed_at = after().find(|e| e.actor == Actor::Person && e.action == "resumed").map(|e| e.at);
     Some(LastTrip { kind, fields, at: trip.at, resumed_at })
+}
+
+/// Whether the newest of the person's readiness choices (`readiness_asked`, `readiness_answered`, `readiness_overridden`)
+/// is "I'll answer" and no comment with their answers was drafted after it among `drafts`, whatever its state.
+pub fn answers_due(events: &[WorkstreamEvent], drafts: &[Proposal]) -> bool {
+    let choice = events.iter().rev().find(|e| e.actor == Actor::Person && matches!(e.action.as_str(), "readiness_asked" | "readiness_answered" | "readiness_overridden"));
+    let Some(chosen) = choice.filter(|e| e.action == "readiness_answered") else { return false };
+    !drafts.iter().any(|p| proposals::is_answers_draft(p) && p.created_at >= chosen.at)
 }
 
 /// Why a tripwire of `kind` held a workstream, in words, e.g. "the ticket's description changed in Jira".
@@ -169,10 +199,11 @@ pub async fn load(core: &Core, scope: &Scope, id: &str) -> Result<WorkstreamCont
         }
     }
     let events = core.workstream_events(scope, id).await?;
+    let answers_due = answers_due(&events, &core.proposals_in(scope, &ProposalQuery { workstream: Some(workstream.id.clone()), ..Default::default() }).await?);
     let last_trip = last_trip(&events);
     let mut recent: Vec<WorkstreamEvent> = events.into_iter().filter(|e| e.actor == Actor::Person).collect();
     recent.drain(..recent.len().saturating_sub(RECENT_ACTIONS));
-    Ok(WorkstreamContext { workstream, stage: view.stage, review_blocking: view.review_blocking, runs, drafts, recent_person_actions: recent, waiting_for_pr: view.waiting_for_pr, event: None, last_trip, escalation: view.escalation, readiness: view.readiness })
+    Ok(WorkstreamContext { workstream, stage: view.stage, review_blocking: view.review_blocking, runs, drafts, recent_person_actions: recent, waiting_for_pr: view.waiting_for_pr, event: None, last_trip, escalation: view.escalation, readiness: view.readiness, clarity: view.clarity.map(|c| c.gaps).unwrap_or_default(), waiting_on_reporter: view.waiting_on_reporter.map(|w| w.since), answers_due })
 }
 
 /// The workstream a turn in its conversation works in. Refused, so the turn never runs, unless it is an open
@@ -230,6 +261,8 @@ fn action_line(e: &WorkstreamEvent, labels: &HashMap<&str, &str>) -> String {
         ("readiness_asked", Some(r)) => format!("asked the reporter about {r}'s open questions ({draft})"),
         ("readiness_answered", Some(r)) => format!("chose to answer {r}'s open questions themselves"),
         ("readiness_overridden", Some(r)) => format!("chose to plan anyway after {r} found the ticket not ready"),
+        ("clarity_asked", _) => format!("asked the reporter about what the ticket leaves unclear ({draft})"),
+        ("clarity_dismissed", _) => "said the ticket looks clear enough".into(),
         ("undone", _) => match e.detail.as_deref() {
             Some("draft_skipped") => format!("undid skipping {draft}"),
             Some("held") => "undid holding this workstream".into(),
@@ -275,6 +308,15 @@ impl WorkstreamContext {
         }
         if let Some(r) = &self.readiness {
             out.push_str(&format!("{}\n", readiness_line(r)));
+        }
+        if let (Some(key), false) = (ws.item_key.as_deref(), self.clarity.is_empty()) {
+            out.push_str(&format!("{}\n", clarity_line(key, &self.clarity)));
+        }
+        if let Some(since) = self.waiting_on_reporter {
+            out.push_str(&format!("{}\n", waiting_line_for_reporter(since)));
+        }
+        if self.answers_due {
+            out.push_str(&format!("{ANSWERS_LINE}\n"));
         }
         if let Some(trip) = &self.last_trip {
             out.push_str(&format!("{}\n", trip_line(trip)));

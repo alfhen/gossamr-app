@@ -19,6 +19,8 @@
 //! (`carried`). What starts is the kind's own template with the
 //! handoffs Core fills; Pip's focus is never carried.
 //!
+//! While the workstream waits on the reporter (the person asked, and the comment was posted) a Triage starts nothing either.
+//!
 //! A Triage that says `ready to plan: no` is a hard stop: nothing starts after it until the person answers or overrides
 //! it, and only the person's own audit line (`readiness_overridden`, actor person, naming that Triage) counts as the
 //! override, which still needs everything else above (Manage, not held, within budget, never a tripwire's run). A Triage
@@ -99,6 +101,9 @@ pub struct RuleInput<'a> {
     pub plan_approved: bool,
     /// For a Triage: the person chose "Plan anyway" after it found the ticket not ready (`readiness_overridden`).
     pub readiness_overridden: bool,
+    /// The person asked the reporter and the comment was posted: nothing starts after a Triage while the workstream waits
+    /// on their answer (`reporter_follow`).
+    pub waiting_on_reporter: bool,
     /// For a Build: its pull request, once a sync found it.
     pub pr: Option<PullHead>,
     /// For a Build: the commit each review of it read.
@@ -138,6 +143,9 @@ pub fn decide(input: &RuleInput) -> Option<Decision> {
     let on = |rule| rule_on(input.settings, ws, rule);
     let start = |rule, kind| Some(Decision::Start { rule, kind, from_run: src.id.clone() });
     match src.spec.kind {
+        // Waiting on the reporter: the Triage's plan, which the answer may change, stays unstarted until the person
+        // chooses or the ticket changes. Only they end the wait, and ending it with "Plan anyway" is the override below.
+        RunKind::Triage if input.waiting_on_reporter => None,
         RunKind::Investigate if src.spec.project.is_none() && on(Rule::InvestigateTriage) => start(Rule::InvestigateTriage, RunKind::Triage),
         // A Triage that found the ticket not ready starts nothing; the person's own "Plan anyway" starts the Plan it was
         // going to, even when the Triage didn't recommend one or the rule is off: they chose it.
@@ -221,6 +229,8 @@ pub struct Slots {
     /// For a Plan after a Triage: the investigation whose findings that Triage carried, which the supervisor checked like
     /// the Triage itself. `None` carries none: Core never falls back to the workstream's newest for a run a rule starts.
     pub findings_from_run: Option<String>,
+    /// For a Plan the person chose to start though its Triage found the ticket not ready: that Triage's open questions.
+    pub assumptions: Vec<String>,
     /// For a Review: the pull request and the head commit the sync cached, which GitHub must still have.
     pub pr: Option<u64>,
     pub pr_sha: Option<String>,
@@ -249,6 +259,7 @@ pub fn spec_for(decision: &Decision, source: &Run, plan: ClonePlan, slots: &Slot
         build_account: None,
         build_from_run: (kind == RunKind::Review).then(|| source.id.clone()),
         findings: None,
+        assumptions: if kind == RunKind::Plan { slots.assumptions.clone() } else { Vec::new() },
         findings_from_run: match kind {
             RunKind::Triage if source.spec.kind == RunKind::Investigate => Some(source.id.clone()),
             RunKind::Triage | RunKind::Plan => slots.findings_from_run.clone(),

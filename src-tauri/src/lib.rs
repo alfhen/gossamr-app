@@ -716,6 +716,26 @@ async fn workstreams_readiness_ask(app: AppHandle, core: State<'_, CoreState>, i
     Ok(made)
 }
 
+/// The person's "Ask the reporter now" on the clarity notice of a ticket no Triage has judged: the same comment to the
+/// reporter, from the gaps the check found, as a draft the person approves like any other. Pip has no way to call this.
+#[tauri::command]
+async fn workstreams_clarity_ask(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+    let scope = core.scope().await?;
+    let made = core.ask_reporter_now(&scope, &id).await?;
+    proposals_changed(&app, &Connection::jira_id(&scope));
+    workstreams_changed(&app, &Connection::jira_id(&scope));
+    Ok(made)
+}
+
+/// The person's "Looks fine" on the clarity notice: it doesn't show again for this ticket.
+#[tauri::command]
+async fn workstreams_clarity_dismiss(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
+    let scope = core.scope().await?;
+    let ws = core.dismiss_clarity(&scope, &id).await?;
+    workstreams_changed(&app, &Connection::jira_id(&scope));
+    Ok(ws)
+}
+
 /// The person's "I'll answer" on a Triage that found its ticket not ready to plan: it settles the question and starts
 /// nothing; the page opens the conversation with the questions quoted.
 #[tauri::command]
@@ -1507,6 +1527,8 @@ pub fn run() {
             workstreams_fix_round,
             workstreams_take_over,
             workstreams_readiness_ask,
+            workstreams_clarity_ask,
+            workstreams_clarity_dismiss,
             workstreams_readiness_answer,
             workstreams_readiness_override,
             workstreams_hold,

@@ -58,6 +58,10 @@ interface WorkstreamsState {
   allowMore(id: string): Promise<boolean>;
   /** The person's "Ask the reporter" on workstream `id`, whose triage found its ticket not ready to plan: a Jira comment to the reporter with its open questions is drafted, for them to approve like any other. False when it couldn't. */
   askReporter(id: string): Promise<boolean>;
+  /** The person's "Ask the reporter now" on the clarity notice: drafts the comment to the reporter from the gaps and shows it for approval. False when it couldn't. */
+  askReporterNow(id: string): Promise<boolean>;
+  /** The person's "Looks fine" on the clarity notice: it doesn't show for this ticket again. False when it couldn't. */
+  looksFine(id: string): Promise<boolean>;
   /** The person's "I'll answer": settles the question and opens the workstream's conversation with the open questions quoted in the composer. False when it couldn't. */
   answerSelf(id: string): Promise<boolean>;
   /** The person's "Plan anyway": records the override; the Triage-to-Plan step starts the Plan under its own checks (Manage, not held, within budget). False when it couldn't. */
@@ -101,6 +105,19 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       useToasts.getState().push(`${failed}. ${messageOf(e)}`);
       return { ok: false };
     }
+  }
+  /** Shows the comment to the reporter `draftId` in the decision pane, its card focused so Post comment is not one keypress away. */
+  async function showReporterDraft(id: string, draftId: string) {
+    // A readiness need is gone once asked: the pane would fall to the next need. It shows the new draft instead.
+    await useWorkspace.getState().refreshProposals();
+    const home = usePipHome.getState();
+    const key = `draft:${draftId}`;
+    setPaneIntent("card");
+    // The advance after the answered need may have opened this very draft already, with its Post button focused: remount it to read the intent.
+    const open = home.deciding === key;
+    home.decide(key, id);
+    if (open) home.redecide();
+    useToasts.getState().push("Here is the comment to the reporter. Nothing is posted until you press Post comment.", "info");
   }
   const ok = async (failed: string, call: (backend: Backend) => Promise<Workstream>) => (await act(failed, call)).ok;
   /** What a choice about a triage's open questions says when the workstream no longer waits for it. */
@@ -279,17 +296,21 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       if (!stop) return stale();
       const done = await act("Couldn't draft the comment to the reporter", (b) => b.workstreamsReadinessAsk(id, stop.triageRun));
       if (!done.ok) return false;
-      // The readiness need is gone: the pane would fall to the next need. It shows the new draft instead, its card focused so Post comment is not one keypress away.
-      await useWorkspace.getState().refreshProposals();
-      const home = usePipHome.getState();
-      const key = `draft:${done.value.id}`;
-      setPaneIntent("card");
-      // The advance after the answered need may have opened this very draft already, with its Post button focused: remount it to read the intent.
-      const open = home.deciding === key;
-      home.decide(key, id);
-      if (open) home.redecide();
-      useToasts.getState().push("Here is the comment to the reporter. Nothing is posted until you press Post comment.", "info");
+      await showReporterDraft(id, done.value.id);
       return true;
+    },
+
+    async askReporterNow(id) {
+      if (!get().list.find((v) => v.workstream.id === id)?.clarity) return stale();
+      const done = await act("Couldn't draft the comment to the reporter", (b) => b.workstreamsClarityAsk(id));
+      if (!done.ok) return false;
+      await showReporterDraft(id, done.value.id);
+      return true;
+    },
+
+    async looksFine(id) {
+      if (!get().list.find((v) => v.workstream.id === id)?.clarity) return stale();
+      return ok("Couldn't dismiss the notice", (b) => b.workstreamsClarityDismiss(id));
     },
 
     async answerSelf(id) {

@@ -121,6 +121,14 @@ describe("workstreamStatus", () => {
     expect(status([run("r1", "plan", "launching"), run("r2", "review", "working")])).toBe("Review running");
   });
 
+  it("says it waits on the reporter once nothing is running or queued, ahead of Needs you and Idle", () => {
+    const waiting = { ...view("ws-1", "CA-401", { runs: all, stage: "triage" }), waitingOnReporter: { since: iso(60) } };
+    expect(workstreamStatus(waiting, [run("r1", "triage", "done")])).toBe("Waiting on the reporter");
+    expect(workstreamStatus(waiting, [run("r1", "triage", "working")])).toBe("Triage running");
+    expect(workstreamStatus({ ...waiting, workstream: { ...waiting.workstream, heldReason: HELD_PERSON } }, [])).toBe("Held by you");
+    expect(workstreamStatus(waiting, [], 1)).toBe("Waiting on the reporter");
+  });
+
   it("says queued, then Needs you, then a failure, then Idle or Done", () => {
     expect(status([run("r1", "build", "queued"), run("r2", "plan", "needsAnswer")])).toBe("Build queued");
     expect(status([run("r1", "plan", "needsPermission"), run("r2", "investigate", "failed")])).toBe("Needs you");
@@ -279,6 +287,13 @@ describe("drafts by step", () => {
   it("are approved together only when pending comments, moves and subtasks; never a rewrite or a run", () => {
     const drafts = [fromRun("c1", comment("CA-401"), "r5"), fromRun("rw", rewrite, "r5"), fromRun("t1", transition, "r5"), fromRun("s1", subtasks, "r5"), draft("run", startRun("CA-401", "review", "ws-1"), 3), { ...fromRun("c2", comment("CA-401"), "r5"), state: { type: "applying" } } as Proposal];
     expect(batchable(drafts).map((p) => p.id)).toEqual(["c1", "t1", "s1"]);
+  });
+
+  it("leave out the questions to a reporter and Pip's comment with the person's answers, which are read and approved on their own", () => {
+    const asked = { ...fromRun("asked", comment("CA-401"), "r5"), label: "Questions for the reporter" } as Proposal;
+    const clarity = { ...draft("clarity", comment("CA-401"), 4), createdBy: "user", label: "Questions for the reporter" } as Proposal;
+    const answers = { ...draft("answers", comment("CA-401"), 3), label: "Answers to the open questions" } as Proposal;
+    expect(batchable([asked, clarity, answers, fromRun("c1", comment("CA-401"), "r5")]).map((p) => p.id)).toEqual(["c1"]);
   });
 });
 

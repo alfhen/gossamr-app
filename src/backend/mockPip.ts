@@ -1,5 +1,5 @@
 import { and } from "../lib/filter";
-import { REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
+import { ANSWERS_COMMENT_LABEL, REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
 import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import type { BasisField, Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
@@ -14,7 +14,7 @@ import { heldText } from "../lib/workstreamHold";
 import { draftPhrase, runPhrase } from "../lib/runNames";
 import { statusId } from "./mockConnector";
 import type { LastTrip } from "./mockWorkstreams";
-import { gapsSentence, readinessGaps, thinDescription } from "./mockReadiness";
+import { clarityText, type ClarityGap } from "../lib/ticketClarity";
 
 /** What the scripted Pip does for one question. */
 export interface PipScript {
@@ -192,21 +192,57 @@ export interface PipWorkstream {
   lastTrip?: LastTrip | null;
   /** Pip's first turn in this conversation, which opens with the readiness check of the ticket. */
   first?: boolean;
-  /** The ticket's description as text, for that check; null when it has none or isn't known. */
-  ticketText?: string | null;
+  /** The gaps Gossamr's own word check found in the ticket's description, while its notice shows (not dismissed, no triage yet): Pip's first line names them. */
+  clarity?: readonly ClarityGap[] | null;
+  /** The person chose "I'll answer" on a triage's open questions and no comment with their answers was drafted since: their next message holds the answers. */
+  answersDue?: boolean;
 }
 
 /**
  * Pip's readiness check of a workstream's ticket in its first turn, as the Manager prompt asks (`MANAGER` in
- * src-tauri/src/agent/context.rs): the one sentence naming what the ticket leaves out, e.g. "CA-408 doesn't say what done
- * looks like, what's in or out of scope, or who is waiting on it." Null when it isn't the first turn, there is no ticket,
- * or the sample finds nothing missing: it recognises a one-line description (`thinDescription`), the sample's stand-in for
- * Pip's judgment.
+ * src-tauri/src/agent/context.rs): the one sentence naming what the ticket leaves out, from the gaps Gossamr's own word check
+ * found (`clarity_line` in agent/workstream.rs tells the real Pip the same), e.g. "CA-408 may be unclear: it has a very short
+ * description and doesn't say what done looks like." Null when it isn't the first turn, there is no ticket, or the check
+ * found nothing, or its notice is gone (dismissed, asked, or a triage ran).
  */
 export function readinessLine(workstream: PipWorkstream | null): string | null {
-  if (!workstream?.first || !workstream.item || !thinDescription(workstream.ticketText)) return null;
-  const gaps = readinessGaps(workstream.ticketText ?? "");
-  return gaps.length ? gapsSentence(workstream.item.key, gaps) : null;
+  if (!workstream?.first || !workstream.item || !workstream.clarity?.length) return null;
+  return clarityText(workstream.item.key, workstream.clarity);
+}
+
+/**
+ * What Pip does with the person's next message after they chose "I'll answer": the comment "Answers to the open questions"
+ * for the ticket, quoting each question with their answer, as a draft for approval, then the plan as a run draft. A comment,
+ * never a rewrite of the description. The message is the composer's prefill (`readinessPrompt`): the questions quoted, then
+ * "My answers:" and what the person wrote. Null when no answers are due, or there is no ticket.
+ */
+export function answersScript(prompt: string, runs: readonly Run[], workstream: PipWorkstream | null): PipScript | null {
+  const item = workstream?.item;
+  if (!workstream?.answersDue || !item) return null;
+  const at = prompt.indexOf("My answers:");
+  const asked = at >= 0 ? prompt.slice(0, at) : "";
+  const questions = [...asked.matchAll(/\u201c([^\u201d]*)\u201d/g)].map((m) => m[1].trim()).filter((q) => q && q !== "(it listed no questions)");
+  const answer = (at >= 0 ? prompt.slice(at + "My answers:".length) : prompt).trim();
+  // One answer line for each question pairs them up; any other shape gets every question, then the answer as it was written.
+  const lines = answer.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const paired = questions.length > 1 && lines.length === questions.length;
+  const body = [ANSWERS_COMMENT_LABEL, ""];
+  if (paired) questions.forEach((q, i) => body.push(`\u201c${q}\u201d`, `Answer: ${lines[i]}`, ""));
+  else {
+    questions.forEach((q) => body.push(`\u201c${q}\u201d`));
+    if (questions.length) body.push("");
+    body.push(questions.length === 1 ? `Answer: ${answer}` : `Answers: ${answer}`);
+  }
+  const triage = runs
+    .filter((r) => r.spec.workstream === workstream.id && r.spec.kind === "triage" && r.state === "done")
+    .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
+  return {
+    steps: ["Read the open questions", "Drafted a comment with your answers"],
+    text: `I drafted a comment on **${item.key}** with your answers, quoting each question. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " I also drafted the plan, which does not start until you read and start it." : ""}`,
+    filter: null,
+    draft: { intent: { type: "comment", item, body: docFromText(body.join("\n").trim()) }, label: ANSWERS_COMMENT_LABEL },
+    runDraft: triage ? { item, kind: "plan", fromRun: triage.id, focus: null } : null,
+  };
 }
 
 /**
@@ -515,6 +551,8 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
 
 function scriptTurn(prompt: string, context: ScreenContext, images: ImageData[], runs: readonly Run[], now: number, drafts: readonly Proposal[], discussed: string | null, workstream: PipWorkstream | null): PipScript {
   if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs, workstream);
+  const answers = answersScript(prompt, runs, workstream);
+  if (answers) return answers;
   const q = prompt.toLowerCase();
   const foundIn = asksWhatRunFound.exec(prompt.trim());
   if (foundIn) return runFound(runs.find((r) => r.id === foundIn[1]));
@@ -823,8 +861,10 @@ export interface PipDrafter {
   pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string): Promise<unknown>;
   /** The ticket of workstream `id`, for a turn asked in its conversation. */
   pipWorkstreamItem(id: string): ItemRef | null;
-  /** The description of `item` as text, for Pip's readiness check in a workstream's first turn. */
-  pipTicketText?(item: ItemRef): string | null;
+  /** The gaps Gossamr's word check found in workstream `id`'s ticket while its notice shows, for Pip's readiness line in a first turn. */
+  pipWorkstreamClarity?(id: string): readonly ClarityGap[] | null;
+  /** Whether the person chose "I'll answer" in workstream `id` and no comment with their answers was drafted since. */
+  pipWorkstreamAnswersDue?(id: string): boolean;
   /** Why workstream `id` is held, or null; only the scripted answer to "Why is this held?" reads it. */
   pipWorkstreamHeld(id: string): string | null;
   /** The ticket fields whose drift held workstream `id`, while it is held for that. */
@@ -894,7 +934,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   const first = !!wsId && req.kind !== "wake" && mockPipTurns.turns(req.conversation ?? GENERAL_CONVERSATION).every((t) => t.requestId === req.requestId);
   mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "running", new Date(), undefined, req.kind ?? "user");
   const item = wsId ? (drafter?.pipWorkstreamItem?.(wsId) ?? null) : null;
-  const workstream = wsId ? { id: wsId, item, heldReason: drafter?.pipWorkstreamHeld?.(wsId) ?? null, drifted: drafter?.pipWorkstreamDrifted?.(wsId) ?? null, lastTrip: drafter?.pipWorkstreamTrip?.(wsId) ?? null, first, ticketText: item ? (drafter?.pipTicketText?.(item) ?? null) : null } : null;
+  const workstream = wsId ? { id: wsId, item, heldReason: drafter?.pipWorkstreamHeld?.(wsId) ?? null, drifted: drafter?.pipWorkstreamDrifted?.(wsId) ?? null, lastTrip: drafter?.pipWorkstreamTrip?.(wsId) ?? null, first, clarity: drafter?.pipWorkstreamClarity?.(wsId) ?? null, answersDue: drafter?.pipWorkstreamAnswersDue?.(wsId) ?? false } : null;
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });

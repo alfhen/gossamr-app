@@ -318,6 +318,10 @@ export interface Backend {
   workstreamsTakeOver(id: string, reviewRun: string): Promise<Workstream>;
   /** The person's "Ask the reporter" on Triage `triageRun`, which found its ticket not ready to plan: a Jira comment to the reporter with its open questions, as a draft the person approves like any other. Refused when the stop isn't about that Triage any more. */
   workstreamsReadinessAsk(id: string, triageRun: string): Promise<Proposal>;
+  /** The person's "Ask the reporter now" on a workstream's clarity notice (a ticket no Triage has judged): the same comment to the reporter, with one question per gap the check found, as a draft the person approves like any other. Refused when the notice isn't showing any more. */
+  workstreamsClarityAsk(id: string): Promise<Proposal>;
+  /** The person's "Looks fine" on the clarity notice: it doesn't show for this ticket again. Refused when the notice isn't showing. */
+  workstreamsClarityDismiss(id: string): Promise<Workstream>;
   /** The person's "I'll answer" on Triage `triageRun`: it settles the question and starts nothing. */
   workstreamsReadinessAnswer(id: string, triageRun: string): Promise<Workstream>;
   /** The person's "Plan anyway" on Triage `triageRun`: records the override and lets the Triage-to-Plan rule start the Plan under its own checks (Manage, not held, within budget). */
