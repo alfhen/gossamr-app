@@ -299,7 +299,7 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
     await expect(toast(page)).toContainText("CA-401 to Advise");
   });
 
-  test("the header's banner for a budget hold offers Allow 5 more and Switch to Advise, never Resume, which would reset what was spent", async ({ page }) => {
+  test("the header's banner for a budget hold offers Allow 5 more and Switch to Advise, never Resume", async ({ page }) => {
     await spent(page);
     const banner = heldBanner(page);
     await expect(banner.getByRole("button", { name: "Resume" })).toHaveCount(0);
@@ -318,6 +318,28 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
     await expect(needOfKind(page, "budget")).toHaveCount(0);
     await expect(heldBanner(page).getByRole("button", { name: "Allow 5 more" })).toHaveCount(0);
     await expect(heldBanner(page).getByRole("button", { name: "Resume" })).toBeVisible();
+  });
+
+  test("Switch to Advise, Resume and back to Manage asks Allow 5 more again, with the spent count unchanged", async ({ page }) => {
+    await spent(page);
+    const left = pipPane(page).locator("[data-steps-left]");
+    const before = await left.innerText();
+    await heldBanner(page).getByRole("button", { name: "Switch to Advise" }).click();
+    await expect(needOfKind(page, "budget")).toHaveCount(0);
+    await heldBanner(page).getByRole("button", { name: "Resume" }).click();
+    await expect(heldBanner(page)).toHaveCount(0);
+    expect(await actions(page, "budget_reset")).toEqual([]);
+
+    // Manage again: nothing was granted, so the question is back.
+    await pipPane(page).getByRole("switch", { name: "Manage this workstream" }).click();
+    await expect(heldBanner(page)).toHaveAttribute("data-held-banner", "budget");
+    await expect(heldBanner(page).getByRole("button", { name: "Allow 5 more" })).toBeVisible();
+    await expect(left).toHaveText(before);
+    await nextLine(page).getByRole("button").click();
+    await expect(needsPane(page)).toHaveAttribute("data-kind", "budget");
+    await expect(needsPane(page).getByRole("button", { name: "Allow 5 more" })).toBeVisible();
+    expect((await actions(page, "held")).map((e) => [e.actor, e.detail]).pop()).toEqual(["supervisor", "budget"]);
+    expect(await actions(page, "steps_allowed")).toEqual([]);
   });
 
   test("a double click on Allow 5 more allows once and shows no error", async ({ page }) => {

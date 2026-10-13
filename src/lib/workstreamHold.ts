@@ -37,7 +37,7 @@ export function isHeldByYou(reason: string | null | undefined): boolean {
 /**
  * What the page says about a workstream held for `reason` (`heldReason`); null when it isn't held. A basis-drift hold
  * says what changed when `drifted` names it. A budget hold says no more than that the steps are used up: what to do
- * is Allow 5 more or Advise (the banner's buttons), never Resume, which would start the count from zero unaudited.
+ * is Allow 5 more or Advise (the banner's buttons), never Resume: lifting the hold grants nothing, and Manage with the steps spent is held again.
  */
 export function heldText(reason: string | null | undefined, drifted?: readonly BasisField[] | null): string | null {
   if (!reason) return null;
