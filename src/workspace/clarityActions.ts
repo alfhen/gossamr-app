@@ -16,14 +16,35 @@ export async function giveBackClarity(project?: string): Promise<number> {
     useToasts.getState().push("Gossamr hasn't learned anything from Looks fine yet.", "info");
     return 0;
   }
-  prefs.resetClarityLearning(project);
   const ws = useWorkstreams.getState();
   const backend = ws.backend ?? useWorkspace.getState().backend;
+  // Where there is an open workstream the audit line is written first, and the learning is given back only once it is
+  // there: a reset with no record of it is worse than one that has to be tried again. With no open workstream there is
+  // nowhere to write it, so the page's prefs are cleared with no audit, as documented above.
+  const reset: string[] = [];
+  const failed: string[] = [];
   for (const { project: p } of projects) {
     const open = ws.list.find((v) => v.workstream.closedAt === null && v.workstream.itemKey && projectOfKey(v.workstream.itemKey) === p);
-    if (open && backend) await backend.workstreamsClarityNote(open.workstream.id, "clarity_reset", p).catch(() => {});
+    if (open) {
+      if (!backend) {
+        failed.push(p);
+        continue;
+      }
+      try {
+        await backend.workstreamsClarityNote(open.workstream.id, "clarity_reset", p);
+      } catch {
+        failed.push(p);
+        continue;
+      }
+    }
+    reset.push(p);
   }
-  if (backend) await ws.refresh().catch(() => {});
-  useToasts.getState().push(project ? `Gossamr will flag unclear ${project} tickets as before.` : "Gossamr will flag unclear tickets as before in every project.", "info");
-  return projects.length;
+  // Everything is reset at once when nothing failed, which also drops the counts not yet learned; otherwise only what was audited.
+  if (!failed.length) prefs.resetClarityLearning(project);
+  else for (const p of reset) prefs.resetClarityLearning(p);
+  if (backend && reset.length) await ws.refresh().catch(() => {});
+  const toasts = useToasts.getState();
+  if (failed.length) toasts.push(`Couldn't note the reset in the audit, so ${failed.join(", ")} wasn't reset. Try again.`, "error");
+  if (reset.length) toasts.push(project ? `Gossamr will flag unclear ${project} tickets as before.` : "Gossamr will flag unclear tickets as before in every project.", "info");
+  return reset.length;
 }

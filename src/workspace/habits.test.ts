@@ -216,6 +216,49 @@ describe("what Looks fine teaches the clarity notice", () => {
     expect(usePrefs.getState().clarityLearning).toEqual({});
   });
 
+  it("does not give the learning back when its audit line can't be written, and says so", async () => {
+    usePrefs.setState({ clarityLearning: { CA: { who: 3 }, WEB: { done: 4 } } });
+    const id = await open("CA-402");
+    const note = vi.spyOn(backend, "workstreamsClarityNote").mockRejectedValue(new Error("down"));
+    expect(await giveBackClarity("CA")).toBe(0);
+    expect(usePrefs.getState().clarityLearning).toEqual({ CA: { who: 3 }, WEB: { done: 4 } });
+    expect(events(id).some((e) => e.action === "clarity_reset")).toBe(false);
+    expect(texts()).toHaveLength(1);
+    expect(texts()[0]).toContain("CA wasn't reset. Try again.");
+    expect(useToasts.getState().toasts[0].tone).toBe("error");
+    // With all of them: the project with no open workstream is reset, the one whose audit failed is kept.
+    useToasts.getState().clear();
+    expect(await giveBackClarity()).toBe(1);
+    expect(usePrefs.getState().clarityLearning).toEqual({ CA: { who: 3 } });
+    note.mockRestore();
+    useToasts.getState().clear();
+    expect(await giveBackClarity("CA")).toBe(1);
+    expect(usePrefs.getState().clarityLearning).toEqual({});
+    expect(events(id).find((e) => e.action === "clarity_reset")).toMatchObject({ detail: "CA" });
+  });
+
+  it("dismisses the notice but doesn't count it toward learning when the clarity_learned write fails", async () => {
+    const [a, b, c] = await (async () => {
+      const ids: string[] = [];
+      for (const key of ["CA-402", "CA-409", "CA-209"]) {
+        backend.editTicket(key, { description: THIN });
+        ids.push(await open(key));
+      }
+      return ids;
+    })();
+    await useWorkstreams.getState().looksFine(a);
+    await useWorkstreams.getState().looksFine(b);
+    const note = vi.spyOn(backend, "workstreamsClarityNote").mockRejectedValue(new Error("down"));
+    expect(await useWorkstreams.getState().looksFine(c)).toBe(true);
+    expect(events(c).filter((e) => e.action === "clarity_dismissed")).toHaveLength(1);
+    expect(events(c).some((e) => e.action === "clarity_learned")).toBe(false);
+    expect(usePrefs.getState().clarityLearning).toEqual({ CA: { short: 2, done: 2, scope: 2, who: 2 } });
+    expect(texts()).toHaveLength(1);
+    expect(texts()[0]).toContain("couldn't note what Gossamr learned");
+    expect(useToasts.getState().toasts[0].tone).toBe("error");
+    note.mockRestore();
+  });
+
   it("takes only the two clarity notes into the audit", async () => {
     const id = await open("CA-402");
     await expect(backend.workstreamsClarityNote(id, "draft_approved" as never, "x")).rejects.toThrow("isn't a note about the clarity check");
