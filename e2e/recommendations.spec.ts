@@ -147,8 +147,8 @@ test.describe("B2: a hold the person chose is not a need", () => {
     await expect(needsYouCount(page)).toHaveText("0");
     await expect(needsYouTray(page)).toContainText("Nothing needs you.");
     await expect(homeButton(page)).toHaveAccessibleName("Pip home");
-    await expect(workstreamRow(page, "CA-401").locator("[data-status]")).toHaveText("· Held by you");
-    await expect(workstreamRow(page, "CA-401").locator("[data-needs-you-badge]")).toHaveCount(0);
+    await expect(workstreamRow(page, "CA-401").locator("[data-status]")).toHaveText("Held by you");
+    await expect(workstreamRow(page, "CA-401").locator('[data-status="needs-you"]')).toHaveCount(0);
 
     // Undo of the hold works as before.
     await expect(toast(page)).toContainText("Held CA-401.");

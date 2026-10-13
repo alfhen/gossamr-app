@@ -157,7 +157,7 @@ test.describe("the reporter nudge", () => {
     await openPipHome(page);
     await workstreamRow(page, "CA-408").click();
     await waitingOn(page, 1.5);
-    await expect(workstreamRow(page, "CA-408").locator("[data-status]")).toHaveText("· Waiting on the reporter");
+    await expect(workstreamRow(page, "CA-408").locator("[data-status]")).toHaveText("Waiting on reporter");
     // Under two days: said, and no offer.
     await expect(nextLine(page)).toHaveText("Next: Waiting on the reporter since yesterday; nothing starts on its own.");
     await expect(nextLine(page).getByRole("button", { name: "Draft a nudge" })).toHaveCount(0);
