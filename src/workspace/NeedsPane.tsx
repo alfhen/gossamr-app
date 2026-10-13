@@ -92,6 +92,15 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
 /** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
 export const advancedText = (done: Pick<Need, "title">, next: Pick<Need, "title">) => `Done: ${done.title}. Now: ${next.title}`;
 
+/** The line with an id of its own: two advances with the same words (drafts with one title) are still two, so the line shows again and its timer restarts. */
+export interface Advanced {
+  id: number;
+  text: string;
+}
+
+/** The line for a new advance after `previous`, whose id is never the same. */
+export const nextAdvanced = (previous: Advanced | null, text: string): Advanced => ({ id: (previous?.id ?? 0) + 1, text });
+
 /** How long the line saying the pane moved on stays. */
 export const ADVANCED_MS = 5000;
 
@@ -717,10 +726,12 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
 export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const deciding = usePipHome((s) => s.deciding);
   const paneRev = usePipHome((s) => s.paneRev);
-  const [advanced, setAdvanced] = useState<string | null>(null);
-  useAdvance(needs, (done, next) => setAdvanced(advancedText(done, next)));
+  const [advanced, setAdvanced] = useState<Advanced | null>(null);
+  const lastId = useRef(0);
+  useAdvance(needs, (done, next) => setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next))));
   useEffect(() => {
     if (!advanced) return;
+    lastId.current = advanced.id;
     const timer = setTimeout(() => setAdvanced(null), ADVANCED_MS);
     return () => clearTimeout(timer);
   }, [advanced]);
@@ -733,8 +744,8 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   return (
     <>
       {advanced && (
-        <p role="status" data-needs-advanced className="m-0 shrink-0 border-b border-ws-sep bg-ws-bar px-3 py-1 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
-          {advanced}
+        <p key={advanced.id} role="status" data-needs-advanced className="m-0 shrink-0 border-b border-ws-sep bg-ws-bar px-3 py-1 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
+          {advanced.text}
         </p>
       )}
       {higher && <HigherPriorityBar need={higher} />}

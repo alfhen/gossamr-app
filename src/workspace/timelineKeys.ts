@@ -102,6 +102,21 @@ export interface ReadingAnchor {
   offset: number;
 }
 
+/**
+ * The index of the first of `count` entries, in document order, whose bottom (read by `bottomAt`) is below `top`; `count` when none is. Entries stack,
+ * so bottoms only grow and a binary search reads about log2(count) of them instead of all.
+ */
+export function firstShowing(count: number, bottomAt: (i: number) => number, top: number): number {
+  let lo = 0;
+  let hi = count;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (bottomAt(mid) > top) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
 /** The first entry still showing at the scroller's `top`: the first whose bottom is below it. Null for none. */
 export function readingAnchor(top: number, entries: readonly { key: string; top: number; bottom: number }[]): ReadingAnchor | null {
   const entry = entries.find((e) => e.bottom > top);

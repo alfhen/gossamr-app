@@ -1949,6 +1949,9 @@ impl SupervisorCore for Recording {
     async fn workstream_events(&self, scope: &Scope, id: &str) -> crate::error::Result<Vec<WorkstreamEvent>> {
         self.core().workstream_events(scope, id).await
     }
+    async fn ticket_replies(&self, scope: &Scope, ws: &Workstream) -> crate::error::Result<Vec<chrono::DateTime<chrono::Utc>>> {
+        self.core().ticket_replies(scope, ws).await
+    }
     async fn linked_runs(&self, scope: &Scope, ws: &str) -> crate::error::Result<Vec<Run>> {
         self.core().runs_list(&RunQuery { connection_id: Some(Connection::jira_id(scope)), workstream: Some(ws.into()), ..Default::default() }).await
     }

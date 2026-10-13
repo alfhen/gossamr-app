@@ -58,6 +58,8 @@ export interface WitherMore {
   turns?: readonly { at?: string | null }[] | null;
   /** When the workstream opened, when the audit has no `opened` line. */
   openedAt?: string | null;
+  /** The reporter replied on the ticket (`WorkstreamView.reporterReplied`): the wait on them is over, whatever the audit says. */
+  replied?: boolean;
 }
 
 const at = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
@@ -83,7 +85,7 @@ function sinceText(runs: number, turns: number): string {
 /** The workstream's cobweb at `now`, from its audit `events`, its `runs` and what `more` knows. Pure. */
 export function workstreamWither(events: readonly WorkstreamEvent[], runs: readonly WitherRun[], now: Date, more: WitherMore = {}): WorkstreamWither {
   const none: WorkstreamWither = { level: 0, days: 0, since: null, runs: 0, turns: 0, text: "" };
-  const waiting = reporterFollow(events).waiting;
+  const waiting = more.replied ? null : reporterFollow(events).waiting;
   if (waiting && !Number.isNaN(at(waiting))) {
     const days = Math.max(0, Math.floor((now.getTime() - at(waiting)) / 86_400_000));
     const level = witherLevel(waiting, now, WITHER_DAYS.ticket);

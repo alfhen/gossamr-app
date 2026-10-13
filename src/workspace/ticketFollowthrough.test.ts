@@ -14,6 +14,7 @@ import { currentNeeds } from "./useNeeds";
 import { workstreamStatus } from "./pipHomeLogic";
 import { heldBanner } from "../lib/workstreamHold";
 import { useWorkstreams } from "./workstreamsStore";
+import { withersOf } from "./useWorkstreamWithers";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -131,6 +132,33 @@ describe("a workstream that waits on the reporter", () => {
     backend.workstreams.resume(id);
     await useWorkstreams.getState().refresh();
     expect(stored(id).waitingOnReporter ?? null).toBeNull();
+  });
+});
+
+describe("a reporter's reply comment ends the wait", () => {
+  it("ends it for a comment from someone else, not for the person's own, and brings the readiness question back as a reply", async () => {
+    const id = await open("CA-408");
+    await useWorkstreams.getState().askReporterNow(id);
+    await useWorkspace.getState().refreshProposals();
+    const asked = Object.values(useWorkspace.getState().proposals).find((p) => p.label === "Questions for the reporter")!;
+    await backend.proposalsApprove(asked.id);
+    await useWorkstreams.getState().refresh();
+    expect(stored(id).waitingOnReporter?.since).toBeTruthy();
+    // The person's own comment answers nothing.
+    await new Promise((r) => setTimeout(r, 5));
+    backend.connector.comment(CA408, "Any news?");
+    await useWorkstreams.getState().refresh();
+    expect(stored(id).waitingOnReporter?.since).toBeTruthy();
+    expect(stored(id).reporterReplied ?? false).toBe(false);
+    // The reporter's reply ends it, with no audit line and no hold.
+    await new Promise((r) => setTimeout(r, 5));
+    backend.commentOnTicket("CA-408", "It should send three emails.");
+    await useWorkstreams.getState().refresh();
+    expect(stored(id).waitingOnReporter ?? null).toBeNull();
+    expect(stored(id)).toMatchObject({ reporterReplied: true, changedWhileWaiting: true });
+    expect(stored(id).workstream.heldReason).toBeNull();
+    expect(workstreamStatus(stored(id), [])).not.toBe("Waiting on the reporter");
+    expect(withersOf([stored(id)], { events: { [id]: events(id) }, byTicket: {}, runs: [], proposals: {} }, Date.now() + 5 * 86_400_000)[id]?.reporter).toBeUndefined();
   });
 });
 

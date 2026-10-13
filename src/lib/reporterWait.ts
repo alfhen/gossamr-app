@@ -5,8 +5,10 @@ import { isAnswersDraft } from "./proposals";
 export interface ReporterFollow {
   /** Waiting on the reporter since then: the asked comment was approved and nothing has ended the wait. */
   waiting: string | null;
-  /** The wait ended because the ticket changed, and the person hasn't chosen since: the readiness question comes back. */
+  /** The wait ended because the ticket changed or the reporter replied (`replied`), and the person hasn't chosen since: the readiness question comes back. */
   changed: boolean;
+  /** The wait ended with a comment on the ticket from someone other than the person, newer than the wait's start: how a reporter usually answers, which leaves no audit line. Implies `changed`. */
+  replied: boolean;
 }
 
 /** The parts of an audit line the wait is read from. */
@@ -15,22 +17,30 @@ export type FollowLine = Pick<WorkstreamEvent, "actor" | "action" | "proposalId"
 /**
  * `ReporterFollow` of the audit `events` (oldest first), as `reporter_follow`: the wait starts when the comment of a
  * `readiness_asked` or `clarity_asked` is approved, and ends at the first of the ticket changing (`basis_drifted`, the
- * supervisor's), the person choosing to answer or plan anyway, or resuming. Only the person's own lines count as theirs.
- * Both sides run src/lib/reporterWait.fixtures.json.
+ * supervisor's), the reporter replying, the person choosing to answer or plan anyway, or resuming. Only the person's own
+ * lines count as theirs. Both sides run src/lib/reporterWait.fixtures.json. `replies` are the times (ISO) of the ticket's comments from anyone but the signed-in person: a
+ * Jira comment leaves no audit line, so one newer than the wait's start ends it, placed among the audit lines by its time.
  */
-export function reporterFollow(events: readonly FollowLine[]): ReporterFollow {
+export function reporterFollow(events: readonly FollowLine[], replies: readonly string[] = []): ReporterFollow {
   const asked = new Set<string>();
-  let now: ReporterFollow = { waiting: null, changed: false };
+  let now: ReporterFollow = { waiting: null, changed: false, replied: false };
+  const times = replies.map((r) => Date.parse(r)).filter((t) => !Number.isNaN(t)).sort((a, b) => a - b);
+  let next = 0;
+  const reply = (t: number) => {
+    if (now.waiting && t > Date.parse(now.waiting)) now = { waiting: null, changed: true, replied: true };
+  };
   for (const e of events) {
+    while (next < times.length && times[next] < Date.parse(e.at)) reply(times[next++]);
     const person = e.actor === "person";
     if (person && (e.action === "readiness_asked" || e.action === "clarity_asked")) {
       if (e.proposalId) asked.add(e.proposalId);
-      now = { ...now, changed: false };
-    } else if (person && e.action === "draft_approved" && e.proposalId && asked.has(e.proposalId)) now = { waiting: e.at, changed: false };
-    else if (person && (e.action === "readiness_answered" || e.action === "readiness_overridden")) now = { waiting: null, changed: false };
-    else if (e.actor === "supervisor" && e.action === "basis_drifted" && now.waiting) now = { waiting: null, changed: true };
+      now = { ...now, changed: false, replied: false };
+    } else if (person && e.action === "draft_approved" && e.proposalId && asked.has(e.proposalId)) now = { waiting: e.at, changed: false, replied: false };
+    else if (person && (e.action === "readiness_answered" || e.action === "readiness_overridden")) now = { waiting: null, changed: false, replied: false };
+    else if (e.actor === "supervisor" && e.action === "basis_drifted" && now.waiting) now = { waiting: null, changed: true, replied: false };
     else if (person && e.action === "resumed") now = { ...now, waiting: null };
   }
+  while (next < times.length) reply(times[next++]);
   return now;
 }
 
