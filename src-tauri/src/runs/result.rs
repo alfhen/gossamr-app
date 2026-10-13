@@ -291,7 +291,7 @@ pub struct Readiness {
 /// `no`, the list under its `Open questions:` heading (or the text after it on the same line). Quoted lines, code fences
 /// and disagreeing lines count for nothing, so a ticket's own words never mark it not ready. The questions are the
 /// agent's words: cleaned, one line each, cut, at most `QUESTIONS_MAX`. `None` when there is no verdict, which reads as
-/// ready.
+/// ready. Mirrored by `readiness` in src/backend/mockSupervisor.ts; both run `report` in src/backend/readiness.fixtures.json.
 pub fn readiness(result: &str) -> Option<Readiness> {
     let clean = sanitize(result);
     let ready = yes_no_line(&clean, "ready to plan")?;

@@ -137,7 +137,8 @@ pub struct ReporterFollow {
 }
 
 /// `ReporterFollow` of the audit `events`. Only the person's own lines count as asking, approving, answering, planning
-/// anyway or resuming, and only the supervisor's as the ticket changing. `replies` are the times of the cached ticket's
+/// anyway or resuming, and only the supervisor's as the ticket changing. Mirrored by `reporterFollow` in
+/// src/lib/reporterWait.ts; both run src/lib/reporterWait.fixtures.json. `replies` are the times of the cached ticket's
 /// comments from anyone but the signed-in person (`ticket_replies`), oldest first or not: a Jira comment leaves no audit
 /// line, so one newer than the wait's start ends the wait too, as the reporter's reply. A reply is placed among the audit
 /// lines by its time, so a later choice of the person settles it.
@@ -306,7 +307,8 @@ pub struct ReadinessStop {
 /// theirs, naming that Triage), and no Plan was started since it finished. A newer Triage, which is under way or says
 /// ready, takes it away, as does a Plan the person started by hand. `readiness` is what a Triage's report resolves to.
 /// A choice to ask the reporter is undone by the ticket changing while the person waited (`ReporterFollow::changed`): the
-/// stop comes back, flagged `changed`.
+/// stop comes back, flagged `changed`. Mirrored by `readinessOf` in src/backend/mockWorkstreams.ts; both run `stop` in
+/// src/backend/readiness.fixtures.json.
 pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> Option<Readiness>, replies: &[chrono::DateTime<Utc>], events: &[WorkstreamEvent]) -> Option<ReadinessStop> {
     if ws.closed_at.is_some() || ws.mode != Mode::Manage {
         return None;
@@ -1724,6 +1726,44 @@ mod tests {
             }
         }
 
+        /// The audit of a shared case: its lines with `at` as given, its ticket comments are read by `replies_of_case`.
+        fn audit_of(case: &serde_json::Value) -> Vec<WorkstreamEvent> {
+            case["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    let actor: Actor = serde_json::from_value(e["actor"].clone()).unwrap();
+                    let mut line = WorkstreamEvent::new("w", actor, e["action"].as_str().unwrap(), e["at"].as_str().unwrap().parse().unwrap());
+                    line.seq = i as u32 + 1;
+                    line.proposal_id = e["proposalId"].as_str().map(Into::into);
+                    line
+                })
+                .collect()
+        }
+
+        /// The times of a shared case's comments from anyone but its `me`: what the caller passes as `replies`.
+        fn replies_of_case(case: &serde_json::Value) -> Vec<chrono::DateTime<Utc>> {
+            let me = case["me"].as_str();
+            case["comments"].as_array().unwrap().iter().filter(|c| c["author"].as_str() != me).map(|c| c["at"].as_str().unwrap().parse().unwrap()).collect()
+        }
+
+        #[test]
+        fn the_shared_cases_read_the_same_here_and_in_the_page() {
+            let all: serde_json::Value = serde_json::from_str(include_str!("../../../src/lib/reporterWait.fixtures.json")).unwrap();
+            let cases = all["cases"].as_array().unwrap();
+            assert!(cases.len() >= 40);
+            for case in cases {
+                let got = reporter_follow(&audit_of(case), &replies_of_case(case));
+                let expect = &case["expect"];
+                let since = expect["since"].as_str().map(|s| s.parse::<chrono::DateTime<Utc>>().unwrap());
+                assert_eq!((got.waiting, got.changed), (since, expect["changed"].as_bool().unwrap()), "{}", case["name"]);
+                assert_eq!(got.replied, expect["replied"].as_bool().unwrap(), "{}", case["name"]);
+                assert_eq!(got.waiting.is_some(), expect["waiting"].as_bool().unwrap(), "{}", case["name"]);
+            }
+        }
+
         fn follow_of(events: &[WorkstreamEvent]) -> ReporterFollow {
             reporter_follow(events, &[])
         }
@@ -2937,5 +2977,140 @@ mod tests {
         let taken = rebased(&basis, &now);
         assert_eq!(taken.summary_digest, Some(sha256_hex("Checkout")));
         assert!(drifted(&taken, &now).is_empty());
+    }
+
+    /// The cases the mock runs too: `readiness.fixtures.json` (the readiness stop) and `workstreamHold.fixtures.json` (the budget).
+    mod shared {
+        use super::*;
+        use serde_json::{json, Value};
+
+        /// A workstream as a shared case describes it; what it leaves out is a fresh workstream's.
+        fn workstream_of(id: &str, mode: &str, held: &Value, closed: bool, spent: &Value, budget: &Value) -> Workstream {
+            let mut value = json!({ "id": id, "connectionId": "c", "title": "t", "createdAt": "2026-10-01T10:00:00Z", "mode": mode, "heldReason": held });
+            if closed {
+                value["closedAt"] = json!("2026-10-12T20:00:00Z");
+            }
+            if !spent.is_null() {
+                value["spent"] = spent.clone();
+            }
+            if !budget.is_null() {
+                value["budget"] = budget.clone();
+            }
+            serde_json::from_value(value).unwrap()
+        }
+
+        #[test]
+        fn the_shared_readiness_stop_cases_read_the_same_here_and_in_the_mock() {
+            let all: Value = serde_json::from_str(include_str!("../../../src/backend/readiness.fixtures.json")).unwrap();
+            let cases = all["stop"].as_array().unwrap();
+            assert!(cases.len() >= 50);
+            for case in cases {
+                let name = case["name"].as_str().unwrap();
+                let shape = &case["workstream"];
+                let ws = workstream_of("w1", shape["mode"].as_str().unwrap_or("manage"), &shape["held"], shape["closed"].as_bool().unwrap_or(false), &Value::Null, &Value::Null);
+                let mut reports: HashMap<String, Option<String>> = HashMap::new();
+                let runs: Vec<Run> = case["runs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|r| {
+                        let id = r["id"].as_str().unwrap();
+                        let spec = RunSpec { kind: serde_json::from_value(r["kind"].clone()).unwrap(), workstream: Some(r["workstream"].as_str().unwrap_or("w1").into()), ..run_spec() };
+                        let item = (r["item"].as_bool() != Some(false)).then(|| ItemRef { connection_id: "c".into(), external_id: "1".into(), key: "CA-1".into() });
+                        let mut run = Run::queued(id.into(), format!("p-{id}"), "c".into(), item, spec, "f".into(), r["queuedAt"].as_str().unwrap().parse().unwrap());
+                        run.state = serde_json::from_value(r["state"].clone()).unwrap();
+                        run.ended_at = r["endedAt"].as_str().map(|t| t.parse().unwrap());
+                        reports.insert(id.into(), r["report"].as_str().map(Into::into));
+                        run
+                    })
+                    .collect();
+                let events: Vec<WorkstreamEvent> = case["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| {
+                        let mut line = WorkstreamEvent::new("w1", serde_json::from_value(e["actor"].clone()).unwrap(), e["action"].as_str().unwrap(), e["at"].as_str().unwrap().parse().unwrap());
+                        line.seq = i as u32 + 1;
+                        line.run_id = e["runId"].as_str().map(Into::into);
+                        line.proposal_id = e["proposalId"].as_str().map(Into::into);
+                        line
+                    })
+                    .collect();
+                let got = readiness_of(&ws, &runs, |r| reports.get(&r.id).cloned().flatten().and_then(|text| crate::runs::result::readiness(&text)), &[], &events);
+                let got = got.map(|s| {
+                    let mut stop = json!({ "triageRun": s.triage_run, "questions": s.questions, "at": s.at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true) });
+                    if s.changed {
+                        stop["changed"] = json!(true);
+                    }
+                    stop
+                });
+                assert_eq!(got.unwrap_or(Value::Null), case["expect"], "{name}");
+            }
+        }
+
+        #[test]
+        fn the_shared_budget_cases_read_the_same_here_and_in_the_page() {
+            let all: Value = serde_json::from_str(include_str!("../../../src/lib/workstreamHold.fixtures.json")).unwrap();
+            let cases = all["budget"].as_array().unwrap();
+            assert!(cases.len() >= 25);
+            for case in cases {
+                let name = case["name"].as_str().unwrap();
+                let ws = workstream_of("w1", "manage", &Value::Null, false, &case["spent"], &case["budget"]);
+                let expect = &case["expect"];
+                assert_eq!(level_word(budget_level(&ws)), expect["level"].as_str().unwrap(), "{name}");
+                // The page works the steps out of these counters (`stepsOf`, which has no twin here).
+                let view = serde_json::to_value(BudgetView::of(&ws)).unwrap();
+                assert_eq!(view, json!({ "autoTurns": expect["autoTurns"], "wakes": expect["wakes"], "level": expect["level"] }), "{name}");
+            }
+        }
+
+        #[tokio::test]
+        async fn the_shared_sequences_of_budget_actions_leave_the_same_state_and_audit_here_and_in_the_mock() {
+            let all: Value = serde_json::from_str(include_str!("../../../src/lib/workstreamHold.fixtures.json")).unwrap();
+            let sequences = all["sequences"].as_array().unwrap();
+            assert!(sequences.len() >= 30);
+            let fx = fixture().await;
+            for seq in sequences {
+                let name = seq["name"].as_str().unwrap();
+                let start = &seq["start"];
+                let opened = fx.core.open_workstream(&fx.scope, None, Some(name.chars().take(60).collect())).await.unwrap();
+                let mut ws = workstream_of(&opened.id, start["mode"].as_str().unwrap(), &start["held"], start["closed"].as_bool().unwrap_or(false), &start["spent"], &start["budget"]);
+                ws.connection_id = opened.connection_id.clone();
+                ws.title = opened.title.clone();
+                ws.created_at = opened.created_at;
+                fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&ws)).await.unwrap();
+                for step in seq["steps"].as_array().unwrap() {
+                    let what = format!("{name}: {}", step["do"]);
+                    let before = fx.core.workstream_events(&fx.scope, &opened.id).await.unwrap().len();
+                    let actor = || -> Actor { serde_json::from_value(step["actor"].clone()).unwrap() };
+                    let done = match step["do"].as_str().unwrap() {
+                        "setMode" => {
+                            let mode = if step["mode"] == "manage" { Mode::Manage } else { Mode::Advise };
+                            fx.core.set_workstream_mode(&fx.scope, &opened.id, mode, actor()).await
+                        }
+                        "hold" => fx.core.hold_workstream(&fx.scope, &opened.id, step["reason"].as_str().unwrap(), actor()).await,
+                        "resume" => fx.core.resume_workstream(&fx.scope, &opened.id).await,
+                        "allowMore" => fx.core.allow_more_steps(&fx.scope, &opened.id).await,
+                        "trip" => fx.core.trip_workstream(&fx.scope, &opened.id, step["kind"].as_str().unwrap(), Some("r1"), &[]).await,
+                        "spend" => {
+                            let mut now = fx.core.with_db_for(&fx.scope, |db| db.workstream(&opened.id)).await.unwrap().unwrap();
+                            now.spent.auto_turns = step["spent"][0].as_u64().unwrap() as u32;
+                            now.spent.wakes = step["spent"][1].as_u64().unwrap() as u32;
+                            fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&now)).await.map(|_| now)
+                        }
+                        other => panic!("no action {other}"),
+                    };
+                    let expect = &step["expect"];
+                    assert_eq!(done.is_err(), expect["error"].as_bool().unwrap_or(false), "{what}: {done:?}");
+                    let now = fx.core.workstream(&fx.scope, &opened.id).await.unwrap().unwrap();
+                    let state = json!({ "mode": now.workstream.mode.as_str(), "held": now.workstream.held_reason, "limits": [now.budget.auto_turns.limit, now.budget.wakes.limit], "level": level_word(now.budget.level) });
+                    assert_eq!(state, expect["state"], "{what}");
+                    let events = fx.core.workstream_events(&fx.scope, &opened.id).await.unwrap();
+                    let added: Vec<Value> = events[before..].iter().map(|e| json!([e.actor.as_str(), e.action, e.detail])).collect();
+                    assert_eq!(Value::Array(added), expect["events"], "{what}");
+                }
+            }
+        }
     }
 }

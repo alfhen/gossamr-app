@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { AUTO_TURNS_DEFAULT, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
 import type { BudgetView, Workstream } from "../types";
-import { FIX_ROUNDS_MAX } from "../backend/mockSupervisor";
-import { STEP_HELP, budgetLevel, budgetView, driftWhileWaitingText, heldBanner, heldText, ruleText, stepsLeftText, tripwireResumeText } from "./workstreamHold";
+import { FIX_ROUNDS_MAX, fixRoundBuilds, isFreeWake } from "../backend/mockSupervisor";
+import { STEP_HELP, budgetLevel, budgetView, driftWhileWaitingText, heldBanner, heldText, ruleText, stepsLeftText, stepsOf, tripwireResumeText } from "./workstreamHold";
+import fixtures from "./workstreamHold.fixtures.json";
 
 describe("heldText", () => {
   it("says nothing for a workstream that isn't held", () => {
@@ -81,6 +82,24 @@ describe("heldText", () => {
     const names = WORKSTREAM_RULES.map(ruleText);
     expect(new Set(names).size).toBe(WORKSTREAM_RULES.length);
     expect(ruleText("triage_plan")).toBe("Triage → Plan");
+  });
+});
+
+describe("the budget in the shared cases the Rust side runs too (workstreamHold.fixtures.json)", () => {
+  const ws = (c: (typeof fixtures.budget)[number]): Workstream =>
+    ({ spent: { ...c.spent, tokens: 0 }, budget: { autoTurns: (c.budget as { autoTurns?: number }).autoTurns ?? null, wakes: (c.budget as { wakes?: number }).wakes ?? null, tokens: null } }) as Workstream;
+
+  // `stepsOf` is the page's alone: Rust hands it the counters (`BudgetView::of`), which both sides check here.
+  it.each(fixtures.budget.map((c) => [c.name, c] as const))("%s", (_, c) => {
+    const view = budgetView(ws(c));
+    expect(budgetLevel(ws(c))).toBe(c.expect.level);
+    expect(view).toEqual({ autoTurns: c.expect.autoTurns, wakes: c.expect.wakes, level: c.expect.level });
+    expect(stepsOf(view)).toEqual(c.expect.steps);
+    expect(stepsLeftText(view)).toBe(`${c.expect.left} of ${c.expect.steps.limit} automatic steps left`);
+  });
+
+  it.each(fixtures.free.map((c) => [c.name, c] as const))("a wake about %s", (_, c) => {
+    expect(isFreeWake(c.facts, fixRoundBuilds(c.events))).toBe(c.expect);
   });
 });
 
