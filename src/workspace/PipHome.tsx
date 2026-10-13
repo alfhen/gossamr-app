@@ -564,6 +564,7 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
 export function PipHome() {
   const list = useWorkstreams((s) => s.list);
   const closed = useWorkstreams((s) => s.closed);
+  const loaded = useWorkstreams((s) => s.loaded);
   const selected = usePipHome((s) => s.selected);
   const showClosed = usePipHome((s) => s.showClosed);
   const workstream = useHomeWorkstream();
@@ -600,13 +601,15 @@ export function PipHome() {
   useEffect(() => {
     const home = usePipHome.getState();
     if (home.landed) return;
+    // A need can arrive before the workstreams are read, its workstream not among `openIds` yet: landing then would give it up.
+    if (!loaded) return;
     // Only while it loads: a need that turns up later never moves what the person is looking at.
     if (home.selected !== null || Date.now() - mountedAt.current > LANDING_MS) return home.land();
     const landing = landingSelection(needsYou, openIds);
     if (!landing) return;
     if (landing.id) home.openWorkstream(landing.id);
     else home.land();
-  }, [needsYou, openIds]);
+  }, [needsYou, openIds, loaded]);
   useTurnEscape();
   useFocusTarget();
   usePipHomeKeys(needsYou);

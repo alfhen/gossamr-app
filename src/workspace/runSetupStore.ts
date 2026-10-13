@@ -4,7 +4,7 @@ import { itemKey } from "../lib/filter";
 import type { CloneChoice, ContainerRef, ItemRef, Preflight, Proposal, ProposalEdit, Run, RunKind, RunReview, RunSpec } from "../types";
 import { allContainers, useWorkspace } from "../workspaceStore";
 import { defaultProject, defaultRepo, findRunDraft, kindBlock, linkedRepo, prChoices, repoChoices, ticketlessShape, type PrChoice } from "./runSheetLogic";
-import { dismissCancelledNote, startWhat, useRuns } from "./runsStore";
+import { startWhat, useRuns } from "./runsStore";
 import { readStored, writeStored } from "./storage";
 import { useTabs } from "./tabsStore";
 import { messageOf, useToasts } from "./toasts";
@@ -46,8 +46,7 @@ export async function approveRunDraft(backend: Backend, proposalId: string, dige
  */
 export function afterRunStarted(run: Run, item: ItemRef | null, { switchToAgents }: { switchToAgents: boolean }) {
   const runs = useRuns.getState();
-  // A "Cancelled: … Nothing was started." from closing the first-run sheet may still be up; it is not true now.
-  dismissCancelledNote();
+  // A "Cancelled: … Nothing was started." from closing the first-run sheet may still be up; the launch watcher takes it away once this run is launching or working (not while it only waits for a slot).
   void runs.reload();
   void useWorkspace.getState().refreshProposals();
   runs.watchLaunch(run.id);

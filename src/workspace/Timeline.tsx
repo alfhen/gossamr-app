@@ -29,7 +29,7 @@ import { isTypingTarget } from "./pipHomeKeys";
 import { usePipHome } from "./pipHomeStore";
 import { useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
-import { ENTRY_FOCUS, TIMELINE_ENTRY, anchoredScrollTop, followsEnd, nearBottom, readingAnchor, revealEntry, stepIndex, timelineKeyAction, timelineStop, type ReadingAnchor } from "./timelineKeys";
+import { ENTRY_FOCUS, TIMELINE_ENTRY, anchoredScrollTop, firstShowing, followsEnd, nearBottom, readingAnchor, revealEntry, stepIndex, timelineKeyAction, timelineStop, type ReadingAnchor } from "./timelineKeys";
 import { PipRunCard } from "./PipRunCard";
 import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
 import { useWorkstreams } from "./workstreamsStore";
@@ -292,11 +292,11 @@ export function TimelineView({
   const anchor = useRef<ReadingAnchor | null>(null);
   const markAnchor = (el: HTMLElement) => {
     const top = el.getBoundingClientRect().top;
-    const rows = Array.from(el.querySelectorAll<HTMLElement>(TIMELINE_ENTRY)).map((li) => {
-      const box = li.getBoundingClientRect();
-      return { key: li.getAttribute("data-timeline-entry") ?? "", top: box.top, bottom: box.bottom };
-    });
-    anchor.current = readingAnchor(top, rows);
+    const lis = el.querySelectorAll<HTMLElement>(TIMELINE_ENTRY);
+    // Only the entries a binary search touches are measured, not every one on each scroll.
+    const first = lis[firstShowing(lis.length, (i) => lis[i].getBoundingClientRect().bottom, top)];
+    const box = first?.getBoundingClientRect();
+    anchor.current = box ? readingAnchor(top, [{ key: first.getAttribute("data-timeline-entry") ?? "", top: box.top, bottom: box.bottom }]) : null;
   };
   const onScroll = (ev: UIEvent<HTMLDivElement>) => {
     stickToBottom.current = nearBottom(ev.currentTarget);
