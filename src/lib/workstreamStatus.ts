@@ -116,7 +116,7 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   const byYou = isHeldByYou(ws.heldReason);
 
   // A hold the system made is one of the needs; when it is the only one the one thing worth saying is why (the hold's own words), else the count.
-  if (waiting > 0) return make("needs-you", waiting === 1 && ws.heldReason && !byYou ? shortHeld(ws.heldReason, ws.drifted) : `${waiting} waiting`);
+  if (waiting > 0) return make("needs-you", waiting === 1 && ws.heldReason && !byYou ? (shortHeld(ws.heldReason, ws.drifted) ?? `${waiting} waiting`) : `${waiting} waiting`);
   if (ws.heldReason) return byYou ? make("held", null, shortHeld(ws.heldReason) ?? "Held by you") : make("held", heldDetail(ws.heldReason, view));
   if (view.waitingOnReporter) return make("waiting", `${waitedDays(view.waitingOnReporter.since, now)}d`);
   const furthest = (pick: (r: Run) => boolean) => own.filter(pick).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();

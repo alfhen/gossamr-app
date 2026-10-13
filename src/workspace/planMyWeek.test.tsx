@@ -6,7 +6,7 @@ import { isoWeek, ticketPick, type PlanItem } from "../lib/planMyWeek";
 import type { WorkItem, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { buildCommands, rankCommands, type CommandActions } from "./commands";
-import { PLAN_EMPTY, PlanMyWeekView, afterMove, afterRemove, ThisWeekView, findTicket, rowStep, CHOICES } from "./PlanMyWeek";
+import { PLAN_EMPTY, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, ThisWeekView, findTicket, rowStep, CHOICES } from "./PlanMyWeek";
 import { WorkstreamList } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -209,6 +209,22 @@ describe("the stored plan", () => {
     const before = Object.keys(useWorkspace.getState().proposals).length;
     usePrefs.getState().keepWeekPlan([pick("CA-1")]);
     expect(Object.keys(useWorkspace.getState().proposals)).toHaveLength(before);
+  });
+});
+
+describe("the card across a week boundary", () => {
+  // PipHome keys the card by the ISO week of its clock, so the card remounts when the week turns and takes the new week's kept plan.
+  it("is keyed by the week, which turns only at the boundary", () => {
+    const sunday = new Date(2026, 9, 18, 23, 59).getTime();
+    const monday = new Date(2026, 9, 19, 0, 1).getTime();
+    expect(isoWeek(new Date(sunday))).toBe("2026-W42");
+    expect(isoWeek(new Date(monday))).toBe("2026-W43");
+    expect(isoWeek(new Date(sunday - 3 * 86_400_000))).toBe(isoWeek(new Date(sunday)));
+  });
+  it("a card mounted after the boundary is the new week's: its title and Keep target the week of the clock it got", () => {
+    const card = (now: number) => renderToStaticMarkup(<PlanMyWeek key={isoWeek(new Date(now))} needs={[]} withers={{}} now={now} />);
+    expect(card(new Date(2026, 9, 18, 23, 59).getTime())).toContain("2026-W42");
+    expect(card(new Date(2026, 9, 19, 0, 1).getTime())).toContain("2026-W43");
   });
 });
 

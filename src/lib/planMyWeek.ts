@@ -27,6 +27,8 @@ export interface PlanPick {
   kind: "workstream" | "ticket";
   workstreamId: string | null;
   ticketKey: string | null;
+  /** The Jira connection the ticket or workstream is on; a key alone is not unique across connections. Plans kept before this was stored have none, and match by key. */
+  connectionId?: string;
   /** The key and title, or the workstream's title. */
   title: string;
   /** One line saying why it is on the list: "because 2 things need you here". */
@@ -102,7 +104,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     const status = workstreamStatus(v, i.needs, { runs: i.runs, wither: i.withers?.[ws.id] ?? null, now: i.now });
     const name = ws.itemKey ? `${ws.itemKey} ${ws.title.startsWith(ws.itemKey) ? ws.title.slice(ws.itemKey.length).trim() || ws.title : ws.title}` : ws.title;
     const t = ws.itemKey ? ticketOf(i.items, ws.connectionId, ws.itemKey) : undefined;
-    const pick = (because: string, work?: PlanPick["work"], title = name): PlanPick => ({ id: `ws:${ws.id}`, kind: "workstream", workstreamId: ws.id, ticketKey: ws.itemKey, title, because, ...(work ? { work } : {}) });
+    const pick = (because: string, work?: PlanPick["work"], title = name): PlanPick => ({ id: `ws:${ws.id}`, kind: "workstream", workstreamId: ws.id, ticketKey: ws.itemKey, connectionId: ws.connectionId, title, because, ...(work ? { work } : {}) });
     if (status.state === "needs-you") {
       scored.push({ pick: pick(`${plural(mine.length, "thing needs", "things need")} you here: ${mine[0]?.title ?? "a decision"}.${facts(t, i.now) ? ` It is ${facts(t, i.now)}.` : ""}`), tier: 0, score: 3 - GROUPS.indexOf(mine[0]?.group ?? "approve"), at: mine[0]?.at ?? ws.createdAt });
       continue;
@@ -142,7 +144,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     // Unclear work is asking the reporter, not building: said as such, with what tells this ticket from the next.
     const clarify = gaps.length > 0;
     if (clarify) (score -= 6, (because = clarifyLine(t.priority === "high" || t.priority === "highest" ? `${t.priority} priority, ` : "", `assigned to you ${age === 0 ? "today" : `for ${plural(age, "day", "days")}`}`, gaps)));
-    scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: clarify ? `Clarify ${t.item.key} with the reporter` : `${t.item.key} ${t.title}`, because, ...(clarify ? { work: "clarify" as const } : {}) }, tier: 1, score, at: t.created });
+    scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: clarify ? `Clarify ${t.item.key} with the reporter` : `${t.item.key} ${t.title}`, because, ...(clarify ? { work: "clarify" as const } : {}) }, tier: 1, score, at: t.created });
   }
   // Needs you first (its own order: the group that is asked most, then oldest); then by score, then oldest, then by id.
   const order = (a: Scored, b: Scored) => a.tier - b.tier || b.score - a.score || a.at.localeCompare(b.at) || (a.pick.id < b.pick.id ? -1 : a.pick.id > b.pick.id ? 1 : 0);
@@ -192,7 +194,7 @@ export const WEEKS_KEPT = 8;
 
 const isItem = (x: unknown): x is PlanItem => {
   const o = x as Partial<PlanItem> | null;
-  return !!o && typeof o.id === "string" && (o.kind === "workstream" || o.kind === "ticket") && typeof o.title === "string" && typeof o.because === "string" && (o.workstreamId === null || typeof o.workstreamId === "string") && (o.ticketKey === null || typeof o.ticketKey === "string");
+  return !!o && typeof o.id === "string" && (o.kind === "workstream" || o.kind === "ticket") && typeof o.title === "string" && typeof o.because === "string" && (o.workstreamId === null || typeof o.workstreamId === "string") && (o.ticketKey === null || typeof o.ticketKey === "string") && (o.connectionId === undefined || typeof o.connectionId === "string");
 };
 
 /** Reads stored plans, dropping anything malformed. */
@@ -226,7 +228,7 @@ export function movePick<T>(list: readonly T[], from: number, to: number): T[] {
 
 /** A pick for a ticket the person adds by hand. */
 export function ticketPick(t: Pick<WorkItem, "item" | "title">): PlanPick {
-  return { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: `${t.item.key} ${t.title}`, because: "you added it." };
+  return { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because: "you added it." };
 }
 
 /** Where a kept item stands: still `open`, `done` (its workstream closed and the ticket is Done in Jira, or the ticket is Done), or `closed` (its workstream closed but the ticket isn't Done: dropped, not finished). */
@@ -239,9 +241,11 @@ export type ItemOutcome = "open" | "done" | "closed";
  */
 export function itemOutcome(item: PlanItem, workstreams: readonly WorkstreamView[], items: readonly WorkItem[]): ItemOutcome {
   if (item.reopened) return "open";
-  const mine = workstreams.filter((v) => v.workstream.id === item.workstreamId || (!!item.ticketKey && v.workstream.itemKey === item.ticketKey));
+  // The same key on another connection is another ticket; an item kept before connections were stored matches by key alone.
+  const own = (connectionId: string) => item.connectionId === undefined || item.connectionId === connectionId;
+  const mine = workstreams.filter((v) => v.workstream.id === item.workstreamId || (!!item.ticketKey && v.workstream.itemKey === item.ticketKey && own(v.workstream.connectionId)));
   if (mine.some((v) => v.workstream.closedAt === null)) return "open";
-  const ticketDone = !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && t.status.category === "done");
+  const ticketDone = !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && own(t.item.connectionId) && t.status.category === "done");
   if (mine.length) return ticketDone ? "done" : "closed";
   return ticketDone ? "done" : "open";
 }

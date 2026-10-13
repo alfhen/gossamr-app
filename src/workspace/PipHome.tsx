@@ -4,6 +4,7 @@ import { stageText } from "../lib/workstreamStage";
 import { EMPTY_FILTER, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
 import { StatusPill } from "./StatusPill";
 import { PlanMyWeek, ThisWeek } from "./PlanMyWeek";
+import { isoWeek } from "../lib/planMyWeek";
 import { witherClass } from "../lib/views";
 import { witherTitle, type WorkstreamWither } from "../lib/workstreamWither";
 import { Cobweb } from "../components/Cobweb";
@@ -712,7 +713,7 @@ export function PipHome() {
             <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
               <HomeConversation workstream={workstream} footer={footer} needs={needsYou} day={
                   <div data-pip-home-day className="max-h-[45vh] shrink-0 overflow-y-auto empty:hidden">
-                    {planOpen && <PlanMyWeek needs={needsYou} withers={withers} now={now} />}
+                    {planOpen && <PlanMyWeek key={isoWeek(new Date(now))} needs={needsYou} withers={withers} now={now} />}
                     {/* The plan is opened from the card and its Close brings it back; the card is General's summary, not a workstream's. */}
                     {!planOpen && workstream === null && <StartMyDayCard needs={needsYou} withers={withers} now={now} />}
                   </div>
