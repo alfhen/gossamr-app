@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { usePrefs } from "./prefs";
 
 /** The first-run orientation on Pip home, in the app's own words for each term. Kept apart so a test can read the copy. */
@@ -23,27 +24,36 @@ export function dismissOrientation() {
   if (hadFocus) requestAnimationFrame(focusList);
 }
 
-/** What Pip home's words mean, until the person says Got it. It never takes focus by itself. */
-export function PipOrientation({ onDismiss = dismissOrientation }: { onDismiss?(): void }) {
+/** What Pip home's words mean, until the person says Got it: one line, with the words behind More (`open` starts it expanded). It never takes focus by itself. */
+export function PipOrientation({ onDismiss = dismissOrientation, open = false }: { onDismiss?(): void; open?: boolean }) {
+  const [more, setMore] = useState(open);
+  const button = "rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
   return (
-    <section data-pip-orientation aria-labelledby="pip-orientation" className="grid max-h-[40vh] shrink-0 gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-4 py-3">
-      <h2 id="pip-orientation" className="m-0 text-sm font-semibold">
-        New here? What these words mean
-      </h2>
-      <dl className="m-0 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-x-4 gap-y-2 text-sm text-ws-ink2">
-        {ORIENTATION_TERMS.map((t) => (
-          <div key={t.term}>
-            <dt className="font-semibold text-ws-ink">{t.term}</dt>
-            <dd className="m-0">{t.text}</dd>
-          </div>
-        ))}
-      </dl>
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="m-0 text-sm text-ws-ink2">{ORIENTATION_SAFETY}</p>
-        <button type="button" onClick={onDismiss} className="ml-auto rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+    <section data-pip-orientation aria-labelledby="pip-orientation" className="grid max-h-[40vh] shrink-0 gap-1.5 overflow-y-auto border-b border-ws-sep bg-ws-bar px-4 py-1.5">
+      <div className="flex items-center gap-3">
+        <p className="m-0 min-w-0 flex-1 text-sm text-ws-ink2">
+          <b id="pip-orientation" className="font-semibold text-ws-ink">
+            New here?
+          </b>{" "}
+          {ORIENTATION_SAFETY}
+        </p>
+        <button type="button" aria-expanded={more} aria-controls="pip-orientation-more" onClick={() => setMore(!more)} className={button}>
+          More
+        </button>
+        <button type="button" onClick={onDismiss} className={button}>
           Got it
         </button>
       </div>
+      {more && (
+        <dl id="pip-orientation-more" className="m-0 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-x-4 gap-y-2 text-sm text-ws-ink2">
+          {ORIENTATION_TERMS.map((t) => (
+            <div key={t.term}>
+              <dt className="font-semibold text-ws-ink">{t.term}</dt>
+              <dd className="m-0">{t.text}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </section>
   );
 }

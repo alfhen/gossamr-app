@@ -96,6 +96,36 @@ export const BOTTOM_SLACK = 24;
 /** Whether a scroller sits at (or within a few pixels of) its end. */
 export const nearBottom = (el: { scrollTop: number; scrollHeight: number; clientHeight: number }) => el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLACK;
 
+/** The entry the person is reading, and how far below the scroller's top its top sits (negative once it has scrolled partly past it). */
+export interface ReadingAnchor {
+  key: string;
+  offset: number;
+}
+
+/**
+ * The index of the first of `count` entries, in document order, whose bottom (read by `bottomAt`) is below `top`; `count` when none is. Entries stack,
+ * so bottoms only grow and a binary search reads about log2(count) of them instead of all.
+ */
+export function firstShowing(count: number, bottomAt: (i: number) => number, top: number): number {
+  let lo = 0;
+  let hi = count;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (bottomAt(mid) > top) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
+/** The first entry still showing at the scroller's `top`: the first whose bottom is below it. Null for none. */
+export function readingAnchor(top: number, entries: readonly { key: string; top: number; bottom: number }[]): ReadingAnchor | null {
+  const entry = entries.find((e) => e.bottom > top);
+  return entry ? { key: entry.key, offset: entry.top - top } : null;
+}
+
+/** The scroll position that puts the anchor's entry, now at `entryTop`, back where it was under the scroller's `top`. */
+export const anchoredScrollTop = (scrollTop: number, anchor: ReadingAnchor, entryTop: number, top: number) => Math.max(0, scrollTop + (entryTop - top - anchor.offset));
+
 /**
  * Whether the timeline should follow its end after a change: while the person is at the end, and when they just sent
  * something (a new turn of theirs, not one the supervisor woke), wherever they were reading.

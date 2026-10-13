@@ -46,6 +46,7 @@ export async function approveRunDraft(backend: Backend, proposalId: string, dige
  */
 export function afterRunStarted(run: Run, item: ItemRef | null, { switchToAgents }: { switchToAgents: boolean }) {
   const runs = useRuns.getState();
+  // A "Cancelled: … Nothing was started." from closing the first-run sheet may still be up; the launch watcher takes it away once this run is launching or working (not while it only waits for a slot).
   void runs.reload();
   void useWorkspace.getState().refreshProposals();
   runs.watchLaunch(run.id);

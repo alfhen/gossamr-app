@@ -19,6 +19,8 @@ interface WorkstreamsState {
   backend: Backend | null;
   /** The open workstreams, newest first, each with the stage its runs give it. */
   list: WorkstreamView[];
+  /** Whether the first read of the open list has landed; false until then, so an empty `list` is not mistaken for "no workstreams". */
+  loaded: boolean;
   /** The closed workstreams, as Pip home lists them read-only once asked; empty until `loadClosed` read them. */
   closed: WorkstreamView[];
   init(backend: Backend): void;
@@ -150,6 +152,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
   return {
     backend: null,
     list: [],
+    loaded: false,
     closed: [],
     events: {},
     confirmingClose: null,
@@ -179,7 +182,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       seq++;
       closedSeq++;
       eventsSeq.clear();
-      set({ backend: null, list: [], closed: [], events: {}, confirmingClose: null, globals: null });
+      set({ backend: null, list: [], loaded: false, closed: [], events: {}, confirmingClose: null, globals: null });
       usePipHome.getState().reset();
     },
 
@@ -189,7 +192,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const mine = ++seq;
       const list = await backend.workstreamsList().catch(() => null);
       if (!list || mine !== seq || get().backend !== backend) return;
-      set({ list });
+      set({ list, loaded: true });
       keepSelectionOpen(list.filter((v) => v.workstream.closedAt === null).map((v) => v.workstream.id));
       // What Pip home lists as closed follows the open list: one closed meanwhile moves across.
       if (usePipHome.getState().showClosed) void get().loadClosed();

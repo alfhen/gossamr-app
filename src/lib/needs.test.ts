@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
-import { BATCHABLE, GROUP_RANK, byRank, escalationReason, needAfter, needGroups, needs, needsIn, readinessPrompt, readinessWhy, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
+import { BATCHABLE, GROUP_RANK, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, readinessPrompt, readinessWhy, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -667,6 +667,23 @@ describe("needAfter", () => {
     expect(needAfter(before, "b", [key("c"), key("a")])?.key).toBe("c");
     expect(needAfter(before, "x", [key("z"), key("a")])?.key).toBe("z");
     expect(needAfter(before, "a", [])).toBeNull();
+  });
+});
+
+describe("higherPriority", () => {
+  const n = (key: string, group: Need["group"], at = "2026-10-01T10:00:00Z") => ({ key, group, at });
+  const list = [n("e", "decide", "2026-10-01T09:00:00Z"), n("p", "unblock", "2026-10-01T09:30:00Z"), n("open", "unblock", "2026-10-01T10:00:00Z"), n("d", "approve")];
+
+  it("names a Decide or Unblock that ranks above the open need and came in after it was opened", () => {
+    expect(higherPriority(list, "open", new Set(["open", "d"]))?.key).toBe("e");
+    expect(higherPriority(list, "open", new Set(["open", "d", "e"]))?.key).toBe("p");
+  });
+
+  it("says nothing for one that was already there, one that ranks below, or an Approve", () => {
+    expect(higherPriority(list, "open", new Set(["e", "p", "open", "d"]))).toBeNull();
+    expect(higherPriority(list, "e", new Set(["e"]))).toBeNull();
+    expect(higherPriority([n("a", "approve", "2026-10-01T08:00:00Z"), n("open", "approve")], "open", new Set(["open"]))).toBeNull();
+    expect(higherPriority(list, "gone", new Set())).toBeNull();
   });
 });
 

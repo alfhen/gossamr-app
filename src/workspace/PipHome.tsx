@@ -23,7 +23,7 @@ import { useNeedsYou } from "./useNeeds";
 import { NeedsPane, firstDecision } from "./NeedsPane";
 import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
 import { undoLog } from "./undo";
-import { composerFooter, workstreamStatus } from "./pipHomeLogic";
+import { composerFooter, landingSelection, workstreamStatus } from "./pipHomeLogic";
 import { PIP_HOME_REGIONS, columnRegion, regionColumn, usePipHome, type PipHomeColumn, type PipHomeFocus, type PipHomeRegion } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { focusComposer, focusedConversation, useHomeWorkstream, useWorkstreams } from "./workstreamsStore";
@@ -39,6 +39,9 @@ import { DecisionShownContext, decisionShown } from "./decisionShown";
 const PIP_HOME_HINTS = pipHomeHints();
 const NEEDS_HINTS = pipHomeHints(true);
 const TIMELINE_HINTS = pipHomeHints(false, true);
+
+/** How long after Pip home opens it may still land on the top need's workstream: the stores are loading until then. */
+const LANDING_MS = 5000;
 
 /** The ticket's key comes first on its own, so the title loses it when it starts with it, as a workstream's title does. */
 export function rowTitle(ws: WorkstreamView["workstream"]): string {
@@ -561,6 +564,7 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
 export function PipHome() {
   const list = useWorkstreams((s) => s.list);
   const closed = useWorkstreams((s) => s.closed);
+  const loaded = useWorkstreams((s) => s.loaded);
   const selected = usePipHome((s) => s.selected);
   const showClosed = usePipHome((s) => s.showClosed);
   const workstream = useHomeWorkstream();
@@ -591,6 +595,21 @@ export function PipHome() {
       document.removeEventListener("focusout", on);
     };
   }, []);
+  // The first load with nothing chosen lands on the workstream of the top need, so what needs the person is not a click away.
+  const openIds = useMemo(() => openList.map((v) => v.workstream.id), [openList]);
+  const mountedAt = useRef(Date.now());
+  useEffect(() => {
+    const home = usePipHome.getState();
+    if (home.landed) return;
+    // A need can arrive before the workstreams are read, its workstream not among `openIds` yet: landing then would give it up.
+    if (!loaded) return;
+    // Only while it loads: a need that turns up later never moves what the person is looking at.
+    if (home.selected !== null || Date.now() - mountedAt.current > LANDING_MS) return home.land();
+    const landing = landingSelection(needsYou, openIds);
+    if (!landing) return;
+    if (landing.id) home.openWorkstream(landing.id);
+    else home.land();
+  }, [needsYou, openIds, loaded]);
   useTurnEscape();
   useFocusTarget();
   usePipHomeKeys(needsYou);

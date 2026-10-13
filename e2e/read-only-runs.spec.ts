@@ -126,6 +126,7 @@ test("a person-started investigation shows and launches read-only, and its auto-
   await expect(setup(page)).not.toContainText("this is a request, not a lock");
   const adds = await openDetails(setup(page), "What Gossamr adds for the model");
   await expect(adds).toContainText("--permission-mode dontAsk");
+  await expect(adds).toContainText("runs without asking you");
   const deny = adds.locator("[data-read-only-rules] li");
   for (const rule of ["Edit", "Write", "Bash(git push *)"]) await expect(deny.getByText(rule, { exact: true })).toHaveCount(1);
   await expect(adds).toContainText(READ_ONLY_GUARD_START);

@@ -6,7 +6,7 @@ import type { Proposal, Run, WorkstreamView } from "../types";
 import { pipHomeHints } from "./footerHints";
 import { HINTS, keyHint } from "./keyMap";
 import { timelineDrafts, timelineRuns } from "./Timeline";
-import { ENTRY_FOCUS, followsEnd, nearBottom, revealEntry, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
+import { ENTRY_FOCUS, anchoredScrollTop, followsEnd, nearBottom, firstShowing, readingAnchor, revealEntry, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
 import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
@@ -197,5 +197,40 @@ describe("an entry's focus ring and reveal", () => {
     scrollIntoView.mockClear();
     revealEntry({ target: {}, currentTarget: li });
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+});
+
+describe("keeping the entry being read in place", () => {
+  const rows = [
+    { key: "a", top: -300, bottom: -20 },
+    { key: "b", top: -20, bottom: 180 },
+    { key: "c", top: 180, bottom: 400 },
+  ];
+
+  it("anchors on the first entry still showing under the scroller's top, with its offset", () => {
+    expect(readingAnchor(0, rows)).toEqual({ key: "b", offset: -20 });
+    expect(readingAnchor(1000, rows)).toBeNull();
+  });
+
+  it("scrolls by however far that entry moved, so a card above collapsing does not carry the reader off", () => {
+    const anchor = { key: "b", offset: -20 };
+    // The entry above shrank by 150: b now sits at -170, so the scroller moves up by 150 to put it back.
+    expect(anchoredScrollTop(500, anchor, -170, 0)).toBe(350);
+    // Nothing moved: nothing to do.
+    expect(anchoredScrollTop(500, anchor, -20, 0)).toBe(500);
+    // Never past the top.
+    expect(anchoredScrollTop(10, anchor, -170, 0)).toBe(0);
+  });
+});
+
+describe("firstShowing", () => {
+  const bottoms = [10, 20, 30, 40, 50];
+  it("finds the first entry whose bottom is below the top, reading only a few", () => {
+    const read = vi.fn((i: number) => bottoms[i]);
+    expect(firstShowing(5, read, 25)).toBe(2);
+    expect(read.mock.calls.length).toBeLessThan(5);
+    expect(firstShowing(5, (i) => bottoms[i], -1)).toBe(0);
+    expect(firstShowing(5, (i) => bottoms[i], 50)).toBe(5);
+    expect(firstShowing(0, () => 0, 0)).toBe(0);
   });
 });

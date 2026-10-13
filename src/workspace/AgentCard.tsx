@@ -114,8 +114,9 @@ export function RunRef({ run, className = "" }: { run: Run; className?: string }
 /** The short name of a run in its workstream, before the rest of its heading. */
 export function RunLabel({ label }: { label?: string }) {
   if (!label) return null;
+  const n = /^R(\d+)$/.exec(label)?.[1];
   return (
-    <span data-run-label={label} className="shrink-0 rounded bg-ws-pip-soft px-1 font-mono text-xs font-semibold text-ws-pip">
+    <span data-run-label={label} title={n ? `Run ${n} in this workstream` : undefined} className="shrink-0 rounded bg-ws-pip-soft px-1 font-mono text-xs font-semibold text-ws-pip">
       {label}
     </span>
   );

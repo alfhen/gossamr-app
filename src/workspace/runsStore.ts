@@ -195,6 +195,8 @@ function announceFailedLaunches(get: () => RunsState, set: (patch: Partial<RunsS
   for (const id of launching) {
     const run = runs.find((r) => r.id === id);
     if (!run) continue;
+    // A run that waits for a slot is queued, not started: the "Nothing was started" note stays until it launches.
+    if (run.state === "launching" || run.state === "working") dismissCancelledNote(run);
     if (run.state === "queued" || run.state === "launching") {
       still.add(id);
       continue;
@@ -259,6 +261,23 @@ let seq = 0;
 
 /** The note when the one-time safety sheet is closed with × rather than Got it, continue: what was dropped, and that nothing ran. */
 export const introCancelled = (what: string) => `Cancelled: ${what}. Nothing was started.`;
+
+/** The note `closeSheet` pushed, while it may still be on screen or waiting: it goes the moment a run starts after all. */
+let cancelledNote: { id: number; what: string } | null = null;
+
+const GENERIC_START = "Start an agent";
+
+/**
+ * Takes the "Cancelled: … Nothing was started." note away: what it cancelled went ahead after all, so it would now say the
+ * opposite of what happened. Given the run that started, only that run's own kind and ticket take it away; a note that
+ * names no kind or ticket has nothing to match and goes with any run.
+ */
+export function dismissCancelledNote(run?: Pick<Run, "spec" | "item">) {
+  if (!cancelledNote) return;
+  if (run && cancelledNote.what !== GENERIC_START && startWhat(null, run.spec.kind, run.item) !== cancelledNote.what) return;
+  useToasts.getState().dismiss(cancelledNote.id);
+  cancelledNote = null;
+}
 
 /** A run start in words for that note: the draft's own kind and ticket when there is one ("Investigate CA-401"), else the kind and ticket asked for. */
 export function startWhat(p: Proposal | null | undefined, kind?: RunKind, item?: ItemRef | null): string {
@@ -354,9 +373,10 @@ export const useRuns = create<RunsState>((set, get) => ({
   openSafety: () => set({ sheet: { type: "safety" }, afterIntro: null, afterIntroWhat: null, browseOrder: null }),
   closeSheet: () => {
     // The one-time intro closed without Got it, continue: what it stood in for is dropped, and the person is told so.
-    const dropped = get().afterIntro ? (get().afterIntroWhat ?? "Start an agent") : null;
+    const dropped = get().afterIntro ? (get().afterIntroWhat ?? GENERIC_START) : null;
     set({ sheet: null, afterIntro: null, afterIntroWhat: null, browseOrder: null });
-    if (dropped) useToasts.getState().push(introCancelled(dropped), "info");
+    const id = dropped ? useToasts.getState().push(introCancelled(dropped), "info") : undefined;
+    if (dropped && id !== undefined && id !== null) cancelledNote = { id, what: dropped };
   },
 
   showDraft(item) {
@@ -374,6 +394,8 @@ export const useRuns = create<RunsState>((set, get) => ({
   continueIntro() {
     const then = get().afterIntro;
     set({ sheet: null, afterIntro: null, afterIntroWhat: null });
+    // What the person asked for goes ahead after all, so an earlier "Nothing was started" is no longer true.
+    if (then) dismissCancelledNote();
     then?.();
   },
 

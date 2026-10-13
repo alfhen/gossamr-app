@@ -149,6 +149,19 @@ describe("the workstreams store", () => {
   });
 });
 
+describe("the first read of the workstreams", () => {
+  it("is not loaded until the list has landed, and not after a dispose", async () => {
+    useWorkstreams.getState().dispose();
+    expect(useWorkstreams.getState().loaded).toBe(false);
+    useWorkstreams.getState().init(backend);
+    expect(useWorkstreams.getState().loaded).toBe(false);
+    await useWorkstreams.getState().refresh();
+    expect(useWorkstreams.getState().loaded).toBe(true);
+    useWorkstreams.getState().dispose();
+    expect(useWorkstreams.getState().loaded).toBe(false);
+  });
+});
+
 describe("what Pip sees in a workstream's conversation", () => {
   const empty = { view: "Board", item: null, filter: null, selection: [] };
 
