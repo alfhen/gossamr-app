@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewVerdict, RunKind, RunState, WorkstreamStage } from "../types";
 import fixtures from "./workstreamStage.fixtures.json";
-import { reviewBlocking, runLabels, stage, stageText, type StagedRun } from "./workstreamStage";
+import { reviewBlocking, reviewPosted, runLabels, stage, stageText, type StagedRun } from "./workstreamStage";
 
 interface Case {
   name: string;
@@ -65,5 +65,25 @@ describe("run labels", () => {
     const runs = [run("b", "plan", "done", "2026-09-29T10:05:00Z"), run("a", "plan", "done", "2026-09-29T10:00:00Z")];
     runLabels(runs);
     expect(runs.map((r) => r.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("whether a review was posted", () => {
+  const review = { id: "r-new", launchedAt: "2026-10-01T10:00:00Z", endedAt: "2026-10-01T11:00:00Z" };
+  const posted = { action: "review_posted", actor: "person" };
+
+  it("counts a line for that run, or one that names no run made after it ended", () => {
+    expect(reviewPosted([{ ...posted, runId: "r-new", at: "2026-10-01T10:30:00Z" }], review)).toBe(true);
+    expect(reviewPosted([{ ...posted, runId: null, at: "2026-10-01T11:30:00Z" }], review)).toBe(true);
+    expect(reviewPosted([{ ...posted, runId: null, at: "2026-10-01T10:30:00Z" }], review)).toBe(false);
+  });
+
+  it("doesn't let a post for an earlier review, made after the newer one ended, stand for the newer", () => {
+    expect(reviewPosted([{ ...posted, runId: "r-old", at: "2026-10-01T12:00:00Z" }], review)).toBe(false);
+  });
+
+  it("keeps the actor and action filters", () => {
+    expect(reviewPosted([{ action: "review_posted", actor: "pip", runId: "r-new" }], review)).toBe(false);
+    expect(reviewPosted([{ action: "something_else", actor: "person", runId: "r-new" }], review)).toBe(false);
   });
 });

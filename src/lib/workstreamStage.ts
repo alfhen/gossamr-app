@@ -64,11 +64,12 @@ type PostEvent = { action: string; actor?: string; runId: string | null; at?: st
 
 /**
  * Whether the person posted a GitHub review for `review` (a finished review run) as it stood: a `review_posted` or
- * `escalation_posted` of theirs for that run, or made after it ended. The review still blocks, but it has gone to GitHub.
+ * `escalation_posted` of theirs for that run, or, for a line that names no run, made after it ended. A line that names
+ * another run is never this one's. The review still blocks, but it has gone to GitHub.
  */
 export function reviewPosted(events: readonly PostEvent[], review: { id: string; launchedAt?: string | null; endedAt?: string | null }): boolean {
   const since = Date.parse(review.endedAt ?? review.launchedAt ?? "");
-  return events.some((e) => e.actor === "person" && (e.action === "review_posted" || e.action === "escalation_posted") && (e.runId === review.id || (e.at !== undefined && Date.parse(e.at) >= since)));
+  return events.some((e) => e.actor === "person" && (e.action === "review_posted" || e.action === "escalation_posted") && (e.runId != null ? e.runId === review.id : e.at !== undefined && Date.parse(e.at) >= since));
 }
 
 /** Short names for the runs of a workstream, `R1` for the first queued: by queue time, ties by id. */

@@ -21,6 +21,7 @@ import type { WatchState } from "../types";
 import type { StepChip } from "./pipHomeLogic";
 import { NO_PULL_VIEW, autoNote, pullViewOrGithub } from "./StepRail";
 import { usePullView } from "./pullViewStore";
+import { EscalationBody } from "./NeedsPane";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -305,6 +306,15 @@ describe("a review that still blocks after the fix rounds", () => {
     expect(offline).not.toContain(POST_AS_IS_HELP);
     // With a draft there is nothing to explain.
     expect(view({ github: false, escalation })).toContain(POST_AS_IS_HELP.replace(/'/g, "&#x27;"));
+  });
+
+  it("on Pip home's decision pane, says to connect GitHub rather than that no draft waits, while it isn't connected", () => {
+    const view = { ...viewOf(), escalation: { ...escalation, reviewDraft: null } };
+    // The store as it starts has no connections; renderToStaticMarkup reads that initial state.
+    const offline = renderToStaticMarkup(<EscalationBody view={view} />);
+    expect(offline).toContain(CONNECT_TO_POST);
+    expect(offline).toContain("data-escalation-connect");
+    expect(offline).not.toContain(NO_REVIEW_DRAFT);
   });
 
   it("on Pip home's decision pane, holds the choices once Post the review as is was pressed, until the draft is posted or goes", () => {
