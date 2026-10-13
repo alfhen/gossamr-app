@@ -11,6 +11,15 @@ function setup(valid = UNDO_VALID_MS) {
 }
 
 describe("the undo state machine", () => {
+  it("settles an offer once, however many times it is asked to undo", async () => {
+    const settled = vi.fn();
+    const log = new UndoLog(() => 1_000, () => {}, UNDO_VALID_MS, settled);
+    const id = log.offer({ text: "Skipped the draft.", undo: async () => {} });
+    expect(await log.run(id)).toBe("undone");
+    expect(await log.run(id)).toBe("spent");
+    expect(settled.mock.calls).toEqual([[id]]);
+  });
+
   it("offers, undoes once, and says so", async () => {
     const { log, told } = setup();
     const undo = vi.fn(async () => {});

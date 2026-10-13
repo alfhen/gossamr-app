@@ -369,6 +369,8 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
       return `Fix round ${rounds} sent to ${label(e.runId)}${e.actor === "supervisor" ? " automatically" : ""}`;
     case "fix_rounds_exhausted":
       return `The review still blocks after ${e.detail ?? "2"} fix rounds`;
+    case "escalation_taken":
+      return `${who} took the review of ${label(e.runId)} over from Pip`;
     case "waiting_for_pr":
       return `${label(e.runId)} is waiting for its pull request`;
     case "held":

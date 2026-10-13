@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, expandNeedsYou, expectToast, homeConversation, homeSettled, mockRuns, needOfKind, needRow, needsPane, needsYouTray, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { askPermission, askPip, expandNeedsYou, expectToast, homeConversation, homeSettled, mockRuns, needOfKind, needRow, needsPane, needsYouTray, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
 
 // Fixes from the fourth dogfood round: Deny asks before it tells the agent no, Needs-you titles wrap instead of
 // truncating, and the Decisions count leaves out bookkeeping.
@@ -41,6 +41,17 @@ test.describe("Deny on a permission prompt asks first (F1)", () => {
     await confirm.getByRole("button", { name: "Yes, deny" }).click();
     await expect.poll(() => stateOf(page, run.id)).toBe("working");
     await expectToast(page, /^Denied\. .+ carries on without it\./);
+  });
+
+  test("an open Deny confirm closes when the run asks for something else, so it can't deny the new request", async ({ page }) => {
+    const { run, pane } = await onPermission(page);
+    await pane.getByRole("button", { name: "Deny", exact: true }).click();
+    const confirm = pane.getByRole("group", { name: "Deny this request" });
+    await expect(confirm).toBeVisible();
+    await askPermission(page, run.id, "approve Bash: git status");
+    await expect(pane.locator("[data-permission-ask]")).toContainText("git status");
+    await expect(confirm).toHaveCount(0);
+    expect(await stateOf(page, run.id)).toBe("needsPermission");
   });
 });
 
