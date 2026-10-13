@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FeedEntry, Proposal, WorkItem, WorkstreamEvent, WorkstreamView } from "../types";
-import { CHIPS, CHIP_LABEL, buildRows, chipsFor, toWorkstreamEntries, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
+import { CHIPS, CHIP_LABEL, buildRows, chipsFor, eventText, toWorkstreamEntries, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
 
 const entry = (id: string, at: string, over: Partial<FeedEntry> = {}): FeedEntry => ({
   id,
@@ -124,7 +124,7 @@ describe("the Pip & agents chip", () => {
     const ref = { connectionId: "c", externalId: "A-1", key: "A-1" };
     const entries = toWorkstreamEntries(events, [ws], () => ref);
     expect(entries.map((e) => e.text)).toEqual([
-      "Fix round 1 sent to R3",
+      "Fix round 1 sent to R3 automatically",
       "You resumed the workstream",
       "You held the workstream",
       "Triage R2 started automatically after R1",
@@ -135,6 +135,12 @@ describe("the Pip & agents chip", () => {
     expect(entries[0]).toMatchObject({ source: "pip", workstreamId: "w1", itemKey: "A-1", item: ref, runId: "r3", action: "fix_round_sent", unread: false });
     expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
     expect(toWorkstreamEntries({}, [ws])).toEqual([]);
+  });
+
+  it("says a fix round the rules sent was automatic, and one the person chose was not", () => {
+    const label = (id: string | null) => id ?? "a run";
+    expect(eventText(ev(1, "supervisor", "fix_round_sent", "R3"), label, 1)).toBe("Fix round 1 sent to R3 automatically");
+    expect(eventText(ev(2, "person", "fix_round_sent", "R3"), label, 3)).toBe("Fix round 3 sent to R3");
   });
 
   it("words the person's Allow 5 more", () => {

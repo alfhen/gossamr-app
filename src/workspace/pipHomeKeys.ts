@@ -1,6 +1,6 @@
 import { PIP_INPUT_ID } from "./draftKeys";
 import { keyIntent } from "./keyMap";
-import { PIP_HOME_COLUMNS, type PipHomeColumn } from "./pipHomeStore";
+import { PIP_HOME_REGIONS, columnRegion, type PipHomeColumn, type PipHomeRegion } from "./pipHomeStore";
 
 /**
  * What the item with focus in the workstream list or the step rail is, as the keyboard steps through them: a workstream's
@@ -20,8 +20,10 @@ export interface PipHomeKeyState {
   at: number;
   /** What that one is. */
   kind: PipHomeItemKind | null;
-  /** Whether the Steps column has steps to show: a workstream is selected. Without one, column moves pass it by. */
-  steps?: boolean;
+  /** The region the keyboard is in, for F6; the one `column` holds first when omitted. */
+  region?: PipHomeRegion;
+  /** The regions on screen: the decision pane only while one is open, the step rail only while a workstream gives it steps. F6 passes the others by. */
+  regions?: readonly PipHomeRegion[];
   /** A key of the Needs you list waits for Enter on the item with focus. */
   asking?: boolean;
   /** A decision is open in the middle column. */
@@ -30,9 +32,9 @@ export interface PipHomeKeyState {
   inPane?: boolean;
 }
 
-/** What a key on Pip home does: go to a column, focus the item at `index` in this one, or act on the item with focus. */
+/** What a key on Pip home does: go to a region, focus the item at `index` in this one, or act on the item with focus. */
 export type PipHomeKeyAction =
-  | { type: "column"; to: PipHomeColumn }
+  | { type: "region"; to: PipHomeRegion }
   | { type: "focus"; index: number }
   | { type: "open" }
   | { type: "toggle" }
@@ -66,16 +68,16 @@ export function isTypingTarget(target: unknown): boolean {
   return typeof el.closest === "function" && !!el.closest("[contenteditable]:not([contenteditable=false])");
 }
 
-/** The column `by` from `column`, wrapping around; the Steps column only when it has steps (`steps`). */
-const step = (column: PipHomeColumn, by: 1 | -1, steps = true): PipHomeColumn => {
-  const columns = PIP_HOME_COLUMNS.filter((c) => steps || c !== "rail" || c === column);
-  const at = columns.indexOf(column);
-  return columns[(at + by + columns.length) % columns.length];
-};
+/** The region `by` from `region` among those `on` screen, wrapping around; the one the keyboard is in always counts. */
+export function stepRegion(region: PipHomeRegion, by: 1 | -1, on: readonly PipHomeRegion[] = PIP_HOME_REGIONS): PipHomeRegion {
+  const regions = PIP_HOME_REGIONS.filter((r) => r === region || on.includes(r));
+  const at = regions.indexOf(region);
+  return regions[(at + by + regions.length) % regions.length];
+}
 
 /**
- * Which way a key moves between Pip home's columns: F6 and Cmd/Ctrl+] go right, Shift+F6 and Cmd/Ctrl+[ left, wrapping
- * around, past the Steps column while no workstream gives it steps. Like Cmd/Ctrl+J they work from Pip's composer too,
+ * Which way a key moves between Pip home's regions: F6 and Cmd/Ctrl+] go on, Shift+F6 and Cmd/Ctrl+[ back, wrapping
+ * around, past the decision pane while none is open and the Steps column while no workstream gives it steps. Like Cmd/Ctrl+J they work from Pip's composer too,
  * which is how the person leaves it; never from another field (a budget, an answer to a run), where shortcuts don't fire
  * while the person types.
  */
@@ -87,13 +89,13 @@ function columnStep(ev: PipHomeKeyEvent): 1 | -1 | 0 {
 }
 
 /**
- * The key `ev` on Pip home, given where the keyboard is: a column move, a step through the list or the rail, or opening
+ * The key `ev` on Pip home, given where the keyboard is: a region move, a step through the list or the rail, or opening
  * or toggling the item with focus. Null leaves the key to whatever else takes it: plain keys never act while the person
  * types in a field or while something is open over Pip home, and in the conversation they stay its cards' own.
  */
 export function pipHomeKey(ev: PipHomeKeyEvent, state: PipHomeKeyState): PipHomeKeyAction | null {
   const by = columnStep(ev);
-  if (by) return state.overlay || (isTypingTarget(ev.target) && (ev.target as { id?: unknown }).id !== PIP_INPUT_ID) ? null : { type: "column", to: step(state.column, by, state.steps ?? true) };
+  if (by) return state.overlay || (isTypingTarget(ev.target) && (ev.target as { id?: unknown }).id !== PIP_INPUT_ID) ? null : { type: "region", to: stepRegion(state.region ?? columnRegion(state.column), by, state.regions) };
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return null;
   if (state.overlay || isTypingTarget(ev.target)) return null;
   // Inside the open decision the same keys act on the need it shows; the pane is in the conversation column, so this comes first.

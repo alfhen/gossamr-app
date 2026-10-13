@@ -131,7 +131,7 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await openStep(page, "plan");
   const rewrite = stepChip(page, "plan").getByRole("article", { name: "Update the description of CA-401" });
   await expect(rewrite).toBeVisible();
-  await expect(stepChip(page, "plan").getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
+  await expect(stepChip(page, "plan").getByRole("button", { name: /safe drafts/ })).toHaveCount(0);
   await rewrite.getByRole("button", { name: "Review on CA-401 →" }).click();
   await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
   await expect(pipHome(page)).toBeVisible();
@@ -192,7 +192,7 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await expect(pending.and(page.locator('[aria-label^="GitHub review of "]'))).toHaveCount(1);
   const drafts = pending.and(page.locator(':not([aria-label^="GitHub review of "])'));
   await expect(drafts).toHaveCount(1);
-  await expect(stepChip(page, "review").getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
+  await expect(stepChip(page, "review").getByRole("button", { name: /safe drafts/ })).toHaveCount(0);
   const id = (await drafts.getAttribute("data-draft"))!;
   const trayBefore = Number(await needsYouCount(page).innerText());
   await drafts.getByRole("button", { name: "Review on CA-401 →" }).click();
@@ -299,7 +299,7 @@ test("a failed run waits in the list under General, opens its decision, and stay
   await expect(needRow(page, /SUP-9.*needs its folder trusted/)).toHaveCount(1);
 });
 
-test("on a window about 900px wide the steps drop below the conversation, nothing scrolls sideways, and F6 still goes list, conversation, steps", async ({ page }) => {
+test("on a window about 900px wide the steps drop below the conversation, nothing scrolls sideways, and F6 still reaches every region", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 800 });
   await openApp(page, MANAGED);
   await agentsSettled(page);
@@ -311,13 +311,19 @@ test("on a window about 900px wide the steps drop below the conversation, nothin
   expect(s.y).toBeGreaterThanOrEqual(c.y + c.height - 1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
+  // The workstreams, the timeline, the steps, the composer, then round to Needs you and the workstreams again.
   await workstreamRow(page, "CA-401").focus();
+  await page.keyboard.press("F6");
+  await expect(conversation.locator("[data-timeline]")).toHaveCount(1);
+  expect(await page.evaluate(() => !!document.activeElement?.closest("[data-timeline]"))).toBe(true);
+  await page.keyboard.press("F6");
+  await expect(stepChip(page, "investigate").locator("[data-step-chip]")).toBeFocused();
   await page.keyboard.press("F6");
   await expect(pipHome(page).locator("#pip-input")).toBeFocused();
   await page.keyboard.press("F6");
-  await expect(stepChip(page, "investigate").locator("[data-step-chip]")).toBeFocused();
+  expect(await page.evaluate(() => !!document.activeElement?.closest("[data-needs-you]"))).toBe(true);
   await page.keyboard.press("F6");
   await expect(workstreamRow(page, "CA-401")).toBeFocused();
   await page.keyboard.press("Shift+F6");
-  await expect(stepChip(page, "investigate").locator("[data-step-chip]")).toBeFocused();
+  expect(await page.evaluate(() => !!document.activeElement?.closest("[data-needs-you]"))).toBe(true);
 });

@@ -225,6 +225,28 @@ export function rankCommands(commands: readonly Command[], query: string): Comma
   return ranked.sort((x, y) => x.rank - y.rank).map((r) => r.command);
 }
 
+/**
+ * Whether the query names the command: every word of it is a word of the command's title or keywords, or the start of one
+ * ("runs", "timel", "agents"). A command named like that comes before any ticket or search result the same words match.
+ */
+export function namesCommand(command: Command, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return false;
+  const names = `${command.label} ${command.keywords ?? ""}`.toLowerCase().split(/[\s:/-]+/).filter(Boolean);
+  return words.every((w) => names.some((n) => n.startsWith(w)));
+}
+
+/**
+ * Splits a search's ticket matches and ranked commands for the palette: `head` is what comes first (a ticket whose key
+ * starts with what was typed, then the commands the query names), `tickets` and `commands` the rest of each, in order.
+ */
+export function searchOrder(tickets: readonly Command[], ranked: readonly Command[], query: string) {
+  const q = query.trim().toLowerCase();
+  const byKey = tickets.filter((t) => t.hint?.toLowerCase().startsWith(q));
+  const named = ranked.filter((c) => namesCommand(c, query));
+  return { head: [...byKey, ...named], tickets: tickets.filter((t) => !byKey.includes(t)), commands: ranked.filter((c) => !named.includes(c)) };
+}
+
 /** Tickets whose key or title matches, exact keys first. */
 export function ticketCommands(items: readonly WorkItem[], query: string, jump: (item: WorkItem) => void, limit = 8): Command[] {
   const q = query.trim().toLowerCase();

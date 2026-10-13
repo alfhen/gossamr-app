@@ -178,6 +178,11 @@ function Line({ entry, onOpen, children }: { entry: TimelineEntry; onOpen?: () =
           In Needs you
         </button>
       )}
+      {entry.detail && (
+        <span data-timeline-detail className="line-clamp-2 basis-full min-w-0 pl-3 text-xs text-ws-ink3 [overflow-wrap:anywhere]">
+          {entry.detail}
+        </span>
+      )}
       {children}
     </p>
   );
@@ -358,7 +363,7 @@ export function TimelineView({
           />
         )}
       </div>
-      <div ref={ref} data-pip-conversation-body data-timeline onKeyDown={onKeyDown} onScroll={onScroll} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 pt-3 pb-4">
+      <div ref={ref} data-pip-conversation-body data-timeline tabIndex={-1} onKeyDown={onKeyDown} onScroll={onScroll} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 pt-3 pb-4 outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip">
         {empty &&
           !every &&
           filter === "all" &&

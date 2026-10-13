@@ -235,18 +235,19 @@ describe("Pip home's keys with no workstream, and its footer", () => {
   const key = (k: string, over: Partial<PipHomeKeyEvent> = {}): PipHomeKeyEvent => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: null, ...over });
   const at = (over: Partial<PipHomeKeyState> = {}): PipHomeKeyState => ({ column: "list", overlay: false, count: 4, at: 1, kind: "row", ...over });
 
-  it("passes the Steps column by while no workstream gives it steps, both ways and with ⌘] and ⌘[", () => {
-    const none = (column: PipHomeKeyState["column"]) => at({ column, steps: false });
-    expect(pipHomeKey(key("F6"), none("conversation"))).toEqual({ type: "column", to: "list" });
-    expect(pipHomeKey(key("F6"), none("list"))).toEqual({ type: "column", to: "conversation" });
-    expect(pipHomeKey(key("F6", { shiftKey: true }), none("list"))).toEqual({ type: "column", to: "conversation" });
-    expect(pipHomeKey(key("]", { metaKey: true }), none("conversation"))).toEqual({ type: "column", to: "list" });
-    expect(pipHomeKey(key("[", { ctrlKey: true }), none("list"))).toEqual({ type: "column", to: "conversation" });
-    // Left in the Steps column somehow, the keys still leave it.
-    expect(pipHomeKey(key("F6"), none("rail"))).toEqual({ type: "column", to: "list" });
-    expect(pipHomeKey(key("F6", { shiftKey: true }), none("rail"))).toEqual({ type: "column", to: "conversation" });
+  it("passes the Steps region by while no workstream gives it steps, both ways and with ⌘] and ⌘[", () => {
+    const regions = ["needs", "workstreams", "timeline", "composer"] as const;
+    const none = (region: PipHomeKeyState["region"]) => at({ region, regions });
+    expect(pipHomeKey(key("F6"), none("timeline"))).toEqual({ type: "region", to: "composer" });
+    expect(pipHomeKey(key("F6"), none("composer"))).toEqual({ type: "region", to: "needs" });
+    expect(pipHomeKey(key("F6", { shiftKey: true }), none("needs"))).toEqual({ type: "region", to: "composer" });
+    expect(pipHomeKey(key("]", { metaKey: true }), none("timeline"))).toEqual({ type: "region", to: "composer" });
+    expect(pipHomeKey(key("[", { ctrlKey: true }), none("composer"))).toEqual({ type: "region", to: "timeline" });
+    // Left in the Steps region somehow, the keys still leave it.
+    expect(pipHomeKey(key("F6"), none("rail"))).toEqual({ type: "region", to: "composer" });
+    expect(pipHomeKey(key("F6", { shiftKey: true }), none("rail"))).toEqual({ type: "region", to: "timeline" });
     // With steps, the rail is a stop again.
-    expect(pipHomeKey(key("F6"), at({ column: "conversation", steps: true }))).toEqual({ type: "column", to: "rail" });
+    expect(pipHomeKey(key("F6"), at({ region: "timeline", regions: [...regions, "rail"] }))).toEqual({ type: "region", to: "rail" });
   });
 
   it("takes Tab from the last stop on Pip home round to the first stop on the page, and leaves every other Tab to the browser", () => {

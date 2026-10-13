@@ -73,7 +73,7 @@ The owner's tickets are often not well defined, and Gossamr exists to make them 
 - One per workstream, plus General (null).
 - `{ workstreamId, title, top: Need, rest: Need[], count, safeBatch: Need[] }`.
 - `top` is the highest-ranked need.
-- `safeBatch` holds the batchable pending drafts (comment, transition, subtasks), offered as "Approve N" with one combined preview.
+- `safeBatch` holds the batchable pending drafts (comment, transition, subtasks), offered as "Approve N safe drafts" (the one label everywhere, here and on the step rail; `batchLabel` in `pipHomeLogic.ts`) with one combined preview.
 
 ### One count
 - `needsCount = needs.length`. One number everywhere:
@@ -89,7 +89,8 @@ The owner's tickets are often not well defined, and Gossamr exists to make them 
   - **Middle:** the timeline and the composer, with the decision pane opening above the timeline.
   - **Right:** the steps.
   - A group's title wraps to two lines (`line-clamp-2`), as a need's and its reason do, instead of being cut to one.
-  - The keyboard is unchanged: F6 and Cmd/Ctrl+] move between the three columns, j/k and the arrows step through the list's rows (the Needs you rows, then the workstreams'), Enter opens, Esc closes. The `data-pip-home-column` and `data-needs-you-*` handles are as they were.
+  - **F6 reaches every region**, in the order they sit on screen: Needs you, the workstreams, the timeline, the decision pane (only while one is open), the step rail (only while a workstream gives it steps) and the composer. Shift+F6 and Cmd/Ctrl+[ go back, Cmd/Ctrl+] forward, both wrapping (`PIP_HOME_REGIONS`, `stepRegion` in `pipHomeKeys.ts`). It lands on the first Needs you row (the open one first), the selected workstream, the newest timeline entry, the decision's own first button, where the rail was left, and the composer.
+  - **j/k go row by row through the visible rows** of the left column: the Needs you rows, then the workstreams'. A folded group is one row. An open group is its own row, then one row for each of its other needs: its top need is listed again under it, and j/k step past that second row (`data-needs-top`) so no need is stopped on twice. Enter or o (or →) on a group expands it and opens its top need; ← folds it. Esc closes. The `data-pip-home-column` and `data-needs-you-*` handles are as they were.
 - It also opens as the rail popover.
 - **Rows**: one per NeedGroup. Each row shows:
   - the ticket key and title
@@ -97,7 +98,7 @@ The owner's tickets are often not well defined, and Gossamr exists to make them 
   - `top.why`
   - an age
   - "+N more" when there is more than one need
-- **Expanding** a row (Enter or →) lists every need in the group, plus "Approve N safe drafts" when `safeBatch` has 2 or more.
+- **Expanding** a row (Enter or →) lists every need in the group, plus "Approve N safe drafts" when `safeBatch` has 2 or more. That button, and the palette's "Approve all safe drafts in …", open the combined preview in the decision pane like any other decision (`batch` in `pipHomeStore`, `BatchDecision` in `NeedsPane.tsx`): what each draft would do, fixed as it was when the pane opened, then one confirm ("Yes, approve N"). Cancel, ×, Esc or opening another decision keep every draft as it is; the outcome is said in the pane and in a toast.
 - **Decision pane**: selecting a need opens its decision inline in Pip home's middle column, reusing the existing components:
   - PermissionAsk
   - RunAnswer (question, limit-resume)
@@ -129,6 +130,8 @@ The same keys mean the same thing in every list that holds actionable items (the
 - s: skip a draft. d and s on a draft, and d on a failure, act at once and offer Undo.
 - Esc: back.
 
+Global shortcuts: Cmd/Ctrl+0 goes to Pip home from anywhere, the Agents screen with a card's button focused included (a button on a card keeps plain keys from the list's own, but lets a Cmd/Ctrl shortcut through: `ownKey` in `agentKeys.ts`). It works from Pip's composer too, never from another field or behind the open palette. Cmd/Ctrl+K opens the palette, Cmd/Ctrl+J Pip.
+
 ## Undo (step 4)
 Reversible actions act at once and offer Undo in a toast for about 8 seconds (`src/workspace/undo.ts`): skipping a draft, dismissing a failed or stuck run, holding a workstream, switching it to Advise. Undo restores the exact previous state; when the action wrote an audit line the undo writes its own (`undone`). The backend allows an undo for 60 seconds, only while that change is the last line of the workstream's audit, so a stale toast can't undo over later changes. Anything that reached Jira, GitHub or an agent (post, approve, apply, Deny, Allow, Stop, Resume, start) keeps its confirm.
 
@@ -144,9 +147,11 @@ A workstream's story used to be spread over the conversation, the run strip, the
   - `target` is what opening it shows: a run id (its sheet), a draft id (its card), or a need key. An entry about something in Needs you always targets its need.
 - **A run is one entry**, updated in place: it stands where the audit says it was approved or started by a rule (else when it was queued), and its `phase` (queued, started, waiting, finished, failed, stopped, stopped at limit, unknown) and `lifecycle` change as it moves. A finished review says its verdict.
 - **A draft is one entry**, at when it was made, saying who made what and how it stands (waiting, posting, posted, sent, started, skipped, replaced, no longer needed).
+- **Fix rounds** each have a line, from the audit: "Fix round 1 sent to R3 automatically" for the rules' rounds, "Fix round 3 sent to R3" for one the person chose. It opens the build it went to.
+- **A failed run's heading is short** ("Build R4 failed"); what the run said went wrong is the entry's `detail`, in smaller type under it.
 - **Audit lines** are worded as Activity words them. The lines a run's or a draft's own entry already tells are left out (`run_approved`, `autostart`, `wake`, `draft_created`, `draft_retired`, `notes_set`). The same line repeated in a row collapses into one ("… (3 times)").
 - **Linking to Needs you**: a waiting run, a waiting draft, the hold the system made that still holds (and a used-up budget's question), and the open escalation carry the need's key. A hold the person chose has no need, so its line opens nothing.
-- **Ordering**: by time; a tie goes to what was said, then the audit, then runs, then drafts. Turns now carry `at` (the stored turn's `createdAt`, or when it was asked).
+- **Ordering**: by when things happened; a tie goes to what was said, then the audit, then runs, then drafts. Cause precedes effect whatever the clocks say: a draft a run left never stands before that run, and an audit line about a draft (approved, skipped, a review posted) never before the draft, nor before the run it came of. In Every workstream the parts' lists are merged, each keeping its own order. Turns now carry `at` (the stored turn's `createdAt`, or when it was asked).
 - **Filters**: All, Runs (`kind` run), Drafts (`kind` draft), Decisions (what the person did, what asks them to decide, and whatever waits in Needs you).
 
 ### UI
@@ -166,8 +171,9 @@ A workstream's story used to be spread over the conversation, the run strip, the
   - Each entry carries a small label (`data-timeline-workstream`): its ticket key, the workstream's title without one, or "General". Its accessible name starts with it.
   - While Every workstream is shown, every open workstream's conversation and audit are loaded. The composer stays the selected workstream's; the workstream intro shows only in This workstream.
   - **Runs + Every workstream is a timeline like the others.** Choosing Runs with Every workstream stays on Pip home and shows the runs of every open workstream and General, merged by time, each labelled with its workstream (`showTimeline` in `TimelineFilterBar.tsx` sets the filter and the scope and goes to Pip home; there is no redirect and no `isAgentsView`). The scope toggle has no title about another screen.
-  - **The Agents screen is the operations view**: what is running, the capacity, Stop all, Start an agent, and safety and settings. It is reached by the rail's Agents button and the "Open Agents" command in ⌘K (keywords: agents, running, capacity, operations, stop all). It has no timeline filter of its own; its header has a "Runs timeline" button that goes to Pip home's Runs in Every workstream. Its selection, keys (`agentKeys.ts`), settings, banners, lanes and layouts are unchanged.
+  - **The Agents screen is the operations view**: what is running, the capacity, Stop all, Start an agent, and safety and settings. It is reached by the rail's Agents button and the "Open Agents" command in ⌘K (keywords: agents, running, capacity, operations, stop all). It has no timeline filter of its own; its header has a "Runs timeline" button that goes to Pip home's Runs in Every workstream. Its selection, keys (`agentKeys.ts`), settings, banners, lanes and layouts are unchanged, except that its list keeps clear of the floating Pip launcher like the other screens: room under the last row (`--ws-launcher-clear`) and a right gutter (`--ws-launcher-gutter`, `LAUNCHER_GUTTER`) so no card or "Show" link stands under it.
   - Asking Pip home to show a card (`focus`) sets the filter back to All and the scope back to This workstream.
+- **⌘K ranking**: a command the query names comes before any ticket or search result. A query names a command when each of its words is a word of the command's title or keywords, or the start of one ("runs", "timel", "agents", "stop all"); `namesCommand` and `searchOrder` in `commands.ts`. A ticket whose key starts with what was typed still leads, so typing a key finds the ticket, and fuzzy ticket search is unchanged after the commands the query names.
 - **⌘K**: "Timeline: All", "Timeline: Runs", "Timeline: Drafts", "Timeline: Decisions", "Timeline: This workstream" and "Timeline: Every workstream" (`timelineCommands` in `commands.ts`, in the Workstreams group, while Agents are on). A filter keeps the scope and a scope keeps the filter, as the buttons do; every one goes to Pip home. The filter and scope on screen are marked current, while Pip home is on screen; no combination is marked as another screen.
 - **Keyboard** (`src/workspace/timelineKeys.ts`, the `keyMap.ts` model):
   - j/k (or the arrows) move from entry to entry. An entry's stop is its draft card, its run row, or the entry itself.

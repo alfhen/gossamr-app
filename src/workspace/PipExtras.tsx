@@ -88,6 +88,13 @@ export function Nudge({ text, onOpen, onDismiss, onHold }: { text: string; onOpe
  */
 export const LAUNCHER_CLEAR = 112;
 
+/**
+ * How far in from the canvas's right edge a screen whose cards fill its width keeps them while the launcher floats over it,
+ * published on <main> as `--ws-launcher-gutter`: the launcher's width (74px), its right margin (20px) and a little air.
+ * The Agents screen uses it, so a card or a lane's "Show" link never stands under the launcher.
+ */
+export const LAUNCHER_GUTTER = 104;
+
 /** Keeps the launcher clear of the footer and, while the ticket peek is open, of the peek. */
 export const launcherStyle = (clearRight = 0) => ({ right: `calc(${clearRight}px + 1.25rem)`, bottom: "calc(var(--ws-footer-h, 2rem) + 0.75rem)" });
 

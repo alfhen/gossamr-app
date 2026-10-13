@@ -6,7 +6,7 @@ import { useNeedsYou } from "./useNeeds";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, timelineCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext, type TimelineState } from "./commands";
+import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, timelineCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext, type TimelineState } from "./commands";
 import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
 import { useAgentsEnabled } from "./agentsFlag";
@@ -344,8 +344,13 @@ export function Palette() {
     };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);
+    const tickets = ticketCommands(all, query, actions.jumpToItem);
+    // A typed ticket key stays first; any other ticket comes after the commands the query names ("runs", "timeline").
+    const ranked = rankCommands([...contextEntries(subject, agents), ...undoEntries(), ...commands, ...(agents ? timelineCommands(timelineState(), actions) : []), ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query);
+    const order = searchOrder(tickets, ranked, query);
     const found = [
-      ...ticketCommands(all, query, actions.jumpToItem),
+      ...order.head,
+      ...order.tickets,
       ...keyCommand(query, all, actions.openTicket),
       ...pullCommand(query, actions.openPull),
       ...(agents ? askToPlanCommands(all, query, actions) : []),
@@ -353,7 +358,7 @@ export function Palette() {
       ...(agents ? workstreamCommands(workstreams, query, actions) : []),
       // The peeked ticket's own "Start a workstream" is in the commands already.
       ...(agents ? startWorkstreamCommands(all, query, workstreams, actions).filter((c) => !ticket || c.id !== `workstream:start:${itemKey(ticket.item)}`) : []),
-      ...rankCommands([...contextEntries(subject, agents), ...undoEntries(), ...commands, ...(agents ? timelineCommands(timelineState(), actions) : []), ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query),
+      ...order.commands,
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);

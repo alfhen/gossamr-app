@@ -246,13 +246,13 @@ describe("the step rail", () => {
     expect(stepOf(open, "investigate")).not.toContain("data-draft");
   });
 
-  it("offers 'Approve these N' for two or more comments, moves or subtasks, and never counts a rewrite", () => {
+  it("offers 'Approve N safe drafts' for two or more comments, moves or subtasks, and never counts a rewrite", () => {
     const approve = vi.fn();
     const two = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("t1", transition, "r5"), fromRun("rw", rewrite, "r5")]} approve={approve} />);
-    expect(two).toContain(">Approve these 2</button>");
+    expect(two).toContain(">Approve 2 safe drafts</button>");
     expect(two).toContain('data-draft="rw"');
     const one = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("rw", rewrite, "r5"), fromRun("rw2", rewrite, "r5")]} approve={approve} />);
-    expect(one).not.toContain("Approve these");
+    expect(one).not.toContain("safe drafts");
     expect(approve).not.toHaveBeenCalled();
   });
 
@@ -260,7 +260,7 @@ describe("the step rail", () => {
     const html = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("c2", comment, "r5")]} approve={vi.fn()} initialConfirming />);
     expect(html).toMatch(/role="group" aria-label="Approve 2 drafts" data-esc-local/);
     expect(html).toContain(">Yes, approve 2</button>");
-    expect(html).not.toContain("Approve these");
+    expect(html).not.toContain("safe drafts");
 
     const onConfirm = vi.fn();
     const onCancel = vi.fn();

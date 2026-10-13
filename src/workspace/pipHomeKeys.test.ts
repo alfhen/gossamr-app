@@ -11,30 +11,48 @@ const at = (over: Partial<PipHomeKeyState> = {}): PipHomeKeyState => ({ column: 
 /** A stand-in for an element: its tag, and whether it sits inside something editable. */
 const el = (tagName: string, editable = false) => ({ tagName, isContentEditable: editable, closest: (s: string) => (editable && s.includes("contenteditable") ? {} : null) });
 
-describe("pipHomeKey: columns", () => {
-  it("F6 goes right and Shift+F6 left, wrapping around", () => {
-    expect(pipHomeKey(key("F6"), at({ column: "list" }))).toEqual({ type: "column", to: "conversation" });
-    expect(pipHomeKey(key("F6"), at({ column: "conversation" }))).toEqual({ type: "column", to: "rail" });
-    expect(pipHomeKey(key("F6"), at({ column: "rail" }))).toEqual({ type: "column", to: "list" });
-    expect(pipHomeKey(key("F6", { shiftKey: true }), at({ column: "list" }))).toEqual({ type: "column", to: "rail" });
-    expect(pipHomeKey(key("F6", { shiftKey: true }), at({ column: "conversation" }))).toEqual({ type: "column", to: "list" });
+const ALL = ["needs", "workstreams", "timeline", "pane", "rail", "composer"] as const;
+const SHOWN = ["needs", "workstreams", "timeline", "rail", "composer"] as const;
+const f6 = (region: PipHomeKeyState["region"], over: Partial<PipHomeKeyEvent> = {}, state: Partial<PipHomeKeyState> = {}) => pipHomeKey(key("F6", over), at({ region, regions: ALL, ...state }));
+
+describe("pipHomeKey: regions", () => {
+  it("F6 goes through Needs you, the workstreams, the timeline, the decision pane, the steps and the composer, wrapping around", () => {
+    const order = ["needs", "workstreams", "timeline", "pane", "rail", "composer", "needs"] as const;
+    for (let i = 0; i < order.length - 1; i++) expect(f6(order[i])).toEqual({ type: "region", to: order[i + 1] });
+    for (let i = order.length - 1; i > 0; i--) expect(f6(order[i], { shiftKey: true })).toEqual({ type: "region", to: order[i - 1] });
+    expect(f6("needs", { shiftKey: true })).toEqual({ type: "region", to: "composer" });
   });
 
-  it("Cmd+] and Ctrl+] go right, Cmd+[ and Ctrl+[ left", () => {
-    expect(pipHomeKey(key("]", { metaKey: true }), at({ column: "list" }))).toEqual({ type: "column", to: "conversation" });
-    expect(pipHomeKey(key("]", { ctrlKey: true }), at({ column: "rail" }))).toEqual({ type: "column", to: "list" });
-    expect(pipHomeKey(key("[", { metaKey: true }), at({ column: "conversation" }))).toEqual({ type: "column", to: "list" });
-    expect(pipHomeKey(key("[", { ctrlKey: true }), at({ column: "list" }))).toEqual({ type: "column", to: "rail" });
+  it("passes the decision pane by while none is open, and the steps while a workstream gives none", () => {
+    expect(f6("timeline", {}, { regions: SHOWN })).toEqual({ type: "region", to: "rail" });
+    expect(f6("rail", { shiftKey: true }, { regions: SHOWN })).toEqual({ type: "region", to: "timeline" });
+    expect(f6("timeline", {}, { regions: ["needs", "workstreams", "timeline", "composer"] })).toEqual({ type: "region", to: "composer" });
+    // Left in a region that is not on screen, the keys still leave it.
+    expect(f6("pane", {}, { regions: SHOWN })).toEqual({ type: "region", to: "rail" });
+    expect(f6("pane", { shiftKey: true }, { regions: SHOWN })).toEqual({ type: "region", to: "timeline" });
+  });
+
+  it("starts from the column's own region when none is given", () => {
+    expect(pipHomeKey(key("F6"), at({ column: "list" }))).toEqual({ type: "region", to: "workstreams" });
+    expect(pipHomeKey(key("F6"), at({ column: "conversation" }))).toEqual({ type: "region", to: "needs" });
+    expect(pipHomeKey(key("F6"), at({ column: "rail" }))).toEqual({ type: "region", to: "composer" });
+  });
+
+  it("Cmd+] and Ctrl+] go on, Cmd+[ and Ctrl+[ back", () => {
+    expect(pipHomeKey(key("]", { metaKey: true }), at({ region: "needs", regions: ALL }))).toEqual({ type: "region", to: "workstreams" });
+    expect(pipHomeKey(key("]", { ctrlKey: true }), at({ region: "rail", regions: ALL }))).toEqual({ type: "region", to: "composer" });
+    expect(pipHomeKey(key("[", { metaKey: true }), at({ region: "timeline", regions: ALL }))).toEqual({ type: "region", to: "workstreams" });
+    expect(pipHomeKey(key("[", { ctrlKey: true }), at({ region: "needs", regions: ALL }))).toEqual({ type: "region", to: "composer" });
   });
 
   it("works from the composer, like Cmd/Ctrl+J, but not from another field, nor with Alt, nor with a plain ] or [", () => {
     const composer = { ...el("TEXTAREA"), id: "pip-input" };
-    expect(pipHomeKey(key("F6", { target: composer }), at({ column: "conversation" }))).toEqual({ type: "column", to: "rail" });
-    expect(pipHomeKey(key("]", { metaKey: true, target: composer }), at({ column: "conversation" }))).toEqual({ type: "column", to: "rail" });
+    expect(f6("composer", { target: composer })).toEqual({ type: "region", to: "needs" });
+    expect(pipHomeKey(key("[", { metaKey: true, target: composer }), at({ region: "composer", regions: ALL }))).toEqual({ type: "region", to: "rail" });
     // A budget field on the rail, or an answer to a run: the person is typing there.
     for (const target of [el("INPUT"), el("TEXTAREA"), el("DIV", true)]) {
-      expect(pipHomeKey(key("F6", { target }), at({ column: "rail" }))).toBeNull();
-      expect(pipHomeKey(key("[", { ctrlKey: true, target }), at({ column: "rail" }))).toBeNull();
+      expect(f6("rail", { target })).toBeNull();
+      expect(pipHomeKey(key("[", { ctrlKey: true, target }), at({ region: "rail" }))).toBeNull();
     }
     expect(pipHomeKey(key("F6", { altKey: true }), at())).toBeNull();
     expect(pipHomeKey(key("]"), at())).toBeNull();
@@ -177,13 +195,13 @@ describe("Pip home's footer hint", () => {
     expect(pipHomeHints().some((h) => h.id === "needs")).toBe(false);
   });
 
-  it("names the column keys first, then j and k, Enter or o, the draft keys, ⌘↵ and Esc, each kept by rank as it narrows", () => {
+  it("names the region keys first, then j and k, Enter or o, the draft keys, ⌘↵ and Esc, each kept by rank as it narrows", () => {
     const hints = pipHomeHints();
     expect(hints.map((h) => h.keys.join(" "))).toEqual(["F6 ⌘]", "j k", "↵ o", "a e d s", "⌘↵", "Esc", "⌘K"]);
     expect(hints.slice(0, 2).every((h) => h.rank === 0)).toBe(true);
     const html = renderToStaticMarkup(createElement(ShortcutHint, { view: "list", hints }));
     expect(html).toContain("<kbd");
-    expect(html).toContain("next column");
+    expect(html).toContain("next region");
     expect(html).not.toContain("Drag a card");
   });
 });

@@ -5,6 +5,7 @@ import { useRuns } from "./runsStore";
 import type { ReviewView, Run } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
+import { ownKey } from "./agentKeys";
 import { KIND_LABEL, ageSince, ageText, branchOf, formatTokens, repoName, runTitle, stateView } from "./agentsLogic";
 import { readOnlyHeadline, verdictChip, verdictText } from "./runSheetLogic";
 
@@ -217,7 +218,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
           <button
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onOpenDraft())}
-            onKeyDown={(ev) => ev.stopPropagation()}
+            onKeyDown={ownKey}
             title="The comment is a draft. Nothing is posted until you approve it."
             className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >
@@ -228,7 +229,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
             <button
               type="button"
               onClick={(ev) => (ev.stopPropagation(), onDraftComment())}
-              onKeyDown={(ev) => ev.stopPropagation()}
+              onKeyDown={ownKey}
               title="Makes a draft you read and edit. Nothing is posted."
               className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
             >
@@ -241,7 +242,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
             type="button"
             data-resume
             onClick={(ev) => (ev.stopPropagation(), onResume())}
-            onKeyDown={(ev) => ev.stopPropagation()}
+            onKeyDown={ownKey}
             title="Wakes the agent to carry on from where it stopped. Its conversation and worktree are kept."
             className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >
@@ -252,7 +253,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
           <button
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onBuildFromPlan())}
-            onKeyDown={(ev) => ev.stopPropagation()}
+            onKeyDown={ownKey}
             title="Opens a Build draft that carries this plan, for you to read and edit. Nothing starts."
             className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
           >
@@ -263,7 +264,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
           <button
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onReviewThis())}
-            onKeyDown={(ev) => ev.stopPropagation()}
+            onKeyDown={ownKey}
             title="Opens a Review draft for this build's pull request, for you to read and edit. Nothing starts."
             className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
           >
@@ -274,7 +275,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
           <button
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onOpenDescription())}
-            onKeyDown={(ev) => ev.stopPropagation()}
+            onKeyDown={ownKey}
             title="The ticket's description is drafted with this plan added. Nothing is written until you approve it."
             className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >
@@ -285,7 +286,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
           <button
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onOpenBreakdown())}
-            onKeyDown={(ev) => ev.stopPropagation()}
+            onKeyDown={ownKey}
             title="The subtasks are a draft. Nothing is created until you approve it."
             className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >

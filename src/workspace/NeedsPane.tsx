@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { needAfter, type Need } from "../lib/needs";
+import { needAfter, needGroups, type Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS, type Proposal, type Run, type WorkstreamView } from "../types";
 import { stepsOf } from "../lib/workstreamHold";
 import { useWorkspace } from "../workspaceStore";
@@ -22,7 +22,8 @@ import { RunContinuation } from "./RunContinuation";
 import { SignInBox } from "./RunSheet";
 import { resumable } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
-import { PlanApproval, planResultFor } from "./StepRail";
+import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepRail";
+import { batchLabel, freezeBatch, type BatchSnapshot } from "./pipHomeLogic";
 import { useToasts } from "./toasts";
 import { useNow } from "./useNow";
 import { controlActions, HeldBanner } from "./WorkstreamControls";
@@ -79,7 +80,7 @@ function useAdvance(needs: readonly Need[]) {
 }
 
 /** The first thing the person decides with in the pane: a permission's buttons, an answer box, a draft's main button, else the first button. */
-function firstDecision(root: HTMLElement): HTMLElement | null {
+export function firstDecision(root: HTMLElement): HTMLElement | null {
   const body = '[data-needs-pane-body]';
   const decisions = root.querySelector<HTMLElement>(`${body} [data-permission-decisions] button:not(:disabled)`);
   if (decisions) return decisions;
@@ -485,7 +486,109 @@ function NeedDecision({ need }: { need: Need }) {
 }
 
 /**
- * The Needs you decision, open inline above Pip home's conversation: the need chosen in the list (`deciding`) with what
+ * The combined preview of a group's safe drafts, open in the pane like any decision: what each would do, fixed as it was
+ * when the pane opened, then the one confirm (`BatchConfirm`). Cancel, Esc and × keep every draft as it is.
+ */
+function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) {
+  const proposals = useWorkspace((s) => s.proposals);
+  const group = needGroups(needs).find((g) => groupId(g.workstreamId) === gid);
+  // The drafts and what the preview covers are those of the moment it opened.
+  const [ids] = useState(() => (group?.safeBatch ?? []).flatMap((n) => (n.target.type === "draft" ? [n.target.id] : [])));
+  const drafts = ids.flatMap((id) => (proposals[id] ? [proposals[id]] : []));
+  const [frozen, setFrozen] = useState<BatchSnapshot | null>(() => (drafts.length >= 2 ? freezeBatch(drafts) : null));
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<{ text: string; failed: boolean } | null>(null);
+  const [title] = useState(() => group?.ticketKey ?? group?.title ?? "General");
+  const root = useRef<HTMLElement>(null);
+  const close = () => {
+    usePipHome.getState().closeDecision();
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-pip-home-column="list"] [data-needs-you-group="${CSS.escape(gid)}"]`)?.focus());
+  };
+  const confirm = async (covered: BatchSnapshot) => {
+    setFrozen(null);
+    setBusy(true);
+    const done = await confirmBatch(covered, drafts, (id) => useWorkspace.getState().approve(id));
+    setBusy(false);
+    setOutcome(done);
+    // The drafts leave Needs you as they are approved.
+    useToasts.getState().push(done.text, done.failed ? "error" : "info");
+    requestAnimationFrame(() => root.current?.focus({ preventScroll: true }));
+  };
+  const onKeyDown = (ev: KeyboardEvent<HTMLElement>) => {
+    if (ev.key !== "Escape" || ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if ((ev.target as HTMLElement).closest("[data-esc-local]")) return;
+    ev.preventDefault();
+    close();
+  };
+  const count = frozen?.length ?? ids.length;
+  return (
+    <section
+      ref={root}
+      tabIndex={-1}
+      aria-label="Decision"
+      data-needs-pane={`batch:${gid}`}
+      data-kind="batch"
+      data-group="approve"
+      onKeyDown={onKeyDown}
+      className="grid max-h-[60%] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2.5 outline-none"
+    >
+      <header className="flex items-start gap-2">
+        <div className="grid min-w-0 flex-1 gap-0.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-ws-ink3">
+            <b data-needs-pane-head className="min-w-0 truncate font-semibold text-ws-ink">
+              {title}
+            </b>
+            <GroupChip group="approve" />
+            <span data-needs-pane-title className="min-w-0 truncate">
+              {batchLabel(count)}
+            </span>
+          </div>
+          <p data-needs-why className="m-0 text-sm font-semibold text-ws-ink [overflow-wrap:anywhere]">
+            These drafts may go together. Each is written to Jira as its card shows it.
+          </p>
+          <p data-needs-if-you-wait className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
+            <span className="font-semibold">If you wait:</span> Nothing is posted until you choose.
+          </p>
+        </div>
+        <button
+          type="button"
+          aria-label="Back to the list"
+          title="Back to the list (Esc)"
+          onClick={close}
+          className="shrink-0 rounded px-1.5 text-ws-ink3 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+        >
+          ×
+        </button>
+      </header>
+      <div data-needs-pane-body className="grid gap-2">
+        {frozen && (
+          <>
+            <ul data-needs-you-batch-preview aria-label="What approving these does" className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
+              {drafts
+                .filter((p) => frozen.some((f) => f.id === p.id))
+                .map((p) => (
+                  <li key={p.id} className="[overflow-wrap:anywhere]">
+                    <b className="font-semibold text-ws-ink">{draftTitle(p)}</b> · <span>{draftSummary(p, null)}</span>
+                  </li>
+                ))}
+            </ul>
+            <BatchConfirm count={frozen.length} onConfirm={() => void confirm(frozen)} onCancel={close} />
+          </>
+        )}
+        {busy && <p className="m-0 text-sm text-ws-ink2">Approving…</p>}
+        {!frozen && !busy && !outcome && <p className="m-0 text-sm text-ws-ink2">These drafts are no longer waiting together.</p>}
+        {outcome && (
+          <p role="status" data-batch-outcome className={`m-0 text-sm [overflow-wrap:anywhere] ${outcome.failed ? "text-ws-blocked" : "text-ws-ink2"}`}>
+            {outcome.text}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The Needs you decision, open inline above Pip home's conversation: the need chosen in the list (`deciding`), or a group's "Approve N safe drafts" preview (`batch`), with what
  * it asks and what waiting does, decided with the same components the cards and the run sheet use. Once it is dealt with
  * the next need opens in its place; with none left the pane closes and the list says "Nothing needs you."
  */
@@ -493,6 +596,8 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const deciding = usePipHome((s) => s.deciding);
   const paneRev = usePipHome((s) => s.paneRev);
   useAdvance(needs);
+  const batch = usePipHome((s) => s.batch);
   const need = needs.find((n) => n.key === deciding);
+  if (batch !== null) return <BatchDecision key={batch} gid={batch} needs={needs} />;
   return need ? <NeedDecision key={`${need.key}:${paneRev}`} need={need} /> : null;
 }

@@ -85,12 +85,15 @@ export function retiredStepDrafts(proposals: readonly Proposal[], runs: readonly
   return groups;
 }
 
-/** The drafts of a step that "Approve these N" would approve, in order; it is offered only for two or more. */
+/** What the one action of approving N drafts together is called, in the step rail and in Needs you. */
+export const batchLabel = (count: number) => `Approve ${count} safe drafts`;
+
+/** The drafts of a step that "Approve N safe drafts" would approve, in order; it is offered only for two or more. */
 export function batchable(drafts: readonly Proposal[]): Proposal[] {
   return drafts.filter((p) => p.state.type === "pending" && BATCHABLE.has(p.intent.type));
 }
 
-/** What a step's "Approve these N" covers, fixed when its confirm opens: each draft by id, with the revision shown then. */
+/** What an "Approve N safe drafts" covers, fixed when its confirm opens: each draft by id, with the revision shown then. */
 export type BatchSnapshot = readonly { id: string; revision: number }[];
 
 /** The snapshot of `drafts` a confirm opening now covers: only the ones `batchable` lets go together. */
@@ -99,7 +102,7 @@ export function freezeBatch(drafts: readonly Proposal[]): BatchSnapshot {
 }
 
 /**
- * What a confirmed "Approve these N" approves, from the step's drafts now: exactly the ones its confirm covered, each
+ * What a confirmed "Approve N safe drafts" approves, from the step's drafts now: exactly the ones its confirm covered, each
  * still pending, batchable and as it was then. A draft that came in since isn't among them; null when one of them was
  * decided or revised meanwhile, so the person never approves what they didn't see.
  */

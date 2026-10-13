@@ -10,7 +10,7 @@ import { Btn } from "./AgentSheet";
 import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
-import { batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
+import { batchLabel, batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
 import { openPullView, usePullView } from "./pullViewStore";
@@ -78,7 +78,7 @@ export async function confirmBatch(frozen: BatchSnapshot, drafts: readonly Propo
   }
 }
 
-/** A step's drafts, each as its card in the conversation, with "Approve these N" over two or more that may go together. */
+/** A step's drafts, each as its card in the conversation, with "Approve N safe drafts" over two or more that may go together. */
 export function StepDrafts({ step, drafts, approve, initialConfirming = false }: { step: StepGroup; drafts: readonly Proposal[]; approve(id: string): Promise<{ error?: string | null }>; initialConfirming?: boolean }) {
   /** The drafts the open confirm covers, fixed when it opened; null while it is closed. */
   const [frozen, setFrozen] = useState<BatchSnapshot | null>(() => (initialConfirming ? freezeBatch(drafts) : null));
@@ -125,7 +125,7 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
               onClick={() => (setOutcome(null), setFrozen(freezeBatch(drafts)))}
               className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip disabled:opacity-45"
             >
-              {busy ? "Approving…" : `Approve these ${together.length}`}
+              {busy ? "Approving…" : batchLabel(together.length)}
             </button>
           </div>
         ))}

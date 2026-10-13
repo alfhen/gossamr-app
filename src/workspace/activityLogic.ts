@@ -365,7 +365,8 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
     case "autostart_failed":
       return `An automatic step after ${label(e.runId)} couldn't start`;
     case "fix_round_sent":
-      return `Fix round ${rounds} sent to ${label(e.runId)}`;
+      // The rule's rounds say so; one the person chose ("Run another fix round") is theirs.
+      return `Fix round ${rounds} sent to ${label(e.runId)}${e.actor === "supervisor" ? " automatically" : ""}`;
     case "fix_rounds_exhausted":
       return `The review still blocks after ${e.detail ?? "2"} fix rounds`;
     case "waiting_for_pr":

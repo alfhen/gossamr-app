@@ -61,7 +61,7 @@ test.describe("first-run orientation", () => {
 
     // It takes no focus, and Pip home's keys and footer hints are as they were.
     await expect(orientation.getByRole("button", { name: "Got it" })).not.toBeFocused();
-    await expect(pipHome(page).locator("[data-pip-home-hints]")).toContainText("next column");
+    await expect(pipHome(page).locator("[data-pip-home-hints]")).toContainText("next region");
     await expect(workstreamRow(page, "General")).toHaveAttribute("aria-selected", "true");
 
     await orientation.getByRole("button", { name: "Got it" }).click();

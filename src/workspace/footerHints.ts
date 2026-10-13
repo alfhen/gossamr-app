@@ -45,7 +45,7 @@ export function pipHomeHints(onNeed = false, onTimeline = false): FooterHint[] {
   const [walk, open] = HINTS.timeline;
   const move: FooterHint = onTimeline && !onNeed ? { id: "timeline", rank: 0, keys: walk[0].split(" "), text: walk[1] } : { id: "move", rank: 0, keys: ["j", "k"], text: "move" };
   return [
-    { id: "columns", rank: 0, keys: ["F6", "⌘]"], text: "next column" },
+    { id: "columns", rank: 0, keys: ["F6", "⌘]"], text: "next region" },
     move,
     { id: "open", rank: 1, keys: open[0].split(" "), text: onTimeline && !onNeed ? "open what it is about" : "open" },
     decide,

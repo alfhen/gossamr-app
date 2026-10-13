@@ -38,7 +38,7 @@ describe("the one key model", () => {
 });
 
 describe("every list takes the same keys the same way", () => {
-  const needs = (kind: "need" | "group"): PipHomeKeyState => ({ column: "list", overlay: false, count: 4, at: 1, kind, steps: true });
+  const needs = (kind: "need" | "group"): PipHomeKeyState => ({ column: "list", overlay: false, count: 4, at: 1, kind });
   const comment = {
     id: "p1",
     state: { type: "pending" },

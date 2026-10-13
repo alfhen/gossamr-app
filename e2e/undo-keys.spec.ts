@@ -10,6 +10,7 @@ import {
   jiraWrites,
   mockRuns,
   needOfKind,
+  needsPane,
   openApp,
   openPip,
   openPipHome,
@@ -368,7 +369,8 @@ test("Cmd/Ctrl+K reaches Hold and Advise for the selected workstream, and 'Appro
   await page.keyboard.press("ControlOrMeta+k");
   await page.keyboard.type("approve all safe");
   await palette.getByRole("option", { name: /Approve all safe drafts in CA-401/ }).click();
-  const preview = pipHome(page).locator("[data-needs-you-batch-preview]");
+  // It opens in the decision pane, like any other decision.
+  const preview = needsPane(page).locator("[data-needs-you-batch-preview]");
   await expect(preview).toBeVisible();
   await expect(pipHome(page).getByRole("group", { name: "Approve 2 drafts" })).toBeVisible();
   expect(await jiraWrites(page)).toEqual([]);

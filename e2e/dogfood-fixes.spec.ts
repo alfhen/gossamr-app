@@ -715,18 +715,28 @@ test.describe("focus and keyboard (D8, D29, D30)", () => {
     await expect.poll(() => page.evaluate(() => document.activeElement !== document.body)).toBe(true);
   });
 
-  test("on Pip home with no workstream, F6 skips the empty Steps column and Tab past '?' never lands on the page", async ({ page }) => {
+  test("on Pip home with no workstream, F6 skips the empty Steps region and Tab past '?' never lands on the page", async ({ page }) => {
     await openApp(page, "runs=empty");
     await agentsSettled(page, true);
     await openPipHome(page);
     const composer = pipHome(page).locator(PIP_INPUT);
     await expect(composer).toBeFocused();
+    // Needs you (its heading, with nothing in it), the workstreams, the timeline, then round to the composer: no steps, no decision.
+    const timeline = homeConversationRegion(page).locator("[data-timeline]");
+    await page.keyboard.press("F6");
+    await expect(needsYouTray(page).locator("[data-needs-you-title]")).toBeFocused();
     await page.keyboard.press("F6");
     await expect(workstreamRow(page, "General")).toBeFocused();
+    await page.keyboard.press("F6");
+    await expect(timeline).toBeFocused();
     await page.keyboard.press("F6");
     await expect(composer).toBeFocused();
     await page.keyboard.press("Shift+F6");
+    await expect(timeline).toBeFocused();
+    await page.keyboard.press("Shift+F6");
     await expect(workstreamRow(page, "General")).toBeFocused();
+    await page.keyboard.press("Shift+F6");
+    await expect(needsYouTray(page).locator("[data-needs-you-title]")).toBeFocused();
     await page.keyboard.press("Shift+F6");
     await expect(composer).toBeFocused();
 

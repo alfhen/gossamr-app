@@ -9,7 +9,7 @@ import type { Run, WorkstreamView } from "../types";
 import { PipAvatar } from "./PipAvatar";
 import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, useAnswering, workstreamConversation } from "./PipConversation";
 import { TimelineView } from "./Timeline";
-import { TIMELINE_ENTRY } from "./timelineKeys";
+import { TIMELINE_ENTRY, timelineStop } from "./timelineKeys";
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { ConversationLine, escapeCancelsTurn, useConversationDrafts, usePipChips } from "./PipPane";
 import { popoverOpen } from "./Popover";
@@ -20,10 +20,10 @@ import { useTabs } from "./tabsStore";
 import { needsIn, type Need } from "../lib/needs";
 import { NeedsYouList } from "./NeedsYou";
 import { useNeedsYou } from "./useNeeds";
-import { NeedsPane } from "./NeedsPane";
+import { NeedsPane, firstDecision } from "./NeedsPane";
 import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
 import { composerFooter, workstreamStatus } from "./pipHomeLogic";
-import { usePipHome, type PipHomeColumn, type PipHomeFocus } from "./pipHomeStore";
+import { PIP_HOME_REGIONS, columnRegion, regionColumn, usePipHome, type PipHomeColumn, type PipHomeFocus, type PipHomeRegion } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { focusComposer, focusedConversation, useHomeWorkstream, useWorkstreams } from "./workstreamsStore";
 import { TABBABLE, pipHomeKey, wrapTab, type PipHomeItemKind } from "./pipHomeKeys";
@@ -295,7 +295,7 @@ function useTurnEscape() {
         popoverOpen: popoverOpen(),
         lightbox: lightboxOpen(),
         // An open Needs you decision closes first: the next Esc stops Pip.
-        paneOpen: usePipHome.getState().deciding !== null,
+        paneOpen: usePipHome.getState().deciding !== null || usePipHome.getState().batch !== null,
         // A confirmation that takes Esc itself, or a field being edited other than Pip's own input.
         handled: ev.defaultPrevented || (field instanceof HTMLElement && !!field.closest("[data-esc-local]")) || (editable && field?.id !== PIP_INPUT_ID),
         running: (useClaude.getState().byTicket[conversation]?.turns ?? []).some((t) => t.status === "running"),
@@ -309,9 +309,10 @@ function useTurnEscape() {
   }, []);
 }
 
-/** The items j and k step through in the workstream list (its rows, then the Needs you list's rows) and in the step rail (its chips, and the cards under the open ones). */
+/** The items j and k step through in the left column (the Needs you list's rows, then the workstreams') and in the step rail (its chips, and the cards under the open ones). */
 const COLUMN_ITEMS: Record<Exclude<PipHomeColumn, "conversation">, string> = {
-  list: '[data-pip-home-column="list"] [role="option"], [data-pip-home-column="list"] [data-needs-you-group], [data-pip-home-column="list"] [data-needs-you-need]',
+  // An open group's own row is its top need's; that need's row under it is not a second stop (`data-needs-top`).
+  list: '[data-pip-home-column="list"] [role="option"], [data-pip-home-column="list"] [data-needs-you-group], [data-pip-home-column="list"] [data-needs-you-need]:not([data-needs-top])',
   rail: '[data-pip-home-column="rail"] [data-step-chip], [data-pip-home-column="rail"] article[data-run-id], [data-pip-home-column="rail"] article[data-draft]',
 };
 
@@ -340,6 +341,31 @@ function overlayOpen(): boolean {
   );
 }
 
+/** What puts each of F6's regions on screen. The decision pane exists only while one is open, the step rail only while a workstream gives it steps. */
+const REGION_ON: Record<PipHomeRegion, string> = {
+  needs: "[data-pip-home] [data-needs-you]",
+  workstreams: '[data-pip-home] nav[aria-label="Workstreams"]',
+  timeline: "[data-pip-home] [data-timeline]",
+  pane: "[data-pip-home] [data-needs-pane]",
+  rail: '[data-pip-home-column="rail"] [data-step-rail]',
+  composer: `#${PIP_INPUT_ID}`,
+};
+
+const regionsOnScreen = () => PIP_HOME_REGIONS.filter((r) => document.querySelector(REGION_ON[r]));
+
+/** The region of Pip home `el` is in; null for nothing there (focus on the page itself). The timeline's filter bar and the conversation's header are the timeline's. */
+function regionOf(el: Element | null): PipHomeRegion | null {
+  if (!el || !el.closest("[data-pip-home]")) return null;
+  if (el.closest("[data-needs-pane]")) return "pane";
+  if (el.closest("[data-needs-you]")) return "needs";
+  if (el.closest('nav[aria-label="Workstreams"]')) return "workstreams";
+  if (el.closest('[data-pip-home-column="rail"]')) return "rail";
+  if (el.id === PIP_INPUT_ID) return "composer";
+  if (el.closest("[data-timeline-scope-shown], [data-pip-home-column=\"conversation\"] > section > header")) return "timeline";
+  // Anything else in the conversation column is the composer's: its attachments, its commands.
+  return el.closest('[data-pip-home-column="conversation"]') ? "composer" : el.closest('[data-pip-home-column="list"]') ? "workstreams" : null;
+}
+
 /** The page's Tab stops in order: enabled, shown and not taken out of the order. */
 const tabStops = () =>
   Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && !el.closest("[hidden], [inert]") && el.getClientRects().length > 0);
@@ -359,8 +385,8 @@ function backToRow(need: Need) {
 }
 
 /**
- * Pip home's keyboard, as `pipHomeKey` decides: F6 or Cmd/Ctrl+] and [ move between the columns, wrapping; in the list
- * and the rail j and k (or the arrows) step and Enter or Space opens or toggles. It listens after everything nearer the
+ * Pip home's keyboard, as `pipHomeKey` decides: F6 or Cmd/Ctrl+] and [ move between the regions (Needs you, the workstreams, the timeline, the open decision, the steps, the
+ * composer), wrapping; in the left column and the rail j and k (or the arrows) step and Enter or Space opens or toggles. It listens after everything nearer the
  * key, so a card, a confirmation or a sheet that took the key keeps it.
  */
 function usePipHomeKeys(needsYou: readonly Need[]) {
@@ -390,6 +416,31 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
       // A column with nothing to step through takes focus itself.
       if (!show(current)) show(document.querySelector<HTMLElement>(`[data-pip-home-column="${column}"] > *`));
     };
+    /** F6's stops: where the keyboard lands in a region, which is the first row of Needs you, the selected workstream, the newest entry of the timeline, the pane's decision, the rail as `enter` has it, or the composer. */
+    const enterRegion = (region: PipHomeRegion) => {
+      if (region === "rail" || region === "composer") return enter(regionColumn(region));
+      usePipHome.getState().setColumn(regionColumn(region));
+      const home = document.querySelector("[data-pip-home]");
+      const all = (sel: string) => Array.from(home?.querySelectorAll<HTMLElement>(sel) ?? []);
+      switch (region) {
+        case "needs": {
+          const rows = all("[data-needs-you-group]");
+          return void show(rows.find((r) => r.getAttribute("aria-current") === "true") ?? rows[0] ?? home?.querySelector<HTMLElement>("[data-needs-you-title]"));
+        }
+        case "workstreams": {
+          const rows = all('[role="option"]');
+          return void show(rows.find((r) => r.getAttribute("aria-selected") === "true") ?? rows[0] ?? home?.querySelector<HTMLElement>('nav[aria-label="Workstreams"]'));
+        }
+        case "timeline": {
+          const last = all("[data-timeline] " + TIMELINE_ENTRY).pop();
+          return void show(last ? timelineStop(last) : home?.querySelector<HTMLElement>("[data-timeline]"));
+        }
+        case "pane": {
+          const pane = home?.querySelector<HTMLElement>("[data-needs-pane]");
+          return void show(pane && (firstDecision(pane) ?? pane));
+        }
+      }
+    };
     const onKey = (ev: globalThis.KeyboardEvent) => {
       if (ev.defaultPrevented) return;
       if (ev.key === "Tab") {
@@ -403,15 +454,17 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
       }
       const column = usePipHome.getState().column;
       const list = items(column);
-      const at = list.indexOf(document.activeElement as HTMLElement);
-      const steps = document.querySelector('[data-pip-home-column="rail"] [data-step-rail]') !== null;
+      const active = document.activeElement as HTMLElement | null;
+      let at = list.indexOf(active as HTMLElement);
+      // A group's top need, opened under its row, is that row's stop.
+      if (at < 0 && active?.hasAttribute("data-needs-top")) at = list.findIndex((e) => e.hasAttribute("data-needs-you-group") && e.getAttribute("data-need-key") === active.getAttribute("data-need-key"));
       const home = usePipHome.getState();
       const el = list[at];
       const needKey = el?.getAttribute("data-need-key") ?? null;
       // Focus inside the open decision: its keys act on the need it shows, not on a row.
       const inPane = document.activeElement instanceof HTMLElement && document.activeElement.closest("[data-needs-pane]") !== null;
       const need = needKey ? needsRef.current.find((n) => n.key === needKey) : inPane && home.deciding ? needsRef.current.find((n) => n.key === home.deciding) : undefined;
-      const action = pipHomeKey(ev, { column, overlay: overlayOpen(), count: list.length, at, kind: itemKind(el), steps, asking: !!home.asking && home.asking.key === needKey, pane: home.deciding !== null, inPane });
+      const action = pipHomeKey(ev, { column, overlay: overlayOpen(), count: list.length, at, kind: itemKind(el), region: regionOf(active) ?? columnRegion(column), regions: regionsOnScreen(), asking: !!home.asking && home.asking.key === needKey, pane: home.deciding !== null || home.batch !== null, inPane });
       if (!action) return;
       ev.preventDefault();
       switch (action.type) {
@@ -444,8 +497,8 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           home.closeDecision();
           return void (back && backToRow(back));
         }
-        case "column":
-          return enter(action.to);
+        case "region":
+          return enterRegion(action.to);
         case "focus":
           return void show(list[action.index]);
         case "toggle":

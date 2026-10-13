@@ -206,6 +206,30 @@ describe("the Needs you list", () => {
     expect(renderToStaticMarkup(<NeedsYouList needs={lone} now={NOW} />)).not.toContain("safe drafts");
   });
 
+  it("keeps the batch's preview out of the list: its button opens it in the pane", () => {
+    seed(useWorkspace, { proposals: Object.fromEntries(input().proposals.map((p) => [p.id, p])) });
+    seed(usePipHome, { expanded: new Set(["ws-1"]), batch: "ws-1" });
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html).toContain("Approve 3 safe drafts");
+    expect(html).not.toContain("data-needs-you-batch-preview");
+    expect(html).not.toContain("Yes, approve");
+    usePipHome.getState().previewBatch("ws-1");
+    expect(usePipHome.getState().batch).toBe("ws-1");
+  });
+
+  it("marks an open group's top need, listed again under it, so j and k step past it", () => {
+    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    const group = needGroups(list).find((g) => g.workstreamId === "ws-1")!;
+    expect([...html.matchAll(/data-needs-top=""/g)]).toHaveLength(1);
+    expect(html).toMatch(new RegExp(`data-needs-you-need="${group.top.key}"[^>]*data-needs-top=""`));
+    expect(html.match(/data-needs-you-need=/g)).toHaveLength(group.count);
+    // Folded, a group is its one row.
+    unseed();
+    const folded = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(folded).not.toContain("data-needs-top");
+  });
+
   it("says so when nothing waits", () => {
     const html = renderToStaticMarkup(<NeedsYouList needs={[]} now={NOW} />);
     expect(html).toMatch(/data-needs-you-count[^>]*>0</);
@@ -361,6 +385,36 @@ describe("the decision pane", () => {
     expect(renderToStaticMarkup(<NeedsPane needs={list} />)).toBe("");
     seed(usePipHome, { deciding: "run:gone" });
     expect(renderToStaticMarkup(<NeedsPane needs={list} />)).toBe("");
+  });
+
+  it("opens a group's safe drafts as one decision: what each does, then the one confirm; a batch with fewer than two says so", () => {
+    const list = set();
+    seed(usePipHome, { batch: "ws-1" });
+    const html = renderToStaticMarkup(<NeedsPane needs={list} />);
+    expect(html).toContain('data-needs-pane="batch:ws-1"');
+    expect(html).toContain("Approve 3 safe drafts");
+    expect(html).toContain('data-needs-you-chip="approve"');
+    expect(html).toContain("Nothing is posted until you choose.");
+    expect(html.match(/<li class="\[overflow-wrap:anywhere\]">/g)).toHaveLength(3);
+    expect(html).toContain(">Yes, approve 3</button>");
+    expect(html).toContain('aria-label="Back to the list"');
+    // Cancel and Esc keep the drafts: the pane is the one confirm, and nothing was approved by opening it.
+    expect(useWorkspace.getState().proposals["c1"].state.type).toBe("pending");
+    seed(usePipHome, { batch: "general" });
+    expect(renderToStaticMarkup(<NeedsPane needs={list} />)).toContain("These drafts are no longer waiting together.");
+  });
+
+  it("a batch and a need's decision replace each other, and closing clears either", () => {
+    const home = usePipHome.getState();
+    home.decide("run:r-perm", "ws-1");
+    home.previewBatch("ws-1");
+    expect(usePipHome.getState()).toMatchObject({ deciding: null, batch: "ws-1" });
+    expect([...usePipHome.getState().expanded]).toContain("ws-1");
+    usePipHome.getState().decide("run:r-perm", "ws-1");
+    expect(usePipHome.getState()).toMatchObject({ deciding: "run:r-perm", batch: null });
+    usePipHome.getState().previewBatch("ws-1");
+    usePipHome.getState().closeDecision();
+    expect(usePipHome.getState()).toMatchObject({ deciding: null, batch: null });
   });
 
   it("heads the decision with why and what waiting does, and a link to the workstream", () => {

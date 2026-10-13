@@ -1,13 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind } from "../lib/needs";
 import { relativeTime } from "../lib/views";
 import { useWorkspace } from "../workspaceStore";
-import { draftSummary, draftTitle } from "./DraftCard";
 import { groupId, openNeed } from "./needsActions";
-import { freezeBatch, type BatchSnapshot } from "./pipHomeLogic";
+import { batchLabel } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
-import { BatchConfirm, confirmBatch } from "./StepRail";
-import { useToasts } from "./toasts";
 import { needsYouText } from "./useNeeds";
 
 const CHIP: Record<NeedGroupKind, string> = {
@@ -47,89 +44,31 @@ function Asking({ need }: { need: Need }) {
 }
 
 /**
- * "Approve N safe drafts" under a group's needs, with what each would do in one combined preview, then a confirm: the
- * same step the step rail's "Approve these N" asks, over exactly the drafts it showed (`freezeBatch`, `confirmBatch`).
+ * "Approve N safe drafts" under a group's needs. It opens the combined preview of what each would do, with its confirm, in
+ * the decision pane like any other decision (`BatchDecision`): the same step the step rail's button asks.
  */
 function SafeBatch({ needs, gid }: { needs: readonly Need[]; gid: string }) {
   const proposals = useWorkspace((s) => s.proposals);
-  const drafts = needs.flatMap((n) => (n.target.type === "draft" && proposals[n.target.id] ? [proposals[n.target.id]] : []));
-  const [frozen, setFrozen] = useState<BatchSnapshot | null>(null);
-  const [outcome, setOutcome] = useState<{ text: string; failed: boolean } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const ask = useRef<HTMLButtonElement>(null);
-  // The palette's "Approve all safe drafts in …" opens the same preview and its confirm; it approves nothing itself.
-  const asked = usePipHome((s) => s.batchPreview === gid);
-  const count = drafts.length;
-  useEffect(() => {
-    if (!asked) return;
-    usePipHome.setState({ batchPreview: null });
-    if (count >= 2) {
-      setOutcome(null);
-      setFrozen(freezeBatch(drafts));
-    }
-    // The preview is frozen from the drafts as they are when it opens.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [asked]);
-  if (drafts.length < 2 && !outcome) return null;
-  const confirm = async (covered: BatchSnapshot) => {
-    setFrozen(null);
-    setBusy(true);
-    try {
-      const done = await confirmBatch(covered, drafts, (id) => useWorkspace.getState().approve(id));
-      setOutcome(done);
-      // The drafts leave Needs you as they are approved, which can take this line with them.
-      useToasts.getState().push(done.text, done.failed ? "error" : "info");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const open = usePipHome((s) => s.batch === gid);
+  const count = needs.filter((n) => n.target.type === "draft" && proposals[n.target.id]).length;
+  if (count < 2) return null;
   return (
     <li data-needs-you-batch className="grid gap-1.5 px-2 py-1">
-      {frozen ? (
-        <>
-          <ul data-needs-you-batch-preview aria-label="What approving these does" className="m-0 grid list-none gap-0.5 p-0 text-xs text-ws-ink2">
-            {drafts
-              .filter((p) => frozen.some((f) => f.id === p.id))
-              .map((p) => (
-                <li key={p.id} className="[overflow-wrap:anywhere]">
-                  <b className="font-semibold text-ws-ink">{draftTitle(p)}</b> · <span className="line-clamp-2">{draftSummary(p, null)}</span>
-                </li>
-              ))}
-          </ul>
-          <BatchConfirm
-            count={frozen.length}
-            onConfirm={() => void confirm(frozen)}
-            onCancel={() => {
-              setFrozen(null);
-              requestAnimationFrame(() => ask.current?.focus());
-            }}
-          />
-        </>
-      ) : (
-        drafts.length >= 2 && (
-          <div>
-            <button
-              ref={ask}
-              type="button"
-              disabled={busy}
-              onClick={() => (setOutcome(null), setFrozen(freezeBatch(drafts)))}
-              className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip disabled:opacity-45"
-            >
-              {busy ? "Approving…" : `Approve ${drafts.length} safe drafts`}
-            </button>
-          </div>
-        )
-      )}
-      {outcome && (
-        <p role="status" data-batch-outcome className={`m-0 text-sm [overflow-wrap:anywhere] ${outcome.failed ? "text-ws-blocked" : "text-ws-ink2"}`}>
-          {outcome.text}
-        </p>
-      )}
+      <div>
+        <button
+          type="button"
+          aria-current={open ? "true" : undefined}
+          onClick={() => usePipHome.getState().previewBatch(gid)}
+          className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+        >
+          {batchLabel(count)}
+        </button>
+      </div>
     </li>
   );
 }
 
-function NeedRow({ need, gid, now, onPick, showTicket }: { need: Need; gid: string; now: number; onPick?(need: Need): void; showTicket: boolean }) {
+function NeedRow({ need, gid, now, onPick, showTicket, top }: { need: Need; gid: string; now: number; onPick?(need: Need): void; showTicket: boolean; top: boolean }) {
   const deciding = usePipHome((s) => s.deciding === need.key);
   const text = `${need.head ? `${need.head} · ` : ""}${need.title} · ${age(need, now)}`;
   return (
@@ -139,6 +78,8 @@ function NeedRow({ need, gid, now, onPick, showTicket }: { need: Need; gid: stri
         data-needs-you-need={need.key}
         data-need-key={need.key}
         data-gid={gid}
+        // The group's own row above is this need too: j and k step past it, so an open group is no longer than its needs.
+        data-needs-top={top ? "" : undefined}
         data-kind={need.kind}
         data-group={need.group}
         aria-current={deciding ? "true" : undefined}
@@ -224,7 +165,7 @@ function GroupRow({ group: g, now, onPick }: { group: NeedGroup; now: number; on
       {expanded && (
         <ul id={list} data-needs-you-needs aria-label={`Everything that needs you in ${g.title}`} className="m-0 grid list-none gap-0.5 border-l border-ws-sep pl-1.5 ml-2 p-0">
           {[g.top, ...g.rest].map((n) => (
-            <NeedRow key={n.key} need={n} gid={gid} now={now} onPick={onPick} showTicket={g.workstreamId === null || n.ticketKey !== g.ticketKey} />
+            <NeedRow key={n.key} need={n} gid={gid} now={now} onPick={onPick} top={n === g.top} showTicket={g.workstreamId === null || n.ticketKey !== g.ticketKey} />
           ))}
           <SafeBatch needs={g.safeBatch} gid={gid} />
         </ul>

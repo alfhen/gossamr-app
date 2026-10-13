@@ -10,6 +10,7 @@ import { AgentsBanners } from "./AgentsBanners";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
+import { LAUNCHER_GUTTER } from "./PipExtras";
 import { DENY_QUESTION, DenyConfirm, StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
 import { Rail, railBadgeText } from "./Rail";
 import { usePrefs } from "./prefs";
@@ -659,5 +660,19 @@ describe("publishing the shown order", () => {
   it("publishes it in a layout effect, which the native j and k listener cannot outrun", () => {
     expect(source).toMatch(/useLayoutEffect\(\(\) => onOrder\?\.\(order\)/);
     expect(source).not.toMatch(/useEffect\(\(\) => onOrder\?\.\(order\)/);
+  });
+});
+
+describe("clearance for the floating Pip launcher", () => {
+  it("keeps the Agents list's cards and its lanes' links out of the launcher's column and above its row", () => {
+    const html = screen();
+    expect(html).toContain("pr-[max(24px,var(--ws-launcher-gutter,0px))]");
+    expect(html).toContain("pb-[max(80px,var(--ws-launcher-clear,0px))]");
+  });
+
+  it("publishes the gutter beside the bottom clearance, at least the launcher's width and margin, only while the launcher shows", () => {
+    expect(LAUNCHER_GUTTER).toBeGreaterThanOrEqual(74 + 20);
+    const source = readFileSync(new URL("./Workspace.tsx", import.meta.url), "utf8");
+    expect(source).toContain("`${launcherShown ? LAUNCHER_GUTTER : 0}px`");
   });
 });

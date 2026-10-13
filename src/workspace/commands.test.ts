@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { SUGGESTED_TICKETS, START_WORKSTREAM, agentTicketChoices, askToPlanCommands, buildCommands, agentCommands, startWorkstreamCommands, timelineCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
+import { SUGGESTED_TICKETS, START_WORKSTREAM, namesCommand, agentTicketChoices, askToPlanCommands, buildCommands, agentCommands, startWorkstreamCommands, timelineCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
 import { BUILT_IN_VIEWS } from "./filters";
 import type { WorkItem } from "../types";
 
@@ -56,6 +56,42 @@ describe("palette commands", () => {
 
   it("matches nothing for gibberish", () => {
     expect(find("zzzqq")).toEqual([]);
+  });
+});
+
+describe("a command word outranks tickets", () => {
+  const a = actions();
+  const ctx = { project: null, view: "list" as const, unreadActivity: 0, github: false, agents: true, needsYou: 0, ticket: null, onPipHome: false, onAgents: false };
+  const commands = [...buildCommands(containers, BUILT_IN_VIEWS, a, ctx), ...timelineCommands({ filter: "all", scope: "workstream", shown: false }, a)];
+  const ticket = (key: string, title: string): WorkItem => ({ ...items[0], title, item: { ...items[0].item, key, externalId: key } });
+  const tickets = [ticket("CA-900", "Runs of the nightly sync fail"), ticket("CA-901", "Timeline of agents is blank"), ticket("CA-902", "Retry failed payment")];
+  const order = (q: string) => {
+    const o = searchOrder(ticketCommands(tickets, q, vi.fn()), rankCommands(commands, q), q);
+    return [...o.head, ...o.tickets, ...o.commands].map((c) => c.label);
+  };
+
+  it("names a command by a word of its title or keywords, whole or begun", () => {
+    const open = commands.find((c) => c.label === "Open Agents")!;
+    for (const q of ["runn", "agents", "oper", "stop all", "open agents"]) expect(namesCommand(open, q), q).toBe(true);
+    expect(namesCommand(open, "payment")).toBe(false);
+    expect(namesCommand(open, "ents")).toBe(false);
+    expect(namesCommand(open, "  ")).toBe(false);
+  });
+
+  it("puts the commands a command word names above the tickets it also matches", () => {
+    expect(order("runs")[0]).toBe("Timeline: Runs");
+    expect(order("runs").indexOf("Runs of the nightly sync fail")).toBeGreaterThan(order("runs").indexOf("Timeline: Runs"));
+    const timeline = order("timeline");
+    expect(timeline[0]).toMatch(/^Timeline/);
+    expect(timeline.indexOf("Timeline of agents is blank")).toBeGreaterThan(timeline.lastIndexOf("Timeline: Every workstream"));
+    const agents = order("agents");
+    expect(agents.indexOf("Open Agents")).toBeLessThan(agents.indexOf("Timeline of agents is blank"));
+  });
+
+  it("keeps fuzzy ticket search, and a ticket key typed first", () => {
+    expect(order("nightly")[0]).toBe("Runs of the nightly sync fail");
+    expect(order("retry fail")[0]).toBe("Retry failed payment");
+    expect(order("ca-901")[0]).toBe("Timeline of agents is blank");
   });
 });
 
