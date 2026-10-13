@@ -5,6 +5,7 @@ import { TicketLinksContext } from "../components/ticketLinks";
 import type { WorkFilter } from "../types";
 import { useItemsByFilter, useWorkspace } from "../workspaceStore";
 import { ActivityView } from "./ActivityView";
+import { JiraSentView } from "./JiraSentView";
 import { AgentSheets } from "./AgentSheets";
 import { AgentsView } from "./AgentsView";
 import { useActivity } from "./activityStore";
@@ -311,6 +312,7 @@ export function Workspace({ backend }: { backend: Backend }) {
             <div className="min-h-0 flex-1">
               {screen === "workspace" && <Canvas />}
               {screen === "activity" && <ActivityView />}
+              {screen === "sent" && <JiraSentView />}
               {screen === "agents" && <AgentsView />}
               {screen === "pip" && <PipHome />}
               {screen === "settings" && <Settings />}

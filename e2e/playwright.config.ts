@@ -5,8 +5,8 @@ import process from "node:process";
 const port = Number(process.env.E2E_PORT ?? 4173);
 const url = `http://localhost:${port}`;
 
-/** Every spec starts with Pip home's orientation card and the permission prompt's one-time explainer dismissed (`pipOrientationSeen`, `permissionExplainerSeen`, src/workspace/prefs.ts), so they take no room in their locators. e2e/orientation.spec.ts and e2e/recommendations.spec.ts start without them where they test them. */
-export const SEEDED_PREFS = { name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) };
+/** Every spec starts with Pip home's orientation card and the permission prompt's one-time explainer dismissed (`pipOrientationSeen`, `permissionExplainerSeen`, src/workspace/prefs.ts), and Start my day set aside for good (`startMyDayDoneOn`, a day that never comes), so they take no room in their locators. e2e/orientation.spec.ts and e2e/recommendations.spec.ts start without them where they test them, and e2e/habits.spec.ts without Start my day's. */
+export const SEEDED_PREFS = { name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true, startMyDayDoneOn: "9999-12-31" }) };
 
 export default defineConfig({
   testDir: ".",

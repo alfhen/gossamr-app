@@ -3,7 +3,7 @@
 //! speak up early about a ticket that looks thin. The Triage's verdict (`Ready to plan:`) stays the authority.
 //! Mirrored by src/lib/ticketClarity.ts; both run `ticketClarity.fixtures.json`.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A description shorter than this (trimmed, in characters) is very short.
 pub const SHORT_LIMIT: usize = 80;
@@ -18,7 +18,7 @@ const WHO_WORDS: &[&str] = &["asked", "requested", "waiting", "stakeholder", "ne
 const CHECKLIST: &[&str] = &["[ ]", "[x]", "\u{2610}", "\u{2611}"];
 
 /// One thing a ticket's description leaves out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ClarityGap {
     /// There is no description at all.

@@ -110,9 +110,9 @@ export class MockProposals {
     return Promise.resolve(this.store(intent, label, { type: "board" }, "user"));
   }
 
-  /** Stores the comment "Ask the reporter now" drafts, from the clarity notice of `workstream`: Gossamr's, made for the person, not a run's. */
-  askedFor(intent: Intent, label: string, workstream: string): Proposal {
-    return this.store(intent, label, { type: "chat", requestId: `clarity:${workstream}`, workstream }, "user");
+  /** Stores the comment "Ask the reporter now" drafts, from the clarity notice of `workstream`, or the nudge ("nudge"): Gossamr's, made for the person, not a run's. */
+  askedFor(intent: Intent, label: string, workstream: string, tag: "clarity" | "nudge" = "clarity"): Proposal {
+    return this.store(intent, label, { type: "chat", requestId: `${tag}:${workstream}`, workstream }, "user");
   }
 
   /** Stores a draft an agent run's result left for the person, in the run's workstream. */

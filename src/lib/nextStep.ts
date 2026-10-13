@@ -2,7 +2,7 @@ import { decideAutostart, ruleOn, type AutostartInput, type ReviewFinding } from
 import { slotPosition, slotQueue, ordinal } from "../workspace/agentsLogic";
 import { ALLOW_MORE_STEPS, AUTOSTART_DEFAULTS, HELD_BUDGET, type AutoStartSwitches, type Proposal, type Run, type RunKind, type WorkstreamEvent, type WorkstreamRule, type WorkstreamView } from "../types";
 import { byRank, type Need } from "./needs";
-import { waitingOnReporterText } from "./reporterWait";
+import { nudgeOffered, nudgeText, waitedDays, waitingOnReporterText } from "./reporterWait";
 import { shortHeld, stepsLeftText, ruleText } from "./workstreamHold";
 import { byQueue, reviewPosted, STAGE_LABEL } from "./workstreamStage";
 
@@ -44,6 +44,8 @@ export interface NextStep {
   text: string;
   /** The need the line links to: the top one, for "waiting"; the budget's question, for a workstream held for its automatic steps; null for every other line. */
   need: Need | null;
+  /** The reporter has been silent long enough that "Draft a nudge" is offered beside the line (`kind` "reporter" only). */
+  nudge?: boolean;
 }
 
 /** The step a rule's run is, with its article: "a review starts automatically". */
@@ -134,7 +136,11 @@ export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: 
   const blocking = own.find((n) => n.group !== "approve");
   if (blocking) return step("waiting", `waiting on you. ${blocking.why}`, blocking);
   // Asked and posted: nothing starts on its own until the reporter answers, the ticket changes or the person chooses. A step in hand carries on first.
-  if (view.waitingOnReporter && going.length === 0) return step("reporter", waitingOnReporterText(view.waitingOnReporter.since, now));
+  if (view.waitingOnReporter && going.length === 0) {
+    const nudge = nudgeOffered(view.waitingOnReporter, now, proposals, ws.id);
+    const said = waitingOnReporterText(view.waitingOnReporter.since, now);
+    return { ...step("reporter", nudge ? `${said} ${nudgeText(waitedDays(view.waitingOnReporter.since, now))}` : said), ...(nudge ? { nudge } : {}) };
+  }
   const approve = own[0];
   const line = chain(view, runs, proposals, globals, mine, going, step, events);
   if (approve && line.kind !== "slot" && line.kind !== "auto" && line.kind !== "depends") return step("waiting", `waiting on you. ${approve.why}`, approve);

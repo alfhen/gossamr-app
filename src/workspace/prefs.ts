@@ -5,6 +5,8 @@ import { PEEK_DEFAULT, PIP_DEFAULT, storedWidth } from "./paneSizes";
 import { parseColumnOrders, type ColumnOrders } from "./columnOrder";
 import { readStored, writeStored } from "./storage";
 import { AGENTS_GROUPS, type AgentsGroup } from "./agentsLogic";
+import { dismissed, forget, parseLearning, type ClarityLearning } from "../lib/clarityLearning";
+import type { ClarityGap } from "../lib/ticketClarity";
 
 export const THEMES = ["auto", "light", "dark"] as const;
 export type ThemeMode = (typeof THEMES)[number];
@@ -39,6 +41,10 @@ interface Prefs {
   pipOrientationSeen: boolean;
   /** The person dismissed the one-time explainer of Allow once and Deny on a permission prompt. */
   permissionExplainerSeen: boolean;
+  /** The day (as `dayKey`, local) the person pressed "Done for now" on Start my day; the card is back the next day, or from ⌘K. */
+  startMyDayDoneOn: string | null;
+  /** What "Looks fine" has taught the clarity notice: how often each gap was dismissed, per Jira project (`src/lib/clarityLearning.ts`). */
+  clarityLearning: ClarityLearning;
   /** Open on Pip home rather than the workspace, while Agents are on. On until the person turns it off. */
   startOnPipHome: boolean;
   setUi(ui: UiMode): void;
@@ -57,11 +63,17 @@ interface Prefs {
   setPipOrientationSeen(seen: boolean): void;
   setPermissionExplainerSeen(seen: boolean): void;
   setStartOnPipHome(on: boolean): void;
+  /** Marks Start my day done for `day`, or open again with null. */
+  setStartMyDayDoneOn(day: string | null): void;
+  /** Counts one "Looks fine" on a ticket of `project` whose notice named `gaps`; returns the gaps that are no longer flagged there from now on. */
+  recordClarityDismissal(project: string, gaps: readonly ClarityGap[]): ClarityGap[];
+  /** Forgets what "Looks fine" taught, for one project or (with none) all of them. */
+  resetClarityLearning(project?: string): void;
 }
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen" | "pipOrientationSeen" | "permissionExplainerSeen" | "startOnPipHome"> {
+export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen" | "pipOrientationSeen" | "permissionExplainerSeen" | "startOnPipHome" | "startMyDayDoneOn" | "clarityLearning"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     // Installs from before the workspace was the default stored "classic" without anyone choosing it.
@@ -79,10 +91,12 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
     permissionExplainerSeen: raw?.permissionExplainerSeen === true,
     // Pip home is where everyone with Agents on lands; only a person who turned it off stays on the workspace.
     startOnPipHome: raw?.startOnPipHome !== false,
+    startMyDayDoneOn: typeof raw?.startMyDayDoneOn === "string" ? raw.startMyDayDoneOn : null,
+    clarityLearning: parseLearning(raw?.clarityLearning),
   };
 }
 
-export const usePrefs = create<Prefs>((set) => ({
+export const usePrefs = create<Prefs>((set, get) => ({
   ...loadPrefs(),
   paletteOpen: false,
   paletteSeed: "",
@@ -105,10 +119,17 @@ export const usePrefs = create<Prefs>((set) => ({
   setPipOrientationSeen: (pipOrientationSeen) => set({ pipOrientationSeen }),
   setPermissionExplainerSeen: (permissionExplainerSeen) => set({ permissionExplainerSeen }),
   setStartOnPipHome: (startOnPipHome) => set({ startOnPipHome }),
+  setStartMyDayDoneOn: (startMyDayDoneOn) => set({ startMyDayDoneOn }),
+  recordClarityDismissal: (project, gaps) => {
+    const next = dismissed(get().clarityLearning, project, gaps);
+    set({ clarityLearning: next.learning });
+    return next.learned;
+  },
+  resetClarityLearning: (project) => set((s) => ({ clarityLearning: forget(s.clarityLearning, project) })),
 }));
 
-usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome }) =>
-  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome }),
+usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning }) =>
+  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning }),
 );
 
 /** The browser build has no classic inbox to fall back to, so it always shows the workspace. */

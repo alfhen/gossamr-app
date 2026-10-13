@@ -20,7 +20,10 @@ import { useTabs } from "./tabsStore";
 import { needsIn, type Need } from "../lib/needs";
 import { NeedsYouList } from "./NeedsYou";
 import { useNeedsYou } from "./useNeeds";
+import { nudgeOffered } from "../lib/reporterWait";
+import { useWorkspace } from "../workspaceStore";
 import { NeedsPane, firstDecision } from "./NeedsPane";
+import { StartMyDayCard } from "./StartMyDay";
 import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
 import { undoLog } from "./undo";
 import { composerFooter, landingSelection, workstreamStatus } from "./pipHomeLogic";
@@ -52,7 +55,7 @@ export function rowTitle(ws: WorkstreamView["workstream"]): string {
 const ROW = "grid w-full gap-0.5 rounded-lg px-2.5 py-1.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip";
 
 /** A row's stage, then its short status unless the stage already says it ("Build · waiting for PR"). */
-function RowStatus({ view, runs, waiting }: { view: WorkstreamView; runs: readonly Run[]; waiting: number }) {
+function RowStatus({ view, runs, waiting, nudge = false }: { view: WorkstreamView; runs: readonly Run[]; waiting: number; nudge?: boolean }) {
   const stage = stageText(view.stage, view.waitingForPr, view.reviewBlocking);
   const status = workstreamStatus(view, runs, waiting);
   return (
@@ -63,6 +66,12 @@ function RowStatus({ view, runs, waiting }: { view: WorkstreamView; runs: readon
       {!stage.endsWith(status) && (
         <span data-status className="min-w-0 truncate">
           · {status}
+        </span>
+      )}
+      {/* The reporter has been silent for days: the Next line (and Start my day) offer "Draft a nudge". */}
+      {nudge && (
+        <span data-nudge-due className="shrink-0">
+          · nudge due
         </span>
       )}
     </span>
@@ -83,6 +92,8 @@ export interface WorkstreamListProps {
   needsYou?: readonly Need[];
   /** The workstreams that have gone quiet in Jira while work went on, by id (`useWorkstreamWithers`): each row gets its cobweb. */
   wither?: Readonly<Record<string, WorkstreamWither>>;
+  /** The workstreams (by id) whose reporter has been silent long enough that a nudge is offered: their row says so. */
+  nudgeDue?: ReadonlySet<string>;
 }
 
 /** What the list says before there is any workstream: what one is, in a line. */
@@ -103,7 +114,7 @@ function NeedsBadge({ count, total }: { count: number; total: number }) {
  * open workstream with where it stands; the closed ones behind a toggle, read-only. It takes at most 45% of the column and
  * scrolls inside that, so Needs you keeps the rest.
  */
-export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {} }: WorkstreamListProps) {
+export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {}, nudgeDue }: WorkstreamListProps) {
   const open = list.filter((v) => v.workstream.closedAt === null);
   const option = (id: string | null, level: WorkstreamWither["level"] = 0) => ({
     role: "option" as const,
@@ -133,7 +144,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
                 <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
                 <NeedsBadge count={needsIn(needsYou, v.workstream.id)} total={needsYou.length} />
               </span>
-              <RowStatus view={v} runs={runs} waiting={needsIn(needsYou, v.workstream.id)} />
+              <RowStatus view={v} runs={runs} waiting={needsIn(needsYou, v.workstream.id)} nudge={nudgeDue?.has(v.workstream.id)} />
               {/* After the row's own words, so its name still starts with the ticket's key. */}
               {web && (
                 <>
@@ -204,7 +215,7 @@ export function StepsColumn({ workstream }: { workstream: WorkstreamView | null 
  * The conversation column of Pip home: the workstream's timeline (its conversation with Pip, its runs, drafts and audit in
  * one list) over the same composer the Pip pane has.
  */
-export function HomeConversation({ workstream, footer = null, pane = null, needs = [] }: { workstream: WorkstreamView | null; footer?: string | null; pane?: ReactNode; needs?: readonly Need[] }) {
+export function HomeConversation({ workstream, footer = null, pane = null, needs = [], day = null }: { workstream: WorkstreamView | null; footer?: string | null; pane?: ReactNode; needs?: readonly Need[]; day?: ReactNode }) {
   const conversation = workstream ? workstreamConversation(workstream.workstream.id) : GENERAL_CONVERSATION;
   const running = useAnswering(conversation);
   const attached = useAttachments();
@@ -227,6 +238,7 @@ export function HomeConversation({ workstream, footer = null, pane = null, needs
           <ConversationLine conversation={conversation} workstream={workstream} />
         </div>
       </header>
+      {day}
       {pane}
       <TimelineView key={conversation} conversation={conversation} workstream={workstream} proposals={proposals} needs={needs} primary={primary} />
       <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} footer={footer} />
@@ -576,6 +588,9 @@ export function PipHome() {
   const now = useNow();
   const openList = useMemo(() => list.filter((v) => v.workstream.closedAt === null), [list]);
   const withers = useWorkstreamWithers(openList, now);
+  const proposals = useWorkspace((s) => s.proposals);
+  // Workstreams whose reporter has been silent long enough that the Next line and Start my day offer a nudge.
+  const nudgeDue = useMemo(() => new Set(openList.filter((v) => nudgeOffered(v.waitingOnReporter, new Date(now), Object.values(proposals), v.workstream.id)).map((v) => v.workstream.id)), [openList, proposals, now]);
   const footer = useMemo(() => composerFooter(runs, needsYou.length, now), [runs, needsYou.length, now]);
   const orientationSeen = usePrefs((s) => s.pipOrientationSeen);
   // The footer names the list's own keys while the keyboard is on one of its rows.
@@ -639,6 +654,7 @@ export function PipHome() {
               runs={runs}
               needsYou={needsYou}
               wither={withers}
+              nudgeDue={nudgeDue}
             />
           </div>
         </div>
@@ -646,7 +662,7 @@ export function PipHome() {
         <InlineStartContext.Provider value={true}>
           <DecisionShownContext.Provider value={decided}>
             <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
-              <HomeConversation workstream={workstream} footer={footer} needs={needsYou} pane={<NeedsPane needs={needsYou} />} />
+              <HomeConversation workstream={workstream} footer={footer} needs={needsYou} day={<StartMyDayCard needs={needsYou} withers={withers} now={now} />} pane={<NeedsPane needs={needsYou} />} />
             </div>
             <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">
               <StepsColumn workstream={workstream} />

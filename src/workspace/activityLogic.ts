@@ -2,6 +2,7 @@ import { keysIn } from "../lib/devLinks";
 import { safeGithubUrl } from "../lib/githubUrl";
 import type { ContainerRef, FeedEntry, FeedQuery, ItemRef, PersonRef, Proposal, Run, WorkEvent, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { targetOf } from "../lib/proposals";
+import { LEARN_AFTER, learnedWords } from "../lib/clarityLearning";
 import { itemKey, YOUR_TURN } from "../lib/filter";
 import type { WorkItem } from "../types";
 import { KIND_LABEL, permissionRequest, resultHeadline } from "./agentsLogic";
@@ -51,7 +52,8 @@ export interface DayGroup<T extends { at: string } = FeedEntry> {
   entries: T[];
 }
 
-const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/** The local day as `2026-10-13`. */
+export const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 export function dayLabel(at: Date, now: Date): string {
   const days = Math.round((Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - Date.UTC(at.getFullYear(), at.getMonth(), at.getDate())) / 864e5);
@@ -412,6 +414,12 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
       return `${who} asked the reporter about what the ticket leaves unclear`;
     case "clarity_dismissed":
       return `${who} said the ticket looks clear enough`;
+    case "reporter_nudged":
+      return `${who} asked for a nudge to the reporter`;
+    case "clarity_learned":
+      return `Gossamr stopped flagging ${learnedWords(e.detail)} after you said Looks fine ${LEARN_AFTER} times`;
+    case "clarity_reset":
+      return `${who} gave back what Gossamr learned from Looks fine${e.detail ? ` for ${e.detail}` : ""}`;
     default:
       return null;
   }

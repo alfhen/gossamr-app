@@ -1,5 +1,5 @@
 import { docText } from "../lib/docs";
-import { reporterFollow } from "../lib/reporterWait";
+import { NUDGE_GONE, nudgeOffered, reporterFollow } from "../lib/reporterWait";
 import { clarityGaps, type ClarityGap } from "../lib/ticketClarity";
 import { workstreamOf } from "../lib/proposals";
 import { budgetLevel, budgetView } from "../lib/workstreamHold";
@@ -165,6 +165,9 @@ export function clarityOf(ws: Workstream, runs: readonly Run[], gaps: readonly C
 
 /** Why asking the reporter, or saying a ticket looks fine, is refused when its clarity notice isn't showing, as `CLARITY_GONE`. */
 export const CLARITY_GONE = "This ticket isn't flagged as possibly unclear any more.";
+
+/** The parts of the clarity learning the page may audit, as `CLARITY_NOTES` in src-tauri/src/inbox/workstreams.rs. */
+export const CLARITY_NOTES: readonly string[] = ["clarity_learned", "clarity_reset"];
 
 /** Why a choice on a Triage that found its ticket not ready is refused, as `READINESS_GONE` in src-tauri/src/inbox/workstreams.rs. */
 export const READINESS_GONE = "This ticket isn't waiting for your choice about its open questions any more.";
@@ -550,6 +553,29 @@ export class MockWorkstreams {
     this.clarityNotice(id);
     this.record(id, "person", "clarity_dismissed");
     return this.owned(id);
+  }
+
+  /**
+   * The workstream `id` that waits on the reporter, for a nudge to them, as `nudge_reporter` checks it: refused with
+   * `NUDGE_GONE` unless it waits, has for `NUDGE_AFTER_DAYS` days or more, and no nudge waits among `pending` (its drafts).
+   */
+  nudgeDue(id: string, pending: readonly Proposal[], now: Date): string {
+    const view = this.get(id);
+    const key = view?.workstream.itemKey;
+    if (!view || !key || !nudgeOffered(view.waitingOnReporter, now, pending, id)) throw new Error(NUDGE_GONE);
+    return key;
+  }
+
+  /** Records `reporter_nudged` (the person's, naming the draft they asked for), as `nudge_reporter` does after drafting. */
+  nudged(id: string, proposalId: string) {
+    this.record(id, "person", "reporter_nudged", { proposalId });
+  }
+
+  /** Audits the page's clarity learning, as `note_clarity`: only `clarity_learned` and `clarity_reset` are taken. */
+  noteClarity(id: string, action: string, detail: string) {
+    if (!CLARITY_NOTES.includes(action)) throw new Error(`"${action}" isn't a note about the clarity check`);
+    this.owned(id);
+    this.record(id, "person", action, { detail: detail.replace(/[\u0000-\u001f]/g, "").slice(0, 120) });
   }
 
   /** Records `readiness_asked` (the person's, naming the Triage and the draft they asked for), as `ask_reporter` does after drafting. */

@@ -54,11 +54,12 @@ import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
-import { ANSWERED_REASON, basisFieldsOf, OVERRIDDEN_REASON, targetOf, workstreamOf } from "../lib/proposals";
+import { ANSWERED_REASON, basisFieldsOf, NUDGE_COMMENT_LABEL, OVERRIDDEN_REASON, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { MockSupervisor, triageReadiness } from "./mockSupervisor";
 import { READINESS_LABEL, reporterComment, reporterDoc } from "./mockReadiness";
-import { clarityQuestions } from "../lib/ticketClarity";
+import { clarityQuestions, type ClarityGap } from "../lib/ticketClarity";
+import { nudgeComment } from "../lib/reporterWait";
 import { answersDue, planDue } from "../lib/reporterWait";
 import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
@@ -578,14 +579,16 @@ export class MockBackend implements Backend {
    * with one question per gap the clarity check found, as a draft the person approves like any other. Records
    * `clarity_asked`. Refused with `CLARITY_GONE` unless the workstream's notice is showing.
    */
-  async workstreamsClarityAsk(id: string) {
+  async workstreamsClarityAsk(id: string, skip: ClarityGap[] = []) {
     const notice = this.workstreams.clarityNotice(id);
     const key = this.workstreams.get(id)?.workstream.itemKey;
-    if (!key) throw new Error(CLARITY_GONE);
+    // What the page no longer flags for the project is not asked about; with nothing left the notice is gone.
+    const gaps = notice.gaps.filter((g) => !skip.includes(g));
+    if (!key || !gaps.length) throw new Error(CLARITY_GONE);
     const item = itemRef(key);
     const reporter = this.connector.item(item)?.reporter ?? null;
     const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    const body = reporterDoc(reporterComment(key, name, clarityQuestions(notice.gaps)), reporter && name ? { person: reporter, name } : null);
+    const body = reporterDoc(reporterComment(key, name, clarityQuestions(gaps)), reporter && name ? { person: reporter, name } : null);
     const proposal = this.proposals.askedFor({ type: "comment", item, body }, READINESS_LABEL, id);
     this.workstreams.askedClarity(id, proposal.id);
     return proposal;
@@ -594,6 +597,27 @@ export class MockBackend implements Backend {
   /** The person's "Looks fine", as `workstreams_clarity_dismiss`: the notice doesn't show for this ticket again. */
   async workstreamsClarityDismiss(id: string) {
     return this.workstreams.dismissClarity(id);
+  }
+
+  /**
+   * The person's "Draft a nudge", as `workstreams_nudge_reporter`: a short follow-up comment to the reporter, as a draft the
+   * person approves like any other. Records `reporter_nudged`. Refused with `NUDGE_GONE` unless the workstream has waited
+   * on the reporter for `NUDGE_AFTER_DAYS` days or more and no nudge waits already.
+   */
+  async workstreamsNudgeReporter(id: string) {
+    const key = this.workstreams.nudgeDue(id, this.proposals.list({ workstream: id, states: ["pending", "applying"] }), new Date());
+    const item = itemRef(key);
+    const reporter = this.connector.item(item)?.reporter ?? null;
+    const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
+    const body = reporterDoc(nudgeComment(key, name), reporter && name ? { person: reporter, name } : null);
+    const proposal = this.proposals.askedFor({ type: "comment", item, body }, NUDGE_COMMENT_LABEL, id, "nudge");
+    this.workstreams.nudged(id, proposal.id);
+    return proposal;
+  }
+
+  /** Audits the page's clarity learning, as `workstreams_clarity_note`. */
+  async workstreamsClarityNote(id: string, action: "clarity_learned" | "clarity_reset", detail: string) {
+    this.workstreams.noteClarity(id, action, detail);
   }
 
   /** The person's "I'll answer", as `workstreams_readiness_answer`: settles the question and starts nothing. */

@@ -1,5 +1,6 @@
 import type { Proposal, WorkstreamEvent } from "../types";
-import { isAnswersDraft } from "./proposals";
+import { isAnswersDraft, isReporterNudge, workstreamOf } from "./proposals";
+import { WITHER_DAYS } from "./views";
 
 /** Where a workstream stands with the reporter, read from its audit, as `ReporterFollow` in src-tauri/src/inbox/workstreams.rs. */
 export interface ReporterFollow {
@@ -14,7 +15,7 @@ export type FollowLine = Pick<WorkstreamEvent, "actor" | "action" | "proposalId"
 
 /**
  * `ReporterFollow` of the audit `events` (oldest first), as `reporter_follow`: the wait starts when the comment of a
- * `readiness_asked` or `clarity_asked` is approved, and ends at the first of the ticket changing (`basis_drifted`, the
+ * `readiness_asked`, `clarity_asked` or `reporter_nudged` (a nudge posted starts it again) is approved, and ends at the first of the ticket changing (`basis_drifted`, the
  * supervisor's), the person choosing to answer or plan anyway, or resuming. Only the person's own lines count as theirs.
  */
 export function reporterFollow(events: readonly FollowLine[]): ReporterFollow {
@@ -22,7 +23,7 @@ export function reporterFollow(events: readonly FollowLine[]): ReporterFollow {
   let now: ReporterFollow = { waiting: null, changed: false };
   for (const e of events) {
     const person = e.actor === "person";
-    if (person && (e.action === "readiness_asked" || e.action === "clarity_asked")) {
+    if (person && (e.action === "readiness_asked" || e.action === "clarity_asked" || e.action === "reporter_nudged")) {
       if (e.proposalId) asked.add(e.proposalId);
       now = { ...now, changed: false };
     } else if (person && e.action === "draft_approved" && e.proposalId && asked.has(e.proposalId)) now = { waiting: e.at, changed: false };
@@ -82,3 +83,30 @@ export const waitingOnReporterText = (since: string, now: Date) => `Waiting on t
 
 /** The row's short status while it waits on the reporter. */
 export const WAITING_STATUS = "Waiting on the reporter";
+
+/** How many whole days the reporter may stay silent before a nudge is offered: the cobweb's first stage (`WITHER_DAYS.ticket`), as `NUDGE_AFTER_DAYS` in src-tauri/src/inbox/workstreams.rs. */
+export const NUDGE_AFTER_DAYS = WITHER_DAYS.ticket[0];
+
+/** Why a nudge to the reporter is refused: nobody is waited on, it is too soon, or one waits already. As `NUDGE_GONE` in src-tauri/src/inbox/workstreams.rs. */
+export const NUDGE_GONE = "This workstream isn't due a nudge to the reporter.";
+
+/** Whole days the workstream has waited on the reporter since `since`, at `now`. */
+export const waitedDays = (since: string, now: Date) => Math.max(0, Math.floor((now.getTime() - Date.parse(since)) / 86_400_000));
+
+/**
+ * Whether "Draft a nudge" is offered: the workstream has waited on the reporter for `NUDGE_AFTER_DAYS` days or more and no
+ * nudge waits among `drafts` (the drafts in the workstream; only the pending and applying ones count).
+ */
+export function nudgeOffered(wait: { since: string } | null | undefined, now: Date, drafts: readonly Pick<Proposal, "intent" | "label" | "createdBy" | "state" | "origin">[], workstream: string): boolean {
+  if (!wait || Number.isNaN(Date.parse(wait.since)) || waitedDays(wait.since, now) < NUDGE_AFTER_DAYS) return false;
+  return !drafts.some((p) => isReporterNudge(p as Proposal) && (p.state.type === "pending" || p.state.type === "applying") && workstreamOf(p as Proposal) === workstream);
+}
+
+/** What the Next line adds once the nudge is offered: "The reporter hasn't answered for 3 days. You can draft a nudge." */
+export const nudgeText = (days: number) => `The reporter hasn't answered for ${plural(days, "day", "days")}. You can draft a nudge.`;
+
+/** What the nudge comment says, as `nudge_comment` in src-tauri/src/inbox/workstreams.rs. */
+export function nudgeComment(key: string, reporter: string | null): string {
+  const hello = reporter ? `Hi @${reporter},` : "Hi,";
+  return `${hello}\n\nA gentle nudge on the questions above; we can't plan ${key} until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.`;
+}

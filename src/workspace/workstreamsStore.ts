@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
+import { flaggedGaps, gapWords, ignoredGaps, learnedDetail, projectOfKey } from "../lib/clarityLearning";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { readinessPrompt } from "../lib/needs";
 import { ofItem, runWorkstream, stageText } from "../lib/workstreamStage";
@@ -60,8 +61,10 @@ interface WorkstreamsState {
   askReporter(id: string): Promise<boolean>;
   /** The person's "Ask the reporter now" on the clarity notice: drafts the comment to the reporter from the gaps and shows it for approval. False when it couldn't. */
   askReporterNow(id: string): Promise<boolean>;
-  /** The person's "Looks fine" on the clarity notice: it doesn't show for this ticket again. False when it couldn't. */
+  /** The person's "Looks fine" on the clarity notice: it doesn't show for this ticket again, and counts toward Gossamr no longer flagging the same gap in the ticket's project (`LEARN_AFTER`). False when it couldn't. */
   looksFine(id: string): Promise<boolean>;
+  /** The person's "Draft a nudge" on a workstream that has waited on the reporter for days: drafts the follow-up comment and shows it for approval. False when it couldn't. */
+  nudgeReporter(id: string): Promise<boolean>;
   /** The person's "I'll answer": settles the question and opens the workstream's conversation with the open questions quoted in the composer. False when it couldn't. */
   answerSelf(id: string): Promise<boolean>;
   /** The person's "Plan anyway": records the override; the Triage-to-Plan step starts the Plan under its own checks (Manage, not held, within budget). False when it couldn't. */
@@ -310,16 +313,41 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     },
 
     async askReporterNow(id) {
-      if (!get().list.find((v) => v.workstream.id === id)?.clarity) return stale();
-      const done = await act("Couldn't draft the comment to the reporter", (b) => b.workstreamsClarityAsk(id));
+      const view = get().list.find((v) => v.workstream.id === id);
+      const project = projectOfKey(view?.workstream.itemKey ?? "");
+      const learning = usePrefs.getState().clarityLearning;
+      if (!view?.clarity || !flaggedGaps(view.clarity.gaps, learning, project).length) return stale();
+      // What the person taught the notice to leave out is left out of the questions, too.
+      const done = await act("Couldn't draft the comment to the reporter", (b) => b.workstreamsClarityAsk(id, ignoredGaps(learning, project)));
       if (!done.ok) return false;
       await showReporterDraft(id, done.value.id);
       return true;
     },
 
     async looksFine(id) {
-      if (!get().list.find((v) => v.workstream.id === id)?.clarity) return stale();
-      return ok("Couldn't dismiss the notice", (b) => b.workstreamsClarityDismiss(id));
+      const view = get().list.find((v) => v.workstream.id === id);
+      const key = view?.workstream.itemKey;
+      if (!view?.clarity || !key) return stale();
+      const project = projectOfKey(key);
+      // What the person said looks fine is what the notice showed them: the gaps not already taught away.
+      const shown = flaggedGaps(view.clarity.gaps, usePrefs.getState().clarityLearning, project);
+      if (!(await ok("Couldn't dismiss the notice", (b) => b.workstreamsClarityDismiss(id)))) return false;
+      const backend = get().backend ?? useWorkspace.getState().backend;
+      const learned = usePrefs.getState().recordClarityDismissal(project, shown);
+      if (learned.length) {
+        // One word for what it learned, one audit line for each gap.
+        useToasts.getState().push(`Gossamr will stop flagging ${project} tickets that ${learned.map(gapWords).join(", or that ")}. Give that back in Settings, or from ⌘K.`, "info");
+        for (const gap of learned) await backend?.workstreamsClarityNote(id, "clarity_learned", learnedDetail(gap, project)).catch(() => {});
+        void get().loadEvents(id);
+      }
+      return true;
+    },
+
+    async nudgeReporter(id) {
+      const done = await act("Couldn't draft the nudge", (b) => b.workstreamsNudgeReporter(id));
+      if (!done.ok) return false;
+      await showReporterDraft(id, done.value.id);
+      return true;
     },
 
     async answerSelf(id) {
