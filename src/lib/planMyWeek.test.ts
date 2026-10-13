@@ -145,6 +145,30 @@ describe("planMyWeek: needs in General that name a ticket", () => {
     expect(out[0].because).toContain("thing needs you here");
   });
 
+  it("keeps the same key on two connections apart: a need placed through its run promotes only that connection's ticket", () => {
+    const run = { id: "r1", connectionId: "c2", item: { connectionId: "c2", externalId: "CA-1", key: "CA-1" } } as unknown as PlanInput["runs"][number];
+    const out = planMyWeek(input({ items: [ticket("CA-1"), ticket("CA-1", { item: { connectionId: "c2", externalId: "CA-1", key: "CA-1" } } as Partial<WorkItem>)], me: [ME, { connectionId: "c2", accountId: "me" }], runs: [run], needs: [loose("CA-1", { runId: "r1" })] }));
+    const promoted = out.filter((p) => p.because.includes("needs you here"));
+    expect(promoted.map((p) => p.id)).toEqual(["ticket:c2:CA-1"]);
+    expect(out.map((p) => p.id)).toContain("ticket:c:CA-1");
+  });
+
+  it("matches a need with no run only where the key is on one connection", () => {
+    const two = [ticket("CA-1"), ticket("CA-1", { item: { connectionId: "c2", externalId: "CA-1", key: "CA-1" } } as Partial<WorkItem>)];
+    const me = [ME, { connectionId: "c2", accountId: "me" }];
+    expect(planMyWeek(input({ items: two, me, needs: [loose("CA-1")] })).some((p) => p.because.includes("needs you here"))).toBe(false);
+    expect(planMyWeek(input({ items: [two[0]], needs: [loose("CA-1")] }))[0].because).toContain("thing needs you here");
+  });
+
+  it("leaves out a held or waiting workstream even when a need in General names its ticket, and keeps an eligible one", () => {
+    const held = ws("w1", "CA-4", {}, { heldReason: HELD_PERSON });
+    const waiting = ws("w2", "CA-5", { waitingOnReporter: { since: ago(1) } } as Partial<WorkstreamView>);
+    const fine = ws("w3", "CA-6");
+    const out = rankWeek(input({ workstreams: [held, waiting, fine], needs: [loose("CA-4"), loose("CA-5"), loose("CA-6")] }));
+    expect(out.map((p) => p.id)).toEqual(["ws:w3"]);
+    expect(out[0].because).toContain("thing needs you here");
+  });
+
   it("keeps a ticket with gaps and no need on its current line", () => {
     const out = planMyWeek(input({ items: [ticket("CA-7", {}, "Fix it.")] }));
     expect(out[0]).toMatchObject({ work: "clarify", title: "Clarify CA-7 with the reporter" });

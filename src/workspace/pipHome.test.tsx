@@ -103,7 +103,18 @@ describe("the workstream list on Pip home", () => {
     expect(clear).not.toMatch(/wither|<svg/);
     const only = list({ wither: { [first.workstream.id]: web(3, 5) } });
     expect(only.slice(only.indexOf(`data-workstream-row="${second.workstream.id}"`)).split("</li>")[0]).not.toMatch(/ws-wither|data-wither|<svg/);
-    expect(list()).not.toMatch(/ws-wither|data-wither|<svg|sr-only/);
+    expect(list()).not.toMatch(/ws-wither|data-wither|<svg|data-workstream-wither/);
+  });
+
+  it("gives each status pill its hint as text for a screen reader, the pill described by it, and no extra tab stop", () => {
+    const html = list();
+    const row = html.slice(html.indexOf(`data-workstream-row="${open[0].workstream.id}"`)).split("</li>")[0];
+    const id = /<span data-status="[^"]+"[^>]*aria-describedby="([^"]+)"/.exec(row)?.[1];
+    expect(id).toBeTruthy();
+    expect(row).toMatch(new RegExp(`<span id="${id}" data-status-hint="true" class="sr-only">[^<]+</span>`));
+    expect(row).toMatch(/<span data-status="[^"]+" title="[^"]+"/);
+    // The row stays the one stop: nothing inside it is focusable.
+    expect(row.slice(row.indexOf(">") + 1)).not.toContain("tabindex");
   });
 
   it("lists the closed workstreams behind the toggle, read-only", () => {

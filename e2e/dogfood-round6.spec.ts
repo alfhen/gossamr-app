@@ -81,8 +81,12 @@ test.describe("status words explained (G6)", () => {
     const pill = workstreamRow(page, "CA-402").locator("[data-status]");
     await expect(pill).toHaveText("Idle");
     await expect(pill).toHaveAttribute("title", /Nothing is running and nothing waits on you/);
+    // The same words are in the row as text for a screen reader, which the pill is described by.
+    await expect(workstreamRow(page, "CA-402").locator("[data-status-hint]")).toHaveText(/Nothing is running and nothing waits on you/);
+    await expect(pill).toHaveAttribute("aria-describedby", /.+/);
     await workstreamRow(page, "CA-402").click();
     await expect(pipHome(page).locator("[data-header-status]")).toHaveAttribute("title", /Nothing is running and nothing waits on you/);
+    await expect(pipHome(page).locator("[data-header-status] [data-status-hint]")).toHaveText(/Nothing is running and nothing waits on you/);
   });
 });
 

@@ -361,8 +361,11 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       } else if (shown.length) {
         // The first and second Looks fine count silently otherwise: say how far it is from Gossamr stopping.
         const counts = usePrefs.getState().clarityLearning[project] ?? {};
-        const left = LEARN_AFTER - Math.max(...shown.map((g) => counts[g] ?? 0));
-        useToasts.getState().push(`Noted. After ${left} more Looks fine on ${project} tickets like this, Gossamr stops flagging them (Settings > Unclear tickets).`, "info");
+        const lefts = shown.map((g) => LEARN_AFTER - (counts[g] ?? 0));
+        const left = Math.min(...lefts);
+        // The gaps may stand at different counts: the number is for the first to stop, so say it is not all of them.
+        const them = lefts.every((n) => n === left) ? "them" : "the first of them";
+        useToasts.getState().push(`Noted. After ${left} more Looks fine on ${project} tickets like this, Gossamr stops flagging ${them} (Settings > Unclear tickets).`, "info");
       }
       return true;
     },

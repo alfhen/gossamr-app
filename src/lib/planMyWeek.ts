@@ -92,8 +92,19 @@ export function rankWeek(i: PlanInput): PlanPick[] {
   const scored: Scored[] = [];
   const opened = new Set<string>();
   // Needs in General that are about a ticket (workstreamId null, ticketKey set): a pending decision on a ticket still counts for it, workstream or not.
+  // A need carries a key and no connection, but a run's need can be placed through its run; one with no run (a draft) is matched
+  // only where that key is on one connection among the candidates, since the same key on two is two tickets.
+  const connections = new Map<string, Set<string>>();
+  const seen = (conn: string, key: string) => connections.set(key, (connections.get(key) ?? new Set()).add(conn));
+  for (const v of i.workstreams) if (v.workstream.closedAt === null && v.workstream.itemKey) seen(v.workstream.connectionId, v.workstream.itemKey);
+  for (const t of i.items) seen(t.item.connectionId, t.item.key);
+  const runConnection = new Map(i.runs.map((r) => [r.id, r.item?.connectionId ?? r.connectionId]));
   const general = new Map<string, Need[]>();
-  for (const n of [...i.needs].sort(byRank)) if (n.workstreamId === null && n.ticketKey) general.set(n.ticketKey, [...(general.get(n.ticketKey) ?? []), n]);
+  for (const n of [...i.needs].sort(byRank)) {
+    if (n.workstreamId !== null || !n.ticketKey) continue;
+    const conn = (n.runId && runConnection.get(n.runId)) || (connections.get(n.ticketKey)?.size === 1 ? [...connections.get(n.ticketKey)!][0] : undefined);
+    if (conn) general.set(`${conn}:${n.ticketKey}`, [...(general.get(`${conn}:${n.ticketKey}`) ?? []), n]);
+  }
   const needLine = (list: readonly Need[], t?: WorkItem) => `${plural(list.length, "thing needs", "things need")} you here: ${list[0].title}.${facts(t, i.now) ? ` It is ${facts(t, i.now)}.` : ""}`;
   const needScore = (n: Need) => 3 - GROUPS.indexOf(n.group);
   for (const v of i.workstreams) {
@@ -109,12 +120,12 @@ export function rankWeek(i: PlanInput): PlanPick[] {
       scored.push({ pick: pick(`${plural(mine.length, "thing needs", "things need")} you here: ${mine[0]?.title ?? "a decision"}.${facts(t, i.now) ? ` It is ${facts(t, i.now)}.` : ""}`), tier: 0, score: 3 - GROUPS.indexOf(mine[0]?.group ?? "approve"), at: mine[0]?.at ?? ws.createdAt });
       continue;
     }
-    const loose = ws.itemKey ? general.get(ws.itemKey) : undefined;
+    if (status.state === "held" || status.state === "waiting" || status.state === "done") continue;
+    const loose = ws.itemKey ? general.get(`${ws.connectionId}:${ws.itemKey}`) : undefined;
     if (loose) {
       scored.push({ pick: pick(needLine(loose, t)), tier: 0, score: needScore(loose[0]), at: loose[0].at });
       continue;
     }
-    if (status.state === "held" || status.state === "waiting" || status.state === "done") continue;
     const age = days(ws.createdAt, i.now);
     let score = 8 + Math.min(age, 14) / 2;
     const urgent = t?.priority === "high" || t?.priority === "highest" ? `${t.priority} priority, ` : "";
@@ -131,7 +142,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
   }
   for (const t of i.items) {
     if (t.status.category === "done" || opened.has(`${t.item.connectionId}:${t.item.key}`)) continue;
-    const loose = general.get(t.item.key);
+    const loose = general.get(`${t.item.connectionId}:${t.item.key}`);
     if (!loose && !isMine(t, i.me)) continue;
     if (loose) {
       scored.push({ pick: { id: `ticket:${t.item.connectionId}:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because: needLine(loose, t) }, tier: 0, score: needScore(loose[0]), at: loose[0].at });
